@@ -1,16 +1,13 @@
 import path from "node:path";
 import { glob } from "glob";
-import { Suite } from "./suite.js";
+import { Suite, TestMap } from "./suite.js";
 import { transformFiles } from "./transform.js";
-import { defaultShell } from "./shell.js";
-import { spawn } from "./term.js";
+import { runTestWorker } from "./worker.js";
 
 declare global {
   var suite: Suite;
+  var tests: TestMap | undefined;
 }
-
-const streamBufferInitialSize = 100 * 1024; // 100 kb
-const streamBufferIncrementAmount = 10 * 1024; // 10 kb
 
 const collectSuites = async (matchPattern: string) => {
   const files = await glob(matchPattern);
@@ -22,29 +19,13 @@ const runSuite = async (suite: Suite) => {
     await runSuite(subsuite);
   }
   for (const test of suite.tests) {
-    const { shell, rows, columns } = suite.options();
-    const terminal = await spawn({ shell: shell ?? defaultShell, rows: rows ?? 30, cols: columns ?? 80 });
-    let stderr = "";
-    let stdout = "";
-    const stdoutStream = process.stdout;
-    const stderrStream = process.stdout;
-    // TODO: actually capture the stdout/stderr
-    try {
-      await Promise.resolve(test.testFunction({ terminal }));
-      test.passed = true;
-    } catch (err: unknown) {
-      if (typeof err === "string") {
-        test.error = err;
-      } else if (err instanceof Error) {
-        test.error = err.message;
-        test.errorStack = err.stack;
-      }
-      console.log(test.errorStack);
-      test.passed = false;
-    }
+    const { stderr, stdout, error, passed } = await runTestWorker(test.id, suite.source!, suite.options(), 10_000); // TODO: remove and replace with test level timeout when config support added;
+    test.passed = passed;
     test.stderr = stderr;
     test.stdout = stdout;
-    terminal.kill();
+    if (!passed && error != null) {
+      test.errorStack = error.stack;
+    }
   }
 };
 
@@ -55,6 +36,7 @@ const run = async () => {
     const transformedSuitePath = path.join(process.cwd(), ".tact", "cache", suite.name);
     const parsedSuitePath = path.parse(transformedSuitePath);
     const importablePath = `file://${path.join(parsedSuitePath.dir, `${parsedSuitePath.name}.js`)}`;
+    suite.source = importablePath;
     globalThis.suite = suite;
     await import(importablePath);
   }

@@ -1,4 +1,4 @@
-import { Suite, TestFunction } from "../core/suite.js";
+import { Suite, TestFunction, TestMap } from "../core/suite.js";
 export { Shell } from "../core/shell.js";
 import { TactTestOptions } from "./option.js";
 import { expect as expectLib } from "expect";
@@ -7,6 +7,7 @@ import type { Expect } from "./types.js";
 
 declare global {
   var suite: Suite;
+  var tests: TestMap | undefined;
 }
 
 /**
@@ -15,10 +16,15 @@ declare global {
  * @param testFunction The test function that is run when calling the test function.
  */
 export function test(title: string, testFunction: TestFunction) {
-  suite.tests.push({
+  const test = {
     title,
+    id: suite.tests.length,
     testFunction,
-  });
+  };
+  if (globalThis.tests != null) {
+    globalThis.tests[test.id] = test;
+  }
+  globalThis.suite.tests.push(test);
 }
 
 export namespace test {

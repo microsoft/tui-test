@@ -8,19 +8,23 @@ export type TestFunction = (args: { terminal: Terminal }) => void | Promise<void
 export type Test = {
   title: string;
   testFunction: TestFunction;
+  id: number;
   passed?: boolean;
   stdout?: string;
   stderr?: string;
-  error?: string;
   errorStack?: string;
+};
+
+export type TestMap = {
+  [id: number]: Test;
 };
 
 export class Suite {
   suites: Suite[] = [];
   tests: Test[] = [];
-  results = [];
   readonly name: string;
   readonly type: SuiteType;
+  source?: string;
 
   constructor(name: string, type: SuiteType, private _options?: TactTestOptions, public parentSuite?: Suite) {
     this.name = name;
