@@ -47,9 +47,17 @@ export class Terminal {
     this.#pty.write(data);
   }
 
+  getBuffer(): string[][] {
+    return this._getBuffer(0, this.#term.buffer.active.length);
+  }
+
   getViewableBuffer(): string[][] {
+    return this._getBuffer(this.#term.buffer.active.baseY, this.#term.buffer.active.length);
+  }
+
+  private _getBuffer(startY: number, endY: number): string[][] {
     const lines: string[][] = [];
-    for (let y = this.#term.buffer.active.baseY; y < this.#term.buffer.active.length; y++) {
+    for (let y = startY; y < endY; y++) {
       const termLine = this.#term.buffer.active.getLine(y);
       const line: string[] = [];
       let cell = termLine?.getCell(0);

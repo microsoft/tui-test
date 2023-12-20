@@ -8,19 +8,24 @@ interface TerminalAssertions {
    * **Usage**
    *
    * ```js
-   * expect(terminal).toHaveValue("> ");
+   * await expect(terminal).toHaveValue("> ");
    * ```
    *
    * @param options
    */
-  toHaveValue(value: string | RegExp): void;
-  toHaveValueVisible(
+  toHaveValue(
     value: string | RegExp,
     options?: {
+      /**
+       * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
+       */
       timeout?: number;
+      /**
+       * Whether to check the entire terminal buffer for the value instead of only the visible section.
+       */
+      full?: number;
     }
   ): Promise<void>;
-  toMatchSnapshot(): Promise<void>;
 }
 
 declare type BaseMatchers<T> = Matchers<void, T> & Inverse<Matchers<void, T>> & PromiseMatchers<T>;

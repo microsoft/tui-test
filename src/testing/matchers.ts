@@ -2,13 +2,24 @@ import type { MatcherContext, ExpectationResult, AsyncExpectationResult } from "
 import chalk from "chalk";
 
 import { Terminal } from "../core/term.js";
+import { poll } from "./utils.js";
 
-export function toHaveValue(this: MatcherContext, terminal: Terminal, expected: string | RegExp): ExpectationResult {
-  const viewableBuffer = terminal
-    .getViewableBuffer()
-    .map((bufferLine) => bufferLine.join(""))
-    .join("");
-  const pass = typeof expected === "string" ? viewableBuffer.includes(expected) : expected.test(viewableBuffer);
+export async function toHaveValue(
+  this: MatcherContext,
+  terminal: Terminal,
+  expected: string | RegExp,
+  options?: { timeout?: number; full?: boolean }
+): AsyncExpectationResult {
+  const pass = await poll(
+    () => {
+      const buffer = (options?.full === true ? terminal.getBuffer() : terminal.getViewableBuffer()).map((bufferLine) => bufferLine.join("")).join("");
+      const pass = typeof expected === "string" ? buffer.includes(expected) : expected.test(buffer);
+      return pass;
+    },
+    50,
+    10_000 // TODO: once configuration is supported, change this value
+  );
+
   return {
     pass,
     message: () => {
@@ -22,19 +33,6 @@ export function toHaveValue(this: MatcherContext, terminal: Terminal, expected: 
       return "passed";
     },
   };
-}
-
-// TODO: implement matcher
-export function toHaveValueVisible(
-  this: MatcherContext,
-  terminal: Terminal,
-  expected: string | RegExp,
-  options?: { timeout?: number }
-): AsyncExpectationResult {
-  return Promise.resolve({
-    pass: true,
-    message: () => "",
-  });
 }
 
 // TODO: implement matcher

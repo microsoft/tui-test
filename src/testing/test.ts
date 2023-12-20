@@ -79,20 +79,6 @@ export namespace test {
     callback();
     globalThis.suite = parentSuite;
   };
-
-  /**
-   * Waits the specified number of ms until continuing
-   *
-   * **Usage**
-   *
-   * ```js
-   * test.wait(1_000); // waits for 1 second
-   * test.wait(1_500) // waits for 1,500 milliseconds
-   * ```
-   *
-   * @param time amount of time to wait in ms
-   */
-  export const wait = (time: number) => new Promise((resolve) => setTimeout(resolve, time));
 }
 
 expectLib.extend({
