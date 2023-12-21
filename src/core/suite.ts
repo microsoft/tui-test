@@ -34,10 +34,13 @@ export type Test = {
   title: string;
   testFunction: TestFunction;
   id: number;
-  passed?: boolean;
-  stdout?: string;
-  stderr?: string;
-  errorStack?: string;
+  results: TestResult[];
+};
+type TestResult = {
+  passed: boolean;
+  stdout: string;
+  stderr: string;
+  error?: string;
 };
 
 export type TestMap = {

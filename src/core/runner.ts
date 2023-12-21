@@ -2,7 +2,7 @@ import path from "node:path";
 import { Suite, TestMap, loadSuites } from "./suite.js";
 import { transformFiles } from "./transform.js";
 import { runTestWorker } from "./worker.js";
-import { getTimeout, loadConfig } from "./config.js";
+import { getRetries, getTimeout, loadConfig } from "./config.js";
 
 declare global {
   var suite: Suite;
@@ -14,12 +14,16 @@ const runSuite = async (suite: Suite) => {
     await runSuite(subsuite);
   }
   for (const test of suite.tests) {
-    const { stderr, stdout, error, passed } = await runTestWorker(test.id, suite.source!, suite.options(), getTimeout());
-    test.passed = passed;
-    test.stderr = stderr;
-    test.stdout = stdout;
-    if (!passed && error != null) {
-      test.errorStack = error.stack;
+    for (let i = 0; i < Math.min(0, getRetries()) + 1; i++) {
+      const { stderr, stdout, error, passed } = await runTestWorker(test.id, suite.source!, suite.options(), getTimeout());
+      const errorMessage = !passed && error != null ? error?.stack ?? error?.message ?? "Error: test failed, view stderr for more information" : undefined;
+      test.results.push({
+        passed,
+        stderr,
+        stdout,
+        error: errorMessage,
+      });
+      if (passed) break;
     }
   }
 };

@@ -30,3 +30,4 @@ export const loadConfig = async (): Promise<Required<TactTestConfig>> => {
 
 export const getExpectTimeout = (): number => loadedConfig?.expect.timeout ?? 5_000;
 export const getTimeout = (): number => loadedConfig?.timeout ?? 30_000;
+export const getRetries = (): number => loadedConfig?.retries ?? 0;
