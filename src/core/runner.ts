@@ -1,25 +1,20 @@
 import path from "node:path";
-import { glob } from "glob";
-import { Suite, TestMap } from "./suite.js";
+import { Suite, TestMap, loadSuites } from "./suite.js";
 import { transformFiles } from "./transform.js";
 import { runTestWorker } from "./worker.js";
+import { getTimeout, loadConfig } from "./config.js";
 
 declare global {
   var suite: Suite;
   var tests: TestMap | undefined;
 }
 
-const collectSuites = async (matchPattern: string) => {
-  const files = await glob(matchPattern);
-  return files.map((file) => new Suite(file, "file"));
-};
-
 const runSuite = async (suite: Suite) => {
   for (const subsuite of suite.suites) {
     await runSuite(subsuite);
   }
   for (const test of suite.tests) {
-    const { stderr, stdout, error, passed } = await runTestWorker(test.id, suite.source!, suite.options(), 10_000); // TODO: remove and replace with test level timeout when config support added;
+    const { stderr, stdout, error, passed } = await runTestWorker(test.id, suite.source!, suite.options(), getTimeout());
     test.passed = passed;
     test.stderr = stderr;
     test.stdout = stdout;
@@ -30,17 +25,27 @@ const runSuite = async (suite: Suite) => {
 };
 
 const run = async () => {
-  const suites = await collectSuites("src/**/*.test.{ts,js}");
   await transformFiles();
-  for (const suite of suites) {
-    const transformedSuitePath = path.join(process.cwd(), ".tact", "cache", suite.name);
-    const parsedSuitePath = path.parse(transformedSuitePath);
-    const importablePath = `file://${path.join(parsedSuitePath.dir, `${parsedSuitePath.name}.js`)}`;
-    suite.source = importablePath;
-    globalThis.suite = suite;
-    await import(importablePath);
+  const config = await loadConfig();
+  const baseSuites = await loadSuites(config);
+  for (const baseSuite of baseSuites) {
+    for (const suite of baseSuite.suites) {
+      const transformedSuitePath = path.join(process.cwd(), ".tact", "cache", suite.name);
+      const parsedSuitePath = path.parse(transformedSuitePath);
+      const importablePath = `file://${path.join(parsedSuitePath.dir, `${parsedSuitePath.name}.js`)}`;
+      suite.source = importablePath;
+      globalThis.suite = suite;
+      await import(importablePath);
+    }
   }
-  for (const suite of suites) {
+  if (config.globalTimeout > 0) {
+    setTimeout(() => {
+      console.error(`Error: global timeout (${config.globalTimeout} ms) exceeded`);
+      process.exit(1);
+    }, config.globalTimeout);
+  }
+
+  for (const suite of baseSuites) {
     await runSuite(suite);
   }
   process.exit(0);

@@ -3,7 +3,7 @@ export { Shell } from "../core/shell.js";
 import { TactTestOptions } from "./option.js";
 import { expect as expectLib } from "expect";
 import { toHaveValue } from "./matchers.js";
-import type { Expect } from "./types.js";
+import type { Expect, TactTestConfig } from "./types.js";
 
 declare global {
   var suite: Suite;
@@ -94,3 +94,10 @@ expectLib.extend({
 const expect = expectLib as Expect;
 
 export { expect };
+
+/**
+ * Defines tact config
+ */
+export function defineConfig(config: TactTestConfig): TactTestConfig {
+  return config;
+}

@@ -3,6 +3,7 @@ import chalk from "chalk";
 
 import { Terminal } from "../core/term.js";
 import { poll } from "./utils.js";
+import { getExpectTimeout } from "../core/config.js";
 
 export async function toHaveValue(
   this: MatcherContext,
@@ -17,7 +18,7 @@ export async function toHaveValue(
       return pass;
     },
     50,
-    10_000 // TODO: once configuration is supported, change this value
+    options?.timeout ?? getExpectTimeout()
   );
 
   return {
