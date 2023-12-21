@@ -1,4 +1,4 @@
-import { test, expect, Shell } from "../testing/test.js";
+import { test, expect, Shell } from "../test/test.js";
 
 test.use({ shell: Shell.Cmd });
 

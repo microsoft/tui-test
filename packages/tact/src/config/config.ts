@@ -1,62 +1,42 @@
-import { Matchers, AsymmetricMatchers, BaseExpect } from "expect";
-import { Terminal } from "../core/term.ts";
-import { TactTestOptions as TestOptions } from "./option.ts";
+import fs from "node:fs";
+import path from "node:path";
+import process from "node:process";
+import { defaultShell } from "../terminal/shell.js";
+import { TactTestOptions as TestOptions } from "../test/option.js";
 
-interface TerminalAssertions {
-  /**
-   * Checks that Terminal has the provided text or RegExp.
-   *
-   * **Usage**
-   *
-   * ```js
-   * await expect(terminal).toHaveValue("> ");
-   * ```
-   *
-   * @param options
-   */
-  toHaveValue(
-    value: string | RegExp,
-    options?: {
-      /**
-       * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
-       */
-      timeout?: number;
-      /**
-       * Whether to check the entire terminal buffer for the value instead of only the visible section.
-       */
-      full?: number;
-    }
-  ): Promise<void>;
-}
+const configPath = path.join(process.cwd(), ".tact", "cache", "tact.config.js");
+let loadedConfig: Required<TactTestConfig> | undefined;
 
-declare type BaseMatchers<T> = Matchers<void, T> & Inverse<Matchers<void, T>> & PromiseMatchers<T>;
-declare type AllowedGenericMatchers<T> = Pick<Matchers<void, T>, "toBe" | "toBeDefined" | "toBeFalsy" | "toBeNull" | "toBeTruthy" | "toBeUndefined">;
-declare type SpecificMatchers<T> = T extends Terminal ? TerminalAssertions & AllowedGenericMatchers<T> : BaseMatchers<T>;
-
-export declare type Expect = {
-  <T = unknown>(actual: T): SpecificMatchers<T>;
-} & BaseExpect &
-  AsymmetricMatchers &
-  Inverse<Omit<AsymmetricMatchers, "any" | "anything">>;
-
-declare type PromiseMatchers<T = unknown> = {
-  /**
-   * Unwraps the reason of a rejected promise so any other matcher can be chained.
-   * If the promise is fulfilled the assertion fails.
-   */
-  rejects: Matchers<Promise<void>, T> & Inverse<Matchers<Promise<void>, T>>;
-  /**
-   * Unwraps the value of a fulfilled promise so any other matcher can be chained.
-   * If the promise is rejected the assertion fails.
-   */
-  resolves: Matchers<Promise<void>, T> & Inverse<Matchers<Promise<void>, T>>;
+export const loadConfig = async (): Promise<Required<TactTestConfig>> => {
+  const userConfig: TactTestConfig = !fs.existsSync(configPath) ? {} : (await import(`file://${configPath}`)).default;
+  loadedConfig = {
+    testMatch: userConfig.testMatch ?? "**/*.@(spec|test).?(c|m)[jt]s?(x)",
+    expect: {
+      timeout: userConfig.timeout ?? 5_000,
+    },
+    globalTimeout: userConfig.globalTimeout ?? 0,
+    retries: userConfig.retries ?? 0,
+    projects: userConfig.projects ?? [],
+    timeout: userConfig.timeout ?? 30_000,
+    reporter: userConfig.reporter ?? "list",
+    use: {
+      shell: userConfig.use?.shell ?? defaultShell,
+      rows: userConfig.use?.rows ?? 30,
+      columns: userConfig.use?.columns ?? 80,
+    },
+  };
+  return loadedConfig;
 };
 
-declare type Inverse<Matchers> = {
+export const getExpectTimeout = (): number => loadedConfig?.expect.timeout ?? 5_000;
+export const getTimeout = (): number => loadedConfig?.timeout ?? 30_000;
+export const getRetries = (): number => loadedConfig?.retries ?? 0;
+
+declare type TestProject = {
   /**
-   * Inverse next matcher. If you know how to test something, `.not` lets you test its opposite.
+   * Project name is visible in the report and during test execution.
    */
-  not: Matchers;
+  name?: string;
 };
 
 declare type WorkerOptions = {
@@ -71,13 +51,6 @@ declare type WorkerOptions = {
    * Use testConfig.testMatch to change this option for all projects.
    */
   testMatch?: string;
-};
-
-declare type TestProject = {
-  /**
-   * Project name is visible in the report and during test execution.
-   */
-  name?: string;
 };
 
 export declare type TactProjectConfig = TestOptions & Required<WorkerOptions> & TestProject;
@@ -178,8 +151,8 @@ export declare type TactTestConfig = {
    * **Usage**
    *
    * ```js
-   * // playwright.config.ts
-   * import { defineConfig } from '@playwright/test';
+   * // tact.config.ts
+   * import { defineConfig } from '@microsoft/tact-test';
    *
    * export default defineConfig({
    *   reporter: 'list',
@@ -187,7 +160,7 @@ export declare type TactTestConfig = {
    * ```
    *
    */
-  reporter?: LiteralUnion<"list" | "null", string>;
+  reporter?: "list" | "null";
 
   /**
    * Options for all tests in this project
@@ -219,7 +192,7 @@ export declare type TactTestConfig = {
    * **Usage**
    *
    * ```js
-   * // playwright.config.ts
+   * // tact.config.ts
    * import { defineConfig, Shell } from '@microsoft/tact-test';
    *
    * export default defineConfig({
@@ -230,5 +203,5 @@ export declare type TactTestConfig = {
    * ```
    *
    */
-  projects?: Array<TactProjectConfig>;
+  projects?: TactProjectConfig[];
 };

@@ -1,12 +1,12 @@
-import { TactTestOptions } from "../testing/option.js";
-import { Terminal } from "./term.js";
-import type { TactTestConfig, TactProjectConfig } from "../testing/types.js";
+import { TactTestOptions } from "./test/option.js";
+import { Terminal } from "./terminal/term.js";
+import { TactTestConfig, TactProjectConfig } from "./config/config.js";
 import { glob } from "glob";
 
 type SuiteType = "file" | "describe" | "project";
 
 export const loadSuites = async (config: Required<TactTestConfig>): Promise<Suite[]> => {
-  const projects: Array<Required<TactProjectConfig>> = [
+  const projects: Required<TactProjectConfig>[] = [
     { shell: config.use.shell!, rows: config.use.rows!, columns: config.use.columns!, testMatch: config.testMatch!, name: "" },
     ...(config.projects?.map((project) => ({
       shell: project.shell ?? config.use.shell!,

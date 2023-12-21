@@ -1,8 +1,8 @@
 import path from "node:path";
-import { Suite, TestMap, loadSuites } from "./suite.js";
-import { transformFiles } from "./transform.js";
+import { Suite, TestMap, loadSuites } from "../suite.js";
+import { transformFiles } from "../transform.js";
 import { runTestWorker } from "./worker.js";
-import { getRetries, getTimeout, loadConfig } from "./config.js";
+import { getRetries, getTimeout, loadConfig } from "../config/config.js";
 
 declare global {
   var suite: Suite;
@@ -55,4 +55,4 @@ const run = async () => {
   process.exit(0);
 };
 
-await run();
+// await run();

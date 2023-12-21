@@ -2,10 +2,10 @@ import process from "node:process";
 import workerThreads from "node:worker_threads";
 import url from "node:url";
 
-import { Suite } from "./suite.js";
-import { TactTestOptions } from "../testing/option.js";
-import { spawn } from "./term.js";
-import { defaultShell } from "./shell.js";
+import { Suite } from "../suite.js";
+import { TactTestOptions } from "../test/option.js";
+import { spawn } from "../terminal/term.js";
+import { defaultShell } from "../terminal/shell.js";
 
 type WorkerResult = {
   stdout: string;
@@ -14,8 +14,6 @@ type WorkerResult = {
   error?: Error;
   passed: boolean;
 };
-
-const __filename = url.fileURLToPath(import.meta.url);
 
 const runTest = async (testId: number, importPath: string, options: TactTestOptions) => {
   process.setSourceMapsEnabled(true);
@@ -81,6 +79,7 @@ export function runTestWorker(testId: number, importPath: string, options: TactT
 
 if (!workerThreads.isMainThread) {
   const { testId, importPath, options } = workerThreads.workerData as { testId: number; importPath: string; options: TactTestOptions };
-  await runTest(testId, importPath, options);
-  workerThreads.parentPort?.postMessage("passed");
+  runTest(testId, importPath, options).then(() => {
+    workerThreads.parentPort?.postMessage("passed");
+  });
 }

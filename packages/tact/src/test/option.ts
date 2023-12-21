@@ -1,4 +1,4 @@
-import { Shell } from "../core/shell.js";
+import { Shell } from "../terminal/shell.js";
 
 export interface TactTestOptions {
   /**
