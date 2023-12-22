@@ -7,7 +7,7 @@ test("", async ({ terminal }) => {
   terminal.resize(80, 30);
 
   await expect(terminal).toHaveValue("> ");
-  expect(terminal.cursor().x).toBe(59);
+  // expect(terminal.cursor().x).toBe(59);
 });
 
 test("", async ({ terminal }) => {
@@ -15,5 +15,5 @@ test("", async ({ terminal }) => {
   terminal.resize(80, 30);
 
   await expect(terminal).toHaveValue("> ");
-  // expect(terminal.cursor().x).toBe(59);
+  expect(terminal.cursor().x).toBe(59);
 });

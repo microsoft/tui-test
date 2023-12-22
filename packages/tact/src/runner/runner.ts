@@ -16,19 +16,18 @@ const runSuite = async (suite: Suite) => {
   for (const test of suite.tests) {
     for (let i = 0; i < Math.min(0, getRetries()) + 1; i++) {
       const { stderr, stdout, error, passed } = await runTestWorker(test.id, suite.source!, suite.options(), getTimeout());
-      const errorMessage = !passed && error != null ? error?.stack ?? error?.message ?? "Error: test failed, view stderr for more information" : undefined;
       test.results.push({
         passed,
         stderr,
         stdout,
-        error: errorMessage,
+        error,
       });
       if (passed) break;
     }
   }
 };
 
-const run = async () => {
+export const run = async () => {
   await transformFiles();
   const config = await loadConfig();
   const baseSuites = await loadSuites(config);
