@@ -1,30 +1,41 @@
 import path from "node:path";
+import url from "node:url";
+import os from "node:os";
+import workerpool from "workerpool";
 import { Suite, TestMap, loadSuites } from "../suite.js";
 import { transformFiles } from "../transform.js";
-import { runTestWorker } from "./worker.js";
 import { getRetries, getTimeout, loadConfig } from "../config/config.js";
+import { runTestWorker } from "./worker.js";
 
 declare global {
   var suite: Suite;
   var tests: TestMap | undefined;
 }
 
-const runSuite = async (suite: Suite) => {
-  for (const subsuite of suite.suites) {
-    await runSuite(subsuite);
+const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
+const pool = workerpool.pool(path.join(__dirname, "worker.js"), { workerType: "process" });
+
+const runSuites = async (allSuites: Suite[]) => {
+  const tasks: Promise<any>[] = [];
+  const suites = [...allSuites];
+  while (suites.length != 0) {
+    const suite = suites.shift();
+    if (!suite) break;
+    tasks.push(
+      ...suite.tests.map(async (test) => {
+        for (let i = 0; i < Math.min(0, getRetries()) + 1; i++) {
+          const { error, passed } = await runTestWorker(test.id, suite.source!, suite.options(), getTimeout(), pool);
+          test.results.push({
+            passed,
+            error,
+          });
+          if (passed) break;
+        }
+      })
+    );
+    suites.push(...suite.suites);
   }
-  for (const test of suite.tests) {
-    for (let i = 0; i < Math.min(0, getRetries()) + 1; i++) {
-      const { stderr, stdout, error, passed } = await runTestWorker(test.id, suite.source!, suite.options(), getTimeout());
-      test.results.push({
-        passed,
-        stderr,
-        stdout,
-        error,
-      });
-      if (passed) break;
-    }
-  }
+  return Promise.all(tasks);
 };
 
 export const run = async () => {
@@ -49,10 +60,9 @@ export const run = async () => {
     }, config.globalTimeout);
   }
 
-  for (const suite of baseSuites) {
-    await runSuite(suite);
-  }
+  await runSuites(baseSuites);
+  try {
+    await pool.terminate(true);
+  } catch {}
   process.exit(0);
 };
-
-// await run();

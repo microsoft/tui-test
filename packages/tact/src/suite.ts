@@ -38,8 +38,6 @@ export type Test = {
 };
 type TestResult = {
   passed: boolean;
-  stdout: string;
-  stderr: string;
   error?: string;
 };
 

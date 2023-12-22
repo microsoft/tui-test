@@ -1,4 +1,4 @@
-import { Suite, TestFunction, TestMap } from "../suite.js";
+import { Suite, Test, TestFunction, TestMap } from "../suite.js";
 export { Shell } from "../terminal/shell.js";
 import { TactTestOptions } from "./option.js";
 import { expect as expectLib } from "expect";
@@ -9,6 +9,7 @@ import { TactTestConfig } from "../config/config.js";
 
 declare global {
   var suite: Suite;
+  var updateWorkerCache: ((test: Test) => void) | undefined;
   var tests: TestMap | undefined;
 }
 
@@ -26,6 +27,9 @@ export function test(title: string, testFunction: TestFunction) {
   };
   if (globalThis.tests != null) {
     globalThis.tests[test.id] = test;
+  }
+  if (globalThis.updateWorkerCache) {
+    globalThis.updateWorkerCache(test);
   }
   globalThis.suite.tests.push(test);
 }
