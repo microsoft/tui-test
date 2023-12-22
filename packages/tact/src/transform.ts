@@ -80,7 +80,8 @@ const copyFilesToCache = async (directory: string, destination: string) => {
         if (typescriptPattern.test(fileExtension) || javascriptPattern.test(fileExtension)) {
           const content = await fsAsync.readFile(resolvedPath);
           const fileHash = crypto.createHash("md5").update(content).digest("hex");
-          const transformedPath = path.join(destination, `${path.parse(directoryItem.name).name}.js`);
+          const newExtension = fileExtension.startsWith(".m") ? ".mjs" : ".js";
+          const transformedPath = path.join(destination, `${path.parse(directoryItem.name).name}${newExtension}`);
           if (fs.existsSync(transformedPath)) {
             const reader = readline.createInterface({
               input: fs.createReadStream(transformedPath),

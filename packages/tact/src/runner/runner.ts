@@ -35,7 +35,8 @@ export const run = async () => {
     for (const suite of baseSuite.suites) {
       const transformedSuitePath = path.join(process.cwd(), ".tact", "cache", suite.name);
       const parsedSuitePath = path.parse(transformedSuitePath);
-      const importablePath = `file://${path.join(parsedSuitePath.dir, `${parsedSuitePath.name}.js`)}`;
+      const extension = parsedSuitePath.ext.startsWith(".m") ? ".mjs" : ".js";
+      const importablePath = `file://${path.join(parsedSuitePath.dir, `${parsedSuitePath.name}${extension}`)}`;
       suite.source = importablePath;
       globalThis.suite = suite;
       await import(importablePath);
