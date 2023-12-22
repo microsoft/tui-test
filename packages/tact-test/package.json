@@ -5,21 +5,14 @@
   "engines": {
     "node": ">=16"
   },
+  "type": "module",
+  "main": "index.js",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/microsoft/tact.git"
   },
   "author": "Microsoft Corporation",
   "license": "MIT",
-  "exports": {
-    ".": {
-      "types": "./index.d.ts",
-      "import": "./index.mjs",
-      "require": "./index.js",
-      "default": "./index.js"
-    },
-    "./package.json": "./package.json"
-  },
   "homepage": "https://github.com/microsoft/tact#readme",
   "dependencies": {
     "@microsoft/tact": "0.0.1-rc.1"

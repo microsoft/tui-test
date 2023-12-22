@@ -2,6 +2,7 @@
   "name": "@microsoft/tact",
   "version": "0.0.1-rc.1",
   "description": "Fast and precise end-to-end terminal testing framework",
+  "type": "module",
   "engines": {
     "node": ">=16"
   },
@@ -9,19 +10,9 @@
     "type": "git",
     "url": "git+https://github.com/microsoft/tact.git"
   },
-  "type": "module",
   "author": "Microsoft Corporation",
   "license": "MIT",
   "homepage": "https://github.com/microsoft/tact#readme",
-  "exports": {
-    "./test": {
-      "types": "./test.d.ts",
-      "import": "./test.mjs",
-      "require": "./test.js",
-      "default": "./test.js"
-    },
-    "./package.json": "./package.json"
-  },
   "files": [
     "lib/**",
     "*.js",
@@ -29,7 +20,7 @@
     "*.d.ts"
   ],
   "bin": {
-    "tact": "cli.js"
+    "tact": "./lib/cli/cli.js"
   },
   "dependencies": {
     "@swc/core": "^1.3.100",

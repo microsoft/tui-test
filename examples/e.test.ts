@@ -1,4 +1,4 @@
-import { test, expect, Shell } from "../test/test.js";
+import { test, expect, Shell } from "@microsoft/tact-test";
 
 test.use({ shell: Shell.Cmd });
 
@@ -7,5 +7,5 @@ test("", async ({ terminal }) => {
   terminal.resize(80, 30);
 
   await expect(terminal).toHaveValue("> ");
-  await expect(terminal.cursor().x).toBe(10);
+  expect(terminal.cursor().x).toBe(10);
 });
