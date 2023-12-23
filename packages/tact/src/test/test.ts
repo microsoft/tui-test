@@ -4,6 +4,7 @@ import { TactTestOptions } from "./option.js";
 import { expect as expectLib } from "expect";
 import { toHaveValue } from "./matchers.js";
 import { Matchers, AsymmetricMatchers, BaseExpect } from "expect";
+import { v4 as uuidv4 } from "uuid";
 import { Terminal } from "../terminal/term.js";
 import { TactTestConfig } from "../config/config.js";
 
@@ -19,14 +20,30 @@ declare global {
  * @param testFunction The test function that is run when calling the test function.
  */
 export function test(title: string, testFunction: TestFunction) {
-  const test = {
-    title,
-    id: suite.tests.length,
+  const errorStack = new Error().stack;
+  let callsite;
+  if (errorStack) {
+    const lineInfo = errorStack
+      .match(/at <anonymous>(.*)\)/)
+      ?.at(1)
+      ?.split(":")
+      ?.slice(-2);
+    if (lineInfo?.length === 2 && lineInfo.every((info) => /^\d+$/.test(info))) {
+      const [line, column] = lineInfo.map((info) => Number(info));
+      callsite = { line, column };
+    }
+  }
+
+  const test: Test = {
+    title: title,
+    suiteId: suite.tests.length,
+    globalId: uuidv4(),
     testFunction,
     results: [],
+    callsite,
   };
   if (globalThis.tests != null) {
-    globalThis.tests[test.id] = test;
+    globalThis.tests[test.suiteId] = test;
   }
   if (globalThis.updateWorkerCache) {
     globalThis.updateWorkerCache(test);

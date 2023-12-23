@@ -2,16 +2,18 @@
   "name": "@microsoft/tact-internal",
   "scripts": {
     "build": "tsc --project packages/tact/tsconfig.json --rootDir .",
-    "package": "npm pack ./packages/tact ./packages/tact-test"
+    "package": "npm pack ./packages/tact ./packages/tact-test",
+    "dev": "node --loader ts-node/esm packages/tact/src/cli/cli.ts"
   },
   "type": "module",
   "author": "Microsoft Corporation",
   "license": "MIT",
   "devDependencies": {
+    "@microsoft/tact-test": "file:packages/tact-test",
     "@tsconfig/node18": "^18.2.2",
+    "@types/uuid": "^9.0.7",
     "@types/which": "^3.0.3",
     "ts-node": "^10.9.2",
-    "typescript": "^5.3.3",
-    "@microsoft/tact-test": "file:packages/tact-test"
+    "typescript": "^5.3.3"
   }
 }

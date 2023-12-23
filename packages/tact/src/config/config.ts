@@ -160,7 +160,7 @@ export declare type TactTestConfig = {
    * ```
    *
    */
-  reporter?: "list" | "null";
+  reporter?: "list";
 
   /**
    * Options for all tests in this project

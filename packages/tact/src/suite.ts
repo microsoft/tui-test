@@ -33,12 +33,15 @@ export type TestFunction = (args: { terminal: Terminal }) => void | Promise<void
 export type Test = {
   title: string;
   testFunction: TestFunction;
-  id: number;
+  suiteId: number;
+  globalId: string;
   results: TestResult[];
+  callsite?: { line: number; column: number };
 };
 type TestResult = {
   passed: boolean;
   error?: string;
+  executionTime: number;
 };
 
 export type TestMap = {
