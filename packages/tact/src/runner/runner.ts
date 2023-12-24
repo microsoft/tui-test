@@ -1,5 +1,6 @@
 import path from "node:path";
 import url from "node:url";
+import os from "node:os";
 import workerpool from "workerpool";
 import { Suite, getRootSuite } from "../test/suite.js";
 import { transformFiles } from "./transform.js";
@@ -16,7 +17,8 @@ declare global {
 }
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
-const pool = workerpool.pool(path.join(__dirname, "worker.js"), { workerType: "process" });
+const maxWorkers = Math.max(os.cpus().length - 1, 1);
+const pool = workerpool.pool(path.join(__dirname, "worker.js"), { workerType: "process", maxWorkers });
 
 const runSuites = async (allSuites: Suite[], reporter: BaseReporter) => {
   const tasks: Promise<any>[] = [];
