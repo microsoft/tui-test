@@ -29,7 +29,6 @@
     "glob": "^10.3.10",
     "node-pty": "^1.0.0",
     "pretty-ms": "^8.0.0",
-    "uuid": "^9.0.1",
     "which": "^4.0.0",
     "workerpool": "^9.0.4",
     "xterm-headless": "^5.3.0"

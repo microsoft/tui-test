@@ -1,7 +1,7 @@
 import { Shell, shellTarget } from "../terminal/shell.js";
 import { promisify } from "node:util";
 import { exec } from "node:child_process";
-import { Suite, Test } from "../suite.js";
+import { Suite } from "../test/suite.js";
 import chalk from "chalk";
 
 const execAsync = promisify(exec);
@@ -60,25 +60,6 @@ export const loadShellVersions = async (shell: Shell[]): Promise<{ shell: Shell;
       return { shell, target, version };
     })
   );
-};
-
-export const getFullName = (test: Test, suite: Suite): string[] => {
-  const names = [];
-  let topSuite: Suite | undefined = suite;
-  while (topSuite != null) {
-    if (topSuite.name.length > 0) {
-      if (topSuite.type === "project") {
-        names.push(`[${topSuite.name}]`);
-      } else if (topSuite.type === "file" && test.callsite != null) {
-        const { column, line } = test.callsite;
-        names.push(`${topSuite.name}:${line}:${column}`);
-      } else {
-        names.push(topSuite.name);
-      }
-    }
-    topSuite = topSuite.parentSuite;
-  }
-  return [...names.reverse(), test.title];
 };
 
 export function stripAnsiEscapes(str: string): string {

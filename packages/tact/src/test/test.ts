@@ -1,17 +1,16 @@
-import { Suite, Test, TestFunction, TestMap } from "../suite.js";
+import { Suite } from "./suite.js";
+import { TestFunction, TestCase, Location } from "./testcase.js";
 export { Shell } from "../terminal/shell.js";
 import { TactTestOptions } from "./option.js";
 import { expect as expectLib } from "expect";
 import { toHaveValue } from "./matchers.js";
 import { Matchers, AsymmetricMatchers, BaseExpect } from "expect";
-import { v4 as uuidv4 } from "uuid";
 import { Terminal } from "../terminal/term.js";
 import { TactTestConfig } from "../config/config.js";
 
 declare global {
   var suite: Suite;
-  var updateWorkerCache: ((test: Test) => void) | undefined;
-  var tests: TestMap | undefined;
+  var tests: { [testId: string]: TestCase };
 }
 
 /**
@@ -21,7 +20,7 @@ declare global {
  */
 export function test(title: string, testFunction: TestFunction) {
   const errorStack = new Error().stack;
-  let callsite;
+  let location: Location = { row: 0, column: 0 };
   if (errorStack) {
     const lineInfo = errorStack
       .match(/at <anonymous>(.*)\)/)
@@ -29,24 +28,14 @@ export function test(title: string, testFunction: TestFunction) {
       ?.split(":")
       ?.slice(-2);
     if (lineInfo?.length === 2 && lineInfo.every((info) => /^\d+$/.test(info))) {
-      const [line, column] = lineInfo.map((info) => Number(info));
-      callsite = { line, column };
+      const [row, column] = lineInfo.map((info) => Number(info));
+      location = { row, column };
     }
   }
 
-  const test: Test = {
-    title: title,
-    suiteId: suite.tests.length,
-    globalId: uuidv4(),
-    testFunction,
-    results: [],
-    callsite,
-  };
+  const test = new TestCase(title, location, testFunction, globalThis.suite);
   if (globalThis.tests != null) {
-    globalThis.tests[test.suiteId] = test;
-  }
-  if (globalThis.updateWorkerCache) {
-    globalThis.updateWorkerCache(test);
+    globalThis.tests[test.id] = test;
   }
   globalThis.suite.tests.push(test);
 }
@@ -77,7 +66,7 @@ export namespace test {
    * @param options An object with local options.
    */
   export const use = (options: TactTestOptions) => {
-    globalThis.suite.use(options);
+    globalThis.suite.options = { ...globalThis.suite.options, ...options };
   };
 
   /**
@@ -103,7 +92,7 @@ export namespace test {
    */
   export const describe = (title: string, callback: () => void) => {
     const parentSuite = globalThis.suite;
-    const currentSuite = new Suite(title, "describe", parentSuite.options(), parentSuite);
+    const currentSuite = new Suite(title, "describe", parentSuite.options, parentSuite);
     parentSuite.suites.push(currentSuite);
     globalThis.suite = currentSuite;
     callback();

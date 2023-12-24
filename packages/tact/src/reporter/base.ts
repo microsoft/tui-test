@@ -1,10 +1,9 @@
-import { Test, Suite } from "../suite.js";
+import { TestCase, TestResult } from "../test/testcase.js";
 import { Shell } from "../terminal/shell.js";
-import { Reporter } from "./reporter.js";
 import chalk from "chalk";
 import { loadShellVersions } from "./utils.js";
 
-export class BaseReporter implements Reporter {
+export class BaseReporter {
   protected currentTest: number;
 
   constructor() {
@@ -19,9 +18,9 @@ export class BaseReporter implements Reporter {
     });
     process.stdout.write("\n" + (shellVersions.length == 0 ? "\n" : ""));
   }
-  startTest(test: Test, suite: Suite): void {
+  startTest(test: TestCase, result: TestResult): void {
     this.currentTest += 1;
   }
-  endTest(test: Test, suite: Suite): void {}
+  endTest(test: TestCase, result: TestResult): void {}
   end(): void {}
 }
