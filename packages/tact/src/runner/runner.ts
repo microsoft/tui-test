@@ -2,6 +2,7 @@ import path from "node:path";
 import url from "node:url";
 import os from "node:os";
 import workerpool from "workerpool";
+
 import { Suite, getRootSuite } from "../test/suite.js";
 import { transformFiles } from "./transform.js";
 import { getRetries, getTimeout, loadConfig } from "../config/config.js";
@@ -41,7 +42,7 @@ const runSuites = async (allSuites: Suite[], reporter: BaseReporter) => {
 
           test.results.push(testResult);
           reporter.endTest(test, testResult);
-          if (status == "passed") break;
+          if (status == "expected" || status == "skipped") break;
         }
       })
     );
@@ -86,5 +87,6 @@ export const run = async () => {
   try {
     await pool.terminate(true);
   } catch {}
-  process.exit(0);
+  const failures = reporter.end(rootSuite);
+  process.exit(failures);
 };

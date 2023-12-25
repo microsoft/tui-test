@@ -1,8 +1,7 @@
-import { Shell, shellTarget } from "../terminal/shell.js";
 import { promisify } from "node:util";
 import { exec } from "node:child_process";
-import { Suite } from "../test/suite.js";
-import chalk from "chalk";
+
+import { Shell, shellTarget } from "../terminal/shell.js";
 
 const execAsync = promisify(exec);
 const ansiRegex = new RegExp(
@@ -96,34 +95,3 @@ export const ansi = {
   cursorPreviousLine: "\x1b[F",
   cursorNextLine: "\x1b[E",
 };
-
-// TODO: finish summary
-export const getSummary = (allSuites: Suite[]) => {
-  const suites = [...allSuites];
-
-  // 1) [setup] › src\tests\playwright\auth.pwt.setup.ts:9:6 ›  ───────────────────────────────────────
-  // Retry #1 ───────────────────────────────────────────────────────────────────────────────────────
-  // ───────── stdout ─────────
-  // ───────── stderr ─────────
-  const maxWidth = process.stdout.columns;
-  let currentTest = 1;
-  while (suites != null) {
-    const suite = suites.shift();
-    for (const test of suite?.tests ?? []) {
-      for (let idx = 0; idx < test.results.length; idx++) {
-        const result = test.results[idx];
-        const resultColor = chalk.green;
-        const title = idx == 0 ? resultColor(`  ) `) : chalk.gray(`    Retry #${idx} `.padEnd(maxWidth - 4, "─"));
-      }
-      currentTest += 1;
-    }
-  }
-};
-
-/*
-3 failed
-    [setup] › src\tests\playwright\auth.pwt.setup.ts:9:6 ›  ────────────────────────────────────────    
-    [setup] › src\tests\playwright\auth.pwt.setup.ts:57:6 › authenticate in Lxp as non AAD user ────    
-    [setup] › src\tests\playwright\auth.pwt.setup.ts:113:6 › authenticate as non AAD user ──────────    
-22 skipped
-*/

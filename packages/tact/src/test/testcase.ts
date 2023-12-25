@@ -8,7 +8,7 @@ export type Location = {
 
 export type TestFunction = (args: { terminal: Terminal }) => void | Promise<void>;
 
-export type TestStatus = "passed" | "failed" | "pending";
+export type TestStatus = "expected" | "unexpected" | "pending" | "skipped" | "flaky";
 
 export type TestResult = {
   status: TestStatus;
@@ -21,6 +21,18 @@ export class TestCase {
   readonly results: TestResult[] = [];
   constructor(readonly title: string, readonly location: Location, readonly testFunction: TestFunction, readonly suite: Suite) {
     this.id = this.titlePath().join("");
+  }
+
+  outcome(): TestStatus {
+    if (this.results.length == 0) return "skipped";
+    let status = this.results[0].status;
+    for (const result of this.results.slice(1)) {
+      if ((status === "unexpected" && result.status === "expected") || (status === "expected" && result.status !== "expected")) {
+        return "flaky";
+      }
+      status = result.status;
+    }
+    return status;
   }
 
   titlePath(): string[] {

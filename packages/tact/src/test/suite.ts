@@ -1,6 +1,7 @@
+import { glob } from "glob";
+
 import { TactTestOptions } from "./option.js";
 import { TactTestConfig, TactProjectConfig } from "../config/config.js";
-import { glob } from "glob";
 import type { TestCase } from "./testcase.js";
 
 type SuiteType = "file" | "describe" | "project" | "root";

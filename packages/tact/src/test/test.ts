@@ -1,10 +1,10 @@
+import { expect as expectLib, Matchers, AsymmetricMatchers, BaseExpect } from "expect";
+
 import { Suite } from "./suite.js";
 import { TestFunction, TestCase, Location } from "./testcase.js";
 export { Shell } from "../terminal/shell.js";
 import { TactTestOptions } from "./option.js";
-import { expect as expectLib } from "expect";
 import { toHaveValue } from "./matchers.js";
-import { Matchers, AsymmetricMatchers, BaseExpect } from "expect";
 import { Terminal } from "../terminal/term.js";
 import { TactTestConfig } from "../config/config.js";
 

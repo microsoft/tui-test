@@ -4,7 +4,6 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import readline from "node:readline";
 import process from "node:process";
-
 import swc from "@swc/core";
 
 const cacheFolder = path.join(".tact", "cache");

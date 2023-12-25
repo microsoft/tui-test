@@ -36,7 +36,7 @@ export function runTestWorker(test: TestCase, importPath: string, timeout: numbe
         on: (payload) => {
           if (payload.errorMessage) {
             resolve({
-              status: "failed",
+              status: "unexpected",
               error: payload.errorMessage,
               duration: payload.duration,
             });
@@ -50,26 +50,26 @@ export function runTestWorker(test: TestCase, importPath: string, timeout: numbe
       }
       await poolPromise;
       resolve({
-        status: "passed",
+        status: "expected",
         duration: Date.now() - startTime,
       });
     } catch (e) {
       const duration = startTime != null ? Date.now() - startTime : -1;
       if (typeof e === "string") {
         resolve({
-          status: "failed",
+          status: "unexpected",
           error: e,
           duration,
         });
       } else if (e instanceof workerpool.Promise.TimeoutError) {
         resolve({
-          status: "failed",
+          status: "unexpected",
           error: `Error: worker was terminated as the timeout (${timeout} ms) as exceeded`,
           duration,
         });
       } else if (e instanceof Error) {
         resolve({
-          status: "failed",
+          status: "unexpected",
           error: e.stack ?? e.message,
           duration,
         });

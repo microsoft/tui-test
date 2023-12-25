@@ -1,6 +1,7 @@
 import pty, { IPty, IEvent } from "node-pty";
 import xterm from "xterm-headless";
 import process from "node:process";
+
 import { Shell, shellTarget } from "./shell.js";
 
 type TerminalOptions = {
