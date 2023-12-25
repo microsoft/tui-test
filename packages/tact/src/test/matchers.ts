@@ -27,7 +27,7 @@ export async function toHaveValue(
       if (!pass) {
         const comparisonMethod = typeof expected === "string" ? "String.prototype.includes search" : "RegExp.prototype.test search";
         return (
-          `Error: expect(${chalk.red("received")}).toHaveValue(${chalk.green("expected")}) ${chalk.gray("// " + comparisonMethod)}` +
+          `expect(${chalk.red("received")}).toHaveValue(${chalk.green("expected")}) ${chalk.dim("// " + comparisonMethod)}` +
           `\n\nExpected: ${chalk.green(expected.toString())}\nMatches Found: ${chalk.red(0)}`
         );
       }
