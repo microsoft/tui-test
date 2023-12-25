@@ -8,8 +8,10 @@ export type Location = {
 
 export type TestFunction = (args: { terminal: Terminal }) => void | Promise<void>;
 
+export type TestStatus = "passed" | "failed" | "pending";
+
 export type TestResult = {
-  passed: boolean;
+  status: TestStatus;
   error?: string;
   duration: number;
 };

@@ -30,18 +30,18 @@ const runSuites = async (allSuites: Suite[], reporter: BaseReporter) => {
       ...suite.tests.map(async (test) => {
         for (let i = 0; i < Math.max(0, getRetries()) + 1; i++) {
           const testResult: TestResult = {
-            passed: false,
+            status: "pending",
             duration: 0,
           };
           reporter.startTest(test, testResult);
-          const { error, passed, duration } = await runTestWorker(test, suite.source!, getTimeout(), pool);
-          testResult.passed = passed;
+          const { error, status, duration } = await runTestWorker(test, suite.source!, getTimeout(), pool);
+          testResult.status = status;
           testResult.duration = duration;
           testResult.error = error;
 
           test.results.push(testResult);
           reporter.endTest(test, testResult);
-          if (passed) break;
+          if (status == "passed") break;
         }
       })
     );

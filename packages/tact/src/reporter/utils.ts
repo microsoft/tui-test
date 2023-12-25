@@ -112,7 +112,7 @@ export const getSummary = (allSuites: Suite[]) => {
     for (const test of suite?.tests ?? []) {
       for (let idx = 0; idx < test.results.length; idx++) {
         const result = test.results[idx];
-        const resultColor = result.passed ? chalk.green : chalk.red;
+        const resultColor = chalk.green;
         const title = idx == 0 ? resultColor(`  ) `) : chalk.gray(`    Retry #${idx} `.padEnd(maxWidth - 4, "─"));
       }
       currentTest += 1;

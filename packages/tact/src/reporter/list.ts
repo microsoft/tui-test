@@ -19,37 +19,71 @@ export class ListReporter extends BaseReporter {
 
   override startTest(test: TestCase, result: TestResult): void {
     super.startTest(test, result);
+    if (!this.isTTY) {
+      return;
+    }
     this._testRows[test.id] = this.currentTest;
     const fullName = test.titlePath();
-    const retryTag = test.results.length > 0 ? ` ${chalk.yellow(`(retry #${test.results.length})`)}` : "";
-    const prefix = `     ${chalk.gray(this.currentTest)} `;
-    const line = `${chalk.gray(fullName.join(" › "))}${retryTag}`;
-    process.stdout.write(prefix + fitToWidth(line, process.stdout.columns, prefix) + "\n");
+
+    const prefix = this._linePrefix(test, result);
+    const line = chalk.dim(fullName.join(" › ")) + this._lineSuffix(test, result);
+    this._appendLine(line, prefix);
   }
 
   override endTest(test: TestCase, result: TestResult): void {
-    const fullName = test.titlePath();
-    const retryTag = test.results.length > 1 ? ` ${chalk.yellow(`(retry #${test.results.length - 1})`)}` : "";
-    const timeTag = ` ${chalk.gray(`(${ms(result.duration)})`)}`;
-    const row = this._testRows[test.id];
-    const resultTag = result.passed ? chalk.green("✔") : chalk.red("✘");
-    const prefix = `  ${resultTag}  ${chalk.gray(row)} `;
-    const resultColor = result.passed ? chalk.green : chalk.red;
-    const line = `${resultColor(fullName.join(" › "))}${retryTag}${timeTag}`;
-
-    const offset = -(row - this.currentTest - 1);
-    process.stdout.write(
-      ansi.cursorPreviousLine.repeat(offset) +
-        ansi.eraseCurrentLine +
-        prefix +
-        fitToWidth(line, process.stdout.columns, prefix) +
-        ansi.cursorNextLine.repeat(offset)
-    );
-
     super.endTest(test, result);
+    const fullName = test.titlePath();
+    const prefix = this._linePrefix(test, result);
+    const line = this._resultColor(result)(fullName.join(" › ")) + this._lineSuffix(test, result);
+    const row = this._testRows[test.id];
+
+    this._updateOrAppendLine(row, line, prefix);
   }
 
   override end(): void {
     super.end();
+  }
+
+  private _resultColor(result: TestResult): (str: string) => string {
+    switch (result.status) {
+      case "passed":
+        return chalk.green;
+      case "failed":
+        return chalk.red;
+      case "pending":
+        return (str: string) => str;
+    }
+  }
+
+  private _linePrefix(test: TestCase, result: TestResult): string {
+    const row = this._testRows[test.id] ?? this.currentTest;
+    const resultTag = result.status === "passed" ? chalk.green("✔") : result.status === "failed" ? chalk.red("✘") : " ";
+    return `  ${resultTag}  ${chalk.dim(row)} `;
+  }
+
+  private _lineSuffix(test: TestCase, result: TestResult): string {
+    const timeTag = chalk.dim(` (${ms(result.duration)})`);
+    const retryIdx = test.results.length - (result.status === "pending" ? 0 : 1);
+    const retryTag = retryIdx > 0 ? chalk.yellow(` (retry #${retryIdx})`) : "";
+    return `${retryTag}${timeTag}`;
+  }
+
+  private _appendLine(line: string, prefix: string) {
+    process.stdout.write(prefix + fitToWidth(line, process.stdout.columns, prefix) + "\n");
+  }
+
+  private _updateLine(row: number, line: string, prefix: string) {
+    const offset = -(row - this.currentTest - 1);
+    const updateAnsi = ansi.cursorPreviousLine.repeat(offset) + ansi.eraseCurrentLine;
+    const restoreAnsi = ansi.cursorNextLine.repeat(offset);
+    process.stdout.write(updateAnsi + prefix + fitToWidth(line, process.stdout.columns, prefix) + restoreAnsi);
+  }
+
+  private _updateOrAppendLine(row: number, line: string, prefix: string) {
+    if (this.isTTY) {
+      this._updateLine(row, line, prefix);
+    } else {
+      this._appendLine(line, prefix);
+    }
   }
 }

@@ -8,9 +8,11 @@ const maxWorkers = Math.max(os.cpus().length - 1, 1);
 
 export class BaseReporter {
   protected currentTest: number;
+  protected isTTY: boolean;
 
   constructor() {
     this.currentTest = 0;
+    this.isTTY = process.stdout.isTTY;
   }
 
   private _plural(text: string, count: number): string {
@@ -35,8 +37,10 @@ export class BaseReporter {
     process.stdout.write("\n" + (shellVersions.length == 0 ? "\n" : ""));
   }
   startTest(test: TestCase, result: TestResult): void {
-    this.currentTest += 1;
+    if (this.isTTY) this.currentTest += 1;
   }
-  endTest(test: TestCase, result: TestResult): void {}
+  endTest(test: TestCase, result: TestResult): void {
+    if (!this.isTTY) this.currentTest += 1;
+  }
   end(): void {}
 }

@@ -4,11 +4,11 @@ import workerpool from "workerpool";
 import { Suite } from "../test/suite.js";
 import { spawn } from "../terminal/term.js";
 import { defaultShell } from "../terminal/shell.js";
-import { TestCase } from "../test/testcase.js";
+import { TestCase, TestStatus } from "../test/testcase.js";
 
 type WorkerResult = {
   error?: string;
-  passed: boolean;
+  status: TestStatus;
   duration: number;
 };
 
@@ -36,7 +36,7 @@ export function runTestWorker(test: TestCase, importPath: string, timeout: numbe
         on: (payload) => {
           if (payload.errorMessage) {
             resolve({
-              passed: false,
+              status: "failed",
               error: payload.errorMessage,
               duration: payload.duration,
             });
@@ -50,26 +50,26 @@ export function runTestWorker(test: TestCase, importPath: string, timeout: numbe
       }
       await poolPromise;
       resolve({
-        passed: true,
+        status: "passed",
         duration: Date.now() - startTime,
       });
     } catch (e) {
       const duration = startTime != null ? Date.now() - startTime : -1;
       if (typeof e === "string") {
         resolve({
-          passed: false,
+          status: "failed",
           error: e,
           duration,
         });
       } else if (e instanceof workerpool.Promise.TimeoutError) {
         resolve({
-          passed: false,
+          status: "failed",
           error: `Error: worker was terminated as the timeout (${timeout} ms) as exceeded`,
           duration,
         });
       } else if (e instanceof Error) {
         resolve({
-          passed: false,
+          status: "failed",
           error: e.stack ?? e.message,
           duration,
         });
