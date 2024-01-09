@@ -1,9 +1,9 @@
 import type { MatcherContext, AsyncExpectationResult } from "expect";
 import chalk from "chalk";
 
-import { Terminal } from "../terminal/term.js";
-import { poll } from "./utils.js";
-import { getExpectTimeout } from "../config/config.js";
+import { Terminal } from "../../terminal/term.js";
+import { poll } from "../utils.js";
+import { getExpectTimeout } from "../../config/config.js";
 
 export async function toHaveValue(
   this: MatcherContext,
@@ -34,12 +34,4 @@ export async function toHaveValue(
       return "passed";
     },
   };
-}
-
-// TODO: implement matcher
-export function toMatchSnapshot(this: MatcherContext, terminal: Terminal): AsyncExpectationResult {
-  return Promise.resolve({
-    pass: true,
-    message: () => "",
-  });
 }

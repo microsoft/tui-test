@@ -5,6 +5,7 @@ import { Suite } from "../test/suite.js";
 import { spawn } from "../terminal/term.js";
 import { defaultShell } from "../terminal/shell.js";
 import { TestCase, TestStatus } from "../test/testcase.js";
+import { expect } from "../test/test.js";
 
 type WorkerResult = {
   error?: string;
@@ -25,6 +26,14 @@ const runTest = async (testId: string, testSuite: Suite, importPath: string) => 
   const test = globalThis.tests[testId];
   const { shell, rows, columns } = test.suite.options ?? {};
   const terminal = await spawn({ shell: shell ?? defaultShell, rows: rows ?? 30, cols: columns ?? 80 });
+
+  const allTests = Object.values(globalThis.tests);
+  const testPath = test.filePath();
+  const signatureIdenticalTests = allTests.filter((t) => t.filePath() === testPath && t.title === test.title);
+  const signatureIdx = signatureIdenticalTests.findIndex((t) => t.id == test.id);
+  const currentConcurrentTestName = () => `${test.title} ${signatureIdx + 1}`;
+
+  expect.setState({ ...expect.getState(), testPath, currentTestName: test.title, currentConcurrentTestName });
   await Promise.resolve(test.testFunction({ terminal }));
 };
 

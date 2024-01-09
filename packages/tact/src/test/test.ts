@@ -4,7 +4,8 @@ import { Suite } from "./suite.js";
 import { TestFunction, TestCase, Location } from "./testcase.js";
 export { Shell } from "../terminal/shell.js";
 import { TactTestOptions } from "./option.js";
-import { toHaveValue } from "./matchers.js";
+import { toHaveValue } from "./matchers/toHaveValue.js";
+import { toMatchSnapshot } from "./matchers/toMatchSnapshot.js";
 import { Terminal } from "../terminal/term.js";
 import { TactTestConfig } from "../config/config.js";
 
@@ -102,6 +103,7 @@ export namespace test {
 
 expectLib.extend({
   toHaveValue,
+  toMatchSnapshot,
 });
 
 interface TerminalAssertions {
@@ -129,6 +131,8 @@ interface TerminalAssertions {
       full?: number;
     }
   ): Promise<void>;
+
+  toMatchSnapshot(): Promise<void>;
 }
 
 declare type BaseMatchers<T> = Matchers<void, T> & Inverse<Matchers<void, T>> & PromiseMatchers<T>;

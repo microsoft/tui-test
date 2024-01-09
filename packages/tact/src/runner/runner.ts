@@ -19,7 +19,7 @@ declare global {
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const maxWorkers = Math.max(os.cpus().length - 1, 1);
-const pool = workerpool.pool(path.join(__dirname, "worker.js"), { workerType: "process", maxWorkers });
+const pool = workerpool.pool(path.join(__dirname, "worker.js"), { workerType: "process", maxWorkers, forkOpts: { stdio: "inherit" } });
 
 const runSuites = async (allSuites: Suite[], reporter: BaseReporter) => {
   const tasks: Promise<any>[] = [];

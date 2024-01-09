@@ -35,6 +35,16 @@ export class TestCase {
     return status;
   }
 
+  filePath(): string | undefined {
+    let currentSuite: Suite | undefined = this.suite;
+    while (currentSuite != null) {
+      if (currentSuite.type === "file") {
+        return currentSuite.title;
+      }
+      currentSuite = currentSuite.parentSuite;
+    }
+  }
+
   titlePath(): string[] {
     const titles = [];
     let currentSuite: Suite | undefined = this.suite;

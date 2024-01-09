@@ -16,6 +16,22 @@ export const spawn = async (options: TerminalOptions): Promise<Terminal> => {
   return new Terminal(await shellTarget(options.shell), options.shellArgs ?? [], options.rows, options.cols, options.env);
 };
 
+type CellShift = {
+  bgColorMode?: number;
+  bgColor?: number;
+  fgColorMode?: number;
+  fgColor?: number;
+  blink?: number;
+  bold?: number;
+  dim?: number;
+  inverse?: number;
+  invisible?: number;
+  italic?: number;
+  overline?: number;
+  strike?: number;
+  underline?: number;
+};
+
 export class Terminal {
   readonly #pty: IPty;
   readonly #term: xterm.Terminal;
@@ -79,6 +95,78 @@ export class Terminal {
       y: this.#term.buffer.active.cursorY,
       baseY: this.#term.buffer.active.baseY,
     };
+  }
+
+  private _shift(baseCell: xterm.IBufferCell | undefined, targetCell: xterm.IBufferCell | undefined): CellShift {
+    const result: CellShift = {};
+    if (!(baseCell?.getBgColorMode() == targetCell?.getBgColorMode() && baseCell?.getBgColor() == targetCell?.getBgColor())) {
+      result.bgColorMode = targetCell?.getBgColorMode();
+      result.bgColor = targetCell?.getBgColor();
+    }
+    if (!(baseCell?.getFgColorMode() == targetCell?.getFgColorMode() && baseCell?.getFgColor() == targetCell?.getFgColor())) {
+      result.fgColorMode = targetCell?.getFgColorMode();
+      result.fgColor = targetCell?.getFgColor();
+    }
+    if (baseCell?.isBlink() !== targetCell?.isBlink()) {
+      result.blink = targetCell?.isBlink();
+    }
+    if (baseCell?.isBold() !== targetCell?.isBold()) {
+      result.bold = targetCell?.isBold();
+    }
+    if (baseCell?.isDim() !== targetCell?.isDim()) {
+      result.dim = targetCell?.isDim();
+    }
+    if (baseCell?.isInverse() !== targetCell?.isInverse()) {
+      result.inverse = targetCell?.isInverse();
+    }
+    if (baseCell?.isInvisible() !== targetCell?.isInvisible()) {
+      result.invisible = targetCell?.isInvisible();
+    }
+    if (baseCell?.isItalic() !== targetCell?.isItalic()) {
+      result.italic = targetCell?.isItalic();
+    }
+    if (baseCell?.isOverline() !== targetCell?.isOverline()) {
+      result.overline = targetCell?.isOverline();
+    }
+    if (baseCell?.isStrikethrough() !== targetCell?.isStrikethrough()) {
+      result.strike = targetCell?.isStrikethrough();
+    }
+    if (baseCell?.isUnderline() !== targetCell?.isUnderline()) {
+      result.underline = targetCell?.isUnderline();
+    }
+    return result;
+  }
+
+  serialize(): { view: string; shifts: Map<string, CellShift> } {
+    const shifts = new Map<string, CellShift>();
+    const lines = [];
+
+    const empty = (o: object) => Object.keys(o).length === 0;
+    let prevCell = undefined;
+    for (let y = this.#term.buffer.active.baseY; y < this.#term.buffer.active.length; y++) {
+      const line = this.#term.buffer.active.getLine(y);
+      const lineView = [];
+      if (line == null) continue;
+      for (let x = 0; x < line.length; x++) {
+        const cell = line.getCell(x);
+        const chars = cell?.getChars() ?? "";
+        lineView.push(chars.length === 0 ? " " : chars);
+        const shift = this._shift(prevCell, cell);
+        if (!empty(shift)) {
+          shifts.set(`${x},${y}`, shift);
+        }
+        prevCell = cell;
+      }
+      lines.push(lineView.join(""));
+    }
+    const view = this._box(lines.join("\n"), this.#term.cols);
+    return { view, shifts };
+  }
+
+  private _box(view: string, width: number) {
+    const top = "╭" + "─".repeat(width) + "╮";
+    const bottom = "╰" + "─".repeat(width) + "╯";
+    return [top, ...view.split("\n").map((line) => "│" + line + "│"), bottom].join("\n");
   }
 
   kill() {
