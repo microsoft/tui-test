@@ -3,17 +3,21 @@ import { test, expect, Shell } from "@microsoft/tact-test";
 test.use({ shell: Shell.Cmd });
 
 test("", async ({ terminal }) => {
-  terminal.write("");
-  terminal.resize(80, 30);
+  terminal.write("foo");
+  terminal.resize(80, 15);
 
-  await expect(terminal).toHaveValue("> ");
-  // expect(terminal.cursor().x).toBe(59);
+  await expect(terminal).toHaveValue("foo");
+  await expect(terminal).toMatchSnapshot();
 });
 
 test("", async ({ terminal }) => {
-  terminal.write("");
-  terminal.resize(80, 30);
+  terminal.write("bar");
+  terminal.resize(80, 15);
 
-  await expect(terminal).toHaveValue("> ");
-  expect(terminal.cursor().x).toBe(59);
+  await expect(terminal).toHaveValue("bar");
+  await expect(terminal).toMatchSnapshot();
+
+  terminal.write("foo");
+  await expect(terminal).toHaveValue("foo");
+  await expect(terminal).toMatchSnapshot();
 });

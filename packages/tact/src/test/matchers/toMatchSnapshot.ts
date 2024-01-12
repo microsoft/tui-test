@@ -33,7 +33,15 @@ const writeSnapshot = async (testPath: string, testName: string, snapshot: strin
   if (!fs.existsSync(snapPath)) {
     await fsAsync.mkdir(path.dirname(snapPath), { recursive: true });
   }
-  await fsAsync.appendFile(snapPath, `exports[\`${testName}\`] = String.raw\`\n${snapshot}\n\`;`);
+  await fsAsync.appendFile(snapPath, `exports[\`${testName}\`] = String.raw\`\n${snapshot}\n\`;\n\n`);
+};
+
+const generateSnapshot = (terminal: Terminal) => {
+  const { view, shifts } = terminal.serialize();
+  if (shifts.size === 0) {
+    return view;
+  }
+  return `${view}\n${JSON.stringify(Object.fromEntries(shifts), null, 2)}`;
 };
 
 export async function toMatchSnapshot(this: MatcherContext, terminal: Terminal): AsyncExpectationResult {
@@ -41,22 +49,20 @@ export async function toMatchSnapshot(this: MatcherContext, terminal: Terminal):
   const snapshotIdx = snapshotsIdx.get(testName) ?? 0;
   const snapshotPostfixTestName = snapshotIdx != null && snapshotIdx != 0 ? `${testName} ${snapshotIdx}` : testName;
   snapshotsIdx.set(testName, snapshotIdx + 1);
-  const snapshot = await loadSnapshot(this.testPath ?? "", snapshotPostfixTestName);
-
-  const { view, shifts } = terminal.serialize();
-  const currentSnapshot = `${view}\n${JSON.stringify(shifts, null, 2)}`;
+  const existingSnapshot = await loadSnapshot(this.testPath ?? "", snapshotPostfixTestName);
+  const newSnapshot = generateSnapshot(terminal);
 
   // TODO: add check for -u flag
-  if (snapshot == null) {
-    await writeSnapshot(this.testPath ?? "", snapshotPostfixTestName, currentSnapshot);
+  if (existingSnapshot == null) {
+    await writeSnapshot(this.testPath ?? "", snapshotPostfixTestName, newSnapshot);
     return Promise.resolve({
       pass: true,
       message: () => "",
     });
   }
-  const pass = currentSnapshot == snapshot;
+  const pass = existingSnapshot == newSnapshot;
   return Promise.resolve({
     pass,
-    message: pass ? () => "" : () => diffStringsUnified(snapshot ?? "", currentSnapshot),
+    message: pass ? () => "" : () => diffStringsUnified(existingSnapshot, newSnapshot ?? ""),
   });
 }
