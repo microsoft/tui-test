@@ -2,6 +2,7 @@ import path from "node:path";
 import url from "node:url";
 import os from "node:os";
 import workerpool from "workerpool";
+import chalk from "chalk";
 
 import { Suite, getRootSuite } from "../test/suite.js";
 import { transformFiles } from "./transform.js";
@@ -51,7 +52,20 @@ const runSuites = async (allSuites: Suite[], reporter: BaseReporter) => {
   return Promise.all(tasks);
 };
 
+const checkNodeVersion = () => {
+  const nodeVersion = process.versions.node;
+  const nodeMajorVersion = nodeVersion.split(".")[0];
+  if (nodeMajorVersion.trim() != "18") {
+    console.warn(
+      chalk.yellow(
+        `tact works best when using a supported node versions (which ${nodeVersion} is not). See https://aka.ms/tact-supported-node-versions for more details.\n`
+      )
+    );
+  }
+};
+
 export const run = async () => {
+  checkNodeVersion();
   await transformFiles();
   const config = await loadConfig();
   const rootSuite = await getRootSuite(config);
