@@ -1,4 +1,4 @@
-import pty, { IPty, IEvent } from "node-pty";
+import pty, { IPty, IEvent } from "@homebridge/node-pty-prebuilt-multiarch";
 import xterm from "xterm-headless";
 import process from "node:process";
 

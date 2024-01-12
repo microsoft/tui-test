@@ -54,7 +54,7 @@ export const getRootSuite = async (config: Required<TactTestConfig>): Promise<Su
   const suites = (
     await Promise.all(
       projects.map(async (project) => {
-        const files = await glob(project.testMatch, { ignore: ["node_modules/**"] });
+        const files = await glob(project.testMatch, { ignore: ["**/node_modules/**"] });
         const suite = new Suite(project.name, "project", { shell: project.shell, rows: project.rows, columns: project.columns });
         suite.suites = files.map((file) => new Suite(file, "file", { shell: project.shell, rows: project.rows, columns: project.columns }, suite));
         return suite;
