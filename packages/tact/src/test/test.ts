@@ -1,4 +1,4 @@
-import { expect as expectLib, Matchers, AsymmetricMatchers, BaseExpect } from "expect";
+import { expect as jestExpect, Matchers, AsymmetricMatchers, BaseExpect } from "expect";
 
 import { Suite } from "./suite.js";
 import { TestFunction, TestCase, Location } from "./testcase.js";
@@ -101,7 +101,7 @@ export namespace test {
   };
 }
 
-expectLib.extend({
+jestExpect.extend({
   toHaveValue,
   toMatchSnapshot,
 });
@@ -165,7 +165,7 @@ declare type Inverse<Matchers> = {
   not: Matchers;
 };
 
-const expect = expectLib as Expect;
+const expect = jestExpect as Expect;
 
 export { expect };
 
