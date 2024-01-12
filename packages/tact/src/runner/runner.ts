@@ -18,11 +18,15 @@ declare global {
   var tests: { [testId: string]: TestCase };
 }
 
+type ExecutionOptions = {
+  updateSnapshot: boolean;
+};
+
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const maxWorkers = Math.max(os.cpus().length - 1, 1);
 const pool = workerpool.pool(path.join(__dirname, "worker.js"), { workerType: "process", maxWorkers, forkOpts: { stdio: "inherit" } });
 
-const runSuites = async (allSuites: Suite[], reporter: BaseReporter) => {
+const runSuites = async (allSuites: Suite[], reporter: BaseReporter, { updateSnapshot }: ExecutionOptions) => {
   const tasks: Promise<any>[] = [];
   const suites = [...allSuites];
   while (suites.length != 0) {
@@ -36,7 +40,7 @@ const runSuites = async (allSuites: Suite[], reporter: BaseReporter) => {
             duration: 0,
           };
           reporter.startTest(test, testResult);
-          const { error, status, duration } = await runTestWorker(test, suite.source!, getTimeout(), pool);
+          const { error, status, duration } = await runTestWorker(test, suite.source!, { timeout: getTimeout(), updateSnapshot }, pool);
           testResult.status = status;
           testResult.duration = duration;
           testResult.error = error;
@@ -64,7 +68,7 @@ const checkNodeVersion = () => {
   }
 };
 
-export const run = async () => {
+export const run = async (options: ExecutionOptions) => {
   checkNodeVersion();
   await transformFiles();
   const config = await loadConfig();
@@ -97,7 +101,7 @@ export const run = async () => {
     }, config.globalTimeout);
   }
 
-  await runSuites(rootSuite.suites, reporter);
+  await runSuites(rootSuite.suites, reporter, options);
   try {
     await pool.terminate(true);
   } catch {}

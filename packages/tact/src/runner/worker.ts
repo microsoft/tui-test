@@ -13,12 +13,18 @@ type WorkerResult = {
   duration: number;
 };
 
+type WorkerExecutionOptions = {
+  timeout: number;
+  updateSnapshot: boolean;
+};
+
 const importSet = new Set<string>();
 
-const runTest = async (testId: string, testSuite: Suite, importPath: string) => {
+const runTest = async (testId: string, testSuite: Suite, updateSnapshot: boolean, importPath: string) => {
   process.setSourceMapsEnabled(true);
   globalThis.suite = testSuite;
   globalThis.tests = globalThis.tests ?? {};
+  globalThis.__expectState = { updateSnapshot };
   if (!importSet.has(importPath)) {
     await import(importPath);
     importSet.add(importPath);
@@ -37,11 +43,16 @@ const runTest = async (testId: string, testSuite: Suite, importPath: string) => 
   await Promise.resolve(test.testFunction({ terminal }));
 };
 
-export function runTestWorker(test: TestCase, importPath: string, timeout: number, pool: workerpool.Pool): Promise<WorkerResult> {
+export function runTestWorker(
+  test: TestCase,
+  importPath: string,
+  { timeout, updateSnapshot }: WorkerExecutionOptions,
+  pool: workerpool.Pool
+): Promise<WorkerResult> {
   return new Promise(async (resolve, reject) => {
     let startTime = Date.now();
     try {
-      const poolPromise = pool.exec("testWorker", [test.id, getMockSuite(test), importPath], {
+      const poolPromise = pool.exec("testWorker", [test.id, getMockSuite(test), updateSnapshot, importPath], {
         on: (payload) => {
           if (payload.errorMessage) {
             resolve({
@@ -102,13 +113,13 @@ const getMockSuite = (test: TestCase): Suite => {
   return newSuites[0];
 };
 
-const testWorker = async (testId: string, testSuite: Suite, importPath: string): Promise<void> => {
+const testWorker = async (testId: string, testSuite: Suite, updateSnapshot: boolean, importPath: string): Promise<void> => {
   const startTime = Date.now();
   workerpool.workerEmit({
     startTime,
   });
   try {
-    await runTest(testId, testSuite, importPath);
+    await runTest(testId, testSuite, updateSnapshot, importPath);
   } catch (e) {
     let errorMessage;
     if (typeof e == "string") {

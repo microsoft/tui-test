@@ -12,6 +12,7 @@ import { TactTestConfig } from "../config/config.js";
 declare global {
   var suite: Suite;
   var tests: { [testId: string]: TestCase };
+  var __expectState: { updateSnapshot: boolean };
 }
 
 /**

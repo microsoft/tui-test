@@ -52,8 +52,7 @@ export async function toMatchSnapshot(this: MatcherContext, terminal: Terminal):
   const existingSnapshot = await loadSnapshot(this.testPath ?? "", snapshotPostfixTestName);
   const newSnapshot = generateSnapshot(terminal);
 
-  // TODO: add check for -u flag
-  if (existingSnapshot == null) {
+  if (existingSnapshot == null || globalThis.__expectState.updateSnapshot) {
     await writeSnapshot(this.testPath ?? "", snapshotPostfixTestName, newSnapshot);
     return Promise.resolve({
       pass: true,
