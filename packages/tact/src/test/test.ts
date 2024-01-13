@@ -15,12 +15,7 @@ declare global {
   var __expectState: { updateSnapshot: boolean };
 }
 
-/**
- * These tests are executed in tact environment that launches a shell and provides a fresh pty session to each test.
- * @param title Test title.
- * @param testFunction The test function that is run when calling the test function.
- */
-export function test(title: string, testFunction: TestFunction) {
+const getTestLocation = () => {
   const errorStack = new Error().stack;
   let location: Location = { row: 0, column: 0 };
   if (errorStack) {
@@ -34,7 +29,16 @@ export function test(title: string, testFunction: TestFunction) {
       location = { row, column };
     }
   }
+  return location;
+};
 
+/**
+ * These tests are executed in tact environment that launches a shell and provides a fresh pty session to each test.
+ * @param title Test title.
+ * @param testFunction The test function that is run when calling the test function.
+ */
+export function test(title: string, testFunction: TestFunction) {
+  const location = getTestLocation();
   const test = new TestCase(title, location, testFunction, globalThis.suite);
   if (globalThis.tests != null) {
     globalThis.tests[test.id] = test;
@@ -99,6 +103,53 @@ export namespace test {
     globalThis.suite = currentSuite;
     callback();
     globalThis.suite = parentSuite;
+  };
+
+  /**
+   * Declares a skipped test. Skipped test is never run.
+   *
+   * **Usage**
+   *
+   * ```js
+   * import { test, expect } from '@microsoft/tact-test';
+   *
+   * test.skip('broken test', async ({ page }) => {
+   *   // ...
+   * });
+   * ```
+   *
+   * @param title Test title.
+   * @param testFunction The test function that is run when calling the test function.
+   */
+  export const skip = (title: string, testFunction: TestFunction) => {
+    const location = getTestLocation();
+    const test = new TestCase(title, location, testFunction, globalThis.suite, "skipped");
+    if (globalThis.tests != null) {
+      globalThis.tests[test.id] = test;
+    }
+    globalThis.suite.tests.push(test);
+  };
+
+  /**
+   * Declares a failed test.
+   *
+   * **Usage**
+   *
+   * ```js
+   * import { test, expect } from '@microsoft/tact-test';
+   *
+   * test.fail('purposely failing test', async ({ page }) => {
+   *   // ...
+   * });
+   * ```
+   *
+   * @param title Test title.
+   * @param testFunction The test function that is run when calling the test function.
+   */
+  export const fail = (title: string, testFunction: TestFunction) => {
+    const location = getTestLocation();
+    const test = new TestCase(title, location, testFunction, globalThis.suite, "unexpected");
+    globalThis.suite.tests.push(test);
   };
 }
 

@@ -52,6 +52,16 @@ export function runTestWorker(
   pool: workerpool.Pool
 ): Promise<WorkerResult> {
   const snapshots: SnapshotStatus[] = [];
+  if (test.expectedStatus === "skipped") {
+    return new Promise((resolve) =>
+      resolve({
+        status: "skipped",
+        duration: 0,
+        snapshots,
+      })
+    );
+  }
+
   return new Promise(async (resolve, _) => {
     let startTime = Date.now();
     try {

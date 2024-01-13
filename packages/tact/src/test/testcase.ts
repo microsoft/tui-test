@@ -21,7 +21,13 @@ export type TestResult = {
 export class TestCase {
   readonly id: string;
   readonly results: TestResult[] = [];
-  constructor(readonly title: string, readonly location: Location, readonly testFunction: TestFunction, readonly suite: Suite) {
+  constructor(
+    readonly title: string,
+    readonly location: Location,
+    readonly testFunction: TestFunction,
+    readonly suite: Suite,
+    readonly expectedStatus: TestStatus = "expected"
+  ) {
     this.id = this.titlePath().join("");
   }
 
@@ -34,6 +40,7 @@ export class TestCase {
       }
       status = result.status;
     }
+    if (this.expectedStatus === status) return "expected";
     return status;
   }
 
