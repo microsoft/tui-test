@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 // source: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html
 
 const ESC = "\u001B";

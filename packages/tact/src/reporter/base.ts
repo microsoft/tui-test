@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import os from "node:os";
 import chalk from "chalk";
 
@@ -43,9 +46,9 @@ export class BaseReporter {
       chalk.dim(
         `Running ${chalk.dim.reset(testCount)} ${this._plural("test", testCount)} using ${chalk.dim.reset(workers)} ${this._plural(
           "worker",
-          workers
-        )} with the following shells:\n`
-      )
+          workers,
+        )} with the following shells:\n`,
+      ),
     );
 
     shellVersions.forEach(({ shell, version, target }) => {
@@ -53,9 +56,13 @@ export class BaseReporter {
     });
     process.stdout.write("\n" + (shellVersions.length == 0 ? "\n" : ""));
   }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   startTest(test: TestCase, result: TestResult): void {
     if (this.isTTY) this.currentTest += 1;
   }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   endTest(test: TestCase, result: TestResult): void {
     if (!this.isTTY) this.currentTest += 1;
   }

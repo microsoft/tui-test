@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import type { MatcherContext, AsyncExpectationResult } from "expect";
 import { diffStringsUnified } from "jest-diff";
 import path from "node:path";
@@ -10,7 +13,7 @@ import { Terminal } from "../../terminal/term.js";
 
 export type SnapshotStatus = "passed" | "failed" | "written" | "updated";
 
-const snapshots = new Map<string, any>();
+const snapshots = new Map<string, string>();
 const snapshotsIdx = new Map<string, number>();
 const snapshotPath = (testPath: string): string => path.join(process.cwd(), path.dirname(testPath), "__snapshots__", `${path.basename(testPath)}.snap.cjs`);
 
@@ -44,7 +47,7 @@ const updateSnapshot = async (testPath: string, testName: string, snapshot: stri
     Object.keys(snapshots)
       .sort()
       .map((snapshotName) => `exports[\`${snapshotName}\`] = String.raw\`\n${snapshots[snapshotName].trim()}\n\`;\n\n`)
-      .join("")
+      .join(""),
   );
   await fh.close();
 };

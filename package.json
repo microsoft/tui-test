@@ -3,7 +3,9 @@
   "scripts": {
     "build": "cd packages/tact && npx tsc && cd ../..",
     "package": "npm pack ./packages/tact ./packages/tact-test",
-    "dev": "npm run build && node packages/tact/lib/cli/index.js"
+    "dev": "npm run build && node packages/tact/lib/cli/index.js",
+    "lint": "eslint packages/tact/src/ --ext .ts,.tsx && prettier packages/tact/src/ --check",
+    "lint:fix": "eslint packages/tact/src/ --ext .ts,.tsx --fix && prettier packages/tact/src/ --write"
   },
   "type": "module",
   "author": "Microsoft Corporation",
@@ -13,6 +15,12 @@
     "@tsconfig/node18": "^18.2.2",
     "@types/uuid": "^9.0.7",
     "@types/which": "^3.0.3",
+    "@typescript-eslint/eslint-plugin": "^6.7.4",
+    "@typescript-eslint/parser": "^6.7.4",
+    "eslint": "^8.51.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-header": "^3.1.1",
+    "prettier": "3.2.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   }

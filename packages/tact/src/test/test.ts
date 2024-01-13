@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import { expect as jestExpect, Matchers, AsymmetricMatchers, BaseExpect } from "expect";
 
 import { Suite } from "./suite.js";
@@ -8,6 +11,8 @@ import { toHaveValue } from "./matchers/toHaveValue.js";
 import { toMatchSnapshot } from "./matchers/toMatchSnapshot.js";
 import { Terminal } from "../terminal/term.js";
 import { TactTestConfig } from "../config/config.js";
+
+/* eslint-disable no-var */
 
 declare global {
   var suite: Suite;
@@ -46,6 +51,7 @@ export function test(title: string, testFunction: TestFunction) {
   globalThis.suite.tests.push(test);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace test {
   /**
    * Specifies options or fixtures to use in a single test file or a test.describe group. Most useful to
@@ -181,7 +187,7 @@ interface TerminalAssertions {
        * Whether to check the entire terminal buffer for the value instead of only the visible section.
        */
       full?: number;
-    }
+    },
   ): Promise<void>;
 
   toMatchSnapshot(): Promise<void>;

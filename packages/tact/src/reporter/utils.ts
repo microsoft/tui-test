@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import { promisify } from "node:util";
 import { exec } from "node:child_process";
 
@@ -5,8 +8,9 @@ import { Shell, shellLaunch } from "../terminal/shell.js";
 
 const execAsync = promisify(exec);
 const ansiRegex = new RegExp(
+  // eslint-disable-next-line no-control-regex
   "([\\u001B\\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~])))",
-  "g"
+  "g",
 );
 
 export const loadShellVersions = async (shell: Shell[]): Promise<{ shell: Shell; version?: string; target: string }[]> => {
@@ -54,10 +58,12 @@ export const loadShellVersions = async (shell: Shell[]): Promise<{ shell: Shell;
             break;
           }
         }
-      } catch {}
+      } catch {
+        /* empty */
+      }
       version = (version?.length ?? 0) > 0 ? version : undefined;
       return { shell, target, version };
-    })
+    }),
   );
 };
 

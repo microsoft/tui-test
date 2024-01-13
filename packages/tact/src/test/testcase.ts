@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import { Terminal } from "../terminal/term.js";
 import type { Suite } from "./suite.js";
 import type { SnapshotStatus } from "./matchers/toMatchSnapshot.js";
@@ -26,7 +29,7 @@ export class TestCase {
     readonly location: Location,
     readonly testFunction: TestFunction,
     readonly suite: Suite,
-    readonly expectedStatus: TestStatus = "expected"
+    readonly expectedStatus: TestStatus = "expected",
   ) {
     this.id = this.titlePath().join("");
   }

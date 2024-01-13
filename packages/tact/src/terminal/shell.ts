@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
@@ -99,7 +102,7 @@ const getGitBashPaths = async (): Promise<string[]> => {
     gitBashPaths.push(
       `${gitDir}\\Git\\bin\\bash.exe`,
       `${gitDir}\\Git\\usr\\bin\\bash.exe`,
-      `${gitDir}\\usr\\bin\\bash.exe` // using Git for Windows SDK
+      `${gitDir}\\usr\\bin\\bash.exe`, // using Git for Windows SDK
     );
   }
 

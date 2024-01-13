@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import path from "node:path";
 import url from "node:url";
 import os from "node:os";
@@ -13,6 +16,8 @@ import { ListReporter } from "../reporter/list.js";
 import { BaseReporter } from "../reporter/base.js";
 import { TestCase, TestResult } from "../test/testcase.js";
 
+/* eslint-disable no-var */
+
 declare global {
   var suite: Suite;
   var tests: { [testId: string]: TestCase };
@@ -27,7 +32,7 @@ const maxWorkers = Math.max(os.cpus().length - 1, 1);
 const pool = workerpool.pool(path.join(__dirname, "worker.js"), { workerType: "process", maxWorkers, forkOpts: { stdio: "inherit" } });
 
 const runSuites = async (allSuites: Suite[], reporter: BaseReporter, { updateSnapshot }: ExecutionOptions) => {
-  const tasks: Promise<any>[] = [];
+  const tasks: Promise<void>[] = [];
   const suites = [...allSuites];
   while (suites.length != 0) {
     const suite = suites.shift();
@@ -51,7 +56,7 @@ const runSuites = async (allSuites: Suite[], reporter: BaseReporter, { updateSna
           reporter.endTest(test, testResult);
           if (status == "expected" || status == "skipped") break;
         }
-      })
+      }),
     );
     suites.push(...suite.suites);
   }
@@ -64,8 +69,8 @@ const checkNodeVersion = () => {
   if (nodeMajorVersion.trim() != "18") {
     console.warn(
       chalk.yellow(
-        `tact works best when using a supported node versions (which ${nodeVersion} is not). See https://aka.ms/tact-supported-node-versions for more details.\n`
-      )
+        `tact works best when using a supported node versions (which ${nodeVersion} is not). See https://aka.ms/tact-supported-node-versions for more details.\n`,
+      ),
     );
   }
 };
@@ -110,7 +115,9 @@ export const run = async (options: ExecutionOptions) => {
   await runSuites(rootSuite.suites, reporter, options);
   try {
     await pool.terminate(true);
-  } catch {}
+  } catch {
+    /* empty */
+  }
   const failures = reporter.end(rootSuite);
   process.exit(failures);
 };

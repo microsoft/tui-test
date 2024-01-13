@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import { glob } from "glob";
 
 import { TactTestOptions } from "./option.js";
@@ -11,7 +14,12 @@ export class Suite {
   tests: TestCase[] = [];
   source?: string;
 
-  constructor(readonly title: string, readonly type: SuiteType, public options?: TactTestOptions, public parentSuite?: Suite) {}
+  constructor(
+    readonly title: string,
+    readonly type: SuiteType,
+    public options?: TactTestOptions,
+    public parentSuite?: Suite,
+  ) {}
 
   allTests(): TestCase[] {
     const suitesIterable = [...this.suites];
@@ -59,7 +67,7 @@ export const getRootSuite = async (config: Required<TactTestConfig>): Promise<Su
         const suite = new Suite(project.name, "project", { shell: project.shell, rows: project.rows, columns: project.columns });
         suite.suites = files.map((file) => new Suite(file, "file", { shell: project.shell, rows: project.rows, columns: project.columns }, suite));
         return suite;
-      })
+      }),
     )
   ).flat();
 

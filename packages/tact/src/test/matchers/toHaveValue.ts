@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import type { MatcherContext, AsyncExpectationResult } from "expect";
 import chalk from "chalk";
 
@@ -9,7 +12,7 @@ export async function toHaveValue(
   this: MatcherContext,
   terminal: Terminal,
   expected: string | RegExp,
-  options?: { timeout?: number; full?: boolean }
+  options?: { timeout?: number; full?: boolean },
 ): AsyncExpectationResult {
   const pass = await poll(
     () => {
@@ -18,7 +21,7 @@ export async function toHaveValue(
       return pass;
     },
     50,
-    options?.timeout ?? getExpectTimeout()
+    options?.timeout ?? getExpectTimeout(),
   );
 
   return {

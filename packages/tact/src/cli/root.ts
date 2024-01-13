@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+/* eslint-disable header/header */
+
 import { run } from "../runner/runner.js";
 
 type RootCommandOptions = {

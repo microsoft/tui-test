@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import ms from "pretty-ms";
 import chalk from "chalk";
 

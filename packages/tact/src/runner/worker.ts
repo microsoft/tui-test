@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import process from "node:process";
 import workerpool from "workerpool";
 
@@ -45,24 +48,22 @@ const runTest = async (testId: string, testSuite: Suite, updateSnapshot: boolean
   await Promise.resolve(test.testFunction({ terminal }));
 };
 
-export function runTestWorker(
+export async function runTestWorker(
   test: TestCase,
   importPath: string,
   { timeout, updateSnapshot }: WorkerExecutionOptions,
-  pool: workerpool.Pool
+  pool: workerpool.Pool,
 ): Promise<WorkerResult> {
   const snapshots: SnapshotStatus[] = [];
   if (test.expectedStatus === "skipped") {
-    return new Promise((resolve) =>
-      resolve({
-        status: "skipped",
-        duration: 0,
-        snapshots,
-      })
-    );
+    return {
+      status: "skipped",
+      duration: 0,
+      snapshots,
+    };
   }
 
-  return new Promise(async (resolve, _) => {
+  return new Promise((resolve) => {
     let startTime = Date.now();
     try {
       const poolPromise = pool.exec("testWorker", [test.id, getMockSuite(test), updateSnapshot, importPath], {
@@ -84,12 +85,13 @@ export function runTestWorker(
       if (timeout > 0) {
         poolPromise.timeout(timeout);
       }
-      await poolPromise;
-      resolve({
-        status: "expected",
-        duration: Date.now() - startTime,
-        snapshots,
-      });
+      poolPromise.then(() =>
+        resolve({
+          status: "expected",
+          duration: Date.now() - startTime,
+          snapshots,
+        }),
+      );
     } catch (e) {
       const duration = startTime != null ? Date.now() - startTime : -1;
       if (typeof e === "string") {
@@ -120,7 +122,7 @@ export function runTestWorker(
 
 const getMockSuite = (test: TestCase): Suite => {
   let testSuite: Suite | undefined = test.suite;
-  let newSuites: Suite[] = [];
+  const newSuites: Suite[] = [];
   while (testSuite != null) {
     if (testSuite.type !== "describe") {
       newSuites.push(new Suite(testSuite.title, testSuite.type, testSuite.options));

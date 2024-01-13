@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import path from "node:path";
 import fsAsync from "node:fs/promises";
 import fs from "node:fs";
@@ -102,7 +105,7 @@ const copyFilesToCache = async (directory: string, destination: string) => {
           await fsAsync.copyFile(resolvedPath, destinationPath);
         }
       }
-    })
+    }),
   );
 };
 

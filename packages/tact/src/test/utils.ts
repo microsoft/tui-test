@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 export async function poll(callback: () => boolean | Promise<boolean>, delay: number, timeout: number): Promise<boolean> {
   return await _poll(callback, Date.now(), delay, timeout);
 }

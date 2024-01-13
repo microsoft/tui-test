@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import pty, { IPty, IEvent } from "@homebridge/node-pty-prebuilt-multiarch";
 import xterm from "xterm-headless";
 import process from "node:process";
@@ -40,7 +43,13 @@ export class Terminal {
   readonly #term: xterm.Terminal;
   readonly onExit: IEvent<{ exitCode: number; signal?: number }>;
 
-  constructor(shellTarget: string, shellArgs: string[], private _rows: number, private _cols: number, env?: { [key: string]: string | undefined }) {
+  constructor(
+    shellTarget: string,
+    shellArgs: string[],
+    private _rows: number,
+    private _cols: number,
+    env?: { [key: string]: string | undefined },
+  ) {
     this.#pty = pty.spawn(shellTarget, shellArgs ?? [], {
       name: "xterm-256color",
       cols: this._cols,
