@@ -1,7 +1,9 @@
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
+import url from "node:url";
 import which from "which";
+import fsAsync from "node:fs/promises";
 
 export enum Shell {
   Bash = "bash",
@@ -13,9 +15,55 @@ export enum Shell {
 }
 
 export const defaultShell = os.platform() == "win32" ? Shell.Cmd : Shell.Bash;
+export const userZdotdir = process.env?.ZDOTDIR ?? os.homedir() ?? `~`;
+export const zdotdir = path.join(os.tmpdir(), `tact-zsh`);
 
-export const shellTarget = async (shell: Shell): Promise<string> =>
-  shell == Shell.Bash && os.platform() == "win32" ? await gitBashPath() : os.platform() == "win32" ? `${shell}.exe` : shell;
+export const shellLaunch = async (shell: Shell) => {
+  const platform = os.platform();
+  const shellTarget = shell == Shell.Bash && platform == "win32" ? await gitBashPath() : platform == "win32" ? `${shell}.exe` : shell;
+  const shellFolderPath = path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..", "..", "shell");
+  let shellArgs: string[] | undefined = undefined;
+
+  switch (shell) {
+    case Shell.Bash:
+      shellArgs = ["--init-file", path.join(shellFolderPath, "shellIntegration.bash")];
+      break;
+    case Shell.WindowsPowershell:
+      shellArgs = ["-NoLogo", "-noexit", "-command", `try { . "${path.join(shellFolderPath, "shellIntegration.ps1")}" } catch {}`];
+      break;
+    case Shell.Powershell:
+      shellArgs = ["-noexit", "-command", `. "${path.join(shellFolderPath, "shellIntegration.ps1")}"`];
+      break;
+    case Shell.Fish:
+      shellArgs = ["--init-command", `. ${path.join(shellFolderPath, "shellIntegration.fish").replace(/(\s+)/g, "\\$1")}`];
+      break;
+  }
+
+  return { shellTarget, shellArgs };
+};
+
+export const shellEnv = (shell: Shell) => {
+  const env = {
+    ...process.env,
+  };
+  switch (shell) {
+    case Shell.Cmd: {
+      return { ...env, PROMPT: "$G" };
+    }
+    case Shell.Zsh: {
+      return { ...env, ZDOTDIR: zdotdir, USER_ZDOTDIR: userZdotdir };
+    }
+  }
+  return env;
+};
+
+export const setupZshDotfiles = async () => {
+  const shellFolderPath = path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..", "..", "shell");
+  await fsAsync.cp(path.join(shellFolderPath, "shellIntegration-rc.zsh"), path.join(zdotdir, ".zshrc"));
+  await fsAsync.cp(path.join(shellFolderPath, "shellIntegration-profile.zsh"), path.join(zdotdir, ".zprofile"));
+  await fsAsync.cp(path.join(shellFolderPath, "shellIntegration-env.zsh"), path.join(zdotdir, ".zshenv"));
+  await fsAsync.cp(path.join(shellFolderPath, "shellIntegration-login.zsh"), path.join(zdotdir, ".zlogin"));
+};
 
 const gitBashPath = async (): Promise<string> => {
   const gitBashPaths = await getGitBashPaths();

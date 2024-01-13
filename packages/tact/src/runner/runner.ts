@@ -8,7 +8,7 @@ import { Suite, getRootSuite } from "../test/suite.js";
 import { transformFiles } from "./transform.js";
 import { getRetries, getTimeout, loadConfig } from "../config/config.js";
 import { runTestWorker } from "./worker.js";
-import { Shell } from "../terminal/shell.js";
+import { Shell, setupZshDotfiles } from "../terminal/shell.js";
 import { ListReporter } from "../reporter/list.js";
 import { BaseReporter } from "../reporter/base.js";
 import { TestCase, TestResult } from "../test/testcase.js";
@@ -95,6 +95,9 @@ export const run = async (options: ExecutionOptions) => {
 
   const allTests = rootSuite.allTests();
   const shells = Array.from(new Set(allTests.map((t) => t.suite.options?.shell).filter((s): s is Shell => s != null)));
+  if (shells.includes(Shell.Zsh)) {
+    await setupZshDotfiles();
+  }
   await reporter.start(allTests.length, shells);
 
   if (config.globalTimeout > 0) {

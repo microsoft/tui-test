@@ -1,0 +1,3 @@
+function Global:Prompt() {
+    return "> "
+}

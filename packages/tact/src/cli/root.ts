@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { Command } from "commander";
 import { run } from "../runner/runner.js";
 
 type RootCommandOptions = {

@@ -1,7 +1,7 @@
 import { promisify } from "node:util";
 import { exec } from "node:child_process";
 
-import { Shell, shellTarget } from "../terminal/shell.js";
+import { Shell, shellLaunch } from "../terminal/shell.js";
 
 const execAsync = promisify(exec);
 const ansiRegex = new RegExp(
@@ -12,7 +12,7 @@ const ansiRegex = new RegExp(
 export const loadShellVersions = async (shell: Shell[]): Promise<{ shell: Shell; version?: string; target: string }[]> => {
   return Promise.all(
     shell.map(async (shell) => {
-      const target = await shellTarget(shell);
+      const { shellTarget: target } = await shellLaunch(shell);
       let version: string | undefined;
       try {
         switch (shell) {

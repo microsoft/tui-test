@@ -4,7 +4,7 @@ import process from "node:process";
 
 import ansi from "./ansi.js";
 
-import { Shell, shellTarget } from "./shell.js";
+import { Shell, shellLaunch, shellEnv } from "./shell.js";
 
 type TerminalOptions = {
   env?: { [key: string]: string | undefined };
@@ -15,7 +15,8 @@ type TerminalOptions = {
 };
 
 export const spawn = async (options: TerminalOptions): Promise<Terminal> => {
-  return new Terminal(await shellTarget(options.shell), options.shellArgs ?? [], options.rows, options.cols, options.env);
+  const { shellTarget, shellArgs } = await shellLaunch(options.shell);
+  return new Terminal(shellTarget, options.shellArgs ?? shellArgs ?? [], options.rows, options.cols, { ...shellEnv(options.shell), ...options.env });
 };
 
 type CellShift = {
