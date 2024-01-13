@@ -2,6 +2,8 @@ import pty, { IPty, IEvent } from "@homebridge/node-pty-prebuilt-multiarch";
 import xterm from "xterm-headless";
 import process from "node:process";
 
+import ansi from "./ansi.js";
+
 import { Shell, shellTarget } from "./shell.js";
 
 type TerminalOptions = {
@@ -64,6 +66,69 @@ export class Terminal {
     this.#pty.write(data);
   }
 
+  /**
+   * Press up arrow key a specific amount of times.
+   *
+   * @param count Count of cells to move up. Default is `1`.
+   */
+  keyUp(count?: number | undefined): void {
+    this.#pty.write(ansi.keyUp.repeat(count ?? 1));
+  }
+
+  /**
+   * Press down arrow key a specific amount of times.
+   *
+   * @param count Count of cells to move down. Default is `1`.
+   */
+  keyDown(count?: number | undefined): void {
+    this.#pty.write(ansi.keyDown.repeat(count ?? 1));
+  }
+
+  /**
+   * Press left arrow key a specific amount of times.
+   *
+   * @param count Count of cells to move left. Default is `1`.
+   */
+  keyLeft(count?: number | undefined): void {
+    this.#pty.write(ansi.keyLeft.repeat(count ?? 1));
+  }
+
+  /**
+   * Press right arrow key a specific amount of times.
+   *
+   * @param count Count of cells to move right. Default is `1`.
+   */
+  keyRight(count?: number | undefined): void {
+    this.#pty.write(ansi.keyRight.repeat(count ?? 1));
+  }
+
+  /**
+   * Press escape key a specific amount of times.
+   *
+   * @param count Count of escapes. Default is `1`.
+   */
+  keyEscape(count?: number | undefined): void {
+    this.#pty.write(ansi.ESC.repeat(count ?? 1));
+  }
+
+  /**
+   * Press delete key a specific amount of times.
+   *
+   * @param count Count of escapes. Default is `1`.
+   */
+  keyDelete(count?: number | undefined): void {
+    this.#pty.write(ansi.keyDelete.repeat(count ?? 1));
+  }
+
+  /**
+   * Press backspace key a specific amount of times.
+   *
+   * @param count Count of escapes. Default is `1`.
+   */
+  keyBackspace(count?: number | undefined): void {
+    this.#pty.write(ansi.keyBackspace.repeat(count ?? 1));
+  }
+
   getBuffer(): string[][] {
     return this._getBuffer(0, this.#term.buffer.active.length);
   }
@@ -89,7 +154,7 @@ export class Terminal {
     return lines;
   }
 
-  cursor() {
+  getCursor() {
     return {
       x: this.#term.buffer.active.cursorX,
       y: this.#term.buffer.active.cursorY,
