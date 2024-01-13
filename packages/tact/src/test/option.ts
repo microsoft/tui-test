@@ -15,4 +15,9 @@ export interface TactTestOptions {
    * The number of columns to initialize the terminal with. Defaults to 80.
    */
   columns?: number;
+
+  /**
+   * Environment to be set for the shell.
+   */
+  env?: { [key: string]: string | undefined };
 }

@@ -41,13 +41,14 @@ export class Suite {
 
 export const getRootSuite = async (config: Required<TactTestConfig>): Promise<Suite> => {
   const projects: Required<TactProjectConfig>[] = [
-    { shell: config.use.shell!, rows: config.use.rows!, columns: config.use.columns!, testMatch: config.testMatch!, name: "" },
+    { shell: config.use.shell!, rows: config.use.rows!, columns: config.use.columns!, testMatch: config.testMatch!, name: "", env: config.use.env! },
     ...(config.projects?.map((project) => ({
       shell: project.shell ?? config.use.shell!,
       name: project.name ?? "",
       rows: project.rows ?? config.use.rows!,
       columns: project.columns ?? config.use.columns!,
       testMatch: project.testMatch,
+      env: project.env ?? config.use.env!,
     })) ?? []),
   ];
 

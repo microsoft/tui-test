@@ -32,8 +32,8 @@ const runTest = async (testId: string, testSuite: Suite, updateSnapshot: boolean
     importSet.add(importPath);
   }
   const test = globalThis.tests[testId];
-  const { shell, rows, columns } = test.suite.options ?? {};
-  const terminal = await spawn({ shell: shell ?? defaultShell, rows: rows ?? 30, cols: columns ?? 80 });
+  const { shell, rows, columns, env } = test.suite.options ?? {};
+  const terminal = await spawn({ shell: shell ?? defaultShell, rows: rows ?? 30, cols: columns ?? 80, env });
 
   const allTests = Object.values(globalThis.tests);
   const testPath = test.filePath();
