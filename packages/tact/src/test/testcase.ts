@@ -1,5 +1,6 @@
 import { Terminal } from "../terminal/term.js";
 import type { Suite } from "./suite.js";
+import type { SnapshotStatus } from "./matchers/toMatchSnapshot.js";
 
 export type Location = {
   row: number;
@@ -14,6 +15,7 @@ export type TestResult = {
   status: TestStatus;
   error?: string;
   duration: number;
+  snapshots: SnapshotStatus[];
 };
 
 export class TestCase {
@@ -33,6 +35,10 @@ export class TestCase {
       status = result.status;
     }
     return status;
+  }
+
+  snapshots(): SnapshotStatus[] {
+    return this.results.at(-1)?.snapshots ?? [];
   }
 
   filePath(): string | undefined {

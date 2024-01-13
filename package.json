@@ -1,9 +1,9 @@
 {
   "name": "@microsoft/tact-internal",
   "scripts": {
-    "build": "tsc --project packages/tact/tsconfig.json --rootDir .",
+    "build": "cd packages/tact && npx tsc && cd ../..",
     "package": "npm pack ./packages/tact ./packages/tact-test",
-    "dev": "node --loader ts-node/esm packages/tact/src/cli/cli.ts"
+    "dev": "npm run build && node packages/tact/lib/cli/index.js"
   },
   "type": "module",
   "author": "Microsoft Corporation",

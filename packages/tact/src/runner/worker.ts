@@ -6,11 +6,13 @@ import { spawn } from "../terminal/term.js";
 import { defaultShell } from "../terminal/shell.js";
 import { TestCase, TestStatus } from "../test/testcase.js";
 import { expect } from "../test/test.js";
+import { SnapshotStatus } from "../test/matchers/toMatchSnapshot.js";
 
 type WorkerResult = {
   error?: string;
   status: TestStatus;
   duration: number;
+  snapshots: SnapshotStatus[];
 };
 
 type WorkerExecutionOptions = {
@@ -49,7 +51,8 @@ export function runTestWorker(
   { timeout, updateSnapshot }: WorkerExecutionOptions,
   pool: workerpool.Pool
 ): Promise<WorkerResult> {
-  return new Promise(async (resolve, reject) => {
+  const snapshots: SnapshotStatus[] = [];
+  return new Promise(async (resolve, _) => {
     let startTime = Date.now();
     try {
       const poolPromise = pool.exec("testWorker", [test.id, getMockSuite(test), updateSnapshot, importPath], {
@@ -59,9 +62,12 @@ export function runTestWorker(
               status: "unexpected",
               error: payload.errorMessage,
               duration: payload.duration,
+              snapshots,
             });
           } else if (payload.startTime) {
             startTime = payload.startTime;
+          } else if (payload.snapshotResult) {
+            snapshots.push(payload.snapshotResult);
           }
         },
       });
@@ -72,6 +78,7 @@ export function runTestWorker(
       resolve({
         status: "expected",
         duration: Date.now() - startTime,
+        snapshots,
       });
     } catch (e) {
       const duration = startTime != null ? Date.now() - startTime : -1;
@@ -80,18 +87,21 @@ export function runTestWorker(
           status: "unexpected",
           error: e,
           duration,
+          snapshots,
         });
       } else if (e instanceof workerpool.Promise.TimeoutError) {
         resolve({
           status: "unexpected",
           error: `Error: worker was terminated as the timeout (${timeout} ms) as exceeded`,
           duration,
+          snapshots,
         });
       } else if (e instanceof Error) {
         resolve({
           status: "unexpected",
           error: e.stack ?? e.message,
           duration,
+          snapshots,
         });
       }
     }

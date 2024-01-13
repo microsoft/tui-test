@@ -4,12 +4,14 @@ import path from "node:path";
 import process from "node:process";
 import fs from "node:fs";
 import fsAsync from "node:fs/promises";
+import workpool from "workerpool";
 
 import { Terminal } from "../../terminal/term.js";
 
+export type SnapshotStatus = "passed" | "failed" | "written" | "updated";
+
 const snapshots = new Map<string, any>();
 const snapshotsIdx = new Map<string, number>();
-
 const snapshotPath = (testPath: string): string => path.join(process.cwd(), path.dirname(testPath), "__snapshots__", `${path.basename(testPath)}.snap.cjs`);
 
 const loadSnapshot = async (testPath: string, testName: string): Promise<string | undefined> => {
@@ -28,12 +30,23 @@ const loadSnapshot = async (testPath: string, testName: string): Promise<string 
   return Object.hasOwn(snaps, testName) ? snaps[testName].trim() : undefined;
 };
 
-const writeSnapshot = async (testPath: string, testName: string, snapshot: string): Promise<void> => {
+const updateSnapshot = async (testPath: string, testName: string, snapshot: string): Promise<void> => {
   const snapPath = snapshotPath(testPath);
   if (!fs.existsSync(snapPath)) {
     await fsAsync.mkdir(path.dirname(snapPath), { recursive: true });
   }
-  await fsAsync.appendFile(snapPath, `exports[\`${testName}\`] = String.raw\`\n${snapshot}\n\`;\n\n`);
+
+  const fh = await fsAsync.open(snapPath, "w+");
+  const snapshots = (await import(`file://${snapPath}`)).default;
+  snapshots[testName] = snapshot;
+
+  await fh.writeFile(
+    Object.keys(snapshots)
+      .sort()
+      .map((snapshotName) => `exports[\`${snapshotName}\`] = String.raw\`\n${snapshots[snapshotName].trim()}\n\`;\n\n`)
+      .join("")
+  );
+  await fh.close();
 };
 
 const generateSnapshot = (terminal: Terminal) => {
@@ -51,17 +64,25 @@ export async function toMatchSnapshot(this: MatcherContext, terminal: Terminal):
   snapshotsIdx.set(testName, snapshotIdx + 1);
   const existingSnapshot = await loadSnapshot(this.testPath ?? "", snapshotPostfixTestName);
   const newSnapshot = generateSnapshot(terminal);
+  const snapshotsDifferent = existingSnapshot !== newSnapshot;
+  const snapshotShouldUpdate = globalThis.__expectState.updateSnapshot && snapshotsDifferent;
+  const snapshotEmpty = existingSnapshot == null;
 
-  if (existingSnapshot == null || globalThis.__expectState.updateSnapshot) {
-    await writeSnapshot(this.testPath ?? "", snapshotPostfixTestName, newSnapshot);
+  if (!workpool.isMainThread) {
+    const snapshotResult = snapshotEmpty ? "written" : snapshotShouldUpdate ? "updated" : snapshotsDifferent ? "failed" : "passed";
+    workpool.workerEmit({ snapshotResult, testName });
+  }
+
+  if (snapshotEmpty || snapshotShouldUpdate) {
+    await updateSnapshot(this.testPath ?? "", snapshotPostfixTestName, newSnapshot);
     return Promise.resolve({
       pass: true,
       message: () => "",
     });
   }
-  const pass = existingSnapshot == newSnapshot;
+
   return Promise.resolve({
-    pass,
-    message: pass ? () => "" : () => diffStringsUnified(existingSnapshot, newSnapshot ?? ""),
+    pass: !snapshotsDifferent,
+    message: !snapshotsDifferent ? () => "" : () => diffStringsUnified(existingSnapshot, newSnapshot ?? ""),
   });
 }

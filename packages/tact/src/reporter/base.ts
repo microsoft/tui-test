@@ -15,6 +15,12 @@ type TestSummary = {
   unexpected: TestCase[];
   flaky: TestCase[];
   failuresToPrint: TestCase[];
+  snapshots: {
+    passed: number;
+    failed: number;
+    written: number;
+    updated: number;
+  };
 };
 
 export class BaseReporter {
@@ -67,8 +73,25 @@ export class BaseReporter {
     let expected = 0;
     const unexpected: TestCase[] = [];
     const flaky: TestCase[] = [];
+    const snapshots = { written: 0, updated: 0, failed: 0, passed: 0 };
 
     rootSuite.allTests().forEach((test) => {
+      test.snapshots().forEach((snapshot) => {
+        switch (snapshot) {
+          case "passed":
+            snapshots.passed++;
+            break;
+          case "failed":
+            snapshots.failed++;
+            break;
+          case "written":
+            snapshots.written++;
+            break;
+          case "updated":
+            snapshots.updated++;
+            break;
+        }
+      });
       switch (test.outcome()) {
         case "skipped": {
           if (!test.results.length) {
@@ -98,29 +121,49 @@ export class BaseReporter {
       unexpected,
       flaky,
       failuresToPrint,
+      snapshots,
     };
   }
 
-  private _printSummary({ didNotRun, skipped, expected, unexpected, flaky }: TestSummary) {
+  private _printSummary({ didNotRun, skipped, expected, unexpected, flaky, snapshots }: TestSummary) {
     const tokens = [];
     if (unexpected.length) {
-      tokens.push(chalk.red(`  ${unexpected.length} failed`));
-      for (const test of unexpected) tokens.push(chalk.red(this._header(test)));
+      tokens.push(chalk.red(`${unexpected.length} failed`));
     }
     if (flaky.length) {
-      tokens.push(chalk.yellow(`  ${flaky.length} flaky`));
+      tokens.push(chalk.yellow(`${flaky.length} flaky`));
       for (const test of flaky) tokens.push(chalk.yellow(this._header(test)));
     }
     if (didNotRun > 0) {
-      tokens.push(chalk.yellow(`  ${didNotRun} did not run`));
+      tokens.push(chalk.yellow(`${didNotRun} did not run`));
     }
     if (skipped > 0) {
-      tokens.push(chalk.yellow(`  ${didNotRun} skipped`));
+      tokens.push(chalk.yellow(`${didNotRun} skipped`));
     }
     if (expected > 0) {
-      tokens.push(chalk.green(`  ${expected} passed`));
+      tokens.push(chalk.green(`${expected} passed`));
     }
-    process.stdout.write(tokens.join("\n") + "\n");
+
+    const testTotal = unexpected.length + flaky.length + didNotRun + skipped + expected;
+    process.stdout.write(`\n  tests: ${tokens.join(", ")}, ${testTotal} total\n`);
+
+    const snapshotTokens = [];
+    if (snapshots.passed > 0) {
+      snapshotTokens.push(chalk.green(`${snapshots.passed} passed`));
+    }
+    if (snapshots.failed > 0) {
+      snapshotTokens.push(chalk.red(`${snapshots.failed} failed`));
+    }
+    if (snapshots.updated > 0) {
+      snapshotTokens.push(chalk.green(`${snapshots.updated} updated`));
+    }
+    if (snapshots.written > 0) {
+      snapshotTokens.push(chalk.green(`${snapshots.written} written`));
+    }
+
+    const snapshotTotal = snapshots.passed + snapshots.failed + snapshots.written + snapshots.updated;
+    const snapshotErrorPostfix = snapshots.failed > 0 ? chalk.dim("(Inspect your code changes or use the `-u` flag to update them.)") : "";
+    process.stdout.write(`  snapshots: ${snapshotTokens.join(", ")}, ${snapshotTotal} total ${snapshotErrorPostfix}\n\n`);
   }
 
   private _header(test: TestCase, prefix?: string): string {

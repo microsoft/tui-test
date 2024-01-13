@@ -38,12 +38,14 @@ const runSuites = async (allSuites: Suite[], reporter: BaseReporter, { updateSna
           const testResult: TestResult = {
             status: "pending",
             duration: 0,
+            snapshots: [],
           };
           reporter.startTest(test, testResult);
-          const { error, status, duration } = await runTestWorker(test, suite.source!, { timeout: getTimeout(), updateSnapshot }, pool);
+          const { error, status, duration, snapshots } = await runTestWorker(test, suite.source!, { timeout: getTimeout(), updateSnapshot }, pool);
           testResult.status = status;
           testResult.duration = duration;
           testResult.error = error;
+          testResult.snapshots = snapshots;
 
           test.results.push(testResult);
           reporter.endTest(test, testResult);
@@ -70,6 +72,7 @@ const checkNodeVersion = () => {
 
 export const run = async (options: ExecutionOptions) => {
   checkNodeVersion();
+
   await transformFiles();
   const config = await loadConfig();
   const rootSuite = await getRootSuite(config);
