@@ -152,7 +152,9 @@ export class BaseReporter {
     }
 
     const testTotal = unexpected.length + flaky.length + didNotRun + skipped + expected;
-    process.stdout.write(`\n  tests: ${tokens.join(", ")}, ${testTotal} total\n`);
+    if (testTotal !== 0) {
+      process.stdout.write(`\n  tests: ${tokens.join(", ")}, ${testTotal} total\n`);
+    }
 
     const snapshotTokens = [];
     if (snapshots.passed > 0) {
@@ -170,7 +172,11 @@ export class BaseReporter {
 
     const snapshotTotal = snapshots.passed + snapshots.failed + snapshots.written + snapshots.updated;
     const snapshotErrorPostfix = snapshots.failed > 0 ? chalk.dim("(Inspect your code changes or use the `-u` flag to update them.)") : "";
-    process.stdout.write(`  snapshots: ${snapshotTokens.join(", ")}, ${snapshotTotal} total ${snapshotErrorPostfix}\n\n`);
+    if (snapshotTotal !== 0) {
+      process.stdout.write(`  snapshots: ${snapshotTokens.join(", ")}, ${snapshotTotal} total ${snapshotErrorPostfix}\n\n`);
+    } else {
+      process.stdout.write("\n");
+    }
   }
 
   private _header(test: TestCase, prefix?: string): string {
