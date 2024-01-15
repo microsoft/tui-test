@@ -17,6 +17,21 @@ type TerminalOptions = {
   shellArgs?: string[];
 };
 
+type CursorPosition = {
+  /**
+   * The x position of the cursor. This ranges between 0 (left side) and Terminal.cols (after last cell of the row).
+   */
+  x: number;
+  /**
+   * The y position of the cursor. This ranges between 0 (when the cursor is at baseY) and Terminal.rows - 1 (when the cursor is on the last row).
+   */
+  y: number;
+  /**
+   * The line within the buffer where the top of the bottom page is (when fully scrolled down).
+   */
+  baseY: number;
+};
+
 export const spawn = async (options: TerminalOptions): Promise<Terminal> => {
   const { shellTarget, shellArgs } = await shellLaunch(options.shell);
   return new Terminal(shellTarget, options.shellArgs ?? shellArgs ?? [], options.rows, options.cols, { ...shellEnv(options.shell), ...options.env });
@@ -65,6 +80,12 @@ export class Terminal {
     this.onExit = this.#pty.onExit;
   }
 
+  /**
+   * Change the size of the terminal
+   *
+   * @param columns Count of column cells
+   * @param rows Count of row cells
+   */
   resize(columns: number, rows: number) {
     this._cols = columns;
     this._rows = rows;
@@ -72,6 +93,11 @@ export class Terminal {
     this.#term.resize(columns, rows);
   }
 
+  /**
+   * Write the provided data through to the shell
+   *
+   * @param data Data to write to the shell
+   */
   write(data: string): void {
     this.#pty.write(data);
   }
@@ -115,7 +141,7 @@ export class Terminal {
   /**
    * Press escape key a specific amount of times.
    *
-   * @param count Count of escapes. Default is `1`.
+   * @param count Count of key presses. Default is `1`.
    */
   keyEscape(count?: number | undefined): void {
     this.#pty.write(ansi.ESC.repeat(count ?? 1));
@@ -124,7 +150,7 @@ export class Terminal {
   /**
    * Press delete key a specific amount of times.
    *
-   * @param count Count of escapes. Default is `1`.
+   * @param count Count of key presses. Default is `1`.
    */
   keyDelete(count?: number | undefined): void {
     this.#pty.write(ansi.keyDelete.repeat(count ?? 1));
@@ -133,16 +159,44 @@ export class Terminal {
   /**
    * Press backspace key a specific amount of times.
    *
-   * @param count Count of escapes. Default is `1`.
+   * @param count Count of key presses. Default is `1`.
    */
   keyBackspace(count?: number | undefined): void {
     this.#pty.write(ansi.keyBackspace.repeat(count ?? 1));
   }
 
+  /**
+   * Press Ctrl+C key combination a specific amount of times.
+   *
+   * @param count Count of key presses. Default is `1`.
+   */
+  keyCtrlC(count?: number | undefined): void {
+    this.#pty.write(ansi.keyCtrlC.repeat(count ?? 1));
+  }
+
+  /**
+   * Press Ctrl+D key combination a specific amount of times.
+   *
+   * @param count Count of key presses. Default is `1`.
+   */
+  keyCtrlD(count?: number | undefined): void {
+    this.#pty.write(ansi.keyCtrlD.repeat(count ?? 1));
+  }
+
+  /**
+   * Get an array representation of the entire active terminal buffer
+   *
+   * @returns an array representation of the buffer
+   */
   getBuffer(): string[][] {
     return this._getBuffer(0, this.#term.buffer.active.length);
   }
 
+  /**
+   * Get an array representation of the visible active terminal buffer
+   *
+   * @returns an array representation of the buffer
+   */
   getViewableBuffer(): string[][] {
     return this._getBuffer(this.#term.buffer.active.baseY, this.#term.buffer.active.length);
   }
@@ -164,7 +218,12 @@ export class Terminal {
     return lines;
   }
 
-  getCursor() {
+  /**
+   * Get the terminal's cursor positions
+   *
+   * @returns the cursor's positions
+   */
+  getCursor(): CursorPosition {
     return {
       x: this.#term.buffer.active.cursorX,
       y: this.#term.buffer.active.cursorY,
@@ -212,6 +271,11 @@ export class Terminal {
     return result;
   }
 
+  /**
+   * Serialize the terminal into an encoding for snapshots
+   *
+   * @returns snapshot information
+   */
   serialize(): { view: string; shifts: Map<string, CellShift> } {
     const shifts = new Map<string, CellShift>();
     const lines = [];
@@ -244,6 +308,9 @@ export class Terminal {
     return [top, ...view.split("\n").map((line) => "│" + line + "│"), bottom].join("\n");
   }
 
+  /**
+   * Kill the terminal and underlying processes
+   */
   kill() {
     process.kill(this.#pty.pid, 9);
   }

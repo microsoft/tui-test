@@ -12,5 +12,7 @@ const keyRight = CSI + "C";
 const keyLeft = CSI + "D";
 const keyBackspace = "\u007F";
 const keyDelete = CSI + "3~";
+const keyCtrlC = "\u0003";
+const keyCtrlD = "\u0004";
 
-export default { keyUp, keyDown, keyRight, keyLeft, ESC, keyBackspace, keyDelete };
+export default { keyUp, keyDown, keyRight, keyLeft, ESC, keyBackspace, keyDelete, keyCtrlC, keyCtrlD };
