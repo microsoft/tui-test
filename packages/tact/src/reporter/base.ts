@@ -106,7 +106,6 @@ export class BaseReporter {
             break;
         }
       });
-      console.log(test.outcome(), test.id, test.results.length);
       switch (test.outcome()) {
         case "skipped": {
           if (!test.results.length) {
