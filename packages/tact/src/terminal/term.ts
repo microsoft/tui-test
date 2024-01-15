@@ -34,7 +34,13 @@ type CursorPosition = {
 
 export const spawn = async (options: TerminalOptions): Promise<Terminal> => {
   const { shellTarget, shellArgs } = await shellLaunch(options.shell);
-  return new Terminal(shellTarget, options.shellArgs ?? shellArgs ?? [], options.rows, options.cols, { ...shellEnv(options.shell), ...options.env });
+  return new Terminal(
+    shellTarget,
+    options.shellArgs ?? shellArgs ?? [],
+    options.rows,
+    options.cols,
+    { ...shellEnv(options.shell), ...options.env },
+  );
 };
 
 type CellShift = {
@@ -72,7 +78,11 @@ export class Terminal {
       cwd: process.cwd(),
       env,
     });
-    this.#term = new xterm.Terminal({ allowProposedApi: true, rows: this._rows, cols: this._cols });
+    this.#term = new xterm.Terminal({
+      allowProposedApi: true,
+      rows: this._rows,
+      cols: this._cols,
+    });
 
     this.#pty.onData((data) => {
       this.#term.write(data);
@@ -198,7 +208,10 @@ export class Terminal {
    * @returns an array representation of the buffer
    */
   getViewableBuffer(): string[][] {
-    return this._getBuffer(this.#term.buffer.active.baseY, this.#term.buffer.active.length);
+    return this._getBuffer(
+      this.#term.buffer.active.baseY,
+      this.#term.buffer.active.length,
+    );
   }
 
   private _getBuffer(startY: number, endY: number): string[][] {
@@ -231,13 +244,26 @@ export class Terminal {
     };
   }
 
-  private _shift(baseCell: xterm.IBufferCell | undefined, targetCell: xterm.IBufferCell | undefined): CellShift {
+  private _shift(
+    baseCell: xterm.IBufferCell | undefined,
+    targetCell: xterm.IBufferCell | undefined,
+  ): CellShift {
     const result: CellShift = {};
-    if (!(baseCell?.getBgColorMode() == targetCell?.getBgColorMode() && baseCell?.getBgColor() == targetCell?.getBgColor())) {
+    if (
+      !(
+        baseCell?.getBgColorMode() == targetCell?.getBgColorMode() &&
+        baseCell?.getBgColor() == targetCell?.getBgColor()
+      )
+    ) {
       result.bgColorMode = targetCell?.getBgColorMode();
       result.bgColor = targetCell?.getBgColor();
     }
-    if (!(baseCell?.getFgColorMode() == targetCell?.getFgColorMode() && baseCell?.getFgColor() == targetCell?.getFgColor())) {
+    if (
+      !(
+        baseCell?.getFgColorMode() == targetCell?.getFgColorMode() &&
+        baseCell?.getFgColor() == targetCell?.getFgColor()
+      )
+    ) {
       result.fgColorMode = targetCell?.getFgColorMode();
       result.fgColor = targetCell?.getFgColor();
     }
@@ -282,7 +308,11 @@ export class Terminal {
 
     const empty = (o: object) => Object.keys(o).length === 0;
     let prevCell = undefined;
-    for (let y = this.#term.buffer.active.baseY; y < this.#term.buffer.active.length; y++) {
+    for (
+      let y = this.#term.buffer.active.baseY;
+      y < this.#term.buffer.active.length;
+      y++
+    ) {
       const line = this.#term.buffer.active.getLine(y);
       const lineView = [];
       if (line == null) continue;
@@ -305,7 +335,11 @@ export class Terminal {
   private _box(view: string, width: number) {
     const top = "╭" + "─".repeat(width) + "╮";
     const bottom = "╰" + "─".repeat(width) + "╯";
-    return [top, ...view.split("\n").map((line) => "│" + line + "│"), bottom].join("\n");
+    return [
+      top,
+      ...view.split("\n").map((line) => "│" + line + "│"),
+      bottom,
+    ].join("\n");
   }
 
   /**

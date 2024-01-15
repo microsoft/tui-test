@@ -29,9 +29,17 @@ type ExecutionOptions = {
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const maxWorkers = Math.max(os.cpus().length - 1, 1);
-const pool = workerpool.pool(path.join(__dirname, "worker.js"), { workerType: "process", maxWorkers, forkOpts: { stdio: "inherit" } });
+const pool = workerpool.pool(path.join(__dirname, "worker.js"), {
+  workerType: "process",
+  maxWorkers,
+  forkOpts: { stdio: "inherit" },
+});
 
-const runSuites = async (allSuites: Suite[], reporter: BaseReporter, { updateSnapshot }: ExecutionOptions) => {
+const runSuites = async (
+  allSuites: Suite[],
+  reporter: BaseReporter,
+  { updateSnapshot }: ExecutionOptions,
+) => {
   const tasks: Promise<void>[] = [];
   const suites = [...allSuites];
   while (suites.length != 0) {
@@ -46,7 +54,12 @@ const runSuites = async (allSuites: Suite[], reporter: BaseReporter, { updateSna
             snapshots: [],
           };
           reporter.startTest(test, testResult);
-          const { error, status, duration, snapshots } = await runTestWorker(test, suite.source!, { timeout: getTimeout(), updateSnapshot }, pool);
+          const { error, status, duration, snapshots } = await runTestWorker(
+            test,
+            suite.source!,
+            { timeout: getTimeout(), updateSnapshot },
+            pool,
+          );
           testResult.status = status;
           testResult.duration = duration;
           testResult.error = error;
@@ -87,7 +100,12 @@ export const run = async (options: ExecutionOptions) => {
   while (suites.length != 0) {
     const importSuite = suites.shift();
     if (importSuite?.type === "file") {
-      const transformedSuitePath = path.join(process.cwd(), ".tact", "cache", importSuite.title);
+      const transformedSuitePath = path.join(
+        process.cwd(),
+        ".tact",
+        "cache",
+        importSuite.title,
+      );
       const parsedSuitePath = path.parse(transformedSuitePath);
       const extension = parsedSuitePath.ext.startsWith(".m") ? ".mjs" : ".js";
       const importablePath = `file://${path.join(parsedSuitePath.dir, `${parsedSuitePath.name}${extension}`)}`;
@@ -99,7 +117,13 @@ export const run = async (options: ExecutionOptions) => {
   }
 
   const allTests = rootSuite.allTests();
-  const shells = Array.from(new Set(allTests.map((t) => t.suite.options?.shell).filter((s): s is Shell => s != null)));
+  const shells = Array.from(
+    new Set(
+      allTests
+        .map((t) => t.suite.options?.shell)
+        .filter((s): s is Shell => s != null),
+    ),
+  );
   if (shells.includes(Shell.Zsh)) {
     await setupZshDotfiles();
   }
@@ -107,7 +131,9 @@ export const run = async (options: ExecutionOptions) => {
 
   if (config.globalTimeout > 0) {
     setTimeout(() => {
-      console.error(`Error: global timeout (${config.globalTimeout} ms) exceeded`);
+      console.error(
+        `Error: global timeout (${config.globalTimeout} ms) exceeded`,
+      );
       process.exit(1);
     }, config.globalTimeout);
   }

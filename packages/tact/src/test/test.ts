@@ -1,7 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { expect as jestExpect, Matchers, AsymmetricMatchers, BaseExpect } from "expect";
+import {
+  expect as jestExpect,
+  Matchers,
+  AsymmetricMatchers,
+  BaseExpect,
+} from "expect";
 
 import { Suite } from "./suite.js";
 import { TestFunction, TestCase, Location } from "./testcase.js";
@@ -29,7 +34,10 @@ const getTestLocation = () => {
       ?.at(1)
       ?.split(":")
       ?.slice(-2);
-    if (lineInfo?.length === 2 && lineInfo.every((info) => /^\d+$/.test(info))) {
+    if (
+      lineInfo?.length === 2 &&
+      lineInfo.every((info) => /^\d+$/.test(info))
+    ) {
       const [row, column] = lineInfo.map((info) => Number(info));
       location = { row, column };
     }
@@ -104,7 +112,12 @@ export namespace test {
    */
   export const describe = (title: string, callback: () => void) => {
     const parentSuite = globalThis.suite;
-    const currentSuite = new Suite(title, "describe", parentSuite.options, parentSuite);
+    const currentSuite = new Suite(
+      title,
+      "describe",
+      parentSuite.options,
+      parentSuite,
+    );
     parentSuite.suites.push(currentSuite);
     globalThis.suite = currentSuite;
     callback();
@@ -129,7 +142,13 @@ export namespace test {
    */
   export const skip = (title: string, testFunction: TestFunction) => {
     const location = getTestLocation();
-    const test = new TestCase(title, location, testFunction, globalThis.suite, "skipped");
+    const test = new TestCase(
+      title,
+      location,
+      testFunction,
+      globalThis.suite,
+      "skipped",
+    );
     if (globalThis.tests != null) {
       globalThis.tests[test.id] = test;
     }
@@ -154,7 +173,13 @@ export namespace test {
    */
   export const fail = (title: string, testFunction: TestFunction) => {
     const location = getTestLocation();
-    const test = new TestCase(title, location, testFunction, globalThis.suite, "unexpected");
+    const test = new TestCase(
+      title,
+      location,
+      testFunction,
+      globalThis.suite,
+      "unexpected",
+    );
     globalThis.suite.tests.push(test);
   };
 }
@@ -193,9 +218,21 @@ interface TerminalAssertions {
   toMatchSnapshot(): Promise<void>;
 }
 
-declare type BaseMatchers<T> = Matchers<void, T> & Inverse<Matchers<void, T>> & PromiseMatchers<T>;
-declare type AllowedGenericMatchers<T> = Pick<Matchers<void, T>, "toBe" | "toBeDefined" | "toBeFalsy" | "toBeNull" | "toBeTruthy" | "toBeUndefined">;
-declare type SpecificMatchers<T> = T extends Terminal ? TerminalAssertions & AllowedGenericMatchers<T> : BaseMatchers<T>;
+declare type BaseMatchers<T> = Matchers<void, T> &
+  Inverse<Matchers<void, T>> &
+  PromiseMatchers<T>;
+declare type AllowedGenericMatchers<T> = Pick<
+  Matchers<void, T>,
+  | "toBe"
+  | "toBeDefined"
+  | "toBeFalsy"
+  | "toBeNull"
+  | "toBeTruthy"
+  | "toBeUndefined"
+>;
+declare type SpecificMatchers<T> = T extends Terminal
+  ? TerminalAssertions & AllowedGenericMatchers<T>
+  : BaseMatchers<T>;
 
 export declare type Expect = {
   <T = unknown>(actual: T): SpecificMatchers<T>;

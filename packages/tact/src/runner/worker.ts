@@ -25,7 +25,12 @@ type WorkerExecutionOptions = {
 
 const importSet = new Set<string>();
 
-const runTest = async (testId: string, testSuite: Suite, updateSnapshot: boolean, importPath: string) => {
+const runTest = async (
+  testId: string,
+  testSuite: Suite,
+  updateSnapshot: boolean,
+  importPath: string,
+) => {
   process.setSourceMapsEnabled(true);
   globalThis.suite = testSuite;
   globalThis.tests = globalThis.tests ?? {};
@@ -36,15 +41,29 @@ const runTest = async (testId: string, testSuite: Suite, updateSnapshot: boolean
   }
   const test = globalThis.tests[testId];
   const { shell, rows, columns, env } = test.suite.options ?? {};
-  const terminal = await spawn({ shell: shell ?? defaultShell, rows: rows ?? 30, cols: columns ?? 80, env });
+  const terminal = await spawn({
+    shell: shell ?? defaultShell,
+    rows: rows ?? 30,
+    cols: columns ?? 80,
+    env,
+  });
 
   const allTests = Object.values(globalThis.tests);
   const testPath = test.filePath();
-  const signatureIdenticalTests = allTests.filter((t) => t.filePath() === testPath && t.title === test.title);
-  const signatureIdx = signatureIdenticalTests.findIndex((t) => t.id == test.id);
+  const signatureIdenticalTests = allTests.filter(
+    (t) => t.filePath() === testPath && t.title === test.title,
+  );
+  const signatureIdx = signatureIdenticalTests.findIndex(
+    (t) => t.id == test.id,
+  );
   const currentConcurrentTestName = () => `${test.title} ${signatureIdx + 1}`;
 
-  expect.setState({ ...expect.getState(), testPath, currentTestName: test.title, currentConcurrentTestName });
+  expect.setState({
+    ...expect.getState(),
+    testPath,
+    currentTestName: test.title,
+    currentConcurrentTestName,
+  });
   await Promise.resolve(test.testFunction({ terminal }));
 };
 
@@ -66,22 +85,26 @@ export async function runTestWorker(
   return new Promise((resolve) => {
     let startTime = Date.now();
     try {
-      const poolPromise = pool.exec("testWorker", [test.id, getMockSuite(test), updateSnapshot, importPath], {
-        on: (payload) => {
-          if (payload.errorMessage) {
-            resolve({
-              status: "unexpected",
-              error: payload.errorMessage,
-              duration: payload.duration,
-              snapshots,
-            });
-          } else if (payload.startTime) {
-            startTime = payload.startTime;
-          } else if (payload.snapshotResult) {
-            snapshots.push(payload.snapshotResult);
-          }
+      const poolPromise = pool.exec(
+        "testWorker",
+        [test.id, getMockSuite(test), updateSnapshot, importPath],
+        {
+          on: (payload) => {
+            if (payload.errorMessage) {
+              resolve({
+                status: "unexpected",
+                error: payload.errorMessage,
+                duration: payload.duration,
+                snapshots,
+              });
+            } else if (payload.startTime) {
+              startTime = payload.startTime;
+            } else if (payload.snapshotResult) {
+              snapshots.push(payload.snapshotResult);
+            }
+          },
         },
-      });
+      );
       if (timeout > 0) {
         poolPromise.timeout(timeout);
       }
@@ -125,7 +148,9 @@ const getMockSuite = (test: TestCase): Suite => {
   const newSuites: Suite[] = [];
   while (testSuite != null) {
     if (testSuite.type !== "describe") {
-      newSuites.push(new Suite(testSuite.title, testSuite.type, testSuite.options));
+      newSuites.push(
+        new Suite(testSuite.title, testSuite.type, testSuite.options),
+      );
     }
     testSuite = testSuite.parentSuite;
   }
@@ -135,7 +160,12 @@ const getMockSuite = (test: TestCase): Suite => {
   return newSuites[0];
 };
 
-const testWorker = async (testId: string, testSuite: Suite, updateSnapshot: boolean, importPath: string): Promise<void> => {
+const testWorker = async (
+  testId: string,
+  testSuite: Suite,
+  updateSnapshot: boolean,
+  importPath: string,
+): Promise<void> => {
   const startTime = Date.now();
   workerpool.workerEmit({
     startTime,

@@ -10,9 +10,16 @@ export type Location = {
   column: number;
 };
 
-export type TestFunction = (args: { terminal: Terminal }) => void | Promise<void>;
+export type TestFunction = (args: {
+  terminal: Terminal;
+}) => void | Promise<void>;
 
-export type TestStatus = "expected" | "unexpected" | "pending" | "skipped" | "flaky";
+export type TestStatus =
+  | "expected"
+  | "unexpected"
+  | "pending"
+  | "skipped"
+  | "flaky";
 
 export type TestResult = {
   status: TestStatus;
@@ -38,7 +45,10 @@ export class TestCase {
     if (this.results.length == 0) return "skipped";
     let status = this.results[0].status;
     for (const result of this.results.slice(1)) {
-      if ((status === "unexpected" && result.status === "expected") || (status === "expected" && result.status !== "expected")) {
+      if (
+        (status === "unexpected" && result.status === "expected") ||
+        (status === "expected" && result.status !== "expected")
+      ) {
         return "flaky";
       }
       status = result.status;
@@ -70,7 +80,9 @@ export class TestCase {
       } else if (currentSuite.type === "describe") {
         titles.push(currentSuite.title);
       } else if (currentSuite.type === "file") {
-        titles.push(`${currentSuite.title}:${this.location.row}:${this.location.row}`);
+        titles.push(
+          `${currentSuite.title}:${this.location.row}:${this.location.row}`,
+        );
       }
       currentSuite = currentSuite.parentSuite;
     }

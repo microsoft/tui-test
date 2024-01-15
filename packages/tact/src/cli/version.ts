@@ -10,7 +10,9 @@ const __dirname = path.dirname(__filename);
 
 export const getVersion = async (): Promise<string> => {
   const packageJsonPath = path.join(__dirname, "..", "..", "package.json");
-  const packageJson = await fsAsync.readFile(packageJsonPath, { encoding: "utf-8" });
+  const packageJson = await fsAsync.readFile(packageJsonPath, {
+    encoding: "utf-8",
+  });
   const packageJsonParsed = JSON.parse(packageJson);
   return packageJsonParsed.version;
 };

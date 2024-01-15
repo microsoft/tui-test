@@ -47,9 +47,18 @@ export class Suite {
   }
 }
 
-export const getRootSuite = async (config: Required<TactTestConfig>): Promise<Suite> => {
+export const getRootSuite = async (
+  config: Required<TactTestConfig>,
+): Promise<Suite> => {
   const projects: Required<TactProjectConfig>[] = [
-    { shell: config.use.shell!, rows: config.use.rows!, columns: config.use.columns!, testMatch: config.testMatch!, name: "", env: config.use.env! },
+    {
+      shell: config.use.shell!,
+      rows: config.use.rows!,
+      columns: config.use.columns!,
+      testMatch: config.testMatch!,
+      name: "",
+      env: config.use.env!,
+    },
     ...(config.projects?.map((project) => ({
       shell: project.shell ?? config.use.shell!,
       name: project.name ?? "",
@@ -63,15 +72,37 @@ export const getRootSuite = async (config: Required<TactTestConfig>): Promise<Su
   const suites = (
     await Promise.all(
       projects.map(async (project) => {
-        const files = await glob(project.testMatch, { ignore: ["**/node_modules/**"] });
-        const suite = new Suite(project.name, "project", { shell: project.shell, rows: project.rows, columns: project.columns });
-        suite.suites = files.map((file) => new Suite(file, "file", { shell: project.shell, rows: project.rows, columns: project.columns }, suite));
+        const files = await glob(project.testMatch, {
+          ignore: ["**/node_modules/**"],
+        });
+        const suite = new Suite(project.name, "project", {
+          shell: project.shell,
+          rows: project.rows,
+          columns: project.columns,
+        });
+        suite.suites = files.map(
+          (file) =>
+            new Suite(
+              file,
+              "file",
+              {
+                shell: project.shell,
+                rows: project.rows,
+                columns: project.columns,
+              },
+              suite,
+            ),
+        );
         return suite;
       }),
     )
   ).flat();
 
-  const rootSuite = new Suite("Root Suite", "root", { shell: config.use.shell!, rows: config.use.rows!, columns: config.use.columns! });
+  const rootSuite = new Suite("Root Suite", "root", {
+    shell: config.use.shell!,
+    rows: config.use.rows!,
+    columns: config.use.columns!,
+  });
   rootSuite.suites = suites;
   return rootSuite;
 };

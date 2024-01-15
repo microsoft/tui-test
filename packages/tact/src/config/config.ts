@@ -12,7 +12,9 @@ const configPath = path.join(process.cwd(), ".tact", "cache", "tact.config.js");
 let loadedConfig: Required<TactTestConfig> | undefined;
 
 export const loadConfig = async (): Promise<Required<TactTestConfig>> => {
-  const userConfig: TactTestConfig = !fs.existsSync(configPath) ? {} : (await import(`file://${configPath}`)).default;
+  const userConfig: TactTestConfig = !fs.existsSync(configPath)
+    ? {}
+    : (await import(`file://${configPath}`)).default;
   loadedConfig = {
     testMatch: userConfig.testMatch ?? "**/*.@(spec|test).?(c|m)[jt]s?(x)",
     expect: {
@@ -32,7 +34,8 @@ export const loadConfig = async (): Promise<Required<TactTestConfig>> => {
   return loadedConfig;
 };
 
-export const getExpectTimeout = (): number => loadedConfig?.expect.timeout ?? 5_000;
+export const getExpectTimeout = (): number =>
+  loadedConfig?.expect.timeout ?? 5_000;
 export const getTimeout = (): number => loadedConfig?.timeout ?? 30_000;
 export const getRetries = (): number => loadedConfig?.retries ?? 0;
 
@@ -57,7 +60,9 @@ declare type WorkerOptions = {
   testMatch?: string;
 };
 
-export declare type TactProjectConfig = TestOptions & Required<WorkerOptions> & TestProject;
+export declare type TactProjectConfig = TestOptions &
+  Required<WorkerOptions> &
+  TestProject;
 
 export declare type TactTestConfig = {
   /**

@@ -18,9 +18,18 @@ type SourceMap = {
   sources?: string[];
 };
 
-const transformFile = async (source: string, sourceContent: string, sourceHash: string, destination: string) => {
+const transformFile = async (
+  source: string,
+  sourceContent: string,
+  sourceHash: string,
+  destination: string,
+) => {
   const fileExtension = path.extname(source);
-  const fileType = typescriptPattern.test(fileExtension) ? "typescript" : javascriptPattern.test(fileExtension) ? "javascript" : undefined;
+  const fileType = typescriptPattern.test(fileExtension)
+    ? "typescript"
+    : javascriptPattern.test(fileExtension)
+      ? "javascript"
+      : undefined;
   if (fileType == null) {
     throw new Error("");
   }
@@ -48,14 +57,20 @@ const transformFile = async (source: string, sourceContent: string, sourceHash: 
 
   const mapDestination = path.resolve(destination + ".map");
   const destinationFilename = path.basename(destination);
-  const mapHeader = result.map != null ? `\n//# sourceMappingURL=${destinationFilename + ".map"}` : "";
+  const mapHeader =
+    result.map != null
+      ? `\n//# sourceMappingURL=${destinationFilename + ".map"}`
+      : "";
   const hashHeader = `//# hash=${sourceHash}`;
   const code = `${hashHeader}${mapHeader}\n\n${result.code}`;
 
   await fsAsync.writeFile(destination, code);
   if (result.map != null) {
     const map = JSON.parse(result.map) as SourceMap;
-    await fsAsync.writeFile(mapDestination, JSON.stringify({ ...map, file: destinationFilename, sources: [source] }));
+    await fsAsync.writeFile(
+      mapDestination,
+      JSON.stringify({ ...map, file: destinationFilename, sources: [source] }),
+    );
   }
 };
 
@@ -79,11 +94,20 @@ const copyFilesToCache = async (directory: string, destination: string) => {
         await copyFilesToCache(resolvedPath, destinationPath);
       } else if (directoryItem.isFile() || directoryItem.isSymbolicLink()) {
         const fileExtension = path.extname(directoryItem.name);
-        if (typescriptPattern.test(fileExtension) || javascriptPattern.test(fileExtension)) {
+        if (
+          typescriptPattern.test(fileExtension) ||
+          javascriptPattern.test(fileExtension)
+        ) {
           const content = await fsAsync.readFile(resolvedPath);
-          const fileHash = crypto.createHash("md5").update(content).digest("hex");
+          const fileHash = crypto
+            .createHash("md5")
+            .update(content)
+            .digest("hex");
           const newExtension = fileExtension.startsWith(".m") ? ".mjs" : ".js";
-          const transformedPath = path.join(destination, `${path.parse(directoryItem.name).name}${newExtension}`);
+          const transformedPath = path.join(
+            destination,
+            `${path.parse(directoryItem.name).name}${newExtension}`,
+          );
           if (fs.existsSync(transformedPath)) {
             const reader = readline.createInterface({
               input: fs.createReadStream(transformedPath),
@@ -100,7 +124,12 @@ const copyFilesToCache = async (directory: string, destination: string) => {
               return;
             }
           }
-          await transformFile(resolvedPath, content.toString(), fileHash, transformedPath);
+          await transformFile(
+            resolvedPath,
+            content.toString(),
+            fileHash,
+            transformedPath,
+          );
         } else {
           await fsAsync.copyFile(resolvedPath, destinationPath);
         }

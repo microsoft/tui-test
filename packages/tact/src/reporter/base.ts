@@ -52,7 +52,14 @@ export class BaseReporter {
     );
 
     shellVersions.forEach(({ shell, version, target }) => {
-      process.stdout.write(shell + chalk.dim(" version ") + version + chalk.dim(" running from ") + target + "\n");
+      process.stdout.write(
+        shell +
+          chalk.dim(" version ") +
+          version +
+          chalk.dim(" running from ") +
+          target +
+          "\n",
+      );
     });
     process.stdout.write("\n" + (shellVersions.length == 0 ? "\n" : ""));
   }
@@ -132,7 +139,14 @@ export class BaseReporter {
     };
   }
 
-  private _printSummary({ didNotRun, skipped, expected, unexpected, flaky, snapshots }: TestSummary) {
+  private _printSummary({
+    didNotRun,
+    skipped,
+    expected,
+    unexpected,
+    flaky,
+    snapshots,
+  }: TestSummary) {
     const tokens = [];
     if (unexpected.length) {
       tokens.push(chalk.red(`${unexpected.length} failed`));
@@ -151,9 +165,12 @@ export class BaseReporter {
       tokens.push(chalk.green(`${expected} passed`));
     }
 
-    const testTotal = unexpected.length + flaky.length + didNotRun + skipped + expected;
+    const testTotal =
+      unexpected.length + flaky.length + didNotRun + skipped + expected;
     if (testTotal !== 0) {
-      process.stdout.write(`\n  tests: ${tokens.join(", ")}, ${testTotal} total\n`);
+      process.stdout.write(
+        `\n  tests: ${tokens.join(", ")}, ${testTotal} total\n`,
+      );
     }
 
     const snapshotTokens = [];
@@ -170,10 +187,21 @@ export class BaseReporter {
       snapshotTokens.push(chalk.green(`${snapshots.written} written`));
     }
 
-    const snapshotTotal = snapshots.passed + snapshots.failed + snapshots.written + snapshots.updated;
-    const snapshotErrorPostfix = snapshots.failed > 0 ? chalk.dim("(Inspect your code changes or use the `-u` flag to update them.)") : "";
+    const snapshotTotal =
+      snapshots.passed +
+      snapshots.failed +
+      snapshots.written +
+      snapshots.updated;
+    const snapshotErrorPostfix =
+      snapshots.failed > 0
+        ? chalk.dim(
+            "(Inspect your code changes or use the `-u` flag to update them.)",
+          )
+        : "";
     if (snapshotTotal !== 0) {
-      process.stdout.write(`  snapshots: ${snapshotTokens.join(", ")}, ${snapshotTotal} total ${snapshotErrorPostfix}\n\n`);
+      process.stdout.write(
+        `  snapshots: ${snapshotTokens.join(", ")}, ${snapshotTotal} total ${snapshotErrorPostfix}\n\n`,
+      );
     } else {
       process.stdout.write("\n");
     }
@@ -202,8 +230,14 @@ export class BaseReporter {
       test.results.forEach((result, resultIdx) => {
         if (result.error == null) return;
         const header =
-          resultIdx === 0 ? this._resultColor(test.outcome())(this._header(test, `  ${failureIdx + 1}) `)) : chalk.dim(this._retryHeader(resultIdx));
-        process.stdout.write("\n" + header + "\n\n" + padError(result.error) + "\n\n");
+          resultIdx === 0
+            ? this._resultColor(test.outcome())(
+                this._header(test, `  ${failureIdx + 1}) `),
+              )
+            : chalk.dim(this._retryHeader(resultIdx));
+        process.stdout.write(
+          "\n" + header + "\n\n" + padError(result.error) + "\n\n",
+        );
       });
     });
   }

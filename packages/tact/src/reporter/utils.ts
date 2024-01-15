@@ -13,7 +13,9 @@ const ansiRegex = new RegExp(
   "g",
 );
 
-export const loadShellVersions = async (shell: Shell[]): Promise<{ shell: Shell; version?: string; target: string }[]> => {
+export const loadShellVersions = async (
+  shell: Shell[],
+): Promise<{ shell: Shell; version?: string; target: string }[]> => {
   return Promise.all(
     shell.map(async (shell) => {
       const { shellTarget: target } = await shellLaunch(shell);
@@ -21,14 +23,18 @@ export const loadShellVersions = async (shell: Shell[]): Promise<{ shell: Shell;
       try {
         switch (shell) {
           case Shell.Bash: {
-            const output = (await execAsync('echo "$BASH_VERSION"', { shell: target })).stdout;
+            const output = (
+              await execAsync('echo "$BASH_VERSION"', { shell: target })
+            ).stdout;
             if (output.trim().length != 0) {
               version = output.trim();
             }
             break;
           }
           case (Shell.WindowsPowershell, Shell.Powershell): {
-            const output = (await execAsync("$PSVersionTable", { shell: target })).stdout;
+            const output = (
+              await execAsync("$PSVersionTable", { shell: target })
+            ).stdout;
             const match = output.match(/PSVersion\s*([^\s]*)/)?.at(1);
             if (match != null) {
               version = match;
@@ -44,14 +50,18 @@ export const loadShellVersions = async (shell: Shell[]): Promise<{ shell: Shell;
             break;
           }
           case Shell.Fish: {
-            const output = (await execAsync('echo "$version"', { shell: target })).stdout;
+            const output = (
+              await execAsync('echo "$version"', { shell: target })
+            ).stdout;
             if (output.trim().length != 0) {
               version = output.trim();
             }
             break;
           }
           case Shell.Zsh: {
-            const output = (await execAsync('echo "$ZSH_VERSION"', { shell: target })).stdout;
+            const output = (
+              await execAsync('echo "$ZSH_VERSION"', { shell: target })
+            ).stdout;
             if (output.trim().length != 0) {
               version = output.trim();
             }
@@ -71,7 +81,11 @@ export function stripAnsiEscapes(str: string): string {
   return str.replace(ansiRegex, "");
 }
 
-export function fitToWidth(line: string, width: number, prefix?: string): string {
+export function fitToWidth(
+  line: string,
+  width: number,
+  prefix?: string,
+): string {
   const prefixLength = prefix ? stripAnsiEscapes(prefix).length : 0;
   width -= prefixLength;
   if (line.length <= width) return line;

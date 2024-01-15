@@ -13,6 +13,9 @@ const action = async (options: TactCommandOptions) => {
   await run({ updateSnapshot: updateSnapshot ?? false });
 };
 
-const cmd = new Command("test").description(`run tests with tact`).option("-u, --updateSnapshot", `use this flag to re-record snapshots`).action(action);
+const cmd = new Command("test")
+  .description(`run tests with tact`)
+  .option("-u, --updateSnapshot", `use this flag to re-record snapshots`)
+  .action(action);
 
 export default cmd;

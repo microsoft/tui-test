@@ -15,4 +15,14 @@ const keyDelete = CSI + "3~";
 const keyCtrlC = "\u0003";
 const keyCtrlD = "\u0004";
 
-export default { keyUp, keyDown, keyRight, keyLeft, ESC, keyBackspace, keyDelete, keyCtrlC, keyCtrlD };
+export default {
+  keyUp,
+  keyDown,
+  keyRight,
+  keyLeft,
+  ESC,
+  keyBackspace,
+  keyDelete,
+  keyCtrlC,
+  keyCtrlD,
+};

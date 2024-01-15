@@ -31,7 +31,8 @@ export class ListReporter extends BaseReporter {
     const fullName = test.titlePath();
 
     const prefix = this._linePrefix(test, result);
-    const line = chalk.dim(fullName.join(" › ")) + this._lineSuffix(test, result);
+    const line =
+      chalk.dim(fullName.join(" › ")) + this._lineSuffix(test, result);
     this._appendLine(line, prefix);
   }
 
@@ -39,7 +40,9 @@ export class ListReporter extends BaseReporter {
     super.endTest(test, result);
     const fullName = test.titlePath();
     const prefix = this._linePrefix(test, result);
-    const line = this._resultColor(result.status)(fullName.join(" › ")) + this._lineSuffix(test, result);
+    const line =
+      this._resultColor(result.status)(fullName.join(" › ")) +
+      this._lineSuffix(test, result);
     const row = this._testRows[test.id];
 
     this._updateOrAppendLine(row, line, prefix);
@@ -68,21 +71,31 @@ export class ListReporter extends BaseReporter {
   }
 
   private _lineSuffix(test: TestCase, result: TestResult): string {
-    const timeTag = result.status === "pending" ? "" : chalk.dim(` (${ms(result.duration)})`);
-    const retryIdx = test.results.length - (result.status === "pending" ? 0 : 1);
+    const timeTag =
+      result.status === "pending" ? "" : chalk.dim(` (${ms(result.duration)})`);
+    const retryIdx =
+      test.results.length - (result.status === "pending" ? 0 : 1);
     const retryTag = retryIdx > 0 ? chalk.yellow(` (retry #${retryIdx})`) : "";
     return `${retryTag}${timeTag}`;
   }
 
   private _appendLine(line: string, prefix: string) {
-    process.stdout.write(prefix + fitToWidth(line, process.stdout.columns, prefix) + "\n");
+    process.stdout.write(
+      prefix + fitToWidth(line, process.stdout.columns, prefix) + "\n",
+    );
   }
 
   private _updateLine(row: number, line: string, prefix: string) {
     const offset = -(row - this.currentTest - 1);
-    const updateAnsi = ansi.cursorPreviousLine.repeat(offset) + ansi.eraseCurrentLine;
+    const updateAnsi =
+      ansi.cursorPreviousLine.repeat(offset) + ansi.eraseCurrentLine;
     const restoreAnsi = ansi.cursorNextLine.repeat(offset);
-    process.stdout.write(updateAnsi + prefix + fitToWidth(line, process.stdout.columns, prefix) + restoreAnsi);
+    process.stdout.write(
+      updateAnsi +
+        prefix +
+        fitToWidth(line, process.stdout.columns, prefix) +
+        restoreAnsi,
+    );
   }
 
   private _updateOrAppendLine(row: number, line: string, prefix: string) {
