@@ -1,9 +1,9 @@
-exports[` 2`] = String.raw`
+exports[` 1`] = String.raw`
 ╭────────────────────────────────────────────────────────────────────────────────╮
 │Microsoft Windows [Version 10.0.22621.3007]                                     │
 │(c) Microsoft Corporation. All rights reserved.                                 │
 │                                                                                │
-│C:\Users\cpendery\OneDrive - Microsoft\Documents\code\tact>bar                  │
+│>foo                                                                            │
 │                                                                                │
 │                                                                                │
 │                                                                                │
@@ -35,12 +35,12 @@ exports[` 2`] = String.raw`
 }
 `;
 
-exports[` 1`] = String.raw`
+exports[` 2`] = String.raw`
 ╭────────────────────────────────────────────────────────────────────────────────╮
 │Microsoft Windows [Version 10.0.22621.3007]                                     │
 │(c) Microsoft Corporation. All rights reserved.                                 │
 │                                                                                │
-│C:\Users\cpendery\OneDrive - Microsoft\Documents\code\tact>foo                  │
+│>bar                                                                            │
 │                                                                                │
 │                                                                                │
 │                                                                                │
@@ -77,7 +77,7 @@ exports[` 2 1`] = String.raw`
 │Microsoft Windows [Version 10.0.22621.3007]                                     │
 │(c) Microsoft Corporation. All rights reserved.                                 │
 │                                                                                │
-│C:\Users\cpendery\OneDrive - Microsoft\Documents\code\tact>barfoo               │
+│>barfoo                                                                         │
 │                                                                                │
 │                                                                                │
 │                                                                                │

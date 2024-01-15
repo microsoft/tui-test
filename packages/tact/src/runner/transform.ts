@@ -113,6 +113,11 @@ export const transformFiles = async () => {
   process.setSourceMapsEnabled(true);
   if (!fs.existsSync(cacheFolder)) {
     await fsAsync.mkdir(cacheFolder, { recursive: true });
+  } else {
+    // TODO: remove cache clearing add smart file cleanup between runs
+    for (const file of await fsAsync.readdir(cacheFolder)) {
+      await fsAsync.rm(path.join(cacheFolder, file), { recursive: true });
+    }
   }
   await copyFilesToCache(process.cwd(), cacheFolder);
 };

@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 import { test, expect, Shell } from "@microsoft/tact-test";
 
 test.use({ shell: Shell.Cmd });
