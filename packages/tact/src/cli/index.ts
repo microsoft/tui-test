@@ -14,7 +14,7 @@ const program = new Command();
 
 program
   .name("tact")
-  .description("A fast and precise end-to-end terminal testing framework")
+  .description("a fast and precise end-to-end terminal testing framework")
   .version(await getVersion(), "-v, --version", "output the current version")
   .action(() => program.help())
   .showHelpAfterError("(add --help for additional information)");

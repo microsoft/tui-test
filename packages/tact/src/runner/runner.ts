@@ -25,6 +25,7 @@ declare global {
 
 type ExecutionOptions = {
   updateSnapshot: boolean;
+  testFilter?: string[];
 };
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -37,8 +38,9 @@ const pool = workerpool.pool(path.join(__dirname, "worker.js"), {
 
 const runSuites = async (
   allSuites: Suite[],
+  filteredTestIds: Set<string>,
   reporter: BaseReporter,
-  { updateSnapshot }: ExecutionOptions,
+  { updateSnapshot }: ExecutionOptions
 ) => {
   const tasks: Promise<void>[] = [];
   const suites = [...allSuites];
@@ -47,6 +49,9 @@ const runSuites = async (
     if (!suite) break;
     tasks.push(
       ...suite.tests.map(async (test) => {
+        if (!filteredTestIds.has(test.id)) {
+          return;
+        }
         for (let i = 0; i < Math.max(0, getRetries()) + 1; i++) {
           const testResult: TestResult = {
             status: "pending",
@@ -58,18 +63,17 @@ const runSuites = async (
             test,
             suite.source!,
             { timeout: getTimeout(), updateSnapshot },
-            pool,
+            pool
           );
           testResult.status = status;
           testResult.duration = duration;
           testResult.error = error;
           testResult.snapshots = snapshots;
-
           test.results.push(testResult);
           reporter.endTest(test, testResult);
           if (status == "expected" || status == "skipped") break;
         }
-      }),
+      })
     );
     suites.push(...suite.suites);
   }
@@ -82,8 +86,8 @@ const checkNodeVersion = () => {
   if (nodeMajorVersion.trim() != "18") {
     console.warn(
       chalk.yellow(
-        `tact works best when using a supported node versions (which ${nodeVersion} is not). See https://aka.ms/tact-supported-node-versions for more details.\n`,
-      ),
+        `tact works best when using a supported node versions (which ${nodeVersion} is not). See https://aka.ms/tact-supported-node-versions for more details.\n`
+      )
     );
   }
 };
@@ -104,7 +108,7 @@ export const run = async (options: ExecutionOptions) => {
         process.cwd(),
         ".tact",
         "cache",
-        importSuite.title,
+        importSuite.title
       );
       const parsedSuitePath = path.parse(transformedSuitePath);
       const extension = parsedSuitePath.ext.startsWith(".m") ? ".mjs" : ".js";
@@ -116,13 +120,29 @@ export const run = async (options: ExecutionOptions) => {
     suites.push(...(importSuite?.suites ?? []));
   }
 
-  const allTests = rootSuite.allTests();
+  let allTests = rootSuite.allTests();
+
+  if (options.testFilter != null) {
+    try {
+      const patterns = options.testFilter.map((filter) => new RegExp(filter));
+      allTests = allTests.filter((test) => {
+        const testPath = path.resolve(test.filePath() ?? "");
+        return patterns.find((pattern) => pattern.test(testPath)) != null;
+      });
+    } catch {
+      console.error(
+        "Error: invalid test filter supplied. Test filters must be valid regular expressions"
+      );
+      process.exit(1);
+    }
+  }
+
   const shells = Array.from(
     new Set(
       allTests
         .map((t) => t.suite.options?.shell)
-        .filter((s): s is Shell => s != null),
-    ),
+        .filter((s): s is Shell => s != null)
+    )
   );
   if (shells.includes(Shell.Zsh)) {
     await setupZshDotfiles();
@@ -132,13 +152,18 @@ export const run = async (options: ExecutionOptions) => {
   if (config.globalTimeout > 0) {
     setTimeout(() => {
       console.error(
-        `Error: global timeout (${config.globalTimeout} ms) exceeded`,
+        `Error: global timeout (${config.globalTimeout} ms) exceeded`
       );
       process.exit(1);
     }, config.globalTimeout);
   }
 
-  await runSuites(rootSuite.suites, reporter, options);
+  await runSuites(
+    rootSuite.suites,
+    new Set(allTests.map((test) => test.id)),
+    reporter,
+    options
+  );
   try {
     await pool.terminate(true);
   } catch {

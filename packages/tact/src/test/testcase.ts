@@ -36,13 +36,17 @@ export class TestCase {
     readonly location: Location,
     readonly testFunction: TestFunction,
     readonly suite: Suite,
-    readonly expectedStatus: TestStatus = "expected",
+    readonly expectedStatus: TestStatus = "expected"
   ) {
     this.id = this.titlePath().join("");
   }
 
   outcome(): TestStatus {
-    if (this.results.length == 0) return "skipped";
+    if (
+      this.results.length == 0 ||
+      this.results.every((result) => result.status === "skipped")
+    )
+      return "skipped";
     let status = this.results[0].status;
     for (const result of this.results.slice(1)) {
       if (
@@ -81,7 +85,7 @@ export class TestCase {
         titles.push(currentSuite.title);
       } else if (currentSuite.type === "file") {
         titles.push(
-          `${currentSuite.title}:${this.location.row}:${this.location.row}`,
+          `${currentSuite.title}:${this.location.row}:${this.location.row}`
         );
       }
       currentSuite = currentSuite.parentSuite;
