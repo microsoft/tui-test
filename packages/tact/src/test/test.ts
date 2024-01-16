@@ -180,6 +180,41 @@ export namespace test {
       globalThis.suite,
       "unexpected"
     );
+    if (globalThis.tests != null) {
+      globalThis.tests[test.id] = test;
+    }
+    globalThis.suite.tests.push(test);
+  };
+
+  /**
+   * Declares a focused test. If there are some focused tests or suites, all of them will be run but nothing else.
+   *
+   * **Usage**
+   *
+   * ```js
+   * import { test, expect } from '@microsoft/tact-test';
+   *
+   * test.only('focus this test', async ({ page }) => {
+   *   // Run only focused tests
+   * });
+   * ```
+   *
+   * @param title Test title.
+   * @param testFunction The test function that is run when calling the test function.
+   */
+  export const only = (title: string, testFunction: TestFunction) => {
+    const location = getTestLocation();
+    const test = new TestCase(
+      title,
+      location,
+      testFunction,
+      globalThis.suite,
+      "expected",
+      ["only"]
+    );
+    if (globalThis.tests != null) {
+      globalThis.tests[test.id] = test;
+    }
     globalThis.suite.tests.push(test);
   };
 }

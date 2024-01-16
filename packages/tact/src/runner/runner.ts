@@ -121,6 +121,13 @@ export const run = async (options: ExecutionOptions) => {
   }
 
   let allTests = rootSuite.allTests();
+
+  // refine with only annotations
+  if (allTests.find((test) => test.annotations.includes("only"))) {
+    allTests = allTests.filter((test) => test.annotations.includes("only"));
+  }
+
+  // refine with test filters
   if (options.testFilter != null && options.testFilter.length > 0) {
     try {
       const patterns = options.testFilter.map(

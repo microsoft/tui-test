@@ -36,7 +36,8 @@ export class TestCase {
     readonly location: Location,
     readonly testFunction: TestFunction,
     readonly suite: Suite,
-    readonly expectedStatus: TestStatus = "expected"
+    readonly expectedStatus: TestStatus = "expected",
+    readonly annotations: string[] = []
   ) {
     this.id = this.titlePath().join("");
   }
