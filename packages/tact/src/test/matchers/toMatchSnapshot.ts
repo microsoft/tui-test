@@ -20,12 +20,12 @@ const snapshotPath = (testPath: string): string =>
     process.cwd(),
     path.dirname(testPath),
     "__snapshots__",
-    `${path.basename(testPath)}.snap.cjs`,
+    `${path.basename(testPath)}.snap.cjs`
   );
 
 const loadSnapshot = async (
   testPath: string,
-  testName: string,
+  testName: string
 ): Promise<string | undefined> => {
   let snaps;
   if (snapshots.has(testPath)) {
@@ -45,7 +45,7 @@ const loadSnapshot = async (
 const updateSnapshot = async (
   testPath: string,
   testName: string,
-  snapshot: string,
+  snapshot: string
 ): Promise<void> => {
   const snapPath = snapshotPath(testPath);
   if (!fs.existsSync(snapPath)) {
@@ -61,16 +61,16 @@ const updateSnapshot = async (
       .sort()
       .map(
         (snapshotName) =>
-          `exports[\`${snapshotName}\`] = String.raw\`\n${snapshots[snapshotName].trim()}\n\`;\n\n`,
+          `exports[\`${snapshotName}\`] = String.raw\`\n${snapshots[snapshotName].trim()}\n\`;\n\n`
       )
-      .join(""),
+      .join("")
   );
   await fh.close();
 };
 
-const generateSnapshot = (terminal: Terminal) => {
+const generateSnapshot = (terminal: Terminal, includeColors: boolean) => {
   const { view, shifts } = terminal.serialize();
-  if (shifts.size === 0) {
+  if (shifts.size === 0 || !includeColors) {
     return view;
   }
   return `${view}\n${JSON.stringify(Object.fromEntries(shifts), null, 2)}`;
@@ -79,6 +79,7 @@ const generateSnapshot = (terminal: Terminal) => {
 export async function toMatchSnapshot(
   this: MatcherContext,
   terminal: Terminal,
+  options?: { includeColors?: boolean }
 ): AsyncExpectationResult {
   const testName = (this.currentConcurrentTestName || (() => ""))() ?? "";
   const snapshotIdx = snapshotsIdx.get(testName) ?? 0;
@@ -89,9 +90,12 @@ export async function toMatchSnapshot(
   snapshotsIdx.set(testName, snapshotIdx + 1);
   const existingSnapshot = await loadSnapshot(
     this.testPath ?? "",
-    snapshotPostfixTestName,
+    snapshotPostfixTestName
   );
-  const newSnapshot = generateSnapshot(terminal);
+  const newSnapshot = generateSnapshot(
+    terminal,
+    options?.includeColors ?? false
+  );
   const snapshotsDifferent = existingSnapshot !== newSnapshot;
   const snapshotShouldUpdate =
     globalThis.__expectState.updateSnapshot && snapshotsDifferent;
@@ -112,7 +116,7 @@ export async function toMatchSnapshot(
     await updateSnapshot(
       this.testPath ?? "",
       snapshotPostfixTestName,
-      newSnapshot,
+      newSnapshot
     );
     return Promise.resolve({
       pass: true,

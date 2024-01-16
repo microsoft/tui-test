@@ -215,7 +215,12 @@ interface TerminalMatchers {
     }
   ): Promise<void>;
 
-  toMatchSnapshot(): Promise<void>;
+  toMatchSnapshot(options?: {
+    /**
+     * Include color information in the snapshot.
+     */
+    includeColors?: boolean;
+  }): Promise<void>;
 }
 
 declare type BaseMatchers<T> = Matchers<void, T> &
