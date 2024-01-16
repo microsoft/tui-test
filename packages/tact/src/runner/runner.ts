@@ -121,7 +121,7 @@ export const run = async (options: ExecutionOptions) => {
   }
 
   let allTests = rootSuite.allTests();
-  if (options.testFilter != null) {
+  if (options.testFilter != null && options.testFilter.length > 0) {
     try {
       const patterns = options.testFilter.map(
         (filter) => new RegExp(filter.replaceAll("\\", "\\\\"))
