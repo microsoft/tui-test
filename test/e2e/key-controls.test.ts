@@ -32,7 +32,7 @@ test("up arrow", async ({ terminal }) => {
   terminal.write("\r");
   await expect(terminal).not.toHaveValue("clear");
 
-  terminal.keyUp(1);
+  terminal.keyUp();
   await expect(terminal).toHaveValue("clear");
   expect(terminal.getCursor().x).toBe(7);
 });
@@ -44,11 +44,42 @@ test("down arrow", async ({ terminal }) => {
   terminal.write("\r");
   await expect(terminal).not.toHaveValue("clear");
 
-  terminal.keyUp(1);
+  terminal.keyUp();
   await expect(terminal).toHaveValue("clear");
   expect(terminal.getCursor().x).toBe(7);
 
-  terminal.keyDown(1);
+  terminal.keyDown();
   await expect(terminal).toHaveValue(">   ");
   expect(terminal.getCursor().x).toBe(2);
+});
+
+test("ctrl+c", async ({ terminal }) => {
+  terminal.write("sleep\r");
+  await expect(terminal).toHaveValue("sleep");
+  await expect(terminal).not.toHaveValue(">   ");
+
+  terminal.keyCtrlC();
+  await expect(terminal).toHaveValue(">   ");
+});
+
+test("ctrl+d", async ({ terminal }) => {
+  terminal.keyCtrlD();
+  await expect(terminal).toHaveValue("^D");
+});
+
+test("backspace", async ({ terminal }) => {
+  terminal.write("foo");
+  await expect(terminal).toHaveValue("foo");
+
+  terminal.keyBackspace(3);
+  await expect(terminal).toHaveValue(">   ");
+});
+
+test("delete", async ({ terminal }) => {
+  terminal.write("foo");
+  await expect(terminal).toHaveValue("foo");
+
+  terminal.keyLeft(3);
+  terminal.keyDelete(3);
+  await expect(terminal).toHaveValue(">   ");
 });
