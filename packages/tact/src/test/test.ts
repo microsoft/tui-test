@@ -116,7 +116,7 @@ export namespace test {
       title,
       "describe",
       parentSuite.options,
-      parentSuite,
+      parentSuite
     );
     parentSuite.suites.push(currentSuite);
     globalThis.suite = currentSuite;
@@ -147,7 +147,7 @@ export namespace test {
       location,
       testFunction,
       globalThis.suite,
-      "skipped",
+      "skipped"
     );
     if (globalThis.tests != null) {
       globalThis.tests[test.id] = test;
@@ -178,7 +178,7 @@ export namespace test {
       location,
       testFunction,
       globalThis.suite,
-      "unexpected",
+      "unexpected"
     );
     globalThis.suite.tests.push(test);
   };
@@ -189,7 +189,7 @@ jestExpect.extend({
   toMatchSnapshot,
 });
 
-interface TerminalAssertions {
+interface TerminalMatchers {
   /**
    * Checks that Terminal has the provided text or RegExp.
    *
@@ -212,7 +212,7 @@ interface TerminalAssertions {
        * Whether to check the entire terminal buffer for the value instead of only the visible section.
        */
       full?: number;
-    },
+    }
   ): Promise<void>;
 
   toMatchSnapshot(): Promise<void>;
@@ -221,6 +221,7 @@ interface TerminalAssertions {
 declare type BaseMatchers<T> = Matchers<void, T> &
   Inverse<Matchers<void, T>> &
   PromiseMatchers<T>;
+
 declare type AllowedGenericMatchers<T> = Pick<
   Matchers<void, T>,
   | "toBe"
@@ -230,8 +231,12 @@ declare type AllowedGenericMatchers<T> = Pick<
   | "toBeTruthy"
   | "toBeUndefined"
 >;
+
 declare type SpecificMatchers<T> = T extends Terminal
-  ? TerminalAssertions & AllowedGenericMatchers<T>
+  ? TerminalMatchers &
+      Inverse<Pick<TerminalMatchers, "toHaveValue">> &
+      AllowedGenericMatchers<T> &
+      Inverse<AllowedGenericMatchers<T>>
   : BaseMatchers<T>;
 
 export declare type Expect = {

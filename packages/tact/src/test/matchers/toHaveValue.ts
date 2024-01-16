@@ -12,7 +12,7 @@ export async function toHaveValue(
   this: MatcherContext,
   terminal: Terminal,
   expected: string | RegExp,
-  options?: { timeout?: number; full?: boolean },
+  options?: { timeout?: number; full?: boolean }
 ): AsyncExpectationResult {
   const pass = await poll(
     () => {
@@ -23,20 +23,20 @@ export async function toHaveValue(
       )
         .map((bufferLine) => bufferLine.join(""))
         .join("");
-      const pass =
-        typeof expected === "string"
-          ? buffer.includes(expected)
-          : expected.test(buffer);
-      return pass;
+
+      return typeof expected === "string"
+        ? buffer.includes(expected)
+        : expected.test(buffer);
     },
     50,
     options?.timeout ?? getExpectTimeout(),
+    this.isNot
   );
 
   return {
     pass,
     message: () => {
-      if (!pass) {
+      if (!pass && !this.isNot) {
         const comparisonMethod =
           typeof expected === "string"
             ? "String.prototype.includes search"
@@ -44,6 +44,16 @@ export async function toHaveValue(
         return (
           `expect(${chalk.red("received")}).toHaveValue(${chalk.green("expected")}) ${chalk.dim("// " + comparisonMethod)}` +
           `\n\nExpected: ${chalk.green(expected.toString())}\nMatches Found: ${chalk.red(0)}`
+        );
+      }
+      if (pass && this.isNot) {
+        const comparisonMethod =
+          typeof expected === "string"
+            ? "String.prototype.includes search"
+            : "RegExp.prototype.test search";
+        return (
+          `expect(${chalk.red("received")}).not.toHaveValue(${chalk.green("expected")}) ${chalk.dim("// " + comparisonMethod)}` +
+          `\n\nExpected: ${chalk.green("0 matches")}\nFound: ${chalk.red(expected.toString())}`
         );
       }
       return "passed";
