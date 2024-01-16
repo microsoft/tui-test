@@ -28,24 +28,24 @@ test("right key", async ({ terminal }) => {
 test("up arrow", async ({ terminal }) => {
   terminal.write("clear");
   await expect(terminal).toHaveValue("clear");
+
   terminal.write("\r");
+  await expect(terminal).not.toHaveValue("clear");
 
-  await expect(terminal).toHaveValue(">    ");
   terminal.keyUp(1);
-
-  await expect(terminal).toHaveValue("> clear");
+  await expect(terminal).toHaveValue("clear");
   expect(terminal.getCursor().x).toBe(7);
 });
 
 test("down arrow", async ({ terminal }) => {
   terminal.write("clear");
   await expect(terminal).toHaveValue("clear");
+
   terminal.write("\r");
+  await expect(terminal).not.toHaveValue("clear");
 
-  await expect(terminal).toHaveValue(">    ");
   terminal.keyUp(1);
-
-  await expect(terminal).toHaveValue("> clear");
+  await expect(terminal).toHaveValue("clear");
   expect(terminal.getCursor().x).toBe(7);
 
   terminal.keyDown(1);

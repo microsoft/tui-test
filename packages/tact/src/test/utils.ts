@@ -7,7 +7,7 @@ export async function poll(
   timeout: number,
   isNot?: boolean
 ): Promise<boolean> {
-  return await _poll(callback, Date.now(), delay, timeout, isNot);
+  return await _poll(callback, Date.now(), delay, timeout, isNot ?? false);
 }
 
 async function _poll(
@@ -15,10 +15,10 @@ async function _poll(
   startTime: number,
   delay: number,
   timeout: number,
-  isNot?: boolean
+  isNot: boolean
 ): Promise<boolean> {
   const result = await Promise.resolve(callback());
-  if (result) {
+  if (!isNot && result) {
     return true;
   }
   if (isNot && !result) {
@@ -28,6 +28,9 @@ async function _poll(
     return false;
   }
   return new Promise((resolve) =>
-    setTimeout(() => resolve(_poll(callback, startTime, delay, timeout)), delay)
+    setTimeout(
+      () => resolve(_poll(callback, startTime, delay, timeout, isNot)),
+      delay
+    )
   );
 }
