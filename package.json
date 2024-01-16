@@ -3,9 +3,10 @@
   "scripts": {
     "build": "cd packages/tact && npx tsc && cd ../..",
     "package": "npm pack ./packages/tact ./packages/tact-test",
-    "dev": "npm run build && node packages/tact/lib/cli/index.js tact",
+    "dev": "npm run build && node packages/tact/lib/cli/index.js test",
     "lint": "eslint packages/tact/src/ --ext .ts,.tsx && prettier packages/tact/src/ --check",
-    "lint:fix": "eslint packages/tact/src/ --ext .ts,.tsx --fix && prettier packages/tact/src/ --write"
+    "lint:fix": "eslint packages/tact/src/ --ext .ts,.tsx --fix && prettier packages/tact/src/ --write",
+    "test:e2e": "npm run build && node packages/tact/lib/cli/index.js test \\test\\e2e\\.*"
   },
   "type": "module",
   "author": "Microsoft Corporation",

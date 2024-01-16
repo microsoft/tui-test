@@ -121,10 +121,11 @@ export const run = async (options: ExecutionOptions) => {
   }
 
   let allTests = rootSuite.allTests();
-
   if (options.testFilter != null) {
     try {
-      const patterns = options.testFilter.map((filter) => new RegExp(filter));
+      const patterns = options.testFilter.map(
+        (filter) => new RegExp(filter.replaceAll("\\", "\\\\"))
+      );
       allTests = allTests.filter((test) => {
         const testPath = path.resolve(test.filePath() ?? "");
         return patterns.find((pattern) => pattern.test(testPath)) != null;
