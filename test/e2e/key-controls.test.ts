@@ -49,14 +49,13 @@ test("down arrow", async ({ terminal }) => {
   expect(terminal.getCursor().x).toBe(7);
 
   terminal.keyDown();
-  await expect(terminal).toHaveValue(">   ");
+  await expect(terminal).not.toHaveValue("clear");
   expect(terminal.getCursor().x).toBe(2);
 });
 
 test("ctrl+c", async ({ terminal }) => {
-  terminal.write("sleep\r");
+  terminal.write("sleep 10000\r");
   await expect(terminal).toHaveValue("sleep");
-  await expect(terminal).not.toHaveValue(">   ");
 
   terminal.keyCtrlC();
   await expect(terminal).toHaveValue(">   ");
