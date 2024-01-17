@@ -10,6 +10,7 @@ import { defaultShell } from "../terminal/shell.js";
 import { TestCase, TestStatus } from "../test/testcase.js";
 import { expect } from "../test/test.js";
 import { SnapshotStatus } from "../test/matchers/toMatchSnapshot.js";
+import { BaseReporter } from "../reporter/base.js";
 
 type WorkerResult = {
   error?: string;
@@ -72,6 +73,7 @@ export async function runTestWorker(
   importPath: string,
   { timeout, updateSnapshot }: WorkerExecutionOptions,
   pool: workerpool.Pool,
+  reporter: BaseReporter,
 ): Promise<WorkerResult> {
   const snapshots: SnapshotStatus[] = [];
   if (test.expectedStatus === "skipped") {
@@ -84,6 +86,7 @@ export async function runTestWorker(
 
   return new Promise((resolve) => {
     let startTime = Date.now();
+    let reportStarted = false;
     try {
       const poolPromise = pool.exec(
         "testWorker",
@@ -98,6 +101,12 @@ export async function runTestWorker(
                 snapshots,
               });
             } else if (payload.startTime) {
+              reporter.startTest(test, {
+                status: "pending",
+                duration: 0,
+                snapshots,
+              });
+              reportStarted = true;
               startTime = payload.startTime;
             } else if (payload.snapshotResult) {
               snapshots.push(payload.snapshotResult);
@@ -108,15 +117,29 @@ export async function runTestWorker(
       if (timeout > 0) {
         poolPromise.timeout(timeout);
       }
-      poolPromise.then(() =>
+      poolPromise.then(() => {
+        if (!reportStarted) {
+          reporter.startTest(test, {
+            status: "pending",
+            duration: 0,
+            snapshots,
+          });
+        }
         resolve({
           status: "expected",
           duration: Date.now() - startTime,
           snapshots,
-        }),
-      );
+        });
+      });
     } catch (e) {
       const duration = startTime != null ? Date.now() - startTime : -1;
+      if (!reportStarted) {
+        reporter.startTest(test, {
+          status: "pending",
+          duration: 0,
+          snapshots,
+        });
+      }
       if (typeof e === "string") {
         resolve({
           status: "unexpected",
