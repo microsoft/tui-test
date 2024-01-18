@@ -25,7 +25,7 @@ async function _poll(
     return false;
   }
   if (startTime + timeout < Date.now()) {
-    return false;
+    return isNot;
   }
   return new Promise((resolve) =>
     setTimeout(

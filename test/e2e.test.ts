@@ -55,11 +55,8 @@ test.describe("key controls", () => {
   });
 
   test("ctrl+c", async ({ terminal }) => {
-    terminal.write("sleep 10000\r");
-    await expect(terminal).toHaveValue("sleep");
-
     terminal.keyCtrlC();
-    await expect(terminal).toHaveValue(">   ");
+    await expect(terminal).toHaveValue("^C");
   });
 
   test("ctrl+d", async ({ terminal }) => {

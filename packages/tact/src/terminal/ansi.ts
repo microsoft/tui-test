@@ -6,14 +6,14 @@
 const ESC = "\u001B";
 const CSI = "\u001B[";
 
-const keyUp = CSI + "A";
-const keyDown = CSI + "B";
+const keyUp = (count: number) => CSI + count + "A";
+const keyDown = (count: number) => CSI + count + "B";
 const keyRight = CSI + "C";
 const keyLeft = CSI + "D";
 const keyBackspace = "\u007F";
 const keyDelete = CSI + "3~";
-const keyCtrlC = "\u0003";
-const keyCtrlD = "\u0004";
+const keyCtrlC = String.fromCharCode(3);
+const keyCtrlD = String.fromCharCode(4);
 
 export default {
   keyUp,
