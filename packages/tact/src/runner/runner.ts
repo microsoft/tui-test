@@ -60,7 +60,7 @@ const runSuites = async (
           };
           const { error, status, duration, snapshots } = await runTestWorker(
             test,
-            suite.source!,
+            test.sourcePath()!,
             { timeout: getTimeout(), updateSnapshot },
             pool,
             reporter,

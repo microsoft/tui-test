@@ -37,7 +37,7 @@ export class TestCase {
     readonly testFunction: TestFunction,
     readonly suite: Suite,
     readonly expectedStatus: TestStatus = "expected",
-    readonly annotations: string[] = []
+    readonly annotations: string[] = [],
   ) {
     this.id = this.titlePath().join("");
   }
@@ -86,11 +86,21 @@ export class TestCase {
         titles.push(currentSuite.title);
       } else if (currentSuite.type === "file") {
         titles.push(
-          `${currentSuite.title}:${this.location.row}:${this.location.row}`
+          `${currentSuite.title}:${this.location.row}:${this.location.row}`,
         );
       }
       currentSuite = currentSuite.parentSuite;
     }
     return [...titles.reverse(), this.title];
+  }
+
+  sourcePath(): string | undefined {
+    let currentSuite: Suite | undefined = this.suite;
+    while (currentSuite != null) {
+      if (currentSuite.type === "file") {
+        return currentSuite.source;
+      }
+      currentSuite = currentSuite.parentSuite;
+    }
   }
 }
