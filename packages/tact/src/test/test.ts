@@ -189,6 +189,37 @@ export namespace test {
   };
 
   /**
+   * Declares a conditional test.
+   *
+   * **Usage**
+   *
+   * ```js
+   * import { test, expect } from '@microsoft/tact-test';
+   * import os from "node:os";
+   *
+   * const isWindows = os.platform() == "win32"
+   * test.when(isWindows, 'windows only test', async ({ page }) => {
+   *   // ...
+   * });
+   * ```
+   *
+   * @param shouldRun If the test should be run or skipped.
+   * @param title Test title.
+   * @param testFunction The test function that is run when calling the test function.
+   */
+  export const when = (
+    shouldRun: boolean,
+    title: string,
+    testFunction: TestFunction
+  ) => {
+    if (shouldRun) {
+      test(title, testFunction);
+    } else {
+      skip(title, testFunction);
+    }
+  };
+
+  /**
    * Declares a focused test. If there are some focused tests or suites, all of them will be run but nothing else.
    *
    * **Usage**

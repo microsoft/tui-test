@@ -2,8 +2,11 @@
 // Licensed under the MIT License.
 
 import { test, expect, Shell } from "@microsoft/tact-test";
+import os from "node:os";
 
 test.use({ shell: Shell.Powershell, columns: 80, rows: 15 });
+
+const isWindows = os.platform() == "win32";
 
 test.describe("key controls", () => {
   test("left key", async ({ terminal }) => {
@@ -130,5 +133,22 @@ test.describe("test variations", () => {
 
   test.fail("fail", async () => {
     throw new Error("this must pass");
+  });
+});
+
+test.describe("use variations", () => {
+  test.describe("powershell", () => {
+    test.use({ shell: Shell.Powershell });
+    test("doesn't have logo", async ({ terminal }) => {
+      await expect(terminal).toHaveValue(">  ");
+      await expect(terminal).not.toHaveValue("Microsoft Corporation");
+    });
+  });
+
+  test.describe("cmd", () => {
+    test.use({ shell: Shell.Cmd });
+    test.when(isWindows, "has logo", async ({ terminal }) => {
+      await expect(terminal).toHaveValue("Microsoft Corporation");
+    });
   });
 });
