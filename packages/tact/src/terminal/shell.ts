@@ -33,7 +33,7 @@ export const shellLaunch = async (shell: Shell) => {
     path.dirname(url.fileURLToPath(import.meta.url)),
     "..",
     "..",
-    "shell",
+    "shell"
   );
   let shellArgs: string[] | undefined = undefined;
 
@@ -76,7 +76,7 @@ export const shellEnv = (shell: Shell) => {
   };
   switch (shell) {
     case Shell.Cmd: {
-      return { ...env, PROMPT: "$G" };
+      return { ...env, PROMPT: "$G " };
     }
     case Shell.Zsh: {
       return { ...env, ZDOTDIR: zdotdir, USER_ZDOTDIR: userZdotdir };
@@ -90,23 +90,23 @@ export const setupZshDotfiles = async () => {
     path.dirname(url.fileURLToPath(import.meta.url)),
     "..",
     "..",
-    "shell",
+    "shell"
   );
   await fsAsync.cp(
     path.join(shellFolderPath, "shellIntegration-rc.zsh"),
-    path.join(zdotdir, ".zshrc"),
+    path.join(zdotdir, ".zshrc")
   );
   await fsAsync.cp(
     path.join(shellFolderPath, "shellIntegration-profile.zsh"),
-    path.join(zdotdir, ".zprofile"),
+    path.join(zdotdir, ".zprofile")
   );
   await fsAsync.cp(
     path.join(shellFolderPath, "shellIntegration-env.zsh"),
-    path.join(zdotdir, ".zshenv"),
+    path.join(zdotdir, ".zshenv")
   );
   await fsAsync.cp(
     path.join(shellFolderPath, "shellIntegration-login.zsh"),
-    path.join(zdotdir, ".zlogin"),
+    path.join(zdotdir, ".zlogin")
   );
 };
 
@@ -144,16 +144,16 @@ const getGitBashPaths = async (): Promise<string[]> => {
     gitBashPaths.push(
       `${gitDir}\\Git\\bin\\bash.exe`,
       `${gitDir}\\Git\\usr\\bin\\bash.exe`,
-      `${gitDir}\\usr\\bin\\bash.exe`, // using Git for Windows SDK
+      `${gitDir}\\usr\\bin\\bash.exe` // using Git for Windows SDK
     );
   }
 
   // Add special installs that don't follow the standard directory structure
   gitBashPaths.push(
-    `${process.env["UserProfile"]}\\scoop\\apps\\git\\current\\bin\\bash.exe`,
+    `${process.env["UserProfile"]}\\scoop\\apps\\git\\current\\bin\\bash.exe`
   );
   gitBashPaths.push(
-    `${process.env["UserProfile"]}\\scoop\\apps\\git-with-openssh\\current\\bin\\bash.exe`,
+    `${process.env["UserProfile"]}\\scoop\\apps\\git-with-openssh\\current\\bin\\bash.exe`
   );
 
   return gitBashPaths;

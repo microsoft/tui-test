@@ -81,7 +81,7 @@ export class ListReporter extends BaseReporter {
 
   private _appendLine(line: string, prefix: string) {
     process.stdout.write(
-      prefix + fitToWidth(line, process.stdout.columns, prefix) + "\n",
+      prefix + fitToWidth(line, process.stdout.columns, prefix) + "\n"
     );
   }
 
@@ -94,7 +94,7 @@ export class ListReporter extends BaseReporter {
       updateAnsi +
         prefix +
         fitToWidth(line, process.stdout.columns, prefix) +
-        restoreAnsi,
+        restoreAnsi
     );
   }
 

@@ -30,7 +30,7 @@ const runTest = async (
   testId: string,
   testSuite: Suite,
   updateSnapshot: boolean,
-  importPath: string,
+  importPath: string
 ) => {
   process.setSourceMapsEnabled(true);
   globalThis.suite = testSuite;
@@ -52,10 +52,10 @@ const runTest = async (
   const allTests = Object.values(globalThis.tests);
   const testPath = test.filePath();
   const signatureIdenticalTests = allTests.filter(
-    (t) => t.filePath() === testPath && t.title === test.title,
+    (t) => t.filePath() === testPath && t.title === test.title
   );
   const signatureIdx = signatureIdenticalTests.findIndex(
-    (t) => t.id == test.id,
+    (t) => t.id == test.id
   );
   const currentConcurrentTestName = () => `${test.title} ${signatureIdx + 1}`;
 
@@ -66,6 +66,7 @@ const runTest = async (
     currentConcurrentTestName,
   });
   await Promise.resolve(test.testFunction({ terminal }));
+  terminal.kill();
 };
 
 export async function runTestWorker(
@@ -73,7 +74,7 @@ export async function runTestWorker(
   importPath: string,
   { timeout, updateSnapshot }: WorkerExecutionOptions,
   pool: workerpool.Pool,
-  reporter: BaseReporter,
+  reporter: BaseReporter
 ): Promise<WorkerResult> {
   const snapshots: SnapshotStatus[] = [];
   if (test.expectedStatus === "skipped") {
@@ -112,7 +113,7 @@ export async function runTestWorker(
               snapshots.push(payload.snapshotResult);
             }
           },
-        },
+        }
       );
       if (timeout > 0) {
         poolPromise.timeout(timeout);
@@ -172,7 +173,7 @@ const getMockSuite = (test: TestCase): Suite => {
   while (testSuite != null) {
     if (testSuite.type !== "describe") {
       newSuites.push(
-        new Suite(testSuite.title, testSuite.type, testSuite.options),
+        new Suite(testSuite.title, testSuite.type, testSuite.options)
       );
     }
     testSuite = testSuite.parentSuite;
@@ -187,7 +188,7 @@ const testWorker = async (
   testId: string,
   testSuite: Suite,
   updateSnapshot: boolean,
-  importPath: string,
+  importPath: string
 ): Promise<void> => {
   const startTime = Date.now();
   workerpool.workerEmit({

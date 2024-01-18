@@ -40,7 +40,7 @@ const runSuites = async (
   allSuites: Suite[],
   filteredTestIds: Set<string>,
   reporter: BaseReporter,
-  { updateSnapshot }: ExecutionOptions,
+  { updateSnapshot }: ExecutionOptions
 ) => {
   const tasks: Promise<void>[] = [];
   const suites = [...allSuites];
@@ -63,7 +63,7 @@ const runSuites = async (
             test.sourcePath()!,
             { timeout: getTimeout(), updateSnapshot },
             pool,
-            reporter,
+            reporter
           );
           testResult.status = status;
           testResult.duration = duration;
@@ -73,7 +73,7 @@ const runSuites = async (
           reporter.endTest(test, testResult);
           if (status == "expected" || status == "skipped") break;
         }
-      }),
+      })
     );
     suites.push(...suite.suites);
   }
@@ -86,8 +86,8 @@ const checkNodeVersion = () => {
   if (nodeMajorVersion.trim() != "18") {
     console.warn(
       chalk.yellow(
-        `tact works best when using a supported node versions (which ${nodeVersion} is not). See https://aka.ms/tact-supported-node-versions for more details.\n`,
-      ),
+        `tact works best when using a supported node versions (which ${nodeVersion} is not). See https://aka.ms/tact-supported-node-versions for more details.\n`
+      )
     );
   }
 };
@@ -108,7 +108,7 @@ export const run = async (options: ExecutionOptions) => {
         process.cwd(),
         ".tact",
         "cache",
-        importSuite.title,
+        importSuite.title
       );
       const parsedSuitePath = path.parse(transformedSuitePath);
       const extension = parsedSuitePath.ext.startsWith(".m") ? ".mjs" : ".js";
@@ -131,7 +131,7 @@ export const run = async (options: ExecutionOptions) => {
   if (options.testFilter != null && options.testFilter.length > 0) {
     try {
       const patterns = options.testFilter.map(
-        (filter) => new RegExp(filter.replaceAll("\\", "\\\\")),
+        (filter) => new RegExp(filter.replaceAll("\\", "\\\\"))
       );
       allTests = allTests.filter((test) => {
         const testPath = path.resolve(test.filePath() ?? "");
@@ -139,7 +139,7 @@ export const run = async (options: ExecutionOptions) => {
       });
     } catch {
       console.error(
-        "Error: invalid test filter supplied. Test filters must be valid regular expressions",
+        "Error: invalid test filter supplied. Test filters must be valid regular expressions"
       );
       process.exit(1);
     }
@@ -149,8 +149,8 @@ export const run = async (options: ExecutionOptions) => {
     new Set(
       allTests
         .map((t) => t.suite.options?.shell)
-        .filter((s): s is Shell => s != null),
-    ),
+        .filter((s): s is Shell => s != null)
+    )
   );
   if (shells.includes(Shell.Zsh)) {
     await setupZshDotfiles();
@@ -160,7 +160,7 @@ export const run = async (options: ExecutionOptions) => {
   if (config.globalTimeout > 0) {
     setTimeout(() => {
       console.error(
-        `Error: global timeout (${config.globalTimeout} ms) exceeded`,
+        `Error: global timeout (${config.globalTimeout} ms) exceeded`
       );
       process.exit(1);
     }, config.globalTimeout);
@@ -170,7 +170,7 @@ export const run = async (options: ExecutionOptions) => {
     rootSuite.suites,
     new Set(allTests.map((test) => test.id)),
     reporter,
-    options,
+    options
   );
   try {
     await pool.terminate(true);

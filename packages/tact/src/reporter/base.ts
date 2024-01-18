@@ -44,9 +44,9 @@ export class BaseReporter {
       chalk.dim(
         `Running ${chalk.dim.reset(testCount)} ${this._plural("test", testCount)} using ${chalk.dim.reset(workers)} ${this._plural(
           "worker",
-          workers,
-        )} with the following shells:\n`,
-      ),
+          workers
+        )} with the following shells:\n`
+      )
     );
 
     shellVersions.forEach(({ shell, version, target }) => {
@@ -56,7 +56,7 @@ export class BaseReporter {
           version +
           chalk.dim(" running from ") +
           target +
-          "\n",
+          "\n"
       );
     });
     process.stdout.write("\n" + (shellVersions.length == 0 ? "\n" : ""));
@@ -167,7 +167,7 @@ export class BaseReporter {
       unexpected.length + flaky.length + didNotRun + skipped + expected;
     if (testTotal !== 0) {
       process.stdout.write(
-        `\n  tests: ${tokens.join(", ")}, ${testTotal} total\n`,
+        `\n  tests: ${tokens.join(", ")}, ${testTotal} total\n`
       );
     }
 
@@ -193,12 +193,12 @@ export class BaseReporter {
     const snapshotErrorPostfix =
       snapshots.failed > 0
         ? chalk.dim(
-            "(Inspect your code changes or use the `-u` flag to update them.)",
+            "(Inspect your code changes or use the `-u` flag to update them.)"
           )
         : "";
     if (snapshotTotal !== 0) {
       process.stdout.write(
-        `  snapshots: ${snapshotTokens.join(", ")}, ${snapshotTotal} total ${snapshotErrorPostfix}\n\n`,
+        `  snapshots: ${snapshotTokens.join(", ")}, ${snapshotTotal} total ${snapshotErrorPostfix}\n\n`
       );
     } else {
       process.stdout.write("\n");
@@ -230,11 +230,11 @@ export class BaseReporter {
         const header =
           resultIdx === 0
             ? this._resultColor(test.outcome())(
-                this._header(test, `  ${failureIdx + 1}) `),
+                this._header(test, `  ${failureIdx + 1}) `)
               )
             : chalk.dim(this._retryHeader(resultIdx));
         process.stdout.write(
-          "\n" + header + "\n\n" + padError(result.error) + "\n\n",
+          "\n" + header + "\n\n" + padError(result.error) + "\n\n"
         );
       });
     });

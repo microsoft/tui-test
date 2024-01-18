@@ -39,7 +39,7 @@ export const spawn = async (options: TerminalOptions): Promise<Terminal> => {
     options.shellArgs ?? shellArgs ?? [],
     options.rows,
     options.cols,
-    { ...shellEnv(options.shell), ...options.env },
+    { ...shellEnv(options.shell), ...options.env }
   );
 };
 
@@ -69,7 +69,7 @@ export class Terminal {
     shellArgs: string[],
     private _rows: number,
     private _cols: number,
-    env?: { [key: string]: string | undefined },
+    env?: { [key: string]: string | undefined }
   ) {
     this.#pty = pty.spawn(shellTarget, shellArgs ?? [], {
       name: "xterm-256color",
@@ -118,7 +118,7 @@ export class Terminal {
    * @param count Count of cells to move up. Default is `1`.
    */
   keyUp(count?: number | undefined): void {
-    this.#pty.write(ansi.keyUp.repeat(count ?? 1));
+    this.#pty.write(ansi.keyUp(count ?? 1));
   }
 
   /**
@@ -127,7 +127,7 @@ export class Terminal {
    * @param count Count of cells to move down. Default is `1`.
    */
   keyDown(count?: number | undefined): void {
-    this.#pty.write(ansi.keyDown.repeat(count ?? 1));
+    this.#pty.write(ansi.keyDown(count ?? 1));
   }
 
   /**
@@ -210,7 +210,7 @@ export class Terminal {
   getViewableBuffer(): string[][] {
     return this._getBuffer(
       this.#term.buffer.active.baseY,
-      this.#term.buffer.active.length,
+      this.#term.buffer.active.length
     );
   }
 
@@ -246,7 +246,7 @@ export class Terminal {
 
   private _shift(
     baseCell: xterm.IBufferCell | undefined,
-    targetCell: xterm.IBufferCell | undefined,
+    targetCell: xterm.IBufferCell | undefined
   ): CellShift {
     const result: CellShift = {};
     if (

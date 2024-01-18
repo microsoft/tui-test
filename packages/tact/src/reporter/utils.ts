@@ -10,11 +10,11 @@ const execAsync = promisify(exec);
 const ansiRegex = new RegExp(
   // eslint-disable-next-line no-control-regex
   "([\\u001B\\u009B][[\\]()#;?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~])))",
-  "g",
+  "g"
 );
 
 export const loadShellVersions = async (
-  shell: Shell[],
+  shell: Shell[]
 ): Promise<{ shell: Shell; version?: string; target: string }[]> => {
   return Promise.all(
     shell.map(async (shell) => {
@@ -73,7 +73,7 @@ export const loadShellVersions = async (
       }
       version = (version?.length ?? 0) > 0 ? version : undefined;
       return { shell, target, version };
-    }),
+    })
   );
 };
 
@@ -84,7 +84,7 @@ export function stripAnsiEscapes(str: string): string {
 export function fitToWidth(
   line: string,
   width: number,
-  prefix?: string,
+  prefix?: string
 ): string {
   const prefixLength = prefix ? stripAnsiEscapes(prefix).length : 0;
   width -= prefixLength;

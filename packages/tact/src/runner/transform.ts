@@ -22,7 +22,7 @@ const transformFile = async (
   source: string,
   sourceContent: string,
   sourceHash: string,
-  destination: string,
+  destination: string
 ) => {
   const fileExtension = path.extname(source);
   const fileType = typescriptPattern.test(fileExtension)
@@ -69,7 +69,7 @@ const transformFile = async (
     const map = JSON.parse(result.map) as SourceMap;
     await fsAsync.writeFile(
       mapDestination,
-      JSON.stringify({ ...map, file: destinationFilename, sources: [source] }),
+      JSON.stringify({ ...map, file: destinationFilename, sources: [source] })
     );
   }
 };
@@ -106,7 +106,7 @@ const copyFilesToCache = async (directory: string, destination: string) => {
           const newExtension = fileExtension.startsWith(".m") ? ".mjs" : ".js";
           const transformedPath = path.join(
             destination,
-            `${path.parse(directoryItem.name).name}${newExtension}`,
+            `${path.parse(directoryItem.name).name}${newExtension}`
           );
           if (fs.existsSync(transformedPath)) {
             const reader = readline.createInterface({
@@ -128,13 +128,13 @@ const copyFilesToCache = async (directory: string, destination: string) => {
             resolvedPath,
             content.toString(),
             fileHash,
-            transformedPath,
+            transformedPath
           );
         } else {
           await fsAsync.copyFile(resolvedPath, destinationPath);
         }
       }
-    }),
+    })
   );
 };
 
