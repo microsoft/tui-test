@@ -78,6 +78,11 @@ export async function runTestWorker(
 ): Promise<WorkerResult> {
   const snapshots: SnapshotStatus[] = [];
   if (test.expectedStatus === "skipped") {
+    reporter.startTest(test, {
+      status: "pending",
+      duration: 0,
+      snapshots,
+    });
     return {
       status: "skipped",
       duration: 0,

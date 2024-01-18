@@ -6,7 +6,7 @@ import chalk from "chalk";
 
 import { Shell } from "../terminal/shell.js";
 import { fitToWidth, ansi } from "./utils.js";
-import { TestCase, TestResult } from "../test/testcase.js";
+import { TestCase, TestResult, TestStatus } from "../test/testcase.js";
 import { BaseReporter } from "./base.js";
 import { Suite } from "../test/suite.js";
 
@@ -30,7 +30,7 @@ export class ListReporter extends BaseReporter {
     this._testRows[test.id] = this.currentTest;
     const fullName = test.titlePath();
 
-    const prefix = this._linePrefix(test, result);
+    const prefix = this._linePrefix(test);
     const line =
       chalk.dim(fullName.join(" › ")) + this._lineSuffix(test, result);
     this._appendLine(line, prefix);
@@ -39,9 +39,9 @@ export class ListReporter extends BaseReporter {
   override endTest(test: TestCase, result: TestResult): void {
     super.endTest(test, result);
     const fullName = test.titlePath();
-    const prefix = this._linePrefix(test, result);
+    const prefix = this._linePrefix(test);
     const line =
-      this._resultColor(result.status)(fullName.join(" › ")) +
+      this._resultColor(test.outcome())(fullName.join(" › ")) +
       this._lineSuffix(test, result);
     const row = this._testRows[test.id];
 
@@ -52,8 +52,8 @@ export class ListReporter extends BaseReporter {
     return super.end(rootSuite);
   }
 
-  private _resultIcon(result: TestResult): string {
-    switch (result.status) {
+  private _resultIcon(status: TestStatus): string {
+    switch (status) {
       case "expected":
         return chalk.green("✔");
       case "unexpected":
@@ -65,9 +65,9 @@ export class ListReporter extends BaseReporter {
     }
   }
 
-  private _linePrefix(test: TestCase, result: TestResult): string {
+  private _linePrefix(test: TestCase): string {
     const row = this._testRows[test.id] ?? this.currentTest;
-    return `  ${this._resultIcon(result)}  ${chalk.dim(row)} `;
+    return `  ${this._resultIcon(test.outcome())}  ${chalk.dim(row)} `;
   }
 
   private _lineSuffix(test: TestCase, result: TestResult): string {
