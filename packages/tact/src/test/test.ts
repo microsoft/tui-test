@@ -7,6 +7,7 @@ import {
   AsymmetricMatchers,
   BaseExpect,
 } from "expect";
+import path from "node:path";
 
 import { Suite } from "./suite.js";
 import { TestFunction, TestCase, Location } from "./testcase.js";
@@ -26,11 +27,12 @@ declare global {
 }
 
 const getTestLocation = () => {
+  const filename = globalThis.suite.filePath()!;
   const errorStack = new Error().stack;
   let location: Location = { row: 0, column: 0 };
   if (errorStack) {
     const lineInfo = errorStack
-      .match(/at <anonymous>(.*)\)/)
+      .match(new RegExp(`${path.basename(filename)}(.*)\\)`))
       ?.at(1)
       ?.split(":")
       ?.slice(-2);

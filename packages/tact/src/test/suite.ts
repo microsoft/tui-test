@@ -18,7 +18,7 @@ export class Suite {
     readonly title: string,
     readonly type: SuiteType,
     public options?: TactTestOptions,
-    public parentSuite?: Suite,
+    public parentSuite?: Suite
   ) {}
 
   allTests(): TestCase[] {
@@ -45,10 +45,23 @@ export class Suite {
     }
     return [...titles.reverse(), this.title];
   }
+
+  filePath(): string | undefined {
+    if (this.type === "file") {
+      return this.title;
+    }
+    let currentSuite: Suite | undefined = this.parentSuite;
+    while (currentSuite != null) {
+      if (currentSuite.type === "file") {
+        return currentSuite.title;
+      }
+      currentSuite = currentSuite.parentSuite;
+    }
+  }
 }
 
 export const getRootSuite = async (
-  config: Required<TactTestConfig>,
+  config: Required<TactTestConfig>
 ): Promise<Suite> => {
   const projects: Required<TactProjectConfig>[] = [
     {
@@ -90,11 +103,11 @@ export const getRootSuite = async (
                 rows: project.rows,
                 columns: project.columns,
               },
-              suite,
-            ),
+              suite
+            )
         );
         return suite;
-      }),
+      })
     )
   ).flat();
 
