@@ -45,20 +45,17 @@ export class Suite {
     }
     return [...titles.reverse(), this.title];
   }
-
-  filePath(): string | undefined {
-    if (this.type === "file") {
-      return this.title;
-    }
-    let currentSuite: Suite | undefined = this.parentSuite;
-    while (currentSuite != null) {
-      if (currentSuite.type === "file") {
-        return currentSuite.title;
-      }
-      currentSuite = currentSuite.parentSuite;
-    }
-  }
 }
+
+export const suiteFilePath = (suite: Suite) => {
+  let currentSuite: Suite | undefined = suite;
+  while (currentSuite != null) {
+    if (currentSuite.type === "file") {
+      return currentSuite.title;
+    }
+    currentSuite = currentSuite.parentSuite;
+  }
+};
 
 export const getRootSuite = async (
   config: Required<TactTestConfig>

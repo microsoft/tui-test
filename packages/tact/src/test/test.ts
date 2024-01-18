@@ -9,7 +9,7 @@ import {
 } from "expect";
 import path from "node:path";
 
-import { Suite } from "./suite.js";
+import { Suite, suiteFilePath } from "./suite.js";
 import { TestFunction, TestCase, Location } from "./testcase.js";
 export { Shell } from "../terminal/shell.js";
 import { TactTestOptions } from "./option.js";
@@ -27,7 +27,7 @@ declare global {
 }
 
 const getTestLocation = () => {
-  const filename = globalThis.suite.filePath()!;
+  const filename = suiteFilePath(globalThis.suite)!;
   const errorStack = new Error().stack;
   let location: Location = { row: 0, column: 0 };
   if (errorStack) {
