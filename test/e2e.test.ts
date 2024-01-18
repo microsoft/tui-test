@@ -55,11 +55,13 @@ test.describe("key controls", () => {
   });
 
   test("ctrl+c", async ({ terminal }) => {
+    await expect(terminal).toHaveValue(">  ");
     terminal.keyCtrlC();
     await expect(terminal).toHaveValue("^C");
   });
 
   test("ctrl+d", async ({ terminal }) => {
+    await expect(terminal).toHaveValue(">  ");
     terminal.keyCtrlD();
     await expect(terminal).toHaveValue("^D");
   });
@@ -118,5 +120,15 @@ test.describe("terminal functions", () => {
     expect(terminal.getCursor().x).toBe(2);
     expect(terminal.getCursor().y).toBe(9);
     expect(terminal.getCursor().baseY).toBe(35);
+  });
+});
+
+test.describe("test variations", () => {
+  test.skip("skip", async () => {
+    throw new Error("this must be skipped");
+  });
+
+  test.fail("fail", async () => {
+    throw new Error("this must pass");
   });
 });
