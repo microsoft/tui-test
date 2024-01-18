@@ -1,6 +1,84 @@
-# tact
+# Tact
 
-A fast and precise end-to-end terminal testing framework
+Tact is a framework for testing terminal applications. It provides a rich API for writing tests that interact with a terminal application across macOS, Linux, and Windows with a wide range of shells. It is built to be **fast**, **reliable**, and **easy to use**.
+
+## Installation
+
+Install Tact as using `npm`:
+
+```sh
+npm i -D @microsoft/tact-test
+```
+
+or `yarn`
+
+```sh
+yarn add --dev @microsoft/tact-test
+```
+
+or `pnpm`
+
+```sh
+pnpm add -D @microsoft/tact-test
+```
+
+## Running Tests
+
+Running tests is as simple as running `tact` from the command line:
+
+```sh
+npx @microsoft/tact
+```
+
+
+## Capabilities
+
+### Resilient • No flaky tests
+
+**Auto-wait** Tact provides a rich API for interacting with the terminal. It waits for the terminal to be ready before executing commands, and it provides tooling for waiting for terminal renders before executing assertions.
+
+**Tracing**. Configure test retry strategy, and capture detailed terminal snapshots to eliminate flakes.
+
+### Full isolation • Fast execution
+
+**Terminal contexts**. Tact creates a new 'terminal context' for each test, which includes a new terminal and new underlying pty. This delivers full test isolation with zero overhead. Creating new terminal contexts only takes a handful of milliseconds.
+
+### Multi-platform / Multi-shell • No more "works on my machine"
+
+**Multi-platform**. Tact supports testing on macOS, Linux, and Windows with a wide range of shells when installed: `cmd`, `windows powershell`, `powershell`, `bash`, `git-bash`, `fish`, and `zsh`. It also reports all testing information in a consistent format across platforms to help users detect any runtime variations.
+
+## Examples
+
+To find more Tact examples [check out the examples folder](./examples) or in Tact's [e2e tests](./test/).
+
+### Terminal Screenshot
+
+This code snippet shows how to take a screenshot of the terminal.
+
+```ts
+import { test, expect } from "@microsoft/tact-test";
+
+test("take a screenshot", async ({ terminal }) => {
+  terminal.write("foo")
+
+  await expect(terminal).toHaveValue("foo");
+  await expect(terminal).toMatchSnapshot();
+});
+```
+
+### Terminal Assertions
+
+This code snippet shows how to use rich assertions of the terminal.
+
+```ts
+import { test, expect } from "@microsoft/tact-test";
+
+test("make a regex assertion", async ({ terminal }) => {
+  terminal.write("ls -l\r")
+
+  await expect(terminal).toHaveValue(/total [0-9]{3}/m);
+});
+```
 
 ## Contributing
 
@@ -23,3 +101,4 @@ trademarks or logos is subject to and must follow
 [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
 Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
 Any use of third-party trademarks or logos are subject to those third-party's policies.
+

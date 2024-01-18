@@ -6,7 +6,11 @@ module.exports = {
     es2021: true,
     node: true,
   },
-  extends: ["eslint:recommended", "plugin:@typescript-eslint/recommended", "prettier"],
+  extends: [
+    "eslint:recommended",
+    "plugin:@typescript-eslint/recommended",
+    "prettier",
+  ],
   overrides: [
     {
       env: {
@@ -24,5 +28,15 @@ module.exports = {
     sourceType: "module",
   },
   plugins: ["@typescript-eslint", "header"],
-  rules: { "header/header": [2, "line", [" Copyright (c) Microsoft Corporation.", " Licensed under the MIT License."]] },
+  ignorePatterns: ["**/__snapshots__"],
+  rules: {
+    "header/header": [
+      2,
+      "line",
+      [
+        " Copyright (c) Microsoft Corporation.",
+        " Licensed under the MIT License.",
+      ],
+    ],
+  },
 };
