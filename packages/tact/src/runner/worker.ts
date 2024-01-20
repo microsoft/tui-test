@@ -42,12 +42,13 @@ const runTest = async (
     importSet.add(importPath);
   }
   const test = globalThis.tests[testId];
-  const { shell, rows, columns, env } = test.suite.options ?? {};
+  const { shell, rows, columns, env, program } = test.suite.options ?? {};
   const terminal = await spawn({
     shell: shell ?? defaultShell,
     rows: rows ?? 30,
     cols: columns ?? 80,
     env,
+    program,
   });
 
   const allTests = Object.values(globalThis.tests);
@@ -67,21 +68,28 @@ const runTest = async (
     currentConcurrentTestName,
   });
 
-  // wait on the terminal to be ready with the prompt
-  await poll(
-    () => {
-      const view = terminal
-        .getViewableBuffer()
-        .map((row) => row.join(""))
-        .join("\n");
-      return view.includes(">  ");
-    },
-    50,
-    5_000
-  );
+  // wait on the shell to be ready with the prompt
+  if (program == null) {
+    await poll(
+      () => {
+        const view = terminal
+          .getViewableBuffer()
+          .map((row) => row.join(""))
+          .join("\n");
+        return view.includes(">  ");
+      },
+      50,
+      5_000
+    );
+  }
 
   await Promise.resolve(test.testFunction({ terminal }));
-  terminal.kill();
+
+  try {
+    terminal.kill();
+  } catch {
+    // terminal can pre-terminate if program is provided
+  }
 };
 
 export async function runTestWorker(

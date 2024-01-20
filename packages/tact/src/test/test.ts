@@ -279,7 +279,7 @@ interface TerminalMatchers {
       /**
        * Whether to check the entire terminal buffer for the value instead of only the visible section.
        */
-      full?: number;
+      full?: boolean;
     }
   ): Promise<void>;
 

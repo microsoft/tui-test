@@ -156,4 +156,18 @@ test.describe("use variations", () => {
       await expect(terminal).toHaveValue("Microsoft Corporation");
     });
   });
+
+  test.describe("program", () => {
+    test.use({ program: { file: "git" } });
+    test("git shows usage message", async ({ terminal }) => {
+      await expect(terminal).toHaveValue("usage: git", { full: true });
+    });
+  });
+
+  test.describe("program with args", () => {
+    test.use({ program: { file: "git", args: ["status"] } });
+    test("git shows status message", async ({ terminal }) => {
+      await expect(terminal).toHaveValue("On branch", { full: true });
+    });
+  });
 });

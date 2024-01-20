@@ -60,7 +60,8 @@ export const suiteFilePath = (suite: Suite) => {
 export const getRootSuite = async (
   config: Required<TactTestConfig>
 ): Promise<Suite> => {
-  const projects: Required<TactProjectConfig>[] = [
+  const projects: (Required<Omit<TactProjectConfig, "program">> &
+    Pick<TactProjectConfig, "program">)[] = [
     {
       shell: config.use.shell!,
       rows: config.use.rows!,
@@ -68,6 +69,7 @@ export const getRootSuite = async (
       testMatch: config.testMatch!,
       name: "",
       env: config.use.env!,
+      program: config.use.program,
     },
     ...(config.projects?.map((project) => ({
       shell: project.shell ?? config.use.shell!,
@@ -76,6 +78,7 @@ export const getRootSuite = async (
       columns: project.columns ?? config.use.columns!,
       testMatch: project.testMatch,
       env: project.env ?? config.use.env!,
+      program: project.program ?? config.use.program,
     })) ?? []),
   ];
 
@@ -89,6 +92,7 @@ export const getRootSuite = async (
           shell: project.shell,
           rows: project.rows,
           columns: project.columns,
+          program: project.program,
         });
         suite.suites = files.map(
           (file) =>
@@ -99,6 +103,7 @@ export const getRootSuite = async (
                 shell: project.shell,
                 rows: project.rows,
                 columns: project.columns,
+                program: project.program,
               },
               suite
             )
@@ -112,6 +117,7 @@ export const getRootSuite = async (
     shell: config.use.shell!,
     rows: config.use.rows!,
     columns: config.use.columns!,
+    program: config.use.program,
   });
   rootSuite.suites = suites;
   return rootSuite;

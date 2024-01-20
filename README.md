@@ -51,6 +51,20 @@ npx @microsoft/tact
 
 To find more Tact examples [check out the examples folder](./examples) or in Tact's [e2e tests](./test/).
 
+### Terminal Program
+
+This code snippet shows how to start the terminal with a specific program running.
+
+```ts
+import { test, expect } from "@microsoft/tact-test";
+
+test.use({ program: { file: "git" } });
+
+test("git shows usage message", async ({ terminal }) => {
+  await expect(terminal).toHaveValue("usage: git", { full: true });
+});
+```
+
 ### Terminal Screenshot
 
 This code snippet shows how to take a screenshot of the terminal.

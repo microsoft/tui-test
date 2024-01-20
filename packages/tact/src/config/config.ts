@@ -29,6 +29,7 @@ export const loadConfig = async (): Promise<Required<TactTestConfig>> => {
       shell: userConfig.use?.shell ?? defaultShell,
       rows: userConfig.use?.rows ?? 30,
       columns: userConfig.use?.columns ?? 80,
+      program: userConfig.use?.program,
     },
   };
   return loadedConfig;

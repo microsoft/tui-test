@@ -23,4 +23,19 @@ export interface TactTestOptions {
    * Environment to be set for the shell.
    */
   env?: { [key: string]: string | undefined };
+
+  /**
+   * The program to initialize the terminal with. Overrides the `shell` option
+   */
+  program?: {
+    /**
+     * The file to launch
+     */
+    file: string;
+
+    /**
+     * The file's arguments as argv
+     */
+    args?: string[];
+  };
 }

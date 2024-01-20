@@ -8,6 +8,7 @@ import process from "node:process";
 import ansi from "./ansi.js";
 
 import { Shell, shellLaunch, shellEnv } from "./shell.js";
+import which from "which";
 
 type TerminalOptions = {
   env?: { [key: string]: string | undefined };
@@ -15,6 +16,10 @@ type TerminalOptions = {
   cols: number;
   shell: Shell;
   shellArgs?: string[];
+  program?: {
+    file: string;
+    args?: string[];
+  };
 };
 
 type CursorPosition = {
@@ -33,6 +38,17 @@ type CursorPosition = {
 };
 
 export const spawn = async (options: TerminalOptions): Promise<Terminal> => {
+  if (options.program != null) {
+    const { file, args } = options.program;
+    const resolvedFile = await which(file);
+    return new Terminal(
+      resolvedFile,
+      args ?? [],
+      options.rows,
+      options.cols,
+      options.env
+    );
+  }
   const { shellTarget, shellArgs } = await shellLaunch(options.shell);
   return new Terminal(
     shellTarget,
@@ -65,13 +81,13 @@ export class Terminal {
   readonly onExit: IEvent<{ exitCode: number; signal?: number }>;
 
   constructor(
-    shellTarget: string,
-    shellArgs: string[],
+    target: string,
+    args: string[],
     private _rows: number,
     private _cols: number,
     env?: { [key: string]: string | undefined }
   ) {
-    this.#pty = pty.spawn(shellTarget, shellArgs ?? [], {
+    this.#pty = pty.spawn(target, args ?? [], {
       name: "xterm-256color",
       cols: this._cols,
       rows: this._rows,
