@@ -119,12 +119,11 @@ const checkShellSupport = (shells: Shell[]) => {
     platform = "Linux";
   }
   if (badShells.length != 0) {
-    console.error(
-      chalk.red(
-        `Error: tact does not support the following shells on ${platform} ${badShells.join(", ")}`
+    console.warn(
+      chalk.yellow(
+        `Warning: tact does not support the following shells on ${platform} ${badShells.join(", ")}`
       )
     );
-    process.exit(1);
   }
 };
 
