@@ -40,7 +40,12 @@ type CursorPosition = {
 export const spawn = async (options: TerminalOptions): Promise<Terminal> => {
   if (options.program != null) {
     const { file, args } = options.program;
-    const resolvedFile = await which(file);
+    const resolvedFile = await which(file, { nothrow: true });
+    if (resolvedFile == null) {
+      throw new Error(
+        `unable to spawn terminal, unable to resolve file '${file}' from PATH`
+      );
+    }
     return new Terminal(
       resolvedFile,
       args ?? [],
