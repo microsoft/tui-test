@@ -71,7 +71,7 @@ const runSuites = async (
           testResult.snapshots = snapshots;
           test.results.push(testResult);
           reporter.endTest(test, testResult);
-          if (status == "expected" || status == "skipped") break;
+          if (status == "skipped" || status == test.expectedStatus) break;
         }
       })
     );

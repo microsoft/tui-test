@@ -6,8 +6,8 @@
 const ESC = "\u001B";
 const CSI = "\u001B[";
 
-const keyUp = (count: number) => CSI + count + "A";
-const keyDown = (count: number) => CSI + count + "B";
+const keyUp = CSI + "A";
+const keyDown = CSI + "B";
 const keyRight = CSI + "C";
 const keyLeft = CSI + "D";
 const keyBackspace = "\u007F";

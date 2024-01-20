@@ -11,6 +11,7 @@ import { TestCase, TestStatus } from "../test/testcase.js";
 import { expect } from "../test/test.js";
 import { SnapshotStatus } from "../test/matchers/toMatchSnapshot.js";
 import { BaseReporter } from "../reporter/base.js";
+import { poll } from "../test/utils.js";
 
 type WorkerResult = {
   error?: string;
@@ -65,6 +66,20 @@ const runTest = async (
     currentTestName: test.title,
     currentConcurrentTestName,
   });
+
+  // wait on the terminal to be ready with the prompt
+  await poll(
+    () => {
+      const view = terminal
+        .getViewableBuffer()
+        .map((row) => row.join(""))
+        .join("\n");
+      return view.includes(">  ");
+    },
+    50,
+    5_000
+  );
+
   await Promise.resolve(test.testFunction({ terminal }));
   terminal.kill();
 };

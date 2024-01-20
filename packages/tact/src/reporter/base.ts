@@ -76,7 +76,9 @@ export class BaseReporter {
 
     this._printFailures(summary);
     this._printSummary(summary);
-    return summary.failuresToPrint.length;
+    return summary.failuresToPrint.filter(
+      (failure) => failure.outcome() == "unexpected"
+    ).length;
   }
 
   private _generateSummary(rootSuite: Suite): TestSummary {
@@ -151,7 +153,6 @@ export class BaseReporter {
     }
     if (flaky.length) {
       tokens.push(chalk.yellow(`${flaky.length} flaky`));
-      for (const test of flaky) tokens.push(chalk.yellow(this._header(test)));
     }
     if (didNotRun > 0) {
       tokens.push(chalk.yellow(`${didNotRun} did not run`));

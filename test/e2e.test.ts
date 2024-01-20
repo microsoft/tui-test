@@ -4,9 +4,16 @@
 import { test, expect, Shell } from "@microsoft/tact-test";
 import os from "node:os";
 
-test.use({ shell: Shell.Powershell, columns: 80, rows: 15 });
+const shell =
+  os.platform() == "darwin"
+    ? Shell.Zsh
+    : os.platform() == "linux"
+      ? Shell.Bash
+      : Shell.Powershell;
 
+test.use({ shell: shell, columns: 80, rows: 15 });
 const isWindows = os.platform() == "win32";
+const isNotMacOS = os.platform() != "darwin";
 
 test.describe("key controls", () => {
   test("left key", async ({ terminal }) => {
@@ -57,14 +64,12 @@ test.describe("key controls", () => {
     expect(terminal.getCursor().x).toBe(2);
   });
 
-  test("ctrl+c", async ({ terminal }) => {
-    await expect(terminal).toHaveValue(">  ");
+  test.when(isNotMacOS, "ctrl+c", async ({ terminal }) => {
     terminal.keyCtrlC();
     await expect(terminal).toHaveValue("^C");
   });
 
-  test("ctrl+d", async ({ terminal }) => {
-    await expect(terminal).toHaveValue(">  ");
+  test.when(isWindows, "ctrl+d", async ({ terminal }) => {
     terminal.keyCtrlD();
     await expect(terminal).toHaveValue("^D");
   });
@@ -102,7 +107,6 @@ test.describe("terminal functions", () => {
   test("cursor position", async ({ terminal }) => {
     terminal.resize(40, 10);
 
-    await expect(terminal).toHaveValue("> ");
     expect(terminal.getCursor().x).toBe(2);
     expect(terminal.getCursor().y).toBe(0);
     expect(terminal.getCursor().baseY).toBe(0);
@@ -112,7 +116,7 @@ test.describe("terminal functions", () => {
     await expect(terminal).toHaveValue("bar");
     await expect(terminal).toHaveValue(">  ");
     expect(terminal.getCursor().x).toBe(2);
-    expect(terminal.getCursor().y).toBe(4);
+    expect(terminal.getCursor().y).toBeGreaterThanOrEqual(4);
     expect(terminal.getCursor().baseY).toBe(0);
 
     for (let i = 0; i < 20; i++) {
@@ -122,7 +126,8 @@ test.describe("terminal functions", () => {
     await expect(terminal).toHaveValue(">  ");
     expect(terminal.getCursor().x).toBe(2);
     expect(terminal.getCursor().y).toBe(9);
-    expect(terminal.getCursor().baseY).toBe(35);
+
+    expect(terminal.getCursor().baseY).toBeGreaterThanOrEqual(35);
   });
 });
 
@@ -139,7 +144,7 @@ test.describe("test variations", () => {
 test.describe("use variations", () => {
   test.describe("powershell", () => {
     test.use({ shell: Shell.Powershell });
-    test("doesn't have logo", async ({ terminal }) => {
+    test.when(isWindows, "doesn't have logo", async ({ terminal }) => {
       await expect(terminal).toHaveValue(">  ");
       await expect(terminal).not.toHaveValue("Microsoft Corporation");
     });

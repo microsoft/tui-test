@@ -3,4 +3,4 @@ if [[ -f $USER_ZDOTDIR/.zshrc ]]; then
 	. $USER_ZDOTDIR/.zshrc
 fi
 
-PS1="%# %{%}"
+PS1="> "

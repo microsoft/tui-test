@@ -118,7 +118,7 @@ export class Terminal {
    * @param count Count of cells to move up. Default is `1`.
    */
   keyUp(count?: number | undefined): void {
-    this.#pty.write(ansi.keyUp(count ?? 1));
+    this.#pty.write(ansi.keyUp.repeat(count ?? 1));
   }
 
   /**
@@ -127,7 +127,7 @@ export class Terminal {
    * @param count Count of cells to move down. Default is `1`.
    */
   keyDown(count?: number | undefined): void {
-    this.#pty.write(ansi.keyDown(count ?? 1));
+    this.#pty.write(ansi.keyDown.repeat(count ?? 1));
   }
 
   /**

@@ -17,7 +17,13 @@ export enum Shell {
   Zsh = "zsh",
 }
 
-export const defaultShell = os.platform() == "win32" ? Shell.Cmd : Shell.Bash;
+export const defaultShell =
+  os.platform() == "win32"
+    ? Shell.Cmd
+    : os.platform() == "darwin"
+      ? Shell.Zsh
+      : Shell.Bash;
+
 export const userZdotdir = process.env?.ZDOTDIR ?? os.homedir() ?? `~`;
 export const zdotdir = path.join(os.tmpdir(), `tact-zsh`);
 
