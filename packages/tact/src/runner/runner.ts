@@ -82,13 +82,49 @@ const runSuites = async (
 
 const checkNodeVersion = () => {
   const nodeVersion = process.versions.node;
-  const nodeMajorVersion = nodeVersion.split(".")[0];
-  if (nodeMajorVersion.trim() != "18") {
+  const nodeMajorVersion = nodeVersion.split(".")[0].trim();
+  if (
+    nodeMajorVersion != "16" &&
+    nodeMajorVersion != "18" &&
+    nodeMajorVersion != "20"
+  ) {
     console.warn(
       chalk.yellow(
-        `tact works best when using a supported node versions (which ${nodeVersion} is not). See https://aka.ms/tact-supported-node-versions for more details.\n`
+        `Warning: tact works best when using a supported node versions (which ${nodeVersion} is not). See https://aka.ms/tact-supported-node-versions for more details.\n`
       )
     );
+  }
+};
+
+const checkShellSupport = (shells: Shell[]) => {
+  let platform = "";
+  let badShells: string[] = [];
+  if (os.platform() === "darwin") {
+    badShells = shells.filter(
+      (shell) =>
+        shell == Shell.Cmd ||
+        shell == Shell.Powershell ||
+        shell == Shell.WindowsPowershell
+    );
+    platform = "macOS";
+  } else if (os.platform() == "win32") {
+    badShells = shells.filter(
+      (shell) => shell == Shell.Zsh || shell == Shell.Fish
+    );
+    platform = "Windows";
+  } else if (os.platform() == "linux") {
+    badShells = shells.filter(
+      (shell) => shell == Shell.Cmd || shell == Shell.WindowsPowershell
+    );
+    platform = "Linux";
+  }
+  if (badShells.length != 0) {
+    console.error(
+      chalk.red(
+        `Error: tact does not support the following shells on ${platform} ${badShells.join(", ")}`
+      )
+    );
+    process.exit(1);
   }
 };
 
@@ -152,6 +188,7 @@ export const run = async (options: ExecutionOptions) => {
         .filter((s): s is Shell => s != null)
     )
   );
+  checkShellSupport(shells);
   if (shells.includes(Shell.Zsh)) {
     await setupZshDotfiles();
   }
