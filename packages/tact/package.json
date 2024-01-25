@@ -32,7 +32,7 @@
     "jest-diff": "^29.7.0",
     "pretty-ms": "^8.0.0",
     "which": "^4.0.0",
-    "workerpool": "^9.0.4",
+    "workerpool": "^9.1.0",
     "xterm-headless": "^5.3.0"
   },
   "scripts": {}

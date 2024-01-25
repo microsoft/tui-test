@@ -14,7 +14,7 @@ import { runTestWorker } from "./worker.js";
 import { Shell, setupZshDotfiles } from "../terminal/shell.js";
 import { ListReporter } from "../reporter/list.js";
 import { BaseReporter } from "../reporter/base.js";
-import { TestCase, TestResult } from "../test/testcase.js";
+import { TestCase } from "../test/testcase.js";
 
 /* eslint-disable no-var */
 
@@ -34,6 +34,7 @@ const pool = workerpool.pool(path.join(__dirname, "worker.js"), {
   workerType: "process",
   maxWorkers,
   forkOpts: { stdio: "inherit" },
+  emitStdStreams: true,
 });
 
 const runSuites = async (
@@ -53,25 +54,20 @@ const runSuites = async (
           return;
         }
         for (let i = 0; i < Math.max(0, getRetries()) + 1; i++) {
-          const testResult: TestResult = {
-            status: "pending",
-            duration: 0,
-            snapshots: [],
-          };
-          const { error, status, duration, snapshots } = await runTestWorker(
+          const testResult = await runTestWorker(
             test,
             test.sourcePath()!,
             { timeout: getTimeout(), updateSnapshot },
             pool,
             reporter
           );
-          testResult.status = status;
-          testResult.duration = duration;
-          testResult.error = error;
-          testResult.snapshots = snapshots;
           test.results.push(testResult);
           reporter.endTest(test, testResult);
-          if (status == "skipped" || status == test.expectedStatus) break;
+          if (
+            testResult.status == "skipped" ||
+            testResult.status == test.expectedStatus
+          )
+            break;
         }
       })
     );

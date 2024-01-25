@@ -207,7 +207,7 @@ export class BaseReporter {
   }
 
   private _header(test: TestCase, prefix?: string): string {
-    const line = (prefix ?? "     ") + test.titlePath().join(" › ");
+    const line = (prefix ?? "     ") + test.titlePath().join(" › ") + " ";
     const stdoutWidth = process.stdout.columns - 4;
     const padLength = stdoutWidth > 96 ? 96 : stdoutWidth;
     return line.padEnd(padLength, "─");
@@ -219,8 +219,15 @@ export class BaseReporter {
     return `     Retry #${retry} `.padEnd(padLength, "─");
   }
 
+  private _stdStreamHeader(streamType: "stdout" | "stderr") {
+    const streamTitle = streamType[0].toUpperCase() + streamType.slice(1);
+    const stdoutWidth = process.stdout.columns - 4;
+    const padLength = stdoutWidth > 36 ? 36 : stdoutWidth;
+    return `     ${streamTitle} `.padEnd(padLength, "─");
+  }
+
   private _printFailures({ failuresToPrint }: TestSummary) {
-    const padError = (error: string) =>
+    const padContent = (error: string) =>
       error
         .split("\n")
         .map((line) => `     ${line}`)
@@ -228,14 +235,35 @@ export class BaseReporter {
     failuresToPrint.forEach((test, failureIdx) => {
       test.results.forEach((result, resultIdx) => {
         if (result.error == null) return;
-        const header =
+        const errorHeader =
           resultIdx === 0
             ? this._resultColor(test.outcome())(
                 this._header(test, `  ${failureIdx + 1}) `)
               )
             : chalk.dim(this._retryHeader(resultIdx));
+        let stdStreams = "";
+        if (result.stdout?.trim()) {
+          stdStreams +=
+            chalk.dim(this._stdStreamHeader("stdout")) +
+            "\n\n" +
+            padContent(result.stdout) +
+            "\n\n";
+        }
+        if (result.stderr?.trim()) {
+          stdStreams +=
+            chalk.dim(this._stdStreamHeader("stderr")) +
+            "\n\n" +
+            padContent(result.stderr) +
+            "\n\n";
+        }
+
         process.stdout.write(
-          "\n" + header + "\n\n" + padError(result.error) + "\n\n"
+          "\n" +
+            errorHeader +
+            "\n\n" +
+            padContent(result.error) +
+            "\n\n" +
+            stdStreams
         );
       });
     });

@@ -26,6 +26,8 @@ export type TestResult = {
   error?: string;
   duration: number;
   snapshots: SnapshotStatus[];
+  stdout?: string;
+  stderr?: string;
 };
 
 export class TestCase {

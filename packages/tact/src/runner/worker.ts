@@ -15,6 +15,8 @@ import { poll } from "../test/utils.js";
 
 type WorkerResult = {
   error?: string;
+  stdout?: string;
+  stderr?: string;
   status: TestStatus;
   duration: number;
   snapshots: SnapshotStatus[];
@@ -116,18 +118,28 @@ export async function runTestWorker(
   return new Promise((resolve) => {
     let startTime = Date.now();
     let reportStarted = false;
+    let stdout = "";
+    let stderr = "";
     try {
       const poolPromise = pool.exec(
         "testWorker",
         [test.id, getMockSuite(test), updateSnapshot, importPath],
         {
           on: (payload) => {
+            if (payload.stdout) {
+              stdout += payload.stdout;
+            }
+            if (payload.stderr) {
+              stderr += payload.stderr;
+            }
             if (payload.errorMessage) {
               resolve({
                 status: "unexpected",
                 error: payload.errorMessage,
                 duration: payload.duration,
                 snapshots,
+                stdout,
+                stderr,
               });
             } else if (payload.startTime) {
               reporter.startTest(test, {
@@ -158,6 +170,8 @@ export async function runTestWorker(
           status: "expected",
           duration: Date.now() - startTime,
           snapshots,
+          stdout,
+          stderr,
         });
       });
     } catch (e) {
@@ -175,6 +189,8 @@ export async function runTestWorker(
           error: e,
           duration,
           snapshots,
+          stdout,
+          stderr,
         });
       } else if (e instanceof workerpool.Promise.TimeoutError) {
         resolve({
@@ -182,6 +198,8 @@ export async function runTestWorker(
           error: `Error: worker was terminated as the timeout (${timeout} ms) as exceeded`,
           duration,
           snapshots,
+          stdout,
+          stderr,
         });
       } else if (e instanceof Error) {
         resolve({
@@ -189,6 +207,8 @@ export async function runTestWorker(
           error: e.stack ?? e.message,
           duration,
           snapshots,
+          stdout,
+          stderr,
         });
       }
     }
