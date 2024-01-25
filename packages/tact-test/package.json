@@ -1,6 +1,6 @@
 {
   "name": "@microsoft/tact-test",
-  "version": "0.0.1-rc.1",
+  "version": "0.0.1",
   "description": "Fast and precise end-to-end terminal testing framework",
   "engines": {
     "node": ">=16"
@@ -15,7 +15,7 @@
   "license": "MIT",
   "homepage": "https://github.com/microsoft/tact#readme",
   "dependencies": {
-    "@microsoft/tact": "0.0.1-rc.1"
+    "@microsoft/tact": "0.0.1"
   },
   "scripts": {}
 }

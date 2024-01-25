@@ -1,6 +1,6 @@
 {
   "name": "@microsoft/tact",
-  "version": "0.0.1-rc.1",
+  "version": "0.0.1",
   "description": "Fast and precise end-to-end terminal testing framework",
   "type": "module",
   "engines": {
