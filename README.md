@@ -37,15 +37,15 @@ npx @microsoft/tact
 
 **Auto-wait** Tact provides a rich API for interacting with the terminal. It waits for the terminal to be ready before executing commands, and it provides tooling for waiting for terminal renders before executing assertions.
 
-**Tracing**. Configure test retry strategy, and capture detailed terminal snapshots to eliminate flakes.
+**Tracing**. Configure test retry strategy, capture stdout & stderr and create detailed terminal snapshots to eliminate flakes.
 
 ### Full isolation • Fast execution
 
 **Terminal contexts**. Tact creates a new 'terminal context' for each test, which includes a new terminal and new underlying pty. This delivers full test isolation with zero overhead. Creating new terminal contexts only takes a handful of milliseconds.
 
-### Multi-platform / Multi-shell • No more "works on my machine"
+### Multi-platform / Multi-shell • No more "it works in my shell"
 
-**Multi-platform**. Tact supports testing on macOS, Linux, and Windows with a wide range of shells when installed: `cmd`, `windows powershell`, `powershell`, `bash`, `git-bash`, `fish`, and `zsh`. It also reports all testing information in a consistent format across platforms to help users detect any runtime variations.
+**Multi-platform**. Tact supports testing on macOS, Linux, and Windows with a wide range of shells when installed: `cmd`, `windows powershell`, `powershell`, `bash`, `git-bash`, `fish`, and `zsh`.
 
 ## Examples
 
