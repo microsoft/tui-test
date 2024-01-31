@@ -27,8 +27,8 @@ program
     `a fast and precise end-to-end terminal testing framework
 
 Examples:
-\`npx @microsoft/tui-test test my.spec.ts\`
-\`npx @microsoft/tui-test test some.spec.ts:42\``
+\`npx @microsoft/tui-test my.spec.ts\`
+\`npx @microsoft/tui-test some.spec.ts:42\``
   )
   .argument(
     "[test-filter...]",
