@@ -24,7 +24,13 @@ pnpm add -D @microsoft/tui-test
 
 ## Running Tests
 
-Running tests is as simple as running `tui-test` from the command line:
+Running tests is as simple as running TUI Test from the command line after installation:
+
+```sh
+tui-test
+```
+
+Or run it using `npx`:
 
 ```sh
 npx @microsoft/tui-test
@@ -37,7 +43,7 @@ npx @microsoft/tui-test
 
 **Auto-wait** TUI Test provides a rich API for interacting with the terminal. It waits for the terminal to be ready before executing commands, and it provides tooling for waiting for terminal renders before executing assertions.
 
-**Tracing**. Configure test retry strategy, capture stdout & stderr and create detailed terminal snapshots to eliminate flakes.
+**Tracing**. Configure test retry strategy, capture stdout & stderr, and create detailed terminal snapshots to eliminate flakes.
 
 ### Full isolation • Fast execution
 
@@ -46,6 +52,8 @@ npx @microsoft/tui-test
 ### Multi-platform / Multi-shell • No more "it works in my shell"
 
 **Multi-platform**. TUI Test supports testing on macOS, Linux, and Windows with a wide range of shells when installed: `cmd`, `windows powershell`, `powershell`, `bash`, `git-bash`, `fish`, and `zsh`.
+
+**Wide-support**. TUI Test uses [xterm.js](https://xtermjs.org/) to render the terminal, which is a widely used terminal emulator in projects like [VSCode](https://github.com/microsoft/vscode) and [Hyper](https://github.com/vercel/hyper).
 
 ## Examples
 
