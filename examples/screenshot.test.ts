@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { test, expect, Shell } from "@microsoft/tact-test";
+import { test, expect, Shell } from "@microsoft/tui-test";
 
 test.use({ shell: Shell.Powershell, rows: 10, columns: 40 });
 

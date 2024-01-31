@@ -1,33 +1,33 @@
-# Tact
+# TUI Test
 
-Tact is a framework for testing terminal applications. It provides a rich API for writing tests that interact with a terminal application across macOS, Linux, and Windows with a wide range of shells. It is built to be **fast**, **reliable**, and **easy to use**.
+TUI Test is a framework for testing terminal applications. It provides a rich API for writing tests that interact with a terminal application across macOS, Linux, and Windows with a wide range of shells. It is built to be **fast**, **reliable**, and **easy to use**.
 
 ## Installation
 
-Install Tact as using `npm`:
+Install TUI Test as using `npm`:
 
 ```sh
-npm i -D @microsoft/tact-test
+npm i -D @microsoft/tui-test
 ```
 
 or `yarn`
 
 ```sh
-yarn add --dev @microsoft/tact-test
+yarn add --dev @microsoft/tui-test
 ```
 
 or `pnpm`
 
 ```sh
-pnpm add -D @microsoft/tact-test
+pnpm add -D @microsoft/tui-test
 ```
 
 ## Running Tests
 
-Running tests is as simple as running `tact` from the command line:
+Running tests is as simple as running `tui-test` from the command line:
 
 ```sh
-npx @microsoft/tact
+npx @microsoft/tui-test
 ```
 
 
@@ -35,28 +35,28 @@ npx @microsoft/tact
 
 ### Resilient • No flaky tests
 
-**Auto-wait** Tact provides a rich API for interacting with the terminal. It waits for the terminal to be ready before executing commands, and it provides tooling for waiting for terminal renders before executing assertions.
+**Auto-wait** TUI Test provides a rich API for interacting with the terminal. It waits for the terminal to be ready before executing commands, and it provides tooling for waiting for terminal renders before executing assertions.
 
 **Tracing**. Configure test retry strategy, capture stdout & stderr and create detailed terminal snapshots to eliminate flakes.
 
 ### Full isolation • Fast execution
 
-**Terminal contexts**. Tact creates a new 'terminal context' for each test, which includes a new terminal and new underlying pty. This delivers full test isolation with zero overhead. Creating new terminal contexts only takes a handful of milliseconds.
+**Terminal contexts**. TUI Test creates a new 'terminal context' for each test, which includes a new terminal and new underlying pty. This delivers full test isolation with zero overhead. Creating new terminal contexts only takes a handful of milliseconds.
 
 ### Multi-platform / Multi-shell • No more "it works in my shell"
 
-**Multi-platform**. Tact supports testing on macOS, Linux, and Windows with a wide range of shells when installed: `cmd`, `windows powershell`, `powershell`, `bash`, `git-bash`, `fish`, and `zsh`.
+**Multi-platform**. TUI Test supports testing on macOS, Linux, and Windows with a wide range of shells when installed: `cmd`, `windows powershell`, `powershell`, `bash`, `git-bash`, `fish`, and `zsh`.
 
 ## Examples
 
-To find more Tact examples [check out the examples folder](./examples) or in Tact's [e2e tests](./test/).
+To find more TUI Test examples [check out the examples folder](./examples) or in TUI Test's [e2e tests](./test/).
 
 ### Terminal Program
 
 This code snippet shows how to start the terminal with a specific program running.
 
 ```ts
-import { test, expect } from "@microsoft/tact-test";
+import { test, expect } from "@microsoft/tui-test";
 
 test.use({ program: { file: "git" } });
 
@@ -70,7 +70,7 @@ test("git shows usage message", async ({ terminal }) => {
 This code snippet shows how to take a screenshot of the terminal.
 
 ```ts
-import { test, expect } from "@microsoft/tact-test";
+import { test, expect } from "@microsoft/tui-test";
 
 test("take a screenshot", async ({ terminal }) => {
   terminal.write("foo")
@@ -85,7 +85,7 @@ test("take a screenshot", async ({ terminal }) => {
 This code snippet shows how to use rich assertions of the terminal.
 
 ```ts
-import { test, expect } from "@microsoft/tact-test";
+import { test, expect } from "@microsoft/tui-test";
 
 test("make a regex assertion", async ({ terminal }) => {
   terminal.write("ls -l\r")

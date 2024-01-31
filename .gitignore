@@ -1,6 +1,5 @@
 node_modules/
-packages/*/node_modules/
-packages/*/lib/
-.tact/**
+lib/
+.tui-test/
 *.tgz
 t*.md

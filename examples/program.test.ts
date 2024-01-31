@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { test, expect } from "@microsoft/tact-test";
+import { test, expect } from "@microsoft/tui-test";
 
 test.use({ program: { file: "git" } });
 

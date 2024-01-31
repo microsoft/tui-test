@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { test, expect, Shell } from "@microsoft/tact-test";
+import { test, expect, Shell } from "@microsoft/tui-test";
 import os from "node:os";
 
 const shell =

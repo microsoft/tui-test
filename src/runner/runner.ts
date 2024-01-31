@@ -15,6 +15,7 @@ import { Shell, setupZshDotfiles } from "../terminal/shell.js";
 import { ListReporter } from "../reporter/list.js";
 import { BaseReporter } from "../reporter/base.js";
 import { TestCase } from "../test/testcase.js";
+import { cacheFolderName, executableName } from "../utils/constants.js";
 
 /* eslint-disable no-var */
 
@@ -86,7 +87,7 @@ const checkNodeVersion = () => {
   ) {
     console.warn(
       chalk.yellow(
-        `Warning: tact works best when using a supported node versions (which ${nodeVersion} is not). See https://aka.ms/tact-supported-node-versions for more details.\n`
+        `Warning: tui-test works best when using a supported node versions (which ${nodeVersion} is not).\n`
       )
     );
   }
@@ -117,7 +118,7 @@ const checkShellSupport = (shells: Shell[]) => {
   if (badShells.length != 0) {
     console.warn(
       chalk.yellow(
-        `Warning: tact does not support the following shells on ${platform} ${badShells.join(", ")}`
+        `Warning: ${executableName} does not support the following shells on ${platform} ${badShells.join(", ")}`
       )
     );
   }
@@ -137,8 +138,7 @@ export const run = async (options: ExecutionOptions) => {
     if (importSuite?.type === "file") {
       const transformedSuitePath = path.join(
         process.cwd(),
-        ".tact",
-        "cache",
+        cacheFolderName,
         importSuite.title
       );
       const parsedSuitePath = path.parse(transformedSuitePath);

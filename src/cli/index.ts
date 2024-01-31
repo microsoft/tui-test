@@ -2,34 +2,39 @@
 // Licensed under the MIT License.
 
 import { Command } from "commander";
+
+import { getVersion } from "./version.js";
+import { executableName } from "../utils/constants.js";
 import { run } from "../runner/runner.js";
 
-type TactCommandOptions = {
+type CommandOptions = {
   updateSnapshot: boolean | undefined;
 };
 
 const action = async (
   testFilter: string[] | undefined,
-  options: TactCommandOptions
+  options: CommandOptions
 ) => {
   const { updateSnapshot } = options;
   await run({ updateSnapshot: updateSnapshot ?? false, testFilter });
 };
 
-const cmd = new Command("test")
-  .summary("run tests with tact")
+export const program = new Command();
+
+program
+  .name(executableName)
   .description(
-    `run tests with tact
+    `a fast and precise end-to-end terminal testing framework
 
 Examples:
-  \`npx @microsoft/tact test my.spec.ts\`
-  \`npx @microsoft/tact test some.spec.ts:42\``
+\`npx @microsoft/tui-test test my.spec.ts\`
+\`npx @microsoft/tui-test test some.spec.ts:42\``
   )
   .argument(
     "[test-filter...]",
     "Pass an argument to filter test files. Each argument is treated as a regular expression. Matching is performed against the absolute file paths"
   )
   .option("-u, --updateSnapshot", `use this flag to re-record snapshots`)
-  .action(action);
-
-export default cmd;
+  .version(await getVersion(), "-v, --version", "output the current version")
+  .action(action)
+  .showHelpAfterError("(add --help for additional information)");

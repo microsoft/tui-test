@@ -12,11 +12,11 @@ import path from "node:path";
 import { Suite, suiteFilePath } from "./suite.js";
 import { TestFunction, TestCase, Location } from "./testcase.js";
 export { Shell } from "../terminal/shell.js";
-import { TactTestOptions } from "./option.js";
+import { TestOptions } from "./option.js";
 import { toHaveValue } from "./matchers/toHaveValue.js";
 import { toMatchSnapshot } from "./matchers/toMatchSnapshot.js";
 import { Terminal } from "../terminal/term.js";
-import { TactTestConfig } from "../config/config.js";
+import { TestConfig } from "../config/config.js";
 
 /* eslint-disable no-var */
 
@@ -48,7 +48,7 @@ const getTestLocation = () => {
 };
 
 /**
- * These tests are executed in tact environment that launches a shell and provides a fresh pty session to each test.
+ * These tests are executed in new terminal context which provides a shell and provides a new pty to each test.
  * @param title Test title.
  * @param testFunction The test function that is run when calling the test function.
  */
@@ -70,7 +70,7 @@ export namespace test {
    * **Usage**
    *
    * ```js
-   * import { test, expect, Shell } from '@microsoft/tact-test';
+   * import { test, expect, Shell } from '@microsoft/tui-test';
    *
    * test.use({ shell: Shell.Cmd });
    *
@@ -87,7 +87,7 @@ export namespace test {
    *
    * @param options An object with local options.
    */
-  export const use = (options: TactTestOptions) => {
+  export const use = (options: TestOptions) => {
     globalThis.suite.options = { ...globalThis.suite.options, ...options };
   };
 
@@ -132,7 +132,7 @@ export namespace test {
    * **Usage**
    *
    * ```js
-   * import { test, expect } from '@microsoft/tact-test';
+   * import { test, expect } from '@microsoft/tui-test';
    *
    * test.skip('broken test', async ({ page }) => {
    *   // ...
@@ -163,7 +163,7 @@ export namespace test {
    * **Usage**
    *
    * ```js
-   * import { test, expect } from '@microsoft/tact-test';
+   * import { test, expect } from '@microsoft/tui-test';
    *
    * test.fail('purposely failing test', async ({ page }) => {
    *   // ...
@@ -194,7 +194,7 @@ export namespace test {
    * **Usage**
    *
    * ```js
-   * import { test, expect } from '@microsoft/tact-test';
+   * import { test, expect } from '@microsoft/tui-test';
    * import os from "node:os";
    *
    * const isWindows = os.platform() == "win32"
@@ -225,7 +225,7 @@ export namespace test {
    * **Usage**
    *
    * ```js
-   * import { test, expect } from '@microsoft/tact-test';
+   * import { test, expect } from '@microsoft/tui-test';
    *
    * test.only('focus this test', async ({ page }) => {
    *   // Run only focused tests
@@ -343,8 +343,8 @@ const expect = jestExpect as Expect;
 export { expect };
 
 /**
- * Defines tact config
+ * Defines tui-test config
  */
-export function defineConfig(config: TactTestConfig): TactTestConfig {
+export function defineConfig(config: TestConfig): TestConfig {
   return config;
 }

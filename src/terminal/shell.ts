@@ -25,7 +25,7 @@ export const defaultShell =
       : Shell.Bash;
 
 export const userZdotdir = process.env?.ZDOTDIR ?? os.homedir() ?? `~`;
-export const zdotdir = path.join(os.tmpdir(), `tact-zsh`);
+export const zdotdir = path.join(os.tmpdir(), `tui-test-zsh`);
 
 export const shellLaunch = async (shell: Shell) => {
   const platform = os.platform();

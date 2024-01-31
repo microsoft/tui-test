@@ -1,9 +1,10 @@
 {
   "extends": "@tsconfig/node18/tsconfig.json",
-  "include": ["packages"],
-  "exclude": ["packages/*/node_modules", "packages/*/lib"],
+  "include": ["src"],
   "compilerOptions": {
+    "outDir": "./lib",
+    "declarationDir": "./lib",
     "types": ["node"],
-    "noEmit": true
+    "declaration": true,
   }
 }

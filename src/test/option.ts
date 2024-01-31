@@ -3,7 +3,7 @@
 
 import { Shell } from "../terminal/shell.js";
 
-export interface TactTestOptions {
+export interface TestOptions {
   /**
    * The shell to initialize the terminal with. Defaults to `cmd` on Windows and `bash` on macOS/Linux.
    */

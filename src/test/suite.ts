@@ -3,8 +3,8 @@
 
 import { glob } from "glob";
 
-import { TactTestOptions } from "./option.js";
-import { TactTestConfig, TactProjectConfig } from "../config/config.js";
+import { TestOptions } from "./option.js";
+import { TestConfig, ProjectConfig } from "../config/config.js";
 import type { TestCase } from "./testcase.js";
 
 type SuiteType = "file" | "describe" | "project" | "root";
@@ -17,7 +17,7 @@ export class Suite {
   constructor(
     readonly title: string,
     readonly type: SuiteType,
-    public options?: TactTestOptions,
+    public options?: TestOptions,
     public parentSuite?: Suite
   ) {}
 
@@ -58,10 +58,10 @@ export const suiteFilePath = (suite: Suite) => {
 };
 
 export const getRootSuite = async (
-  config: Required<TactTestConfig>
+  config: Required<TestConfig>
 ): Promise<Suite> => {
-  const projects: (Required<Omit<TactProjectConfig, "program">> &
-    Pick<TactProjectConfig, "program">)[] = [
+  const projects: (Required<Omit<ProjectConfig, "program">> &
+    Pick<ProjectConfig, "program">)[] = [
     {
       shell: config.use.shell!,
       rows: config.use.rows!,

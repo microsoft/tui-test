@@ -6,13 +6,14 @@ import path from "node:path";
 import process from "node:process";
 
 import { defaultShell } from "../terminal/shell.js";
-import { TactTestOptions as TestOptions } from "../test/option.js";
+import { TestOptions } from "../test/option.js";
+import { cacheFolderName, configFileName } from "../utils/constants.js";
 
-const configPath = path.join(process.cwd(), ".tact", "cache", "tact.config.js");
-let loadedConfig: Required<TactTestConfig> | undefined;
+const configPath = path.join(process.cwd(), cacheFolderName, configFileName);
+let loadedConfig: Required<TestConfig> | undefined;
 
-export const loadConfig = async (): Promise<Required<TactTestConfig>> => {
-  const userConfig: TactTestConfig = !fs.existsSync(configPath)
+export const loadConfig = async (): Promise<Required<TestConfig>> => {
+  const userConfig: TestConfig = !fs.existsSync(configPath)
     ? {}
     : (await import(`file://${configPath}`)).default;
   loadedConfig = {
@@ -52,7 +53,7 @@ declare type WorkerOptions = {
    * Only the files matching one of these patterns are executed as test files. Matching is performed against the
    * absolute file path. Strings are treated as glob patterns.
    *
-   * By default, Tact looks for files matching the following glob pattern: `**\/*.@(spec|test).?(c|m)[jt]s?(x)`.
+   * By default, TUI Test looks for files matching the following glob pattern: `**\/*.@(spec|test).?(c|m)[jt]s?(x)`.
    * This means JavaScript or TypeScript files with `".test"` or `".spec"` suffix, for example
    * `bash.integration.spec.ts`.
    *
@@ -61,19 +62,19 @@ declare type WorkerOptions = {
   testMatch?: string;
 };
 
-export declare type TactProjectConfig = TestOptions &
+export declare type ProjectConfig = TestOptions &
   Required<WorkerOptions> &
   TestProject;
 
-export declare type TactTestConfig = {
+export declare type TestConfig = {
   /**
    * Configuration for the `expect` assertion library.
    *
    * **Usage**
    *
    * ```js
-   * // tact.config.ts
-   * import { defineConfig } from '@microsoft/tact-test';
+   * // tui-test.config.ts
+   * import { defineConfig } from '@microsoft/tui-test';
    *
    * export default defineConfig({
    *   expect: {
@@ -97,8 +98,8 @@ export declare type TactTestConfig = {
    * **Usage**
    *
    * ```js
-   * // tact.config.ts
-   * import { defineConfig } from '@microsoft/tact-test';
+   * // tui-test.config.ts
+   * import { defineConfig } from '@microsoft/tui-test';
    *
    * export default defineConfig({
    *   timeout: 5 * 60 * 1000,
@@ -112,7 +113,7 @@ export declare type TactTestConfig = {
    * Only the files matching one of these patterns are executed as test files. Matching is performed against the
    * absolute file path. Strings are treated as glob patterns.
    *
-   * By default, Tact looks for files matching the following glob pattern: `**\/*.@(spec|test).?(c|m)[jt]s?(x)`.
+   * By default, TUI Test looks for files matching the following glob pattern: `**\/*.@(spec|test).?(c|m)[jt]s?(x)`.
    * This means JavaScript or TypeScript files with `".test"` or `".spec"` suffix, for example
    * `bash.integration.spec.ts`.
    *
@@ -127,8 +128,8 @@ export declare type TactTestConfig = {
    * **Usage**
    *
    * ```js
-   * // tact.config.ts
-   * import { defineConfig } from '@microsoft/tact-test';
+   * // tui-test.config.ts
+   * import { defineConfig } from '@microsoft/tui-test';
    *
    * export default defineConfig({
    *   globalTimeout: process.env.CI ? 60 * 60 * 1000 : undefined,
@@ -144,8 +145,8 @@ export declare type TactTestConfig = {
    * **Usage**
    *
    * ```js
-   * // tact.config.ts
-   * import { defineConfig } from '@microsoft/tact-test';
+   * // tui-test.config.ts
+   * import { defineConfig } from '@microsoft/tui-test';
    *
    * export default defineConfig({
    *   retries: 2,
@@ -161,8 +162,8 @@ export declare type TactTestConfig = {
    * **Usage**
    *
    * ```js
-   * // tact.config.ts
-   * import { defineConfig } from '@microsoft/tact-test';
+   * // tui-test.config.ts
+   * import { defineConfig } from '@microsoft/tui-test';
    *
    * export default defineConfig({
    *   reporter: 'list',
@@ -176,8 +177,8 @@ export declare type TactTestConfig = {
    * Options for all tests in this project
    *
    * ```js
-   * // tact.config.ts
-   * import { defineConfig, Shell } from '@microsoft/tact-test';
+   * // tui-test.config.ts
+   * import { defineConfig, Shell } from '@microsoft/tui-test';
    *
    * export default defineConfig({
    *   projects: [
@@ -197,13 +198,13 @@ export declare type TactTestConfig = {
   use?: TestOptions;
 
   /**
-   * Tact supports running multiple test projects at the same time.
+   * TUI Test supports running multiple test projects at the same time.
    *
    * **Usage**
    *
    * ```js
-   * // tact.config.ts
-   * import { defineConfig, Shell } from '@microsoft/tact-test';
+   * // tui-test.config.ts
+   * import { defineConfig, Shell } from '@microsoft/tui-test';
    *
    * export default defineConfig({
    *   projects: [
@@ -213,5 +214,5 @@ export declare type TactTestConfig = {
    * ```
    *
    */
-  projects?: TactProjectConfig[];
+  projects?: ProjectConfig[];
 };

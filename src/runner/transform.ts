@@ -9,7 +9,8 @@ import readline from "node:readline";
 import process from "node:process";
 import swc from "@swc/core";
 
-const cacheFolder = path.join(".tact", "cache");
+import { cacheFolderName } from "../utils/constants.js";
+
 const typescriptPattern = /^\.[mc]?ts[x]?$/;
 const javascriptPattern = /^\.[mc]?js[x]?$/;
 
@@ -140,13 +141,13 @@ const copyFilesToCache = async (directory: string, destination: string) => {
 
 export const transformFiles = async () => {
   process.setSourceMapsEnabled(true);
-  if (!fs.existsSync(cacheFolder)) {
-    await fsAsync.mkdir(cacheFolder, { recursive: true });
+  if (!fs.existsSync(cacheFolderName)) {
+    await fsAsync.mkdir(cacheFolderName, { recursive: true });
   } else {
     // TODO: remove cache clearing add smart file cleanup between runs
-    for (const file of await fsAsync.readdir(cacheFolder)) {
-      await fsAsync.rm(path.join(cacheFolder, file), { recursive: true });
+    for (const file of await fsAsync.readdir(cacheFolderName)) {
+      await fsAsync.rm(path.join(cacheFolderName, file), { recursive: true });
     }
   }
-  await copyFilesToCache(process.cwd(), cacheFolder);
+  await copyFilesToCache(process.cwd(), cacheFolderName);
 };
