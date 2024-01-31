@@ -87,7 +87,7 @@ const checkNodeVersion = () => {
   ) {
     console.warn(
       chalk.yellow(
-        `Warning: tui-test works best when using a supported node versions (which ${nodeVersion} is not).\n`
+        `Warning: ${executableName} works best when using a supported node versions (which ${nodeVersion} is not).\n`
       )
     );
   }
