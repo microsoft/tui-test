@@ -1,3 +1,5 @@
+// TUI Test Snapshot v1
+
 exports[`take a screenshot 1`] = String.raw`
 ╭────────────────────────────────────────╮
 │> foo                                   │

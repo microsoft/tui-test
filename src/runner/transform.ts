@@ -131,6 +131,8 @@ const copyFilesToCache = async (directory: string, destination: string) => {
             fileHash,
             transformedPath
           );
+        } else if (fileExtension == ".snap") {
+          await fsAsync.copyFile(resolvedPath, `${destinationPath}.cjs`);
         } else {
           await fsAsync.copyFile(resolvedPath, destinationPath);
         }

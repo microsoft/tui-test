@@ -7,11 +7,14 @@ import path from "node:path";
 import process from "node:process";
 import fs from "node:fs";
 import fsAsync from "node:fs/promises";
+import module from "node:module";
 import workpool from "workerpool";
 
 import { Terminal } from "../../terminal/term.js";
 
 export type SnapshotStatus = "passed" | "failed" | "written" | "updated";
+
+const require = module.createRequire(import.meta.url);
 
 const snapshots = new Map<string, string>();
 const snapshotsIdx = new Map<string, number>();
@@ -20,7 +23,7 @@ const snapshotPath = (testPath: string): string =>
     process.cwd(),
     path.dirname(testPath),
     "__snapshots__",
-    `${path.basename(testPath)}.snap.cjs`
+    `${path.basename(testPath)}.snap`
   );
 
 const loadSnapshot = async (
@@ -35,7 +38,7 @@ const loadSnapshot = async (
     if (!fs.existsSync(snapPath)) {
       return;
     }
-    snaps = (await import(`file://${snapPath}`)).default;
+    snaps = require(snapPath);
     snapshots.set(testPath, snaps);
   }
 
@@ -53,17 +56,18 @@ const updateSnapshot = async (
   }
 
   const fh = await fsAsync.open(snapPath, "w+");
-  const snapshots = (await import(`file://${snapPath}`)).default;
+  const snapshots = require(snapPath);
   snapshots[testName] = snapshot;
 
   await fh.writeFile(
-    Object.keys(snapshots)
-      .sort()
-      .map(
-        (snapshotName) =>
-          `exports[\`${snapshotName}\`] = String.raw\`\n${snapshots[snapshotName].trim()}\n\`;\n\n`
-      )
-      .join("")
+    "// TUI Test Snapshot v1\n\n" +
+      Object.keys(snapshots)
+        .sort()
+        .map(
+          (snapshotName) =>
+            `exports[\`${snapshotName}\`] = String.raw\`\n${snapshots[snapshotName].trim()}\n\`;\n\n`
+        )
+        .join("")
   );
   await fh.close();
 };
