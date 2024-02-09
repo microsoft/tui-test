@@ -171,3 +171,36 @@ test.describe("use variations", () => {
     });
   });
 });
+
+test.describe("locators", () => {
+  test.describe("getByText", () => {
+    test("match found", async ({ terminal }) => {
+      await expect(terminal.getByText(">")).toHaveBgColor(0);
+    });
+
+    test.fail("match not found", async ({ terminal }) => {
+      await expect(terminal.getByText("apple")).toHaveBgColor(0);
+    });
+  });
+});
+
+test.describe("color detection", () => {
+  test("checks background color", async ({ terminal }) => {
+    await expect(terminal.getByText(">")).toHaveBgColor(0);
+    await expect(terminal.getByText(">")).toHaveBgColor([0, 0, 0]);
+  });
+
+  test.fail(
+    "checks failure on background color when it doesn't match",
+    async ({ terminal }) => {
+      await expect(terminal.getByText(">")).toHaveBgColor(16);
+    }
+  );
+
+  test.fail(
+    "checks failure on background color when it matches .not",
+    async ({ terminal }) => {
+      await expect(terminal.getByText(">")).not.toHaveBgColor(0);
+    }
+  );
+});

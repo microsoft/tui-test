@@ -9,6 +9,7 @@ import ansi from "./ansi.js";
 
 import { Shell, shellLaunch, shellEnv } from "./shell.js";
 import which from "which";
+import { Locator } from "./locator.js";
 
 type TerminalOptions = {
   env?: { [key: string]: string | undefined };
@@ -316,6 +317,15 @@ export class Terminal {
       result.underline = targetCell?.isUnderline();
     }
     return result;
+  }
+
+  getByText(
+    text: string | RegExp,
+    options?: {
+      full?: boolean;
+    }
+  ): Locator {
+    return new Locator(text, this, this.#term, options?.full);
   }
 
   /**

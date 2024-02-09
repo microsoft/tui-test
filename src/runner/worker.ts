@@ -11,7 +11,7 @@ import { TestCase, TestStatus } from "../test/testcase.js";
 import { expect } from "../test/test.js";
 import { SnapshotStatus } from "../test/matchers/toMatchSnapshot.js";
 import { BaseReporter } from "../reporter/base.js";
-import { poll } from "../test/utils.js";
+import { poll } from "../utils/poll.js";
 
 type WorkerResult = {
   error?: string;

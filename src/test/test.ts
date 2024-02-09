@@ -17,6 +17,8 @@ import { toHaveValue } from "./matchers/toHaveValue.js";
 import { toMatchSnapshot } from "./matchers/toMatchSnapshot.js";
 import { Terminal } from "../terminal/term.js";
 import { TestConfig } from "../config/config.js";
+import { toHaveBgColor } from "./matchers/toHaveBgColor.js";
+import { Locator } from "../terminal/locator.js";
 
 /* eslint-disable no-var */
 
@@ -255,6 +257,7 @@ export namespace test {
 jestExpect.extend({
   toHaveValue,
   toMatchSnapshot,
+  toHaveBgColor,
 });
 
 interface TerminalMatchers {
@@ -291,6 +294,33 @@ interface TerminalMatchers {
   }): Promise<void>;
 }
 
+interface LocatorMatchers {
+  /**
+   * Checks that selected text has the desired background color.
+   *
+   * **Usage**
+   *
+   * ```js
+   * await expect(terminal.getByText(">")).toHaveBgColor("#000000");
+   * ```
+   *
+   * @param value The desired cell's background color. Can be in the following forms
+   * - ANSI 256: This is a number from 0 to 255 of ANSI colors `255`
+   * - Hex: A string representing a 'true color' `#FFFFFF`
+   * - RGB: An array presenting an rgb color `[255, 255, 255]`
+   * @param options
+   */
+  toHaveBgColor(
+    value: string | number | [number, number, number],
+    options?: {
+      /**
+       * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
+       */
+      timeout?: number;
+    }
+  ): Promise<void>;
+}
+
 declare type BaseMatchers<T> = Matchers<void, T> &
   Inverse<Matchers<void, T>> &
   PromiseMatchers<T>;
@@ -310,7 +340,9 @@ declare type SpecificMatchers<T> = T extends Terminal
       Inverse<Pick<TerminalMatchers, "toHaveValue">> &
       AllowedGenericMatchers<T> &
       Inverse<AllowedGenericMatchers<T>>
-  : BaseMatchers<T>;
+  : T extends Locator
+    ? LocatorMatchers & Inverse<LocatorMatchers>
+    : BaseMatchers<T>;
 
 export declare type Expect = {
   <T = unknown>(actual: T): SpecificMatchers<T>;

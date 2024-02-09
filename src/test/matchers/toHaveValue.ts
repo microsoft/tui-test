@@ -5,7 +5,7 @@ import type { MatcherContext, AsyncExpectationResult } from "expect";
 import chalk from "chalk";
 
 import { Terminal } from "../../terminal/term.js";
-import { poll } from "../utils.js";
+import { poll } from "../../utils/poll.js";
 import { getExpectTimeout } from "../../config/config.js";
 
 export async function toHaveValue(
