@@ -14,6 +14,7 @@ const shell =
 test.use({ shell: shell, columns: 80, rows: 15 });
 const isWindows = os.platform() == "win32";
 const isNotMacOS = os.platform() != "darwin";
+const isLinux = os.platform() == "linux";
 
 test.describe("key controls", () => {
   test("left key", async ({ terminal }) => {
@@ -65,9 +66,11 @@ test.describe("key controls", () => {
   });
 
   test.when(isNotMacOS, "ctrl+c", async ({ terminal }) => {
+    await expect(terminal).toMatchSnapshot();
     terminal.keyCtrlC();
 
     await expect(terminal.getByText("^C")).toBeVisible();
+    await expect(terminal).toMatchSnapshot();
   });
 
   test.when(isWindows, "ctrl+d", async ({ terminal }) => {
@@ -209,25 +212,17 @@ test.describe("color detection", () => {
     await expect(terminal.getByText(">")).toHaveFgColor(0);
   });
 
-  test.when(
-    os.platform() === "linux",
-    "checks background color",
-    async ({ terminal }) => {
-      terminal.write(String.raw`printf "\x1b[42m%s%s\n\x1b[0m" foo bar`);
-      terminal.write("\r");
-      await expect(terminal.getByText("foobar")).toHaveBgColor(2);
-    }
-  );
+  test.when(isLinux, "checks background color", async ({ terminal }) => {
+    terminal.write(String.raw`printf "\x1b[42m%s%s\n\x1b[0m" foo bar`);
+    terminal.write("\r");
+    await expect(terminal.getByText("foobar")).toHaveBgColor(2);
+  });
 
-  test.when(
-    os.platform() === "linux",
-    "checks foreground color",
-    async ({ terminal }) => {
-      terminal.write(String.raw`printf "\x1b[31m%s%s\n\x1b[0m" foo bar`);
-      terminal.write("\r");
-      await expect(terminal.getByText("foobar")).toHaveFgColor(1);
-    }
-  );
+  test.when(isLinux, "checks foreground color", async ({ terminal }) => {
+    terminal.write(String.raw`printf "\x1b[31m%s%s\n\x1b[0m" foo bar`);
+    terminal.write("\r");
+    await expect(terminal.getByText("foobar")).toHaveFgColor(1);
+  });
 
   test.fail(
     "checks failure on background color when it doesn't match",
