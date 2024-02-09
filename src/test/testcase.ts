@@ -61,7 +61,7 @@ export class TestCase {
       status = result.status;
     }
     if (this.expectedStatus === status) return "expected";
-    return status;
+    return "unexpected";
   }
 
   snapshots(): SnapshotStatus[] {
