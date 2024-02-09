@@ -200,10 +200,32 @@ test.describe("locators", () => {
 });
 
 test.describe("color detection", () => {
-  test("checks background color", async ({ terminal }) => {
+  test("checks the default background color", async ({ terminal }) => {
     await expect(terminal.getByText(">")).toHaveBgColor(0);
     await expect(terminal.getByText(">")).toHaveBgColor([0, 0, 0]);
   });
+
+  test("checks the default foreground color", async ({ terminal }) => {
+    await expect(terminal.getByText(">")).toHaveFgColor(0);
+  });
+
+  test.when(
+    os.platform() === "linux",
+    "checks background color",
+    async ({ terminal }) => {
+      terminal.write(String.raw`printf \033[41mHello\n\033[0m\r`);
+      await expect(terminal.getByText("Hello ")).toHaveBgColor(41);
+    }
+  );
+
+  test.when(
+    os.platform() === "linux",
+    "checks foreground color",
+    async ({ terminal }) => {
+      terminal.write(String.raw`printf \033[31mHello\n\033[0m\r`);
+      await expect(terminal.getByText("Hello ")).toHaveFgColor(31);
+    }
+  );
 
   test.fail(
     "checks failure on background color when it doesn't match",

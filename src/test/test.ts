@@ -17,6 +17,7 @@ import { toMatchSnapshot } from "./matchers/toMatchSnapshot.js";
 import { Terminal } from "../terminal/term.js";
 import { TestConfig } from "../config/config.js";
 import { toHaveBgColor } from "./matchers/toHaveBgColor.js";
+import { toHaveFgColor } from "./matchers/toHaveFgColor.js";
 import { Locator } from "../terminal/locator.js";
 import { toBeVisible } from "./matchers/toBeVisible.js";
 
@@ -258,6 +259,7 @@ jestExpect.extend({
   toBeVisible,
   toMatchSnapshot,
   toHaveBgColor,
+  toHaveFgColor,
 });
 
 interface TerminalMatchers {
@@ -304,6 +306,31 @@ interface LocatorMatchers {
    * @param options
    */
   toHaveBgColor(
+    value: string | number | [number, number, number],
+    options?: {
+      /**
+       * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
+       */
+      timeout?: number;
+    }
+  ): Promise<void>;
+
+  /**
+   * Checks that selected text has the desired foreground color.
+   *
+   * **Usage**
+   *
+   * ```js
+   * await expect(terminal.getByText(">")).toHaveFgColor("#000000");
+   * ```
+   *
+   * @param value The desired cell's foreground color. Can be in the following forms
+   * - ANSI 256: This is a number from 0 to 255 of ANSI colors `255`
+   * - Hex: A string representing a 'true color' `#FFFFFF`
+   * - RGB: An array presenting an rgb color `[255, 255, 255]`
+   * @param options
+   */
+  toHaveFgColor(
     value: string | number | [number, number, number],
     options?: {
       /**
