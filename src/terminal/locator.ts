@@ -95,7 +95,8 @@ export class Locator {
         this._cells = [];
         for (let y = 0; y < buffer.length; y++) {
           for (let x = 0; x < buffer[y].length ?? 0; x++) {
-            if (x + y >= index && x + y < index + length) {
+            const pos = x + y * buffer[y].length;
+            if (pos >= index && pos < index + length) {
               this._cells.push({
                 termCell: this._xterm.buffer.active
                   .getLine(baseY + y)

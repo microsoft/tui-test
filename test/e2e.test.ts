@@ -213,8 +213,9 @@ test.describe("color detection", () => {
     os.platform() === "linux",
     "checks background color",
     async ({ terminal }) => {
-      terminal.write(String.raw`printf \033[41mHello\n\033[0m\r`);
-      await expect(terminal.getByText("Hello ")).toHaveBgColor(41);
+      terminal.write(String.raw`printf "\x1b[42m%s%s\n\x1b[0m" foo bar`);
+      terminal.write("\r");
+      await expect(terminal.getByText("foobar")).toHaveBgColor(2);
     }
   );
 
@@ -222,8 +223,9 @@ test.describe("color detection", () => {
     os.platform() === "linux",
     "checks foreground color",
     async ({ terminal }) => {
-      terminal.write(String.raw`printf \033[31mHello\n\033[0m\r`);
-      await expect(terminal.getByText("Hello ")).toHaveFgColor(31);
+      terminal.write(String.raw`printf "\x1b[31m%s%s\n\x1b[0m" foo bar`);
+      terminal.write("\r");
+      await expect(terminal.getByText("foobar")).toHaveFgColor(1);
     }
   );
 
