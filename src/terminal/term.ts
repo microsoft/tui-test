@@ -319,13 +319,35 @@ export class Terminal {
     return result;
   }
 
+  /**
+   * Creates a locator for the terminal to search for cells matching the
+   * given pattern
+   *
+   * @param text
+   * @param options
+   */
   getByText(
     text: string | RegExp,
     options?: {
+      /**
+       * Whether to check the entire terminal buffer for the value instead of only the visible section.
+       */
       full?: boolean;
+      /**
+       * Whether to throw errors when the locator can match multiple sets of cells
+       *
+       * @default true
+       */
+      strict?: boolean;
     }
   ): Locator {
-    return new Locator(text, this, this.#term, options?.full);
+    return new Locator(
+      text,
+      this,
+      this.#term,
+      options?.full,
+      options?.strict ?? true
+    );
   }
 
   /**

@@ -19,7 +19,8 @@ export class Locator {
     private readonly _text: string | RegExp,
     private readonly _term: Terminal,
     private readonly _xterm: XTerminal,
-    private readonly _full: boolean | undefined = undefined
+    private readonly _full: boolean | undefined = undefined,
+    private readonly _strict: boolean = false
   ) {}
 
   private static _getIndicesOf(substring: string, string: string) {
@@ -34,7 +35,26 @@ export class Locator {
     return indices;
   }
 
-  public async resolve(timeout: number): Promise<Cell[]> {
+  /**
+   * Gets a locator's search term. This is not supported for direct usage in
+   * testing and can break in future releases.
+   *
+   */
+  public searchTerm(): string | RegExp {
+    return this._text;
+  }
+
+  /**
+   * Resolves a locator to a specific set of cells. This is not supported for
+   * direct usage in testing and can break in future releases.
+   *
+   * @param timeout
+   * @param isNot
+   */
+  public async resolve(
+    timeout: number,
+    isNot: boolean = false
+  ): Promise<Cell[] | undefined> {
     if (this._cells != null) return this._cells;
     const result = await poll(
       () => {
@@ -47,7 +67,7 @@ export class Locator {
         let length = 0;
         if (typeof this._text === "string") {
           const indices = Locator._getIndicesOf(this._text, block);
-          if (indices.length > 1) {
+          if (indices.length > 1 && this._strict) {
             throw new Error(
               `strict mode violation: getByText(${this._text.toString()}) resolved to ${indices.length} elements`
             );
@@ -59,7 +79,7 @@ export class Locator {
           length = this._text.length;
         } else {
           const matches = Array.from(block.matchAll(this._text));
-          if (matches.length > 1) {
+          if (matches.length > 1 && this._strict) {
             throw new Error(
               `strict mode violation: getByText(${this._text.toString()}) resolved to ${matches.length} elements`
             );
@@ -89,14 +109,18 @@ export class Locator {
         return true;
       },
       50,
-      timeout
+      timeout,
+      isNot
     );
 
-    if (!result) {
+    if (!result && !isNot) {
       throw new Error(
         `locator timeout: getByText(${this._text.toString()}) resolved to 0 elements after ${ms(timeout)}`
       );
     }
-    return this._cells!;
+    if (!result && isNot) {
+      this._cells = undefined;
+    }
+    return this._cells;
   }
 }

@@ -15,7 +15,11 @@ export async function toHaveBgColor(
   options?: { timeout?: number }
 ): AsyncExpectationResult {
   const cells = await locator.resolve(options?.timeout ?? getExpectTimeout());
-  const [result, errorCell] = hasBgColor(cells, expected, this.isNot ?? false);
+  const [result, errorCell] = hasBgColor(
+    cells ?? [],
+    expected,
+    this.isNot ?? false
+  );
   const pass = this.isNot ? !result : result;
   const badColor = toMatchingColorMode(expected, errorCell);
 

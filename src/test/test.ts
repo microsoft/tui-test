@@ -13,12 +13,12 @@ import { Suite, suiteFilePath } from "./suite.js";
 import { TestFunction, TestCase, Location } from "./testcase.js";
 export { Shell } from "../terminal/shell.js";
 import { TestOptions } from "./option.js";
-import { toHaveValue } from "./matchers/toHaveValue.js";
 import { toMatchSnapshot } from "./matchers/toMatchSnapshot.js";
 import { Terminal } from "../terminal/term.js";
 import { TestConfig } from "../config/config.js";
 import { toHaveBgColor } from "./matchers/toHaveBgColor.js";
 import { Locator } from "../terminal/locator.js";
+import { toBeVisible } from "./matchers/toBeVisible.js";
 
 /* eslint-disable no-var */
 
@@ -255,37 +255,12 @@ export namespace test {
 }
 
 jestExpect.extend({
-  toHaveValue,
+  toBeVisible,
   toMatchSnapshot,
   toHaveBgColor,
 });
 
 interface TerminalMatchers {
-  /**
-   * Checks that Terminal has the provided text or RegExp.
-   *
-   * **Usage**
-   *
-   * ```js
-   * await expect(terminal).toHaveValue("> ");
-   * ```
-   *
-   * @param options
-   */
-  toHaveValue(
-    value: string | RegExp,
-    options?: {
-      /**
-       * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
-       */
-      timeout?: number;
-      /**
-       * Whether to check the entire terminal buffer for the value instead of only the visible section.
-       */
-      full?: boolean;
-    }
-  ): Promise<void>;
-
   toMatchSnapshot(options?: {
     /**
      * Include color information in the snapshot.
@@ -295,6 +270,24 @@ interface TerminalMatchers {
 }
 
 interface LocatorMatchers {
+  /**
+   * Checks that selected text is visible.
+   *
+   * **Usage**
+   *
+   * ```js
+   * await expect(terminal.getByText(">")).toBeVisible();
+   * ```
+   *
+   * @param options
+   */
+  toBeVisible(options?: {
+    /**
+     * Time to retry the assertion for in milliseconds. Defaults to `timeout` in `TestConfig.expect`.
+     */
+    timeout?: number;
+  }): Promise<void>;
+
   /**
    * Checks that selected text has the desired background color.
    *
@@ -337,7 +330,6 @@ declare type AllowedGenericMatchers<T> = Pick<
 
 declare type SpecificMatchers<T> = T extends Terminal
   ? TerminalMatchers &
-      Inverse<Pick<TerminalMatchers, "toHaveValue">> &
       AllowedGenericMatchers<T> &
       Inverse<AllowedGenericMatchers<T>>
   : T extends Locator

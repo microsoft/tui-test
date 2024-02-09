@@ -69,7 +69,7 @@ import { test, expect } from "@microsoft/tui-test";
 test.use({ program: { file: "git" } });
 
 test("git shows usage message", async ({ terminal }) => {
-  await expect(terminal).toHaveValue("usage: git", { full: true });
+  await expect(terminal.getByText("usage: git", { full: true })).toBeVisible();
 });
 ```
 
@@ -83,7 +83,7 @@ import { test, expect } from "@microsoft/tui-test";
 test("take a screenshot", async ({ terminal }) => {
   terminal.write("foo")
 
-  await expect(terminal).toHaveValue("foo");
+  await expect(terminal.getByText("foo")).toBeVisible();
   await expect(terminal).toMatchSnapshot();
 });
 ```
@@ -98,7 +98,7 @@ import { test, expect } from "@microsoft/tui-test";
 test("make a regex assertion", async ({ terminal }) => {
   terminal.write("ls -l\r")
 
-  await expect(terminal).toHaveValue(/total [0-9]{3}/m);
+  await expect(terminal.getByText(/total [0-9]{3}/m)).toBeVisible();
 });
 ```
 

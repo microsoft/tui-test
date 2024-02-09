@@ -7,20 +7,20 @@ test.use({ shell: Shell.Cmd });
 
 test("backspace", async ({ terminal }) => {
   terminal.write("foo");
-  await expect(terminal).toHaveValue("foo");
+  await expect(terminal.getByText("foo")).toBeVisible();
   expect(terminal.getCursor().x).toBe(5);
 
   terminal.keyBackspace(3);
-  await expect(terminal).not.toHaveValue("foo");
+  await expect(terminal.getByText("foo")).not.toBeVisible();
   expect(terminal.getCursor().x).toBe(2);
 });
 
 test("delete", async ({ terminal }) => {
   terminal.write("foo");
-  await expect(terminal).toHaveValue("foo");
+  await expect(terminal.getByText("foo")).toBeVisible();
   expect(terminal.getCursor().x).toBe(5);
 
   terminal.keyBackspace(3);
-  await expect(terminal).not.toHaveValue("foo");
+  await expect(terminal.getByText("foo")).not.toBeVisible();
   expect(terminal.getCursor().x).toBe(2);
 });
