@@ -141,7 +141,7 @@ export async function runTestWorker(
                 stdout,
                 stderr,
               });
-            } else if (payload.startTime) {
+            } else if (payload.startTime && !reportStarted) {
               reporter.startTest(test, {
                 status: "pending",
                 duration: 0,
