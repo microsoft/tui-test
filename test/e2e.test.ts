@@ -16,6 +16,22 @@ const isWindows = os.platform() == "win32";
 const isNotMacOS = os.platform() != "darwin";
 const isLinux = os.platform() == "linux";
 
+test.describe("locators", () => {
+  test.describe("getByText", () => {
+    test("string driven", async ({ terminal }) => {
+      await expect(terminal.getByText(">")).toBeVisible();
+    });
+
+    test("regex driven", async ({ terminal }) => {
+      await expect(terminal.getByText(/>/g)).toBeVisible();
+    });
+
+    test.fail("regex driven non-global regex", async ({ terminal }) => {
+      await expect(terminal.getByText(/>/m)).toBeVisible();
+    });
+  });
+});
+
 test.describe("key controls", () => {
   test("left key", async ({ terminal }) => {
     terminal.write("bar");

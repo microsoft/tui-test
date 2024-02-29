@@ -8,7 +8,7 @@ test.use({ shell: Shell.Powershell });
 test("make a regex assertion", async ({ terminal }) => {
   terminal.write("dir | measure\r");
 
-  await expect(terminal.getByText(/Count\s*:\s*[0-9]{2}/m)).toBeVisible();
+  await expect(terminal.getByText(/Count\s*:\s*[0-9]{2}/g)).toBeVisible();
 });
 
 test("make a text assertion", async ({ terminal }) => {
