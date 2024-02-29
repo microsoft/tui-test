@@ -98,7 +98,7 @@ import { test, expect } from "@microsoft/tui-test";
 test("make a regex assertion", async ({ terminal }) => {
   terminal.write("ls -l\r")
 
-  await expect(terminal.getByText(/total [0-9]{3}/m)).toBeVisible();
+  await expect(terminal.getByText(/total [0-9]{3}/g)).toBeVisible();
 });
 ```
 
