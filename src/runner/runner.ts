@@ -16,6 +16,7 @@ import { ListReporter } from "../reporter/list.js";
 import { BaseReporter } from "../reporter/base.js";
 import { TestCase } from "../test/testcase.js";
 import { cacheFolderName, executableName } from "../utils/constants.js";
+import { supportsColor } from "chalk";
 
 /* eslint-disable no-var */
 
@@ -34,7 +35,12 @@ export const maxWorkers = Math.max(Math.floor(os.cpus().length / 2), 1);
 const pool = workerpool.pool(path.join(__dirname, "worker.js"), {
   workerType: "process",
   maxWorkers,
-  forkOpts: { stdio: "inherit" },
+  forkOpts: {
+    stdio: "inherit",
+    env: {
+      ...(supportsColor ? { FORCE_COLOR: "1" } : {}),
+    },
+  },
   emitStdStreams: true,
 });
 
