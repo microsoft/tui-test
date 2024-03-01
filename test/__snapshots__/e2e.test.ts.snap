@@ -1,6 +1,6 @@
 // TUI Test Snapshot v1
 
-exports[`ctrl+c 1`] = String.raw`
+exports[`key controls › ctrl+c | 1`] = String.raw`
 ╭────────────────────────────────────────────────────────────────────────────────╮
 │>                                                                               │
 │                                                                                │
@@ -20,7 +20,7 @@ exports[`ctrl+c 1`] = String.raw`
 ╰────────────────────────────────────────────────────────────────────────────────╯
 `;
 
-exports[`ctrl+c 1 1`] = String.raw`
+exports[`key controls › ctrl+c | 1 1`] = String.raw`
 ╭────────────────────────────────────────────────────────────────────────────────╮
 │> ^C                                                                            │
 │>                                                                               │
@@ -40,7 +40,7 @@ exports[`ctrl+c 1 1`] = String.raw`
 ╰────────────────────────────────────────────────────────────────────────────────╯
 `;
 
-exports[`resize 1`] = String.raw`
+exports[`terminal functions › resize | 1`] = String.raw`
 ╭────────────────────────────────────────────────────────────────────────────────╮
 │> foo                                                                           │
 │                                                                                │
@@ -60,7 +60,7 @@ exports[`resize 1`] = String.raw`
 ╰────────────────────────────────────────────────────────────────────────────────╯
 `;
 
-exports[`resize 1 1`] = String.raw`
+exports[`terminal functions › resize | 1 1`] = String.raw`
 ╭────────────────────────────────────────╮
 │> foobar                                │
 │                                        │

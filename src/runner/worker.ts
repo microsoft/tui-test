@@ -61,7 +61,8 @@ const runTest = async (
   const signatureIdx = signatureIdenticalTests.findIndex(
     (t) => t.id == test.id
   );
-  const currentConcurrentTestName = () => `${test.title} ${signatureIdx + 1}`;
+  const currentConcurrentTestName = () =>
+    `${test.titlePath().slice(1).join(" › ")} | ${signatureIdx + 1}`;
 
   expect.setState({
     ...expect.getState(),
