@@ -215,6 +215,14 @@ test.describe("locators", () => {
       await expect(terminal.getByText("foo")).toBeVisible();
       await expect(terminal.getByText("bar")).toBeVisible();
     });
+
+    test.fail("strict mode failure with .not", async ({ terminal }) => {
+      terminal.write("echo bar\r");
+      terminal.write("foo");
+
+      await expect(terminal.getByText("foo")).toBeVisible();
+      await expect(terminal.getByText("bar")).not.toBeVisible();
+    });
   });
 });
 
