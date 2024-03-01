@@ -6,6 +6,7 @@ import chalk from "chalk";
 
 import { getExpectTimeout } from "../../config/config.js";
 import { Locator } from "../../terminal/locator.js";
+import { isStrictModeViolation } from "../error.js";
 
 export async function toBeVisible(
   this: MatcherContext,
@@ -29,8 +30,10 @@ export async function toBeVisible(
   } catch (e) {
     const errorMessage =
       typeof e == "string" ? e : e instanceof Error ? e.message : "";
+
+    pass = (isStrictModeViolation(e) && this.isNot) || false;
     return {
-      pass: false,
+      pass,
       message: () => {
         if (!this.isNot) {
           return `expect(${chalk.red("received")}).toBeVisible(${chalk.green("expected")}) ${chalk.dim("// " + comparisonMethod)}\n\n${errorMessage}`;

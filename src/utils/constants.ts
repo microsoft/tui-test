@@ -7,3 +7,4 @@ export const executableName = "tui-test";
 export const programFolderName = ".tui-test";
 export const cacheFolderName = path.join(programFolderName, "cache");
 export const configFileName = "tui-test.config.js";
+export const strictModeErrorPrefix = "strict mode violation";

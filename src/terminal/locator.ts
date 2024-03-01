@@ -5,6 +5,7 @@ import { IBufferCell, Terminal as XTerminal } from "xterm-headless";
 import ms from "pretty-ms";
 import { poll } from "../utils/poll.js";
 import { Terminal } from "./term.js";
+import { strictModeErrorPrefix } from "../utils/constants.js";
 
 export type Cell = {
   termCell: IBufferCell | undefined;
@@ -69,7 +70,7 @@ export class Locator {
           const indices = Locator._getIndicesOf(this._text, block);
           if (indices.length > 1 && this._strict) {
             throw new Error(
-              `strict mode violation: getByText(${this._text.toString()}) resolved to ${indices.length} elements`
+              `${strictModeErrorPrefix}: getByText(${this._text.toString()}) resolved to ${indices.length} elements`
             );
           }
           if (indices.length == 0) {
@@ -81,7 +82,7 @@ export class Locator {
           const matches = Array.from(block.matchAll(this._text));
           if (matches.length > 1 && this._strict) {
             throw new Error(
-              `strict mode violation: getByText(${this._text.toString()}) resolved to ${matches.length} elements`
+              `${strictModeErrorPrefix}: getByText(${this._text.toString()}) resolved to ${matches.length} elements`
             );
           }
           if (matches.length == 0) {
