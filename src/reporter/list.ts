@@ -30,7 +30,7 @@ export class ListReporter extends BaseReporter {
     this._testRows[test.id] = this.currentTest;
     const fullName = test.titlePath();
 
-    const prefix = this._linePrefix(test);
+    const prefix = this._linePrefix(test, "start");
     const line =
       chalk.dim(fullName.join(" › ")) + this._lineSuffix(test, result);
     this._appendLine(line, prefix);
@@ -39,7 +39,7 @@ export class ListReporter extends BaseReporter {
   override endTest(test: TestCase, result: TestResult): void {
     super.endTest(test, result);
     const fullName = test.titlePath();
-    const prefix = this._linePrefix(test);
+    const prefix = this._linePrefix(test, "end");
     const line =
       this._resultColor(test.outcome())(fullName.join(" › ")) +
       this._lineSuffix(test, result);
@@ -53,21 +53,25 @@ export class ListReporter extends BaseReporter {
   }
 
   private _resultIcon(status: TestStatus): string {
+    const color = this._resultColor(status);
     switch (status) {
       case "expected":
-        return chalk.green("✔");
+        return color("✔");
       case "unexpected":
-        return chalk.red("✘");
+        return color("✘");
       case "skipped":
-        return chalk.green("-");
+      case "pending":
+        return color("-");
       default:
         return " ";
     }
   }
 
-  private _linePrefix(test: TestCase): string {
+  private _linePrefix(test: TestCase, testPoint: "start" | "end"): string {
     const row = this._testRows[test.id] ?? this.currentTest;
-    return `  ${this._resultIcon(test.outcome())}  ${chalk.dim(row)} `;
+    return testPoint === "end"
+      ? `  ${this._resultIcon(test.outcome())}  ${chalk.dim(row)} `
+      : `  ${this._resultIcon("pending")}  ${chalk.dim(row)} `;
   }
 
   private _lineSuffix(test: TestCase, result: TestResult): string {

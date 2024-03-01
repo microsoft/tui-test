@@ -294,6 +294,8 @@ export class BaseReporter {
         return chalk.yellow;
       case "skipped":
         return chalk.cyan;
+      case "pending":
+        return chalk.dim;
       default:
         return (str: string) => str;
     }
