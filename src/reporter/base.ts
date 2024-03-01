@@ -266,6 +266,21 @@ export class BaseReporter {
             stdStreams
         );
       });
+      if (
+        test.results.every((result) => result.error == null) &&
+        test.outcome() === "unexpected"
+      ) {
+        const errorHeader = this._resultColor(test.outcome())(
+          this._header(test, `  ${failureIdx + 1}) `)
+        );
+        process.stdout.write(
+          "\n" +
+            errorHeader +
+            "\n\n" +
+            padContent("Error: test passed when run with `test.fail`") +
+            "\n\n"
+        );
+      }
     });
   }
 
