@@ -38,6 +38,7 @@ const pool = workerpool.pool(path.join(__dirname, "worker.js"), {
   forkOpts: {
     stdio: "inherit",
     env: {
+      ...process.env,
       ...(supportsColor ? { FORCE_COLOR: "1" } : {}),
     },
   },
