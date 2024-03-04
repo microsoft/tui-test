@@ -80,6 +80,8 @@ const generateSnapshot = (terminal: Terminal, includeColors: boolean) => {
   return `${view}\n${JSON.stringify(Object.fromEntries(shifts), null, 2)}`;
 };
 
+export const flushSnapshotExecutionCache = () => snapshotsIdx.clear();
+
 export async function toMatchSnapshot(
   this: MatcherContext,
   terminal: Terminal,

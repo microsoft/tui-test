@@ -12,6 +12,7 @@ import { expect } from "../test/test.js";
 import { SnapshotStatus } from "../test/matchers/toMatchSnapshot.js";
 import { BaseReporter } from "../reporter/base.js";
 import { poll } from "../utils/poll.js";
+import { flushSnapshotExecutionCache } from "../test/matchers/toMatchSnapshot.js";
 
 type WorkerResult = {
   error?: string;
@@ -239,6 +240,8 @@ const testWorker = async (
   updateSnapshot: boolean,
   importPath: string
 ): Promise<void> => {
+  flushSnapshotExecutionCache();
+
   const startTime = Date.now();
   workerpool.workerEmit({
     startTime,
