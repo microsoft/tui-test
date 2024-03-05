@@ -21,6 +21,7 @@ type TestSummary = {
     failed: number;
     written: number;
     updated: number;
+    obsolete: number;
   };
 };
 
@@ -71,8 +72,8 @@ export class BaseReporter {
   endTest(test: TestCase, result: TestResult): void {
     if (!this.isTTY) this.currentTest += 1;
   }
-  end(rootSuite: Suite): number {
-    const summary = this._generateSummary(rootSuite);
+  end(rootSuite: Suite, obsoleteSnapshots: number): number {
+    const summary = this._generateSummary(rootSuite, obsoleteSnapshots);
 
     this._printFailures(summary);
     this._printSummary(summary);
@@ -81,17 +82,26 @@ export class BaseReporter {
     ).length;
   }
 
-  private _generateSummary(rootSuite: Suite): TestSummary {
+  private _generateSummary(
+    rootSuite: Suite,
+    obsoleteSnapshots: number
+  ): TestSummary {
     let didNotRun = 0;
     let skipped = 0;
     let expected = 0;
     const unexpected: TestCase[] = [];
     const flaky: TestCase[] = [];
-    const snapshots = { written: 0, updated: 0, failed: 0, passed: 0 };
+    const snapshots = {
+      written: 0,
+      updated: 0,
+      failed: 0,
+      passed: 0,
+      obsolete: obsoleteSnapshots,
+    };
 
     rootSuite.allTests().forEach((test) => {
       test.snapshots().forEach((snapshot) => {
-        switch (snapshot) {
+        switch (snapshot.result) {
           case "passed":
             snapshots.passed++;
             break;
@@ -185,21 +195,25 @@ export class BaseReporter {
     if (snapshots.written > 0) {
       snapshotTokens.push(chalk.green(`${snapshots.written} written`));
     }
+    if (snapshots.obsolete > 0) {
+      snapshotTokens.push(chalk.yellow(`${snapshots.obsolete} obsolete`));
+    }
 
     const snapshotTotal =
       snapshots.passed +
       snapshots.failed +
       snapshots.written +
-      snapshots.updated;
-    const snapshotErrorPostfix =
-      snapshots.failed > 0
+      snapshots.updated +
+      snapshots.obsolete;
+    const snapshotPostfix =
+      snapshots.failed > 0 || snapshots.obsolete > 0
         ? chalk.dim(
             "(Inspect your code changes or use the `-u` flag to update them.)"
           )
         : "";
     if (snapshotTotal !== 0) {
       process.stdout.write(
-        `  snapshots: ${snapshotTokens.join(", ")}, ${snapshotTotal} total ${snapshotErrorPostfix}\n\n`
+        `  snapshots: ${snapshotTokens.join(", ")}, ${snapshotTotal} total ${snapshotPostfix}\n\n`
       );
     } else {
       process.stdout.write("\n");

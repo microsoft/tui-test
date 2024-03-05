@@ -7,9 +7,8 @@ import workerpool from "workerpool";
 import { Suite } from "../test/suite.js";
 import { spawn } from "../terminal/term.js";
 import { defaultShell } from "../terminal/shell.js";
-import { TestCase, TestStatus } from "../test/testcase.js";
+import { Snapshot, TestCase, TestStatus } from "../test/testcase.js";
 import { expect } from "../test/test.js";
-import { SnapshotStatus } from "../test/matchers/toMatchSnapshot.js";
 import { BaseReporter } from "../reporter/base.js";
 import { poll } from "../utils/poll.js";
 import { flushSnapshotExecutionCache } from "../test/matchers/toMatchSnapshot.js";
@@ -20,7 +19,7 @@ type WorkerResult = {
   stderr?: string;
   status: TestStatus;
   duration: number;
-  snapshots: SnapshotStatus[];
+  snapshots: Snapshot[];
 };
 
 type WorkerExecutionOptions = {
@@ -103,7 +102,7 @@ export async function runTestWorker(
   pool: workerpool.Pool,
   reporter: BaseReporter
 ): Promise<WorkerResult> {
-  const snapshots: SnapshotStatus[] = [];
+  const snapshots: Snapshot[] = [];
   if (test.expectedStatus === "skipped") {
     reporter.startTest(test, {
       status: "pending",
@@ -152,7 +151,10 @@ export async function runTestWorker(
               reportStarted = true;
               startTime = payload.startTime;
             } else if (payload.snapshotResult) {
-              snapshots.push(payload.snapshotResult);
+              snapshots.push({
+                name: payload.snapshotName,
+                result: payload.snapshotResult,
+              });
             }
           },
         }

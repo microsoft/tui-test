@@ -17,6 +17,7 @@ import { BaseReporter } from "../reporter/base.js";
 import { TestCase } from "../test/testcase.js";
 import { cacheFolderName, executableName } from "../utils/constants.js";
 import { supportsColor } from "chalk";
+import { cleanSnapshot } from "../test/matchers/toMatchSnapshot.js";
 
 /* eslint-disable no-var */
 
@@ -131,6 +132,28 @@ const checkShellSupport = (shells: Shell[]) => {
   }
 };
 
+const cleanSnapshots = async (
+  tests: TestCase[],
+  { updateSnapshot }: ExecutionOptions
+) => {
+  const snapshotFiles = tests.reduce((snapshots, test) => {
+    const source = test.filePath() ?? "";
+    const snapshotNames = test.snapshots().map((snapshot) => snapshot.name);
+    snapshots.set(source, [...(snapshots.get(source) ?? []), ...snapshotNames]);
+    return snapshots;
+  }, new Map<string, string[]>());
+
+  let unusedSnapshots = 0;
+  for (const snapshotFile of snapshotFiles.keys()) {
+    unusedSnapshots += await cleanSnapshot(
+      snapshotFile,
+      new Set(snapshotFiles.get(snapshotFile)),
+      updateSnapshot
+    );
+  }
+  return unusedSnapshots;
+};
+
 export const run = async (options: ExecutionOptions) => {
   checkNodeVersion();
 
@@ -216,6 +239,8 @@ export const run = async (options: ExecutionOptions) => {
   } catch {
     /* empty */
   }
-  const failures = reporter.end(rootSuite);
+  const obsoleteSnapshots = await cleanSnapshots(allTests, options);
+  const failures = reporter.end(rootSuite, obsoleteSnapshots);
+
   process.exit(failures);
 };

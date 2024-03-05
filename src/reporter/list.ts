@@ -48,8 +48,8 @@ export class ListReporter extends BaseReporter {
     this._updateOrAppendLine(row, line, prefix);
   }
 
-  override end(rootSuite: Suite): number {
-    return super.end(rootSuite);
+  override end(rootSuite: Suite, obsoleteSnapshots: number): number {
+    return super.end(rootSuite, obsoleteSnapshots);
   }
 
   private _resultIcon(status: TestStatus): string {

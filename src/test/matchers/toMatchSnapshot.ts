@@ -72,6 +72,38 @@ const updateSnapshot = async (
   await fh.close();
 };
 
+export const cleanSnapshot = async (
+  testPath: string,
+  retainedSnapshots: Set<string>,
+  updateSnapshot: boolean
+): Promise<number> => {
+  const snapPath = snapshotPath(testPath);
+  if (!fs.existsSync(snapPath)) return retainedSnapshots.size;
+  const snapshots = require(snapPath);
+  const unusedSnapshots = Object.keys(snapshots).filter(
+    (snapshot) => !retainedSnapshots.has(snapshot)
+  );
+
+  if (!updateSnapshot) return unusedSnapshots.length;
+  unusedSnapshots.forEach((unusedSnapshot) => {
+    delete snapshots[unusedSnapshot];
+  });
+
+  await fsAsync.writeFile(
+    snapPath,
+    "// TUI Test Snapshot v1\n\n" +
+      Object.keys(snapshots)
+        .sort()
+        .map(
+          (snapshotName) =>
+            `exports[\`${snapshotName}\`] = String.raw\`\n${snapshots[snapshotName].trim()}\n\`;\n\n`
+        )
+        .join("")
+  );
+
+  return unusedSnapshots.length;
+};
+
 const generateSnapshot = (terminal: Terminal, includeColors: boolean) => {
   const { view, shifts } = terminal.serialize();
   if (shifts.size === 0 || !includeColors) {
@@ -108,14 +140,17 @@ export async function toMatchSnapshot(
   const snapshotEmpty = existingSnapshot == null;
 
   if (!workpool.isMainThread) {
-    const snapshotResult = snapshotEmpty
+    const snapshotResult: SnapshotStatus = snapshotEmpty
       ? "written"
       : snapshotShouldUpdate
         ? "updated"
         : snapshotsDifferent
           ? "failed"
           : "passed";
-    workpool.workerEmit({ snapshotResult, testName });
+    workpool.workerEmit({
+      snapshotResult,
+      snapshotName: snapshotPostfixTestName,
+    });
   }
 
   if (snapshotEmpty || snapshotShouldUpdate) {
