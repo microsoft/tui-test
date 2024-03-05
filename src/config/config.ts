@@ -15,7 +15,7 @@ let loadedConfig: Required<TestConfig> | undefined;
 export const loadConfig = async (): Promise<Required<TestConfig>> => {
   const userConfig: TestConfig = !fs.existsSync(configPath)
     ? {}
-    : (await import(`file://${configPath}`)).default;
+    : (await import(`file://${configPath}`)).default ?? {};
   loadedConfig = {
     testMatch: userConfig.testMatch ?? "**/*.@(spec|test).?(c|m)[jt]s?(x)",
     expect: {
