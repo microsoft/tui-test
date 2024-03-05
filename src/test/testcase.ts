@@ -21,11 +21,16 @@ export type TestStatus =
   | "skipped"
   | "flaky";
 
+export type Snapshot = {
+  name: string;
+  result: SnapshotStatus;
+};
+
 export type TestResult = {
   status: TestStatus;
   error?: string;
   duration: number;
-  snapshots: SnapshotStatus[];
+  snapshots: Snapshot[];
   stdout?: string;
   stderr?: string;
 };
@@ -64,7 +69,7 @@ export class TestCase {
     return "unexpected";
   }
 
-  snapshots(): SnapshotStatus[] {
+  snapshots(): Snapshot[] {
     return this.results.at(-1)?.snapshots ?? [];
   }
 
