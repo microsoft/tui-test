@@ -55,14 +55,17 @@ const runTest = async (
 
   const allTests = Object.values(globalThis.tests);
   const testPath = test.filePath();
+  const testSignature = test.titlePath().slice(1).join(" › ");
   const signatureIdenticalTests = allTests.filter(
-    (t) => t.filePath() === testPath && t.title === test.title
+    (t) =>
+      t.filePath() === testPath &&
+      t.titlePath().slice(1).join(" › ") === testSignature
   );
   const signatureIdx = signatureIdenticalTests.findIndex(
     (t) => t.id == test.id
   );
   const currentConcurrentTestName = () =>
-    `${test.titlePath().slice(1).join(" › ")} | ${signatureIdx + 1}`;
+    `${testSignature} | ${signatureIdx + 1}`;
 
   expect.setState({
     ...expect.getState(),

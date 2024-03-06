@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { Shell } from "../terminal/shell.js";
 import { fitToWidth, ansi } from "./utils.js";
 import { TestCase, TestResult, TestStatus } from "../test/testcase.js";
-import { BaseReporter } from "./base.js";
+import { BaseReporter, StaleSnapshotSummary } from "./base.js";
 import { Suite } from "../test/suite.js";
 
 export class ListReporter extends BaseReporter {
@@ -48,13 +48,17 @@ export class ListReporter extends BaseReporter {
     this._updateOrAppendLine(row, line, prefix);
   }
 
-  override end(rootSuite: Suite, obsoleteSnapshots: number): number {
-    return super.end(rootSuite, obsoleteSnapshots);
+  override end(
+    rootSuite: Suite,
+    staleSnapshotSummary: StaleSnapshotSummary
+  ): number {
+    return super.end(rootSuite, staleSnapshotSummary);
   }
 
   private _resultIcon(status: TestStatus): string {
     const color = this._resultColor(status);
     switch (status) {
+      case "flaky":
       case "expected":
         return color("✔");
       case "unexpected":

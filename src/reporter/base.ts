@@ -22,7 +22,13 @@ type TestSummary = {
     written: number;
     updated: number;
     obsolete: number;
+    removed: number;
   };
+};
+
+export type StaleSnapshotSummary = {
+  obsolete: number;
+  removed: number;
 };
 
 export class BaseReporter {
@@ -72,8 +78,8 @@ export class BaseReporter {
   endTest(test: TestCase, result: TestResult): void {
     if (!this.isTTY) this.currentTest += 1;
   }
-  end(rootSuite: Suite, obsoleteSnapshots: number): number {
-    const summary = this._generateSummary(rootSuite, obsoleteSnapshots);
+  end(rootSuite: Suite, staleSnapshotSummary: StaleSnapshotSummary): number {
+    const summary = this._generateSummary(rootSuite, staleSnapshotSummary);
 
     this._printFailures(summary);
     this._printSummary(summary);
@@ -84,7 +90,7 @@ export class BaseReporter {
 
   private _generateSummary(
     rootSuite: Suite,
-    obsoleteSnapshots: number
+    staleSnapshotSummary: StaleSnapshotSummary
   ): TestSummary {
     let didNotRun = 0;
     let skipped = 0;
@@ -96,7 +102,7 @@ export class BaseReporter {
       updated: 0,
       failed: 0,
       passed: 0,
-      obsolete: obsoleteSnapshots,
+      ...staleSnapshotSummary,
     };
 
     rootSuite.allTests().forEach((test) => {
@@ -198,13 +204,18 @@ export class BaseReporter {
     if (snapshots.obsolete > 0) {
       snapshotTokens.push(chalk.yellow(`${snapshots.obsolete} obsolete`));
     }
+    if (snapshots.removed > 0) {
+      snapshotTokens.push(chalk.green(`${snapshots.removed} removed`));
+    }
 
     const snapshotTotal =
       snapshots.passed +
       snapshots.failed +
       snapshots.written +
       snapshots.updated +
+      snapshots.removed +
       snapshots.obsolete;
+
     const snapshotPostfix =
       snapshots.failed > 0 || snapshots.obsolete > 0
         ? chalk.dim(
