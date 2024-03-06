@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import os from "node:os";
 
 import { defaultShell } from "../terminal/shell.js";
 import { TestOptions } from "../test/option.js";
@@ -26,6 +27,10 @@ export const loadConfig = async (): Promise<Required<TestConfig>> => {
     projects: userConfig.projects ?? [],
     timeout: userConfig.timeout ?? 30_000,
     reporter: userConfig.reporter ?? "list",
+    workers: Math.max(
+      userConfig.workers ?? Math.max(Math.floor(os.cpus().length / 2), 1),
+      1
+    ),
     use: {
       shell: userConfig.use?.shell ?? defaultShell,
       rows: userConfig.use?.rows ?? 30,
@@ -196,6 +201,24 @@ export declare type TestConfig = {
    * all projects.
    */
   use?: TestOptions;
+
+  /**
+   * The number of workers to use. Defaults to 50% of the logical cpu cores. If
+   * there are less tests than requested workers, there will be 1 worker used per test.
+   *
+   * **Usage**
+   *
+   * ```js
+   * // tui-test.config.ts
+   * import { defineConfig } from '@microsoft/tui-test';
+   *
+   * export default defineConfig({
+   *   workers: 4,
+   * });
+   * ```
+   *
+   */
+  workers?: number;
 
   /**
    * TUI Test supports running multiple test projects at the same time.

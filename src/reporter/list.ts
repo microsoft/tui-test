@@ -18,8 +18,12 @@ export class ListReporter extends BaseReporter {
     this._testRows = {};
   }
 
-  override async start(testCount: number, shells: Shell[]): Promise<void> {
-    await super.start(testCount, shells);
+  override async start(
+    testCount: number,
+    shells: Shell[],
+    maxWorkers: number
+  ): Promise<void> {
+    await super.start(testCount, shells, maxWorkers);
   }
 
   override startTest(test: TestCase, result: TestResult): void {

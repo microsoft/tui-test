@@ -7,7 +7,6 @@ import { TestCase, TestResult, TestStatus } from "../test/testcase.js";
 import { Shell } from "../terminal/shell.js";
 import { loadShellVersions } from "./utils.js";
 import { Suite } from "../test/suite.js";
-import { maxWorkers } from "../runner/runner.js";
 
 type TestSummary = {
   didNotRun: number;
@@ -44,7 +43,11 @@ export class BaseReporter {
     return `${text}${count > 1 ? "s" : ""}`;
   }
 
-  async start(testCount: number, shells: Shell[]): Promise<void> {
+  async start(
+    testCount: number,
+    shells: Shell[],
+    maxWorkers: number
+  ): Promise<void> {
     const shellVersions = await loadShellVersions(shells);
     const workers = Math.min(testCount, maxWorkers);
     process.stdout.write(
