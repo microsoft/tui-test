@@ -7,7 +7,7 @@
     "lint:fix": "eslint src/ --ext .ts,.tsx --fix && prettier src/ --write",
     "test:e2e": "npm run build && node index.js e2e.test.ts"
   },
-  "version": "0.0.1-rc.2",
+  "version": "0.0.1-rc.3",
   "description": "Fast and precise end-to-end terminal testing framework",
   "type": "module",
   "engines": {
