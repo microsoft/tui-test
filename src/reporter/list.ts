@@ -58,6 +58,7 @@ export class ListReporter extends BaseReporter {
   private _resultIcon(status: TestStatus): string {
     const color = this._resultColor(status);
     switch (status) {
+      case "flaky":
       case "expected":
         return color("✔");
       case "unexpected":
