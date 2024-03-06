@@ -9,6 +9,7 @@ import fs from "node:fs";
 import fsAsync from "node:fs/promises";
 import module from "node:module";
 import workpool from "workerpool";
+import lockfile from "proper-lockfile";
 
 import { Terminal } from "../../terminal/term.js";
 
@@ -55,11 +56,21 @@ const updateSnapshot = async (
     await fsAsync.mkdir(path.dirname(snapPath), { recursive: true });
   }
 
-  const fh = await fsAsync.open(snapPath, "w+");
+  const unlock = await lockfile.lock(snapPath, {
+    stale: 5_000,
+    retries: {
+      retries: 5,
+      minTimeout: 50,
+      maxTimeout: 1_000,
+      randomize: true,
+    },
+  });
+
+  delete require.cache[require.resolve(snapPath)];
   const snapshots = require(snapPath);
   snapshots[testName] = snapshot;
-
-  await fh.writeFile(
+  await fsAsync.writeFile(
+    snapPath,
     "// TUI Test Snapshot v1\n\n" +
       Object.keys(snapshots)
         .sort()
@@ -69,7 +80,7 @@ const updateSnapshot = async (
         )
         .join("")
   );
-  await fh.close();
+  await unlock();
 };
 
 export const cleanSnapshot = async (
@@ -139,19 +150,21 @@ export async function toMatchSnapshot(
     globalThis.__expectState.updateSnapshot && snapshotsDifferent;
   const snapshotEmpty = existingSnapshot == null;
 
-  if (!workpool.isMainThread) {
-    const snapshotResult: SnapshotStatus = snapshotEmpty
-      ? "written"
-      : snapshotShouldUpdate
-        ? "updated"
-        : snapshotsDifferent
-          ? "failed"
-          : "passed";
-    workpool.workerEmit({
-      snapshotResult,
-      snapshotName: snapshotPostfixTestName,
-    });
-  }
+  const emitResult = () => {
+    if (!workpool.isMainThread) {
+      const snapshotResult: SnapshotStatus = snapshotEmpty
+        ? "written"
+        : snapshotShouldUpdate
+          ? "updated"
+          : snapshotsDifferent
+            ? "failed"
+            : "passed";
+      workpool.workerEmit({
+        snapshotResult,
+        snapshotName: snapshotPostfixTestName,
+      });
+    }
+  };
 
   if (snapshotEmpty || snapshotShouldUpdate) {
     await updateSnapshot(
@@ -159,16 +172,18 @@ export async function toMatchSnapshot(
       snapshotPostfixTestName,
       newSnapshot
     );
-    return Promise.resolve({
+    emitResult();
+    return {
       pass: true,
       message: () => "",
-    });
+    };
+  } else {
+    emitResult();
   }
-
-  return Promise.resolve({
+  return {
     pass: !snapshotsDifferent,
     message: !snapshotsDifferent
       ? () => ""
       : () => diffStringsUnified(existingSnapshot, newSnapshot ?? ""),
-  });
+  };
 }

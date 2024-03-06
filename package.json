@@ -41,6 +41,7 @@
     "glob": "^10.3.10",
     "jest-diff": "^29.7.0",
     "pretty-ms": "^8.0.0",
+    "proper-lockfile": "^4.1.2",
     "which": "^4.0.0",
     "workerpool": "^9.1.0",
     "xterm-headless": "^5.3.0"
@@ -51,6 +52,7 @@
     "@microsoft/tui-test": "file:.",
     "@tsconfig/node18": "^18.2.2",
     "@types/color-convert": "^2.0.3",
+    "@types/proper-lockfile": "^4.1.4",
     "@types/uuid": "^9.0.7",
     "@types/which": "^3.0.3",
     "@typescript-eslint/eslint-plugin": "^6.7.4",
