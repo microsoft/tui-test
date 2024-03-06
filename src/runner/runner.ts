@@ -4,7 +4,7 @@
 import path from "node:path";
 import url from "node:url";
 import os from "node:os";
-import workerpool from "workerpool";
+import workerpool, { Pool } from "workerpool";
 import chalk from "chalk";
 
 import { Suite, getRootSuite } from "../test/suite.js";
@@ -32,25 +32,28 @@ type ExecutionOptions = {
 };
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
-export const maxWorkers = Math.max(Math.floor(os.cpus().length / 2), 1);
-const pool = workerpool.pool(path.join(__dirname, "worker.js"), {
-  workerType: "process",
-  maxWorkers,
-  forkOpts: {
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      ...(supportsColor ? { FORCE_COLOR: "1" } : {}),
+
+const createWorkerPool = (maxWorkers: number): Pool => {
+  return workerpool.pool(path.join(__dirname, "worker.js"), {
+    workerType: "process",
+    maxWorkers,
+    forkOpts: {
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        ...(supportsColor ? { FORCE_COLOR: "1" } : {}),
+      },
     },
-  },
-  emitStdStreams: true,
-});
+    emitStdStreams: true,
+  });
+};
 
 const runSuites = async (
   allSuites: Suite[],
   filteredTestIds: Set<string>,
   reporter: BaseReporter,
-  { updateSnapshot }: ExecutionOptions
+  { updateSnapshot }: ExecutionOptions,
+  pool: Pool
 ) => {
   const tasks: Promise<void>[] = [];
   const suites = [...allSuites];
@@ -161,6 +164,7 @@ export const run = async (options: ExecutionOptions) => {
   const config = await loadConfig();
   const rootSuite = await getRootSuite(config);
   const reporter = new ListReporter();
+  const pool = createWorkerPool(config.workers);
 
   const suites = [rootSuite];
   while (suites.length != 0) {
@@ -217,7 +221,7 @@ export const run = async (options: ExecutionOptions) => {
   if (shells.includes(Shell.Zsh)) {
     await setupZshDotfiles();
   }
-  await reporter.start(allTests.length, shells);
+  await reporter.start(allTests.length, shells, config.workers);
 
   if (config.globalTimeout > 0) {
     setTimeout(() => {
@@ -232,7 +236,8 @@ export const run = async (options: ExecutionOptions) => {
     rootSuite.suites,
     new Set(allTests.map((test) => test.id)),
     reporter,
-    options
+    options,
+    pool
   );
   try {
     await pool.terminate(true);
