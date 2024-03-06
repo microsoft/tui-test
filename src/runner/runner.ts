@@ -239,8 +239,11 @@ export const run = async (options: ExecutionOptions) => {
   } catch {
     /* empty */
   }
-  const obsoleteSnapshots = await cleanSnapshots(allTests, options);
-  const failures = reporter.end(rootSuite, obsoleteSnapshots);
+  const staleSnapshots = await cleanSnapshots(allTests, options);
+  const failures = reporter.end(rootSuite, {
+    obsolete: options.updateSnapshot ? 0 : staleSnapshots,
+    removed: options.updateSnapshot ? staleSnapshots : 0,
+  });
 
   process.exit(failures);
 };
