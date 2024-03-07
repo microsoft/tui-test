@@ -1,17 +1,20 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import readlineAsync from "node:readline/promises";
+import readline from "node:readline";
 import { EventEmitter } from "node:events";
 import chalk from "chalk";
 
 import { DataTracePoint, SizeTracePoint, Trace } from "./tracer.js";
 import ansi from "../terminal/ansi.js";
 
-const rl = readlineAsync.createInterface({
+const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout,
 });
+
+const question = (query: string): Promise<string> =>
+  new Promise((resolve) => rl.question(query, (answer) => resolve(answer)));
 
 export const play = async (trace: Trace) => {
   const startTime = trace.tracePoints.find(
@@ -42,7 +45,7 @@ export const play = async (trace: Trace) => {
     );
   }
 
-  const answer = (await rl.question("\nDo you want to start the trace [y/N]? "))
+  const answer = (await question("\nDo you want to start the trace [y/N]? "))
     .trim()
     .toLowerCase();
 
@@ -76,7 +79,7 @@ export const play = async (trace: Trace) => {
   e.on("write", async () => {
     executedEvents += 1;
     if (executedEvents == totalEvents) {
-      await rl.question("\n\nReplay complete, press any key to exit ");
+      await question("\n\nReplay complete, press any key to exit ");
       process.stdout.write(
         ansi.cursorTo(process.stdout.rows, process.stdout.columns)
       );
