@@ -52,8 +52,11 @@ const updateSnapshot = async (
   snapshot: string
 ): Promise<void> => {
   const snapPath = snapshotPath(testPath);
-  if (!fs.existsSync(snapPath)) {
+  if (!fs.existsSync(path.dirname(snapPath))) {
     await fsAsync.mkdir(path.dirname(snapPath), { recursive: true });
+  }
+  if (!fs.existsSync(snapPath)) {
+    await fsAsync.appendFile(snapPath, "");
   }
 
   const unlock = await lockfile.lock(snapPath, {
@@ -180,6 +183,7 @@ export async function toMatchSnapshot(
   } else {
     emitResult();
   }
+
   return {
     pass: !snapshotsDifferent,
     message: !snapshotsDifferent
