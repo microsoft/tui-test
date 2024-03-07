@@ -9,7 +9,12 @@ import chalk from "chalk";
 
 import { Suite, getRootSuite } from "../test/suite.js";
 import { transformFiles } from "./transform.js";
-import { getRetries, getTimeout, loadConfig } from "../config/config.js";
+import {
+  TestConfig,
+  getRetries,
+  getTimeout,
+  loadConfig,
+} from "../config/config.js";
 import { runTestWorker } from "./worker.js";
 import { Shell, setupZshDotfiles } from "../terminal/shell.js";
 import { ListReporter } from "../reporter/list.js";
@@ -28,6 +33,7 @@ declare global {
 
 type ExecutionOptions = {
   updateSnapshot: boolean;
+  trace?: boolean;
   testFilter?: string[];
 };
 
@@ -52,9 +58,12 @@ const runSuites = async (
   allSuites: Suite[],
   filteredTestIds: Set<string>,
   reporter: BaseReporter,
-  { updateSnapshot }: ExecutionOptions,
+  options: ExecutionOptions,
+  config: Required<TestConfig>,
   pool: Pool
 ) => {
+  const { updateSnapshot } = options;
+  const trace = options.trace ?? config.trace;
   const tasks: Promise<void>[] = [];
   const suites = [...allSuites];
   while (suites.length != 0) {
@@ -70,8 +79,11 @@ const runSuites = async (
             test,
             test.sourcePath()!,
             { timeout: getTimeout(), updateSnapshot },
+            trace,
             pool,
-            reporter
+            reporter,
+            i,
+            config.traceFolder
           );
           test.results.push(testResult);
           reporter.endTest(test, testResult);
@@ -237,6 +249,7 @@ export const run = async (options: ExecutionOptions) => {
     new Set(allTests.map((test) => test.id)),
     reporter,
     options,
+    config,
     pool
   );
   try {

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import process from "node:process";
+import { EventEmitter } from "node:events";
 import workerpool from "workerpool";
 
 import { Suite } from "../test/suite.js";
@@ -12,6 +13,7 @@ import { expect } from "../test/test.js";
 import { BaseReporter } from "../reporter/base.js";
 import { poll } from "../utils/poll.js";
 import { flushSnapshotExecutionCache } from "../test/matchers/toMatchSnapshot.js";
+import { saveTrace, TracePoint } from "../trace/tracer.js";
 
 type WorkerResult = {
   error?: string;
@@ -33,6 +35,8 @@ const runTest = async (
   testId: string,
   testSuite: Suite,
   updateSnapshot: boolean,
+  trace: boolean,
+  tracePoints: TracePoint[],
   importPath: string
 ) => {
   process.setSourceMapsEnabled(true);
@@ -45,13 +49,24 @@ const runTest = async (
   }
   const test = globalThis.tests[testId];
   const { shell, rows, columns, env, program } = test.suite.options ?? {};
-  const terminal = await spawn({
-    shell: shell ?? defaultShell,
-    rows: rows ?? 30,
-    cols: columns ?? 80,
-    env,
-    program,
-  });
+  const traceEmitter = new EventEmitter();
+  traceEmitter.on("data", (data: string, time: number) =>
+    tracePoints.push({ data, time })
+  );
+  traceEmitter.on("size", (rows: number, cols: number) =>
+    tracePoints.push({ rows, cols })
+  );
+  const terminal = await spawn(
+    {
+      shell: shell ?? defaultShell,
+      rows: rows ?? 30,
+      cols: columns ?? 80,
+      env,
+      program,
+    },
+    trace,
+    traceEmitter
+  );
 
   const allTests = Object.values(globalThis.tests);
   const testPath = test.filePath();
@@ -102,8 +117,11 @@ export async function runTestWorker(
   test: TestCase,
   importPath: string,
   { timeout, updateSnapshot }: WorkerExecutionOptions,
+  trace: boolean,
   pool: workerpool.Pool,
-  reporter: BaseReporter
+  reporter: BaseReporter,
+  attempt: number,
+  traceFolder: string
 ): Promise<WorkerResult> {
   const snapshots: Snapshot[] = [];
   if (test.expectedStatus === "skipped") {
@@ -127,7 +145,15 @@ export async function runTestWorker(
     try {
       const poolPromise = pool.exec(
         "testWorker",
-        [test.id, getMockSuite(test), updateSnapshot, importPath],
+        [
+          test.id,
+          getMockSuite(test),
+          updateSnapshot,
+          trace,
+          importPath,
+          attempt,
+          traceFolder,
+        ],
         {
           on: (payload) => {
             if (payload.stdout) {
@@ -243,16 +269,27 @@ const testWorker = async (
   testId: string,
   testSuite: Suite,
   updateSnapshot: boolean,
-  importPath: string
+  trace: boolean,
+  importPath: string,
+  attempt: number,
+  traceFolder: string
 ): Promise<void> => {
   flushSnapshotExecutionCache();
 
   const startTime = Date.now();
+  const tracePoints = [{ data: "", time: startTime }];
   workerpool.workerEmit({
     startTime,
   });
   try {
-    await runTest(testId, testSuite, updateSnapshot, importPath);
+    await runTest(
+      testId,
+      testSuite,
+      updateSnapshot,
+      trace,
+      tracePoints,
+      importPath
+    );
   } catch (e) {
     let errorMessage;
     if (typeof e == "string") {
@@ -267,6 +304,9 @@ const testWorker = async (
         duration,
       });
     }
+  }
+  if (trace) {
+    await saveTrace(tracePoints, testId, attempt, traceFolder);
   }
 };
 

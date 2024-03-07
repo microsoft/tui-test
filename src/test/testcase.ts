@@ -93,7 +93,7 @@ export class TestCase {
         titles.push(currentSuite.title);
       } else if (currentSuite.type === "file") {
         titles.push(
-          `${currentSuite.title}:${this.location.row}:${this.location.row}`
+          `${currentSuite.title}:${this.location.row}:${this.location.column}`
         );
       }
       currentSuite = currentSuite.parentSuite;
