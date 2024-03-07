@@ -3,3 +3,4 @@ lib/
 .tui-test/
 *.tgz
 t*.md
+tui-traces/

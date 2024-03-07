@@ -102,6 +102,26 @@ test("make a regex assertion", async ({ terminal }) => {
 });
 ```
 
+## Traces
+
+TUI Test provides a rich tracing system to help you debug and diagnose issues with your tests. You can enable traces by setting the `trace` value in your `tui-test.config.ts` to `true` or by running the cli with the `-t/--trace` flag.
+
+Traces are contain a replay of everything the terminal received and can be used to diagnose issues with your tests, especially when issues happen on different machines. Traces are stored in by default in the `tui-traces` folder in the root of your project and can be replayed via the `show-trace` command.
+
+## Configuration
+
+TUI Test can be configured via the `tui-test.config.[ts|js]` file in the root of your project. The following is an example of a configuration file:
+
+```ts
+import { defineConfig } from "@microsoft/tui-test";
+
+export default defineConfig({
+  retries: 3,
+  trace: true
+});
+
+```
+
 ## Contributing
 
 This project welcomes contributions and suggestions. Most contributions require you to agree to a

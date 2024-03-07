@@ -31,6 +31,9 @@ export const loadConfig = async (): Promise<Required<TestConfig>> => {
       userConfig.workers ?? Math.max(Math.floor(os.cpus().length / 2), 1),
       1
     ),
+    trace: userConfig.trace ?? false,
+    traceFolder:
+      userConfig.traceFolder ?? path.join(process.cwd(), "tui-traces"),
     use: {
       shell: userConfig.use?.shell ?? defaultShell,
       rows: userConfig.use?.rows ?? 30,
@@ -219,6 +222,40 @@ export declare type TestConfig = {
    *
    */
   workers?: number;
+
+  /**
+   * Record each test run for replay.
+   *
+   * **Usage**
+   *
+   * ```js
+   * // tui-test.config.ts
+   * import { defineConfig } from '@microsoft/tui-test';
+   *
+   * export default defineConfig({
+   *   trace: true,
+   * });
+   * ```
+   *
+   */
+  trace?: boolean;
+
+  /**
+   * Folder to store the traces in. Defaults to `tui-traces`
+   *
+   * **Usage**
+   *
+   * ```js
+   * // tui-test.config.ts
+   * import { defineConfig } from '@microsoft/tui-test';
+   *
+   * export default defineConfig({
+   *   traceFolder: "tui-traces",
+   * });
+   * ```
+   *
+   */
+  traceFolder?: string;
 
   /**
    * TUI Test supports running multiple test projects at the same time.

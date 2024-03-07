@@ -4,6 +4,7 @@
 import pty, { IPty, IEvent } from "@homebridge/node-pty-prebuilt-multiarch";
 import xterm from "xterm-headless";
 import process from "node:process";
+import { EventEmitter } from "node:events";
 
 import ansi from "./ansi.js";
 
@@ -38,7 +39,11 @@ type CursorPosition = {
   baseY: number;
 };
 
-export const spawn = async (options: TerminalOptions): Promise<Terminal> => {
+export const spawn = async (
+  options: TerminalOptions,
+  trace: boolean,
+  traceEmitter: EventEmitter
+): Promise<Terminal> => {
   if (options.program != null) {
     const { file, args } = options.program;
     const resolvedFile = await which(file, { nothrow: true });
@@ -52,6 +57,8 @@ export const spawn = async (options: TerminalOptions): Promise<Terminal> => {
       args ?? [],
       options.rows,
       options.cols,
+      trace,
+      traceEmitter,
       options.env
     );
   }
@@ -61,6 +68,8 @@ export const spawn = async (options: TerminalOptions): Promise<Terminal> => {
     options.shellArgs ?? shellArgs ?? [],
     options.rows,
     options.cols,
+    trace,
+    traceEmitter,
     { ...shellEnv(options.shell), ...options.env }
   );
 };
@@ -91,6 +100,8 @@ export class Terminal {
     args: string[],
     private _rows: number,
     private _cols: number,
+    private _trace: boolean,
+    private _traceEmitter: EventEmitter,
     env?: { [key: string]: string | undefined }
   ) {
     this.#pty = pty.spawn(target, args ?? [], {
@@ -105,8 +116,13 @@ export class Terminal {
       rows: this._rows,
       cols: this._cols,
     });
-
+    if (this._trace) {
+      this._traceEmitter.emit("size", this._rows, this._cols);
+    }
     this.#pty.onData((data) => {
+      if (this._trace) {
+        this._traceEmitter.emit("data", data, Date.now());
+      }
       this.#term.write(data);
     });
     this.onExit = this.#pty.onExit;
@@ -123,6 +139,9 @@ export class Terminal {
     this._rows = rows;
     this.#pty.resize(columns, rows);
     this.#term.resize(columns, rows);
+    if (this._trace) {
+      this._traceEmitter.emit("size", rows, columns);
+    }
   }
 
   /**
