@@ -166,7 +166,7 @@ export class Terminal {
    * @param data Data to write to the shell
    */
   submit(data?: string): void {
-    this._pty.write(data + this._returnChar);
+    this._pty.write(`${data ?? ""}${this._returnChar}`);
   }
 
   /**

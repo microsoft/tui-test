@@ -31,7 +31,8 @@ export const loadShellVersions = async (
             }
             break;
           }
-          case (Shell.WindowsPowershell, Shell.Powershell): {
+          case Shell.Powershell:
+          case Shell.WindowsPowershell: {
             const output = (
               await execAsync("$PSVersionTable", { shell: target })
             ).stdout;
@@ -64,6 +65,17 @@ export const loadShellVersions = async (
             ).stdout;
             if (output.trim().length != 0) {
               version = output.trim();
+            }
+            break;
+          }
+          case Shell.Xonsh: {
+            const output = (
+              await execAsync(`${target} -m xonsh -V`)
+            ).stdout.trim();
+            // eslint-disable-next-line no-useless-escape
+            const match = output.match(/^xonsh\/([0-9\.]*)$/)?.at(1);
+            if (match != null) {
+              version = match;
             }
             break;
           }
