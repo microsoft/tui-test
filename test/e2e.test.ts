@@ -12,9 +12,18 @@ const shell =
       : Shell.Powershell;
 
 test.use({ shell: shell, columns: 80, rows: 15 });
+
 const isWindows = os.platform() == "win32";
 const isNotMacOS = os.platform() != "darwin";
 const isLinux = os.platform() == "linux";
+
+const windowsShells = [
+  Shell.Cmd,
+  Shell.Powershell,
+  Shell.WindowsPowershell,
+  Shell.Xonsh,
+];
+const unixShells = [Shell.Bash, Shell.Fish, Shell.Zsh];
 
 test.describe("locators", () => {
   test.describe("getByText", () => {
@@ -57,7 +66,7 @@ test.describe("key controls", () => {
     terminal.write("clear");
     await expect(terminal.getByText("clear")).toBeVisible();
 
-    terminal.write("\r");
+    terminal.submit();
     await expect(terminal.getByText("clear")).not.toBeVisible();
 
     terminal.keyUp();
@@ -69,7 +78,7 @@ test.describe("key controls", () => {
     terminal.write("clear");
     await expect(terminal.getByText("clear")).toBeVisible();
 
-    terminal.write("\r");
+    terminal.submit();
     await expect(terminal.getByText("clear")).not.toBeVisible();
 
     terminal.keyUp();
@@ -131,8 +140,8 @@ test.describe("terminal functions", () => {
     expect(terminal.getCursor().y).toBe(0);
     expect(terminal.getCursor().baseY).toBe(0);
 
-    terminal.write("echo foo\r");
-    terminal.write("echo bar\r");
+    terminal.submit("echo foo");
+    terminal.submit("echo bar");
     await expect(terminal.getByText("bar", { strict: false })).toBeVisible();
     await expect(terminal.getByText(">  ")).toBeVisible();
     expect(terminal.getCursor().x).toBe(2);
@@ -140,7 +149,7 @@ test.describe("terminal functions", () => {
     expect(terminal.getCursor().baseY).toBe(0);
 
     for (let i = 0; i < 20; i++) {
-      terminal.write(`echo ${i}\r`);
+      terminal.submit(`echo ${i}`);
     }
     await expect(terminal.getByText("19", { strict: false })).toBeVisible();
     await expect(terminal.getByText(">  ")).toBeVisible();
@@ -209,7 +218,7 @@ test.describe("locators", () => {
     });
 
     test.fail("strict mode failure", async ({ terminal }) => {
-      terminal.write("echo bar\r");
+      terminal.submit("echo bar");
       terminal.write("foo");
 
       await expect(terminal.getByText("foo")).toBeVisible();
@@ -217,7 +226,7 @@ test.describe("locators", () => {
     });
 
     test.fail("strict mode failure with .not", async ({ terminal }) => {
-      terminal.write("echo bar\r");
+      terminal.submit("echo bar");
       terminal.write("foo");
 
       await expect(terminal.getByText("foo")).toBeVisible();
@@ -238,13 +247,13 @@ test.describe("color detection", () => {
 
   test.when(isLinux, "checks background color", async ({ terminal }) => {
     terminal.write(String.raw`printf "\x1b[42m%s%s\n\x1b[0m" foo bar`);
-    terminal.write("\r");
+    terminal.submit();
     await expect(terminal.getByText("foobar")).toHaveBgColor(2);
   });
 
   test.when(isLinux, "checks foreground color", async ({ terminal }) => {
     terminal.write(String.raw`printf "\x1b[31m%s%s\n\x1b[0m" foo bar`);
-    terminal.write("\r");
+    terminal.submit();
     await expect(terminal.getByText("foobar")).toHaveFgColor(1);
   });
 
@@ -261,4 +270,25 @@ test.describe("color detection", () => {
       await expect(terminal.getByText(">")).not.toHaveBgColor(0);
     }
   );
+});
+
+test.describe("shells", () => {
+  const shells = isWindows ? windowsShells : unixShells;
+  shells.forEach((shell) => {
+    test.describe(`[${shell}]`, () => {
+      test.use({ shell });
+
+      test("simple controls", async ({ terminal }) => {
+        terminal.submit("echo bar");
+        await expect(
+          terminal.getByText("bar", { strict: false })
+        ).toBeVisible();
+
+        await expect(terminal.getByText(">   ")).toBeVisible();
+
+        terminal.write("tomato");
+        await expect(terminal.getByText("tomato")).toBeVisible();
+      });
+    });
+  });
 });

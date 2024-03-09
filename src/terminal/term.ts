@@ -58,6 +58,7 @@ export const spawn = async (
       options.rows,
       options.cols,
       trace,
+      options.shell,
       traceEmitter,
       options.env
     );
@@ -69,6 +70,7 @@ export const spawn = async (
     options.rows,
     options.cols,
     trace,
+    options.shell,
     traceEmitter,
     { ...shellEnv(options.shell), ...options.env }
   );
@@ -91,8 +93,9 @@ type CellShift = {
 };
 
 export class Terminal {
-  readonly #pty: IPty;
-  readonly #term: xterm.Terminal;
+  private readonly _pty: IPty;
+  private readonly _term: xterm.Terminal;
+  private readonly _returnChar: string;
   readonly onExit: IEvent<{ exitCode: number; signal?: number }>;
 
   constructor(
@@ -101,17 +104,19 @@ export class Terminal {
     private _rows: number,
     private _cols: number,
     private _trace: boolean,
+    private _shell: Shell,
     private _traceEmitter: EventEmitter,
     env?: { [key: string]: string | undefined }
   ) {
-    this.#pty = pty.spawn(target, args ?? [], {
+    this._returnChar = this._shell == Shell.Xonsh ? "\n" : "\r";
+    this._pty = pty.spawn(target, args ?? [], {
       name: "xterm-256color",
       cols: this._cols,
       rows: this._rows,
       cwd: process.cwd(),
       env,
     });
-    this.#term = new xterm.Terminal({
+    this._term = new xterm.Terminal({
       allowProposedApi: true,
       rows: this._rows,
       cols: this._cols,
@@ -119,13 +124,13 @@ export class Terminal {
     if (this._trace) {
       this._traceEmitter.emit("size", this._rows, this._cols);
     }
-    this.#pty.onData((data) => {
+    this._pty.onData((data) => {
       if (this._trace) {
         this._traceEmitter.emit("data", data, Date.now());
       }
-      this.#term.write(data);
+      this._term.write(data);
     });
-    this.onExit = this.#pty.onExit;
+    this.onExit = this._pty.onExit;
   }
 
   /**
@@ -137,8 +142,8 @@ export class Terminal {
   resize(columns: number, rows: number) {
     this._cols = columns;
     this._rows = rows;
-    this.#pty.resize(columns, rows);
-    this.#term.resize(columns, rows);
+    this._pty.resize(columns, rows);
+    this._term.resize(columns, rows);
     if (this._trace) {
       this._traceEmitter.emit("size", rows, columns);
     }
@@ -150,7 +155,18 @@ export class Terminal {
    * @param data Data to write to the shell
    */
   write(data: string): void {
-    this.#pty.write(data);
+    this._pty.write(data);
+  }
+
+  /**
+   * Write the provided data through to the shell and submit with a return character.
+   * If running a program with no shell selected, the return character will use the return
+   * character for the default shell.
+   *
+   * @param data Data to write to the shell
+   */
+  submit(data?: string): void {
+    this._pty.write(`${data ?? ""}${this._returnChar}`);
   }
 
   /**
@@ -159,7 +175,7 @@ export class Terminal {
    * @param count Count of cells to move up. Default is `1`.
    */
   keyUp(count?: number | undefined): void {
-    this.#pty.write(ansi.keyUp.repeat(count ?? 1));
+    this._pty.write(ansi.keyUp.repeat(count ?? 1));
   }
 
   /**
@@ -168,7 +184,7 @@ export class Terminal {
    * @param count Count of cells to move down. Default is `1`.
    */
   keyDown(count?: number | undefined): void {
-    this.#pty.write(ansi.keyDown.repeat(count ?? 1));
+    this._pty.write(ansi.keyDown.repeat(count ?? 1));
   }
 
   /**
@@ -177,7 +193,7 @@ export class Terminal {
    * @param count Count of cells to move left. Default is `1`.
    */
   keyLeft(count?: number | undefined): void {
-    this.#pty.write(ansi.keyLeft.repeat(count ?? 1));
+    this._pty.write(ansi.keyLeft.repeat(count ?? 1));
   }
 
   /**
@@ -186,7 +202,7 @@ export class Terminal {
    * @param count Count of cells to move right. Default is `1`.
    */
   keyRight(count?: number | undefined): void {
-    this.#pty.write(ansi.keyRight.repeat(count ?? 1));
+    this._pty.write(ansi.keyRight.repeat(count ?? 1));
   }
 
   /**
@@ -195,7 +211,7 @@ export class Terminal {
    * @param count Count of key presses. Default is `1`.
    */
   keyEscape(count?: number | undefined): void {
-    this.#pty.write(ansi.ESC.repeat(count ?? 1));
+    this._pty.write(ansi.ESC.repeat(count ?? 1));
   }
 
   /**
@@ -204,7 +220,7 @@ export class Terminal {
    * @param count Count of key presses. Default is `1`.
    */
   keyDelete(count?: number | undefined): void {
-    this.#pty.write(ansi.keyDelete.repeat(count ?? 1));
+    this._pty.write(ansi.keyDelete.repeat(count ?? 1));
   }
 
   /**
@@ -213,7 +229,7 @@ export class Terminal {
    * @param count Count of key presses. Default is `1`.
    */
   keyBackspace(count?: number | undefined): void {
-    this.#pty.write(ansi.keyBackspace.repeat(count ?? 1));
+    this._pty.write(ansi.keyBackspace.repeat(count ?? 1));
   }
 
   /**
@@ -222,7 +238,7 @@ export class Terminal {
    * @param count Count of key presses. Default is `1`.
    */
   keyCtrlC(count?: number | undefined): void {
-    this.#pty.write(ansi.keyCtrlC.repeat(count ?? 1));
+    this._pty.write(ansi.keyCtrlC.repeat(count ?? 1));
   }
 
   /**
@@ -231,7 +247,7 @@ export class Terminal {
    * @param count Count of key presses. Default is `1`.
    */
   keyCtrlD(count?: number | undefined): void {
-    this.#pty.write(ansi.keyCtrlD.repeat(count ?? 1));
+    this._pty.write(ansi.keyCtrlD.repeat(count ?? 1));
   }
 
   /**
@@ -240,7 +256,7 @@ export class Terminal {
    * @returns an array representation of the buffer
    */
   getBuffer(): string[][] {
-    return this._getBuffer(0, this.#term.buffer.active.length);
+    return this._getBuffer(0, this._term.buffer.active.length);
   }
 
   /**
@@ -250,18 +266,18 @@ export class Terminal {
    */
   getViewableBuffer(): string[][] {
     return this._getBuffer(
-      this.#term.buffer.active.baseY,
-      this.#term.buffer.active.length
+      this._term.buffer.active.baseY,
+      this._term.buffer.active.length
     );
   }
 
   private _getBuffer(startY: number, endY: number): string[][] {
     const lines: string[][] = [];
     for (let y = startY; y < endY; y++) {
-      const termLine = this.#term.buffer.active.getLine(y);
+      const termLine = this._term.buffer.active.getLine(y);
       const line: string[] = [];
       let cell = termLine?.getCell(0);
-      for (let x = 0; x < this.#term.cols; x++) {
+      for (let x = 0; x < this._term.cols; x++) {
         cell = termLine?.getCell(x, cell);
         const rawChars = cell?.getChars() ?? "";
         const chars = rawChars === "" ? " " : rawChars;
@@ -279,9 +295,9 @@ export class Terminal {
    */
   getCursor(): CursorPosition {
     return {
-      x: this.#term.buffer.active.cursorX,
-      y: this.#term.buffer.active.cursorY,
-      baseY: this.#term.buffer.active.baseY,
+      x: this._term.buffer.active.cursorX,
+      y: this._term.buffer.active.cursorY,
+      baseY: this._term.buffer.active.baseY,
     };
   }
 
@@ -363,7 +379,7 @@ export class Terminal {
     return new Locator(
       text,
       this,
-      this.#term,
+      this._term,
       options?.full,
       options?.strict ?? true
     );
@@ -381,11 +397,11 @@ export class Terminal {
     const empty = (o: object) => Object.keys(o).length === 0;
     let prevCell = undefined;
     for (
-      let y = this.#term.buffer.active.baseY;
-      y < this.#term.buffer.active.length;
+      let y = this._term.buffer.active.baseY;
+      y < this._term.buffer.active.length;
       y++
     ) {
-      const line = this.#term.buffer.active.getLine(y);
+      const line = this._term.buffer.active.getLine(y);
       const lineView = [];
       if (line == null) continue;
       for (let x = 0; x < line.length; x++) {
@@ -400,7 +416,7 @@ export class Terminal {
       }
       lines.push(lineView.join(""));
     }
-    const view = this._box(lines.join("\n"), this.#term.cols);
+    const view = this._box(lines.join("\n"), this._term.cols);
     return { view, shifts };
   }
 
@@ -418,6 +434,6 @@ export class Terminal {
    * Kill the terminal and underlying processes
    */
   kill() {
-    process.kill(this.#pty.pid, 9);
+    process.kill(this._pty.pid, 9);
   }
 }

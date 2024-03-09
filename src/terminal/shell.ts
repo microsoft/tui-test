@@ -15,6 +15,7 @@ export enum Shell {
   Cmd = "cmd",
   Fish = "fish",
   Zsh = "zsh",
+  Xonsh = "xonsh",
 }
 
 export const defaultShell =
@@ -29,7 +30,7 @@ export const zdotdir = path.join(os.tmpdir(), `tui-test-zsh`);
 
 export const shellLaunch = async (shell: Shell) => {
   const platform = os.platform();
-  const shellTarget =
+  let shellTarget =
     shell == Shell.Bash && platform == "win32"
       ? await gitBashPath()
       : platform == "win32"
@@ -71,6 +72,30 @@ export const shellLaunch = async (shell: Shell) => {
         `. ${path.join(shellFolderPath, "shellIntegration.fish").replace(/(\s+)/g, "\\$1")}`,
       ];
       break;
+    case Shell.Xonsh: {
+      const sharedConfig =
+        os.platform() == "win32"
+          ? path.join("C:\\ProgramData", "xonsh", "xonshrc")
+          : path.join("etc", "xonsh", "xonshrc");
+      const userConfigs = [
+        path.join(os.homedir(), ".xonshrc"),
+        path.join(os.homedir(), ".config", "xonsh", "rc.xsh"),
+        path.join(os.homedir(), ".config", "xonsh", "rc.d"),
+      ];
+      const configs = [sharedConfig, ...userConfigs].filter((config) =>
+        fs.existsSync(config)
+      );
+
+      shellArgs = [
+        "-m",
+        "xonsh",
+        "--rc",
+        ...configs,
+        path.join(shellFolderPath, "shellIntegration.xsh"),
+      ];
+      shellTarget = await getPythonPath();
+      break;
+    }
   }
 
   return { shellTarget, shellArgs };
@@ -114,6 +139,10 @@ export const setupZshDotfiles = async () => {
     path.join(shellFolderPath, "shellIntegration-login.zsh"),
     path.join(zdotdir, ".zlogin")
   );
+};
+
+export const getPythonPath = async (): Promise<string> => {
+  return await which("python", { nothrow: true });
 };
 
 const gitBashPath = async (): Promise<string> => {
