@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import pty, { IPty, IEvent } from "@homebridge/node-pty-prebuilt-multiarch";
-import xterm from "xterm-headless";
+import xterm from "@xterm/headless";
 import process from "node:process";
 import { EventEmitter } from "node:events";
 

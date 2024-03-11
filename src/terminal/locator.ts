@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { IBufferCell, Terminal as XTerminal } from "xterm-headless";
+import { IBufferCell, Terminal as XTerminal } from "@xterm/headless";
 import ms from "pretty-ms";
 import { poll } from "../utils/poll.js";
 import { Terminal } from "./term.js";

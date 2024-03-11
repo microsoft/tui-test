@@ -15,11 +15,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/microsoft/tuitest.git"
+    "url": "git+https://github.com/microsoft/tui-test.git"
   },
   "author": "Microsoft Corporation",
   "license": "MIT",
-  "homepage": "https://github.com/microsoft/tuitest#readme",
+  "homepage": "https://github.com/microsoft/tui-test#readme",
   "files": [
     "lib/**",
     "index.js",
@@ -44,7 +44,7 @@
     "proper-lockfile": "^4.1.2",
     "which": "^4.0.0",
     "workerpool": "^9.1.0",
-    "xterm-headless": "^5.3.0"
+    "@xterm/headless": "^5.3.0"
   },
   "devDependencies": {
     "@commitlint/cli": "^18.4.4",
