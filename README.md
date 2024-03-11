@@ -2,6 +2,10 @@
 
 TUI Test is a framework for testing terminal applications. It provides a rich API for writing tests that interact with a terminal application across macOS, Linux, and Windows with a wide range of shells. It is built to be **fast**, **reliable**, and **easy to use**.
 
+## Requirements
+
+- Node.js 20.X, 18.X, 16.X (16.6.0 >=)
+
 ## Installation
 
 Install TUI Test as using `npm`:
@@ -27,15 +31,8 @@ pnpm add -D @microsoft/tui-test
 Running tests is as simple as running TUI Test from the command line after installation:
 
 ```sh
-tui-test
-```
-
-Or run it using `npx`:
-
-```sh
 npx @microsoft/tui-test
 ```
-
 
 ## Capabilities
 
