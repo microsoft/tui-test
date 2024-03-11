@@ -27,15 +27,8 @@ pnpm add -D @microsoft/tui-test
 Running tests is as simple as running TUI Test from the command line after installation:
 
 ```sh
-tui-test
-```
-
-Or run it using `npx`:
-
-```sh
 npx @microsoft/tui-test
 ```
-
 
 ## Capabilities
 
