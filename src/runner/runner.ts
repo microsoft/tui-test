@@ -116,11 +116,20 @@ const checkRuntimeVersion = () => {
       );
       process.exit(1);
     }
+    if (Bun.version.localeCompare("1.3.5", undefined, { numeric: true }) < 0) {
+      console.warn(
+        chalk.yellow(
+          `Warning: ${executableName} works best with Bun version 1.3.5 or higher (you are using ${Bun.version}).\n`
+        )
+      );
+    }
     return;
   }
   const nodeVersion = process.versions.node;
   const nodeMajorVersion = nodeVersion.split(".")[0].trim();
   if (
+    nodeMajorVersion != "16" &&
+    nodeMajorVersion != "18" &&
     nodeMajorVersion != "20" &&
     nodeMajorVersion != "22" &&
     nodeMajorVersion != "24"
