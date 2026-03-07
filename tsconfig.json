@@ -4,7 +4,7 @@
   "compilerOptions": {
     "outDir": "./lib",
     "declarationDir": "./lib",
-    "types": ["node"],
+    "types": ["node", "bun-types"],
     "declaration": true,
   }
 }

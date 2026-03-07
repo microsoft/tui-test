@@ -27,6 +27,7 @@ type WorkerResult = {
 type WorkerExecutionOptions = {
   timeout: number;
   updateSnapshot: boolean;
+  shellReadyTimeout: number;
 };
 
 const importSet = new Set<string>();
@@ -37,7 +38,8 @@ const runTest = async (
   updateSnapshot: boolean,
   trace: boolean,
   tracePoints: TracePoint[],
-  importPath: string
+  importPath: string,
+  shellReadyTimeout: number
 ) => {
   process.setSourceMapsEnabled(true);
   globalThis.suite = testSuite;
@@ -68,6 +70,14 @@ const runTest = async (
     traceEmitter
   );
 
+  // add slight delay for node-pty teardown
+  let programExited: Promise<void> | undefined;
+  if (program != null) {
+    programExited = new Promise<void>((resolve) => {
+      terminal.onExit(() => setTimeout(resolve, 100));
+    });
+  }
+
   const allTests = Object.values(globalThis.tests);
   const testPath = test.filePath();
   const testSignature = test.titlePath().slice(1).join(" › ");
@@ -91,7 +101,7 @@ const runTest = async (
 
   // wait on the shell to be ready with the prompt
   if (program == null) {
-    await poll(
+    const shellReady = await poll(
       () => {
         const view = terminal
           .getViewableBuffer()
@@ -100,23 +110,40 @@ const runTest = async (
         return view.includes(">  ");
       },
       50,
-      5_000
+      shellReadyTimeout
     );
+    if (!shellReady) {
+      try {
+        terminal.kill();
+      } catch {
+        // ignore
+      }
+      throw new Error(
+        `shell readiness timeout: the shell prompt was not detected within ${shellReadyTimeout / 1000}s`
+      );
+    }
+  } else if (programExited) {
+    await Promise.race([
+      programExited,
+      new Promise<void>((r) => setTimeout(r, 5_000)),
+    ]);
   }
 
-  await Promise.resolve(test.testFunction({ terminal }));
-
   try {
-    terminal.kill();
-  } catch {
-    // terminal can pre-terminate if program is provided
+    await Promise.resolve(test.testFunction({ terminal }));
+  } finally {
+    try {
+      terminal.kill();
+    } catch {
+      // terminal can pre-terminate if program is provided
+    }
   }
 };
 
 export async function runTestWorker(
   test: TestCase,
   importPath: string,
-  { timeout, updateSnapshot }: WorkerExecutionOptions,
+  { timeout, updateSnapshot, shellReadyTimeout }: WorkerExecutionOptions,
   trace: boolean,
   pool: workerpool.Pool,
   reporter: BaseReporter,
@@ -153,6 +180,7 @@ export async function runTestWorker(
           importPath,
           attempt,
           traceFolder,
+          shellReadyTimeout,
         ],
         {
           on: (payload) => {
@@ -206,6 +234,52 @@ export async function runTestWorker(
           stdout,
           stderr,
         });
+      }).catch((e: unknown) => {
+        const duration = startTime != null ? Date.now() - startTime : -1;
+        if (!reportStarted) {
+          reporter.startTest(test, {
+            status: "pending",
+            duration: 0,
+            snapshots,
+          });
+        }
+        if (typeof e === "string") {
+          resolve({
+            status: "unexpected",
+            error: e,
+            duration,
+            snapshots,
+            stdout,
+            stderr,
+          });
+        } else if (e instanceof workerpool.Promise.TimeoutError) {
+          resolve({
+            status: "unexpected",
+            error: `Error: worker was terminated as the timeout (${timeout} ms) was exceeded`,
+            duration,
+            snapshots,
+            stdout,
+            stderr,
+          });
+        } else if (e instanceof Error) {
+          resolve({
+            status: "unexpected",
+            error: e.stack ?? e.message,
+            duration,
+            snapshots,
+            stdout,
+            stderr,
+          });
+        } else {
+          resolve({
+            status: "unexpected",
+            error: `Unknown worker error: ${String(e)}`,
+            duration,
+            snapshots,
+            stdout,
+            stderr,
+          });
+        }
       });
     } catch (e) {
       const duration = startTime != null ? Date.now() - startTime : -1;
@@ -228,7 +302,7 @@ export async function runTestWorker(
       } else if (e instanceof workerpool.Promise.TimeoutError) {
         resolve({
           status: "unexpected",
-          error: `Error: worker was terminated as the timeout (${timeout} ms) as exceeded`,
+          error: `Error: worker was terminated as the timeout (${timeout} ms) was exceeded`,
           duration,
           snapshots,
           stdout,
@@ -272,7 +346,8 @@ const testWorker = async (
   trace: boolean,
   importPath: string,
   attempt: number,
-  traceFolder: string
+  traceFolder: string,
+  shellReadyTimeout: number
 ): Promise<void> => {
   flushSnapshotExecutionCache();
 
@@ -288,7 +363,8 @@ const testWorker = async (
       updateSnapshot,
       trace,
       tracePoints,
-      importPath
+      importPath,
+      shellReadyTimeout
     );
   } catch (e) {
     let errorMessage;
@@ -311,6 +387,12 @@ const testWorker = async (
 };
 
 if (!workerpool.isMainThread) {
+  process.on("uncaughtException", () => {
+    // prevent worker crashes from unhandled native errors
+  });
+  process.on("unhandledRejection", () => {
+    // prevent worker crashes from unhandled promise rejections
+  });
   workerpool.worker({
     testWorker: testWorker,
   });

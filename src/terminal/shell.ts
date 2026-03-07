@@ -54,6 +54,7 @@ export const shellLaunch = async (shell: Shell) => {
     case Shell.WindowsPowershell:
       shellArgs = [
         "-NoLogo",
+        "-NoProfile",
         "-noexit",
         "-command",
         `try { . "${path.join(shellFolderPath, "shellIntegration.ps1")}" } catch {}`,
@@ -61,6 +62,8 @@ export const shellLaunch = async (shell: Shell) => {
       break;
     case Shell.Powershell:
       shellArgs = [
+        "-NoLogo",
+        "-NoProfile",
         "-noexit",
         "-command",
         `. "${path.join(shellFolderPath, "shellIntegration.ps1")}"`,

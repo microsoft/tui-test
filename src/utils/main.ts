@@ -6,12 +6,18 @@ import process from "node:process";
 import module from "node:module";
 import url from "node:url";
 
+import { isBun } from "./runtime.js";
+
 const stripExt = (name: string) => {
   const extension = path.extname(name);
   return !extension ? name : name.slice(0, -extension.length);
 };
 
 export const isMain = (meta: ImportMeta) => {
+  if (isBun()) {
+    return (meta as ImportMeta & { main?: boolean }).main === true;
+  }
+
   if (!meta || !process.argv[1]) {
     return false;
   }

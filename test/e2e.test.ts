@@ -193,7 +193,7 @@ test.describe("use variations", () => {
     test("git shows usage message", async ({ terminal }) => {
       await expect(
         terminal.getByText("usage: git", { full: true })
-      ).not.toBeVisible();
+      ).toBeVisible();
     });
   });
 
@@ -202,6 +202,12 @@ test.describe("use variations", () => {
     test("git shows status message", async ({ terminal }) => {
       await expect(
         terminal.getByText("On branch", { full: true })
+      ).toBeVisible();
+    });
+
+    test("git doesn't show usage", async ({ terminal }) => {
+      await expect(
+        terminal.getByText("usage: git", { full: true })
       ).not.toBeVisible();
     });
   });
