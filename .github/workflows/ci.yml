@@ -9,7 +9,7 @@ jobs:
   e2e-node:
     strategy:
       matrix:
-        version: [20, 22, 24]
+        version: [16, 18, 20, 22, 24]
         os: ["windows-latest", "ubuntu-latest", "macos-latest"]
     runs-on: ${{ matrix.os }}
     steps:
