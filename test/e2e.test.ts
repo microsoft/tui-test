@@ -201,7 +201,7 @@ test.describe("use variations", () => {
     test.use({ program: { file: "git", args: ["status"] } });
     test("git shows status message", async ({ terminal }) => {
       await expect(
-        terminal.getByText("On branch", { full: true })
+        terminal.getByText(/On branch|HEAD detached at/g, { full: true })
       ).toBeVisible();
     });
 
