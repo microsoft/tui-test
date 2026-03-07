@@ -27,12 +27,24 @@ or `pnpm`
 pnpm add -D @microsoft/tui-test
 ```
 
+or `bun`
+
+```sh
+bun add -D @microsoft/tui-test
+```
+
 ## Running Tests
 
 Running tests is as simple as running TUI Test from the command line after installation:
 
 ```sh
 npx @microsoft/tui-test
+```
+
+or with `bun`
+
+```sh
+bunx @microsoft/tui-test
 ```
 
 ## Capabilities
