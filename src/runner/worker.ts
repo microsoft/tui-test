@@ -219,68 +219,70 @@ export async function runTestWorker(
       if (timeout > 0) {
         poolPromise.timeout(timeout);
       }
-      poolPromise.then(() => {
-        if (!reportStarted) {
-          reporter.startTest(test, {
-            status: "pending",
-            duration: 0,
+      poolPromise
+        .then(() => {
+          if (!reportStarted) {
+            reporter.startTest(test, {
+              status: "pending",
+              duration: 0,
+              snapshots,
+            });
+          }
+          resolve({
+            status: "expected",
+            duration: Date.now() - startTime,
             snapshots,
+            stdout,
+            stderr,
           });
-        }
-        resolve({
-          status: "expected",
-          duration: Date.now() - startTime,
-          snapshots,
-          stdout,
-          stderr,
+        })
+        .catch((e: unknown) => {
+          const duration = startTime != null ? Date.now() - startTime : -1;
+          if (!reportStarted) {
+            reporter.startTest(test, {
+              status: "pending",
+              duration: 0,
+              snapshots,
+            });
+          }
+          if (typeof e === "string") {
+            resolve({
+              status: "unexpected",
+              error: e,
+              duration,
+              snapshots,
+              stdout,
+              stderr,
+            });
+          } else if (e instanceof workerpool.Promise.TimeoutError) {
+            resolve({
+              status: "unexpected",
+              error: `Error: worker was terminated as the timeout (${timeout} ms) was exceeded`,
+              duration,
+              snapshots,
+              stdout,
+              stderr,
+            });
+          } else if (e instanceof Error) {
+            resolve({
+              status: "unexpected",
+              error: e.stack ?? e.message,
+              duration,
+              snapshots,
+              stdout,
+              stderr,
+            });
+          } else {
+            resolve({
+              status: "unexpected",
+              error: `Unknown worker error: ${String(e)}`,
+              duration,
+              snapshots,
+              stdout,
+              stderr,
+            });
+          }
         });
-      }).catch((e: unknown) => {
-        const duration = startTime != null ? Date.now() - startTime : -1;
-        if (!reportStarted) {
-          reporter.startTest(test, {
-            status: "pending",
-            duration: 0,
-            snapshots,
-          });
-        }
-        if (typeof e === "string") {
-          resolve({
-            status: "unexpected",
-            error: e,
-            duration,
-            snapshots,
-            stdout,
-            stderr,
-          });
-        } else if (e instanceof workerpool.Promise.TimeoutError) {
-          resolve({
-            status: "unexpected",
-            error: `Error: worker was terminated as the timeout (${timeout} ms) was exceeded`,
-            duration,
-            snapshots,
-            stdout,
-            stderr,
-          });
-        } else if (e instanceof Error) {
-          resolve({
-            status: "unexpected",
-            error: e.stack ?? e.message,
-            duration,
-            snapshots,
-            stdout,
-            stderr,
-          });
-        } else {
-          resolve({
-            status: "unexpected",
-            error: `Unknown worker error: ${String(e)}`,
-            duration,
-            snapshots,
-            stdout,
-            stderr,
-          });
-        }
-      });
     } catch (e) {
       const duration = startTime != null ? Date.now() - startTime : -1;
       if (!reportStarted) {

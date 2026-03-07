@@ -22,7 +22,7 @@ export const createBunPty = (
   const proc = Bun.spawn([target, ...args], {
     cwd: options.cwd,
     env: options.env as Record<string, string>,
-    terminal: terminal
+    terminal: terminal,
   });
 
   proc.exited.then((exitCode: number) => {

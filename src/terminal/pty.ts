@@ -13,9 +13,7 @@ export type PtyOptions = {
 export interface IPtyBackend {
   readonly pid: number;
   onData(callback: (data: string) => void): void;
-  onExit(
-    callback: (exit: { exitCode: number; signal?: number }) => void
-  ): void;
+  onExit(callback: (exit: { exitCode: number; signal?: number }) => void): void;
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;

@@ -80,7 +80,11 @@ const runSuites = async (
           const testResult = await runTestWorker(
             test,
             test.sourcePath()!,
-            { timeout: getTimeout(), updateSnapshot, shellReadyTimeout: getShellReadyTimeout() },
+            {
+              timeout: getTimeout(),
+              updateSnapshot,
+              shellReadyTimeout: getShellReadyTimeout(),
+            },
             trace,
             pool,
             reporter,
