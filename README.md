@@ -2,9 +2,10 @@
 
 TUI Test is a framework for testing terminal applications. It provides a rich API for writing tests that interact with a terminal application across macOS, Linux, and Windows with a wide range of shells. It is built to be **fast**, **reliable**, and **easy to use**.
 
-## Requirements
+## Supported Runtimes
 
-- Node.js 20.X, 18.X, 16.X (16.6.0 >=)
+- Node.js 24.X, 22.X, 20.X, 18.X, 16.X (16.6.0 >=)
+- Bun (1.3.5 >=)
 
 ## Installation
 
