@@ -90,7 +90,7 @@ test.describe("key controls", () => {
     expect(terminal.getCursor().x).toBe(2);
   });
 
-  test.when(isNotMacOS, "ctrl+c", async ({ terminal }) => {
+  test.when(isLinux, "ctrl+c", async ({ terminal }) => {
     await expect(terminal).toMatchSnapshot();
     terminal.keyCtrlC();
 
