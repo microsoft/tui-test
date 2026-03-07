@@ -2,9 +2,10 @@
 
 TUI Test is a framework for testing terminal applications. It provides a rich API for writing tests that interact with a terminal application across macOS, Linux, and Windows with a wide range of shells. It is built to be **fast**, **reliable**, and **easy to use**.
 
-## Requirements
+## Supported Runtimes
 
-- Node.js 20.X, 18.X, 16.X (16.6.0 >=)
+- Node.js 24.X, 22.X, 20.X, 18.X, 16.X (16.6.0 >=)
+- Bun (1.3.5 >=)
 
 ## Installation
 
@@ -26,12 +27,24 @@ or `pnpm`
 pnpm add -D @microsoft/tui-test
 ```
 
+or `bun`
+
+```sh
+bun add -D @microsoft/tui-test
+```
+
 ## Running Tests
 
 Running tests is as simple as running TUI Test from the command line after installation:
 
 ```sh
 npx @microsoft/tui-test
+```
+
+or with `bun`
+
+```sh
+bunx @microsoft/tui-test
 ```
 
 ## Capabilities
@@ -48,7 +61,9 @@ npx @microsoft/tui-test
 
 ### Multi-platform / Multi-shell • No more "it works in my shell"
 
-**Multi-platform**. TUI Test supports testing on macOS, Linux, and Windows with a wide range of shells when installed: `cmd`, `windows powershell`, `powershell`, `bash`, `git-bash`, `fish`, `zsh`, and `xonsh`.
+**Multi-platform**. TUI Test supports testing on macOS, Linux, and Windows with a wide range of shells when installed: `cmd`, `windows powershell`, `powershell`, `bash`, `git-bash`, `fish`, `zsh`, and `xonsh`. 
+
+> Note: Bun is only supported on macOS and Linux.
 
 **Wide-support**. TUI Test uses [xterm.js](https://xtermjs.org/) to render the terminal, which is a widely used terminal emulator in projects like [VSCode](https://github.com/microsoft/vscode) and [Hyper](https://github.com/vercel/hyper).
 

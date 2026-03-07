@@ -34,6 +34,7 @@ export const loadConfig = async (): Promise<Required<TestConfig>> => {
     trace: userConfig.trace ?? false,
     traceFolder:
       userConfig.traceFolder ?? path.join(process.cwd(), "tui-traces"),
+    shellReadyTimeout: userConfig.shellReadyTimeout ?? 30_000,
     use: {
       shell: userConfig.use?.shell ?? defaultShell,
       rows: userConfig.use?.rows ?? 30,
@@ -48,6 +49,8 @@ export const getExpectTimeout = (): number =>
   loadedConfig?.expect.timeout ?? 5_000;
 export const getTimeout = (): number => loadedConfig?.timeout ?? 30_000;
 export const getRetries = (): number => loadedConfig?.retries ?? 0;
+export const getShellReadyTimeout = (): number =>
+  loadedConfig?.shellReadyTimeout ?? 30_000;
 
 declare type TestProject = {
   /**
@@ -256,6 +259,24 @@ export declare type TestConfig = {
    *
    */
   traceFolder?: string;
+
+  /**
+   * Timeout in milliseconds for the shell prompt to become ready before running the test.
+   * Defaults to 30 seconds.
+   *
+   * **Usage**
+   *
+   * ```js
+   * // tui-test.config.ts
+   * import { defineConfig } from '@microsoft/tui-test';
+   *
+   * export default defineConfig({
+   *   shellReadyTimeout: 60000,
+   * });
+   * ```
+   *
+   */
+  shellReadyTimeout?: number;
 
   /**
    * TUI Test supports running multiple test projects at the same time.

@@ -6,10 +6,10 @@ on:
     branches: [main]
 
 jobs:
-  e2e:
+  e2e-node:
     strategy:
       matrix:
-        version: [16, 18, 20]
+        version: [16, 18, 20, 22, 24]
         os: ["windows-latest", "ubuntu-latest", "macos-latest"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 0
 
       - name: Use Node.js ${{ matrix.version }}.x
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.version }}
 
@@ -36,7 +36,9 @@ jobs:
           brew install fish
           brew install zsh
 
-          sudo chmod g-w /usr/local/share/zsh /usr/local/share/zsh/site-functions /usr/share/zsh
+          for dir in /usr/local/share/zsh /usr/local/share/zsh/site-functions /usr/share/zsh /opt/homebrew/share/zsh /opt/homebrew/share/zsh/site-functions /opt/homebrew/share/fish /opt/homebrew/share/fish/vendor_completions.d; do
+            [ -d "$dir" ] && sudo chmod g-w "$dir"
+          done
 
       - name: setup linux shells
         if: matrix.os == 'ubuntu-latest'
@@ -62,3 +64,46 @@ jobs:
 
       - name: Run npm run test:e2e
         run: npm run test:e2e
+
+  e2e-bun:
+    strategy:
+      matrix:
+        os: ["ubuntu-latest", "macos-latest"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Run bun install
+        run: bun install
+
+      - name: setup macOS shells
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          brew install fish
+          brew install zsh
+
+          for dir in /usr/local/share/zsh /usr/local/share/zsh/site-functions /usr/share/zsh /opt/homebrew/share/zsh /opt/homebrew/share/zsh/site-functions /opt/homebrew/share/fish /opt/homebrew/share/fish/vendor_completions.d; do
+            [ -d "$dir" ] && sudo chmod g-w "$dir"
+          done
+
+      - name: setup linux shells
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          sudo apt-add-repository ppa:fish-shell/release-3
+          sudo apt-get update
+          sudo apt install fish zsh
+
+          sudo chmod -R 755 /usr/share/zsh/vendor-completions
+          sudo chown -R root:root /usr/share/zsh/vendor-completions
+          sudo chmod -R 755 /usr/share/zsh
+          sudo chown -R root:root /usr/share/zsh
+
+      - name: Run npm run test:e2e
+        run: bun run test:e2e

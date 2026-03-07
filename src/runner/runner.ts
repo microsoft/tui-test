@@ -12,6 +12,7 @@ import { transformFiles } from "./transform.js";
 import {
   TestConfig,
   getRetries,
+  getShellReadyTimeout,
   getTimeout,
   loadConfig,
 } from "../config/config.js";
@@ -23,6 +24,7 @@ import { TestCase } from "../test/testcase.js";
 import { cacheFolderName, executableName } from "../utils/constants.js";
 import { supportsColor } from "chalk";
 import { cleanSnapshot } from "../test/matchers/toMatchSnapshot.js";
+import { isBun } from "../utils/runtime.js";
 
 /* eslint-disable no-var */
 
@@ -78,7 +80,11 @@ const runSuites = async (
           const testResult = await runTestWorker(
             test,
             test.sourcePath()!,
-            { timeout: getTimeout(), updateSnapshot },
+            {
+              timeout: getTimeout(),
+              updateSnapshot,
+              shellReadyTimeout: getShellReadyTimeout(),
+            },
             trace,
             pool,
             reporter,
@@ -100,13 +106,33 @@ const runSuites = async (
   return Promise.all(tasks);
 };
 
-const checkNodeVersion = () => {
+const checkRuntimeVersion = () => {
+  if (isBun()) {
+    if (os.platform() === "win32") {
+      console.error(
+        chalk.red(
+          `Error: ${executableName} does not support Bun on Windows. Please use Node.js instead.\n`
+        )
+      );
+      process.exit(1);
+    }
+    if (Bun.version.localeCompare("1.3.5", undefined, { numeric: true }) < 0) {
+      console.warn(
+        chalk.yellow(
+          `Warning: ${executableName} works best with Bun version 1.3.5 or higher (you are using ${Bun.version}).\n`
+        )
+      );
+    }
+    return;
+  }
   const nodeVersion = process.versions.node;
   const nodeMajorVersion = nodeVersion.split(".")[0].trim();
   if (
     nodeMajorVersion != "16" &&
     nodeMajorVersion != "18" &&
-    nodeMajorVersion != "20"
+    nodeMajorVersion != "20" &&
+    nodeMajorVersion != "22" &&
+    nodeMajorVersion != "24"
   ) {
     console.warn(
       chalk.yellow(
@@ -170,7 +196,7 @@ const cleanSnapshots = async (
 };
 
 export const run = async (options: ExecutionOptions) => {
-  checkNodeVersion();
+  checkRuntimeVersion();
 
   await transformFiles();
   const config = await loadConfig();

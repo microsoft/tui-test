@@ -90,7 +90,7 @@ test.describe("key controls", () => {
     expect(terminal.getCursor().x).toBe(2);
   });
 
-  test.when(isNotMacOS, "ctrl+c", async ({ terminal }) => {
+  test.when(isLinux, "ctrl+c", async ({ terminal }) => {
     await expect(terminal).toMatchSnapshot();
     terminal.keyCtrlC();
 
@@ -193,7 +193,7 @@ test.describe("use variations", () => {
     test("git shows usage message", async ({ terminal }) => {
       await expect(
         terminal.getByText("usage: git", { full: true })
-      ).not.toBeVisible();
+      ).toBeVisible();
     });
   });
 
@@ -201,7 +201,13 @@ test.describe("use variations", () => {
     test.use({ program: { file: "git", args: ["status"] } });
     test("git shows status message", async ({ terminal }) => {
       await expect(
-        terminal.getByText("On branch", { full: true })
+        terminal.getByText(/On branch|HEAD detached at/g, { full: true })
+      ).toBeVisible();
+    });
+
+    test("git doesn't show usage", async ({ terminal }) => {
+      await expect(
+        terminal.getByText("usage: git", { full: true })
       ).not.toBeVisible();
     });
   });

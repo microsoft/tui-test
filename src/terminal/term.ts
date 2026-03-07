@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import pty, { IPty, IEvent } from "@homebridge/node-pty-prebuilt-multiarch";
 import xterm from "@xterm/headless";
 import process from "node:process";
 import { EventEmitter } from "node:events";
 
 import ansi from "./ansi.js";
+import { createPty, type IPtyBackend } from "./pty.js";
 
 import { Shell, shellLaunch, shellEnv } from "./shell.js";
 import which from "which";
@@ -52,27 +52,40 @@ export const spawn = async (
         `unable to spawn terminal, unable to resolve file '${file}' from PATH`
       );
     }
+    const ptyBackend = await createPty(resolvedFile, args ?? [], {
+      cols: options.cols,
+      rows: options.rows,
+      cwd: process.cwd(),
+      env: options.env,
+    });
     return new Terminal(
-      resolvedFile,
-      args ?? [],
+      ptyBackend,
       options.rows,
       options.cols,
       trace,
       options.shell,
-      traceEmitter,
-      options.env
+      traceEmitter
     );
   }
   const { shellTarget, shellArgs } = await shellLaunch(options.shell);
-  return new Terminal(
+  const env = { ...shellEnv(options.shell), ...options.env };
+  const ptyBackend = await createPty(
     shellTarget,
     options.shellArgs ?? shellArgs ?? [],
+    {
+      cols: options.cols,
+      rows: options.rows,
+      cwd: process.cwd(),
+      env,
+    }
+  );
+  return new Terminal(
+    ptyBackend,
     options.rows,
     options.cols,
     trace,
     options.shell,
-    traceEmitter,
-    { ...shellEnv(options.shell), ...options.env }
+    traceEmitter
   );
 };
 
@@ -93,29 +106,24 @@ type CellShift = {
 };
 
 export class Terminal {
-  private readonly _pty: IPty;
+  private readonly _pty: IPtyBackend;
   private readonly _term: xterm.Terminal;
   private readonly _returnChar: string;
-  readonly onExit: IEvent<{ exitCode: number; signal?: number }>;
+  private _exited: boolean = false;
+  readonly onExit: (
+    callback: (exit: { exitCode: number; signal?: number }) => void
+  ) => void;
 
   constructor(
-    target: string,
-    args: string[],
+    ptyBackend: IPtyBackend,
     private _rows: number,
     private _cols: number,
     private _trace: boolean,
     private _shell: Shell,
-    private _traceEmitter: EventEmitter,
-    env?: { [key: string]: string | undefined }
+    private _traceEmitter: EventEmitter
   ) {
     this._returnChar = this._shell == Shell.Xonsh ? "\n" : "\r";
-    this._pty = pty.spawn(target, args ?? [], {
-      name: "xterm-256color",
-      cols: this._cols,
-      rows: this._rows,
-      cwd: process.cwd(),
-      env,
-    });
+    this._pty = ptyBackend;
     this._term = new xterm.Terminal({
       allowProposedApi: true,
       rows: this._rows,
@@ -130,7 +138,10 @@ export class Terminal {
       }
       this._term.write(data);
     });
-    this.onExit = this._pty.onExit;
+    this._pty.onExit(() => {
+      this._exited = true;
+    });
+    this.onExit = (callback) => this._pty.onExit(callback);
   }
 
   /**
@@ -142,7 +153,9 @@ export class Terminal {
   resize(columns: number, rows: number) {
     this._cols = columns;
     this._rows = rows;
-    this._pty.resize(columns, rows);
+    if (!this._exited) {
+      this._pty.resize(columns, rows);
+    }
     this._term.resize(columns, rows);
     if (this._trace) {
       this._traceEmitter.emit("size", rows, columns);
@@ -155,7 +168,9 @@ export class Terminal {
    * @param data Data to write to the shell
    */
   write(data: string): void {
-    this._pty.write(data);
+    if (!this._exited) {
+      this._pty.write(data);
+    }
   }
 
   /**
@@ -166,7 +181,9 @@ export class Terminal {
    * @param data Data to write to the shell
    */
   submit(data?: string): void {
-    this._pty.write(`${data ?? ""}${this._returnChar}`);
+    if (!this._exited) {
+      this._pty.write(`${data ?? ""}${this._returnChar}`);
+    }
   }
 
   /**
@@ -434,6 +451,6 @@ export class Terminal {
    * Kill the terminal and underlying processes
    */
   kill() {
-    process.kill(this._pty.pid, 9);
+    this._pty.kill();
   }
 }
