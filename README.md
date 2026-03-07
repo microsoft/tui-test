@@ -49,7 +49,9 @@ npx @microsoft/tui-test
 
 ### Multi-platform / Multi-shell • No more "it works in my shell"
 
-**Multi-platform**. TUI Test supports testing on macOS, Linux, and Windows with a wide range of shells when installed: `cmd`, `windows powershell`, `powershell`, `bash`, `git-bash`, `fish`, `zsh`, and `xonsh`.
+**Multi-platform**. TUI Test supports testing on macOS, Linux, and Windows with a wide range of shells when installed: `cmd`, `windows powershell`, `powershell`, `bash`, `git-bash`, `fish`, `zsh`, and `xonsh`. 
+
+> Note: Bun is only supported on macOS and Linux.
 
 **Wide-support**. TUI Test uses [xterm.js](https://xtermjs.org/) to render the terminal, which is a widely used terminal emulator in projects like [VSCode](https://github.com/microsoft/vscode) and [Hyper](https://github.com/vercel/hyper).
 
