@@ -116,8 +116,14 @@ export class Locator {
     );
 
     if (!result && !isNot) {
+      const buffer = this._full
+        ? this._term.getBuffer()
+        : this._term.getViewableBuffer();
+      const snapshot = buffer
+        .map((bufferLine) => bufferLine.join("").trimEnd())
+        .join("\n");
       throw new Error(
-        `locator timeout: getByText(${this._text.toString()}) resolved to 0 elements after ${ms(timeout)}`
+        `locator timeout: getByText(${this._text.toString()}) resolved to 0 elements after ${ms(timeout)}\n\nTerminal content:\n---START---\n${snapshot}\n---END---`
       );
     }
     if (!result && isNot) {
