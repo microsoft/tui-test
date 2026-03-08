@@ -5,7 +5,7 @@ import xterm from "@xterm/headless";
 import process from "node:process";
 import { EventEmitter } from "node:events";
 
-import ansi, { MouseButton } from "./ansi.js";
+import ansi, { Key, MouseKey } from "./ansi.js";
 import { createPty, type IPtyBackend } from "./pty.js";
 
 import { Shell, shellLaunch, shellEnv } from "./shell.js";
@@ -268,16 +268,36 @@ export class Terminal {
   }
 
   /**
+   * Press an arbitrary key, optionally with modifier keys (Ctrl, Alt, Shift).
+   *
+   * For single printable characters, pass the character as a string.
+   * For special keys (arrows, function keys, etc.), use the `Key` enum.
+   *
+   * @param key A single character string or a `Key` enum value.
+   * @param options.ctrl Whether Ctrl is held. Default is `false`.
+   * @param options.alt Whether Alt is held. Default is `false`.
+   * @param options.shift Whether Shift is held. Default is `false`.
+   */
+  keyPress(
+    key: string | Key,
+    options?: { ctrl?: boolean; alt?: boolean; shift?: boolean }
+  ): void {
+    if (!this._exited) {
+      this._pty.write(ansi.keyCombo(key, options));
+    }
+  }
+
+  /**
    * Send a mouse down event at the given position.
    *
    * @param x The column (0-based)
    * @param y The row (0-based)
-   * @param options.button The mouse button. Default is `MouseButton.Left`.
+   * @param options.button The mouse button. Default is `MouseKey.Left`.
    */
-  mouseDown(x: number, y: number, options?: { button?: MouseButton }): void {
+  mouseDown(x: number, y: number, options?: { button?: MouseKey }): void {
     if (!this._exited) {
       this._pty.write(
-        ansi.mouseDown(x, y, options?.button ?? MouseButton.Left)
+        ansi.mouseDown(x, y, options?.button ?? MouseKey.Left)
       );
     }
   }
@@ -287,11 +307,11 @@ export class Terminal {
    *
    * @param x The column (0-based)
    * @param y The row (0-based)
-   * @param options.button The mouse button. Default is `MouseButton.Left`.
+   * @param options.button The mouse button. Default is `MouseKey.Left`.
    */
-  mouseUp(x: number, y: number, options?: { button?: MouseButton }): void {
+  mouseUp(x: number, y: number, options?: { button?: MouseKey }): void {
     if (!this._exited) {
-      this._pty.write(ansi.mouseUp(x, y, options?.button ?? MouseButton.Left));
+      this._pty.write(ansi.mouseUp(x, y, options?.button ?? MouseKey.Left));
     }
   }
 
@@ -300,9 +320,9 @@ export class Terminal {
    *
    * @param x The column (0-based)
    * @param y The row (0-based)
-   * @param options.button The mouse button. Default is `MouseButton.Left`.
+   * @param options.button The mouse button. Default is `MouseKey.Left`.
    */
-  mousePress(x: number, y: number, options?: { button?: MouseButton }): void {
+  mousePress(x: number, y: number, options?: { button?: MouseKey }): void {
     this.mouseDown(x, y, options);
     this.mouseUp(x, y, options);
   }
