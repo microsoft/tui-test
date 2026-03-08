@@ -296,9 +296,7 @@ export class Terminal {
    */
   mouseDown(x: number, y: number, options?: { button?: MouseKey }): void {
     if (!this._exited) {
-      this._pty.write(
-        ansi.mouseDown(x, y, options?.button ?? MouseKey.Left)
-      );
+      this._pty.write(ansi.mouseDown(x, y, options?.button ?? MouseKey.Left));
     }
   }
 
