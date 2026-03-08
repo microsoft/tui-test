@@ -22,6 +22,22 @@ const cursorTo = (x: number, y: number) => {
   return CSI + (y + 1) + SEP + (x + 1) + "H";
 };
 
+export enum MouseButton {
+  Left = 0,
+  Middle = 1,
+  Right = 2,
+}
+
+const mouseDown = (x: number, y: number, button: MouseButton) => {
+  return CSI + "<" + button + SEP + (x + 1) + SEP + (y + 1) + "M";
+};
+const mouseUp = (x: number, y: number, button: MouseButton) => {
+  return CSI + "<" + button + SEP + (x + 1) + SEP + (y + 1) + "m";
+};
+const mouseMove = (x: number, y: number) => {
+  return CSI + "<" + 35 + SEP + (x + 1) + SEP + (y + 1) + "M";
+};
+
 export default {
   keyUp,
   keyDown,
@@ -36,4 +52,7 @@ export default {
   restoreScreen,
   clearScreen,
   cursorTo,
+  mouseDown,
+  mouseUp,
+  mouseMove,
 };

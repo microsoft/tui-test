@@ -5,7 +5,7 @@ import xterm from "@xterm/headless";
 import process from "node:process";
 import { EventEmitter } from "node:events";
 
-import ansi from "./ansi.js";
+import ansi, { MouseButton } from "./ansi.js";
 import { createPty, type IPtyBackend } from "./pty.js";
 
 import { Shell, shellLaunch, shellEnv } from "./shell.js";
@@ -265,6 +265,72 @@ export class Terminal {
    */
   keyCtrlD(count?: number | undefined): void {
     this._pty.write(ansi.keyCtrlD.repeat(count ?? 1));
+  }
+
+  /**
+   * Send a mouse down event at the given position.
+   *
+   * @param x The column (0-based)
+   * @param y The row (0-based)
+   * @param options.button The mouse button. Default is `MouseButton.Left`.
+   */
+  mouseDown(
+    x: number,
+    y: number,
+    options?: { button?: MouseButton }
+  ): void {
+    if (!this._exited) {
+      this._pty.write(
+        ansi.mouseDown(x, y, options?.button ?? MouseButton.Left)
+      );
+    }
+  }
+
+  /**
+   * Send a mouse up event at the given position.
+   *
+   * @param x The column (0-based)
+   * @param y The row (0-based)
+   * @param options.button The mouse button. Default is `MouseButton.Left`.
+   */
+  mouseUp(
+    x: number,
+    y: number,
+    options?: { button?: MouseButton }
+  ): void {
+    if (!this._exited) {
+      this._pty.write(
+        ansi.mouseUp(x, y, options?.button ?? MouseButton.Left)
+      );
+    }
+  }
+
+  /**
+   * Send a mouse press (down + up) at the given position.
+   *
+   * @param x The column (0-based)
+   * @param y The row (0-based)
+   * @param options.button The mouse button. Default is `MouseButton.Left`.
+   */
+  mousePress(
+    x: number,
+    y: number,
+    options?: { button?: MouseButton }
+  ): void {
+    this.mouseDown(x, y, options);
+    this.mouseUp(x, y, options);
+  }
+
+  /**
+   * Send a mouse move event to the given position.
+   *
+   * @param x The column (0-based)
+   * @param y The row (0-based)
+   */
+  mouseTo(x: number, y: number): void {
+    if (!this._exited) {
+      this._pty.write(ansi.mouseMove(x, y));
+    }
   }
 
   /**
