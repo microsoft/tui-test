@@ -274,11 +274,7 @@ export class Terminal {
    * @param y The row (0-based)
    * @param options.button The mouse button. Default is `MouseButton.Left`.
    */
-  mouseDown(
-    x: number,
-    y: number,
-    options?: { button?: MouseButton }
-  ): void {
+  mouseDown(x: number, y: number, options?: { button?: MouseButton }): void {
     if (!this._exited) {
       this._pty.write(
         ansi.mouseDown(x, y, options?.button ?? MouseButton.Left)
@@ -293,15 +289,9 @@ export class Terminal {
    * @param y The row (0-based)
    * @param options.button The mouse button. Default is `MouseButton.Left`.
    */
-  mouseUp(
-    x: number,
-    y: number,
-    options?: { button?: MouseButton }
-  ): void {
+  mouseUp(x: number, y: number, options?: { button?: MouseButton }): void {
     if (!this._exited) {
-      this._pty.write(
-        ansi.mouseUp(x, y, options?.button ?? MouseButton.Left)
-      );
+      this._pty.write(ansi.mouseUp(x, y, options?.button ?? MouseButton.Left));
     }
   }
 
@@ -312,11 +302,7 @@ export class Terminal {
    * @param y The row (0-based)
    * @param options.button The mouse button. Default is `MouseButton.Left`.
    */
-  mousePress(
-    x: number,
-    y: number,
-    options?: { button?: MouseButton }
-  ): void {
+  mousePress(x: number, y: number, options?: { button?: MouseButton }): void {
     this.mouseDown(x, y, options);
     this.mouseUp(x, y, options);
   }
