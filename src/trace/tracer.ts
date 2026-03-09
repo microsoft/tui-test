@@ -80,7 +80,10 @@ export const saveTrace = async (
   // remove win32-input-mode enable sequence if it comes through data
   const cleanedTracePoints = tracePoints.map((tracePoint) => {
     if ("data" in tracePoint) {
-      return { ...tracePoint, data: tracePoint.data.replaceAll(enableWin32InputMode, "") };
+      return {
+        ...tracePoint,
+        data: tracePoint.data.replaceAll(enableWin32InputMode, ""),
+      };
     }
     return tracePoint;
   });
@@ -90,7 +93,6 @@ export const saveTrace = async (
     attempt,
     ...testName(testId),
   };
-
 
   await fsAsync.writeFile(
     path.join(traceFolder, filename),
