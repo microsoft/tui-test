@@ -18,6 +18,7 @@ const keyCtrlD = String.fromCharCode(4);
 const saveScreen = CSI + "?47h";
 const restoreScreen = CSI + "?47l";
 const clearScreen = CSI + "2J";
+export const enableWin32InputMode = CSI + "?9001h";
 const cursorTo = (x: number, y: number) => {
   return CSI + (y + 1) + SEP + (x + 1) + "H";
 };

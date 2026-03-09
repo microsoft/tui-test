@@ -7,6 +7,7 @@ import zlib from "node:zlib";
 import process from "node:process";
 import fsAsync from "node:fs/promises";
 import { promisify } from "node:util";
+import { enableWin32InputMode } from "../terminal/ansi.js";
 
 export type TracePoint = DataTracePoint | SizeTracePoint;
 
@@ -75,8 +76,20 @@ export const saveTrace = async (
   if (!fs.existsSync(traceFolder)) {
     await fsAsync.mkdir(traceFolder, { recursive: true });
   }
+
+  // remove win32-input-mode enable sequence if it comes through data
+  const cleanedTracePoints = tracePoints.map((tracePoint) => {
+    if ("data" in tracePoint) {
+      return {
+        ...tracePoint,
+        data: tracePoint.data.replaceAll(enableWin32InputMode, ""),
+      };
+    }
+    return tracePoint;
+  });
+
   const trace: Trace = {
-    tracePoints,
+    tracePoints: cleanedTracePoints,
     attempt,
     ...testName(testId),
   };
