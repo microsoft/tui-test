@@ -12,7 +12,7 @@ import path from "node:path";
 import { Suite, suiteFilePath } from "./suite.js";
 import { TestFunction, TestCase, Location } from "./testcase.js";
 export { Shell } from "../terminal/shell.js";
-export { MouseButton } from "../terminal/ansi.js";
+export { Key, MouseKey } from "../terminal/ansi.js";
 import { TestOptions } from "./option.js";
 import { toMatchSnapshot } from "./matchers/toMatchSnapshot.js";
 import { Terminal } from "../terminal/term.js";
