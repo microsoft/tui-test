@@ -39,6 +39,7 @@ const transformFile = async (
     swcrc: false,
     configFile: false,
     sourceMaps: true,
+    inputSourceMap: false,
     module: {
       type: "es6",
     },
