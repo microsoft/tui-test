@@ -20,7 +20,7 @@ export const loadConfig = async (): Promise<Required<TestConfig>> => {
   loadedConfig = {
     testMatch: userConfig.testMatch ?? "**/*.@(spec|test).?(c|m)[jt]s?(x)",
     expect: {
-      timeout: userConfig.timeout ?? 5_000,
+      timeout: userConfig.expect?.timeout ?? 5_000,
     },
     globalTimeout: userConfig.globalTimeout ?? 0,
     retries: userConfig.retries ?? 0,
