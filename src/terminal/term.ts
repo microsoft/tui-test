@@ -109,7 +109,13 @@ export class Terminal {
   private readonly _pty: IPtyBackend;
   private readonly _term: xterm.Terminal;
   private readonly _returnChar: string;
-  private _exited: boolean = false;
+  private _exitResult: { exitCode: number; signal?: number } | null = null;
+  private get _exited(): boolean {
+    return this._exitResult !== null;
+  }
+  get exitResult() {
+    return this._exitResult;
+  }
   readonly onExit: (
     callback: (exit: { exitCode: number; signal?: number }) => void
   ) => void;
@@ -138,10 +144,16 @@ export class Terminal {
       }
       this._term.write(data);
     });
-    this._pty.onExit(() => {
-      this._exited = true;
+    this._pty.onExit((exitResult) => {
+      this._exitResult = exitResult;
     });
-    this.onExit = (callback) => this._pty.onExit(callback);
+    this.onExit = (callback) => {
+      if (this._exitResult) {
+        callback(this._exitResult);
+      } else {
+        this._pty.onExit(callback);
+      }
+    };
   }
 
   /**
