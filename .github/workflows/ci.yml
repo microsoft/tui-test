@@ -26,8 +26,8 @@ jobs:
         run: npm ci
 
       - name: Run commitlint
-        if: github.event_name == 'pull_request'
-        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --verbose
+        if: github.event_name == 'push'
+        run: npx commitlint --from ${{ github.event.before }} --to ${{ github.event.after }} --verbose
 
       - name: setup macOS shells
         if: matrix.os == 'macos-latest'
