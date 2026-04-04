@@ -64,7 +64,10 @@ const runTest = async (
 
   const enterHooks = enter
     .filter((s) => !beforeAllExecuted.has(s))
-    .flatMap((s) => { beforeAllExecuted.add(s); return s.beforeAllHooks; });
+    .flatMap((s) => {
+      beforeAllExecuted.add(s);
+      return s.beforeAllHooks;
+    });
 
   for (const hook of enterHooks) {
     await Promise.resolve(hook());

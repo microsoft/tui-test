@@ -118,13 +118,19 @@ const runSuites = async (
         }
         await filePool.exec("afterAllWorker", []);
       } finally {
-        try { await filePool.terminate(true); } catch { /* empty */ }
+        try {
+          await filePool.terminate(true);
+        } catch {
+          /* empty */
+        }
       }
     }
   };
 
   await Promise.all(
-    Array.from({ length: Math.min(maxWorkers, files.length) }, () => runNextFile())
+    Array.from({ length: Math.min(maxWorkers, files.length) }, () =>
+      runNextFile()
+    )
   );
 };
 

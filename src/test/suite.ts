@@ -72,7 +72,6 @@ export class Suite {
     return suites.reverse();
   }
 
-
   titlePath(): string[] {
     const titles = [];
     let currentSuite = this.parentSuite;
