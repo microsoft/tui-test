@@ -14,6 +14,8 @@ export type TestFunction = (args: {
   terminal: Terminal;
 }) => void | Promise<void>;
 
+export type HookFunction = () => void | Promise<void>;
+
 export type TestStatus =
   | "expected"
   | "unexpected"

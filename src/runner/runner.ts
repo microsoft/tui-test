@@ -62,48 +62,70 @@ const runSuites = async (
   reporter: BaseReporter,
   options: ExecutionOptions,
   config: Required<TestConfig>,
-  pool: Pool
+  maxWorkers: number
 ) => {
   const { updateSnapshot } = options;
   const trace = options.trace ?? config.trace;
-  const tasks: Promise<void>[] = [];
-  const suites = [...allSuites];
-  while (suites.length != 0) {
-    const suite = suites.shift();
-    if (!suite) break;
-    tasks.push(
-      ...suite.tests.map(async (test) => {
-        if (!filteredTestIds.has(test.id)) {
-          return;
+
+  const groupTestsByFile = (suites: Suite[]): TestCase[][] => {
+    const fileTests = new Map<string, TestCase[]>();
+    const visit = (suites: Suite[]) => {
+      for (const suite of suites) {
+        for (const test of suite.tests) {
+          if (!filteredTestIds.has(test.id)) continue;
+          const file = test.filePath() ?? "";
+          if (!fileTests.has(file)) fileTests.set(file, []);
+          fileTests.get(file)!.push(test);
         }
-        for (let i = 0; i < Math.max(0, getRetries()) + 1; i++) {
-          const testResult = await runTestWorker(
-            test,
-            test.sourcePath()!,
-            {
-              timeout: getTimeout(),
-              updateSnapshot,
-              shellReadyTimeout: getShellReadyTimeout(),
-            },
-            trace,
-            pool,
-            reporter,
-            i,
-            config.traceFolder
-          );
-          test.results.push(testResult);
-          reporter.endTest(test, testResult);
-          if (
-            testResult.status == "skipped" ||
-            testResult.status == test.expectedStatus
-          )
-            break;
+        visit(suite.suites);
+      }
+    };
+    visit(suites);
+    return Array.from(fileTests.values());
+  };
+
+  const files = groupTestsByFile(allSuites);
+  const runNextFile = async (): Promise<void> => {
+    while (files.length != 0) {
+      const tests = files.shift();
+      if (!tests) break;
+      const filePool = createWorkerPool(1);
+      try {
+        for (const test of tests) {
+          for (let i = 0; i < Math.max(0, getRetries()) + 1; i++) {
+            const testResult = await runTestWorker(
+              test,
+              test.sourcePath()!,
+              {
+                timeout: getTimeout(),
+                updateSnapshot,
+                shellReadyTimeout: getShellReadyTimeout(),
+              },
+              trace,
+              filePool,
+              reporter,
+              i,
+              config.traceFolder
+            );
+            test.results.push(testResult);
+            reporter.endTest(test, testResult);
+            if (
+              testResult.status == "skipped" ||
+              testResult.status == test.expectedStatus
+            )
+              break;
+          }
         }
-      })
-    );
-    suites.push(...suite.suites);
-  }
-  return Promise.all(tasks);
+        await filePool.exec("afterAllWorker", []);
+      } finally {
+        try { await filePool.terminate(true); } catch { /* empty */ }
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(maxWorkers, files.length) }, () => runNextFile())
+  );
 };
 
 const checkRuntimeVersion = () => {
@@ -202,7 +224,6 @@ export const run = async (options: ExecutionOptions) => {
   const config = await loadConfig();
   const rootSuite = await getRootSuite(config);
   const reporter = new ListReporter();
-  const pool = createWorkerPool(config.workers);
 
   const suites = [rootSuite];
   while (suites.length != 0) {
@@ -276,13 +297,9 @@ export const run = async (options: ExecutionOptions) => {
     reporter,
     options,
     config,
-    pool
+    config.workers
   );
-  try {
-    await pool.terminate(true);
-  } catch {
-    /* empty */
-  }
+
   const staleSnapshots = await cleanSnapshots(allTests, options);
   const failures = reporter.end(rootSuite, {
     obsolete: options.updateSnapshot ? 0 : staleSnapshots,

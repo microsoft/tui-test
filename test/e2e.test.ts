@@ -298,3 +298,80 @@ test.describe("shells", () => {
     });
   });
 });
+
+let fileBeforeAllCount = 0;
+
+test.beforeAll(() => {
+  fileBeforeAllCount++;
+});
+
+test.describe("lifecycle hooks", () => {
+  let describeBeforeAllCount = 0;
+  let beforeEachCount = 0;
+  let afterEachCount = 0;
+
+  test.beforeAll(() => {
+    describeBeforeAllCount++;
+  });
+
+  test.afterAll(() => {});
+
+  test.beforeEach(async () => {
+    beforeEachCount++;
+  });
+
+  test.afterEach(async () => {
+    afterEachCount++;
+  });
+
+  test("file-level beforeAll ran once", async () => {
+    expect(fileBeforeAllCount).toBe(1);
+  });
+
+  test("describe-level beforeAll ran once", async () => {
+    expect(describeBeforeAllCount).toBe(1);
+  });
+
+  test("beforeEach runs before each test", async () => {
+    expect(beforeEachCount).toBeGreaterThanOrEqual(1);
+  });
+
+  test("afterEach ran for prior test", async () => {
+    expect(afterEachCount).toBeGreaterThanOrEqual(1);
+  });
+
+  test.describe("nested hooks", () => {
+    let nestedBeforeAllCount = 0;
+    let nestedBeforeEachCount = 0;
+
+    test.beforeAll(() => {
+      nestedBeforeAllCount++;
+    });
+
+    test.beforeEach(async () => {
+      nestedBeforeEachCount++;
+    });
+
+    test.afterEach(async () => {});
+
+    test("file-level beforeAll also visible in nested scope", async () => {
+      expect(fileBeforeAllCount).toBe(1);
+    });
+
+    test("outer describe beforeAll also visible in nested scope", async () => {
+      expect(describeBeforeAllCount).toBe(1);
+    });
+
+    test("nested beforeAll ran once", async () => {
+      expect(nestedBeforeAllCount).toBe(1);
+    });
+
+    test("outer beforeEach also runs for nested tests", async () => {
+      expect(beforeEachCount).toBeGreaterThanOrEqual(1);
+    });
+
+    test("nested beforeEach runs for nested tests", async () => {
+      expect(nestedBeforeEachCount).toBeGreaterThanOrEqual(1);
+    });
+  });
+});

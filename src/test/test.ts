@@ -10,7 +10,7 @@ import {
 import path from "node:path";
 
 import { Suite, suiteFilePath } from "./suite.js";
-import { TestFunction, TestCase, Location } from "./testcase.js";
+import { TestFunction, TestCase, Location, HookFunction } from "./testcase.js";
 export { Shell } from "../terminal/shell.js";
 export { Key, MouseKey } from "../terminal/ansi.js";
 import { TestOptions } from "./option.js";
@@ -253,6 +253,82 @@ export namespace test {
       globalThis.tests[test.id] = test;
     }
     globalThis.suite.tests.push(test);
+  };
+
+  /**
+   * Declares a `beforeAll` hook that is executed once before all tests in the current scope.
+   *
+   * **Usage**
+   *
+   * ```js
+   * import { test } from '@microsoft/tui-test';
+   *
+   * test.beforeAll(async () => {
+   *   // Set up shared resources
+   * });
+   * ```
+   *
+   * @param fn The hook function to run before all tests.
+   */
+  export const beforeAll = (fn: HookFunction) => {
+    globalThis.suite.beforeAllHooks.push(fn);
+  };
+
+  /**
+   * Declares an `afterAll` hook that is executed once after all tests in the current scope.
+   *
+   * **Usage**
+   *
+   * ```js
+   * import { test } from '@microsoft/tui-test';
+   *
+   * test.afterAll(async () => {
+   *   // Clean up shared resources
+   * });
+   * ```
+   *
+   * @param fn The hook function to run after all tests.
+   */
+  export const afterAll = (fn: HookFunction) => {
+    globalThis.suite.afterAllHooks.push(fn);
+  };
+
+  /**
+   * Declares a `beforeEach` hook that is executed before each test in the current scope.
+   *
+   * **Usage**
+   *
+   * ```js
+   * import { test } from '@microsoft/tui-test';
+   *
+   * test.beforeEach(async ({ terminal }) => {
+   *   terminal.write('setup command\r');
+   * });
+   * ```
+   *
+   * @param fn The hook function to run before each test. Receives `{ terminal }`.
+   */
+  export const beforeEach = (fn: TestFunction) => {
+    globalThis.suite.beforeEachHooks.push(fn);
+  };
+
+  /**
+   * Declares an `afterEach` hook that is executed after each test in the current scope.
+   *
+   * **Usage**
+   *
+   * ```js
+   * import { test } from '@microsoft/tui-test';
+   *
+   * test.afterEach(async ({ terminal }) => {
+   *   // Clean up after each test
+   * });
+   * ```
+   *
+   * @param fn The hook function to run after each test. Receives `{ terminal }`.
+   */
+  export const afterEach = (fn: TestFunction) => {
+    globalThis.suite.afterEachHooks.push(fn);
   };
 }
 
