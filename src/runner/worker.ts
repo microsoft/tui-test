@@ -31,6 +31,8 @@ type WorkerExecutionOptions = {
 };
 
 const importSet = new Set<string>();
+const activeSuites: Suite[] = [];
+const beforeAllExecuted = new Set<Suite>();
 
 const runTest = async (
   testId: string,
@@ -42,7 +44,7 @@ const runTest = async (
   shellReadyTimeout: number
 ) => {
   process.setSourceMapsEnabled(true);
-  globalThis.suite = testSuite;
+  globalThis.suite = Suite.from(testSuite);
   globalThis.tests = globalThis.tests ?? {};
   globalThis.__expectState = { updateSnapshot };
   if (!importSet.has(importPath)) {
@@ -50,6 +52,28 @@ const runTest = async (
     importSet.add(importPath);
   }
   const test = globalThis.tests[testId];
+
+  const ancestry = test.suite.parentSuites();
+  const { exit, enter } = Suite.computeTransition(activeSuites, ancestry);
+
+  const exitHooks = exit.flatMap((s) => s.afterAllHooks);
+  for (const hook of exitHooks) {
+    await Promise.resolve(hook());
+  }
+  activeSuites.length -= exit.length;
+
+  const enterHooks = enter
+    .filter((s) => !beforeAllExecuted.has(s))
+    .flatMap((s) => {
+      beforeAllExecuted.add(s);
+      return s.beforeAllHooks;
+    });
+
+  for (const hook of enterHooks) {
+    await Promise.resolve(hook());
+  }
+  activeSuites.push(...enter);
+
   const { shell, rows, columns, env, program } = test.suite.options ?? {};
   const traceEmitter = new EventEmitter();
   traceEmitter.on("data", (data: string, time: number) =>
@@ -129,13 +153,28 @@ const runTest = async (
     ]);
   }
 
+  const suites = test.suite.parentSuites();
   try {
+    for (const s of suites) {
+      for (const hook of s.beforeEachHooks) {
+        await Promise.resolve(hook({ terminal }));
+      }
+    }
+
     await Promise.resolve(test.testFunction({ terminal }));
   } finally {
     try {
-      terminal.kill();
-    } catch {
-      // terminal can pre-terminate if program is provided
+      for (const s of suites) {
+        for (const hook of s.afterEachHooks) {
+          await Promise.resolve(hook({ terminal }));
+        }
+      }
+    } finally {
+      try {
+        terminal.kill();
+      } catch {
+        // terminal can pre-terminate if program is provided
+      }
     }
   }
 };
@@ -388,6 +427,14 @@ const testWorker = async (
   }
 };
 
+const afterAllWorker = async (): Promise<void> => {
+  const hooks = [...activeSuites].reverse().flatMap((s) => s.afterAllHooks);
+  for (const hook of hooks) {
+    await Promise.resolve(hook());
+  }
+  activeSuites.length = 0;
+};
+
 if (!workerpool.isMainThread) {
   process.on("uncaughtException", () => {
     // prevent worker crashes from unhandled native errors
@@ -397,5 +444,6 @@ if (!workerpool.isMainThread) {
   });
   workerpool.worker({
     testWorker: testWorker,
+    afterAllWorker: afterAllWorker,
   });
 }

@@ -5,7 +5,7 @@ import { glob } from "glob";
 
 import { TestOptions } from "./option.js";
 import { TestConfig, ProjectConfig } from "../config/config.js";
-import type { TestCase } from "./testcase.js";
+import type { TestCase, TestFunction, HookFunction } from "./testcase.js";
 
 type SuiteType = "file" | "describe" | "project" | "root";
 
@@ -13,6 +13,10 @@ export class Suite {
   suites: Suite[] = [];
   tests: TestCase[] = [];
   source?: string;
+  beforeAllHooks: HookFunction[] = [];
+  afterAllHooks: HookFunction[] = [];
+  beforeEachHooks: TestFunction[] = [];
+  afterEachHooks: TestFunction[] = [];
 
   constructor(
     readonly title: string,
@@ -20,6 +24,32 @@ export class Suite {
     public options?: TestOptions,
     public parentSuite?: Suite
   ) {}
+
+  static from(data: Suite): Suite {
+    const suite = new Suite(data.title, data.type, data.options);
+    if (data.parentSuite) {
+      suite.parentSuite = Suite.from(data.parentSuite);
+    }
+    return suite;
+  }
+
+  static computeTransition(
+    activeSuites: Suite[],
+    targetSuites: Suite[]
+  ): { exit: Suite[]; enter: Suite[] } {
+    let commonPrefix = 0;
+    while (
+      commonPrefix < activeSuites.length &&
+      commonPrefix < targetSuites.length &&
+      activeSuites[commonPrefix] === targetSuites[commonPrefix]
+    ) {
+      commonPrefix++;
+    }
+    return {
+      exit: activeSuites.slice(commonPrefix).reverse(),
+      enter: targetSuites.slice(commonPrefix),
+    };
+  }
 
   allTests(): TestCase[] {
     const suitesIterable = [...this.suites];
@@ -30,6 +60,16 @@ export class Suite {
       suitesIterable.push(...(suite?.suites ?? []));
     }
     return tests;
+  }
+
+  parentSuites(): Suite[] {
+    const suites: Suite[] = [this];
+    let current = this.parentSuite;
+    while (current != null) {
+      suites.push(current);
+      current = current.parentSuite;
+    }
+    return suites.reverse();
   }
 
   titlePath(): string[] {

@@ -210,7 +210,8 @@ export declare type TestConfig = {
 
   /**
    * The number of workers to use. Defaults to 50% of the logical cpu cores. If
-   * there are less tests than requested workers, there will be 1 worker used per test.
+   * there are less files than requested workers, there will be 1 worker used per file. 1 worker is
+   * used per file in order to support lifecycle hooks correctly.
    *
    * **Usage**
    *
