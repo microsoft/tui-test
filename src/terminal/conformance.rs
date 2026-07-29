@@ -10,20 +10,34 @@
 //!
 //! Each case becomes a separate `#[test]` in the calling module, so a failure
 //! names the exact part of the contract that broke.
+//!
+//! Assertions here encode the *contract*, not one implementation. Where real
+//! emulators legitimately diverge (reflow when shrinking below content width)
+//! the test pins only the part that is universal and says why it stops short.
 
 /// Generates the conformance tests for one backend. `$make` builds a boxed
 /// emulator from `(cols, rows, scrollback)`.
+///
+/// The body is fully path-qualified because it expands into the caller's
+/// module; it must not collide with whatever that module already imports.
 #[macro_export]
 macro_rules! emulator_conformance_tests {
     ($make:expr) => {
-        #[allow(unused_imports)]
-        use $crate::terminal::cell::{rows_to_strings, Color};
-        #[allow(unused_imports)]
-        use $crate::terminal::emu::Emulator;
-
-        fn conformance_emu(cols: u16, rows: u16, scrollback: usize) -> Box<dyn Emulator> {
-            let make: fn(u16, u16, usize) -> Box<dyn Emulator> = $make;
+        fn conformance_emu(
+            cols: u16,
+            rows: u16,
+            scrollback: usize,
+        ) -> Box<dyn $crate::terminal::emu::Emulator> {
+            let make: fn(u16, u16, usize) -> Box<dyn $crate::terminal::emu::Emulator> = $make;
             make(cols, rows, scrollback)
+        }
+
+        /// Row text with trailing blanks removed, for readable assertions.
+        fn conformance_text(rows: &[Vec<$crate::terminal::cell::EmuCell>]) -> Vec<String> {
+            $crate::terminal::cell::rows_to_strings(rows)
+                .into_iter()
+                .map(|r| r.trim_end().to_string())
+                .collect()
         }
 
         /// The grid is always exactly `rows` x `cols`, regardless of content.
@@ -39,7 +53,21 @@ macro_rules! emulator_conformance_tests {
             assert_eq!(e.size(), (10, 4));
         }
 
+        /// `full_rows` is as rectangular as `viewable_rows`; ragged history
+        /// rows would misalign the boxed snapshot output.
+        #[test]
+        fn conformance_full_rows_are_rectangular() {
+            let mut e = conformance_emu(10, 3, 100);
+            e.process(b"a\r\nbb\r\nccc\r\ndddd\r\neeeee");
+            for row in e.full_rows() {
+                assert_eq!(row.len(), 10, "history rows must be full width too");
+            }
+        }
+
         /// Printable text lands on the grid, and untouched cells are blank.
+        ///
+        /// A blank cell must be *fully* default: `expect --bg` and the SVG
+        /// renderer read color off cells the shell never painted.
         #[test]
         fn conformance_text_and_blank_cells() {
             let mut e = conformance_emu(10, 2, 100);
@@ -49,10 +77,14 @@ macro_rules! emulator_conformance_tests {
             assert_eq!(rows[0][1].ch, "b");
             assert_eq!(rows[0][2].ch, "c");
             assert_eq!(
-                rows[0][3].ch, "",
-                "blank cells must be the empty string, not a space"
+                rows[0][3],
+                $crate::terminal::cell::EmuCell::default(),
+                "an untouched cell must be blank with default colors and no attributes"
             );
-            assert_eq!(rows_to_strings(&rows)[0], "abc       ");
+            assert_eq!(
+                $crate::terminal::cell::rows_to_strings(&rows)[0],
+                "abc       "
+            );
         }
 
         /// CR/LF moves to the next row rather than wrapping text together.
@@ -60,9 +92,55 @@ macro_rules! emulator_conformance_tests {
         fn conformance_newline_moves_row() {
             let mut e = conformance_emu(10, 3, 100);
             e.process(b"one\r\ntwo");
-            let text = rows_to_strings(&e.viewable_rows());
-            assert_eq!(text[0].trim_end(), "one");
-            assert_eq!(text[1].trim_end(), "two");
+            let text = conformance_text(&e.viewable_rows());
+            assert_eq!(text[0], "one");
+            assert_eq!(text[1], "two");
+        }
+
+        /// A bare CR returns to column 0 so later bytes overwrite in place.
+        /// Progress bars and readline redraws depend on this.
+        #[test]
+        fn conformance_carriage_return_overwrites() {
+            let mut e = conformance_emu(10, 2, 100);
+            e.process(b"12345\rab");
+            assert_eq!(conformance_text(&e.viewable_rows())[0], "ab345");
+        }
+
+        /// Backspace moves the cursor back without erasing; the next byte
+        /// overwrites in place.
+        #[test]
+        fn conformance_backspace_moves_cursor() {
+            let mut e = conformance_emu(10, 2, 100);
+            e.process(b"abc\x08X");
+            assert_eq!(conformance_text(&e.viewable_rows())[0], "abX");
+            assert_eq!(e.cursor(), (3, 0));
+        }
+
+        /// Text longer than the row wraps onto the next row. `expect text` and
+        /// `locator::find` flatten the grid, so wrap placement is observable.
+        #[test]
+        fn conformance_autowrap_at_right_margin() {
+            let mut e = conformance_emu(5, 3, 100);
+            e.process(b"abcdefgh");
+            let text = conformance_text(&e.viewable_rows());
+            assert_eq!(text[0], "abcde", "first row fills to the margin");
+            assert_eq!(text[1], "fgh", "the remainder continues on the next row");
+        }
+
+        /// A tab advances the cursor to the next 8-column tab stop.
+        ///
+        /// What a backend leaves *in* the skipped cells is genuinely
+        /// divergent — alacritty stores a literal `\t` there, others store
+        /// blanks — so this pins only cursor advance and landing column,
+        /// which every emulator agrees on.
+        #[test]
+        fn conformance_tab_advances_to_stop() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"a\tb");
+            let rows = e.viewable_rows();
+            assert_eq!(rows[0][0].ch, "a");
+            assert_eq!(rows[0][8].ch, "b", "next glyph lands on the 8-column stop");
+            assert_eq!(e.cursor(), (9, 0), "cursor sits just past the tab stop");
         }
 
         /// Every SGR attribute the cell vocabulary exposes round-trips.
@@ -82,6 +160,7 @@ macro_rules! emulator_conformance_tests {
             assert!(x.strike, "strike");
 
             let y = &rows[0][1];
+            assert_eq!(y.ch, "Y");
             assert!(!y.bold && !y.dim && !y.italic, "SGR 0 must reset");
             assert!(!y.underline && !y.inverse && !y.invisible && !y.strike);
         }
@@ -106,12 +185,24 @@ macro_rules! emulator_conformance_tests {
             e.process(b"\x1b[38;2;10;20;30mT");
             e.process(b"\x1b[0mD");
             let rows = e.viewable_rows();
-            assert_eq!(rows[0][0].fg, Color::Idx(1), "named red is palette index 1");
-            assert_eq!(rows[0][1].fg, Color::Idx(196), "256-color palette index");
-            assert_eq!(rows[0][2].fg, Color::Rgb(10, 20, 30), "24-bit truecolor");
+            assert_eq!(
+                rows[0][0].fg,
+                $crate::terminal::cell::Color::Idx(1),
+                "named red is palette index 1"
+            );
+            assert_eq!(
+                rows[0][1].fg,
+                $crate::terminal::cell::Color::Idx(196),
+                "256-color palette index"
+            );
+            assert_eq!(
+                rows[0][2].fg,
+                $crate::terminal::cell::Color::Rgb(10, 20, 30),
+                "24-bit truecolor"
+            );
             assert_eq!(
                 rows[0][3].fg,
-                Color::Default,
+                $crate::terminal::cell::Color::Default,
                 "reset returns to default, not an index"
             );
         }
@@ -122,8 +213,12 @@ macro_rules! emulator_conformance_tests {
             let mut e = conformance_emu(10, 2, 100);
             e.process(b"\x1b[44mB");
             let cell = e.viewable_rows()[0][0].clone();
-            assert_eq!(cell.bg, Color::Idx(4), "named blue background");
-            assert_eq!(cell.fg, Color::Default);
+            assert_eq!(
+                cell.bg,
+                $crate::terminal::cell::Color::Idx(4),
+                "named blue background"
+            );
+            assert_eq!(cell.fg, $crate::terminal::cell::Color::Default);
         }
 
         /// A double-width char occupies its cell; its spacer reads as blank so
@@ -138,6 +233,19 @@ macro_rules! emulator_conformance_tests {
             assert_eq!(rows[0][2].ch, "a", "next char sits after the spacer");
         }
 
+        /// A multi-byte character split across reads must still decode. The
+        /// reader fills a fixed 8 KiB buffer, so this happens on real output;
+        /// a backend that decoded each chunk independently would corrupt the
+        /// grid here while passing every other case.
+        #[test]
+        fn conformance_split_utf8_sequence() {
+            let mut e = conformance_emu(10, 2, 100);
+            let text = "héllo".as_bytes();
+            e.process(&text[..2]); // splits the two-byte 'é'
+            e.process(&text[2..]);
+            assert_eq!(conformance_text(&e.viewable_rows())[0], "héllo");
+        }
+
         /// Cursor tracks writes and absolute positioning, 0-based as (x, y).
         #[test]
         fn conformance_cursor_position() {
@@ -149,43 +257,75 @@ macro_rules! emulator_conformance_tests {
             assert_eq!(e.cursor(), (4, 2), "CUP is 1-based, cursor() is 0-based");
         }
 
-        /// The cursor never escapes the grid, even when driven past the edge.
+        /// Positioning past the edge clamps to the last cell, rather than
+        /// wrapping, saturating to zero, or escaping the grid.
         #[test]
         fn conformance_cursor_clamped_to_grid() {
             let mut e = conformance_emu(10, 4, 100);
             e.process(b"\x1b[999;999H");
-            let (x, y) = e.cursor();
-            assert!(x < 10, "cursor x {x} must stay inside 10 cols");
-            assert!(y < 4, "cursor y {y} must stay inside 4 rows");
+            assert_eq!(
+                e.cursor(),
+                (9, 3),
+                "out-of-range CUP clamps to the bottom-right cell"
+            );
         }
 
-        /// Resizing updates the reported size and the grid shape.
+        /// Growing the terminal updates the reported size and keeps content.
         #[test]
-        fn conformance_resize() {
+        fn conformance_resize_grow_preserves_content() {
             let mut e = conformance_emu(10, 4, 100);
             e.process(b"hello");
             e.resize(20, 6);
+
             assert_eq!(e.size(), (20, 6));
             let rows = e.viewable_rows();
             assert_eq!(rows.len(), 6);
             assert_eq!(rows[0].len(), 20);
+            assert_eq!(
+                conformance_text(&rows)[0],
+                "hello",
+                "growing must not discard existing content"
+            );
         }
 
-        /// Scrolled-off lines leave the viewport but stay in `full_rows`.
+        /// Shrinking reports the new size and keeps content that still fits.
+        ///
+        /// Reflow of content wider than the new width legitimately differs
+        /// between emulators, so this pins only the narrow, universal case.
         #[test]
-        fn conformance_scrollback_retained() {
+        fn conformance_resize_shrink_keeps_fitting_content() {
+            let mut e = conformance_emu(20, 6, 100);
+            e.process(b"hey");
+            e.resize(10, 4);
+
+            assert_eq!(e.size(), (10, 4));
+            let rows = e.viewable_rows();
+            assert_eq!(rows.len(), 4);
+            assert_eq!(rows[0].len(), 10);
+            assert!(
+                conformance_text(&rows).iter().any(|r| r == "hey"),
+                "content narrower than the new width must survive shrinking"
+            );
+        }
+
+        /// Scrolled-off lines leave the viewport but stay in `full_rows`, and
+        /// `full_rows` ends with exactly the viewport. `grid(full = true)` in
+        /// the daemon depends on that ordering.
+        #[test]
+        fn conformance_scrollback_retained_and_ordered() {
             let mut e = conformance_emu(10, 3, 100);
             e.process(b"L1\r\nL2\r\nL3\r\nL4\r\nL5\r\nL6");
 
-            let view = rows_to_strings(&e.viewable_rows());
-            assert_eq!(view.len(), 3);
-            assert_eq!(view[2].trim_end(), "L6", "viewport shows the newest line");
+            let view = e.viewable_rows();
+            let view_text = conformance_text(&view);
+            assert_eq!(view_text.len(), 3);
+            assert_eq!(view_text[2], "L6", "viewport shows the newest line");
             assert!(
-                !view.iter().any(|r| r.trim_end() == "L1"),
+                !view_text.iter().any(|r| r == "L1"),
                 "L1 must have scrolled out of the viewport"
             );
 
-            let full = rows_to_strings(&e.full_rows());
+            let full = e.full_rows();
             assert!(
                 full.len() > view.len(),
                 "full_rows must include scrollback: {} vs {}",
@@ -193,49 +333,69 @@ macro_rules! emulator_conformance_tests {
                 view.len()
             );
             assert!(
-                full.iter().any(|r| r.trim_end() == "L1"),
+                conformance_text(&full).iter().any(|r| r == "L1"),
                 "scrolled-off L1 must survive in full_rows"
             );
             assert_eq!(
-                full.last().map(|r| r.trim_end().to_string()),
-                Some("L6".to_string()),
-                "full_rows ends with the newest line (history first, screen last)"
+                &full[full.len() - view.len()..],
+                &view[..],
+                "full_rows must be history followed by exactly the viewport"
             );
         }
 
-        /// With no scrolling, history is empty and both views agree.
+        /// With no scrolling, history is empty and `full_rows` *is* the
+        /// viewport.
         #[test]
         fn conformance_full_rows_without_history() {
             let mut e = conformance_emu(10, 4, 100);
             e.process(b"only");
             assert_eq!(
-                e.full_rows().len(),
-                e.viewable_rows().len(),
-                "no scroll means no extra history rows"
+                e.full_rows(),
+                e.viewable_rows(),
+                "no scroll means full_rows matches the viewport exactly"
+            );
+        }
+
+        /// The scrollback limit is honored. A backend that ignores it grows
+        /// without bound in a long-lived daemon session.
+        #[test]
+        fn conformance_scrollback_is_bounded() {
+            let rows = 3u16;
+            let scrollback = 2usize;
+            let mut e = conformance_emu(10, rows, scrollback);
+            for i in 0..20 {
+                e.process(format!("line{i}\r\n").as_bytes());
+            }
+            let total = e.full_rows().len();
+            assert!(
+                total >= rows as usize,
+                "full_rows ({total}) must still contain the viewport"
+            );
+            assert!(
+                total <= rows as usize + scrollback + 1,
+                "full_rows ({total}) must respect the {scrollback}-row scrollback limit"
             );
         }
 
         /// Queries that require an answer are queued for the PTY, and draining
-        /// is destructive so replies are not sent twice.
+        /// is destructive so replies are not sent twice. The reply must be
+        /// available as soon as `process` returns: a backend that parsed
+        /// asynchronously would hang every program that probes the terminal.
         #[test]
         fn conformance_pty_write_back() {
             let mut e = conformance_emu(10, 4, 100);
-            assert!(
-                e.take_pending_writes().is_empty(),
-                "nothing pending before any query"
-            );
+            // A backend may queue its own startup handshake; only the reply to
+            // our query matters.
+            let _ = e.take_pending_writes();
 
-            // Device Status Report: the terminal must answer with a position.
-            e.process(b"\x1b[6n");
+            // Device Status Report: the terminal must answer with the cursor
+            // position, 1-based, as CSI <row> ; <col> R.
+            e.process(b"\x1b[3;5H\x1b[6n");
             let reply = e.take_pending_writes();
-            assert!(
-                !reply.is_empty(),
-                "DSR must produce a reply, or programs will hang waiting"
-            );
-            assert!(
-                reply.starts_with(b"\x1b["),
-                "reply should be a CSI sequence, got {:?}",
-                String::from_utf8_lossy(&reply)
+            assert_eq!(
+                String::from_utf8_lossy(&reply),
+                "\x1b[3;5R",
+                "DSR must report the cursor position, or programs hang waiting"
             );
             assert!(
                 e.take_pending_writes().is_empty(),
@@ -249,28 +409,46 @@ macro_rules! emulator_conformance_tests {
             let mut e = conformance_emu(10, 3, 100);
             e.process(b"primary");
             e.process(b"\x1b[?1049h");
-            let alt = rows_to_strings(&e.viewable_rows());
+            let alt = conformance_text(&e.viewable_rows());
             assert!(
                 !alt.iter().any(|r| r.contains("primary")),
                 "alt screen must start clear"
             );
 
             e.process(b"\x1b[?1049l");
-            let back = rows_to_strings(&e.viewable_rows());
+            let back = conformance_text(&e.viewable_rows());
             assert!(
                 back.iter().any(|r| r.contains("primary")),
                 "leaving alt screen restores primary content"
             );
         }
 
-        /// Erase sequences clear cells back to blank.
+        /// Erase resets cells to fully default, not merely to a space.
         #[test]
         fn conformance_erase_clears_cells() {
             let mut e = conformance_emu(10, 2, 100);
             e.process(b"abcdef");
             e.process(b"\x1b[H\x1b[2J");
-            let text = rows_to_strings(&e.viewable_rows());
-            assert_eq!(text[0], "          ", "ED 2 clears the screen");
+            for (x, cell) in e.viewable_rows()[0].iter().enumerate() {
+                assert_eq!(
+                    cell,
+                    &$crate::terminal::cell::EmuCell::default(),
+                    "ED 2 must reset cell {x} to a default cell"
+                );
+            }
+        }
+
+        /// Erase to end of line clears from the cursor rightward only.
+        #[test]
+        fn conformance_erase_line_from_cursor() {
+            let mut e = conformance_emu(10, 2, 100);
+            e.process(b"abcdef");
+            e.process(b"\x1b[1;4H\x1b[K");
+            assert_eq!(
+                conformance_text(&e.viewable_rows())[0],
+                "abc",
+                "EL clears from the cursor to end of line, keeping the prefix"
+            );
         }
 
         /// Byte-split escape sequences still parse; PTY reads chunk arbitrarily.
@@ -282,7 +460,7 @@ macro_rules! emulator_conformance_tests {
             e.process(b"R");
             assert_eq!(
                 e.viewable_rows()[0][0].fg,
-                Color::Idx(1),
+                $crate::terminal::cell::Color::Idx(1),
                 "a sequence split across process() calls must still apply"
             );
         }
