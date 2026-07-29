@@ -11,9 +11,18 @@ use compact_str::CompactString;
 /// The 16 themeable palette slots (ANSI 0-15).
 ///
 /// Split out from [`Color::Idx`] by *numeric range*, not by how the escape
-/// sequence spelled it: backends disagree on spelling (alacritty has a `Named`
-/// variant, libghostty and xterm.js only carry palette indices) but all agree
-/// that 0-15 are the slots a theme may override.
+/// sequence spelled it, so `SGR 31` and `SGR 38;5;1` both land here.
+///
+/// The backends do not agree on whether that spelling survives parsing:
+/// alacritty keeps it (`Named` vs `Indexed`) and so does xterm.js (`CM_P16`
+/// vs `CM_P256`), but ghostty flattens both into one `.palette` value. A model
+/// that preserved the distinction would therefore be unimplementable on
+/// ghostty. The usual reason to want it, painting bold text bright, does not
+/// need it either: ghostty keys that off the index (`bold && idx < 8 =>
+/// palette[idx + 8]`), which applies to `38;5;1` just as much as to `31`.
+///
+/// What all three do agree on is that 0-15 are the slots a theme may override,
+/// which is the only distinction any consumer here acts on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum NamedColor {
