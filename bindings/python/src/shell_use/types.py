@@ -10,6 +10,8 @@ Color = Union[str, int]
 class Cell:
     x: int
     y: int
+    #: The cell's grapheme; ``" "`` when blank, ``""`` for the second column
+    #: of a double-width character.
     char: str
     fg: Color
     bg: Color

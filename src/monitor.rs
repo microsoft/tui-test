@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::terminal::cell::{Color, EmuCell};
+use crate::terminal::cell::{Attrs, Color, EmuCell, Underline, UnderlineStyle};
 
 const BORDER: &str = "\x1b[38;5;240m";
 const RESET: &str = "\x1b[0m";
@@ -80,23 +80,16 @@ fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize) {
         let row = f.grid.get(y);
         let mut last: Option<Style> = None;
         for x in 0..inner_w {
-            let mut cell = row
-                .and_then(|r| r.get(x))
-                .cloned()
-                .unwrap_or_else(blank_cell);
+            let mut cell = row.and_then(|r| r.get(x)).cloned().unwrap_or_default();
             if show_cursor && x as u16 == cx && y as u16 == cy {
-                cell.inverse = !cell.inverse;
+                cell.attrs.toggle(Attrs::INVERSE);
             }
             let style = Style::from(&cell);
             if last.as_ref() != Some(&style) {
                 out.push_str(&style.sgr());
                 last = Some(style);
             }
-            if cell.ch.is_empty() {
-                out.push(' ');
-            } else {
-                out.push_str(&cell.ch);
-            }
+            out.push_str(&cell.ch);
         }
         out.push_str(RESET);
         out.push_str(BORDER);
@@ -152,15 +145,10 @@ fn border_line(out: &mut String, left: char, right: char, title: &str, inner_w: 
 
 #[derive(PartialEq, Clone)]
 struct Style {
-    fg: Color,
-    bg: Color,
-    bold: bool,
-    dim: bool,
-    italic: bool,
-    underline: bool,
-    inverse: bool,
-    invisible: bool,
-    strike: bool,
+    fg: Option<Color>,
+    bg: Option<Color>,
+    underline: Option<Underline>,
+    attrs: Attrs,
 }
 
 impl Style {
@@ -168,30 +156,40 @@ impl Style {
         Style {
             fg: c.fg,
             bg: c.bg,
-            bold: c.bold,
-            dim: c.dim,
-            italic: c.italic,
             underline: c.underline,
-            inverse: c.inverse,
-            invisible: c.invisible,
-            strike: c.strike,
+            attrs: c.attrs,
         }
     }
 
     fn sgr(&self) -> String {
         let mut s = String::from("\x1b[0");
-        for (on, code) in [
-            (self.bold, "1"),
-            (self.dim, "2"),
-            (self.italic, "3"),
-            (self.underline, "4"),
-            (self.inverse, "7"),
-            (self.invisible, "8"),
-            (self.strike, "9"),
+        for (attr, code) in [
+            (Attrs::BOLD, "1"),
+            (Attrs::DIM, "2"),
+            (Attrs::ITALIC, "3"),
+            (Attrs::BLINK, "5"),
+            (Attrs::INVERSE, "7"),
+            (Attrs::INVISIBLE, "8"),
+            (Attrs::STRIKE, "9"),
         ] {
-            if on {
+            if self.attrs.contains(attr) {
                 s.push(';');
                 s.push_str(code);
+            }
+        }
+        if let Some(u) = self.underline {
+            let sub = match u.style {
+                UnderlineStyle::Single => 1,
+                UnderlineStyle::Double => 2,
+                UnderlineStyle::Curly => 3,
+                UnderlineStyle::Dotted => 4,
+                UnderlineStyle::Dashed => 5,
+            };
+            s.push_str(&format!(";4:{sub}"));
+            match u.color {
+                Some(Color::Rgb(r, g, b)) => s.push_str(&format!(";58;2::{r}:{g}:{b}")),
+                Some(c) => s.push_str(&format!(";58;5;{}", c.to_index())),
+                None => {}
             }
         }
         push_color(&mut s, self.fg, true);
@@ -201,27 +199,12 @@ impl Style {
     }
 }
 
-fn push_color(s: &mut String, color: Color, fg: bool) {
+fn push_color(s: &mut String, color: Option<Color>, fg: bool) {
     let base = if fg { 38 } else { 48 };
     match color {
-        Color::Default => {}
-        Color::Idx(i) => s.push_str(&format!(";{base};5;{i}")),
-        Color::Rgb(r, g, b) => s.push_str(&format!(";{base};2;{r};{g};{b}")),
-    }
-}
-
-fn blank_cell() -> EmuCell {
-    EmuCell {
-        ch: String::new(),
-        fg: Color::Default,
-        bg: Color::Default,
-        bold: false,
-        dim: false,
-        italic: false,
-        underline: false,
-        inverse: false,
-        invisible: false,
-        strike: false,
+        None => {}
+        Some(Color::Rgb(r, g, b)) => s.push_str(&format!(";{base};2;{r};{g};{b}")),
+        Some(c) => s.push_str(&format!(";{base};5;{}", c.to_index())),
     }
 }
 
@@ -367,8 +350,8 @@ mod tests {
 
     fn cell(ch: &str) -> EmuCell {
         EmuCell {
-            ch: ch.to_string(),
-            ..blank_cell()
+            ch: ch.into(),
+            ..EmuCell::blank()
         }
     }
 

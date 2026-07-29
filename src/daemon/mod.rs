@@ -20,7 +20,7 @@ use crate::input::{keys, mouse};
 use crate::ipc;
 use crate::monitor;
 use crate::protocol::{ErrorKind, GetField, MouseAction, Request, Response};
-use crate::terminal::cell::{rows_to_strings, Color, EmuCell};
+use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::locator::{self, Pattern};
 use logger::Logger;
 use session::{Session, TermState};
@@ -433,13 +433,13 @@ fn cells(s: &Session, x: u16, y: u16, w: u16, h: u16) -> Response {
                 out.push(json!({
                     "x": col,
                     "y": row,
-                    "char": if cell.ch.is_empty() { " ".to_string() } else { cell.ch.clone() },
+                    "char": cell.ch.as_str(),
                     "fg": color_json(cell.fg),
                     "bg": color_json(cell.bg),
-                    "bold": cell.bold,
-                    "italic": cell.italic,
-                    "underline": cell.underline,
-                    "inverse": cell.inverse,
+                    "bold": cell.has(Attrs::BOLD),
+                    "italic": cell.has(Attrs::ITALIC),
+                    "underline": cell.underline.is_some(),
+                    "inverse": cell.has(Attrs::INVERSE),
                 }));
             }
         }
@@ -447,11 +447,14 @@ fn cells(s: &Session, x: u16, y: u16, w: u16, h: u16) -> Response {
     Response::with(json!({ "cells": out }))
 }
 
-fn color_json(c: Color) -> serde_json::Value {
+/// Wire form: `"default"`, a 256-color index, or `"#rrggbb"`. Named and
+/// indexed colors both serialize to their palette index, so the split between
+/// them stays internal and the language bindings are unaffected.
+fn color_json(c: Option<Color>) -> serde_json::Value {
     match c {
-        Color::Default => json!("default"),
-        Color::Idx(i) => json!(i),
-        Color::Rgb(r, g, b) => json!(format!("#{r:02x}{g:02x}{b:02x}")),
+        None => json!("default"),
+        Some(Color::Rgb(r, g, b)) => json!(format!("#{r:02x}{g:02x}{b:02x}")),
+        Some(c) => json!(c.to_index()),
     }
 }
 
@@ -712,11 +715,7 @@ fn check_colors(
                     if not { "absent" } else { "present" },
                     expected.describe(),
                     color::describe_cell(c.cell.fg, &expected),
-                    if c.cell.ch.is_empty() {
-                        " "
-                    } else {
-                        &c.cell.ch
-                    },
+                    c.cell.ch,
                     c.x,
                     c.y
                 ));
@@ -732,11 +731,7 @@ fn check_colors(
                     if not { "absent" } else { "present" },
                     expected.describe(),
                     color::describe_cell(c.cell.bg, &expected),
-                    if c.cell.ch.is_empty() {
-                        " "
-                    } else {
-                        &c.cell.ch
-                    },
+                    c.cell.ch,
                     c.x,
                     c.y
                 ));

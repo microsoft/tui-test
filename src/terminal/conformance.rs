@@ -150,29 +150,57 @@ macro_rules! emulator_conformance_tests {
             // bold, dim, italic, underline, inverse, hidden, strikethrough
             e.process(b"\x1b[1;2;3;4;7;8;9mX\x1b[0mY");
             let rows = e.viewable_rows();
+            use $crate::terminal::cell::Attrs;
+            let set = Attrs::BOLD
+                | Attrs::DIM
+                | Attrs::ITALIC
+                | Attrs::INVERSE
+                | Attrs::INVISIBLE
+                | Attrs::STRIKE;
+
             let x = &rows[0][0];
-            assert!(x.bold, "bold");
-            assert!(x.dim, "dim");
-            assert!(x.italic, "italic");
-            assert!(x.underline, "underline");
-            assert!(x.inverse, "inverse");
-            assert!(x.invisible, "invisible");
-            assert!(x.strike, "strike");
+            assert_eq!(x.attrs, set, "every attribute in the SGR must be set");
+            assert!(x.underline.is_some(), "underline");
 
             let y = &rows[0][1];
             assert_eq!(y.ch, "Y");
-            assert!(!y.bold && !y.dim && !y.italic, "SGR 0 must reset");
-            assert!(!y.underline && !y.inverse && !y.invisible && !y.strike);
+            assert_eq!(y.attrs, Attrs::empty(), "SGR 0 must reset");
+            assert!(y.underline.is_none(), "SGR 0 must clear underline");
         }
 
-        /// Extended underline styles still report as `underline`.
+        /// Each extended underline reports its own style, not a flat boolean.
         #[test]
-        fn conformance_extended_underline_is_underline() {
+        fn conformance_underline_styles() {
+            use $crate::terminal::cell::UnderlineStyle::*;
+            for (seq, want) in [
+                (&b"\x1b[4m"[..], Single),
+                (&b"\x1b[4:2m"[..], Double),
+                (&b"\x1b[4:3m"[..], Curly),
+                (&b"\x1b[4:4m"[..], Dotted),
+                (&b"\x1b[4:5m"[..], Dashed),
+            ] {
+                let mut e = conformance_emu(10, 2, 100);
+                e.process(seq);
+                e.process(b"U");
+                let u = e.viewable_rows()[0][0]
+                    .underline
+                    .unwrap_or_else(|| panic!("{seq:?} must underline"));
+                assert_eq!(u.style, want, "{seq:?}");
+                assert_eq!(u.color, None, "no SGR 58 means it follows the fg");
+            }
+        }
+
+        /// SGR 58 colors the underline independently of the text.
+        #[test]
+        fn conformance_underline_color() {
             let mut e = conformance_emu(10, 2, 100);
-            e.process(b"\x1b[4:3mU");
-            assert!(
-                e.viewable_rows()[0][0].underline,
-                "curly underline must map to underline"
+            e.process(b"\x1b[31;4;58;5;33mU");
+            let cell = e.viewable_rows()[0][0].clone();
+            assert_eq!(cell.fg, Some($crate::terminal::cell::Color::from_index(1)));
+            assert_eq!(
+                cell.underline.and_then(|u| u.color),
+                Some($crate::terminal::cell::Color::from_index(33)),
+                "underline keeps its own color"
             );
         }
 
@@ -187,24 +215,22 @@ macro_rules! emulator_conformance_tests {
             let rows = e.viewable_rows();
             assert_eq!(
                 rows[0][0].fg,
-                $crate::terminal::cell::Color::Idx(1),
-                "named red is palette index 1"
+                Some($crate::terminal::cell::Color::Named(
+                    $crate::terminal::cell::NamedColor::Red
+                )),
+                "SGR 31 is the themeable red slot, not a fixed index"
             );
             assert_eq!(
                 rows[0][1].fg,
-                $crate::terminal::cell::Color::Idx(196),
-                "256-color palette index"
+                Some($crate::terminal::cell::Color::Idx(196)),
+                "256-color palette index stays an index"
             );
             assert_eq!(
                 rows[0][2].fg,
-                $crate::terminal::cell::Color::Rgb(10, 20, 30),
+                Some($crate::terminal::cell::Color::Rgb(10, 20, 30)),
                 "24-bit truecolor"
             );
-            assert_eq!(
-                rows[0][3].fg,
-                $crate::terminal::cell::Color::Default,
-                "reset returns to default, not an index"
-            );
+            assert_eq!(rows[0][3].fg, None, "reset returns to the terminal default");
         }
 
         /// Background colors are tracked independently of foreground.
@@ -215,22 +241,35 @@ macro_rules! emulator_conformance_tests {
             let cell = e.viewable_rows()[0][0].clone();
             assert_eq!(
                 cell.bg,
-                $crate::terminal::cell::Color::Idx(4),
+                Some($crate::terminal::cell::Color::Named(
+                    $crate::terminal::cell::NamedColor::Blue
+                )),
                 "named blue background"
             );
-            assert_eq!(cell.fg, $crate::terminal::cell::Color::Default);
+            assert_eq!(cell.fg, None);
         }
 
-        /// A double-width char occupies its cell; its spacer reads as blank so
-        /// text extraction keeps column alignment.
+        /// A double-width char owns both its columns: the second holds the
+        /// continuation marker, distinct from a blank cell's space, so text
+        /// extraction does not invent a column that the terminal never drew.
         #[test]
-        fn conformance_wide_char_spacer_is_blank() {
+        fn conformance_wide_char_continuation() {
             let mut e = conformance_emu(10, 2, 100);
             e.process("你a".as_bytes());
             let rows = e.viewable_rows();
             assert_eq!(rows[0][0].ch, "你");
-            assert_eq!(rows[0][1].ch, "", "wide-char spacer must be blank");
-            assert_eq!(rows[0][2].ch, "a", "next char sits after the spacer");
+            assert_eq!(
+                rows[0][1].ch,
+                $crate::terminal::cell::CONTINUATION,
+                "the second column of a wide char is a continuation, not a blank"
+            );
+            assert_eq!(rows[0][2].ch, "a", "next char sits after the continuation");
+            assert_eq!(rows[0][3].ch, " ", "an untouched cell is a blank space");
+            assert_eq!(
+                $crate::terminal::cell::rows_to_strings(&rows)[0],
+                "你a       ",
+                "the row is 10 columns wide, not 11"
+            );
         }
 
         /// A multi-byte character split across reads must still decode. The
@@ -460,7 +499,7 @@ macro_rules! emulator_conformance_tests {
             e.process(b"R");
             assert_eq!(
                 e.viewable_rows()[0][0].fg,
-                $crate::terminal::cell::Color::Idx(1),
+                Some($crate::terminal::cell::Color::from_index(1)),
                 "a sequence split across process() calls must still apply"
             );
         }

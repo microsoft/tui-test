@@ -53,43 +53,39 @@ fn parse_hex(hex: &str) -> anyhow::Result<(u8, u8, u8)> {
 }
 
 /// Does a cell's resolved color match the expected color?
-pub fn matches(cell: Color, expected: &Expected) -> bool {
+///
+/// A cell using the terminal default never matches: the default is whatever
+/// the viewer's theme picks, so no concrete value can be claimed for it.
+pub fn matches(cell: Option<Color>, expected: &Expected) -> bool {
+    let Some(cell) = cell else {
+        return false;
+    };
     match expected {
-        Expected::Ansi256(n) => match cell {
-            Color::Default => *n == 0,
-            Color::Idx(i) => i == *n,
-            Color::Rgb(r, g, b) => rgb_to_ansi256(r, g, b) == *n,
-        },
+        Expected::Ansi256(n) => cell.to_index() == *n,
         Expected::Hex(er, eg, eb) | Expected::Rgb(er, eg, eb) => {
-            let (er, eg, eb) = (*er, *eg, *eb);
-            match cell {
-                Color::Default => er == 0 && eg == 0 && eb == 0,
-                Color::Idx(i) => {
-                    let (r, g, b) = ansi256_to_rgb(i);
-                    r == er && g == eg && b == eb
-                }
-                Color::Rgb(r, g, b) => r == er && g == eg && b == eb,
-            }
+            let rgb = match cell {
+                Color::Rgb(r, g, b) => (r, g, b),
+                c => ansi256_to_rgb(c.to_index()),
+            };
+            rgb == (*er, *eg, *eb)
         }
     }
 }
 
 /// Render a cell's color in the same space as the expected value, for messages.
-pub fn describe_cell(cell: Color, expected: &Expected) -> String {
+pub fn describe_cell(cell: Option<Color>, expected: &Expected) -> String {
+    let Some(cell) = cell else {
+        return "default".to_string();
+    };
     match expected {
-        Expected::Ansi256(_) => match cell {
-            Color::Default => "0".to_string(),
-            Color::Idx(i) => i.to_string(),
-            Color::Rgb(r, g, b) => rgb_to_ansi256(r, g, b).to_string(),
-        },
-        _ => match cell {
-            Color::Default => "#000000".to_string(),
-            Color::Idx(i) => {
-                let (r, g, b) = ansi256_to_rgb(i);
-                format!("#{r:02x}{g:02x}{b:02x}")
-            }
-            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-        },
+        Expected::Ansi256(_) => cell.to_index().to_string(),
+        _ => {
+            let (r, g, b) = match cell {
+                Color::Rgb(r, g, b) => (r, g, b),
+                c => ansi256_to_rgb(c.to_index()),
+            };
+            format!("#{r:02x}{g:02x}{b:02x}")
+        }
     }
 }
 
@@ -181,10 +177,23 @@ mod tests {
 
     #[test]
     fn matches_palette_and_default() {
-        assert!(matches(Color::Idx(9), &Expected::Ansi256(9)));
-        assert!(!matches(Color::Idx(2), &Expected::Ansi256(9)));
-        assert!(matches(Color::Default, &Expected::Ansi256(0)));
-        assert!(matches(Color::Rgb(255, 0, 0), &Expected::Rgb(255, 0, 0)));
+        let idx = |i| Some(Color::from_index(i));
+        assert!(matches(idx(9), &Expected::Ansi256(9)));
+        assert!(!matches(idx(2), &Expected::Ansi256(9)));
+        assert!(matches(idx(196), &Expected::Ansi256(196)));
+        assert!(matches(
+            Some(Color::Rgb(255, 0, 0)),
+            &Expected::Rgb(255, 0, 0)
+        ));
+    }
+
+    /// A default-colored cell used to match `--fg 0`, claiming it was black
+    /// when the theme actually paints it light gray.
+    #[test]
+    fn default_color_matches_nothing() {
+        assert!(!matches(None, &Expected::Ansi256(0)));
+        assert!(!matches(None, &Expected::Hex(0, 0, 0)));
+        assert_eq!(describe_cell(None, &Expected::Ansi256(0)), "default");
     }
 
     #[test]

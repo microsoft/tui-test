@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
-use super::super::terminal::cell::{Color, EmuCell};
+use super::super::terminal::cell::{Attrs, Color, EmuCell};
 
 pub enum SnapshotStatus {
     Passed,
@@ -27,11 +27,11 @@ fn snapshot_path(base: &Path, name: &str) -> PathBuf {
     snapshot_dir(base).join(format!("{}.snap", sanitize(name)))
 }
 
-fn color_value(c: Color) -> Value {
+fn color_value(c: Option<Color>) -> Value {
     match c {
-        Color::Default => Value::String("default".to_string()),
-        Color::Idx(i) => json!(i),
-        Color::Rgb(r, g, b) => Value::String(format!("#{r:02x}{g:02x}{b:02x}")),
+        None => Value::String("default".to_string()),
+        Some(Color::Rgb(r, g, b)) => Value::String(format!("#{r:02x}{g:02x}{b:02x}")),
+        Some(c) => json!(c.to_index()),
     }
 }
 
@@ -43,43 +43,27 @@ fn shift(prev: &EmuCell, cur: &EmuCell) -> Map<String, Value> {
     if prev.bg != cur.bg {
         m.insert("bg".into(), color_value(cur.bg));
     }
-    if prev.bold != cur.bold {
-        m.insert("bold".into(), json!(cur.bold));
+    for (attr, key) in [
+        (Attrs::BOLD, "bold"),
+        (Attrs::DIM, "dim"),
+        (Attrs::ITALIC, "italic"),
+        (Attrs::INVERSE, "inverse"),
+        (Attrs::INVISIBLE, "invisible"),
+        (Attrs::STRIKE, "strike"),
+        (Attrs::BLINK, "blink"),
+    ] {
+        if prev.has(attr) != cur.has(attr) {
+            m.insert(key.into(), json!(cur.has(attr)));
+        }
     }
-    if prev.dim != cur.dim {
-        m.insert("dim".into(), json!(cur.dim));
-    }
-    if prev.italic != cur.italic {
-        m.insert("italic".into(), json!(cur.italic));
-    }
-    if prev.underline != cur.underline {
-        m.insert("underline".into(), json!(cur.underline));
-    }
-    if prev.inverse != cur.inverse {
-        m.insert("inverse".into(), json!(cur.inverse));
-    }
-    if prev.invisible != cur.invisible {
-        m.insert("invisible".into(), json!(cur.invisible));
-    }
-    if prev.strike != cur.strike {
-        m.insert("strike".into(), json!(cur.strike));
+    if prev.underline.is_some() != cur.underline.is_some() {
+        m.insert("underline".into(), json!(cur.underline.is_some()));
     }
     m
 }
 
 fn baseline() -> EmuCell {
-    EmuCell {
-        ch: String::new(),
-        fg: Color::Default,
-        bg: Color::Default,
-        bold: false,
-        dim: false,
-        italic: false,
-        underline: false,
-        inverse: false,
-        invisible: false,
-        strike: false,
-    }
+    EmuCell::blank()
 }
 
 /// Serialize a grid into a boxed text view plus (optionally) a color shift map.

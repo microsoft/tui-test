@@ -24,6 +24,7 @@ export interface Size {
 export interface Cell {
   x: number;
   y: number;
+  /** The cell's grapheme; `" "` when blank, `""` for the second column of a double-width character. */
   char: string;
   fg: Color;
   bg: Color;

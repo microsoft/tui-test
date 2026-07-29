@@ -208,20 +208,10 @@ fn is_powerline_separator(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::cell::Color;
-
     fn cell(ch: &str) -> EmuCell {
         EmuCell {
-            ch: ch.to_string(),
-            fg: Color::Default,
-            bg: Color::Default,
-            bold: false,
-            dim: false,
-            italic: false,
-            underline: false,
-            inverse: false,
-            invisible: false,
-            strike: false,
+            ch: ch.into(),
+            ..EmuCell::blank()
         }
     }
 

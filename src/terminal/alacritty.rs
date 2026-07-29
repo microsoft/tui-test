@@ -13,46 +13,100 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config as AlacConfig, Term};
 use alacritty_terminal::vte::ansi;
 
-use crate::terminal::cell::{Color, EmuCell};
+use compact_str::CompactString;
+
+use crate::terminal::cell::{Attrs, Color, EmuCell, Underline, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::Emulator;
 
-fn color_from_alac(c: ansi::Color) -> Color {
+/// Alacritty's palette colors arrive either as a `Named` variant or an index;
+/// both funnel through [`Color::from_index`] so a given slot always yields the
+/// same value. `Foreground`/`Background` are the terminal defaults, and every
+/// other `NamedColor` (`Cursor`, the `Dim*` and `Bright*` aliases) is a UI role
+/// with no cell representation, so it falls back to the default too.
+fn color_from_alac(c: ansi::Color) -> Option<Color> {
     match c {
         ansi::Color::Named(named) => match named {
-            ansi::NamedColor::Foreground | ansi::NamedColor::Background => Color::Default,
-            other => Color::Idx(other as u8),
+            ansi::NamedColor::Black
+            | ansi::NamedColor::Red
+            | ansi::NamedColor::Green
+            | ansi::NamedColor::Yellow
+            | ansi::NamedColor::Blue
+            | ansi::NamedColor::Magenta
+            | ansi::NamedColor::Cyan
+            | ansi::NamedColor::White
+            | ansi::NamedColor::BrightBlack
+            | ansi::NamedColor::BrightRed
+            | ansi::NamedColor::BrightGreen
+            | ansi::NamedColor::BrightYellow
+            | ansi::NamedColor::BrightBlue
+            | ansi::NamedColor::BrightMagenta
+            | ansi::NamedColor::BrightCyan
+            | ansi::NamedColor::BrightWhite => Some(Color::from_index(named as u8)),
+            _ => None,
         },
-        ansi::Color::Spec(rgb) => Color::Rgb(rgb.r, rgb.g, rgb.b),
-        ansi::Color::Indexed(i) => Color::Idx(i),
+        ansi::Color::Spec(rgb) => Some(Color::Rgb(rgb.r, rgb.g, rgb.b)),
+        ansi::Color::Indexed(i) => Some(Color::from_index(i)),
     }
+}
+
+fn underline_from_alac(c: &alacritty_terminal::term::cell::Cell) -> Option<Underline> {
+    let flags = c.flags;
+    // Ordered widest-to-narrowest: alacritty clears the other underline bits on
+    // each SGR, so at most one is ever set.
+    let style = if flags.contains(AlacFlags::DOUBLE_UNDERLINE) {
+        UnderlineStyle::Double
+    } else if flags.contains(AlacFlags::UNDERCURL) {
+        UnderlineStyle::Curly
+    } else if flags.contains(AlacFlags::DOTTED_UNDERLINE) {
+        UnderlineStyle::Dotted
+    } else if flags.contains(AlacFlags::DASHED_UNDERLINE) {
+        UnderlineStyle::Dashed
+    } else if flags.contains(AlacFlags::UNDERLINE) {
+        UnderlineStyle::Single
+    } else {
+        return None;
+    };
+    Some(Underline {
+        style,
+        color: c.underline_color().and_then(color_from_alac),
+    })
 }
 
 fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
     let flags = c.flags;
     let spacer = flags.contains(AlacFlags::WIDE_CHAR_SPACER)
         || flags.contains(AlacFlags::LEADING_WIDE_CHAR_SPACER);
-    let ch = if spacer || (c.c == ' ' && !flags.contains(AlacFlags::WIDE_CHAR)) {
-        String::new()
+    let ch = if spacer {
+        CompactString::const_new(CONTINUATION)
     } else {
-        c.c.to_string()
+        let mut s = CompactString::from(c.c.to_string());
+        for zw in c.zerowidth().unwrap_or(&[]) {
+            s.push(*zw);
+        }
+        s
     };
+
+    let mut attrs = Attrs::empty();
+    for (flag, attr) in [
+        (AlacFlags::BOLD, Attrs::BOLD),
+        (AlacFlags::DIM, Attrs::DIM),
+        (AlacFlags::ITALIC, Attrs::ITALIC),
+        (AlacFlags::INVERSE, Attrs::INVERSE),
+        (AlacFlags::HIDDEN, Attrs::INVISIBLE),
+        (AlacFlags::STRIKEOUT, Attrs::STRIKE),
+    ] {
+        attrs.set(attr, flags.contains(flag));
+    }
+    // ponytail: no Attrs::BLINK here. alacritty_terminal parses SGR 5/6/25 but
+    // drops them (`Flags` has no blink bit), so this backend can never report
+    // it. Set it when a backend that tracks blink lands.
+
     EmuCell {
         ch,
         fg: color_from_alac(c.fg),
         bg: color_from_alac(c.bg),
-        bold: flags.contains(AlacFlags::BOLD),
-        dim: flags.contains(AlacFlags::DIM),
-        italic: flags.contains(AlacFlags::ITALIC),
-        underline: flags.intersects(
-            AlacFlags::UNDERLINE
-                | AlacFlags::DOUBLE_UNDERLINE
-                | AlacFlags::DOTTED_UNDERLINE
-                | AlacFlags::DASHED_UNDERLINE
-                | AlacFlags::UNDERCURL,
-        ),
-        inverse: flags.contains(AlacFlags::INVERSE),
-        invisible: flags.contains(AlacFlags::HIDDEN),
-        strike: flags.contains(AlacFlags::STRIKEOUT),
+        underline: underline_from_alac(c),
+        attrs,
     }
 }
 

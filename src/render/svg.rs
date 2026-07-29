@@ -11,7 +11,7 @@
 use std::fmt::Write;
 
 use super::nerd_font::NerdFont;
-use crate::terminal::cell::{Color, EmuCell};
+use crate::terminal::cell::{Attrs, Color, EmuCell};
 
 const CELL_W: f32 = 10.0;
 const CELL_H: f32 = 21.0;
@@ -58,18 +58,18 @@ impl Default for Theme {
 }
 
 impl Theme {
-    fn resolve(&self, color: Color, is_fg: bool) -> (u8, u8, u8) {
+    fn resolve(&self, color: Option<Color>, is_fg: bool) -> (u8, u8, u8) {
         match color {
-            Color::Default => {
+            None => {
                 if is_fg {
                     self.default_fg
                 } else {
                     self.default_bg
                 }
             }
-            Color::Idx(i) if i < 16 => self.palette[i as usize],
-            Color::Idx(i) => crate::assert::color::ansi256_to_rgb(i),
-            Color::Rgb(r, g, b) => (r, g, b),
+            Some(Color::Named(n)) => self.palette[n.index() as usize],
+            Some(Color::Idx(i)) => crate::assert::color::ansi256_to_rgb(i),
+            Some(Color::Rgb(r, g, b)) => (r, g, b),
         }
     }
 }
@@ -83,18 +83,7 @@ fn dim((r, g, b): (u8, u8, u8)) -> (u8, u8, u8) {
     (s(r), s(g), s(b))
 }
 
-static BLANK: EmuCell = EmuCell {
-    ch: String::new(),
-    fg: Color::Default,
-    bg: Color::Default,
-    bold: false,
-    dim: false,
-    italic: false,
-    underline: false,
-    inverse: false,
-    invisible: false,
-    strike: false,
-};
+static BLANK: EmuCell = EmuCell::blank();
 
 fn cell_at(row: &[EmuCell], x: usize) -> &EmuCell {
     row.get(x).unwrap_or(&BLANK)
@@ -104,7 +93,7 @@ fn cell_at(row: &[EmuCell], x: usize) -> &EmuCell {
 fn bg_of(cell: &EmuCell, theme: &Theme) -> (u8, u8, u8) {
     let bg = theme.resolve(cell.bg, false);
     let fg = theme.resolve(cell.fg, true);
-    if cell.inverse {
+    if cell.has(Attrs::INVERSE) {
         fg
     } else {
         bg
@@ -124,19 +113,19 @@ struct Style {
 fn style_of(cell: &EmuCell, theme: &Theme) -> Style {
     let mut fg = theme.resolve(cell.fg, true);
     let bg = theme.resolve(cell.bg, false);
-    if cell.inverse {
+    if cell.has(Attrs::INVERSE) {
         fg = bg;
     }
-    if cell.dim {
+    if cell.has(Attrs::DIM) {
         fg = dim(fg);
     }
     Style {
         fg,
-        bold: cell.bold,
-        italic: cell.italic,
-        underline: cell.underline,
-        strike: cell.strike,
-        invisible: cell.invisible,
+        bold: cell.has(Attrs::BOLD),
+        italic: cell.has(Attrs::ITALIC),
+        underline: cell.underline.is_some(),
+        strike: cell.has(Attrs::STRIKE),
+        invisible: cell.has(Attrs::INVISIBLE),
     }
 }
 
@@ -156,12 +145,7 @@ fn escape(s: &str) -> String {
 fn run_text(row: &[EmuCell], start: usize, end: usize) -> String {
     let mut text = String::with_capacity(end - start);
     for i in start..end {
-        let ch = &cell_at(row, i).ch;
-        if ch.is_empty() {
-            text.push(' ');
-        } else {
-            text.push_str(ch);
-        }
+        text.push_str(&cell_at(row, i).ch);
     }
     text
 }
@@ -282,19 +266,20 @@ pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16) -> String {
 mod tests {
     use super::*;
 
-    fn cell(ch: &str, fg: Color, bg: Color) -> EmuCell {
-        let mut c = BLANK.clone();
-        c.ch = ch.to_string();
-        c.fg = fg;
-        c.bg = bg;
-        c
+    fn cell(ch: &str, fg: Option<Color>, bg: Option<Color>) -> EmuCell {
+        EmuCell {
+            ch: ch.into(),
+            fg,
+            bg,
+            ..EmuCell::blank()
+        }
     }
 
     #[test]
     fn emits_valid_svg_with_text_and_color() {
         let rows = vec![vec![
-            cell("h", Color::Idx(1), Color::Default),
-            cell("i", Color::Idx(1), Color::Default),
+            cell("h", Some(Color::from_index(1)), None),
+            cell("i", Some(Color::from_index(1)), None),
         ]];
         let svg = render_svg(&rows, 2);
         assert!(svg.starts_with("<svg"));
@@ -308,7 +293,7 @@ mod tests {
 
     #[test]
     fn emits_window_chrome() {
-        let svg = render_svg(&[vec![cell(" ", Color::Default, Color::Default)]], 1);
+        let svg = render_svg(&[vec![cell(" ", None, None)]], 1);
         assert!(svg.contains("<circle"));
         assert!(svg.contains("#ff5f56"));
         assert!(svg.contains("#ffbd2e"));
@@ -317,14 +302,14 @@ mod tests {
 
     #[test]
     fn centers_the_text_font_box_in_each_cell() {
-        let svg = render_svg(&[vec![cell("x", Color::Default, Color::Default)]], 1);
+        let svg = render_svg(&[vec![cell("x", None, None)]], 1);
         let expected_baseline = HEADER_H + FONT_BASELINE;
         assert!(svg.contains(&format!(r#"y="{expected_baseline:.2}""#)));
     }
 
     #[test]
     fn escapes_markup_characters() {
-        let rows = vec![vec![cell("<", Color::Default, Color::Default)]];
+        let rows = vec![vec![cell("<", None, None)]];
         let svg = render_svg(&rows, 1);
         assert!(svg.contains("&lt;"));
         assert!(!svg.contains("><</text>"));
@@ -332,7 +317,7 @@ mod tests {
 
     #[test]
     fn background_run_emitted_for_non_default_bg() {
-        let rows = vec![vec![cell(" ", Color::Default, Color::Idx(4))]];
+        let rows = vec![vec![cell(" ", None, Some(Color::from_index(4)))]];
         let svg = render_svg(&rows, 1);
         assert!(svg.contains(&hex((113, 190, 242))));
     }
@@ -341,9 +326,9 @@ mod tests {
     fn embeds_nerd_font_glyphs_as_vector_paths() {
         let glyph = "\u{f115}";
         let rows = vec![vec![
-            cell("a", Color::Default, Color::Default),
-            cell(glyph, Color::Default, Color::Default),
-            cell("b", Color::Default, Color::Default),
+            cell("a", None, None),
+            cell(glyph, None, None),
+            cell("b", None, None),
         ]];
         let svg = render_svg(&rows, 3);
 
@@ -357,13 +342,7 @@ mod tests {
     #[test]
     fn defines_repeated_nerd_font_glyph_once() {
         let glyph = "\u{f115}";
-        let svg = render_svg(
-            &[vec![
-                cell(glyph, Color::Default, Color::Default),
-                cell(glyph, Color::Default, Color::Default),
-            ]],
-            2,
-        );
+        let svg = render_svg(&[vec![cell(glyph, None, None), cell(glyph, None, None)]], 2);
 
         assert_eq!(svg.matches(r#"<path id="nf-f115""#).count(), 1);
         assert_eq!(svg.matches(r##"<use href="#nf-f115""##).count(), 2);
@@ -372,7 +351,7 @@ mod tests {
     #[test]
     fn leaves_unknown_private_use_glyphs_as_text() {
         let glyph = "\u{10fffd}";
-        let svg = render_svg(&[vec![cell(glyph, Color::Default, Color::Default)]], 1);
+        let svg = render_svg(&[vec![cell(glyph, None, None)]], 1);
 
         assert!(svg.contains(glyph));
         assert!(!svg.contains("<defs>"));
