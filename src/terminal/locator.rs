@@ -3,7 +3,7 @@
 
 use regex::Regex;
 
-use super::emu::EmuCell;
+use super::cell::EmuCell;
 
 pub enum Pattern {
     Text(String),

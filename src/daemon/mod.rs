@@ -20,7 +20,7 @@ use crate::input::{keys, mouse};
 use crate::ipc;
 use crate::monitor;
 use crate::protocol::{ErrorKind, GetField, MouseAction, Request, Response};
-use crate::terminal::emu::{rows_to_strings, Color, EmuCell};
+use crate::terminal::cell::{rows_to_strings, Color, EmuCell};
 use crate::terminal::locator::{self, Pattern};
 use logger::Logger;
 use session::{Session, TermState};
@@ -313,7 +313,7 @@ fn wait_ready(s: &Session) {
     loop {
         {
             let st = s.state.lock().unwrap();
-            if st.emu.tracker().is_ready() || st.exited.is_some() {
+            if st.tracker.is_ready() || st.exited.is_some() {
                 return;
             }
         }
@@ -415,11 +415,11 @@ fn state(s: &Session) -> Response {
         "cols": cols,
         "rows": rows,
         "cursor": { "x": cx, "y": cy },
-        "cwd": st.emu.tracker().cwd(),
-        "last_command": st.emu.tracker().last_command(),
-        "last_exit": st.emu.tracker().last_exit(),
+        "cwd": st.tracker.cwd(),
+        "last_command": st.tracker.last_command(),
+        "last_exit": st.tracker.last_exit(),
         "exited": st.exited,
-        "ready": st.emu.tracker().is_ready(),
+        "ready": st.tracker.is_ready(),
         "text": text,
     }))
 }
@@ -458,10 +458,10 @@ fn color_json(c: Color) -> serde_json::Value {
 fn get(s: &Session, field: GetField) -> Response {
     let st = s.state.lock().unwrap();
     let value = match field {
-        GetField::Command => json!(st.emu.tracker().last_command()),
-        GetField::Output => json!(st.emu.tracker().last_output()),
-        GetField::ExitCode => json!(st.emu.tracker().last_exit()),
-        GetField::Cwd => json!(st.emu.tracker().cwd()),
+        GetField::Command => json!(st.tracker.last_command()),
+        GetField::Output => json!(st.tracker.last_output()),
+        GetField::ExitCode => json!(st.tracker.last_exit()),
+        GetField::Cwd => json!(st.tracker.cwd()),
         GetField::Cursor => {
             let (x, y) = st.emu.cursor();
             json!({ "x": x, "y": y })
@@ -604,15 +604,15 @@ fn wait_idle(s: &Session, timeout_ms: u64) -> Response {
 
 fn wait_command(s: &Session, timeout_ms: u64) -> Response {
     let quiet = Duration::from_millis(300);
-    let baseline = s.state.lock().unwrap().emu.tracker().finished_count();
+    let baseline = s.state.lock().unwrap().tracker.finished_count();
     let ok = poll_until(
         || {
             let st = s.state.lock().unwrap();
-            if st.exited.is_some() || st.emu.tracker().finished_count() > baseline {
+            if st.exited.is_some() || st.tracker.finished_count() > baseline {
                 return true;
             }
             let idle = st.last_change.elapsed() >= quiet;
-            idle && (!st.emu.tracker().started() || st.emu.tracker().is_ready())
+            idle && (!st.tracker.started() || st.tracker.is_ready())
         },
         timeout_ms,
     );
@@ -748,10 +748,10 @@ fn check_colors(
 
 fn expect_exit_code(s: &Session, code: i32) -> Response {
     poll_until(
-        || s.state.lock().unwrap().emu.tracker().last_exit().is_some(),
+        || s.state.lock().unwrap().tracker.last_exit().is_some(),
         config::DEFAULT_EXPECT_TIMEOUT_MS,
     );
-    let actual = s.state.lock().unwrap().emu.tracker().last_exit();
+    let actual = s.state.lock().unwrap().tracker.last_exit();
     match actual {
         Some(a) if a == code => Response::ok(),
         Some(a) => Response::assertion(format!("expected exit code {code}, got {a}")),
@@ -764,8 +764,7 @@ fn expect_output(s: &Session, text: &str, regex: bool) -> Response {
         .state
         .lock()
         .unwrap()
-        .emu
-        .tracker()
+        .tracker
         .last_output()
         .map(|o| o.to_string());
     let Some(output) = output else {

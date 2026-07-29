@@ -11,7 +11,7 @@
 use std::fmt::Write;
 
 use super::nerd_font::NerdFont;
-use crate::terminal::emu::{Color, EmuCell};
+use crate::terminal::cell::{Color, EmuCell};
 
 const CELL_W: f32 = 10.0;
 const CELL_H: f32 = 21.0;

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
-use super::super::terminal::emu::{Color, EmuCell};
+use super::super::terminal::cell::{Color, EmuCell};
 
 pub enum SnapshotStatus {
     Passed,

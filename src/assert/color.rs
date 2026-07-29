@@ -1,6 +1,6 @@
 //! Color parsing and comparison for `expect --fg/--bg`.
 
-use super::super::terminal::emu::Color;
+use super::super::terminal::cell::Color;
 
 #[derive(Debug, Clone)]
 pub enum Expected {
@@ -161,7 +161,7 @@ pub fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::emu::Color;
+    use crate::terminal::cell::Color;
 
     #[test]
     fn parse_forms() {

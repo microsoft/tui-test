@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::terminal::emu::{Color, EmuCell};
+use crate::terminal::cell::{Color, EmuCell};
 
 const BORDER: &str = "\x1b[38;5;240m";
 const RESET: &str = "\x1b[0m";

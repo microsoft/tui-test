@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use ttf_parser::{Face, OutlineBuilder};
 
-use crate::terminal::emu::EmuCell;
+use crate::terminal::cell::EmuCell;
 
 // Nerd Fonts Symbols v3.4.0 is MIT-licensed; see the adjacent LICENSE.
 const FONT_DATA: &[u8] = include_bytes!(concat!(
@@ -208,7 +208,7 @@ fn is_powerline_separator(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::emu::Color;
+    use crate::terminal::cell::Color;
 
     fn cell(ch: &str) -> EmuCell {
         EmuCell {
