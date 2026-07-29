@@ -20,7 +20,7 @@ use crate::input::{keys, mouse};
 use crate::ipc;
 use crate::monitor;
 use crate::protocol::{ErrorKind, GetField, MouseAction, Request, Response};
-use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
+use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell, UnderlineStyle};
 use crate::terminal::locator::{self, Pattern};
 use logger::Logger;
 use session::{Session, TermState};
@@ -430,21 +430,41 @@ fn cells(s: &Session, x: u16, y: u16, w: u16, h: u16) -> Response {
     for row in y..y.saturating_add(h.max(1)) {
         for col in x..x.saturating_add(w.max(1)) {
             if let Some(cell) = rows.get(row as usize).and_then(|r| r.get(col as usize)) {
-                out.push(json!({
-                    "x": col,
-                    "y": row,
-                    "char": cell.ch.as_str(),
-                    "fg": color_json(cell.fg),
-                    "bg": color_json(cell.bg),
-                    "bold": cell.has(Attrs::BOLD),
-                    "italic": cell.has(Attrs::ITALIC),
-                    "underline": cell.underline.is_some(),
-                    "inverse": cell.has(Attrs::INVERSE),
-                }));
+                out.push(cell_json(col, row, cell));
             }
         }
     }
     Response::with(json!({ "cells": out }))
+}
+
+/// One cell in wire form. Every attribute the neutral model carries is
+/// reported, including ones no current backend can source, so a client can be
+/// written against the full vocabulary rather than against alacritty.
+fn cell_json(x: u16, y: u16, cell: &EmuCell) -> serde_json::Value {
+    json!({
+        "x": x,
+        "y": y,
+        "char": cell.ch.as_str(),
+        "fg": color_json(cell.fg),
+        "bg": color_json(cell.bg),
+        "bold": cell.has(Attrs::BOLD),
+        "dim": cell.has(Attrs::DIM),
+        "italic": cell.has(Attrs::ITALIC),
+        "inverse": cell.has(Attrs::INVERSE),
+        "invisible": cell.has(Attrs::INVISIBLE),
+        "strike": cell.has(Attrs::STRIKE),
+        "blink": cell.has(Attrs::BLINK),
+        "underline": cell.underline.is_some(),
+        "underline_style": cell.underline.map(|u| match u.style {
+            UnderlineStyle::Single => "single",
+            UnderlineStyle::Double => "double",
+            UnderlineStyle::Curly => "curly",
+            UnderlineStyle::Dotted => "dotted",
+            UnderlineStyle::Dashed => "dashed",
+        }),
+        // `null` means the underline follows the text color.
+        "underline_color": cell.underline.and_then(|u| u.color).map(|c| color_json(Some(c))),
+    })
 }
 
 /// Wire form: `"default"`, a 256-color index, or `"#rrggbb"`. Named and
@@ -839,5 +859,56 @@ fn format_timeout(timeout_ms: u64) -> String {
         format!("{}s", timeout_ms / 1_000)
     } else {
         format!("{timeout_ms}ms")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terminal::cell::{NamedColor, Underline};
+
+    /// Every attribute in the vocabulary reaches the wire, including ones the
+    /// alacritty backend can never source (blink), so clients written against
+    /// the full model keep working when another backend starts reporting them.
+    #[test]
+    fn cell_json_reports_the_whole_vocabulary() {
+        let cell = EmuCell {
+            ch: "x".into(),
+            fg: Some(Color::Named(NamedColor::Red)),
+            bg: Some(Color::Idx(196)),
+            underline: Some(Underline {
+                style: UnderlineStyle::Curly,
+                color: Some(Color::Rgb(1, 2, 3)),
+            }),
+            attrs: Attrs::all(),
+        };
+        let v = cell_json(3, 4, &cell);
+        assert_eq!(v["x"], json!(3));
+        assert_eq!(v["char"], json!("x"));
+        assert_eq!(v["fg"], json!(1));
+        assert_eq!(v["bg"], json!(196));
+        for key in [
+            "bold",
+            "dim",
+            "italic",
+            "inverse",
+            "invisible",
+            "strike",
+            "blink",
+            "underline",
+        ] {
+            assert_eq!(v[key], json!(true), "{key} must be reported");
+        }
+        assert_eq!(v["underline_style"], json!("curly"));
+        assert_eq!(v["underline_color"], json!("#010203"));
+    }
+
+    #[test]
+    fn cell_json_blank_cell_has_no_underline() {
+        let v = cell_json(0, 0, &EmuCell::blank());
+        assert_eq!(v["underline"], json!(false));
+        assert_eq!(v["underline_style"], serde_json::Value::Null);
+        assert_eq!(v["underline_color"], serde_json::Value::Null);
+        assert_eq!(v["blink"], json!(false));
     }
 }

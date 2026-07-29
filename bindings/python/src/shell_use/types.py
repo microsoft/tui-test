@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 Color = Union[str, int]
+UnderlineStyle = Literal["single", "double", "curly", "dotted", "dashed"]
 
 
 @dataclass
@@ -16,9 +17,17 @@ class Cell:
     fg: Color
     bg: Color
     bold: bool
+    dim: bool
     italic: bool
-    underline: bool
     inverse: bool
+    invisible: bool
+    strike: bool
+    #: Always ``False`` from the alacritty backend, which cannot report blink.
+    blink: bool
+    underline: bool
+    underline_style: Optional[UnderlineStyle]
+    #: ``None`` means the underline follows the text color.
+    underline_color: Optional[Color]
 
 
 @dataclass

@@ -97,9 +97,10 @@ fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
     ] {
         attrs.set(attr, flags.contains(flag));
     }
-    // ponytail: no Attrs::BLINK here. alacritty_terminal parses SGR 5/6/25 but
-    // drops them (`Flags` has no blink bit), so this backend can never report
-    // it. Set it when a backend that tracks blink lands.
+    // `Attrs::BLINK` stays clear: alacritty_terminal parses SGR 5/6/25 and then
+    // discards them, its `Flags` has no blink bit, so this backend has nothing
+    // to read. The attribute is still part of the vocabulary because ghostty
+    // (`Style.Flags.blink`) and xterm.js (`FgFlags.BLINK`) both track it.
 
     EmuCell {
         ch,

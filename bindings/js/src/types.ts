@@ -1,5 +1,12 @@
 export type Color = "default" | number | string;
 
+export type UnderlineStyle =
+  | "single"
+  | "double"
+  | "curly"
+  | "dotted"
+  | "dashed";
+
 export type Shell =
   | "bash"
   | "powershell"
@@ -29,9 +36,17 @@ export interface Cell {
   fg: Color;
   bg: Color;
   bold: boolean;
+  dim: boolean;
   italic: boolean;
-  underline: boolean;
   inverse: boolean;
+  invisible: boolean;
+  strike: boolean;
+  /** Always `false` from the alacritty backend, which cannot report blink. */
+  blink: boolean;
+  underline: boolean;
+  underline_style: UnderlineStyle | null;
+  /** `null` means the underline follows the text color. */
+  underline_color: Color | null;
 }
 
 export interface State {
