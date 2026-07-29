@@ -156,3 +156,10 @@ impl Emulator for AlacrittyEmu {
         self.rows_in_range(-history, screen)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    crate::emulator_conformance_tests!(|c, r, s| Box::new(AlacrittyEmu::new(c, r, s)));
+}
