@@ -113,6 +113,19 @@ pub enum UnderlineStyle {
     Dashed,
 }
 
+impl UnderlineStyle {
+    /// The name this style goes by on the wire.
+    pub const fn name(self) -> &'static str {
+        match self {
+            UnderlineStyle::Single => "single",
+            UnderlineStyle::Double => "double",
+            UnderlineStyle::Curly => "curly",
+            UnderlineStyle::Dotted => "dotted",
+            UnderlineStyle::Dashed => "dashed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Underline {
     pub style: UnderlineStyle,

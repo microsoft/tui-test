@@ -20,7 +20,7 @@ use crate::input::{keys, mouse};
 use crate::ipc;
 use crate::monitor;
 use crate::protocol::{ErrorKind, GetField, MouseAction, Request, Response};
-use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell, UnderlineStyle};
+use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::locator::{self, Pattern};
 use logger::Logger;
 use session::{Session, TermState};
@@ -455,15 +455,12 @@ fn cell_json(x: u16, y: u16, cell: &EmuCell) -> serde_json::Value {
         "strike": cell.has(Attrs::STRIKE),
         "blink": cell.has(Attrs::BLINK),
         "underline": cell.underline.is_some(),
-        "underline_style": cell.underline.map(|u| match u.style {
-            UnderlineStyle::Single => "single",
-            UnderlineStyle::Double => "double",
-            UnderlineStyle::Curly => "curly",
-            UnderlineStyle::Dotted => "dotted",
-            UnderlineStyle::Dashed => "dashed",
-        }),
-        // `null` means the underline follows the text color.
-        "underline_color": cell.underline.and_then(|u| u.color).map(|c| color_json(Some(c))),
+        // Never null: an absent underline is the "none" style, and an
+        // underline that follows the text color is "default", the same
+        // sentinel `fg` and `bg` use. A client can switch on the string
+        // without a null check.
+        "underline_style": cell.underline.map_or("none", |u| u.style.name()),
+        "underline_color": color_json(cell.underline.and_then(|u| u.color)),
     })
 }
 
@@ -865,7 +862,7 @@ fn format_timeout(timeout_ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::cell::{NamedColor, Underline};
+    use crate::terminal::cell::{NamedColor, Underline, UnderlineStyle};
 
     /// Every attribute in the vocabulary reaches the wire, including ones the
     /// alacritty backend can never source (blink), so clients written against
@@ -903,12 +900,28 @@ mod tests {
         assert_eq!(v["underline_color"], json!("#010203"));
     }
 
+    /// The underline fields are never null, so a client can switch on the
+    /// style string and compare the color the same way it does `fg`.
     #[test]
-    fn cell_json_blank_cell_has_no_underline() {
+    fn cell_json_underline_fields_are_never_null() {
         let v = cell_json(0, 0, &EmuCell::blank());
         assert_eq!(v["underline"], json!(false));
-        assert_eq!(v["underline_style"], serde_json::Value::Null);
-        assert_eq!(v["underline_color"], serde_json::Value::Null);
+        assert_eq!(v["underline_style"], json!("none"));
+        assert_eq!(v["underline_color"], json!("default"));
         assert_eq!(v["blink"], json!(false));
+
+        // Underlined, but with no color of its own: it follows the text color,
+        // which is the same thing `fg: "default"` means.
+        let cell = EmuCell {
+            underline: Some(Underline {
+                style: UnderlineStyle::Single,
+                color: None,
+            }),
+            ..EmuCell::blank()
+        };
+        let v = cell_json(0, 0, &cell);
+        assert_eq!(v["underline"], json!(true));
+        assert_eq!(v["underline_style"], json!("single"));
+        assert_eq!(v["underline_color"], json!("default"));
     }
 }

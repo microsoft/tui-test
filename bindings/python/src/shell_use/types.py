@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional, Union
 
 Color = Union[str, int]
-UnderlineStyle = Literal["single", "double", "curly", "dotted", "dashed"]
+#: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
+UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
 
 
 @dataclass
@@ -24,10 +25,11 @@ class Cell:
     strike: bool
     #: Always ``False`` from the alacritty backend, which cannot report blink.
     blink: bool
+    #: Shorthand for ``underline_style != "none"``.
     underline: bool
-    underline_style: Optional[UnderlineStyle]
-    #: ``None`` means the underline follows the text color.
-    underline_color: Optional[Color]
+    underline_style: UnderlineStyle
+    #: ``"default"`` means the underline follows the text color.
+    underline_color: Color
 
 
 @dataclass

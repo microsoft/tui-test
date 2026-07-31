@@ -1,6 +1,8 @@
 export type Color = "default" | number | string;
 
+/** `"none"` is a value, not an absence: an un-underlined cell reports it. */
 export type UnderlineStyle =
+  | "none"
   | "single"
   | "double"
   | "curly"
@@ -43,10 +45,11 @@ export interface Cell {
   strike: boolean;
   /** Always `false` from the alacritty backend, which cannot report blink. */
   blink: boolean;
+  /** Shorthand for `underline_style !== "none"`. */
   underline: boolean;
-  underline_style: UnderlineStyle | null;
-  /** `null` means the underline follows the text color. */
-  underline_color: Color | null;
+  underline_style: UnderlineStyle;
+  /** `"default"` means the underline follows the text color. */
+  underline_color: Color;
 }
 
 export interface State {
