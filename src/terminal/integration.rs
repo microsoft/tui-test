@@ -1,6 +1,6 @@
 //! Command and output tracking from the PTY byte stream.
 
-use alacritty_terminal::vte::{Parser, Perform};
+use rio_vt::performer::parser::{Parser, Perform};
 
 const OSC_CMD: &[u8] = b"133";
 const OSC_VSCODE: &[u8] = b"633";

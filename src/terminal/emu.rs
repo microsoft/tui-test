@@ -1,17 +1,19 @@
-//! Terminal-emulator wrapper around `alacritty_terminal`. Exposes the small
+//! Terminal-emulator wrapper around `rio-vt`. Exposes the small
 //! grid/cell/color surface the rest of shell-use consumes, plus a capture
 //! proxy that queues the terminal's replies so the reader can forward them
 //! back to the PTY.
 
 use std::sync::{Arc, Mutex};
 
-use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::Flags as AlacFlags;
-use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config as AlacConfig, Term};
-use alacritty_terminal::vte::ansi;
+use rio_vt::ansi::CursorShape;
+use rio_vt::config::colors::{AnsiColor, NamedColor};
+use rio_vt::crosswords::grid::Dimensions;
+use rio_vt::crosswords::pos::{Column, Line};
+use rio_vt::crosswords::square::{ContentTag, Square, Wide};
+use rio_vt::crosswords::style::{Style, StyleFlags};
+use rio_vt::crosswords::{Crosswords, CrosswordsSize};
+use rio_vt::event::{EventListener, RioEvent, WindowId};
+use rio_vt::performer::handler::Processor;
 
 use crate::terminal::integration::CommandTracker;
 
@@ -23,14 +25,19 @@ pub enum Color {
 }
 
 impl Color {
-    fn from_alac(c: ansi::Color) -> Self {
+    fn from_vt(c: AnsiColor) -> Self {
         match c {
-            ansi::Color::Named(named) => match named {
-                ansi::NamedColor::Foreground | ansi::NamedColor::Background => Color::Default,
-                other => Color::Idx(other as u8),
-            },
-            ansi::Color::Spec(rgb) => Color::Rgb(rgb.r, rgb.g, rgb.b),
-            ansi::Color::Indexed(i) => Color::Idx(i),
+            AnsiColor::Named(NamedColor::Foreground | NamedColor::Background) => Color::Default,
+            AnsiColor::Named(named) => {
+                let index = named as u32;
+                if index < 16 {
+                    Color::Idx(index as u8)
+                } else {
+                    Color::Default
+                }
+            }
+            AnsiColor::Indexed(i) => Color::Idx(i),
+            AnsiColor::Spec(rgb) => Color::Rgb(rgb.r, rgb.g, rgb.b),
         }
     }
 }
@@ -50,32 +57,43 @@ pub struct EmuCell {
     pub strike: bool,
 }
 
-fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
-    let flags = c.flags;
-    let spacer = flags.contains(AlacFlags::WIDE_CHAR_SPACER)
-        || flags.contains(AlacFlags::LEADING_WIDE_CHAR_SPACER);
-    let ch = if spacer || (c.c == ' ' && !flags.contains(AlacFlags::WIDE_CHAR)) {
+fn cell_from_square(square: &Square, styles: &[Style]) -> EmuCell {
+    let spacer = !matches!(square.wide(), Wide::Narrow | Wide::Wide);
+    let c = square.c();
+    let ch = if spacer || c == ' ' || c == '\0' {
         String::new()
     } else {
-        c.c.to_string()
+        c.to_string()
+    };
+    let (fg, bg, flags) = match square.content_tag() {
+        ContentTag::Codepoint => {
+            let style = styles
+                .get(square.style_id() as usize)
+                .copied()
+                .unwrap_or_default();
+            (Color::from_vt(style.fg), Color::from_vt(style.bg), style.flags)
+        }
+        ContentTag::BgPalette => (
+            Color::Default,
+            Color::Idx(square.bg_palette_index()),
+            StyleFlags::empty(),
+        ),
+        ContentTag::BgRgb => {
+            let (r, g, b) = square.bg_rgb();
+            (Color::Default, Color::Rgb(r, g, b), StyleFlags::empty())
+        }
     };
     EmuCell {
         ch,
-        fg: Color::from_alac(c.fg),
-        bg: Color::from_alac(c.bg),
-        bold: flags.contains(AlacFlags::BOLD),
-        dim: flags.contains(AlacFlags::DIM),
-        italic: flags.contains(AlacFlags::ITALIC),
-        underline: flags.intersects(
-            AlacFlags::UNDERLINE
-                | AlacFlags::DOUBLE_UNDERLINE
-                | AlacFlags::DOTTED_UNDERLINE
-                | AlacFlags::DASHED_UNDERLINE
-                | AlacFlags::UNDERCURL,
-        ),
-        inverse: flags.contains(AlacFlags::INVERSE),
-        invisible: flags.contains(AlacFlags::HIDDEN),
-        strike: flags.contains(AlacFlags::STRIKEOUT),
+        fg,
+        bg,
+        bold: flags.contains(StyleFlags::BOLD),
+        dim: flags.contains(StyleFlags::DIM),
+        italic: flags.contains(StyleFlags::ITALIC),
+        underline: flags.intersects(StyleFlags::ALL_UNDERLINES),
+        inverse: flags.contains(StyleFlags::INVERSE),
+        invisible: flags.contains(StyleFlags::HIDDEN),
+        strike: flags.contains(StyleFlags::STRIKEOUT),
     }
 }
 
@@ -85,18 +103,22 @@ struct CaptureProxy {
 }
 
 impl EventListener for CaptureProxy {
-    fn send_event(&self, ev: Event) {
-        if let Event::PtyWrite(bytes) = ev {
+    fn event(&self) -> (Option<RioEvent>, bool) {
+        (None, false)
+    }
+
+    fn send_event(&self, event: RioEvent, _id: WindowId) {
+        if let RioEvent::PtyWrite(_route, text) = event {
             if let Ok(mut buf) = self.pending.lock() {
-                buf.extend_from_slice(bytes.as_bytes());
+                buf.extend_from_slice(text.as_bytes());
             }
         }
     }
 }
 
 pub struct Emu {
-    term: Term<CaptureProxy>,
-    processor: ansi::Processor,
+    term: Crosswords<CaptureProxy>,
+    processor: Processor,
     tracker: CommandTracker,
     cols: u16,
     rows: u16,
@@ -105,18 +127,21 @@ pub struct Emu {
 
 impl Emu {
     pub fn new(cols: u16, rows: u16, scrollback: usize) -> Self {
-        let size = TermSize::new(cols as usize, rows as usize);
-        let config = AlacConfig {
-            scrolling_history: scrollback,
-            ..Default::default()
-        };
         let pending: Arc<Mutex<Vec<u8>>> = Arc::default();
         let proxy = CaptureProxy {
             pending: pending.clone(),
         };
+        let size = CrosswordsSize::new(cols.max(1) as usize, rows.max(1) as usize);
         Emu {
-            term: Term::new(config, &size, proxy),
-            processor: ansi::Processor::new(),
+            term: Crosswords::new(
+                size,
+                CursorShape::Block,
+                proxy,
+                WindowId::from(0),
+                0,
+                scrollback,
+            ),
+            processor: Processor::default(),
             tracker: CommandTracker::new(),
             cols,
             rows,
@@ -144,7 +169,7 @@ impl Emu {
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
         self.term
-            .resize(TermSize::new(cols as usize, rows as usize));
+            .resize(CrosswordsSize::new(cols.max(1) as usize, rows.max(1) as usize));
         self.cols = cols;
         self.rows = rows;
     }
@@ -155,9 +180,9 @@ impl Emu {
 
     /// Cursor position as `(x, y)` (column, row), 0-based, clamped to screen.
     pub fn cursor(&self) -> (u16, u16) {
-        let p = self.term.grid().cursor.point;
-        let y = p.line.0.max(0).min(self.rows as i32 - 1) as u16;
-        let x = (p.column.0 as u16).min(self.cols.saturating_sub(1));
+        let p = self.term.cursor().pos;
+        let y = p.row.0.max(0).min(self.rows as i32 - 1) as u16;
+        let x = (p.col.0 as u16).min(self.cols.saturating_sub(1));
         (x, y)
     }
 
@@ -168,23 +193,21 @@ impl Emu {
 
     /// History + visible screen as rows of cells.
     pub fn full_rows(&self) -> Vec<Vec<EmuCell>> {
-        let grid = self.term.grid();
-        let total = grid.total_lines() as i32;
-        let screen = grid.screen_lines() as i32;
-        let history = (total - screen).max(0);
+        let history = self.term.history_size() as i32;
+        let screen = self.term.grid.screen_lines() as i32;
         self.rows_in_range(-history, screen)
     }
 
     fn rows_in_range(&self, start: i32, end: i32) -> Vec<Vec<EmuCell>> {
-        let grid = self.term.grid();
+        let styles = self.term.grid.style_set.styles();
         let mut out = Vec::with_capacity((end - start).max(0) as usize);
         for line in start..end {
-            let mut row = Vec::with_capacity(self.cols as usize);
+            let row = &self.term.grid[Line(line)];
+            let mut cells = Vec::with_capacity(self.cols as usize);
             for col in 0..self.cols as usize {
-                let cell = &grid[Line(line)][Column(col)];
-                row.push(cell_from_alac(cell));
+                cells.push(cell_from_square(&row[Column(col)], styles));
             }
-            out.push(row);
+            out.push(cells);
         }
         out
     }
