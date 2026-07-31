@@ -74,7 +74,10 @@ pub fn serialize(rows: &[Vec<EmuCell>], cols: u16, include_colors: bool) -> Stri
     for (y, row) in rows.iter().enumerate() {
         let mut line = String::with_capacity(cols as usize);
         for (x, cell) in row.iter().enumerate() {
-            line.push_str(if cell.ch.is_empty() { " " } else { &cell.ch });
+            // A continuation contributes nothing, exactly as in
+            // `rows_to_strings`: the wide char to its left already spans this
+            // column, so giving it a filler widens the row past the box.
+            line.push_str(&cell.ch);
             let s = shift(&prev, cell);
             if !s.is_empty() {
                 shifts.insert(format!("{x},{y}"), Value::Object(s));
@@ -136,4 +139,37 @@ pub fn compare(
         expected: existing.to_string(),
         actual: trimmed.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terminal::cell::CONTINUATION;
+
+    fn cell(s: &str) -> EmuCell {
+        EmuCell {
+            ch: s.into(),
+            ..EmuCell::blank()
+        }
+    }
+
+    /// A wide char spans two columns on its own. Rendering a filler for the
+    /// continuation pushed every later column right and left the content line
+    /// one column wider than the frame drawn around it, so any snapshot
+    /// holding a wide char was written misaligned and compared against that.
+    #[test]
+    fn a_wide_char_does_not_overflow_the_frame() {
+        let rows = vec![vec![
+            cell("你"),
+            cell(CONTINUATION),
+            cell("b"),
+            cell(" "),
+            cell(" "),
+            cell(" "),
+        ]];
+        assert_eq!(
+            serialize(&rows, 6, false),
+            "╭──────╮\n│你b   │\n╰──────╯"
+        );
+    }
 }
