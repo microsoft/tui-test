@@ -272,6 +272,49 @@ macro_rules! emulator_conformance_tests {
             );
         }
 
+        /// A wide char that does not fit in the last column wraps whole to the
+        /// next row, and the column it left behind is a blank it still owns.
+        /// Backends mark that filler with a distinct flag from a real
+        /// continuation; conflating the two loses a column and every row after
+        /// the wrap renders shifted.
+        #[test]
+        fn conformance_wide_char_wraps_at_the_line_edge() {
+            let mut e = conformance_emu(5, 3, 100);
+            e.process("abcd你".as_bytes());
+            let rows = e.viewable_rows();
+            assert_eq!(
+                rows[0][4].ch, " ",
+                "the column the wide char vacated is a blank"
+            );
+            assert_eq!(
+                rows[1][0].ch, "你",
+                "the wide char moved to the next row whole"
+            );
+            assert_eq!(
+                rows[1][1].ch,
+                $crate::terminal::cell::CONTINUATION,
+                "and takes its continuation with it"
+            );
+            let text = $crate::terminal::cell::rows_to_strings(&rows);
+            assert_eq!(text[0], "abcd ", "the padded row is still 5 columns wide");
+            assert_eq!(text[1], "你   ", "the wrapped row is 5 columns wide too");
+        }
+
+        /// A snapshot of text wrapping over several rows, wide char included.
+        /// Pinning the whole grid catches the off-by-one column errors that a
+        /// per-cell assertion reads past: here the wide char fits mid-row, so
+        /// no padding is involved and every row is exactly 5 columns.
+        #[test]
+        fn conformance_wrap_snapshot() {
+            let mut e = conformance_emu(5, 3, 100);
+            e.process("abcdefg你ij".as_bytes());
+            assert_eq!(
+                $crate::terminal::cell::rows_to_strings(&e.viewable_rows()),
+                // "fg你i" is 4 chars but 5 columns: 你 spans two.
+                ["abcde", "fg你i", "j    "]
+            );
+        }
+
         /// A multi-byte character split across reads must still decode. The
         /// reader fills a fixed 8 KiB buffer, so this happens on real output;
         /// a backend that decoded each chunk independently would corrupt the

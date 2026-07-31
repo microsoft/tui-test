@@ -13,7 +13,7 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config as AlacConfig, Term};
 use alacritty_terminal::vte::ansi;
 
-use compact_str::CompactString;
+use compact_str::{CompactString, ToCompactString};
 
 use crate::terminal::cell::{Attrs, Color, EmuCell, Underline, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::Emulator;
@@ -74,12 +74,16 @@ fn underline_from_alac(c: &alacritty_terminal::term::cell::Cell) -> Option<Under
 
 fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
     let flags = c.flags;
-    let spacer = flags.contains(AlacFlags::WIDE_CHAR_SPACER)
-        || flags.contains(AlacFlags::LEADING_WIDE_CHAR_SPACER);
-    let ch = if spacer {
+    // Only WIDE_CHAR_SPACER is a continuation: it is the second column of a
+    // wide char on this row. LEADING_WIDE_CHAR_SPACER is the opposite, a filler
+    // in the last column when a wide char did not fit and wrapped to the next
+    // row, so it owns its column and has to render as a blank.
+    let ch = if flags.contains(AlacFlags::WIDE_CHAR_SPACER) {
         CompactString::const_new(CONTINUATION)
+    } else if flags.contains(AlacFlags::LEADING_WIDE_CHAR_SPACER) {
+        CompactString::const_new(" ")
     } else {
-        let mut s = CompactString::from(c.c.to_string());
+        let mut s = c.c.to_compact_string();
         for zw in c.zerowidth().unwrap_or(&[]) {
             s.push(*zw);
         }
