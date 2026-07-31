@@ -56,8 +56,8 @@ fn shift(prev: &EmuCell, cur: &EmuCell) -> Map<String, Value> {
             m.insert(key.into(), json!(cur.has(attr)));
         }
     }
-    if prev.underline.is_some() != cur.underline.is_some() {
-        m.insert("underline".into(), json!(cur.underline.is_some()));
+    if prev.underline.is_underlined() != cur.underline.is_underlined() {
+        m.insert("underline".into(), json!(cur.underline.is_underlined()));
     }
     m
 }
@@ -167,9 +167,6 @@ mod tests {
             cell(" "),
             cell(" "),
         ]];
-        assert_eq!(
-            serialize(&rows, 6, false),
-            "╭──────╮\n│你b   │\n╰──────╯"
-        );
+        assert_eq!(serialize(&rows, 6, false), "╭──────╮\n│你b   │\n╰──────╯");
     }
 }

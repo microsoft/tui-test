@@ -28,7 +28,9 @@ class Cell:
     #: Shorthand for ``underline_style != "none"``.
     underline: bool
     underline_style: UnderlineStyle
-    #: ``"default"`` means the underline follows the text color.
+    #: ``"default"`` means the underline follows the text color. Tracked
+    #: independently of ``underline_style``, so a cell that set SGR 58 without
+    #: an underline still reports the color it would use.
     underline_color: Color
 
 

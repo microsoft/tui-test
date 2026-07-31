@@ -123,7 +123,7 @@ fn style_of(cell: &EmuCell, theme: &Theme) -> Style {
         fg,
         bold: cell.has(Attrs::BOLD),
         italic: cell.has(Attrs::ITALIC),
-        underline: cell.underline.is_some(),
+        underline: cell.underline.is_underlined(),
         strike: cell.has(Attrs::STRIKE),
         invisible: cell.has(Attrs::INVISIBLE),
     }

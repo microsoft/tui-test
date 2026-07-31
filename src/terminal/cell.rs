@@ -104,8 +104,17 @@ impl Color {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The shape of a cell's underline.
+///
+/// [`UnderlineStyle::None`] is a value, not an absence: it is the shape an
+/// un-underlined cell has. Wrapping this in an `Option` would give two ways to
+/// spell "not underlined" and force every reader through a `map` to reach the
+/// shape, which is why the style and its color sit flat on the cell rather
+/// than inside a nested struct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UnderlineStyle {
+    #[default]
+    None,
     Single,
     Double,
     Curly,
@@ -114,9 +123,15 @@ pub enum UnderlineStyle {
 }
 
 impl UnderlineStyle {
+    /// Is the cell underlined at all?
+    pub const fn is_underlined(self) -> bool {
+        !matches!(self, UnderlineStyle::None)
+    }
+
     /// The name this style goes by on the wire.
     pub const fn name(self) -> &'static str {
         match self {
+            UnderlineStyle::None => "none",
             UnderlineStyle::Single => "single",
             UnderlineStyle::Double => "double",
             UnderlineStyle::Curly => "curly",
@@ -124,13 +139,6 @@ impl UnderlineStyle {
             UnderlineStyle::Dashed => "dashed",
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Underline {
-    pub style: UnderlineStyle,
-    /// `None` means the underline takes the cell's foreground color.
-    pub color: Option<Color>,
 }
 
 bitflags! {
@@ -161,8 +169,11 @@ pub struct EmuCell {
     pub fg: Option<Color>,
     /// `None` means the terminal's default background.
     pub bg: Option<Color>,
-    /// `None` means not underlined.
-    pub underline: Option<Underline>,
+    pub underline: UnderlineStyle,
+    /// `None` means the underline takes the cell's foreground color. Carried
+    /// even when there is no underline, the same way `fg` outlives the
+    /// grapheme it colors.
+    pub underline_color: Option<Color>,
     pub attrs: Attrs,
 }
 
@@ -173,7 +184,8 @@ impl EmuCell {
             ch: CompactString::const_new(" "),
             fg: None,
             bg: None,
-            underline: None,
+            underline: UnderlineStyle::None,
+            underline_color: None,
             attrs: Attrs::empty(),
         }
     }

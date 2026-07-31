@@ -160,33 +160,40 @@ macro_rules! emulator_conformance_tests {
 
             let x = &rows[0][0];
             assert_eq!(x.attrs, set, "every attribute in the SGR must be set");
-            assert!(x.underline.is_some(), "underline");
+            assert!(x.underline.is_underlined(), "underline");
 
             let y = &rows[0][1];
             assert_eq!(y.ch, "Y");
             assert_eq!(y.attrs, Attrs::empty(), "SGR 0 must reset");
-            assert!(y.underline.is_none(), "SGR 0 must clear underline");
+            assert_eq!(
+                y.underline,
+                $crate::terminal::cell::UnderlineStyle::None,
+                "SGR 0 must clear underline"
+            );
         }
 
         /// Each extended underline reports its own style, not a flat boolean.
         #[test]
         fn conformance_underline_styles() {
-            use $crate::terminal::cell::UnderlineStyle::*;
+            // Aliased, not glob-imported: `UnderlineStyle::None` would shadow
+            // `Option::None` in this scope.
+            use $crate::terminal::cell::UnderlineStyle as U;
             for (seq, want) in [
-                (&b"\x1b[4m"[..], Single),
-                (&b"\x1b[4:2m"[..], Double),
-                (&b"\x1b[4:3m"[..], Curly),
-                (&b"\x1b[4:4m"[..], Dotted),
-                (&b"\x1b[4:5m"[..], Dashed),
+                (&b"\x1b[4m"[..], U::Single),
+                (&b"\x1b[4:2m"[..], U::Double),
+                (&b"\x1b[4:3m"[..], U::Curly),
+                (&b"\x1b[4:4m"[..], U::Dotted),
+                (&b"\x1b[4:5m"[..], U::Dashed),
             ] {
                 let mut e = conformance_emu(10, 2, 100);
                 e.process(seq);
                 e.process(b"U");
-                let u = e.viewable_rows()[0][0]
-                    .underline
-                    .unwrap_or_else(|| panic!("{seq:?} must underline"));
-                assert_eq!(u.style, want, "{seq:?}");
-                assert_eq!(u.color, None, "no SGR 58 means it follows the fg");
+                let cell = e.viewable_rows()[0][0].clone();
+                assert_eq!(cell.underline, want, "{seq:?}");
+                assert_eq!(
+                    cell.underline_color, None,
+                    "no SGR 58 means it follows the fg"
+                );
             }
         }
 
@@ -198,10 +205,38 @@ macro_rules! emulator_conformance_tests {
             let cell = e.viewable_rows()[0][0].clone();
             assert_eq!(cell.fg, Some($crate::terminal::cell::Color::from_index(1)));
             assert_eq!(
-                cell.underline.and_then(|u| u.color),
+                cell.underline_color,
                 Some($crate::terminal::cell::Color::from_index(33)),
                 "underline keeps its own color"
             );
+        }
+
+        /// The underline's color is tracked separately from its shape, so
+        /// SGR 58 survives a cell that is not underlined and SGR 24 leaves it
+        /// alone. Only a full reset clears both.
+        #[test]
+        fn conformance_underline_color_outlives_the_underline() {
+            use $crate::terminal::cell::{Color, UnderlineStyle as U};
+            let mut e = conformance_emu(10, 2, 100);
+            e.process(b"\x1b[58;5;33mA\x1b[4mB\x1b[24mC\x1b[0mD");
+            let rows = e.viewable_rows();
+
+            assert_eq!(rows[0][0].underline, U::None, "58 alone does not underline");
+            assert_eq!(
+                rows[0][0].underline_color,
+                Some(Color::from_index(33)),
+                "but its color is still tracked"
+            );
+            assert_eq!(rows[0][1].underline, U::Single, "4 turns it on");
+            assert_eq!(rows[0][1].underline_color, Some(Color::from_index(33)));
+            assert_eq!(rows[0][2].underline, U::None, "24 turns it off");
+            assert_eq!(
+                rows[0][2].underline_color,
+                Some(Color::from_index(33)),
+                "24 clears the shape, not the color"
+            );
+            assert_eq!(rows[0][3].underline, U::None, "0 resets everything");
+            assert_eq!(rows[0][3].underline_color, None);
         }
 
         /// Named, 256-palette, and 24-bit colors map onto the color vocabulary.

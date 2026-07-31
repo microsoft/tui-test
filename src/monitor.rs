@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::terminal::cell::{Attrs, Color, EmuCell, Underline, UnderlineStyle};
+use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle};
 
 const BORDER: &str = "\x1b[38;5;240m";
 const RESET: &str = "\x1b[0m";
@@ -147,7 +147,8 @@ fn border_line(out: &mut String, left: char, right: char, title: &str, inner_w: 
 struct Style {
     fg: Option<Color>,
     bg: Option<Color>,
-    underline: Option<Underline>,
+    underline: UnderlineStyle,
+    underline_color: Option<Color>,
     attrs: Attrs,
 }
 
@@ -157,6 +158,7 @@ impl Style {
             fg: c.fg,
             bg: c.bg,
             underline: c.underline,
+            underline_color: c.underline_color,
             attrs: c.attrs,
         }
     }
@@ -177,19 +179,20 @@ impl Style {
                 s.push_str(code);
             }
         }
-        if let Some(u) = self.underline {
-            let sub = match u.style {
-                UnderlineStyle::Single => 1,
-                UnderlineStyle::Double => 2,
-                UnderlineStyle::Curly => 3,
-                UnderlineStyle::Dotted => 4,
-                UnderlineStyle::Dashed => 5,
-            };
+        let sub = match self.underline {
+            UnderlineStyle::None => 0,
+            UnderlineStyle::Single => 1,
+            UnderlineStyle::Double => 2,
+            UnderlineStyle::Curly => 3,
+            UnderlineStyle::Dotted => 4,
+            UnderlineStyle::Dashed => 5,
+        };
+        if sub != 0 {
             s.push_str(&format!(";4:{sub}"));
             // SGR 58 takes its arguments as colon-joined subparameters. Mixing
             // in a `;` would end the parameter early and the terminal would
             // read whatever follows as the underline's color instead.
-            match u.color {
+            match self.underline_color {
                 Some(Color::Rgb(r, g, b)) => s.push_str(&format!(";58:2::{r}:{g}:{b}")),
                 Some(c) => s.push_str(&format!(";58:5:{}", c.to_index())),
                 None => {}
@@ -371,28 +374,22 @@ mod tests {
             Style {
                 fg: Some(Color::Named(NamedColor::Red)),
                 bg: Some(Color::Idx(196)),
-                underline: Some(Underline {
-                    style: UnderlineStyle::Curly,
-                    color: Some(Color::Rgb(1, 2, 3)),
-                }),
+                underline: UnderlineStyle::Curly,
+                underline_color: Some(Color::Rgb(1, 2, 3)),
                 attrs: Attrs::BOLD | Attrs::ITALIC | Attrs::STRIKE,
             },
             Style {
                 fg: Some(Color::Rgb(9, 8, 7)),
                 bg: None,
-                underline: Some(Underline {
-                    style: UnderlineStyle::Dotted,
-                    color: Some(Color::Idx(33)),
-                }),
+                underline: UnderlineStyle::Dotted,
+                underline_color: Some(Color::Idx(33)),
                 attrs: Attrs::DIM,
             },
             Style {
                 fg: None,
                 bg: Some(Color::Named(NamedColor::BrightWhite)),
-                underline: Some(Underline {
-                    style: UnderlineStyle::Single,
-                    color: None,
-                }),
+                underline: UnderlineStyle::Single,
+                underline_color: None,
                 attrs: Attrs::empty(),
             },
         ];
@@ -404,11 +401,12 @@ mod tests {
             let got = Style::from(&emu.viewable_rows()[0][0]);
             assert!(
                 got == want,
-                "{:?} round-tripped to fg={:?} bg={:?} underline={:?} attrs={:?}",
+                "{:?} round-tripped to fg={:?} bg={:?} underline={:?}/{:?} attrs={:?}",
                 want.sgr(),
                 got.fg,
                 got.bg,
                 got.underline,
+                got.underline_color,
                 got.attrs,
             );
         }

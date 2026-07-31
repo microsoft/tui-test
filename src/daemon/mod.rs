@@ -454,13 +454,13 @@ fn cell_json(x: u16, y: u16, cell: &EmuCell) -> serde_json::Value {
         "invisible": cell.has(Attrs::INVISIBLE),
         "strike": cell.has(Attrs::STRIKE),
         "blink": cell.has(Attrs::BLINK),
-        "underline": cell.underline.is_some(),
-        // Never null: an absent underline is the "none" style, and an
+        "underline": cell.underline.is_underlined(),
+        // Never null: an un-underlined cell is the "none" style, and an
         // underline that follows the text color is "default", the same
         // sentinel `fg` and `bg` use. A client can switch on the string
         // without a null check.
-        "underline_style": cell.underline.map_or("none", |u| u.style.name()),
-        "underline_color": color_json(cell.underline.and_then(|u| u.color)),
+        "underline_style": cell.underline.name(),
+        "underline_color": color_json(cell.underline_color),
     })
 }
 
@@ -862,7 +862,7 @@ fn format_timeout(timeout_ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::cell::{NamedColor, Underline, UnderlineStyle};
+    use crate::terminal::cell::{NamedColor, UnderlineStyle};
 
     /// Every attribute in the vocabulary reaches the wire, including ones the
     /// alacritty backend can never source (blink), so clients written against
@@ -873,10 +873,8 @@ mod tests {
             ch: "x".into(),
             fg: Some(Color::Named(NamedColor::Red)),
             bg: Some(Color::Idx(196)),
-            underline: Some(Underline {
-                style: UnderlineStyle::Curly,
-                color: Some(Color::Rgb(1, 2, 3)),
-            }),
+            underline: UnderlineStyle::Curly,
+            underline_color: Some(Color::Rgb(1, 2, 3)),
             attrs: Attrs::all(),
         };
         let v = cell_json(3, 4, &cell);
@@ -913,10 +911,8 @@ mod tests {
         // Underlined, but with no color of its own: it follows the text color,
         // which is the same thing `fg: "default"` means.
         let cell = EmuCell {
-            underline: Some(Underline {
-                style: UnderlineStyle::Single,
-                color: None,
-            }),
+            underline: UnderlineStyle::Single,
+            underline_color: None,
             ..EmuCell::blank()
         };
         let v = cell_json(0, 0, &cell);

@@ -15,7 +15,7 @@ use alacritty_terminal::vte::ansi;
 
 use compact_str::{CompactString, ToCompactString};
 
-use crate::terminal::cell::{Attrs, Color, EmuCell, Underline, UnderlineStyle, CONTINUATION};
+use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::Emulator;
 
 /// Alacritty's palette colors arrive either as a `Named` variant or an index;
@@ -49,11 +49,11 @@ fn color_from_alac(c: ansi::Color) -> Option<Color> {
     }
 }
 
-fn underline_from_alac(c: &alacritty_terminal::term::cell::Cell) -> Option<Underline> {
+fn underline_from_alac(c: &alacritty_terminal::term::cell::Cell) -> UnderlineStyle {
     let flags = c.flags;
     // Ordered widest-to-narrowest: alacritty clears the other underline bits on
     // each SGR, so at most one is ever set.
-    let style = if flags.contains(AlacFlags::DOUBLE_UNDERLINE) {
+    if flags.contains(AlacFlags::DOUBLE_UNDERLINE) {
         UnderlineStyle::Double
     } else if flags.contains(AlacFlags::UNDERCURL) {
         UnderlineStyle::Curly
@@ -64,12 +64,8 @@ fn underline_from_alac(c: &alacritty_terminal::term::cell::Cell) -> Option<Under
     } else if flags.contains(AlacFlags::UNDERLINE) {
         UnderlineStyle::Single
     } else {
-        return None;
-    };
-    Some(Underline {
-        style,
-        color: c.underline_color().and_then(color_from_alac),
-    })
+        UnderlineStyle::None
+    }
 }
 
 fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
@@ -111,6 +107,7 @@ fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
         fg: color_from_alac(c.fg),
         bg: color_from_alac(c.bg),
         underline: underline_from_alac(c),
+        underline_color: c.underline_color().and_then(color_from_alac),
         attrs,
     }
 }
