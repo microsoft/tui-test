@@ -335,12 +335,34 @@ macro_rules! emulator_conformance_tests {
             assert_eq!(text[1], "你   ", "the wrapped row is 5 columns wide too");
         }
 
-        /// A snapshot of text wrapping over several rows, wide char included.
-        /// Pinning the whole grid catches the off-by-one column errors that a
-        /// per-cell assertion reads past: here the wide char fits mid-row, so
-        /// no padding is involved and every row is exactly 5 columns.
+        /// The snapshot serializer, run against a real backend grid rather
+        /// than hand-built rows. This is the pairing that broke in practice:
+        /// the grid was right and `serialize` was right on its own inputs, but
+        /// the frame still came out misaligned because they disagreed on what
+        /// a continuation renders as. Any backend whose wrapping is off by a
+        /// column shows up here as a row that overruns the box.
         #[test]
-        fn conformance_wrap_snapshot() {
+        fn conformance_snapshot_frames_a_wrapped_wide_char() {
+            let mut e = conformance_emu(5, 3, 100);
+            e.process("abcd你".as_bytes());
+            assert_eq!(
+                $crate::assert::snapshot::serialize(&e.viewable_rows(), 5, false),
+                concat!(
+                    "\u{256d}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256e}\n",
+                    "\u{2502}abcd \u{2502}\n",
+                    "\u{2502}\u{4f60}   \u{2502}\n",
+                    "\u{2502}     \u{2502}\n",
+                    "\u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256f}",
+                )
+            );
+        }
+
+        /// The whole grid after text wraps over several rows, wide char
+        /// included. Pinning every row at once catches the off-by-one column
+        /// errors a per-cell assertion reads past: here the wide char fits
+        /// mid-row, so no padding is involved and every row is 5 columns.
+        #[test]
+        fn conformance_wrap_grid_over_several_rows() {
             let mut e = conformance_emu(5, 3, 100);
             e.process("abcdefg你ij".as_bytes());
             assert_eq!(
