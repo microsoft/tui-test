@@ -186,9 +186,12 @@ impl Style {
                 UnderlineStyle::Dashed => 5,
             };
             s.push_str(&format!(";4:{sub}"));
+            // SGR 58 takes its arguments as colon-joined subparameters. Mixing
+            // in a `;` would end the parameter early and the terminal would
+            // read whatever follows as the underline's color instead.
             match u.color {
-                Some(Color::Rgb(r, g, b)) => s.push_str(&format!(";58;2::{r}:{g}:{b}")),
-                Some(c) => s.push_str(&format!(";58;5;{}", c.to_index())),
+                Some(Color::Rgb(r, g, b)) => s.push_str(&format!(";58:2::{r}:{g}:{b}")),
+                Some(c) => s.push_str(&format!(";58:5:{}", c.to_index())),
                 None => {}
             }
         }
@@ -352,6 +355,62 @@ mod tests {
         EmuCell {
             ch: ch.into(),
             ..EmuCell::blank()
+        }
+    }
+
+    /// `sgr` writes to the viewer's real terminal, so the only honest check is
+    /// to feed it back through an emulator and see the same style come out.
+    /// A malformed escape does not fail loudly; it silently reassigns the
+    /// parameters that follow it, which is how `58` once swallowed the
+    /// foreground color.
+    #[test]
+    fn sgr_survives_a_round_trip_through_the_emulator() {
+        use crate::terminal::{alacritty::AlacrittyEmu, cell::NamedColor, emu::Emulator};
+
+        let styles = [
+            Style {
+                fg: Some(Color::Named(NamedColor::Red)),
+                bg: Some(Color::Idx(196)),
+                underline: Some(Underline {
+                    style: UnderlineStyle::Curly,
+                    color: Some(Color::Rgb(1, 2, 3)),
+                }),
+                attrs: Attrs::BOLD | Attrs::ITALIC | Attrs::STRIKE,
+            },
+            Style {
+                fg: Some(Color::Rgb(9, 8, 7)),
+                bg: None,
+                underline: Some(Underline {
+                    style: UnderlineStyle::Dotted,
+                    color: Some(Color::Idx(33)),
+                }),
+                attrs: Attrs::DIM,
+            },
+            Style {
+                fg: None,
+                bg: Some(Color::Named(NamedColor::BrightWhite)),
+                underline: Some(Underline {
+                    style: UnderlineStyle::Single,
+                    color: None,
+                }),
+                attrs: Attrs::empty(),
+            },
+        ];
+
+        for want in styles {
+            let mut emu = AlacrittyEmu::new(10, 2, 0);
+            emu.process(want.sgr().as_bytes());
+            emu.process(b"x");
+            let got = Style::from(&emu.viewable_rows()[0][0]);
+            assert!(
+                got == want,
+                "{:?} round-tripped to fg={:?} bg={:?} underline={:?} attrs={:?}",
+                want.sgr(),
+                got.fg,
+                got.bg,
+                got.underline,
+                got.attrs,
+            );
         }
     }
 
