@@ -163,6 +163,7 @@ shell-use mouse drag 2 2 20 2            # drag from (2,2) to (20,2)
 shell-use cells 0 0 10 1                       # inspect char/fg/bg/flags
 shell-use expect text "ERROR" --fg "#ff0000"   # text present AND red
 shell-use expect text "OK" --fg 2 --bg 0       # ansi-256 fg/bg
+shell-use expect text "plain" --fg default     # asserts the cell set no color
 ```
 
 ## Workflow: snapshot testing
