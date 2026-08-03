@@ -3,7 +3,7 @@
 
 use regex::Regex;
 
-use super::emu::EmuCell;
+use super::cell::EmuCell;
 
 pub enum Pattern {
     Text(String),
@@ -45,20 +45,13 @@ pub fn find(
         return Ok(None);
     }
     let width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    // One char per *column*, so match offsets map straight back to (x, y).
+    // A continuation cell holds no grapheme but still occupies its column, so
+    // it gets a filler here rather than being skipped as in `rows_to_strings`.
     let chars: Vec<char> = rows
         .iter()
         .flat_map(|row| {
-            (0..width).map(move |x| {
-                row.get(x)
-                    .map(|c| {
-                        if c.ch.is_empty() {
-                            ' '
-                        } else {
-                            c.ch.chars().next().unwrap_or(' ')
-                        }
-                    })
-                    .unwrap_or(' ')
-            })
+            (0..width).map(move |x| row.get(x).and_then(|c| c.ch.chars().next()).unwrap_or(' '))
         })
         .collect();
 

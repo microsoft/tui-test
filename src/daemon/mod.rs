@@ -20,7 +20,7 @@ use crate::input::{keys, mouse};
 use crate::ipc;
 use crate::monitor;
 use crate::protocol::{ErrorKind, GetField, MouseAction, Request, Response, TimeoutDefaults};
-use crate::terminal::emu::{rows_to_strings, Color, EmuCell};
+use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::locator::{self, Pattern};
 use logger::Logger;
 use session::{Session, TermState};
@@ -233,7 +233,7 @@ impl Daemon {
                 let ready = if wait_ready.unwrap_or(program.is_none()) {
                     await_ready(&s, ready_timeout)
                 } else {
-                    s.state.lock().unwrap().emu.tracker().is_ready()
+                    s.state.lock().unwrap().tracker.is_ready()
                 };
                 if wait_ready == Some(true) && !ready {
                     let message = assertion_message(
@@ -356,7 +356,7 @@ fn await_ready(s: &Session, timeout_ms: u64) -> bool {
     loop {
         {
             let st = s.state.lock().unwrap();
-            if st.emu.tracker().is_ready() {
+            if st.tracker.is_ready() {
                 return true;
             }
             if st.exited.is_some() {
@@ -495,11 +495,11 @@ fn state(s: &Session) -> Response {
         "cols": cols,
         "rows": rows,
         "cursor": { "x": cx, "y": cy },
-        "cwd": st.emu.tracker().cwd(),
-        "last_command": st.emu.tracker().last_command(),
-        "last_exit": st.emu.tracker().last_exit(),
+        "cwd": st.tracker.cwd(),
+        "last_command": st.tracker.last_command(),
+        "last_exit": st.tracker.last_exit(),
         "exited": st.exited,
-        "ready": st.emu.tracker().is_ready(),
+        "ready": st.tracker.is_ready(),
         "timeouts": effective_timeouts(s),
         "text": text,
     }))
@@ -522,38 +522,58 @@ fn cells(s: &Session, x: u16, y: u16, w: u16, h: u16) -> Response {
     for row in y..y.saturating_add(h.max(1)) {
         for col in x..x.saturating_add(w.max(1)) {
             if let Some(cell) = rows.get(row as usize).and_then(|r| r.get(col as usize)) {
-                out.push(json!({
-                    "x": col,
-                    "y": row,
-                    "char": if cell.ch.is_empty() { " ".to_string() } else { cell.ch.clone() },
-                    "fg": color_json(cell.fg),
-                    "bg": color_json(cell.bg),
-                    "bold": cell.bold,
-                    "italic": cell.italic,
-                    "underline": cell.underline,
-                    "inverse": cell.inverse,
-                }));
+                out.push(cell_json(col, row, cell));
             }
         }
     }
     Response::with(json!({ "cells": out }))
 }
 
-fn color_json(c: Color) -> serde_json::Value {
+/// One cell in wire form. Every attribute the neutral model carries is
+/// reported, including ones no current backend can source, so a client can be
+/// written against the full vocabulary rather than against alacritty.
+fn cell_json(x: u16, y: u16, cell: &EmuCell) -> serde_json::Value {
+    json!({
+        "x": x,
+        "y": y,
+        "char": cell.ch.as_str(),
+        "fg": color_json(cell.fg),
+        "bg": color_json(cell.bg),
+        "bold": cell.has(Attrs::BOLD),
+        "dim": cell.has(Attrs::DIM),
+        "italic": cell.has(Attrs::ITALIC),
+        "inverse": cell.has(Attrs::INVERSE),
+        "invisible": cell.has(Attrs::INVISIBLE),
+        "strike": cell.has(Attrs::STRIKE),
+        "blink": cell.has(Attrs::BLINK),
+        "underline": cell.underline.is_underlined(),
+        // Never null: an un-underlined cell is the "none" style, and an
+        // underline that follows the text color is "default", the same
+        // sentinel `fg` and `bg` use. A client can switch on the string
+        // without a null check.
+        "underline_style": cell.underline.name(),
+        "underline_color": color_json(cell.underline_color),
+    })
+}
+
+/// Wire form: `"default"`, a 256-color index, or `"#rrggbb"`. Named and
+/// indexed colors both serialize to their palette index, so the split between
+/// them stays internal and the language bindings are unaffected.
+fn color_json(c: Option<Color>) -> serde_json::Value {
     match c {
-        Color::Default => json!("default"),
-        Color::Idx(i) => json!(i),
-        Color::Rgb(r, g, b) => json!(format!("#{r:02x}{g:02x}{b:02x}")),
+        None => json!(crate::assert::color::DEFAULT),
+        Some(Color::Rgb(r, g, b)) => json!(format!("#{r:02x}{g:02x}{b:02x}")),
+        Some(c) => json!(c.to_index()),
     }
 }
 
 fn get(s: &Session, field: GetField) -> Response {
     let st = s.state.lock().unwrap();
     let value = match field {
-        GetField::Command => json!(st.emu.tracker().last_command()),
-        GetField::Output => json!(st.emu.tracker().last_output()),
-        GetField::ExitCode => json!(st.emu.tracker().last_exit()),
-        GetField::Cwd => json!(st.emu.tracker().cwd()),
+        GetField::Command => json!(st.tracker.last_command()),
+        GetField::Output => json!(st.tracker.last_output()),
+        GetField::ExitCode => json!(st.tracker.last_exit()),
+        GetField::Cwd => json!(st.tracker.cwd()),
         GetField::Cursor => {
             let (x, y) = st.emu.cursor();
             json!({ "x": x, "y": y })
@@ -696,7 +716,7 @@ fn wait_idle(s: &Session, timeout_ms: u64) -> Response {
 
 fn awaiting_command_start(st: &TermState) -> bool {
     st.awaiting_start
-        .is_some_and(|seen| st.emu.tracker().started_count() == seen)
+        .is_some_and(|seen| st.tracker.started_count() == seen)
 }
 
 fn command_settled(s: &Session, baseline: u64) -> bool {
@@ -705,7 +725,7 @@ fn command_settled(s: &Session, baseline: u64) -> bool {
     if st.exited.is_some() {
         return true;
     }
-    let tracker = st.emu.tracker();
+    let tracker = &st.tracker;
     if !tracker.started() {
         return st.last_change.elapsed() >= QUIET;
     }
@@ -716,7 +736,7 @@ fn command_settled(s: &Session, baseline: u64) -> bool {
 }
 
 fn wait_command(s: &Session, timeout_ms: u64) -> Response {
-    let baseline = s.state.lock().unwrap().emu.tracker().finished_count();
+    let baseline = s.state.lock().unwrap().tracker.finished_count();
     if poll_until(|| command_settled(s, baseline), timeout_ms) {
         return Response::ok();
     }
@@ -834,11 +854,7 @@ fn check_colors(
                     if not { "absent" } else { "present" },
                     expected.describe(),
                     color::describe_cell(c.cell.fg, &expected),
-                    if c.cell.ch.is_empty() {
-                        " "
-                    } else {
-                        &c.cell.ch
-                    },
+                    c.cell.ch,
                     c.x,
                     c.y
                 ));
@@ -854,11 +870,7 @@ fn check_colors(
                     if not { "absent" } else { "present" },
                     expected.describe(),
                     color::describe_cell(c.cell.bg, &expected),
-                    if c.cell.ch.is_empty() {
-                        " "
-                    } else {
-                        &c.cell.ch
-                    },
+                    c.cell.ch,
                     c.x,
                     c.y
                 ));
@@ -871,14 +883,14 @@ fn check_colors(
 /// Assert the last completed command's exit code.
 /// Wait first: `last_exit` holds the previous code until a new command finishes.
 fn expect_exit_code(s: &Session, code: i32, timeout_ms: u64) -> Response {
-    let baseline = s.state.lock().unwrap().emu.tracker().finished_count();
+    let baseline = s.state.lock().unwrap().tracker.finished_count();
     if !poll_until(|| command_settled(s, baseline), timeout_ms) {
         return Response::assertion(format!(
             "expected exit code {code}: timed out after {timeout_ms}ms; {}",
             stall_reason(s)
         ));
     }
-    let actual = s.state.lock().unwrap().emu.tracker().last_exit();
+    let actual = s.state.lock().unwrap().tracker.last_exit();
     match actual {
         Some(a) if a == code => Response::ok(),
         Some(a) => Response::assertion(format!("expected exit code {code}, got {a}")),
@@ -891,8 +903,7 @@ fn expect_output(s: &Session, text: &str, regex: bool) -> Response {
         .state
         .lock()
         .unwrap()
-        .emu
-        .tracker()
+        .tracker
         .last_output()
         .map(|o| o.to_string());
     let Some(output) = output else {
@@ -972,5 +983,68 @@ fn format_timeout(timeout_ms: u64) -> String {
         format!("{}s", timeout_ms / 1_000)
     } else {
         format!("{timeout_ms}ms")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terminal::cell::{NamedColor, UnderlineStyle};
+
+    /// Every attribute in the vocabulary reaches the wire, including ones the
+    /// alacritty backend can never source (blink), so clients written against
+    /// the full model keep working when another backend starts reporting them.
+    #[test]
+    fn cell_json_reports_the_whole_vocabulary() {
+        let cell = EmuCell {
+            ch: "x".into(),
+            fg: Some(Color::Named(NamedColor::Red)),
+            bg: Some(Color::Idx(196)),
+            underline: UnderlineStyle::Curly,
+            underline_color: Some(Color::Rgb(1, 2, 3)),
+            attrs: Attrs::all(),
+        };
+        let v = cell_json(3, 4, &cell);
+        assert_eq!(v["x"], json!(3));
+        assert_eq!(v["char"], json!("x"));
+        assert_eq!(v["fg"], json!(1));
+        assert_eq!(v["bg"], json!(196));
+        for key in [
+            "bold",
+            "dim",
+            "italic",
+            "inverse",
+            "invisible",
+            "strike",
+            "blink",
+            "underline",
+        ] {
+            assert_eq!(v[key], json!(true), "{key} must be reported");
+        }
+        assert_eq!(v["underline_style"], json!("curly"));
+        assert_eq!(v["underline_color"], json!("#010203"));
+    }
+
+    /// The underline fields are never null, so a client can switch on the
+    /// style string and compare the color the same way it does `fg`.
+    #[test]
+    fn cell_json_underline_fields_are_never_null() {
+        let v = cell_json(0, 0, &EmuCell::blank());
+        assert_eq!(v["underline"], json!(false));
+        assert_eq!(v["underline_style"], json!("none"));
+        assert_eq!(v["underline_color"], json!("default"));
+        assert_eq!(v["blink"], json!(false));
+
+        // Underlined, but with no color of its own: it follows the text color,
+        // which is the same thing `fg: "default"` means.
+        let cell = EmuCell {
+            underline: UnderlineStyle::Single,
+            underline_color: None,
+            ..EmuCell::blank()
+        };
+        let v = cell_json(0, 0, &cell);
+        assert_eq!(v["underline"], json!(true));
+        assert_eq!(v["underline_style"], json!("single"));
+        assert_eq!(v["underline_color"], json!("default"));
     }
 }

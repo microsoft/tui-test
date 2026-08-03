@@ -30,3 +30,5 @@ sha2 = "0.10.9"
 crossterm = "0.28"
 ttf-parser = { version = "0.25.1", default-features = false, features = ["std"] }
 dialoguer = { version = "0.11", default-features = false }
+compact_str = "0.10.0"
+bitflags = "2.13.1"

@@ -655,10 +655,12 @@ pub enum ExpectCmd {
         /// Invert: assert the text is NOT present.
         #[arg(long)]
         not: bool,
-        /// Require this foreground color on the match.
+        /// Require this foreground color on the match: `default`, an ansi256
+        /// index (0-255), hex (#rrggbb), or rgb (r,g,b).
         #[arg(long)]
         fg: Option<String>,
-        /// Require this background color on the match.
+        /// Require this background color on the match: `default`, an ansi256
+        /// index (0-255), hex (#rrggbb), or rgb (r,g,b).
         #[arg(long)]
         bg: Option<String>,
         /// Timeout in milliseconds.
