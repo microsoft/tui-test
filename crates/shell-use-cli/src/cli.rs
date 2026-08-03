@@ -1,8 +1,8 @@
 use clap::{Args, Parser, Subcommand};
 
-use crate::config::{DEFAULT_COLS, DEFAULT_ROWS};
-use crate::protocol::TimeoutDefaults;
-use crate::shell::Shell;
+use shell_use::config::{DEFAULT_COLS, DEFAULT_ROWS};
+use shell_use::protocol::TimeoutDefaults;
+use shell_use::shell::Shell;
 
 /// Per-class default timeouts for a session, in milliseconds.
 #[derive(Args, Clone, Copy, Default)]

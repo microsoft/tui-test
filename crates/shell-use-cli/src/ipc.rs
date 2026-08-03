@@ -9,7 +9,7 @@ use interprocess::local_socket::{GenericFilePath, GenericNamespaced, ListenerOpt
 
 pub use interprocess::local_socket::Stream;
 
-use crate::protocol::{Request, Response};
+use shell_use::protocol::{Request, Response};
 
 fn to_name(raw: &str) -> std::io::Result<interprocess::local_socket::Name<'_>> {
     if cfg!(windows) {

@@ -873,17 +873,28 @@ dependencies = [
  "bitflags 2.13.1",
  "clap",
  "compact_str",
- "crossterm",
- "dialoguer",
  "dirs",
  "flate2",
- "interprocess",
  "portable-pty",
  "regex",
  "serde",
  "serde_json",
- "sha2",
  "ttf-parser",
+]
+
+[[package]]
+name = "shell-use-cli"
+version = "0.0.1-beta.5"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm",
+ "dialoguer",
+ "dirs",
+ "interprocess",
+ "serde_json",
+ "sha2",
+ "shell-use",
 ]
 
 [[package]]

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle};
+use shell_use::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle};
 
 const BORDER: &str = "\x1b[38;5;240m";
 const RESET: &str = "\x1b[0m";
@@ -259,7 +259,7 @@ enum Action {
 
 fn stream_loop(socket: &str) -> i32 {
     use crate::ipc;
-    use crate::protocol::Request;
+    use shell_use::protocol::Request;
 
     loop {
         let (vcols, vrows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -368,7 +368,7 @@ mod tests {
     /// foreground color.
     #[test]
     fn sgr_survives_a_round_trip_through_the_emulator() {
-        use crate::terminal::{alacritty::AlacrittyEmu, cell::NamedColor, emu::Emulator};
+        use shell_use::terminal::{alacritty::AlacrittyEmu, cell::NamedColor, emu::Emulator};
 
         let styles = [
             Style {

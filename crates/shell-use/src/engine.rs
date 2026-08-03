@@ -1,36 +1,27 @@
-//! Per-session daemon: owns one [`Session`], listens on the session socket, and
-//! services CLI requests (input, inspection, waits, assertions, recording).
+//! Reusable in-process terminal engine.
 
-pub mod logger;
-pub mod session;
-
-use std::io::Write;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use interprocess::local_socket::traits::ListenerExt;
-use interprocess::local_socket::Stream;
-
 use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
 use crate::config::{self, POLL_DELAY_MS};
 use crate::input::{keys, mouse};
-use crate::ipc;
-use crate::monitor;
+use crate::logger::Logger;
 use crate::protocol::{ErrorKind, GetField, MouseAction, Request, Response, TimeoutDefaults};
+use crate::session::{Session, TermState};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::locator::{self, Pattern};
-use logger::Logger;
-use session::{Session, TermState};
 
-pub struct Daemon {
+pub struct Engine {
     name: String,
     session: Mutex<Option<Session>>,
     live: Arc<Mutex<Option<LiveTarget>>>,
     logger: Arc<Logger>,
-    last_activity: Mutex<Instant>,
+    recording_path: PathBuf,
 }
 
 /// The current session's renderable state, shared with monitor threads so they
@@ -41,113 +32,12 @@ struct LiveTarget {
     shell: Option<&'static str>,
 }
 
-/// Run the daemon for `session_name` until it is closed.
-pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
-    config::ensure_home()?;
-    sweep_recordings(&session_name);
-    let socket = config::socket_name(&session_name);
-    let listener = ipc::listen(&socket)?;
-    std::fs::write(
-        config::pid_file(&session_name),
-        std::process::id().to_string(),
-    )
-    .ok();
-
-    let logger = if verbose {
-        match Logger::to_file(&config::log_file(&session_name)) {
-            Ok(l) => Arc::new(l),
-            Err(_) => Arc::new(Logger::disabled()),
-        }
-    } else {
-        Arc::new(Logger::disabled())
-    };
-    logger.event(&format!(
-        "daemon start session={session_name} pid={}",
-        std::process::id()
-    ));
-
-    let daemon = Arc::new(Daemon {
-        name: session_name.clone(),
-        session: Mutex::new(None),
-        live: Arc::new(Mutex::new(None)),
-        logger,
-        last_activity: Mutex::new(Instant::now()),
-    });
-
-    spawn_idle_watchdog(Arc::clone(&daemon));
-
-    for conn in listener.incoming() {
-        let Ok(mut conn) = conn else { continue };
-        let req = match ipc::read_request(&conn) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        *daemon.last_activity.lock().unwrap() = Instant::now();
-        if let Request::Monitor { cols, rows } = req {
-            daemon.spawn_monitor(conn, (cols, rows));
-            continue;
-        }
-        let (resp, shutdown) = daemon.handle(req);
-        let _ = ipc::write_response(&mut conn, &resp);
-        if shutdown {
-            ipc::drain_peer(conn, Duration::from_millis(config::SHUTDOWN_DRAIN_MS));
-            break;
-        }
-    }
-
-    cleanup(&session_name);
-    Ok(())
-}
-
-fn cleanup(session: &str) {
-    let _ = std::fs::remove_file(config::pid_file(session));
-    if !cfg!(windows) {
-        let _ = std::fs::remove_file(config::socket_name(session));
-    }
-}
-
-/// Shut the daemon down once it has gone `IDLE_TIMEOUT_MS` without servicing a
-/// request, checked every `IDLE_CHECK_INTERVAL_MS`. Kills the session's pty,
-/// removes the daemon's state files, and exits the process.
-fn spawn_idle_watchdog(daemon: Arc<Daemon>) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_millis(config::IDLE_CHECK_INTERVAL_MS));
-        let idle = daemon.last_activity.lock().unwrap().elapsed();
-        if idle >= Duration::from_millis(config::IDLE_TIMEOUT_MS) {
-            daemon.logger.event(&format!(
-                "idle timeout: no activity for {}s, shutting down",
-                idle.as_secs()
-            ));
-            if let Some(s) = daemon.session.lock().unwrap().as_ref() {
-                s.kill();
-            }
-            cleanup(&daemon.name);
-            std::process::exit(0);
-        }
-    });
-}
-
-/// Remove leftover `.cast` recordings at daemon start. Recordings of sessions
-/// that are still running (their socket is connectable) are kept; the rest are
-/// deleted. Called before this daemon's own socket is listening, so the current
-/// session's stale cast is included.
-fn sweep_recordings(current: &str) {
-    let Ok(entries) = std::fs::read_dir(config::recording_dir()) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("cast") {
-            continue;
-        }
-        let Some(session) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if session != current && ipc::is_running(&config::socket_name(session)) {
-            continue;
-        }
-        let _ = std::fs::remove_file(&path);
-    }
+pub struct LiveFrame {
+    pub grid: Vec<Vec<EmuCell>>,
+    pub cursor: (u16, u16),
+    pub size: (u16, u16),
+    pub exited: Option<i32>,
+    pub shell: Option<&'static str>,
 }
 
 /// One-line request description for the verbose log. `Open` redacts env values
@@ -171,8 +61,18 @@ fn req_summary(req: &Request) -> String {
     }
 }
 
-impl Daemon {
-    fn handle(&self, req: Request) -> (Response, bool) {
+impl Engine {
+    pub fn new(name: String, logger: Arc<Logger>, recording_path: PathBuf) -> Self {
+        Engine {
+            name,
+            session: Mutex::new(None),
+            live: Arc::new(Mutex::new(None)),
+            logger,
+            recording_path,
+        }
+    }
+
+    pub fn handle(&self, req: Request) -> (Response, bool) {
         if self.logger.enabled() {
             self.logger.event(&format!("req {}", req_summary(&req)));
         }
@@ -225,7 +125,7 @@ impl Daemon {
             env,
             timeouts,
             self.logger.clone(),
-            config::recording_file(&self.name),
+            self.recording_path.clone(),
         ) {
             Ok(s) => {
                 let shell_pid = s.pid();
@@ -254,45 +154,35 @@ impl Daemon {
                 *self.session.lock().unwrap() = Some(s);
                 *self.live.lock().unwrap() = Some(live);
                 Response::with(json!({
-                    "pid": std::process::id(),
                     "shell_pid": shell_pid,
                     "session": self.name,
                     "ready": ready,
-                    "recording": config::recording_file(&self.name).to_string_lossy(),
+                    "recording": self.recording_path.to_string_lossy(),
                 }))
             }
+
             Err(e) => Response::internal(format!("failed to open session: {e}")),
         }
     }
 
     fn status(&self) -> Response {
-        let log = self
-            .logger
-            .enabled()
-            .then(|| config::log_file(&self.name).to_string_lossy().into_owned());
         let guard = self.session.lock().unwrap();
         match guard.as_ref() {
             Some(s) => {
                 let st = s.state.lock().unwrap();
                 Response::with(json!({
                     "session": self.name,
-                    "pid": std::process::id(),
                     "shell_pid": s.pid(),
                     "cols": s.cols,
                     "rows": s.rows,
                     "shell": s.shell.map(|sh| sh.as_str()),
                     "exited": st.exited,
                     "timeouts": effective_timeouts(s),
-                    "log": log,
-                    "version": env!("CARGO_PKG_VERSION"),
                 }))
             }
             None => Response::with(json!({
                 "session": self.name,
-                "pid": std::process::id(),
                 "shell_pid": null,
-                "log": log,
-                "version": env!("CARGO_PKG_VERSION"),
             })),
         }
     }
@@ -305,39 +195,22 @@ impl Daemon {
         }
     }
 
-    /// Stream framed, full-color frames of the live session to a monitor client
-    /// until it detaches. Runs on its own thread so the accept loop keeps
-    /// serving the agent, and reads only the shared emulator state (never the
-    /// session lock) so long `wait`s don't stall the view.
-    fn spawn_monitor(&self, conn: Stream, viewer: (u16, u16)) {
-        let live = self.live.clone();
-        let name = self.name.clone();
-        let logger = self.logger.clone();
-        std::thread::spawn(move || {
-            logger.event("monitor attached");
-            let mut conn = conn;
-            loop {
-                let frame = {
-                    let guard = live.lock().unwrap();
-                    guard.as_ref().map(|t| {
-                        let st = t.state.lock().unwrap();
-                        monitor::Frame {
-                            grid: st.emu.viewable_rows(),
-                            cursor: st.emu.cursor(),
-                            size: st.emu.size(),
-                            exited: st.exited,
-                            shell: t.shell,
-                        }
-                    })
-                };
-                let bytes = monitor::render_frame(frame.as_ref(), viewer, &name);
-                if conn.write_all(&bytes).is_err() || conn.flush().is_err() {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(config::MONITOR_FRAME_MS));
+    pub fn frame(&self) -> Option<LiveFrame> {
+        let live = self.live.lock().unwrap();
+        live.as_ref().map(|target| {
+            let state = target.state.lock().unwrap();
+            LiveFrame {
+                grid: state.emu.viewable_rows(),
+                cursor: state.emu.cursor(),
+                size: state.emu.size(),
+                exited: state.exited,
+                shell: target.shell,
             }
-            logger.event("monitor detached");
-        });
+        })
+    }
+
+    pub fn log_event(&self, message: &str) {
+        self.logger.event(message);
     }
 }
 

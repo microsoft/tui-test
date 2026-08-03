@@ -1,4 +1,4 @@
-//! Optional verbose logging of everything the daemon reads from and writes to
+//! Optional verbose logging of everything a terminal session reads and writes
 //! the PTY, plus lifecycle events. Modeled on inshellisense's data log: every
 //! record is timestamped and byte-escaped so control sequences are visible.
 //!

@@ -8,7 +8,7 @@ use crate::terminal::cell::EmuCell;
 // Nerd Fonts Symbols v3.4.0 is MIT-licensed; see the adjacent LICENSE.
 const FONT_DATA: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/assets/nerd-fonts/SymbolsNerdFontMono-Regular.ttf"
+    "/../../assets/nerd-fonts/SymbolsNerdFontMono-Regular.ttf"
 ));
 
 struct Glyph {
@@ -260,7 +260,7 @@ mod tests {
     fn bundled_font_includes_its_mit_license() {
         let license = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/assets/nerd-fonts/LICENSE"
+            "/../../assets/nerd-fonts/LICENSE"
         ));
         assert!(license.starts_with("The MIT License (MIT)"));
         assert!(license.contains("Copyright (c) 2014 Ryan L McIntyre"));
