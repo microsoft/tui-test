@@ -57,6 +57,20 @@ fn main() {
         Command::GetRecording { session: target } => get_recording(target.unwrap_or(session)),
         Command::Sessions => list_sessions(cli.json),
         Command::Close { all } if all => close_all(cli.json),
+        Command::Daemon {
+            cmd: DaemonCmd::Start,
+        } => daemon_start(&session, cli.verbose, cli.json),
+        Command::Daemon {
+            cmd: DaemonCmd::Status,
+        } => daemon_status(&session, cli.json),
+        Command::Daemon {
+            cmd: DaemonCmd::Stop { all },
+        } => daemon_stop(
+            &session,
+            all,
+            config::session_was_specified(&cli.session),
+            cli.json,
+        ),
         Command::Monitor => monitor::run_client(&session),
         command => run_remote(&session, command, cli.json, cli.verbose),
     };
@@ -88,6 +102,14 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
     }
 }
 
+fn ready_flag(wait_ready: bool, no_wait_ready: bool) -> Option<bool> {
+    match (wait_ready, no_wait_ready) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    }
+}
+
 fn build_request(command: Command) -> anyhow::Result<Request> {
     let req = match command {
         Command::Open {
@@ -96,6 +118,9 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             rows,
             cwd,
             env,
+            wait_ready,
+            no_wait_ready,
+            timeouts,
         } => Request::Open {
             shell,
             program: None,
@@ -103,6 +128,8 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             rows,
             cwd,
             env: parse_env(&env)?,
+            wait_ready: ready_flag(wait_ready, no_wait_ready),
+            timeouts: timeouts.into(),
         },
         Command::Run {
             program,
@@ -111,6 +138,9 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             rows,
             cwd,
             env,
+            wait_ready,
+            no_wait_ready,
+            timeouts,
         } => {
             let mut prog = vec![program];
             prog.extend(args);
@@ -121,13 +151,17 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 rows,
                 cwd,
                 env: parse_env(&env)?,
+                wait_ready: ready_flag(wait_ready, no_wait_ready),
+                timeouts: timeouts.into(),
             }
         }
         Command::Close { .. } => Request::Close,
-        Command::Daemon { cmd } => match cmd {
-            DaemonCmd::Status => Request::Status,
-            DaemonCmd::Stop => Request::Shutdown,
-        },
+        // Every `daemon` subcommand is handled in `main`: they decide for
+        // themselves whether to start a daemon, and requests built here always
+        // do.
+        Command::Daemon { .. } => {
+            anyhow::bail!("internal: `daemon` must be handled before build_request")
+        }
         Command::State => Request::State,
         Command::Text { full } => Request::Text { full },
         Command::Screenshot { path, out, full } => Request::Screenshot {
@@ -233,6 +267,9 @@ fn map_wait(what: WaitCmd) -> Request {
         WaitCmd::Exit { timeout } => Request::WaitExit {
             timeout_ms: timeout,
         },
+        WaitCmd::Ready { timeout } => Request::WaitReady {
+            timeout_ms: timeout,
+        },
     }
 }
 
@@ -257,7 +294,10 @@ fn map_expect(what: ExpectCmd) -> Request {
             bg,
             timeout_ms: timeout,
         },
-        ExpectCmd::ExitCode { code } => Request::ExpectExitCode { code },
+        ExpectCmd::ExitCode { code, timeout } => Request::ExpectExitCode {
+            code,
+            timeout_ms: timeout,
+        },
         ExpectCmd::Output { text, regex } => Request::ExpectOutput { text, regex },
         ExpectCmd::Snapshot {
             name,
@@ -321,6 +361,7 @@ fn spawn_detached(exe: &Path, session: &str, verbose: bool) -> anyhow::Result<()
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    disown_std_handles();
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("__daemon").arg("--session").arg(session);
     if verbose {
@@ -332,6 +373,35 @@ fn spawn_detached(exe: &Path, session: &str, verbose: bool) -> anyhow::Result<()
         .stderr(std::process::Stdio::null())
         .spawn()?;
     Ok(())
+}
+
+/// Clear stdio inheritance so a detached Windows daemon cannot keep pipe EOF open.
+#[cfg(windows)]
+fn disown_std_handles() {
+    use std::os::windows::io::AsRawHandle;
+
+    const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+
+    extern "system" {
+        fn SetHandleInformation(
+            h_object: *mut std::ffi::c_void,
+            dw_mask: u32,
+            dw_flags: u32,
+        ) -> i32;
+    }
+
+    let handles = [
+        std::io::stdin().as_raw_handle(),
+        std::io::stdout().as_raw_handle(),
+        std::io::stderr().as_raw_handle(),
+    ];
+    for handle in handles {
+        if !handle.is_null() {
+            // Safety: the handle comes from the standard streams, which outlive
+            // this call, and clearing the inherit flag never affects our own use.
+            unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -368,20 +438,26 @@ fn get_recording(session: String) -> i32 {
     }
 }
 
-fn list_sessions(json: bool) -> i32 {
-    let home = config::home_dir();
+/// Every session in this home whose daemon is currently answering.
+fn running_sessions() -> Vec<String> {
     let mut sessions = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&home) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(stripped) = name.strip_suffix(".pid") {
-                let socket = config::socket_name(stripped);
-                if ipc::is_running(&socket) {
-                    sessions.push(stripped.to_string());
-                }
+    let Ok(entries) = std::fs::read_dir(config::home_dir()) else {
+        return sessions;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(stripped) = name.strip_suffix(".pid") {
+            if ipc::is_running(&config::socket_name(stripped)) {
+                sessions.push(stripped.to_string());
             }
         }
     }
+    sessions.sort();
+    sessions
+}
+
+fn list_sessions(json: bool) -> i32 {
+    let sessions = running_sessions();
     if json {
         println!("{}", serde_json::json!({ "sessions": sessions }));
     } else if sessions.is_empty() {
@@ -395,17 +471,8 @@ fn list_sessions(json: bool) -> i32 {
 }
 
 fn close_all(json: bool) -> i32 {
-    let home = config::home_dir();
-    if let Ok(entries) = std::fs::read_dir(&home) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(stripped) = name.strip_suffix(".pid") {
-                let socket = config::socket_name(stripped);
-                if ipc::is_running(&socket) {
-                    let _ = ipc::send(&socket, &Request::Close);
-                }
-            }
-        }
+    for name in running_sessions() {
+        let _ = ipc::send(&config::socket_name(&name), &Request::Close);
     }
     if json {
         println!("{}", serde_json::json!({ "ok": true }));
@@ -415,6 +482,104 @@ fn close_all(json: bool) -> i32 {
     0
 }
 
+/// Start a session's daemon, returning only after the socket accepts connections.
+fn daemon_start(session: &str, verbose: bool, json: bool) -> i32 {
+    let running = ipc::is_running(&config::socket_name(session));
+    if let Err(e) = ensure_daemon(session, verbose) {
+        eprintln!("failed to start daemon: {e}");
+        return 4;
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "ok": true, "session": session, "started": !running })
+        );
+    } else if running {
+        println!("daemon already running for session '{session}'");
+    } else {
+        println!("started daemon for session '{session}'");
+    }
+    0
+}
+
+/// Report on a session's daemon without starting one.
+fn daemon_status(session: &str, json: bool) -> i32 {
+    let socket = config::socket_name(session);
+    if !ipc::is_running(&socket) {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({ "session": session, "running": false, "pid": null })
+            );
+        } else {
+            eprintln!("no daemon running for session '{session}'");
+        }
+        return 3;
+    }
+    match ipc::send(&socket, &Request::Status) {
+        Ok(resp) => print_response(&resp, json),
+        Err(e) => {
+            eprintln!("request failed: {e}");
+            4
+        }
+    }
+}
+
+/// Stop targeted daemons without auto-starting anything first.
+fn daemon_stop(session: &str, all: bool, targeted: bool, json: bool) -> i32 {
+    if all {
+        return stop_all_daemons(json);
+    }
+    if !targeted {
+        eprintln!(
+            "error: `daemon stop` needs a target; every session has its own daemon\n  \
+             --session <NAME>  stop one session's daemon (env: SHELL_USE_SESSION)\n  \
+             --all             stop every daemon\n\
+             hint: `shell-use sessions` lists what is running"
+        );
+        return 2;
+    }
+    let socket = config::socket_name(session);
+    if !ipc::is_running(&socket) {
+        eprintln!("no daemon running for session '{session}'");
+        return 3;
+    }
+    match ipc::send(&socket, &Request::Shutdown) {
+        Ok(resp) if resp.ok => {
+            report_stopped(&[session.to_string()], json);
+            0
+        }
+        Ok(resp) => print_response(&resp, json),
+        Err(e) => {
+            eprintln!("request failed: {e}");
+            4
+        }
+    }
+}
+
+fn stop_all_daemons(json: bool) -> i32 {
+    let mut stopped = Vec::new();
+    for name in running_sessions() {
+        if ipc::send(&config::socket_name(&name), &Request::Shutdown).is_ok() {
+            stopped.push(name);
+        }
+    }
+    report_stopped(&stopped, json);
+    0
+}
+
+fn report_stopped(stopped: &[String], json: bool) {
+    if json {
+        println!("{}", serde_json::json!({ "ok": true, "stopped": stopped }));
+    } else if stopped.is_empty() {
+        println!("no daemons running");
+    } else {
+        for name in stopped {
+            println!("stopped daemon for session '{name}'");
+        }
+    }
+}
+
 fn print_response(resp: &Response, json: bool) -> i32 {
     if json {
         println!("{}", serde_json::to_string(resp).unwrap_or_default());
@@ -422,11 +587,7 @@ fn print_response(resp: &Response, json: bool) -> i32 {
     }
     if resp.ok {
         if let Some(data) = &resp.data {
-            if let Some(text) = data.get("text").and_then(|v| v.as_str()) {
-                println!("{text}");
-            } else {
-                println!("{}", serde_json::to_string_pretty(data).unwrap_or_default());
-            }
+            println!("{}", format_data(data));
         }
         0
     } else {
@@ -435,6 +596,61 @@ fn print_response(resp: &Response, json: bool) -> i32 {
         }
         exit_code(resp)
     }
+}
+
+/// Render a successful payload for a human, keeping text-only output bare.
+fn format_data(data: &serde_json::Value) -> String {
+    let text = data.get("text").and_then(|v| v.as_str());
+    let Some(map) = data.as_object() else {
+        return serde_json::to_string_pretty(data).unwrap_or_default();
+    };
+    match text {
+        Some(text) if map.len() == 1 => text.to_string(),
+        None => serde_json::to_string_pretty(data).unwrap_or_default(),
+        Some(text) => {
+            let mut out = String::new();
+            for (key, value) in map {
+                if key != "text" {
+                    out.push_str(&format!("{key}: {}\n", compact(value)));
+                }
+            }
+            out.push_str(text);
+            out
+        }
+    }
+}
+
+/// One-line rendering of a field value, unquoted for plain strings.
+fn compact(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
+fn usage_text() -> &'static str {
+    "shell-use: headless terminal CLI + daemon\n\
+\n\
+SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
+          run <program> [args...]\n\
+          sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
+INSPECT   state | text [--full] | screenshot [-o file.svg] [--full]\n\
+          cells X Y [W H] | get command|output|exit-code|cwd|cursor|size\n\
+INPUT     type \"text\" | submit [\"text\"] | press <Key...> | keys \"Ctrl+a\"\n\
+          mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
+PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
+WAIT      wait text \"T\" [--regex --full --not --timeout MS]\n\
+          wait idle | wait command | wait exit | wait ready\n\
+EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
+          expect exit-code N | expect output \"T\" [--regex]\n\
+          expect snapshot NAME [-u] [--include-colors]\n\
+RECORD    sessions auto-record; get-recording [session] > out.cast (asciinema v2)\n\
+          play with `asciinema play out.cast`, render GIF with `agg out.cast out.gif`\n\
+WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
+AGENT     agent-context (JSON CLI schema) | skill [--add] (workflow guide)\n\
+GLOBAL    --session NAME | --json | --verbose (log PTY traffic to ~/.shell-use/<session>.log)\n\
+EXIT      0 ok | 1 assertion/wait failed | 2 usage | 3 no session | 4 daemon/IPC | 5 internal\n\
+"
 }
 
 /// Map a response to a stable process exit code (see the exit-code taxonomy).
@@ -446,27 +662,44 @@ fn exit_code(resp: &Response) -> i32 {
     }
 }
 
-fn usage_text() -> &'static str {
-    "shell-use: headless terminal CLI + daemon\n\
-\n\
-SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
-          run <program> [args...]\n\
-          sessions | close [--all] | daemon status|stop\n\
-INSPECT   state | text [--full] | screenshot [-o file.svg] [--full]\n\
-          cells X Y [W H] | get command|output|exit-code|cwd|cursor|size\n\
-INPUT     type \"text\" | submit [\"text\"] | press <Key...> | keys \"Ctrl+a\"\n\
-          mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
-PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
-WAIT      wait text \"T\" [--regex --full --not --timeout MS]\n\
-          wait idle | wait command | wait exit\n\
-EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
-          expect exit-code N | expect output \"T\" [--regex]\n\
-          expect snapshot NAME [-u] [--include-colors]\n\
-RECORD    sessions auto-record; get-recording [session] > out.cast (asciinema v2)\n\
-          play with `asciinema play out.cast`, render GIF with `agg out.cast out.gif`\n\
-WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
-AGENT     agent-context (JSON CLI schema) | skill [--add] (workflow guide)\n\
-GLOBAL    --session NAME | --json | --verbose (log PTY traffic to ~/.shell-use/<session>.log)\n\
-EXIT      0 ok | 1 assertion/wait failed | 2 usage | 3 no session | 4 daemon/IPC | 5 internal\n\
-"
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_text_only_payload_prints_the_bare_screen() {
+        assert_eq!(
+            format_data(&json!({ "text": "hello\nworld" })),
+            "hello\nworld"
+        );
+    }
+
+    #[test]
+    fn a_rich_payload_prints_its_fields_before_the_screen() {
+        let rendered = format_data(&json!({
+            "cwd": "/tmp",
+            "cols": 80,
+            "timeouts": { "text": 300 },
+            "text": "screen",
+        }));
+        assert!(rendered.contains("cwd: /tmp"), "{rendered}");
+        assert!(rendered.contains("cols: 80"), "{rendered}");
+        assert!(rendered.contains("timeouts: {\"text\":300}"), "{rendered}");
+        assert!(rendered.ends_with("screen"), "{rendered}");
+    }
+
+    #[test]
+    fn a_payload_without_text_falls_back_to_json() {
+        let rendered = format_data(&json!({ "pid": 42 }));
+        assert!(rendered.contains("\"pid\""), "{rendered}");
+        assert!(rendered.contains("42"), "{rendered}");
+    }
+
+    #[test]
+    fn ready_flag_resolves_the_paired_switches() {
+        assert_eq!(ready_flag(false, false), None);
+        assert_eq!(ready_flag(true, false), Some(true));
+        assert_eq!(ready_flag(false, true), Some(false));
+    }
 }

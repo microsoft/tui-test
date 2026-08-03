@@ -1,7 +1,8 @@
 //! CLI ↔ daemon transport over an `interprocess` local socket.
 //! One JSON request line per connection, one JSON response line back.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::time::Duration;
 
 use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{GenericFilePath, GenericNamespaced, ListenerOptions, Stream};
@@ -72,4 +73,22 @@ pub fn write_response(conn: &mut Stream, resp: &Response) -> anyhow::Result<()> 
     conn.write_all(line.as_bytes())?;
     conn.flush()?;
     Ok(())
+}
+
+/// Wait briefly for the client to read the final response.
+/// Windows named pipes discard buffered data when the server exits; EOF proves
+/// the reply arrived. An unresponsive client can only cost `timeout`.
+pub fn drain_peer(conn: Stream, timeout: Duration) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut conn = conn;
+        let mut buf = [0u8; 64];
+        while let Ok(n) = conn.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+        }
+        let _ = tx.send(());
+    });
+    let _ = rx.recv_timeout(timeout);
 }

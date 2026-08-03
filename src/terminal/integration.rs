@@ -1,5 +1,7 @@
 //! Command and output tracking from the PTY byte stream.
 
+use std::time::Instant;
+
 use alacritty_terminal::vte::{Parser, Perform};
 
 const OSC_CMD: &[u8] = b"133";
@@ -27,6 +29,7 @@ struct TrackerState {
     last_command: Option<String>,
     last_output: Option<String>,
     finished_count: u64,
+    finished_at: Option<Instant>,
 }
 
 /// Tracks command boundaries, exit codes, and cwd from the PTY byte stream.
@@ -61,6 +64,10 @@ impl CommandTracker {
     /// Whether at least one prompt has been seen.
     pub fn started(&self) -> bool {
         self.state.started
+    }
+
+    pub fn finished_at(&self) -> Option<Instant> {
+        self.state.finished_at
     }
 
     pub fn finished_count(&self) -> u64 {
@@ -110,6 +117,7 @@ impl TrackerState {
                 self.region = Region::None;
                 self.last_exit = exit.and_then(|s| s.trim().parse::<i32>().ok());
                 self.finished_count += 1;
+                self.finished_at = Some(Instant::now());
             }
             _ => {}
         }

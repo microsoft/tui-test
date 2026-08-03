@@ -60,9 +60,15 @@ at a matching one.
 
 ## API
 
-`new ShellUse(session?, { binary?, home? })` mirrors the CLI: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get` (+ `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize`), `screenshot`, `waitText` / `waitIdle` / `waitCommand` / `waitExit`, `expectText` / `expectExitCode` / `expectOutput` / `expectSnapshot`, and `close`.
+`new ShellUse(session?, { binary?, home?, timeouts?, artifacts? })` mirrors the CLI: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get` (+ `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize`), `screenshot`, `waitText` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady`, `expectText` / `expectExitCode` / `expectOutput` / `expectSnapshot`, `close`, and `closeQuiet`.
 
-Module-level helpers: `sessions()`, `closeAll()`, `daemonStatus()`, `daemonStop()`, `getRecording()`.
+Module-level helpers: `sessions()`, `closeAll()`, `daemonStatus()`, `daemonStop()`, `getRecording()`, `uniqueSession()`.
+
+`open` and `run` accept `{ cols, rows, cwd, env, waitReady, retries, timeouts }`. The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`; `timeouts` sets session defaults, the constructor sets client-wide ones. Unknown class names throw.
+
+`isolated: true` gives the client a private daemon home, deleted on `close()`, and scopes `sessions()` to that client. `ShellUse.ephemeral(prefix?, opts?)` adds a unique session name on top. `artifacts: { dir, onFailure }` attaches the terminal contents to an `ExpectationError`.
+
+`@microsoft/shell-use/test` has helpers for terminal tests: `createTerminal`, `withTerminal`, `closeAllTracked`, `defaultShell`, and `terminalSnapshot`. Each terminal is isolated and uniquely named, so parallel workers don't collide.
 
 ## Configuration
 
@@ -71,3 +77,4 @@ Module-level helpers: `sessions()`, `closeAll()`, `daemonStatus()`, `daemonStop(
 | `SHELL_USE_BIN` | path to the `shell-use` binary |
 | `SHELL_USE_SESSION` | default session name |
 | `SHELL_USE_HOME` | daemon state directory (sockets, pids) |
+| `SHELL_USE_TIMEOUT_<CLASS>_MS` | fallback timeout for one class (`TEXT`, `IDLE`, `COMMAND`, `EXIT`, `READY`) |

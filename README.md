@@ -132,25 +132,61 @@ await su.close();
 
 Global flags: `--session <name>` (env `SHELL_USE_SESSION`, default `default`), `--json` for machine-readable output, and `--verbose`/`-v` to log PTY traffic (see [Debugging](#debugging)).
 
+### Timeouts
+
+Waits and assertions fall into five classes, each with its own default:
+
+| Class | Applies to | Default |
+| --- | --- | --- |
+| `text` | `expect text`, `wait text` | 5000 ms |
+| `idle` | `wait idle` | 5000 ms |
+| `command` | `wait command`, `expect exit-code` | 30000 ms |
+| `exit` | `wait exit` | 30000 ms |
+| `ready` | `wait ready`, and the prompt wait inside `open` | 30000 ms |
+
+`open`'s prompt wait caps at 8000 ms unless you set a `ready` budget.
+
+Set a session default at `open`, override it per call:
+
+```sh
+shell-use open --timeout-text 30000 --timeout-idle 15000 --timeout-ready 20000
+shell-use wait text "done" --timeout 60000   # just this call
+```
+
+First match wins: `--timeout`, the session default from `open`/`run`, then
+`SHELL_USE_TIMEOUT_<CLASS>_MS` (read when the daemon starts). `shell-use state`
+shows a session's effective budgets.
+
 ### Session & lifecycle
 
 | Command                                                      | Description                                 |
 | ------------------------------------------------------------ | ------------------------------------------- |
-| `open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]` | Spawn a shell session.                      |
+| `open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V] [--timeout-<class> MS]` | Spawn a shell session.                      |
 | `run <program> [args...]`                                    | Spawn a session running a program directly. |
 | `sessions`                                                   | List active sessions.                       |
 | `close [--all]`                                              | Close the current session (or all).         |
-| `daemon status` / `daemon stop`                              | Inspect / stop the daemon.                  |
+| `daemon start` / `daemon status` / `daemon stop --session N \| --all` | Start, inspect, or stop a session's daemon. |
+
+Each session has its own daemon, so `daemon stop` needs `--session <name>` or
+`--all`. `close` stops the session's daemon too.
+
+`open` waits for a prompt before returning, `run` does not. Override with
+`--wait-ready` / `--no-wait-ready`. An explicit `--wait-ready` that never sees a
+prompt fails (exit 1); the implicit wait in `open` reports
+`ready` in its payload either way.
 
 ### Inspection
 
 | Command                                             | Description                                                                                 |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `state`                                             | cwd, size, cursor, last command + exit code, text snapshot.                                 |
+| `state`                                             | cwd, size, cursor, last command + exit code, effective timeouts, text snapshot.             |
 | `text [--full]`                                     | Plain text of the viewport (or scrollback).                                                 |
 | `screenshot [-o file.svg] [--full]`                 | Terminal text to stdout, or a crisp full-color SVG image (svg-term-style window) to a file. |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags).                                                  |
 | `get command\|output\|exit-code\|cwd\|cursor\|size` | Structured getters.                                                                         |
+
+`state` prints `key: value` lines then the screen; `text` and `screenshot`
+print the screen bare.
 
 ### Input
 
@@ -179,6 +215,7 @@ Global flags: `--session <name>` (env `SHELL_USE_SESSION`, default `default`), `
 | `wait idle`                                         | Until the screen stops changing.    |
 | `wait command`                                      | Until the current command finishes. |
 | `wait exit`                                         | Until the session exits.            |
+| `wait ready`                                        | Until the shell reports a prompt.   |
 
 ### Expect (exit 0 = pass, 1 = fail)
 

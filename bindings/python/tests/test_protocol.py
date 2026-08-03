@@ -120,22 +120,22 @@ class ProtocolTests(unittest.TestCase):
                 "text": "done",
                 "regex": False,
                 "full": False,
-                "timeout_ms": 5000,
                 "not": False,
             },
         )
+        self.assertNotIn("timeout_ms", c.sent[0])
 
     def test_expect_text_strict_and_color(self):
         c = CapturingClient("s")
         run(c.expect_text("ERR", fg="#ff0000"))
         self.assertEqual(c.sent[0]["strict"], True)
         self.assertEqual(c.sent[0]["fg"], "#ff0000")
-        self.assertEqual(c.sent[0]["timeout_ms"], 5000)
+        self.assertNotIn("timeout_ms", c.sent[0])
 
-    def test_wait_command_timeout_default(self):
+    def test_wait_command_omits_timeout_when_unset(self):
         c = CapturingClient("s")
         run(c.wait_command())
-        self.assertEqual(c.sent[0], {"kind": "wait_command", "timeout_ms": 30000})
+        self.assertEqual(c.sent[0], {"kind": "wait_command"})
 
 
 class VersionCheckTests(unittest.TestCase):

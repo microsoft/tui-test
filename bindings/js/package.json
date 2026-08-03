@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./test": {
+      "types": "./dist/test/index.d.ts",
+      "default": "./dist/test/index.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -22,9 +26,9 @@
     "build": "tsc -p tsconfig.json",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepublishOnly": "npm run clean && npm run build",
-    "test": "npm run build && node --test",
-    "test:node": "npm run build && node --test",
-    "test:bun": "npm run build && bun test ./test/conformance.test.mjs && bun test ./test/integration.test.mjs && bun test ./test/protocol.test.mjs",
+    "test": "npm run build && node --test \"./test/**/*.test.mjs\"",
+    "test:node": "npm run build && node --test \"./test/**/*.test.mjs\"",
+    "test:bun": "npm run build && bun test ./test/conformance.test.mjs && bun test ./test/integration.test.mjs && bun test ./test/options.test.mjs && bun test ./test/protocol.test.mjs && bun test ./test/helpers.test.mjs",
     "test:deno": "npm run build && deno test -A ./test",
     "test:all": "npm run test:node && npm run test:bun && npm run test:deno"
   },

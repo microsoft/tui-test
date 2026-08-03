@@ -58,7 +58,7 @@ async def ensure_daemon(session: str, home: Optional[str], binary: str) -> None:
             "--session",
             session,
             "daemon",
-            "status",
+            "start",
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
             env=env,

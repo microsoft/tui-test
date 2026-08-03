@@ -67,7 +67,7 @@ test("mouse click builds a nested action", async () => {
   });
 });
 
-test("waitText carries default 5s timeout", async () => {
+test("waitText omits timeout_ms when no client timeout is configured", async () => {
   const c = new CapturingClient("s");
   await c.waitText("done");
   assert.deepEqual(c.sent[0], {
@@ -75,15 +75,27 @@ test("waitText carries default 5s timeout", async () => {
     text: "done",
     regex: false,
     full: false,
-    timeout_ms: 5000,
     not: false,
   });
 });
 
-test("waitCommand defaults to 30s", async () => {
+test("waitText carries a client-level text timeout as timeout_ms", async () => {
+  const c = new CapturingClient("s", { timeouts: { text: 1500 } });
+  await c.waitText("done");
+  assert.deepEqual(c.sent[0], {
+    kind: "wait_text",
+    text: "done",
+    regex: false,
+    full: false,
+    not: false,
+    timeout_ms: 1500,
+  });
+});
+
+test("waitCommand omits timeout_ms when unset", async () => {
   const c = new CapturingClient("s");
   await c.waitCommand();
-  assert.deepEqual(c.sent[0], { kind: "wait_command", timeout_ms: 30000 });
+  assert.deepEqual(c.sent[0], { kind: "wait_command" });
 });
 
 test("expectText is strict by default and forwards colors", async () => {
@@ -91,7 +103,7 @@ test("expectText is strict by default and forwards colors", async () => {
   await c.expectText("ERR", { fg: "#ff0000" });
   assert.equal(c.sent[0].strict, true);
   assert.equal(c.sent[0].fg, "#ff0000");
-  assert.equal(c.sent[0].timeout_ms, 5000);
+  assert.ok(!("timeout_ms" in c.sent[0]));
 });
 
 test("checkVersion passes when versions match", () => {
