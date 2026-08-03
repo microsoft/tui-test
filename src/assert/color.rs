@@ -2,6 +2,9 @@
 
 use super::super::terminal::cell::Color;
 
+/// The spelling of [`Expected::Default`], on the command line and in messages.
+pub const DEFAULT: &str = "default";
+
 #[derive(Debug, Clone)]
 pub enum Expected {
     /// The terminal's default color, i.e. the cell set no color of its own.
@@ -14,7 +17,7 @@ pub enum Expected {
 impl Expected {
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         let s = s.trim();
-        if s.eq_ignore_ascii_case("default") {
+        if s.eq_ignore_ascii_case(DEFAULT) {
             return Ok(Expected::Default);
         }
         if let Some(hex) = s.strip_prefix('#') {
@@ -35,7 +38,7 @@ impl Expected {
 
     pub fn describe(&self) -> String {
         match self {
-            Expected::Default => "default".to_string(),
+            Expected::Default => DEFAULT.to_string(),
             Expected::Ansi256(n) => n.to_string(),
             Expected::Hex(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
             Expected::Rgb(r, g, b) => format!("{r},{g},{b}"),
@@ -46,7 +49,7 @@ impl Expected {
 /// A consistent, enumerated error for any unparseable color value.
 fn invalid(got: &str) -> anyhow::Error {
     anyhow::anyhow!(
-        "color must be \"default\", ansi256 (0-255), hex (#rrggbb), or rgb (r,g,b) (got: \"{got}\")"
+        "color must be \"{DEFAULT}\", ansi256 (0-255), hex (#rrggbb), or rgb (r,g,b) (got: \"{got}\")"
     )
 }
 
@@ -86,7 +89,7 @@ fn rgb_of(c: Color) -> (u8, u8, u8) {
 /// Render a cell's color in the same space as the expected value, for messages.
 pub fn describe_cell(cell: Option<Color>, expected: &Expected) -> String {
     let Some(cell) = cell else {
-        return "default".to_string();
+        return DEFAULT.to_string();
     };
     match expected {
         Expected::Default | Expected::Ansi256(_) => cell.to_index().to_string(),

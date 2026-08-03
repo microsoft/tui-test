@@ -469,7 +469,7 @@ fn cell_json(x: u16, y: u16, cell: &EmuCell) -> serde_json::Value {
 /// them stays internal and the language bindings are unaffected.
 fn color_json(c: Option<Color>) -> serde_json::Value {
     match c {
-        None => json!("default"),
+        None => json!(crate::assert::color::DEFAULT),
         Some(Color::Rgb(r, g, b)) => json!(format!("#{r:02x}{g:02x}{b:02x}")),
         Some(c) => json!(c.to_index()),
     }
