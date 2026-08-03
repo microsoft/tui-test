@@ -8,12 +8,17 @@ use std::time::Instant;
 
 use crate::daemon::logger::Logger;
 use crate::shell::{self, Shell};
-use crate::terminal::emu::Emu;
+use crate::terminal::alacritty::AlacrittyEmu;
+use crate::terminal::emu::Emulator;
+use crate::terminal::integration::CommandTracker;
 use crate::terminal::pty::{Pty, SpawnOptions};
 use crate::trace::recorder::Recorder;
 
 pub struct TermState {
-    pub emu: Emu,
+    pub emu: Box<dyn Emulator>,
+    /// Shell-integration state, derived from the raw PTY stream rather than
+    /// the emulator, so it is identical across backends.
+    pub tracker: CommandTracker,
     pub last_change: Instant,
     pub exited: Option<i32>,
 }
@@ -60,7 +65,8 @@ impl Session {
         };
 
         let state = Arc::new(Mutex::new(TermState {
-            emu: Emu::new(cols, rows, 5_000),
+            emu: Box::new(AlacrittyEmu::new(cols, rows, 5_000)),
+            tracker: CommandTracker::new(),
             last_change: Instant::now(),
             exited: None,
         }));
@@ -94,6 +100,7 @@ impl Session {
                         let pending = {
                             let mut st = reader_state.lock().unwrap();
                             st.emu.process(&buf[..n]);
+                            st.tracker.feed(&buf[..n]);
                             st.last_change = Instant::now();
                             st.emu.take_pending_writes()
                         };

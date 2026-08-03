@@ -1,202 +1,43 @@
-//! Terminal-emulator wrapper around `alacritty_terminal`. Exposes the small
-//! grid/cell/color surface the rest of shell-use consumes, plus a capture
-//! proxy that queues the terminal's replies so the reader can forward them
-//! back to the PTY.
+//! The terminal-emulator seam.
+//!
+//! shell-use drives a PTY and reads back a cell grid. [`Emulator`] is the
+//! entire contract between the two, so an emulator backend can be swapped
+//! without touching render, assert, monitor, or the daemon.
+//!
+//! Command/exit/cwd tracking is deliberately *not* part of this trait: it is
+//! derived from the raw PTY byte stream by [`crate::terminal::integration`],
+//! which is backend-independent. Keeping it out means every backend reports
+//! identical shell-integration behavior by construction rather than by
+//! reimplementation.
 
-use std::sync::{Arc, Mutex};
+use crate::terminal::cell::EmuCell;
 
-use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::Flags as AlacFlags;
-use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config as AlacConfig, Term};
-use alacritty_terminal::vte::ansi;
+/// A headless terminal emulator: bytes in, cell grid out.
+///
+/// Implementations must be `Send`; the daemon shares the emulator across its
+/// reader, request, and monitor threads behind a mutex. A backend whose native
+/// handle is `!Send` is expected to confine that handle to its own thread and
+/// implement this trait on a `Send` handle.
+pub trait Emulator: Send {
+    /// Feed PTY output bytes into the emulator.
+    fn process(&mut self, bytes: &[u8]);
 
-use crate::terminal::integration::CommandTracker;
+    /// Drain bytes the emulator wants written back to the PTY (device
+    /// attribute replies, cursor position reports, and similar). The caller
+    /// forwards these to the PTY.
+    fn take_pending_writes(&mut self) -> Vec<u8>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Color {
-    Default,
-    Idx(u8),
-    Rgb(u8, u8, u8),
-}
+    fn resize(&mut self, cols: u16, rows: u16);
 
-impl Color {
-    fn from_alac(c: ansi::Color) -> Self {
-        match c {
-            ansi::Color::Named(named) => match named {
-                ansi::NamedColor::Foreground | ansi::NamedColor::Background => Color::Default,
-                other => Color::Idx(other as u8),
-            },
-            ansi::Color::Spec(rgb) => Color::Rgb(rgb.r, rgb.g, rgb.b),
-            ansi::Color::Indexed(i) => Color::Idx(i),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct EmuCell {
-    /// Empty string means a blank cell (rendered as a space).
-    pub ch: String,
-    pub fg: Color,
-    pub bg: Color,
-    pub bold: bool,
-    pub dim: bool,
-    pub italic: bool,
-    pub underline: bool,
-    pub inverse: bool,
-    pub invisible: bool,
-    pub strike: bool,
-}
-
-fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
-    let flags = c.flags;
-    let spacer = flags.contains(AlacFlags::WIDE_CHAR_SPACER)
-        || flags.contains(AlacFlags::LEADING_WIDE_CHAR_SPACER);
-    let ch = if spacer || (c.c == ' ' && !flags.contains(AlacFlags::WIDE_CHAR)) {
-        String::new()
-    } else {
-        c.c.to_string()
-    };
-    EmuCell {
-        ch,
-        fg: Color::from_alac(c.fg),
-        bg: Color::from_alac(c.bg),
-        bold: flags.contains(AlacFlags::BOLD),
-        dim: flags.contains(AlacFlags::DIM),
-        italic: flags.contains(AlacFlags::ITALIC),
-        underline: flags.intersects(
-            AlacFlags::UNDERLINE
-                | AlacFlags::DOUBLE_UNDERLINE
-                | AlacFlags::DOTTED_UNDERLINE
-                | AlacFlags::DASHED_UNDERLINE
-                | AlacFlags::UNDERCURL,
-        ),
-        inverse: flags.contains(AlacFlags::INVERSE),
-        invisible: flags.contains(AlacFlags::HIDDEN),
-        strike: flags.contains(AlacFlags::STRIKEOUT),
-    }
-}
-
-#[derive(Default, Clone)]
-struct CaptureProxy {
-    pending: Arc<Mutex<Vec<u8>>>,
-}
-
-impl EventListener for CaptureProxy {
-    fn send_event(&self, ev: Event) {
-        if let Event::PtyWrite(bytes) = ev {
-            if let Ok(mut buf) = self.pending.lock() {
-                buf.extend_from_slice(bytes.as_bytes());
-            }
-        }
-    }
-}
-
-pub struct Emu {
-    term: Term<CaptureProxy>,
-    processor: ansi::Processor,
-    tracker: CommandTracker,
-    cols: u16,
-    rows: u16,
-    pending: Arc<Mutex<Vec<u8>>>,
-}
-
-impl Emu {
-    pub fn new(cols: u16, rows: u16, scrollback: usize) -> Self {
-        let size = TermSize::new(cols as usize, rows as usize);
-        let config = AlacConfig {
-            scrolling_history: scrollback,
-            ..Default::default()
-        };
-        let pending: Arc<Mutex<Vec<u8>>> = Arc::default();
-        let proxy = CaptureProxy {
-            pending: pending.clone(),
-        };
-        Emu {
-            term: Term::new(config, &size, proxy),
-            processor: ansi::Processor::new(),
-            tracker: CommandTracker::new(),
-            cols,
-            rows,
-            pending,
-        }
-    }
-
-    /// Feed PTY bytes through the terminal emulator and the command tracker.
-    pub fn process(&mut self, bytes: &[u8]) {
-        self.processor.advance(&mut self.term, bytes);
-        self.tracker.feed(bytes);
-    }
-
-    /// Access the command tracker.
-    pub fn tracker(&self) -> &CommandTracker {
-        &self.tracker
-    }
-
-    pub fn take_pending_writes(&mut self) -> Vec<u8> {
-        match self.pending.lock() {
-            Ok(mut buf) => std::mem::take(&mut *buf),
-            Err(_) => Vec::new(),
-        }
-    }
-
-    pub fn resize(&mut self, cols: u16, rows: u16) {
-        self.term
-            .resize(TermSize::new(cols as usize, rows as usize));
-        self.cols = cols;
-        self.rows = rows;
-    }
-
-    pub fn size(&self) -> (u16, u16) {
-        (self.cols, self.rows)
-    }
+    /// Current grid size as `(cols, rows)`.
+    fn size(&self) -> (u16, u16);
 
     /// Cursor position as `(x, y)` (column, row), 0-based, clamped to screen.
-    pub fn cursor(&self) -> (u16, u16) {
-        let p = self.term.grid().cursor.point;
-        let y = p.line.0.max(0).min(self.rows as i32 - 1) as u16;
-        let x = (p.column.0 as u16).min(self.cols.saturating_sub(1));
-        (x, y)
-    }
+    fn cursor(&self) -> (u16, u16);
 
-    /// Visible screen as rows of cells.
-    pub fn viewable_rows(&self) -> Vec<Vec<EmuCell>> {
-        self.rows_in_range(0, self.rows as i32)
-    }
+    /// Visible screen as rows of cells. Always `rows` entries of `cols` cells.
+    fn viewable_rows(&self) -> Vec<Vec<EmuCell>>;
 
-    /// History + visible screen as rows of cells.
-    pub fn full_rows(&self) -> Vec<Vec<EmuCell>> {
-        let grid = self.term.grid();
-        let total = grid.total_lines() as i32;
-        let screen = grid.screen_lines() as i32;
-        let history = (total - screen).max(0);
-        self.rows_in_range(-history, screen)
-    }
-
-    fn rows_in_range(&self, start: i32, end: i32) -> Vec<Vec<EmuCell>> {
-        let grid = self.term.grid();
-        let mut out = Vec::with_capacity((end - start).max(0) as usize);
-        for line in start..end {
-            let mut row = Vec::with_capacity(self.cols as usize);
-            for col in 0..self.cols as usize {
-                let cell = &grid[Line(line)][Column(col)];
-                row.push(cell_from_alac(cell));
-            }
-            out.push(row);
-        }
-        out
-    }
-}
-
-/// Join a grid of cells into one string per row (blank cells → spaces).
-pub fn rows_to_strings(rows: &[Vec<EmuCell>]) -> Vec<String> {
-    rows.iter()
-        .map(|row| {
-            row.iter()
-                .map(|c| if c.ch.is_empty() { " " } else { c.ch.as_str() })
-                .collect::<String>()
-        })
-        .collect()
+    /// Scrollback history followed by the visible screen.
+    fn full_rows(&self) -> Vec<Vec<EmuCell>>;
 }

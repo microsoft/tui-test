@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
-use super::super::terminal::emu::{Color, EmuCell};
+use super::super::terminal::cell::{Attrs, Color, EmuCell};
 
 pub enum SnapshotStatus {
     Passed,
@@ -27,11 +27,11 @@ fn snapshot_path(base: &Path, name: &str) -> PathBuf {
     snapshot_dir(base).join(format!("{}.snap", sanitize(name)))
 }
 
-fn color_value(c: Color) -> Value {
+fn color_value(c: Option<Color>) -> Value {
     match c {
-        Color::Default => Value::String("default".to_string()),
-        Color::Idx(i) => json!(i),
-        Color::Rgb(r, g, b) => Value::String(format!("#{r:02x}{g:02x}{b:02x}")),
+        None => Value::String(crate::assert::color::DEFAULT.to_string()),
+        Some(Color::Rgb(r, g, b)) => Value::String(format!("#{r:02x}{g:02x}{b:02x}")),
+        Some(c) => json!(c.to_index()),
     }
 }
 
@@ -43,43 +43,30 @@ fn shift(prev: &EmuCell, cur: &EmuCell) -> Map<String, Value> {
     if prev.bg != cur.bg {
         m.insert("bg".into(), color_value(cur.bg));
     }
-    if prev.bold != cur.bold {
-        m.insert("bold".into(), json!(cur.bold));
+    for (attr, key) in [
+        (Attrs::BOLD, "bold"),
+        (Attrs::DIM, "dim"),
+        (Attrs::ITALIC, "italic"),
+        (Attrs::INVERSE, "inverse"),
+        (Attrs::INVISIBLE, "invisible"),
+        (Attrs::STRIKE, "strike"),
+        (Attrs::BLINK, "blink"),
+    ] {
+        if prev.has(attr) != cur.has(attr) {
+            m.insert(key.into(), json!(cur.has(attr)));
+        }
     }
-    if prev.dim != cur.dim {
-        m.insert("dim".into(), json!(cur.dim));
-    }
-    if prev.italic != cur.italic {
-        m.insert("italic".into(), json!(cur.italic));
-    }
+    // The style, not a boolean: a curly underline and a single one are
+    // different renderings, and a snapshot that only recorded "underlined"
+    // would pass when one silently became the other.
     if prev.underline != cur.underline {
-        m.insert("underline".into(), json!(cur.underline));
-    }
-    if prev.inverse != cur.inverse {
-        m.insert("inverse".into(), json!(cur.inverse));
-    }
-    if prev.invisible != cur.invisible {
-        m.insert("invisible".into(), json!(cur.invisible));
-    }
-    if prev.strike != cur.strike {
-        m.insert("strike".into(), json!(cur.strike));
+        m.insert("underline".into(), json!(cur.underline.name()));
     }
     m
 }
 
 fn baseline() -> EmuCell {
-    EmuCell {
-        ch: String::new(),
-        fg: Color::Default,
-        bg: Color::Default,
-        bold: false,
-        dim: false,
-        italic: false,
-        underline: false,
-        inverse: false,
-        invisible: false,
-        strike: false,
-    }
+    EmuCell::blank()
 }
 
 /// Serialize a grid into a boxed text view plus (optionally) a color shift map.
@@ -90,7 +77,10 @@ pub fn serialize(rows: &[Vec<EmuCell>], cols: u16, include_colors: bool) -> Stri
     for (y, row) in rows.iter().enumerate() {
         let mut line = String::with_capacity(cols as usize);
         for (x, cell) in row.iter().enumerate() {
-            line.push_str(if cell.ch.is_empty() { " " } else { &cell.ch });
+            // A continuation contributes nothing, exactly as in
+            // `rows_to_strings`: the wide char to its left already spans this
+            // column, so giving it a filler widens the row past the box.
+            line.push_str(&cell.ch);
             let s = shift(&prev, cell);
             if !s.is_empty() {
                 shifts.insert(format!("{x},{y}"), Value::Object(s));
@@ -152,4 +142,63 @@ pub fn compare(
         expected: existing.to_string(),
         actual: trimmed.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terminal::cell::CONTINUATION;
+
+    fn cell(s: &str) -> EmuCell {
+        EmuCell {
+            ch: s.into(),
+            ..EmuCell::blank()
+        }
+    }
+
+    /// A wide char spans two columns on its own. Rendering a filler for the
+    /// continuation pushed every later column right and left the content line
+    /// one column wider than the frame drawn around it, so any snapshot
+    /// holding a wide char was written misaligned and compared against that.
+    #[test]
+    fn a_wide_char_does_not_overflow_the_frame() {
+        let rows = vec![vec![
+            cell("你"),
+            cell(CONTINUATION),
+            cell("b"),
+            cell(" "),
+            cell(" "),
+            cell(" "),
+        ]];
+        assert_eq!(serialize(&rows, 6, false), "╭──────╮\n│你b   │\n╰──────╯");
+    }
+
+    /// Snapshots recorded a bare "is underlined", so a curly underline turning
+    /// single left the snapshot passing. The style name is recorded instead.
+    #[test]
+    fn a_shift_between_underline_styles_is_recorded() {
+        use crate::terminal::cell::UnderlineStyle;
+        let styled = |u| EmuCell {
+            underline: u,
+            ..EmuCell::blank()
+        };
+        let curly = shift(
+            &styled(UnderlineStyle::Single),
+            &styled(UnderlineStyle::Curly),
+        );
+        assert_eq!(curly.get("underline"), Some(&json!("curly")));
+        assert_eq!(
+            shift(
+                &styled(UnderlineStyle::Curly),
+                &styled(UnderlineStyle::None)
+            )
+            .get("underline"),
+            Some(&json!("none"))
+        );
+        assert!(shift(
+            &styled(UnderlineStyle::Curly),
+            &styled(UnderlineStyle::Curly)
+        )
+        .is_empty());
+    }
 }

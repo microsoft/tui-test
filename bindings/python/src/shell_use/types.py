@@ -1,22 +1,37 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 Color = Union[str, int]
+#: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
+UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
 
 
 @dataclass
 class Cell:
     x: int
     y: int
+    #: The cell's grapheme; ``" "`` when blank, ``""`` for the second column
+    #: of a double-width character.
     char: str
     fg: Color
     bg: Color
     bold: bool
+    dim: bool
     italic: bool
-    underline: bool
     inverse: bool
+    invisible: bool
+    strike: bool
+    #: Always ``False`` from the alacritty backend, which cannot report blink.
+    blink: bool
+    #: Shorthand for ``underline_style != "none"``.
+    underline: bool
+    underline_style: UnderlineStyle
+    #: ``"default"`` means the underline follows the text color. Tracked
+    #: independently of ``underline_style``, so a cell that set SGR 58 without
+    #: an underline still reports the color it would use.
+    underline_color: Color
 
 
 @dataclass
