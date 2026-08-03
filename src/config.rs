@@ -114,19 +114,36 @@ pub fn recording_file(session: &str) -> PathBuf {
     recording_dir().join(format!("{session}.cast"))
 }
 
+const SOCKET_PATH_MAX: usize = 100;
+
 /// Platform-appropriate socket name for a session.
 ///
 /// On Windows this is a namespaced pipe name; on Unix it is a filesystem path
 /// inside the home directory.
 pub fn socket_name(session: &str) -> String {
     if cfg!(windows) {
-        format!("shell-use-{session}.sock")
-    } else {
-        home_dir()
-            .join(format!("{session}.sock"))
-            .to_string_lossy()
-            .into_owned()
+        return format!("shell-use-{session}.sock");
     }
+    socket_path_in(&home_dir(), session)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn socket_path_in(dir: &std::path::Path, session: &str) -> PathBuf {
+    let path = dir.join(format!("{session}.sock"));
+    if path.as_os_str().len() <= SOCKET_PATH_MAX {
+        return path;
+    }
+    dir.join(format!("{:016x}.sock", digest(session)))
+}
+
+fn digest(value: &str) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 pub fn session_name_from_env(explicit: Option<String>) -> String {
@@ -169,6 +186,45 @@ mod tests {
         assert_eq!(TimeoutClass::Command.built_in_ms(), 30_000);
         assert_eq!(TimeoutClass::Exit.built_in_ms(), 30_000);
         assert_eq!(TimeoutClass::Ready.built_in_ms(), 30_000);
+    }
+
+    #[test]
+    fn a_short_socket_path_keeps_the_session_name() {
+        let dir = PathBuf::from("/tmp/shell-use");
+        assert_eq!(
+            socket_path_in(&dir, "work"),
+            PathBuf::from("/tmp/shell-use/work.sock")
+        );
+    }
+
+    #[test]
+    fn a_long_socket_path_stays_within_sun_path() {
+        let dir =
+            PathBuf::from("/var/folders/9k/hd3xzq_s0mn1c7b2v8t4wxyz0000gn/T/shell-use-Ab12Cd");
+        let session = format!("shell-use-{}", "x".repeat(50));
+        let path = socket_path_in(&dir, &session);
+        assert!(
+            path.as_os_str().len() <= SOCKET_PATH_MAX,
+            "{} is {} bytes, too long for sun_path",
+            path.display(),
+            path.as_os_str().len()
+        );
+        assert_eq!(
+            path,
+            socket_path_in(&dir, &session),
+            "the shortened name must be stable so the CLI and daemon agree"
+        );
+    }
+
+    #[test]
+    fn shortened_socket_names_stay_distinct_per_session() {
+        let dir =
+            PathBuf::from("/var/folders/9k/hd3xzq_s0mn1c7b2v8t4wxyz0000gn/T/shell-use-Ab12Cd");
+        let long = "y".repeat(60);
+        assert_ne!(
+            socket_path_in(&dir, &format!("a{long}")),
+            socket_path_in(&dir, &format!("b{long}")),
+        );
     }
 
     #[test]

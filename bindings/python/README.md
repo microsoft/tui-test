@@ -69,7 +69,7 @@ Module-level helpers: `sessions()`, `close_all()`, `daemon_status()`, `daemon_st
 
 `open()` and `run()` accept `wait_ready=`, `retries=`, and `timeouts=`. The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`; `timeouts=` sets session defaults, the constructor takes the same `Timeouts` (or a dict) as a client-wide default. Unknown class names raise.
 
-`isolated=True` gives the client a private daemon home, deleted on `close()`, and scopes `sessions()` to that client. `ShellUse.ephemeral(prefix=None, **kwargs)` adds a unique session name on top. `artifacts={"dir": ..., "on_failure": ...}` attaches the terminal contents to an `ExpectationError`.
+`isolated=True` gives the client a private daemon home, deleted on `close()`, and scopes `sessions()` to that client. `ShellUse.ephemeral(prefix=None, **kwargs)` does the same with a unique session name. `artifacts={"dir": ..., "on_failure": ...}` attaches the terminal contents to an `ExpectationError`.
 
 `shell_use.testing` has helpers for terminal tests: `create_terminal`, `terminal` (an async context manager), `close_all_tracked`, `DEFAULT_SHELL`, and `terminal_snapshot`.
 
@@ -83,7 +83,7 @@ async def test_echo():
         await t.expect_text("hi")
 ```
 
-Each terminal is isolated and uniquely named, so parallel workers don't collide. `set_terminal_defaults(...)` sets suite-wide options (`binary`, `artifacts`, ...) underneath per-call ones.
+Each terminal is isolated and uniquely named, so parallel workers don't collide. `set_terminal_defaults(...)` sets suite-wide options (`binary`, `artifacts`, ...).
 
 ## Configuration
 

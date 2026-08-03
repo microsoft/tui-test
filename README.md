@@ -134,7 +134,7 @@ Global flags: `--session <name>` (env `SHELL_USE_SESSION`, default `default`), `
 
 ### Timeouts
 
-Waits and assertions fall into five classes, each with its own default:
+Waits and assertions fall into five timeout classes:
 
 | Class | Applies to | Default |
 | --- | --- | --- |
@@ -144,7 +144,7 @@ Waits and assertions fall into five classes, each with its own default:
 | `exit` | `wait exit` | 30000 ms |
 | `ready` | `wait ready`, and the prompt wait inside `open` | 30000 ms |
 
-`open`'s prompt wait caps at 8000 ms unless you set a `ready` budget.
+`open`'s prompt wait caps at 8000 ms unless you set a `ready` timeout.
 
 Set a session default at `open`, override it per call:
 
@@ -153,9 +153,9 @@ shell-use open --timeout-text 30000 --timeout-idle 15000 --timeout-ready 20000
 shell-use wait text "done" --timeout 60000   # just this call
 ```
 
-First match wins: `--timeout`, the session default from `open`/`run`, then
+Precedence: `--timeout`, then the session default from `open`/`run`, then
 `SHELL_USE_TIMEOUT_<CLASS>_MS` (read when the daemon starts). `shell-use state`
-shows a session's effective budgets.
+prints a session's effective timeouts.
 
 ### Session & lifecycle
 
@@ -168,12 +168,12 @@ shows a session's effective budgets.
 | `daemon start` / `daemon status` / `daemon stop --session N \| --all` | Start, inspect, or stop a session's daemon. |
 
 Each session has its own daemon, so `daemon stop` needs `--session <name>` or
-`--all`. `close` stops the session's daemon too.
+`--all`. `close` stops it too.
 
 `open` waits for a prompt before returning, `run` does not. Override with
-`--wait-ready` / `--no-wait-ready`. An explicit `--wait-ready` that never sees a
-prompt fails (exit 1); the implicit wait in `open` reports
-`ready` in its payload either way.
+`--wait-ready` / `--no-wait-ready`. An explicit `--wait-ready` fails (exit 1) if
+no prompt appears; `open`'s implicit wait reports `ready` in its payload either
+way.
 
 ### Inspection
 
@@ -222,7 +222,7 @@ print the screen bare.
 | Command                                                                         | Description                                |
 | ------------------------------------------------------------------------------- | ------------------------------------------ |
 | `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility + optional color.               |
-| `expect exit-code N`                                                            | Last command's exit code.                  |
+| `expect exit-code N [--timeout MS]`                                             | Last command's exit code.                  |
 | `expect output "T" [--regex]`                                                   | Last command's captured output.            |
 | `expect snapshot NAME [-u] [--include-colors]`                                  | Compare against `__snapshots__/NAME.snap`. |
 

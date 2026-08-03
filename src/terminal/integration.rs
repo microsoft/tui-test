@@ -1,7 +1,5 @@
 //! Command and output tracking from the PTY byte stream.
 
-use std::time::Instant;
-
 use alacritty_terminal::vte::{Parser, Perform};
 
 const OSC_CMD: &[u8] = b"133";
@@ -28,8 +26,8 @@ struct TrackerState {
     cwd: Option<String>,
     last_command: Option<String>,
     last_output: Option<String>,
+    started_count: u64,
     finished_count: u64,
-    finished_at: Option<Instant>,
 }
 
 /// Tracks command boundaries, exit codes, and cwd from the PTY byte stream.
@@ -66,8 +64,12 @@ impl CommandTracker {
         self.state.started
     }
 
-    pub fn finished_at(&self) -> Option<Instant> {
-        self.state.finished_at
+    pub fn started_count(&self) -> u64 {
+        self.state.started_count
+    }
+
+    pub fn executing(&self) -> bool {
+        self.state.region == Region::Output
     }
 
     pub fn finished_count(&self) -> u64 {
@@ -111,13 +113,13 @@ impl TrackerState {
                 self.last_command = Some(cmd);
                 self.region = Region::Output;
                 self.output_buf.clear();
+                self.started_count += 1;
             }
             "D" => {
                 self.last_output = Some(clean(&self.output_buf));
                 self.region = Region::None;
                 self.last_exit = exit.and_then(|s| s.trim().parse::<i32>().ok());
                 self.finished_count += 1;
-                self.finished_at = Some(Instant::now());
             }
             _ => {}
         }
@@ -229,12 +231,40 @@ mod tests {
         t.feed(b"echo hi");
         t.feed(&osc("C"));
         assert!(!t.is_ready());
+        assert!(t.executing());
+        assert_eq!(t.started_count(), 1);
         assert_eq!(t.last_command(), Some("echo hi"));
         t.feed(b"hi\r\n");
         t.feed(&osc("D;0"));
+        assert!(!t.executing());
         assert_eq!(t.last_exit(), Some(0));
         assert_eq!(t.finished_count(), 1);
         assert_eq!(t.last_output(), Some("hi"));
+    }
+
+    #[test]
+    fn a_prompt_repaint_replays_d_but_never_starts_a_command() {
+        let mut t = CommandTracker::new();
+        for marker in ["A", "B", "C"] {
+            t.feed(&osc(marker));
+        }
+        t.feed(&osc("D;0"));
+        assert_eq!(t.started_count(), 1);
+
+        for marker in ["D;0", "A", "B"] {
+            t.feed(&osc(marker));
+        }
+        assert_eq!(
+            t.started_count(),
+            1,
+            "a repaint must not look like a new command"
+        );
+        assert!(!t.executing());
+        assert_eq!(t.finished_count(), 2, "the replayed D is still counted");
+
+        t.feed(&osc("C"));
+        assert_eq!(t.started_count(), 2);
+        assert!(t.executing());
     }
 
     #[test]

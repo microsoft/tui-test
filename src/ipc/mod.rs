@@ -5,7 +5,9 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::time::Duration;
 
 use interprocess::local_socket::prelude::*;
-use interprocess::local_socket::{GenericFilePath, GenericNamespaced, ListenerOptions, Stream};
+use interprocess::local_socket::{GenericFilePath, GenericNamespaced, ListenerOptions};
+
+pub use interprocess::local_socket::Stream;
 
 use crate::protocol::{Request, Response};
 
@@ -19,8 +21,10 @@ fn to_name(raw: &str) -> std::io::Result<interprocess::local_socket::Name<'_>> {
 
 /// Connect to a running daemon and exchange a single request/response.
 pub fn send(socket: &str, req: &Request) -> anyhow::Result<Response> {
-    let name = to_name(socket)?;
-    let conn = Stream::connect(name)?;
+    exchange(connect(socket)?, req)
+}
+
+pub fn exchange(conn: Stream, req: &Request) -> anyhow::Result<Response> {
     let mut reader = BufReader::new(conn);
     let mut line = serde_json::to_string(req)?;
     line.push('\n');

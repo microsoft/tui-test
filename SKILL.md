@@ -37,8 +37,8 @@ Three commands let an agent look up the rest of the surface instead of guessing:
   (see [Debugging](#debugging)). Only takes effect when the daemon starts.
 - **Defaults.** New sessions are `80x30`. Timeouts come in five classes: `text`
   and `idle` default to 5s; `command`, `exit`, and `ready` to 30s. Set a session
-  default with `open --timeout-<class> <ms>`, or one call with `--timeout`.
-  `state` reports the effective budgets.
+  default with `open --timeout-<class> <ms>`, or override one call with
+  `--timeout`. `state` reports the effective values.
 
 ## Exit codes
 
@@ -113,7 +113,7 @@ without parsing text:
 | Command | Description |
 | --- | --- |
 | `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility plus optional color. `--no-strict` relaxes a strict single-match. |
-| `expect exit-code N [--timeout MS]` | The last command's exit code. Waits for it to finish first. |
+| `expect exit-code N [--timeout MS]` | The last command's exit code. Waits for the command to finish first. |
 | `expect output "T" [--regex]` | The last command's captured output. |
 | `expect snapshot NAME [-u] [--include-colors]` | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. |
 
@@ -185,9 +185,8 @@ Snapshots live in `__snapshots__/<NAME>.snap` next to where you run the command.
 - `wait text "T"`: waits until text/regex is visible. The most precise wait; use
   it whenever you know what output to look for. `--not` waits for it to disappear.
 - `wait command`: waits until the current command finishes, via the shell's OSC
-  integration markers. This is what you want after `submit`-ing a command.
-  Requires shell integration; without it, falls back to "prompt returned and
-  screen idle". Bump `--timeout` for long commands (default 30s).
+  integration markers. Use it after `submit`. Without shell integration it falls
+  back to "screen idle". Bump `--timeout` for long commands (default 30s).
 - `wait idle`: waits until the screen stops repainting. This tracks visual
   quiescence, not completion: a silent command like `sleep 100` counts as idle
   almost immediately. Use it to let a TUI finish drawing.

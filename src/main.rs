@@ -87,19 +87,39 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
         }
     };
 
-    if let Err(e) = ensure_daemon(session, verbose) {
-        eprintln!("failed to start daemon: {e}");
-        return 4;
-    }
-
-    let socket = config::socket_name(session);
-    match ipc::send(&socket, &request) {
+    let conn = match connect_to_daemon(session, verbose) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            return 4;
+        }
+    };
+    match ipc::exchange(conn, &request) {
         Ok(resp) => print_response(&resp, json),
         Err(e) => {
             eprintln!("request failed: {e}");
             4
         }
     }
+}
+
+fn connect_to_daemon(session: &str, verbose: bool) -> anyhow::Result<ipc::Stream> {
+    const ATTEMPTS: u32 = 3;
+    let socket = config::socket_name(session);
+    let mut last = None;
+    for attempt in 0..ATTEMPTS {
+        ensure_daemon(session, verbose)
+            .map_err(|e| anyhow::anyhow!("failed to start daemon: {e}"))?;
+        match ipc::connect(&socket) {
+            Ok(conn) => return Ok(conn),
+            Err(e) => last = Some(e),
+        }
+        if attempt + 1 < ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let err = last.expect("at least one connect attempt");
+    Err(anyhow::anyhow!("request failed: {err}"))
 }
 
 fn ready_flag(wait_ready: bool, no_wait_ready: bool) -> Option<bool> {

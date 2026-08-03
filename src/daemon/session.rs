@@ -15,7 +15,7 @@ use crate::trace::recorder::Recorder;
 pub struct TermState {
     pub emu: Emu,
     pub last_change: Instant,
-    pub last_input: Instant,
+    pub awaiting_start: Option<u64>,
     pub exited: Option<i32>,
 }
 
@@ -73,7 +73,7 @@ impl Session {
         let state = Arc::new(Mutex::new(TermState {
             emu: Emu::new(cols, rows, 5_000),
             last_change: Instant::now(),
-            last_input: Instant::now(),
+            awaiting_start: None,
             exited: None,
         }));
         let pty = Arc::new(Mutex::new(pty));
@@ -145,7 +145,10 @@ impl Session {
 
     pub fn write(&self, data: &[u8]) -> anyhow::Result<()> {
         self.logger.write(data);
-        self.state.lock().unwrap().last_input = Instant::now();
+        {
+            let mut st = self.state.lock().unwrap();
+            st.awaiting_start = Some(st.emu.tracker().started_count());
+        }
         self.pty.lock().unwrap().write(data)?;
         Ok(())
     }

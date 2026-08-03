@@ -60,15 +60,27 @@ at a matching one.
 
 ## API
 
-`new ShellUse(session?, { binary?, home?, timeouts?, artifacts? })` mirrors the CLI: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get` (+ `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize`), `screenshot`, `waitText` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady`, `expectText` / `expectExitCode` / `expectOutput` / `expectSnapshot`, `close`, and `closeQuiet`.
+`new ShellUse(session?, { binary?, home?, isolated?, timeouts?, artifacts? })` mirrors the CLI: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get` (+ `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize`), `screenshot`, `waitText` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady`, `expectText` / `expectExitCode` / `expectOutput` / `expectSnapshot`, `close`, and `closeQuiet`.
 
 Module-level helpers: `sessions()`, `closeAll()`, `daemonStatus()`, `daemonStop()`, `getRecording()`, `uniqueSession()`.
 
 `open` and `run` accept `{ cols, rows, cwd, env, waitReady, retries, timeouts }`. The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`; `timeouts` sets session defaults, the constructor sets client-wide ones. Unknown class names throw.
 
-`isolated: true` gives the client a private daemon home, deleted on `close()`, and scopes `sessions()` to that client. `ShellUse.ephemeral(prefix?, opts?)` adds a unique session name on top. `artifacts: { dir, onFailure }` attaches the terminal contents to an `ExpectationError`.
+`isolated: true` gives the client a private daemon home, deleted on `close()`, and scopes `sessions()` to that client. `ShellUse.ephemeral(prefix?, opts?)` does the same with a unique session name. `artifacts: { dir, onFailure }` attaches the terminal contents to an `ExpectationError`.
 
-`@microsoft/shell-use/test` has helpers for terminal tests: `createTerminal`, `withTerminal`, `closeAllTracked`, `defaultShell`, and `terminalSnapshot`. Each terminal is isolated and uniquely named, so parallel workers don't collide.
+`@microsoft/shell-use/test` has helpers for terminal tests: `createTerminal`, `withTerminal`, `closeAllTracked`, `defaultShell`, and `terminalSnapshot`.
+
+```js
+import { withTerminal } from "@microsoft/shell-use/test";
+
+await withTerminal({}, async (t) => {
+  await t.submit("echo hi");
+  await t.waitCommand();
+  await t.expectText("hi");
+});
+```
+
+Each terminal is isolated and uniquely named, so parallel workers don't collide. `setTerminalDefaults(...)` sets suite-wide options (`binary`, `artifacts`, ...).
 
 ## Configuration
 

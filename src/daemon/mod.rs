@@ -694,34 +694,46 @@ fn wait_idle(s: &Session, timeout_ms: u64) -> Response {
     }
 }
 
-fn command_done_since_input(st: &TermState) -> bool {
-    st.emu
-        .tracker()
-        .finished_at()
-        .is_some_and(|at| at >= st.last_input)
+fn awaiting_command_start(st: &TermState) -> bool {
+    st.awaiting_start
+        .is_some_and(|seen| st.emu.tracker().started_count() == seen)
 }
 
-/// Whether a new command finished, exited, or fell back to idle-at-prompt.
 fn command_settled(s: &Session, baseline: u64) -> bool {
     const QUIET: Duration = Duration::from_millis(300);
     let st = s.state.lock().unwrap();
-    if st.exited.is_some() || st.emu.tracker().finished_count() > baseline {
+    if st.exited.is_some() {
         return true;
     }
-    if command_done_since_input(&st) {
-        return true;
+    let tracker = st.emu.tracker();
+    if !tracker.started() {
+        return st.last_change.elapsed() >= QUIET;
     }
-    let idle = st.last_change.elapsed() >= QUIET;
-    idle && (!st.emu.tracker().started() || st.emu.tracker().is_ready())
+    if awaiting_command_start(&st) {
+        return false;
+    }
+    tracker.finished_count() > baseline || !tracker.executing()
 }
 
 fn wait_command(s: &Session, timeout_ms: u64) -> Response {
     let baseline = s.state.lock().unwrap().emu.tracker().finished_count();
-    let ok = poll_until(|| command_settled(s, baseline), timeout_ms);
-    if ok {
-        Response::ok()
+    if poll_until(|| command_settled(s, baseline), timeout_ms) {
+        return Response::ok();
+    }
+    Response::assertion(format!(
+        "wait command: timed out after {timeout_ms}ms; {}",
+        stall_reason(s)
+    ))
+}
+
+fn stall_reason(s: &Session) -> String {
+    let st = s.state.lock().unwrap();
+    if awaiting_command_start(&st) {
+        "the shell never started a command for the input that was sent, so there \
+         is nothing to wait for (was the line submitted?)"
+            .to_string()
     } else {
-        Response::assertion("wait command: no command completion within timeout")
+        "the command was still running".to_string()
     }
 }
 
@@ -862,7 +874,8 @@ fn expect_exit_code(s: &Session, code: i32, timeout_ms: u64) -> Response {
     let baseline = s.state.lock().unwrap().emu.tracker().finished_count();
     if !poll_until(|| command_settled(s, baseline), timeout_ms) {
         return Response::assertion(format!(
-            "expected exit code {code}, but the command was still running after {timeout_ms}ms"
+            "expected exit code {code}: timed out after {timeout_ms}ms; {}",
+            stall_reason(s)
         ));
     }
     let actual = s.state.lock().unwrap().emu.tracker().last_exit();

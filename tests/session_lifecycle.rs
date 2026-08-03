@@ -2,24 +2,33 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_shell-use");
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
+static SANDBOX_SEQ: AtomicU32 = AtomicU32::new(0);
+
 struct Sandbox {
+    label: &'static str,
     home: PathBuf,
     session: String,
 }
 
 impl Sandbox {
-    fn new(label: &str) -> Self {
-        let pid = std::process::id();
-        let home = std::env::temp_dir().join(format!("shell-use-it-{pid}-{label}"));
+    fn new(label: &'static str) -> Self {
+        let id = format!(
+            "{:x}-{:x}",
+            std::process::id(),
+            SANDBOX_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let home = std::env::temp_dir().join(format!("su{id}"));
         std::fs::create_dir_all(&home).expect("create sandbox home");
         Sandbox {
-            session: format!("it-{pid}-{label}"),
+            label,
+            session: format!("s{id}"),
             home,
         }
     }
@@ -51,9 +60,10 @@ impl Sandbox {
     fn run(&self, args: &[&str]) -> Output {
         self.try_run(args).unwrap_or_else(|| {
             panic!(
-                "`shell-use {}` produced no result within {:?}. Either it could not be spawned \
-                 (see stderr above), or the CLI process exited but left its stdout pipe open, \
-                 which happens when the detached daemon inherits the CLI's standard handles.",
+                "[{}] `shell-use {}` produced no result within {:?}. Either it could not be \
+                 spawned (see stderr above), or the CLI process exited but left its stdout pipe \
+                 open, which happens when the detached daemon inherits the CLI's standard handles.",
+                self.label,
                 args.join(" "),
                 CALL_TIMEOUT
             )
@@ -84,7 +94,8 @@ impl Sandbox {
         let out = self.run_as(suffix, args);
         assert!(
             out.status.success(),
-            "`shell-use {}` (session {suffix}) failed with {:?}\nstderr: {}",
+            "[{}] `shell-use {}` (session {suffix}) failed with {:?}\nstderr: {}",
+            self.label,
             args.join(" "),
             out.status.code(),
             String::from_utf8_lossy(&out.stderr),
@@ -96,7 +107,8 @@ impl Sandbox {
         let out = self.run(args);
         assert!(
             out.status.success(),
-            "`shell-use {}` failed with {:?}\nstdout: {}\nstderr: {}",
+            "[{}] `shell-use {}` failed with {:?}\nstdout: {}\nstderr: {}",
+            self.label,
             args.join(" "),
             out.status.code(),
             String::from_utf8_lossy(&out.stdout),
@@ -112,6 +124,26 @@ impl Drop for Sandbox {
         let _ = self.try_run(&["close"]);
         let _ = std::fs::remove_dir_all(&self.home);
     }
+}
+
+#[test]
+fn sandbox_paths_fit_in_a_unix_socket_address() {
+    const SUN_PATH_MAX: usize = 103;
+    const MACOS_TMPDIR: usize = 49;
+
+    let sandbox = Sandbox::new("path-budget");
+    let home = sandbox
+        .home
+        .file_name()
+        .expect("sandbox home has a name")
+        .to_string_lossy()
+        .len();
+    let socket = format!("{}-three.sock", sandbox.session).len();
+    let total = MACOS_TMPDIR + home + 1 + socket;
+    assert!(
+        total <= SUN_PATH_MAX,
+        "a sandbox socket would be {total} bytes on macOS; shorten the naming"
+    );
 }
 
 /// Repeats `close` to catch the final-response drain race.
@@ -205,10 +237,17 @@ fn a_session_timeout_default_applies_to_later_commands() {
         out.status.code(),
         String::from_utf8_lossy(&out.stderr),
     );
+    let mut baseline = Duration::ZERO;
+    for _ in 0..3 {
+        let round_trip = Instant::now();
+        sandbox.ok(&["state"]);
+        baseline = baseline.max(round_trip.elapsed());
+    }
     assert!(
-        elapsed < Duration::from_millis(4_000),
-        "the 300ms session default was ignored; the wait took {elapsed:?}, which \
-         suggests it fell back to the 5s built-in",
+        elapsed < baseline + Duration::from_millis(2_500),
+        "the 300ms session default was ignored; the wait took {elapsed:?} \
+         against a {baseline:?} round-trip, which suggests it fell back to the \
+         5s built-in",
     );
 }
 
@@ -342,9 +381,9 @@ const RUN_MARKER: &str = "command-is-running";
 /// command's exit code, so an assertion issued too early settles against it.
 fn slow_exit_with(code: i32) -> String {
     if cfg!(windows) {
-        format!("echo ('command-is-'+'running'); Start-Sleep -Seconds 3; cmd /c exit {code}")
+        format!("echo ('command-is-'+'running'); Start-Sleep -Seconds 6; cmd /c exit {code}")
     } else {
-        format!("echo \"command-is-\"\"running\"; sleep 3; (exit {code})")
+        format!("echo \"command-is-\"\"running\"; sleep 6; (exit {code})")
     }
 }
 
@@ -404,6 +443,36 @@ fn expect_exit_code_timing_out_does_not_accept_a_stale_code() {
 }
 
 #[test]
+fn unsubmitted_input_never_settles_as_a_finished_command() {
+    let sandbox = Sandbox::new("unsubmitted");
+    sandbox.ok(&["open"]);
+    sandbox.ok(&["submit", &exit_with(3)]);
+    sandbox.ok(&["wait", "command", "--timeout", "20000"]);
+
+    sandbox.ok(&["type", "echo not-submitted"]);
+
+    let out = sandbox.run(&["expect", "exit-code", "3", "--timeout", "600"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "the previous command's exit code was accepted for input that never ran: {stderr}",
+    );
+    assert!(
+        stderr.contains("never started a command"),
+        "the failure should explain that nothing was submitted, got: {stderr}"
+    );
+
+    let out = sandbox.run(&["wait", "command", "--timeout", "600"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "`wait command` has nothing to wait for: {}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+#[test]
 fn expect_exit_code_fails_promptly_when_nothing_ran() {
     let sandbox = Sandbox::new("exit-code-idle");
     sandbox.ok(&["open"]);
@@ -434,15 +503,22 @@ fn expect_exit_code_is_immediate_once_the_command_has_finished() {
     sandbox.ok(&["wait", "command"]);
     sandbox.ok(&["wait", "text", "settled-marker", "--timeout", "15000"]);
 
+    let mut baseline = Duration::ZERO;
+    for _ in 0..3 {
+        let started = Instant::now();
+        sandbox.ok(&["state"]);
+        baseline = baseline.max(started.elapsed());
+    }
+
     let started = Instant::now();
     sandbox.ok(&["expect", "exit-code", "0"]);
     let elapsed = started.elapsed();
 
     assert!(
-        elapsed < Duration::from_millis(250),
+        elapsed < baseline + Duration::from_millis(250),
         "the command had already finished, so this should settle on the \
          completion marker rather than waiting out the 300ms quiet window; \
-         it took {elapsed:?}",
+         it took {elapsed:?} against a {baseline:?} round-trip",
     );
 }
 
@@ -457,15 +533,23 @@ fn a_repainting_prompt_neither_stalls_nor_short_circuits_exit_codes() {
 
     sandbox.ok(&["submit", "print repaint-marker"]);
     sandbox.ok(&["wait", "command", "--timeout", "20000"]);
+
+    let mut baseline = Duration::ZERO;
+    for _ in 0..3 {
+        let started = Instant::now();
+        sandbox.ok(&["state"]);
+        baseline = baseline.max(started.elapsed());
+    }
     let started = Instant::now();
     sandbox.ok(&["expect", "exit-code", "0"]);
+    let elapsed = started.elapsed();
     assert!(
-        started.elapsed() < Duration::from_millis(500),
-        "a repainting prompt must not stall a settled exit code; it took {:?}",
-        started.elapsed()
+        elapsed < baseline + Duration::from_millis(500),
+        "a repainting prompt must not stall a settled exit code; it took \
+         {elapsed:?} against a {baseline:?} round-trip",
     );
 
-    sandbox.ok(&["submit", "sleep 4sec; exit 7"]);
+    sandbox.ok(&["submit", "sleep 15sec; exit 7"]);
     let out = sandbox.run(&["expect", "exit-code", "0", "--timeout", "1500"]);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
