@@ -1,24 +1,28 @@
-[package]
-name = "shell-use"
+[workspace]
+members = [
+    "crates/shell-use",
+    "crates/shell-use-cli",
+]
+default-members = [
+    "crates/shell-use",
+    "crates/shell-use-cli",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.0.1-beta.5"
 edition = "2021"
-description = "A headless terminal CLI + daemon for driving, asserting on, and recording shells"
 license = "MIT"
 repository = "https://github.com/microsoft/shell-use"
-readme = "README.md"
 
-[[bin]]
-name = "shell-use"
-path = "src/main.rs"
-
-[profile.release]
-strip = true
-lto = true
-
-[dependencies]
+[workspace.dependencies]
 alacritty_terminal = "0.26.0"
 anyhow = "1.0.102"
-clap = { version = "4.6.1", features = ["derive", "env"] }
+bitflags = "2.13.1"
+clap = { version = "4.6.1", features = ["derive"] }
+compact_str = "0.10.0"
+crossterm = "0.28"
+dialoguer = { version = "0.11", default-features = false }
 dirs = "6.0.0"
 flate2 = "1.1.9"
 interprocess = "2.4.2"
@@ -27,8 +31,9 @@ regex = "1.12.4"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.10.9"
-crossterm = "0.28"
+shell-use = { path = "crates/shell-use" }
 ttf-parser = { version = "0.25.1", default-features = false, features = ["std"] }
-dialoguer = { version = "0.11", default-features = false }
-compact_str = "0.10.0"
-bitflags = "2.13.1"
+
+[profile.release]
+strip = true
+lto = true

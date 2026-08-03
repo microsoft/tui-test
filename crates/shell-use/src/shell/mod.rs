@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::home_dir;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-#[clap(rename_all = "lowercase")]
 pub enum Shell {
     Bash,
     Powershell,

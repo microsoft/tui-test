@@ -1,8 +1,38 @@
 use clap::{Args, Parser, Subcommand};
 
-use crate::config::{DEFAULT_COLS, DEFAULT_ROWS};
-use crate::protocol::TimeoutDefaults;
-use crate::shell::Shell;
+use shell_use::config::{DEFAULT_COLS, DEFAULT_ROWS};
+use shell_use::protocol::TimeoutDefaults;
+use shell_use::shell::Shell;
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub enum ShellArg {
+    Bash,
+    Powershell,
+    Pwsh,
+    Cmd,
+    Fish,
+    Zsh,
+    Xonsh,
+    Elvish,
+    Nushell,
+}
+
+impl From<ShellArg> for Shell {
+    fn from(shell: ShellArg) -> Self {
+        match shell {
+            ShellArg::Bash => Shell::Bash,
+            ShellArg::Powershell => Shell::Powershell,
+            ShellArg::Pwsh => Shell::Pwsh,
+            ShellArg::Cmd => Shell::Cmd,
+            ShellArg::Fish => Shell::Fish,
+            ShellArg::Zsh => Shell::Zsh,
+            ShellArg::Xonsh => Shell::Xonsh,
+            ShellArg::Elvish => Shell::Elvish,
+            ShellArg::Nushell => Shell::Nushell,
+        }
+    }
+}
 
 /// Per-class default timeouts for a session, in milliseconds.
 #[derive(Args, Clone, Copy, Default)]
@@ -63,7 +93,7 @@ pub enum Command {
     Open {
         /// Shell to launch (defaults to the platform shell).
         #[arg(long, value_enum)]
-        shell: Option<Shell>,
+        shell: Option<ShellArg>,
         /// Terminal width in columns.
         #[arg(long, default_value_t = DEFAULT_COLS)]
         cols: u16,
@@ -317,6 +347,32 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn open_shell_values_map_to_library_shells() {
+        let cases = [
+            ("bash", Shell::Bash),
+            ("powershell", Shell::Powershell),
+            ("pwsh", Shell::Pwsh),
+            ("cmd", Shell::Cmd),
+            ("fish", Shell::Fish),
+            ("zsh", Shell::Zsh),
+            ("xonsh", Shell::Xonsh),
+            ("elvish", Shell::Elvish),
+            ("nushell", Shell::Nushell),
+        ];
+        for (value, expected) in cases {
+            let cli =
+                Cli::try_parse_from(["shell-use", "open", "--shell", value]).expect("parse shell");
+            let Some(Command::Open {
+                shell: Some(shell), ..
+            }) = cli.command
+            else {
+                panic!("expected Open with a shell");
+            };
+            assert_eq!(Shell::from(shell), expected);
+        }
     }
 
     #[test]

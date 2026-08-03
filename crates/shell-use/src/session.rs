@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use crate::daemon::logger::Logger;
+use crate::logger::Logger;
 use crate::shell::{self, Shell};
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::emu::Emulator;

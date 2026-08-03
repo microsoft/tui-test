@@ -1,17 +1,10 @@
 mod agent_context;
-mod assert;
 mod cli;
 mod config;
 mod daemon;
-mod input;
 mod ipc;
 mod monitor;
-mod protocol;
-mod render;
-mod shell;
 mod skill;
-mod terminal;
-mod trace;
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -19,10 +12,9 @@ use std::time::{Duration, Instant};
 use clap::{CommandFactory, Parser};
 
 use cli::{Cli, Command, DaemonCmd, ExpectCmd, GetArg, MouseCmd, WaitCmd};
-use protocol::{GetField, MouseAction, Request, Response};
-
+use shell_use::protocol::{GetField, MouseAction, Request, Response};
 /// Long-form agent skill manifest, printed by `shell-use skill`.
-const SKILL_MD: &str = include_str!("../SKILL.md");
+const SKILL_MD: &str = include_str!("../../../SKILL.md");
 
 fn main() {
     let cli = Cli::parse();
@@ -142,7 +134,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             no_wait_ready,
             timeouts,
         } => Request::Open {
-            shell,
+            shell: shell.map(Into::into),
             program: None,
             cols,
             rows,
