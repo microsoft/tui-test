@@ -29,7 +29,7 @@ fn snapshot_path(base: &Path, name: &str) -> PathBuf {
 
 fn color_value(c: Option<Color>) -> Value {
     match c {
-        None => Value::String("default".to_string()),
+        None => Value::String(crate::assert::color::DEFAULT.to_string()),
         Some(Color::Rgb(r, g, b)) => Value::String(format!("#{r:02x}{g:02x}{b:02x}")),
         Some(c) => json!(c.to_index()),
     }
@@ -56,8 +56,11 @@ fn shift(prev: &EmuCell, cur: &EmuCell) -> Map<String, Value> {
             m.insert(key.into(), json!(cur.has(attr)));
         }
     }
-    if prev.underline.is_underlined() != cur.underline.is_underlined() {
-        m.insert("underline".into(), json!(cur.underline.is_underlined()));
+    // The style, not a boolean: a curly underline and a single one are
+    // different renderings, and a snapshot that only recorded "underlined"
+    // would pass when one silently became the other.
+    if prev.underline != cur.underline {
+        m.insert("underline".into(), json!(cur.underline.name()));
     }
     m
 }
@@ -168,5 +171,34 @@ mod tests {
             cell(" "),
         ]];
         assert_eq!(serialize(&rows, 6, false), "╭──────╮\n│你b   │\n╰──────╯");
+    }
+
+    /// Snapshots recorded a bare "is underlined", so a curly underline turning
+    /// single left the snapshot passing. The style name is recorded instead.
+    #[test]
+    fn a_shift_between_underline_styles_is_recorded() {
+        use crate::terminal::cell::UnderlineStyle;
+        let styled = |u| EmuCell {
+            underline: u,
+            ..EmuCell::blank()
+        };
+        let curly = shift(
+            &styled(UnderlineStyle::Single),
+            &styled(UnderlineStyle::Curly),
+        );
+        assert_eq!(curly.get("underline"), Some(&json!("curly")));
+        assert_eq!(
+            shift(
+                &styled(UnderlineStyle::Curly),
+                &styled(UnderlineStyle::None)
+            )
+            .get("underline"),
+            Some(&json!("none"))
+        );
+        assert!(shift(
+            &styled(UnderlineStyle::Curly),
+            &styled(UnderlineStyle::Curly)
+        )
+        .is_empty());
     }
 }
