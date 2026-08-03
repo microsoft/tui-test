@@ -27,6 +27,7 @@ from typing import (
     Set,
 )
 
+from . import _ephemeral
 from ._config import IS_MACOS, IS_WINDOWS
 from ._ephemeral import unique_session
 from .client import ShellUse
@@ -105,6 +106,7 @@ def _install_safety_net() -> None:
     if _safety_net_installed:
         return
     _safety_net_installed = True
+    _ephemeral._register_sweeper()
     atexit.register(_close_all_tracked_blocking)
 
 

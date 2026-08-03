@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections.abc
 import dataclasses
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -14,6 +15,9 @@ DEFAULT_ROWS = 30
 
 IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
+
+_SOCKET_PATH_MAX = 100
+_SOCKET_DIGEST_HEX_LEN = 16
 
 
 def resolve_session(session: Optional[str]) -> str:
@@ -32,10 +36,18 @@ def home_dir(home: Optional[str]) -> Path:
     return Path(home) if home else Path.home() / ".shell-use"
 
 
+def _socket_path_in(directory: Path, session: str) -> Path:
+    candidate = directory / f"{session}.sock"
+    if len(os.fsencode(candidate)) <= _SOCKET_PATH_MAX:
+        return candidate
+    digest = hashlib.sha256(session.encode("utf-8")).hexdigest()
+    return directory / f"{digest[:_SOCKET_DIGEST_HEX_LEN]}.sock"
+
+
 def socket_path(session: str, home: Optional[str]) -> str:
     if IS_WINDOWS:
         return rf"\\.\pipe\shell-use-{session}.sock"
-    return str(home_dir(home) / f"{session}.sock")
+    return str(_socket_path_in(home_dir(home), session))
 
 
 def _cache_dir() -> Path:
@@ -106,4 +118,3 @@ def session_timeouts_payload(timeouts: object) -> Optional[Dict[str, int]]:
         if value is not None
     }
     return payload or None
-

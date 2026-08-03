@@ -395,6 +395,14 @@ fn sleeper() -> Vec<&'static str> {
     }
 }
 
+fn interactive_reader() -> &'static str {
+    if cfg!(windows) {
+        "Write-Output ('reader-'+'ready'); $null = Read-Host"
+    } else {
+        "echo \"reader-\"\"ready\"; read answer"
+    }
+}
+
 fn start_command_with_stale_exit(sandbox: &Sandbox) {
     sandbox.ok(&["open"]);
     sandbox.ok(&["submit", &exit_with(3)]);
@@ -470,6 +478,18 @@ fn unsubmitted_input_never_settles_as_a_finished_command() {
         "`wait command` has nothing to wait for: {}",
         String::from_utf8_lossy(&out.stderr),
     );
+}
+
+#[test]
+fn input_consumed_by_a_running_command_does_not_stall_completion_waits() {
+    let sandbox = Sandbox::new("running-input");
+    sandbox.ok(&["open"]);
+    sandbox.ok(&["submit", interactive_reader()]);
+    sandbox.ok(&["wait", "text", "reader-ready", "--timeout", "15000"]);
+
+    sandbox.ok(&["submit", "typed-answer"]);
+    sandbox.ok(&["wait", "command", "--timeout", "5000"]);
+    sandbox.ok(&["expect", "exit-code", "0", "--timeout", "5000"]);
 }
 
 #[test]

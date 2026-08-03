@@ -81,6 +81,7 @@ class IntegrationTests(unittest.TestCase):
                     await su.open(shell=SHELL)
                     await su.submit("echo snapshot-marker")
                     await su.wait_command()
+                    await su.wait_idle()
                     os.chdir(snap_root)
                     try:
                         status = await su.expect_snapshot(name)

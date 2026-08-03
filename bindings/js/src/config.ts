@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,6 +9,9 @@ export const DEFAULT_ROWS = 30;
 
 export const IS_WINDOWS = process.platform === "win32";
 export const IS_MACOS = process.platform === "darwin";
+
+const SOCKET_PATH_MAX = 100;
+const SOCKET_DIGEST_HEX_LEN = 16;
 
 export function resolveSession(session?: string): string {
   return session || process.env.SHELL_USE_SESSION || "default";
@@ -25,11 +29,20 @@ export function homeDir(home?: string): string {
   return home || path.join(os.homedir(), ".shell-use");
 }
 
+export function socketPathIn(directory: string, session: string): string {
+  const candidate = path.join(directory, `${session}.sock`);
+  if (Buffer.byteLength(candidate) <= SOCKET_PATH_MAX) {
+    return candidate;
+  }
+  const digest = createHash("sha256").update(session, "utf8").digest("hex");
+  return path.join(directory, `${digest.slice(0, SOCKET_DIGEST_HEX_LEN)}.sock`);
+}
+
 export function socketPath(session: string, home?: string): string {
   if (IS_WINDOWS) {
     return `\\\\.\\pipe\\shell-use-${session}.sock`;
   }
-  return path.join(homeDir(home), `${session}.sock`);
+  return socketPathIn(homeDir(home), session);
 }
 
 function cacheDir(): string {

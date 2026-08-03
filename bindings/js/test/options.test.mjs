@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { ExpectationError, ShellUse, uniqueSession } from "../dist/index.js";
-import { resolveHome, resolveTimeout, timeoutsPayload } from "../dist/config.js";
+import {
+  resolveHome,
+  resolveTimeout,
+  socketPathIn,
+  timeoutsPayload,
+} from "../dist/config.js";
 import { createTempHome, removeTempHome } from "../dist/ephemeral.js";
 import { envPairs } from "../dist/protocol.js";
 
@@ -53,6 +59,15 @@ function withEnv(vars, fn) {
     }
   }
 }
+
+test("long socket paths match the Rust and Python digest", () => {
+  const home =
+    "/var/folders/9k/hd3xzq_s0mn1c7b2v8t4wxyz0000gn/T/shell-use-Ab12Cd34";
+  assert.equal(
+    socketPathIn(home, "helpers-track-54321-9f8e7d6c-1"),
+    join(home, "9ba800cbf25eaece.sock"),
+  );
+});
 
 test("resolveTimeout returns undefined when nothing is configured", () => {
   for (const cls of CLASSES) {

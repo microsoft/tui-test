@@ -147,7 +147,10 @@ impl Session {
         self.logger.write(data);
         {
             let mut st = self.state.lock().unwrap();
-            st.awaiting_start = Some(st.emu.tracker().started_count());
+            let tracker = st.emu.tracker();
+            if !tracker.executing() {
+                st.awaiting_start = Some(tracker.started_count());
+            }
         }
         self.pty.lock().unwrap().write(data)?;
         Ok(())

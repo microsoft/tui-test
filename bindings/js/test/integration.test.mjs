@@ -81,6 +81,7 @@ test("snapshot lands in the client cwd", { skip }, async () => {
     await withTerminal({ shell }, async (su) => {
       await su.submit("echo snapshot-marker");
       await su.waitCommand();
+      await su.waitIdle();
       process.chdir(snapRoot);
       const status = await su.expectSnapshot(name);
       assert.equal(status, "written");

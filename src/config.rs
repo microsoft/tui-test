@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use sha2::{Digest, Sha256};
+
 pub const DEFAULT_COLS: u16 = 80;
 pub const DEFAULT_ROWS: u16 = 30;
 pub const POLL_DELAY_MS: u64 = 50;
@@ -115,6 +117,7 @@ pub fn recording_file(session: &str) -> PathBuf {
 }
 
 const SOCKET_PATH_MAX: usize = 100;
+const SOCKET_DIGEST_HEX_LEN: usize = 16;
 
 /// Platform-appropriate socket name for a session.
 ///
@@ -134,16 +137,8 @@ fn socket_path_in(dir: &std::path::Path, session: &str) -> PathBuf {
     if path.as_os_str().len() <= SOCKET_PATH_MAX {
         return path;
     }
-    dir.join(format!("{:016x}.sock", digest(session)))
-}
-
-fn digest(value: &str) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
+    let digest = format!("{:x}", Sha256::digest(session.as_bytes()));
+    dir.join(format!("{}.sock", &digest[..SOCKET_DIGEST_HEX_LEN]))
 }
 
 pub fn session_name_from_env(explicit: Option<String>) -> String {
@@ -213,6 +208,16 @@ mod tests {
             path,
             socket_path_in(&dir, &session),
             "the shortened name must be stable so the CLI and daemon agree"
+        );
+    }
+
+    #[test]
+    fn long_socket_path_matches_the_binding_digest() {
+        let dir =
+            PathBuf::from("/var/folders/9k/hd3xzq_s0mn1c7b2v8t4wxyz0000gn/T/shell-use-Ab12Cd34");
+        assert_eq!(
+            socket_path_in(&dir, "helpers-track-54321-9f8e7d6c-1"),
+            dir.join("9ba800cbf25eaece.sock")
         );
     }
 

@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from shell_use import _config as cfg
@@ -13,6 +14,25 @@ from shell_use.types import Timeouts
 
 def run(coro):
     return asyncio.run(coro)
+
+
+class SocketPathTests(unittest.TestCase):
+    def test_short_path_keeps_the_session_name(self):
+        home = Path("/tmp/shell-use")
+        self.assertEqual(
+            cfg._socket_path_in(home, "work"),
+            home / "work.sock",
+        )
+
+    def test_long_path_matches_the_rust_and_javascript_digest(self):
+        home = Path(
+            "/var/folders/9k/hd3xzq_s0mn1c7b2v8t4wxyz0000gn/T/"
+            "shell-use-Ab12Cd34"
+        )
+        self.assertEqual(
+            cfg._socket_path_in(home, "helpers-track-54321-9f8e7d6c-1"),
+            home / "9ba800cbf25eaece.sock",
+        )
 
 
 class _CapturingClient(client.ShellUse):

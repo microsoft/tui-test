@@ -70,6 +70,28 @@ class RegistryTests(unittest.TestCase):
         testing.untrack_terminal(_FakeTerminal())
 
 
+class SafetyNetTests(unittest.TestCase):
+    def test_registers_the_home_sweeper_before_the_terminal_closer(self):
+        calls = []
+        installed = testing._safety_net_installed
+        testing._safety_net_installed = False
+        try:
+            with mock.patch.object(
+                testing._ephemeral,
+                "_register_sweeper",
+                side_effect=lambda: calls.append("sweeper"),
+            ), mock.patch.object(
+                testing.atexit,
+                "register",
+                side_effect=lambda callback: calls.append(callback.__name__),
+            ):
+                testing._install_safety_net()
+        finally:
+            testing._safety_net_installed = installed
+
+        self.assertEqual(calls, ["sweeper", "_close_all_tracked_blocking"])
+
+
 class DefaultsTests(unittest.TestCase):
     def tearDown(self):
         testing.reset_terminal_defaults()
