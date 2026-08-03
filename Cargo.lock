@@ -871,7 +871,6 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "bitflags 2.13.1",
- "clap",
  "compact_str",
  "dirs",
  "flate2",

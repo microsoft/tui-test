@@ -11,15 +11,10 @@ readme = "../../README.md"
 name = "shell_use"
 path = "src/lib.rs"
 
-[features]
-default = []
-cli = ["dep:clap"]
-
 [dependencies]
 alacritty_terminal.workspace = true
 anyhow.workspace = true
 bitflags.workspace = true
-clap = { workspace = true, optional = true }
 compact_str.workspace = true
 dirs.workspace = true
 flate2.workspace = true

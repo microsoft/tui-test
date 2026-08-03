@@ -20,4 +20,4 @@ dirs.workspace = true
 interprocess.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-shell-use = { workspace = true, features = ["cli"] }
+shell-use.workspace = true

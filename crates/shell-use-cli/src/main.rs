@@ -134,7 +134,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             no_wait_ready,
             timeouts,
         } => Request::Open {
-            shell,
+            shell: shell.map(Into::into),
             program: None,
             cols,
             rows,

@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::home_dir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[serde(rename_all = "lowercase")]
-#[cfg_attr(feature = "cli", clap(rename_all = "lowercase"))]
 pub enum Shell {
     Bash,
     Powershell,
@@ -69,43 +67,43 @@ pub fn write_integration_scripts() -> std::io::Result<()> {
     let files: &[(&str, &str)] = &[
         (
             "shellIntegration.bash",
-            include_str!("../../../../shell/shellIntegration.bash"),
+            include_str!("../../shell/shellIntegration.bash"),
         ),
         (
             "shellIntegration.fish",
-            include_str!("../../../../shell/shellIntegration.fish"),
+            include_str!("../../shell/shellIntegration.fish"),
         ),
         (
             "shellIntegration.ps1",
-            include_str!("../../../../shell/shellIntegration.ps1"),
+            include_str!("../../shell/shellIntegration.ps1"),
         ),
         (
             "shellIntegration.xsh",
-            include_str!("../../../../shell/shellIntegration.xsh"),
+            include_str!("../../shell/shellIntegration.xsh"),
         ),
         (
             "shellIntegration.elv",
-            include_str!("../../../../shell/shellIntegration.elv"),
+            include_str!("../../shell/shellIntegration.elv"),
         ),
         (
             "shellIntegration.nu",
-            include_str!("../../../../shell/shellIntegration.nu"),
+            include_str!("../../shell/shellIntegration.nu"),
         ),
         (
             "shellIntegration-rc.zsh",
-            include_str!("../../../../shell/shellIntegration-rc.zsh"),
+            include_str!("../../shell/shellIntegration-rc.zsh"),
         ),
         (
             "shellIntegration-profile.zsh",
-            include_str!("../../../../shell/shellIntegration-profile.zsh"),
+            include_str!("../../shell/shellIntegration-profile.zsh"),
         ),
         (
             "shellIntegration-env.zsh",
-            include_str!("../../../../shell/shellIntegration-env.zsh"),
+            include_str!("../../shell/shellIntegration-env.zsh"),
         ),
         (
             "shellIntegration-login.zsh",
-            include_str!("../../../../shell/shellIntegration-login.zsh"),
+            include_str!("../../shell/shellIntegration-login.zsh"),
         ),
     ];
     for (name, body) in files {
