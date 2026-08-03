@@ -26,8 +26,8 @@ Three commands let an agent look up the rest of the surface instead of guessing:
 ## Core model
 
 - **Sessions.** `--session <name>` (default `default`, env `SHELL_USE_SESSION`)
-  selects a terminal. The first command auto-starts the daemon; the session
-  persists across calls until `close`. Run many independent sessions by name.
+  selects a terminal. The first command auto-starts that session's daemon; the
+  session persists across calls until `close`. Sessions are independent.
 - **Stateless calls.** Each invocation connects to the daemon, acts, and exits.
   State (screen, cwd, last command) lives in the daemon, not the CLI.
 - **JSON.** Pass `--json` on any command for machine-readable output. Data goes
@@ -35,8 +35,10 @@ Three commands let an agent look up the rest of the surface instead of guessing:
   (`assertion` / `usage` / `no_session` / `internal`).
 - **Verbose.** `--verbose` / `-v` starts the daemon with a full PTY traffic log
   (see [Debugging](#debugging)). Only takes effect when the daemon starts.
-- **Defaults.** New sessions are `80x30`. `wait text` / `wait idle` and
-  `expect text` default to a 5s timeout; `wait command` / `wait exit` to 30s.
+- **Defaults.** New sessions are `80x30`. Timeouts come in five classes: `text`
+  and `idle` default to 5s; `command`, `exit`, and `ready` to 30s. Set a session
+  default with `open --timeout-<class> <ms>`, or override one call with
+  `--timeout`. `state` reports the effective values.
 
 ## Exit codes
 
@@ -62,13 +64,15 @@ without parsing text:
 | `run <program> [args...] [--cols N] [--rows N] [--cwd D] [--env K=V]...` | Spawn a session running a program directly (no shell). |
 | `sessions` | List active sessions. |
 | `close [--all]` | Close the current session (or every session with `--all`). |
-| `daemon status` / `daemon stop` | Inspect (PID, log path) or stop the daemon. |
+| `daemon start` | Start this session's daemon. Most commands start one on demand. |
+| `daemon status` | Inspect a session's daemon (pid, log path). Exit 3 if none is running. |
+| `daemon stop --session N \| --all` | Stop one session's daemon, or every daemon. Needs a target. |
 
 ### Inspection
 
 | Command | Description |
 | --- | --- |
-| `state` | cwd, size, cursor, last command + exit code, and a text snapshot. |
+| `state` | cwd, size, cursor, last command + exit code, timeouts, and a text snapshot. |
 | `text [--full]` | Rendered viewport text, or full scrollback with `--full`. |
 | `screenshot [PATH] [-o FILE] [--full]` | Terminal text to stdout, or a full-color SVG image (crisp at any zoom, svg-term-style window) when a path is given. |
 | `cells X Y [W H]` | Per-cell attributes (char, fg, bg, flags) for a region. |
@@ -102,13 +106,14 @@ without parsing text:
 | `wait idle [--timeout MS]` | Until the screen stops repainting (~250ms quiet). |
 | `wait command [--timeout MS]` | Until the current foreground command finishes (needs shell integration). |
 | `wait exit [--timeout MS]` | Until the session's program/shell itself exits. |
+| `wait ready [--timeout MS]` | Until the shell reports a ready prompt (needs shell integration). `open` waits by default. |
 
 ### Expect (exit 0 = pass, 1 = fail)
 
 | Command | Description |
 | --- | --- |
 | `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility plus optional color. `--no-strict` relaxes a strict single-match. |
-| `expect exit-code N` | The last command's exit code. |
+| `expect exit-code N [--timeout MS]` | The last command's exit code. Waits for the command to finish first. |
 | `expect output "T" [--regex]` | The last command's captured output. |
 | `expect snapshot NAME [-u] [--include-colors]` | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. |
 
@@ -181,14 +186,15 @@ Snapshots live in `__snapshots__/<NAME>.snap` next to where you run the command.
 - `wait text "T"`: waits until text/regex is visible. The most precise wait; use
   it whenever you know what output to look for. `--not` waits for it to disappear.
 - `wait command`: waits until the current command finishes, via the shell's OSC
-  integration markers. This is what you want after `submit`-ing a command.
-  Requires shell integration; without it, falls back to "prompt returned and
-  screen idle". Bump `--timeout` for long commands (default 30s).
+  integration markers. Use it after `submit`. Without shell integration it falls
+  back to "screen idle". Bump `--timeout` for long commands (default 30s).
 - `wait idle`: waits until the screen stops repainting. This tracks visual
   quiescence, not completion: a silent command like `sleep 100` counts as idle
   almost immediately. Use it to let a TUI finish drawing.
 - `wait exit`: waits until the program/session itself exits. Use for
   `run <program>` sessions or after sending `exit`.
+- `wait ready`: waits until the shell reports a ready prompt. `open` does this
+  for you.
 
 ## Recording
 

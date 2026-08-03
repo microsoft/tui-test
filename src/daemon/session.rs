@@ -20,6 +20,7 @@ pub struct TermState {
     /// the emulator, so it is identical across backends.
     pub tracker: CommandTracker,
     pub last_change: Instant,
+    pub awaiting_start: Option<u64>,
     pub exited: Option<i32>,
 }
 
@@ -27,6 +28,8 @@ pub struct Session {
     pub shell: Option<Shell>,
     pub cols: u16,
     pub rows: u16,
+    /// Per-class timeout defaults for the lifetime of this session.
+    pub timeouts: crate::protocol::TimeoutDefaults,
     pub pty: Arc<Mutex<Pty>>,
     pub state: Arc<Mutex<TermState>>,
     recorder: Arc<Mutex<Recorder>>,
@@ -35,6 +38,13 @@ pub struct Session {
 }
 
 impl Session {
+    /// The session default for `class`, else the environment, else the built-in.
+    pub fn timeout_for(&self, class: crate::config::TimeoutClass) -> u64 {
+        self.timeouts
+            .get(class)
+            .unwrap_or_else(|| class.default_ms())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         shell: Option<Shell>,
@@ -43,6 +53,7 @@ impl Session {
         rows: u16,
         cwd: Option<String>,
         env: Vec<(String, String)>,
+        timeouts: crate::protocol::TimeoutDefaults,
         logger: Arc<Logger>,
         recording_path: PathBuf,
     ) -> anyhow::Result<Self> {
@@ -68,6 +79,7 @@ impl Session {
             emu: Box::new(AlacrittyEmu::new(cols, rows, 5_000)),
             tracker: CommandTracker::new(),
             last_change: Instant::now(),
+            awaiting_start: None,
             exited: None,
         }));
         let pty = Arc::new(Mutex::new(pty));
@@ -129,6 +141,7 @@ impl Session {
             shell,
             cols,
             rows,
+            timeouts,
             pty,
             state,
             recorder,
@@ -139,6 +152,13 @@ impl Session {
 
     pub fn write(&self, data: &[u8]) -> anyhow::Result<()> {
         self.logger.write(data);
+        {
+            let mut st = self.state.lock().unwrap();
+            if !st.tracker.executing() {
+                let started_count = st.tracker.started_count();
+                st.awaiting_start = Some(started_count);
+            }
+        }
         self.pty.lock().unwrap().write(data)?;
         Ok(())
     }

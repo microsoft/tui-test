@@ -2,6 +2,31 @@ use serde::{Deserialize, Serialize};
 
 use crate::shell::Shell;
 
+/// Per-session default timeouts, one per [`crate::config::TimeoutClass`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TimeoutDefaults {
+    pub text: Option<u64>,
+    pub idle: Option<u64>,
+    pub command: Option<u64>,
+    pub exit: Option<u64>,
+    pub ready: Option<u64>,
+}
+
+impl TimeoutDefaults {
+    /// The default configured for `class`, if any.
+    pub fn get(&self, class: crate::config::TimeoutClass) -> Option<u64> {
+        use crate::config::TimeoutClass::*;
+        match class {
+            Text => self.text,
+            Idle => self.idle,
+            Command => self.command,
+            Exit => self.exit,
+            Ready => self.ready,
+        }
+    }
+}
+
 /// A request sent from a stateless CLI invocation to the session daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -14,6 +39,11 @@ pub enum Request {
         rows: u16,
         cwd: Option<String>,
         env: Vec<(String, String)>,
+        /// Whether to wait for readiness; `None` keeps the target default.
+        #[serde(default)]
+        wait_ready: Option<bool>,
+        #[serde(default)]
+        timeouts: TimeoutDefaults,
     },
     Close,
     Status,
@@ -53,17 +83,25 @@ pub enum Request {
         text: String,
         regex: bool,
         full: bool,
-        timeout_ms: u64,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
         not: bool,
     },
     WaitIdle {
-        timeout_ms: u64,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
     WaitCommand {
-        timeout_ms: u64,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
     WaitExit {
-        timeout_ms: u64,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    WaitReady {
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
     ExpectText {
         text: String,
@@ -73,10 +111,13 @@ pub enum Request {
         not: bool,
         fg: Option<String>,
         bg: Option<String>,
-        timeout_ms: u64,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
     ExpectExitCode {
         code: i32,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
     ExpectOutput {
         text: String,
@@ -241,5 +282,134 @@ impl Response {
     /// An internal failure (exit code 5).
     pub fn internal(message: impl Into<String>) -> Self {
         Response::err(ErrorKind::Internal, message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_open_req(wait_ready: Option<bool>, timeouts: TimeoutDefaults) -> Request {
+        Request::Open {
+            shell: None,
+            program: None,
+            cols: 80,
+            rows: 30,
+            cwd: None,
+            env: vec![],
+            wait_ready,
+            timeouts,
+        }
+    }
+
+    /// Clients released before `wait_ready` existed must still deserialize.
+    #[test]
+    fn open_without_wait_ready_still_deserializes() {
+        let raw = r#"{"kind":"open","shell":null,"program":null,"cols":80,"rows":30,
+                      "cwd":null,"env":[]}"#;
+        let req: Request = serde_json::from_str(raw).expect("deserialize legacy open");
+        match req {
+            Request::Open {
+                wait_ready,
+                cols,
+                timeouts,
+                ..
+            } => {
+                assert_eq!(wait_ready, None);
+                assert_eq!(cols, 80);
+                assert_eq!(
+                    timeouts,
+                    TimeoutDefaults::default(),
+                    "an absent timeouts object means nothing is configured"
+                );
+            }
+            other => panic!("expected Open, got {other:?}"),
+        }
+    }
+
+    /// Older clients' concrete `timeout_ms` must remain an explicit override.
+    #[test]
+    fn waits_accept_a_concrete_timeout_from_older_clients() {
+        let raw = r#"{"kind":"wait_idle","timeout_ms":1234}"#;
+        match serde_json::from_str::<Request>(raw).expect("deserialize wait_idle") {
+            Request::WaitIdle { timeout_ms } => assert_eq!(timeout_ms, Some(1234)),
+            other => panic!("expected WaitIdle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn waits_treat_an_absent_timeout_as_unset() {
+        for raw in [
+            r#"{"kind":"wait_idle"}"#,
+            r#"{"kind":"wait_command"}"#,
+            r#"{"kind":"wait_exit"}"#,
+            r#"{"kind":"wait_ready"}"#,
+        ] {
+            let req: Request = serde_json::from_str(raw).expect("deserialize wait");
+            let timeout = match req {
+                Request::WaitIdle { timeout_ms }
+                | Request::WaitCommand { timeout_ms }
+                | Request::WaitExit { timeout_ms }
+                | Request::WaitReady { timeout_ms } => timeout_ms,
+                other => panic!("expected a wait, got {other:?}"),
+            };
+            assert_eq!(timeout, None, "{raw} should leave the timeout unset");
+        }
+    }
+
+    /// `expect exit-code` gained a timeout; older payloads omit it.
+    #[test]
+    fn expect_exit_code_timeout_is_optional() {
+        let raw = r#"{"kind":"expect_exit_code","code":0}"#;
+        match serde_json::from_str::<Request>(raw).expect("deserialize expect_exit_code") {
+            Request::ExpectExitCode { code, timeout_ms } => {
+                assert_eq!(code, 0);
+                assert_eq!(timeout_ms, None);
+            }
+            other => panic!("expected ExpectExitCode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_round_trips_session_timeout_defaults() {
+        let timeouts = TimeoutDefaults {
+            text: Some(30_000),
+            idle: Some(15_000),
+            ready: Some(20_000),
+            ..TimeoutDefaults::default()
+        };
+        let req = make_open_req(None, timeouts);
+        let encoded = serde_json::to_string(&req).expect("serialize open");
+        match serde_json::from_str::<Request>(&encoded).expect("deserialize open") {
+            Request::Open { timeouts: got, .. } => {
+                assert_eq!(got, timeouts);
+                assert_eq!(got.get(crate::config::TimeoutClass::Text), Some(30_000));
+                assert_eq!(got.get(crate::config::TimeoutClass::Command), None);
+            }
+            other => panic!("expected Open, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_round_trips_an_explicit_wait_ready() {
+        for expected in [Some(true), Some(false), None] {
+            let req = make_open_req(expected, TimeoutDefaults::default());
+            let encoded = serde_json::to_string(&req).expect("serialize open");
+            let decoded: Request = serde_json::from_str(&encoded).expect("deserialize open");
+            match decoded {
+                Request::Open { wait_ready, .. } => assert_eq!(wait_ready, expected),
+                other => panic!("expected Open, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn wait_ready_uses_a_snake_case_kind() {
+        let req: Request = serde_json::from_str(r#"{"kind":"wait_ready","timeout_ms":1234}"#)
+            .expect("deserialize wait_ready");
+        match req {
+            Request::WaitReady { timeout_ms } => assert_eq!(timeout_ms, Some(1234)),
+            other => panic!("expected WaitReady, got {other:?}"),
+        }
     }
 }

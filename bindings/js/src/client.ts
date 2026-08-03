@@ -1,11 +1,19 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+
 import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
+  assertTimeoutClasses,
   resolveBinary,
   resolveHome,
   resolveSession,
+  resolveTimeout,
+  timeoutsPayload,
 } from "./config.js";
-import { ExpectationError } from "./errors.js";
+import type { TimeoutClass } from "./config.js";
+import { createTempHome, removeTempHome, uniqueSession } from "./ephemeral.js";
+import { DaemonError, ExpectationError, NoSessionError } from "./errors.js";
 import { envPairs, unwrap } from "./protocol.js";
 import * as transport from "./transport.js";
 import { checkVersion } from "./version.js";
@@ -37,6 +45,17 @@ export interface ExpectTextOptions {
 
 export interface MouseButtonOptions {
   button?: number;
+}
+
+const TERMINAL_MARKER = "Terminal content:\n";
+
+/** Pulls boxed terminal content from assertion messages, dropping trailing newlines like the Python binding. */
+function extractTerminalContent(message: string): string | undefined {
+  const idx = message.indexOf(TERMINAL_MARKER);
+  if (idx < 0) {
+    return undefined;
+  }
+  return message.slice(idx + TERMINAL_MARKER.length).replace(/\n+$/, "") || undefined;
 }
 
 function withOperation(error: unknown, operation: string): unknown {
@@ -123,26 +142,86 @@ export class ShellUse {
   readonly mouse: Mouse;
   #binary: string;
   #home?: string;
+  #isolated: boolean;
+  #tempHomePath?: string;
+  #options: ClientOptions;
   #versionChecked = false;
+  #closed = false;
+  #artifactCounter = 0;
 
   constructor(session?: string, opts: ClientOptions = {}) {
     this.session = resolveSession(session);
     this.#binary = resolveBinary(opts.binary);
-    this.#home = resolveHome(opts.home);
+    this.#isolated = opts.isolated ?? false;
+    if (!this.#isolated) {
+      this.#home = resolveHome(opts.home);
+    }
+    if (opts.timeouts) {
+      assertTimeoutClasses(opts.timeouts);
+    }
+    this.#options = opts;
     this.mouse = new Mouse(this);
   }
 
+  static ephemeral(prefix?: string, opts: ClientOptions = {}): ShellUse {
+    return new ShellUse(uniqueSession(prefix), { ...opts, isolated: true });
+  }
+
   async send(payload: unknown): Promise<unknown> {
-    await this.#checkVersion();
-    const resp = await transport.request(this.session, this.#home, this.#binary, payload);
+    const home = await this.#resolveHome();
+    await this.#checkVersion(home);
+    const resp = await transport.request(this.session, home, this.#binary, payload);
     return unwrap(resp);
   }
 
-  async #checkVersion(): Promise<void> {
+  async #resolveHome(): Promise<string | undefined> {
+    if (!this.#isolated) {
+      return this.#home;
+    }
+    if (!this.#tempHomePath) {
+      this.#tempHomePath = await createTempHome();
+    }
+    return this.#tempHomePath;
+  }
+
+  #currentHome(): string | undefined {
+    return this.#isolated ? this.#tempHomePath : this.#home;
+  }
+
+  async #cleanupTempHome(): Promise<void> {
+    const dir = this.#tempHomePath;
+    if (!dir) {
+      return;
+    }
+    this.#tempHomePath = undefined;
+    try {
+      await removeTempHome(dir);
+    } catch {
+      /* best effort; the exit sweeper retries */
+    }
+  }
+
+  #timeout(cls: TimeoutClass, callTimeout?: number): number | undefined {
+    return resolveTimeout(cls, callTimeout, this.#options);
+  }
+
+  #withTimeout(
+    payload: Record<string, unknown>,
+    cls: TimeoutClass,
+    callTimeout?: number,
+  ): Record<string, unknown> {
+    const timeout = this.#timeout(cls, callTimeout);
+    if (timeout !== undefined) {
+      payload.timeout_ms = timeout;
+    }
+    return payload;
+  }
+
+  async #checkVersion(home: string | undefined): Promise<void> {
     if (this.#versionChecked) {
       return;
     }
-    const resp = await transport.request(this.session, this.#home, this.#binary, {
+    const resp = await transport.request(this.session, home, this.#binary, {
       kind: "status",
     });
     const data = unwrap(resp) as { version?: string } | undefined;
@@ -150,8 +229,65 @@ export class ShellUse {
     this.#versionChecked = true;
   }
 
+  async #guard<T>(operation: string, action: () => Promise<T>): Promise<T> {
+    try {
+      return await action();
+    } catch (error) {
+      const mapped = withOperation(error, operation);
+      await this.#captureArtifact(mapped);
+      throw mapped;
+    }
+  }
+
+  async #captureArtifact(error: unknown): Promise<void> {
+    const artifacts = this.#options.artifacts;
+    if (!artifacts || !(error instanceof ExpectationError)) {
+      return;
+    }
+    const mode = artifacts.onFailure ?? "svg";
+    if (mode === "none") {
+      return;
+    }
+    try {
+      const terminal = error.terminal ?? {};
+      const text = extractTerminalContent(error.message);
+      if (text !== undefined) {
+        terminal.text = text;
+      }
+      if (mode === "svg") {
+        await mkdir(artifacts.dir, { recursive: true });
+        const file = path.join(
+          artifacts.dir,
+          `${this.session}-${Date.now()}-${this.#artifactCounter++}.svg`,
+        );
+        terminal.screenshot = await this.screenshot(file);
+      }
+      if (terminal.text !== undefined || terminal.screenshot !== undefined) {
+        error.terminal = terminal;
+      }
+    } catch {
+      /* best effort; never mask the original error */
+    }
+  }
+
+  async #spawn(payload: Record<string, unknown>, retries: number): Promise<OpenResult> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      this.#closed = false;
+      try {
+        return (await this.send(payload)) as OpenResult;
+      } catch (error) {
+        lastError = error;
+        if (attempt < retries) {
+          await this.closeQuiet();
+        }
+      }
+    }
+    throw lastError;
+  }
+
   async open(opts: SpawnOptions & { shell?: Shell } = {}): Promise<OpenResult> {
-    return (await this.send({
+    const payload: Record<string, unknown> = {
       kind: "open",
       shell: opts.shell ?? null,
       program: null,
@@ -159,11 +295,19 @@ export class ShellUse {
       rows: opts.rows ?? DEFAULT_ROWS,
       cwd: opts.cwd ?? null,
       env: envPairs(opts.env),
-    })) as OpenResult;
+    };
+    if (opts.waitReady !== undefined) {
+      payload.wait_ready = opts.waitReady;
+    }
+    const timeouts = timeoutsPayload(opts.timeouts);
+    if (timeouts !== undefined) {
+      payload.timeouts = timeouts;
+    }
+    return this.#spawn(payload, opts.retries ?? 0);
   }
 
   async run(program: string, args: string[] = [], opts: SpawnOptions = {}): Promise<OpenResult> {
-    return (await this.send({
+    const payload: Record<string, unknown> = {
       kind: "open",
       shell: null,
       program: [program, ...args],
@@ -171,21 +315,51 @@ export class ShellUse {
       rows: opts.rows ?? DEFAULT_ROWS,
       cwd: opts.cwd ?? null,
       env: envPairs(opts.env),
-    })) as OpenResult;
+    };
+    if (opts.waitReady !== undefined) {
+      payload.wait_ready = opts.waitReady;
+    }
+    const timeouts = timeoutsPayload(opts.timeouts);
+    if (timeouts !== undefined) {
+      payload.timeouts = timeouts;
+    }
+    return this.#spawn(payload, opts.retries ?? 0);
   }
 
   async close(): Promise<void> {
-    if (!(await transport.canConnect(this.session, this.#home))) {
+    if (this.#closed) {
       return;
     }
-    const resp = await transport.request(
-      this.session,
-      this.#home,
-      this.#binary,
-      { kind: "close" },
-      false,
-    );
-    unwrap(resp);
+    this.#closed = true;
+    try {
+      if (!this.#isolated || this.#tempHomePath) {
+        const home = this.#currentHome();
+        if (await transport.canConnect(this.session, home)) {
+          const resp = await transport.request(
+            this.session,
+            home,
+            this.#binary,
+            { kind: "close" },
+            false,
+          );
+          unwrap(resp);
+        }
+      }
+    } catch (error) {
+      if (!(error instanceof DaemonError) && !(error instanceof NoSessionError)) {
+        throw error;
+      }
+    } finally {
+      await this.#cleanupTempHome();
+    }
+  }
+
+  async closeQuiet(): Promise<void> {
+    try {
+      await this.close();
+    } catch {
+      /* swallow everything; safe for finally blocks */
+    }
   }
 
   async type(text: string): Promise<void> {
@@ -274,69 +448,99 @@ export class ShellUse {
   }
 
   async waitText(text: string, opts: WaitTextOptions = {}): Promise<void> {
-    await this.send({
-      kind: "wait_text",
-      text,
-      regex: opts.regex ?? false,
-      full: opts.full ?? false,
-      timeout_ms: opts.timeout ?? 5000,
-      not: opts.not ?? false,
-    });
+    await this.#guard("waitText", () =>
+      this.send(
+        this.#withTimeout(
+          {
+            kind: "wait_text",
+            text,
+            regex: opts.regex ?? false,
+            full: opts.full ?? false,
+            not: opts.not ?? false,
+          },
+          "text",
+          opts.timeout,
+        ),
+      ),
+    );
   }
 
   async waitIdle(opts: { timeout?: number } = {}): Promise<void> {
-    await this.send({ kind: "wait_idle", timeout_ms: opts.timeout ?? 5000 });
+    await this.#guard("waitIdle", () =>
+      this.send(this.#withTimeout({ kind: "wait_idle" }, "idle", opts.timeout)),
+    );
   }
 
   async waitCommand(opts: { timeout?: number } = {}): Promise<void> {
-    await this.send({ kind: "wait_command", timeout_ms: opts.timeout ?? 30000 });
+    await this.#guard("waitCommand", () =>
+      this.send(this.#withTimeout({ kind: "wait_command" }, "command", opts.timeout)),
+    );
   }
 
   async waitExit(opts: { timeout?: number } = {}): Promise<void> {
-    await this.send({ kind: "wait_exit", timeout_ms: opts.timeout ?? 30000 });
+    await this.#guard("waitExit", () =>
+      this.send(this.#withTimeout({ kind: "wait_exit" }, "exit", opts.timeout)),
+    );
+  }
+
+  async waitReady(opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("waitReady", () =>
+      this.send(this.#withTimeout({ kind: "wait_ready" }, "ready", opts.timeout)),
+    );
   }
 
   async expectText(text: string, opts: ExpectTextOptions = {}): Promise<void> {
-    try {
-      await this.send({
-        kind: "expect_text",
-        text,
-        regex: opts.regex ?? false,
-        full: opts.full ?? false,
-        strict: opts.strict ?? true,
-        not: opts.not ?? false,
-        fg: opts.fg ?? null,
-        bg: opts.bg ?? null,
-        timeout_ms: opts.timeout ?? 5000,
-      });
-    } catch (error) {
-      throw withOperation(error, "expectText");
-    }
+    await this.#guard("expectText", () =>
+      this.send(
+        this.#withTimeout(
+          {
+            kind: "expect_text",
+            text,
+            regex: opts.regex ?? false,
+            full: opts.full ?? false,
+            strict: opts.strict ?? true,
+            not: opts.not ?? false,
+            fg: opts.fg ?? null,
+            bg: opts.bg ?? null,
+          },
+          "text",
+          opts.timeout,
+        ),
+      ),
+    );
   }
 
-  async expectExitCode(code: number): Promise<void> {
-    await this.send({ kind: "expect_exit_code", code });
+  async expectExitCode(code: number, opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("expectExitCode", () =>
+      this.send(
+        this.#withTimeout({ kind: "expect_exit_code", code }, "command", opts.timeout),
+      ),
+    );
   }
 
   async expectOutput(text: string, opts: { regex?: boolean } = {}): Promise<void> {
-    await this.send({ kind: "expect_output", text, regex: opts.regex ?? false });
+    await this.#guard("expectOutput", () =>
+      this.send({ kind: "expect_output", text, regex: opts.regex ?? false }),
+    );
   }
 
   async expectSnapshot(
     name: string,
     opts: { update?: boolean; includeColors?: boolean } = {},
   ): Promise<string> {
-    const data = (await this.send({
-      kind: "snapshot",
-      name,
-      update: opts.update ?? false,
-      include_colors: opts.includeColors ?? false,
-      cwd: process.cwd(),
-    })) as { status: string };
+    const data = (await this.#guard("expectSnapshot", () =>
+      this.send({
+        kind: "snapshot",
+        name,
+        update: opts.update ?? false,
+        include_colors: opts.includeColors ?? false,
+        cwd: process.cwd(),
+      }),
+    )) as { status: string };
     return data.status;
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
-    await this.close();
+    await this.closeQuiet();
   }
 }

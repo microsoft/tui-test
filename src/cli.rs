@@ -1,7 +1,41 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
-use crate::config::{DEFAULT_COLS, DEFAULT_EXPECT_TIMEOUT_MS, DEFAULT_ROWS};
+use crate::config::{DEFAULT_COLS, DEFAULT_ROWS};
+use crate::protocol::TimeoutDefaults;
 use crate::shell::Shell;
+
+/// Per-class default timeouts for a session, in milliseconds.
+#[derive(Args, Clone, Copy, Default)]
+pub struct TimeoutArgs {
+    /// Default timeout for `expect text` / `wait text` (default 5000).
+    #[arg(long = "timeout-text", value_name = "MS")]
+    pub text: Option<u64>,
+    /// Default timeout for `wait idle` (default 5000).
+    #[arg(long = "timeout-idle", value_name = "MS")]
+    pub idle: Option<u64>,
+    /// Default timeout for `wait command` / `expect exit-code` (default 30000).
+    #[arg(long = "timeout-command", value_name = "MS")]
+    pub command: Option<u64>,
+    /// Default timeout for `wait exit` (default 30000).
+    #[arg(long = "timeout-exit", value_name = "MS")]
+    pub exit: Option<u64>,
+    /// Default timeout for `wait ready` (default 30000), and for the prompt
+    /// wait `open` performs — which otherwise caps itself at 8000.
+    #[arg(long = "timeout-ready", value_name = "MS")]
+    pub ready: Option<u64>,
+}
+
+impl From<TimeoutArgs> for TimeoutDefaults {
+    fn from(args: TimeoutArgs) -> Self {
+        TimeoutDefaults {
+            text: args.text,
+            idle: args.idle,
+            command: args.command,
+            exit: args.exit,
+            ready: args.ready,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "shell-use", version, about = "Headless terminal CLI + daemon")]
@@ -42,6 +76,15 @@ pub enum Command {
         /// Environment overrides as KEY=VALUE (repeatable).
         #[arg(long = "env")]
         env: Vec<String>,
+        /// Block until the shell reports a ready prompt (the default), or
+        /// return as soon as it is spawned with --no-wait-ready.
+        #[arg(long)]
+        wait_ready: bool,
+        /// Return as soon as the shell is spawned, without waiting for a prompt.
+        #[arg(long, conflicts_with = "wait_ready")]
+        no_wait_ready: bool,
+        #[command(flatten)]
+        timeouts: TimeoutArgs,
     },
     /// Spawn a session running a program directly.
     Run {
@@ -62,6 +105,15 @@ pub enum Command {
         /// Environment overrides as KEY=VALUE (repeatable).
         #[arg(long = "env")]
         env: Vec<String>,
+        /// Block until the program reports a ready prompt (off by default;
+        /// only meaningful for programs with shell integration).
+        #[arg(long)]
+        wait_ready: bool,
+        /// Return as soon as the program is spawned (the default).
+        #[arg(long, conflicts_with = "wait_ready")]
+        no_wait_ready: bool,
+        #[command(flatten)]
+        timeouts: TimeoutArgs,
     },
     /// Close the current session (or all sessions).
     Close {
@@ -71,7 +123,7 @@ pub enum Command {
     },
     /// List active sessions.
     Sessions,
-    /// Inspect or stop the daemon.
+    /// Start, inspect, or stop a session's daemon.
     Daemon {
         #[command(subcommand)]
         cmd: DaemonCmd,
@@ -238,14 +290,191 @@ mod tests {
         let cli = Cli::try_parse_from(["shell-use", "skill", "--add"]).expect("parse skill");
         assert!(matches!(cli.command, Some(Command::Skill { add: true })));
     }
+
+    #[test]
+    fn wait_ready_parses_with_a_timeout() {
+        let cli = Cli::try_parse_from(["shell-use", "wait", "ready", "--timeout", "1234"])
+            .expect("parse wait ready");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Wait {
+                what: WaitCmd::Ready {
+                    timeout: Some(1234)
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn open_accepts_readiness_flags() {
+        let cli =
+            Cli::try_parse_from(["shell-use", "open", "--no-wait-ready"]).expect("parse open");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Open {
+                wait_ready: false,
+                no_wait_ready: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn run_accepts_readiness_flags() {
+        let cli =
+            Cli::try_parse_from(["shell-use", "run", "--wait-ready", "vim"]).expect("parse run");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Run {
+                wait_ready: true,
+                no_wait_ready: false,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn open_rejects_contradictory_readiness_flags() {
+        assert!(
+            Cli::try_parse_from(["shell-use", "open", "--wait-ready", "--no-wait-ready"]).is_err()
+        );
+    }
+
+    #[test]
+    fn run_rejects_contradictory_readiness_flags() {
+        assert!(Cli::try_parse_from([
+            "shell-use",
+            "run",
+            "--wait-ready",
+            "--no-wait-ready",
+            "vim"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn open_accepts_per_class_timeout_defaults() {
+        let cli = Cli::try_parse_from([
+            "shell-use",
+            "open",
+            "--timeout-text",
+            "30000",
+            "--timeout-idle",
+            "15000",
+            "--timeout-ready",
+            "20000",
+        ])
+        .expect("parse open with timeouts");
+        let Some(Command::Open { timeouts, .. }) = cli.command else {
+            panic!("expected Open");
+        };
+        let defaults: TimeoutDefaults = timeouts.into();
+        assert_eq!(defaults.text, Some(30_000));
+        assert_eq!(defaults.idle, Some(15_000));
+        assert_eq!(defaults.ready, Some(20_000));
+        assert_eq!(defaults.command, None, "unset classes stay unset");
+        assert_eq!(defaults.exit, None);
+    }
+
+    #[test]
+    fn open_has_no_catch_all_timeout_flag() {
+        assert!(Cli::try_parse_from(["shell-use", "open", "--timeout", "1000"]).is_err());
+    }
+
+    #[test]
+    fn per_call_timeouts_are_unset_when_omitted() {
+        let cli = Cli::try_parse_from(["shell-use", "wait", "idle"]).expect("parse wait idle");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Wait {
+                what: WaitCmd::Idle { timeout: None }
+            })
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shell-use", "expect", "text", "hi"]).expect("parse expect text");
+        let Some(Command::Expect {
+            what: ExpectCmd::Text { timeout, .. },
+        }) = cli.command
+        else {
+            panic!("expected Expect text");
+        };
+        assert_eq!(timeout, None);
+    }
+
+    #[test]
+    fn expect_exit_code_accepts_a_timeout() {
+        let cli =
+            Cli::try_parse_from(["shell-use", "expect", "exit-code", "0", "--timeout", "1234"])
+                .expect("parse expect exit-code");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Expect {
+                what: ExpectCmd::ExitCode {
+                    code: 0,
+                    timeout: Some(1234)
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn daemon_stop_accepts_all() {
+        let cli =
+            Cli::try_parse_from(["shell-use", "daemon", "stop", "--all"]).expect("parse stop");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Daemon {
+                cmd: DaemonCmd::Stop { all: true }
+            })
+        ));
+    }
+
+    #[test]
+    fn daemon_start_is_its_own_subcommand() {
+        let cli = Cli::try_parse_from(["shell-use", "daemon", "start"]).expect("parse start");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Daemon {
+                cmd: DaemonCmd::Start
+            })
+        ));
+    }
+
+    #[test]
+    fn daemon_stop_defaults_to_no_target() {
+        let cli = Cli::try_parse_from(["shell-use", "daemon", "stop"]).expect("parse stop");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Daemon {
+                cmd: DaemonCmd::Stop { all: false }
+            })
+        ));
+        assert_eq!(cli.session, None, "no session means no target was named");
+    }
+
+    #[test]
+    fn daemon_stop_records_an_explicit_session() {
+        let cli = Cli::try_parse_from(["shell-use", "--session", "work", "daemon", "stop"])
+            .expect("parse stop");
+        assert_eq!(cli.session.as_deref(), Some("work"));
+    }
 }
 
 #[derive(Subcommand)]
 pub enum DaemonCmd {
+    /// Start this session's daemon (idempotent; blocks until it accepts connections).
+    Start,
     /// Show daemon status, socket, and log path.
+    /// Reports without starting one; exits 3 when nothing is running.
     Status,
-    /// Stop the daemon and close all sessions.
-    Stop,
+    /// Stop a session's daemon.
+    /// Each session has its own daemon, so this needs --session <NAME> or --all.
+    Stop {
+        /// Stop every daemon in this home.
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -370,8 +599,8 @@ pub enum WaitCmd {
         #[arg(long)]
         not: bool,
         /// Timeout in milliseconds.
-        #[arg(long, default_value_t = DEFAULT_EXPECT_TIMEOUT_MS)]
-        timeout: u64,
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
     },
     /// Wait until the screen stops repainting (visual idle, NOT command done).
     ///
@@ -379,8 +608,8 @@ pub enum WaitCmd {
     /// for a command to finish, use `wait command`.
     Idle {
         /// Timeout in milliseconds.
-        #[arg(long, default_value_t = DEFAULT_EXPECT_TIMEOUT_MS)]
-        timeout: u64,
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
     },
     /// Wait until the foreground command finishes (via shell integration).
     ///
@@ -388,16 +617,23 @@ pub enum WaitCmd {
     /// "prompt returned and screen idle". Raise --timeout for long commands.
     Command {
         /// Timeout in milliseconds.
-        #[arg(long, default_value_t = 30_000)]
-        timeout: u64,
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
     },
     /// Wait until the session's program/shell itself exits.
     ///
     /// Use this for `run <program>` sessions or after sending `exit`.
     Exit {
         /// Timeout in milliseconds.
-        #[arg(long, default_value_t = 30_000)]
-        timeout: u64,
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
+    /// Wait until the shell reports a ready prompt (via shell integration).
+    /// Use after `run`-ing something prompt-aware, or to re-synchronise before input.
+    Ready {
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
     },
 }
 
@@ -428,13 +664,17 @@ pub enum ExpectCmd {
         #[arg(long)]
         bg: Option<String>,
         /// Timeout in milliseconds.
-        #[arg(long, default_value_t = DEFAULT_EXPECT_TIMEOUT_MS)]
-        timeout: u64,
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
     },
     /// Assert the last command's exit code.
+    /// Waits for the foreground command first, so this is safe right after `submit`.
     ExitCode {
         /// Expected exit code.
         code: i32,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
     },
     /// Assert the last command's output.
     Output {

@@ -9,7 +9,7 @@ export function unwrap(resp: Response): unknown {
 }
 
 export function envPairs(
-  env?: Record<string, string> | [string, string][],
+  env?: Record<string, string | number | boolean> | [string, string][],
 ): [string, string][] {
   if (!env) {
     return [];
@@ -17,5 +17,12 @@ export function envPairs(
   if (Array.isArray(env)) {
     return env;
   }
-  return Object.entries(env);
+  return Object.entries(env).map(([key, value]) => [key, coerceEnvValue(value)]);
+}
+
+function coerceEnvValue(value: string | number | boolean): string {
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  return String(value);
 }

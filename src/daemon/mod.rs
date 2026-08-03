@@ -19,7 +19,7 @@ use crate::config::{self, POLL_DELAY_MS};
 use crate::input::{keys, mouse};
 use crate::ipc;
 use crate::monitor;
-use crate::protocol::{ErrorKind, GetField, MouseAction, Request, Response};
+use crate::protocol::{ErrorKind, GetField, MouseAction, Request, Response, TimeoutDefaults};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::locator::{self, Pattern};
 use logger::Logger;
@@ -90,6 +90,7 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
         let (resp, shutdown) = daemon.handle(req);
         let _ = ipc::write_response(&mut conn, &resp);
         if shutdown {
+            ipc::drain_peer(conn, Duration::from_millis(config::SHUTDOWN_DRAIN_MS));
             break;
         }
     }
@@ -160,8 +161,10 @@ fn req_summary(req: &Request) -> String {
             rows,
             cwd,
             env,
+            wait_ready,
+            timeouts,
         } => format!(
-            "Open {{ shell: {shell:?}, program: {program:?}, {cols}x{rows}, cwd: {cwd:?}, env: <{} vars> }}",
+            "Open {{ shell: {shell:?}, program: {program:?}, {cols}x{rows}, cwd: {cwd:?}, wait_ready: {wait_ready:?}, timeouts: {timeouts:?}, env: <{} vars> }}",
             env.len()
         ),
         other => format!("{other:?}"),
@@ -183,7 +186,12 @@ impl Daemon {
                 rows,
                 cwd,
                 env,
-            } => (self.open(shell, program, cols, rows, cwd, env), false),
+                wait_ready,
+                timeouts,
+            } => (
+                self.open(shell, program, cols, rows, cwd, env, wait_ready, timeouts),
+                false,
+            ),
             Request::Close => {
                 *self.live.lock().unwrap() = None;
                 if let Some(s) = self.session.lock().unwrap().as_ref() {
@@ -196,6 +204,7 @@ impl Daemon {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn open(
         &self,
         shell: Option<crate::shell::Shell>,
@@ -204,6 +213,8 @@ impl Daemon {
         rows: u16,
         cwd: Option<String>,
         env: Vec<(String, String)>,
+        wait_ready: Option<bool>,
+        timeouts: TimeoutDefaults,
     ) -> Response {
         match Session::open(
             shell,
@@ -212,23 +223,41 @@ impl Daemon {
             rows,
             cwd,
             env,
+            timeouts,
             self.logger.clone(),
             config::recording_file(&self.name),
         ) {
             Ok(s) => {
-                let pid = s.pid();
+                let shell_pid = s.pid();
+                let ready_timeout = open_ready_timeout(&s);
+                let ready = if wait_ready.unwrap_or(program.is_none()) {
+                    await_ready(&s, ready_timeout)
+                } else {
+                    s.state.lock().unwrap().tracker.is_ready()
+                };
+                if wait_ready == Some(true) && !ready {
+                    let message = assertion_message(
+                        &s,
+                        &format!(
+                            "open: the session started but reported no prompt within \
+                             {ready_timeout}ms; pass --no-wait-ready if it has no shell \
+                             integration"
+                        ),
+                    );
+                    s.kill();
+                    return Response::assertion(message);
+                }
                 let live = LiveTarget {
                     state: s.state.clone(),
                     shell: s.shell.map(|sh| sh.as_str()),
                 };
-                if program.is_none() {
-                    wait_ready(&s);
-                }
                 *self.session.lock().unwrap() = Some(s);
                 *self.live.lock().unwrap() = Some(live);
                 Response::with(json!({
-                    "pid": pid,
+                    "pid": std::process::id(),
+                    "shell_pid": shell_pid,
                     "session": self.name,
+                    "ready": ready,
                     "recording": config::recording_file(&self.name).to_string_lossy(),
                 }))
             }
@@ -247,18 +276,24 @@ impl Daemon {
                 let st = s.state.lock().unwrap();
                 Response::with(json!({
                     "session": self.name,
-                    "pid": s.pid(),
+                    "pid": std::process::id(),
+                    "shell_pid": s.pid(),
                     "cols": s.cols,
                     "rows": s.rows,
                     "shell": s.shell.map(|sh| sh.as_str()),
                     "exited": st.exited,
+                    "timeouts": effective_timeouts(s),
                     "log": log,
                     "version": env!("CARGO_PKG_VERSION"),
                 }))
             }
-            None => Response::with(
-                json!({ "session": self.name, "pid": null, "log": log, "version": env!("CARGO_PKG_VERSION") }),
-            ),
+            None => Response::with(json!({
+                "session": self.name,
+                "pid": std::process::id(),
+                "shell_pid": null,
+                "log": log,
+                "version": env!("CARGO_PKG_VERSION"),
+            })),
         }
     }
 
@@ -306,19 +341,30 @@ impl Daemon {
     }
 }
 
-/// Poll until the shell reports an idle prompt (or a short fallback elapses).
-fn wait_ready(s: &Session) {
+/// Cap only `open`'s implicit ready wait when no ready budget is configured.
+fn open_ready_timeout(s: &Session) -> u64 {
+    s.timeouts
+        .get(config::TimeoutClass::Ready)
+        .or_else(|| config::TimeoutClass::Ready.env_ms())
+        .unwrap_or(config::OPEN_READY_CAP_MS)
+}
+
+/// Poll until the shell reports a prompt, or the session exits or times out.
+fn await_ready(s: &Session, timeout_ms: u64) -> bool {
     let start = Instant::now();
-    let cap = Duration::from_millis(config::SHELL_READY_TIMEOUT_MS.min(8_000));
+    let cap = Duration::from_millis(timeout_ms);
     loop {
         {
             let st = s.state.lock().unwrap();
-            if st.tracker.is_ready() || st.exited.is_some() {
-                return;
+            if st.tracker.is_ready() {
+                return true;
+            }
+            if st.exited.is_some() {
+                return false;
             }
         }
         if start.elapsed() >= cap {
-            return;
+            return false;
         }
         std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
     }
@@ -365,10 +411,30 @@ fn dispatch(s: &mut Session, req: Request) -> Response {
             full,
             timeout_ms,
             not,
-        } => wait_text(s, &text, regex, full, timeout_ms, not),
-        Request::WaitIdle { timeout_ms } => wait_idle(s, timeout_ms),
-        Request::WaitCommand { timeout_ms } => wait_command(s, timeout_ms),
-        Request::WaitExit { timeout_ms } => wait_exit(s, timeout_ms),
+        } => wait_text(
+            s,
+            &text,
+            regex,
+            full,
+            timeout_ms.unwrap_or_else(|| s.timeout_for(config::TimeoutClass::Text)),
+            not,
+        ),
+        Request::WaitIdle { timeout_ms } => wait_idle(
+            s,
+            timeout_ms.unwrap_or_else(|| s.timeout_for(config::TimeoutClass::Idle)),
+        ),
+        Request::WaitCommand { timeout_ms } => wait_command(
+            s,
+            timeout_ms.unwrap_or_else(|| s.timeout_for(config::TimeoutClass::Command)),
+        ),
+        Request::WaitExit { timeout_ms } => wait_exit(
+            s,
+            timeout_ms.unwrap_or_else(|| s.timeout_for(config::TimeoutClass::Exit)),
+        ),
+        Request::WaitReady { timeout_ms } => wait_ready(
+            s,
+            timeout_ms.unwrap_or_else(|| s.timeout_for(config::TimeoutClass::Ready)),
+        ),
         Request::ExpectText {
             text,
             regex,
@@ -378,8 +444,22 @@ fn dispatch(s: &mut Session, req: Request) -> Response {
             fg,
             bg,
             timeout_ms,
-        } => expect_text(s, &text, regex, full, strict, not, fg, bg, timeout_ms),
-        Request::ExpectExitCode { code } => expect_exit_code(s, code),
+        } => expect_text(
+            s,
+            &text,
+            regex,
+            full,
+            strict,
+            not,
+            fg,
+            bg,
+            timeout_ms.unwrap_or_else(|| s.timeout_for(config::TimeoutClass::Text)),
+        ),
+        Request::ExpectExitCode { code, timeout_ms } => expect_exit_code(
+            s,
+            code,
+            timeout_ms.unwrap_or_else(|| s.timeout_for(config::TimeoutClass::Command)),
+        ),
         Request::ExpectOutput { text, regex } => expect_output(s, &text, regex),
         Request::Snapshot {
             name,
@@ -420,8 +500,20 @@ fn state(s: &Session) -> Response {
         "last_exit": st.tracker.last_exit(),
         "exited": st.exited,
         "ready": st.tracker.is_ready(),
+        "timeouts": effective_timeouts(s),
         "text": text,
     }))
+}
+
+fn effective_timeouts(s: &Session) -> serde_json::Value {
+    use config::TimeoutClass::*;
+    json!({
+        "text": s.timeout_for(Text),
+        "idle": s.timeout_for(Idle),
+        "command": s.timeout_for(Command),
+        "exit": s.timeout_for(Exit),
+        "ready": s.timeout_for(Ready),
+    })
 }
 
 fn cells(s: &Session, x: u16, y: u16, w: u16, h: u16) -> Response {
@@ -622,24 +714,46 @@ fn wait_idle(s: &Session, timeout_ms: u64) -> Response {
     }
 }
 
+fn awaiting_command_start(st: &TermState) -> bool {
+    st.awaiting_start
+        .is_some_and(|seen| st.tracker.started_count() == seen)
+}
+
+fn command_settled(s: &Session, baseline: u64) -> bool {
+    const QUIET: Duration = Duration::from_millis(300);
+    let st = s.state.lock().unwrap();
+    if st.exited.is_some() {
+        return true;
+    }
+    let tracker = &st.tracker;
+    if !tracker.started() {
+        return st.last_change.elapsed() >= QUIET;
+    }
+    if awaiting_command_start(&st) {
+        return false;
+    }
+    tracker.finished_count() > baseline || !tracker.executing()
+}
+
 fn wait_command(s: &Session, timeout_ms: u64) -> Response {
-    let quiet = Duration::from_millis(300);
     let baseline = s.state.lock().unwrap().tracker.finished_count();
-    let ok = poll_until(
-        || {
-            let st = s.state.lock().unwrap();
-            if st.exited.is_some() || st.tracker.finished_count() > baseline {
-                return true;
-            }
-            let idle = st.last_change.elapsed() >= quiet;
-            idle && (!st.tracker.started() || st.tracker.is_ready())
-        },
-        timeout_ms,
-    );
-    if ok {
-        Response::ok()
+    if poll_until(|| command_settled(s, baseline), timeout_ms) {
+        return Response::ok();
+    }
+    Response::assertion(format!(
+        "wait command: timed out after {timeout_ms}ms; {}",
+        stall_reason(s)
+    ))
+}
+
+fn stall_reason(s: &Session) -> String {
+    let st = s.state.lock().unwrap();
+    if awaiting_command_start(&st) {
+        "the shell never started a command for the input that was sent, so there \
+         is nothing to wait for (was the line submitted?)"
+            .to_string()
     } else {
-        Response::assertion("wait command: no command completion within timeout")
+        "the command was still running".to_string()
     }
 }
 
@@ -649,6 +763,14 @@ fn wait_exit(s: &Session, timeout_ms: u64) -> Response {
         Response::ok()
     } else {
         Response::assertion("wait exit: session still running at timeout")
+    }
+}
+
+fn wait_ready(s: &Session, timeout_ms: u64) -> Response {
+    if await_ready(s, timeout_ms) {
+        Response::ok()
+    } else {
+        Response::assertion("wait ready: no prompt was reported within timeout")
     }
 }
 
@@ -758,11 +880,16 @@ fn check_colors(
     None
 }
 
-fn expect_exit_code(s: &Session, code: i32) -> Response {
-    poll_until(
-        || s.state.lock().unwrap().tracker.last_exit().is_some(),
-        config::DEFAULT_EXPECT_TIMEOUT_MS,
-    );
+/// Assert the last completed command's exit code.
+/// Wait first: `last_exit` holds the previous code until a new command finishes.
+fn expect_exit_code(s: &Session, code: i32, timeout_ms: u64) -> Response {
+    let baseline = s.state.lock().unwrap().tracker.finished_count();
+    if !poll_until(|| command_settled(s, baseline), timeout_ms) {
+        return Response::assertion(format!(
+            "expected exit code {code}: timed out after {timeout_ms}ms; {}",
+            stall_reason(s)
+        ));
+    }
     let actual = s.state.lock().unwrap().tracker.last_exit();
     match actual {
         Some(a) if a == code => Response::ok(),

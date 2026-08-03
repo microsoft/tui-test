@@ -1,3 +1,5 @@
+import type { TerminalArtifact } from "./types.js";
+
 export type ErrorKind =
   | "assertion"
   | "usage"
@@ -9,6 +11,7 @@ export type ErrorKind =
 export class ShellUseError extends Error {
   readonly kind: ErrorKind;
   readonly exitCode: number;
+  terminal?: TerminalArtifact;
 
   constructor(message: string, kind: ErrorKind = "internal", exitCode = 5) {
     super(message);

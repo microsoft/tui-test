@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import collections.abc
+import dataclasses
+import hashlib
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Mapping, Optional
 
 VERSION = "0.0.1-beta.5"
 
@@ -11,6 +14,10 @@ DEFAULT_COLS = 80
 DEFAULT_ROWS = 30
 
 IS_WINDOWS = sys.platform == "win32"
+IS_MACOS = sys.platform == "darwin"
+
+_SOCKET_PATH_MAX = 100
+_SOCKET_DIGEST_HEX_LEN = 16
 
 
 def resolve_session(session: Optional[str]) -> str:
@@ -29,10 +36,18 @@ def home_dir(home: Optional[str]) -> Path:
     return Path(home) if home else Path.home() / ".shell-use"
 
 
+def _socket_path_in(directory: Path, session: str) -> Path:
+    candidate = directory / f"{session}.sock"
+    if len(os.fsencode(candidate)) <= _SOCKET_PATH_MAX:
+        return candidate
+    digest = hashlib.sha256(session.encode("utf-8")).hexdigest()
+    return directory / f"{digest[:_SOCKET_DIGEST_HEX_LEN]}.sock"
+
+
 def socket_path(session: str, home: Optional[str]) -> str:
     if IS_WINDOWS:
         return rf"\\.\pipe\shell-use-{session}.sock"
-    return str(home_dir(home) / f"{session}.sock")
+    return str(_socket_path_in(home_dir(home), session))
 
 
 def _cache_dir() -> Path:
@@ -53,3 +68,53 @@ def recording_dir(home: Optional[str]) -> Path:
 
 def recording_path(session: str, home: Optional[str]) -> Path:
     return recording_dir(home) / f"{session}.cast"
+
+
+_TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
+
+
+def resolve_timeout(
+    class_name: str,
+    *,
+    call: Optional[int] = None,
+    timeouts: Optional[Mapping[str, Optional[int]]] = None,
+) -> Optional[int]:
+    """Resolve a client-side timeout; ``None`` means omit it so the daemon applies its own default."""
+    if call is not None:
+        return call
+    if timeouts is not None:
+        return timeouts.get(class_name)
+    return None
+
+
+def normalize_timeouts(timeouts: object) -> Optional[Dict[str, Optional[int]]]:
+    """Coerce timeouts to a dict; unrecognised keys raise instead of being ignored by the daemon."""
+    if timeouts is None:
+        return None
+    if dataclasses.is_dataclass(timeouts) and not isinstance(timeouts, type):
+        return dataclasses.asdict(timeouts)
+    if isinstance(timeouts, collections.abc.Mapping):
+        normalized = dict(timeouts)
+        unknown = sorted(set(normalized) - set(_TIMEOUT_CLASSES))
+        if unknown:
+            raise ValueError(
+                "unknown timeout class {}; expected one of {}".format(
+                    ", ".join(repr(name) for name in unknown),
+                    ", ".join(_TIMEOUT_CLASSES),
+                )
+            )
+        return normalized
+    raise TypeError("timeouts must be a Timeouts, a mapping, or None")
+
+
+def session_timeouts_payload(timeouts: object) -> Optional[Dict[str, int]]:
+    """Build the session timeout payload, omitting unset fields so the daemon applies its own default."""
+    normalized = normalize_timeouts(timeouts)
+    if not normalized:
+        return None
+    payload = {
+        class_name: value
+        for class_name, value in normalized.items()
+        if value is not None
+    }
+    return payload or None

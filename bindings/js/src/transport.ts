@@ -9,7 +9,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function spawnDaemonStatus(
+function spawnDaemon(
   binary: string,
   args: string[],
   env: NodeJS.ProcessEnv,
@@ -60,7 +60,7 @@ export async function ensureDaemon(
     env.SHELL_USE_HOME = home;
   }
   try {
-    await spawnDaemonStatus(binary, ["--session", session, "daemon", "status"], env);
+    await spawnDaemon(binary, ["--session", session, "daemon", "start"], env);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       throw new DaemonError(

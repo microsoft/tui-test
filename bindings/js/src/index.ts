@@ -4,6 +4,7 @@ export type {
   MouseButtonOptions,
   WaitTextOptions,
 } from "./client.js";
+export { uniqueSession } from "./ephemeral.js";
 export {
   closeAll,
   daemonStatus,
@@ -23,14 +24,18 @@ export {
 export type { ErrorKind } from "./errors.js";
 export { VERSION } from "./version.js";
 export type {
+  ArtifactOptions,
   Cell,
   ClientOptions,
   Color,
   Cursor,
   DaemonStatus,
+  HomeOptions,
   OpenResult,
   Shell,
   Size,
   SpawnOptions,
   State,
+  TerminalArtifact,
+  Timeouts,
 } from "./types.js";

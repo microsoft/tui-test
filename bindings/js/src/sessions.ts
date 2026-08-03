@@ -4,7 +4,7 @@ import { homeDir, recordingPath, resolveBinary, resolveHome, resolveSession } fr
 import { NoSessionError } from "./errors.js";
 import { unwrap } from "./protocol.js";
 import * as transport from "./transport.js";
-import type { ClientOptions, DaemonStatus } from "./types.js";
+import type { DaemonStatus, HomeOptions } from "./types.js";
 
 export async function sessions(opts: { home?: string } = {}): Promise<string[]> {
   const home = resolveHome(opts.home);
@@ -27,7 +27,7 @@ export async function sessions(opts: { home?: string } = {}): Promise<string[]> 
   return out;
 }
 
-export async function closeAll(opts: ClientOptions = {}): Promise<void> {
+export async function closeAll(opts: HomeOptions = {}): Promise<void> {
   const home = resolveHome(opts.home);
   const binary = resolveBinary(opts.binary);
   for (const name of await sessions({ home })) {
@@ -41,7 +41,7 @@ export async function closeAll(opts: ClientOptions = {}): Promise<void> {
 
 export async function daemonStatus(
   session?: string,
-  opts: ClientOptions = {},
+  opts: HomeOptions = {},
 ): Promise<DaemonStatus> {
   const s = resolveSession(session);
   const home = resolveHome(opts.home);
@@ -49,7 +49,7 @@ export async function daemonStatus(
   return unwrap(await transport.request(s, home, binary, { kind: "status" })) as DaemonStatus;
 }
 
-export async function daemonStop(session?: string, opts: ClientOptions = {}): Promise<void> {
+export async function daemonStop(session?: string, opts: HomeOptions = {}): Promise<void> {
   const s = resolveSession(session);
   const home = resolveHome(opts.home);
   const binary = resolveBinary(opts.binary);

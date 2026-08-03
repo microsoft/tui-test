@@ -1,6 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
+
+
+@dataclass
+class TerminalArtifact:
+    """Best-effort failure artifacts captured alongside an error."""
+
+    text: Optional[str] = None
+    screenshot: Optional[str] = None
 
 
 class ShellUseError(Exception):
@@ -10,6 +19,7 @@ class ShellUseError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+        self.terminal: Optional[TerminalArtifact] = None
 
 
 class ExpectationError(ShellUseError):
