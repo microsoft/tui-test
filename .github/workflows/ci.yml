@@ -61,6 +61,9 @@ jobs:
       - name: Test Python binding
         run: python -m unittest discover -s bindings/python/tests -v
 
+      - name: Verify generated Python stubs
+        run: python bindings/python/scripts/generate_stubs.py --check
+
       - name: Install Node dependencies
         run: npm ci --prefix bindings/js
 
@@ -71,7 +74,7 @@ jobs:
         shell: bash
         run: |
           git diff --exit-code -- bindings/js/native/index.js bindings/js/native/index.d.ts
-          ! grep -q "JsonValue" bindings/js/native/index.d.ts
+          ! grep -Eq 'JsonValue|Promise<unknown>|\brequest\(|\bBuffer\b' bindings/js/native/index.d.ts
 
       - uses: oven-sh/setup-bun@v2
         if: runner.os == 'Linux'

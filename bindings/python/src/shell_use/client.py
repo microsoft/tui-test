@@ -1,37 +1,74 @@
 from __future__ import annotations
 
-import asyncio
 import atexit
 import os
 import time
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 from . import _config as cfg
 from . import _ephemeral as ephemeral
 from . import _native as native
-from ._protocol import EnvLike, env_pairs, unwrap
-from .errors import ExpectationError, NoSessionError, TerminalArtifact
+from .errors import (
+    ExpectationError,
+    InternalError,
+    NoSessionError,
+    TerminalArtifact,
+    UsageError,
+)
 from .types import Cell, State, Timeouts
 
 _TERMINAL_MARKER = "Terminal content:\n"
+_TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
 
 _T = TypeVar("_T")
+EnvLike = Union[Mapping[str, str], Iterable[Tuple[str, str]], None]
 
 
-async def _to_thread(func: Callable[..., _T], *args: Any) -> _T:
-    # asyncio.to_thread requires Python 3.9.
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, func, *args)
+async def _await_native(awaitable: Awaitable[_T]) -> _T:
+    try:
+        return await awaitable
+    except native.NativeAssertionError as error:
+        raise ExpectationError(str(error)) from error
+    except native.NativeUsageError as error:
+        raise UsageError(str(error)) from error
+    except native.NativeNoSessionError as error:
+        raise NoSessionError(str(error)) from error
+    except native.NativeInternalError as error:
+        raise InternalError(str(error)) from error
 
 
 def _atexit_close_all() -> None:
     try:
-        native.close_all()
+        native._close_all_blocking()
     except Exception:
         pass
 
 
 atexit.register(_atexit_close_all)
+
+
+def _env_pairs(env: EnvLike) -> List[Tuple[str, str]]:
+    if env is None:
+        return []
+    items = env.items() if isinstance(env, Mapping) else env
+    return [(str(key), str(value)) for key, value in items]
+
+
+def _session_timeout_values(timeouts: object) -> Tuple[Optional[int], ...]:
+    normalized = cfg.session_timeouts_payload(timeouts) or {}
+    return tuple(normalized.get(class_name) for class_name in _TIMEOUT_CLASSES)
 
 
 def _extract_terminal_text(message: Optional[str]) -> Optional[str]:
@@ -41,7 +78,6 @@ def _extract_terminal_text(message: Optional[str]) -> Optional[str]:
     if index == -1:
         return None
     return message[index + len(_TERMINAL_MARKER):].rstrip("\n") or None
-
 
 
 class _Mouse:
@@ -57,57 +93,28 @@ class _Mouse:
         button: int = 0,
         clicks: int = 1,
     ) -> None:
-        await self._c.send(
-            {
-                "kind": "mouse",
-                "action": {
-                    "op": "click",
-                    "x": x,
-                    "y": y,
-                    "on_text": on_text,
-                    "button": button,
-                    "clicks": clicks,
-                },
-            }
+        await self._c._await(
+            self._c._native.mouse_click(x, y, on_text, button, clicks)
         )
 
     async def move(self, x: int, y: int) -> None:
-        await self._c.send({"kind": "mouse", "action": {"op": "move", "x": x, "y": y}})
+        await self._c._await(self._c._native.mouse_move(x, y))
 
     async def down(self, x: int, y: int, *, button: int = 0) -> None:
-        await self._c.send(
-            {"kind": "mouse", "action": {"op": "down", "x": x, "y": y, "button": button}}
-        )
+        await self._c._await(self._c._native.mouse_down(x, y, button))
 
     async def up(self, x: int, y: int, *, button: int = 0) -> None:
-        await self._c.send(
-            {"kind": "mouse", "action": {"op": "up", "x": x, "y": y, "button": button}}
-        )
+        await self._c._await(self._c._native.mouse_up(x, y, button))
 
     async def drag(
         self, x1: int, y1: int, x2: int, y2: int, *, button: int = 0
     ) -> None:
-        await self._c.send(
-            {
-                "kind": "mouse",
-                "action": {
-                    "op": "drag",
-                    "x1": x1,
-                    "y1": y1,
-                    "x2": x2,
-                    "y2": y2,
-                    "button": button,
-                },
-            }
+        await self._c._await(
+            self._c._native.mouse_drag(x1, y1, x2, y2, button)
         )
 
     async def scroll(self, direction: str, *, amount: int = 3) -> None:
-        await self._c.send(
-            {
-                "kind": "mouse",
-                "action": {"op": "scroll", "direction": direction, "amount": amount},
-            }
-        )
+        await self._c._await(self._c._native.mouse_scroll(direction, amount))
 
 
 class ShellUse:
@@ -133,21 +140,17 @@ class ShellUse:
     def session(self) -> str:
         return self._session
 
-    def _with_timeout(
-        self, payload: Dict[str, Any], class_name: str, call: Optional[int]
-    ) -> Dict[str, Any]:
-        value = cfg.resolve_timeout(class_name, call=call, timeouts=self._timeouts)
-        if value is not None:
-            payload["timeout_ms"] = value
-        return payload
+    def _timeout(self, class_name: str, call: Optional[int]) -> Optional[int]:
+        return cfg.resolve_timeout(
+            class_name, call=call, timeouts=self._timeouts
+        )
 
-    async def send(self, payload: Dict[str, Any]) -> Any:
-        resp = await _to_thread(self._native.request, payload)
-        return unwrap(resp)
+    async def _await(self, awaitable: Awaitable[_T]) -> _T:
+        return await _await_native(awaitable)
 
-    async def _guarded(self, op_name: str, payload: Dict[str, Any]) -> Any:
+    async def _guarded(self, op_name: str, awaitable: Awaitable[_T]) -> _T:
         try:
-            return await self.send(payload)
+            return await self._await(awaitable)
         except ExpectationError as error:
             error.message = f"{op_name}: {error.message}"
             error.args = (error.message,)
@@ -185,23 +188,29 @@ class ShellUse:
             return None
         os.makedirs(directory, exist_ok=True)
         self._artifact_counter += 1
-        n = self._artifact_counter
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        filename = "{}-{}-{}.svg".format(self._session, timestamp, n)
+        filename = "{}-{}-{}.svg".format(
+            self._session, timestamp, self._artifact_counter
+        )
         path = os.path.join(directory, filename)
         await self.screenshot(path)
         return path
 
-    async def _spawn(self, payload: Dict[str, Any], retries: int) -> Dict[str, Any]:
+    async def _spawn(
+        self,
+        start: Callable[[], Awaitable[Dict[str, Any]]],
+        retries: int,
+    ) -> Dict[str, Any]:
         attempts = retries + 1 if retries > 0 else 1
         for attempt in range(attempts):
             try:
-                return await self.send(payload)
+                return await self._await(start())
             except Exception:
                 if attempt + 1 < attempts:
                     await self.close_quiet()
                 else:
                     raise
+        raise AssertionError("unreachable")
 
     async def open(
         self,
@@ -215,21 +224,20 @@ class ShellUse:
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
     ) -> Dict[str, Any]:
-        payload = {
-            "kind": "open",
-            "shell": shell,
-            "program": None,
-            "cols": cols,
-            "rows": rows,
-            "cwd": cwd,
-            "env": env_pairs(env),
-        }  # type: Dict[str, Any]
-        if wait_ready is not None:
-            payload["wait_ready"] = wait_ready
-        session_timeouts = cfg.session_timeouts_payload(timeouts)
-        if session_timeouts is not None:
-            payload["timeouts"] = session_timeouts
-        return await self._spawn(payload, retries)
+        env_values = _env_pairs(env)
+        timeout_values = _session_timeout_values(timeouts)
+        return await self._spawn(
+            lambda: self._native.open(
+                shell,
+                cols,
+                rows,
+                cwd,
+                env_values,
+                wait_ready,
+                *timeout_values,
+            ),
+            retries,
+        )
 
     async def run(
         self,
@@ -243,24 +251,24 @@ class ShellUse:
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
     ) -> Dict[str, Any]:
-        payload = {
-            "kind": "open",
-            "shell": None,
-            "program": [program, *args],
-            "cols": cols,
-            "rows": rows,
-            "cwd": cwd,
-            "env": env_pairs(env),
-        }  # type: Dict[str, Any]
-        if wait_ready is not None:
-            payload["wait_ready"] = wait_ready
-        session_timeouts = cfg.session_timeouts_payload(timeouts)
-        if session_timeouts is not None:
-            payload["timeouts"] = session_timeouts
-        return await self._spawn(payload, retries)
+        env_values = _env_pairs(env)
+        timeout_values = _session_timeout_values(timeouts)
+        return await self._spawn(
+            lambda: self._native.run(
+                program,
+                list(args),
+                cols,
+                rows,
+                cwd,
+                env_values,
+                wait_ready,
+                *timeout_values,
+            ),
+            retries,
+        )
 
     async def close(self) -> None:
-        await self.send({"kind": "close"})
+        await self._await(self._native.close())
 
     async def close_quiet(self) -> None:
         try:
@@ -269,63 +277,67 @@ class ShellUse:
             pass
 
     async def type(self, text: str) -> None:
-        await self.send({"kind": "write", "data": text})
+        await self._await(self._native.type(text))
 
     async def write(self, data: str) -> None:
-        await self.send({"kind": "write", "data": data})
+        await self._await(self._native.write(data))
 
     async def submit(self, text: Optional[str] = None) -> None:
-        await self.send({"kind": "submit", "data": text})
+        await self._await(self._native.submit(text))
 
     async def press(self, *keys: str) -> None:
-        await self.send({"kind": "press", "keys": list(keys)})
+        await self._await(self._native.press(list(keys)))
 
     async def keys(self, combo: str) -> None:
-        await self.send({"kind": "press", "keys": [combo]})
+        await self._await(self._native.keys(combo))
 
     async def resize(self, cols: int, rows: int) -> None:
-        await self.send({"kind": "resize", "cols": cols, "rows": rows})
+        await self._await(self._native.resize(cols, rows))
 
     async def signal(self, name: str) -> None:
-        await self.send({"kind": "signal", "name": name})
+        await self._await(self._native.signal(name))
 
     async def kill(self) -> None:
-        await self.send({"kind": "signal", "name": "KILL"})
+        await self._await(self._native.kill())
 
     async def state(self) -> State:
-        return State.from_dict(await self.send({"kind": "state"}))
+        return State.from_dict(await self._await(self._native.state()))
 
     async def text(self, *, full: bool = False) -> str:
-        return (await self.send({"kind": "text", "full": full}))["text"]
+        return await self._await(self._native.text(full))
+
+    async def _packed_screen(
+        self, *, full: bool = False
+    ) -> Tuple[memoryview, int, int]:
+        """Return owned UTF-8 logical rows and terminal cell dimensions."""
+        return await self._await(self._native.packed_screen(full))
 
     async def cells(self, x: int, y: int, w: int = 1, h: int = 1) -> List[Cell]:
-        data = await self.send({"kind": "cells", "x": x, "y": y, "w": w, "h": h})
-        return [Cell(**c) for c in data["cells"]]
-
-    async def get(self, field: str) -> Any:
-        return (await self.send({"kind": "get", "field": field}))["value"]
+        data = await self._await(self._native.cells(x, y, w, h))
+        return [Cell(**cell) for cell in data]
 
     async def get_command(self) -> Optional[str]:
-        return await self.get("command")
+        return await self._await(self._native.get_command())
 
     async def get_output(self) -> Optional[str]:
-        return await self.get("output")
+        return await self._await(self._native.get_output())
 
     async def get_exit_code(self) -> Optional[int]:
-        return await self.get("exit-code")
+        return await self._await(self._native.get_exit_code())
 
     async def get_cwd(self) -> Optional[str]:
-        return await self.get("cwd")
+        return await self._await(self._native.get_cwd())
 
     async def get_cursor(self) -> Dict[str, int]:
-        return await self.get("cursor")
+        return await self._await(self._native.get_cursor())
 
     async def get_size(self) -> Dict[str, int]:
-        return await self.get("size")
+        return await self._await(self._native.get_size())
 
-    async def screenshot(self, path: Optional[str] = None, *, full: bool = False) -> str:
-        data = await self.send({"kind": "screenshot", "full": full, "path": path})
-        return data.get("path") or data.get("text")
+    async def screenshot(
+        self, path: Optional[str] = None, *, full: bool = False
+    ) -> str:
+        return await self._await(self._native.screenshot(path, full))
 
     async def wait_text(
         self,
@@ -338,41 +350,33 @@ class ShellUse:
     ) -> None:
         await self._guarded(
             "wait_text",
-            self._with_timeout(
-                {
-                    "kind": "wait_text",
-                    "text": text,
-                    "regex": regex,
-                    "full": full,
-                    "not": not_,
-                },
-                "text",
-                timeout,
+            self._native.wait_text(
+                text, regex, full, not_, self._timeout("text", timeout)
             ),
         )
 
     async def wait_idle(self, *, timeout: Optional[int] = None) -> None:
         await self._guarded(
             "wait_idle",
-            self._with_timeout({"kind": "wait_idle"}, "idle", timeout),
+            self._native.wait_idle(self._timeout("idle", timeout)),
         )
 
     async def wait_command(self, *, timeout: Optional[int] = None) -> None:
         await self._guarded(
             "wait_command",
-            self._with_timeout({"kind": "wait_command"}, "command", timeout),
+            self._native.wait_command(self._timeout("command", timeout)),
         )
 
     async def wait_exit(self, *, timeout: Optional[int] = None) -> None:
         await self._guarded(
             "wait_exit",
-            self._with_timeout({"kind": "wait_exit"}, "exit", timeout),
+            self._native.wait_exit(self._timeout("exit", timeout)),
         )
 
     async def wait_ready(self, *, timeout: Optional[int] = None) -> None:
         await self._guarded(
             "wait_ready",
-            self._with_timeout({"kind": "wait_ready"}, "ready", timeout),
+            self._native.wait_ready(self._timeout("ready", timeout)),
         )
 
     async def expect_text(
@@ -389,50 +393,46 @@ class ShellUse:
     ) -> None:
         await self._guarded(
             "expect_text",
-            self._with_timeout(
-                {
-                    "kind": "expect_text",
-                    "text": text,
-                    "regex": regex,
-                    "full": full,
-                    "strict": strict,
-                    "not": not_,
-                    "fg": fg,
-                    "bg": bg,
-                },
-                "text",
-                timeout,
+            self._native.expect_text(
+                text,
+                regex,
+                full,
+                strict,
+                not_,
+                fg,
+                bg,
+                self._timeout("text", timeout),
             ),
         )
 
-    async def expect_exit_code(self, code: int, *, timeout: Optional[int] = None) -> None:
+    async def expect_exit_code(
+        self, code: int, *, timeout: Optional[int] = None
+    ) -> None:
         await self._guarded(
             "expect_exit_code",
-            self._with_timeout(
-                {"kind": "expect_exit_code", "code": code}, "command", timeout
+            self._native.expect_exit_code(
+                code, self._timeout("command", timeout)
             ),
         )
 
     async def expect_output(self, text: str, *, regex: bool = False) -> None:
         await self._guarded(
-            "expect_output", {"kind": "expect_output", "text": text, "regex": regex}
+            "expect_output", self._native.expect_output(text, regex)
         )
 
     async def expect_snapshot(
-        self, name: str, *, update: bool = False, include_colors: bool = False
+        self,
+        name: str,
+        *,
+        update: bool = False,
+        include_colors: bool = False,
     ) -> str:
-        return (
-            await self._guarded(
-                "expect_snapshot",
-                {
-                    "kind": "snapshot",
-                    "name": name,
-                    "update": update,
-                    "include_colors": include_colors,
-                    "cwd": os.getcwd(),
-                },
-            )
-        )["status"]
+        return await self._guarded(
+            "expect_snapshot",
+            self._native.snapshot(
+                name, update, include_colors, os.getcwd()
+            ),
+        )
 
     async def __aenter__(self) -> "ShellUse":
         return self
@@ -442,16 +442,20 @@ class ShellUse:
 
 
 async def sessions() -> List[str]:
-    return await _to_thread(native.sessions)
+    return await _await_native(native.sessions())
 
 
 async def close_all() -> None:
-    await _to_thread(native.close_all)
+    await _await_native(native.close_all())
 
 
 async def get_recording(session: Optional[str] = None) -> str:
     name = cfg.resolve_session(session)
     try:
-        return await _to_thread(native.recording, name)
-    except FileNotFoundError:
-        raise NoSessionError(f"no recording for session '{name}'")
+        return await _await_native(native.recording(name))
+    except NoSessionError as error:
+        raise NoSessionError(f"no recording for session '{name}'") from error
+
+
+async def _panic_probe() -> None:
+    await _await_native(native.panic_probe())

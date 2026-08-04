@@ -1,6 +1,6 @@
 ---
 name: shell-use
-description: 'Drive, inspect, assert on, record, and watch a real terminal from the command line with the shell-use cli. Use when running shells (bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, nushell) or TUI programs (vim, less, top, etc.) in a headless PTY; sending keystrokes, key combos, or mouse input; resizing, writing raw bytes, or signaling the child; waiting for a command to finish or the screen to settle; asserting on terminal text, colors, exit codes, output, or snapshots; capturing text or full-color SVG screenshots; recording and replaying asciinema sessions; watching a live session while an agent drives it; or doing any of this from Python or Node with the shell-use bindings.'
+description: "Drive, inspect, assert on, record, and watch a real terminal from the command line with the shell-use cli. Use when running shells (bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, nushell) or TUI programs (vim, less, top, etc.) in a headless PTY; sending keystrokes, key combos, or mouse input; resizing, writing raw bytes, or signaling the child; waiting for a command to finish or the screen to settle; asserting on terminal text, colors, exit codes, output, or snapshots; capturing text or full-color SVG screenshots; recording and replaying asciinema sessions; watching a live cli session while an agent drives it; or driving process-local sessions from Python or Node with the shell-use bindings."
 ---
 
 # shell-use
@@ -45,87 +45,87 @@ Three commands let an agent look up the rest of the surface instead of guessing:
 Every command returns a stable exit code so you can branch on the failure class
 without parsing text:
 
-| Code | Meaning |
-| --- | --- |
-| `0` | success |
-| `1` | assertion or wait condition not met (`expect` / `wait`) |
-| `2` | usage / invalid argument |
-| `3` | no active session (run `open` / `run` first) |
-| `4` | daemon or IPC error |
-| `5` | internal error |
+| Code | Meaning                                                 |
+| ---- | ------------------------------------------------------- |
+| `0`  | success                                                 |
+| `1`  | assertion or wait condition not met (`expect` / `wait`) |
+| `2`  | usage / invalid argument                                |
+| `3`  | no active session (run `open` / `run` first)            |
+| `4`  | daemon or IPC error                                     |
+| `5`  | internal error                                          |
 
 ## Command reference
 
 ### Session & lifecycle
 
-| Command | Description |
-| --- | --- |
-| `open [--shell S] [--cols N] [--rows N] [--cwd D] [--env K=V]...` | Spawn a shell session (auto-starts the daemon). `--env` is repeatable. |
-| `run <program> [args...] [--cols N] [--rows N] [--cwd D] [--env K=V]...` | Spawn a session running a program directly (no shell). |
-| `sessions` | List active sessions. |
-| `close [--all]` | Close the current session (or every session with `--all`). |
-| `daemon start` | Start this session's daemon. Most commands start one on demand. |
-| `daemon status` | Inspect a session's daemon (pid, log path). Exit 3 if none is running. |
-| `daemon stop --session N \| --all` | Stop one session's daemon, or every daemon. Needs a target. |
+| Command                                                                  | Description                                                            |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| `open [--shell S] [--cols N] [--rows N] [--cwd D] [--env K=V]...`        | Spawn a shell session (auto-starts the daemon). `--env` is repeatable. |
+| `run <program> [args...] [--cols N] [--rows N] [--cwd D] [--env K=V]...` | Spawn a session running a program directly (no shell).                 |
+| `sessions`                                                               | List active sessions.                                                  |
+| `close [--all]`                                                          | Close the current session (or every session with `--all`).             |
+| `daemon start`                                                           | Start this session's daemon. Most commands start one on demand.        |
+| `daemon status`                                                          | Inspect a session's daemon (pid, log path). Exit 3 if none is running. |
+| `daemon stop --session N \| --all`                                       | Stop one session's daemon, or every daemon. Needs a target.            |
 
 ### Inspection
 
-| Command | Description |
-| --- | --- |
-| `state` | cwd, size, cursor, last command + exit code, timeouts, and a text snapshot. |
-| `text [--full]` | Rendered viewport text, or full scrollback with `--full`. |
-| `screenshot [PATH] [-o FILE] [--full]` | Terminal text to stdout, or a full-color SVG image (crisp at any zoom, svg-term-style window) when a path is given. |
-| `cells X Y [W H]` | Per-cell attributes (char, fg, bg, flags) for a region. |
-| `get command\|output\|exit-code\|cwd\|cursor\|size` | One structured field. |
+| Command                                             | Description                                                                                                         |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `state`                                             | cwd, size, cursor, last command + exit code, timeouts, and a text snapshot.                                         |
+| `text [--full]`                                     | Rendered viewport text, or full scrollback with `--full`.                                                           |
+| `screenshot [PATH] [-o FILE] [--full]`              | Terminal text to stdout, or a full-color SVG image (crisp at any zoom, svg-term-style window) when a path is given. |
+| `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags) for a region.                                                             |
+| `get command\|output\|exit-code\|cwd\|cursor\|size` | One structured field.                                                                                               |
 
 ### Input
 
-| Command | Description |
-| --- | --- |
-| `type "text"` | Type literal text (no return key). |
-| `submit ["text"]` | Type text then press the shell's return key. Omit text to just submit. |
-| `press <Key...>` | Named keys, e.g. `press Escape : w q Enter`, `press Ctrl+C`. |
-| `keys "Ctrl+a"` | A single key combo. |
-| `mouse click X Y` / `mouse click --on-text "OK" [--button N] [--clicks N]` | Click by coordinates or by visible label. |
-| `mouse move\|down\|up\|drag\|scroll ...` | Full mouse control (`--button` default 0=left, `scroll --amount` default 3). |
+| Command                                                                    | Description                                                                  |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `type "text"`                                                              | Type literal text (no return key).                                           |
+| `submit ["text"]`                                                          | Type text then press the shell's return key. Omit text to just submit.       |
+| `press <Key...>`                                                           | Named keys, e.g. `press Escape : w q Enter`, `press Ctrl+C`.                 |
+| `keys "Ctrl+a"`                                                            | A single key combo.                                                          |
+| `mouse click X Y` / `mouse click --on-text "OK" [--button N] [--clicks N]` | Click by coordinates or by visible label.                                    |
+| `mouse move\|down\|up\|drag\|scroll ...`                                   | Full mouse control (`--button` default 0=left, `scroll --amount` default 3). |
 
 ### PTY control
 
-| Command | Description |
-| --- | --- |
-| `resize COLS ROWS` | Resize the PTY and emulator. |
-| `write <data>` | Write raw bytes to the PTY (no return key appended). |
-| `signal INT\|TERM\|KILL\|QUIT` | Send a signal to the session's child process. |
-| `kill` | Kill the session's child process. |
+| Command                        | Description                                          |
+| ------------------------------ | ---------------------------------------------------- |
+| `resize COLS ROWS`             | Resize the PTY and emulator.                         |
+| `write <data>`                 | Write raw bytes to the PTY (no return key appended). |
+| `signal INT\|TERM\|KILL\|QUIT` | Send a signal to the session's child process.        |
+| `kill`                         | Kill the session's child process.                    |
 
 ### Wait (block until a condition holds)
 
-| Command | Description |
-| --- | --- |
-| `wait text "T" [--regex --full --not --timeout MS]` | Until text/regex is (with `--not`, is not) visible. Most precise wait. |
-| `wait idle [--timeout MS]` | Until the screen stops repainting (~250ms quiet). |
-| `wait command [--timeout MS]` | Until the current foreground command finishes (needs shell integration). |
-| `wait exit [--timeout MS]` | Until the session's program/shell itself exits. |
-| `wait ready [--timeout MS]` | Until the shell reports a ready prompt (needs shell integration). `open` waits by default. |
+| Command                                             | Description                                                                                |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `wait text "T" [--regex --full --not --timeout MS]` | Until text/regex is (with `--not`, is not) visible. Most precise wait.                     |
+| `wait idle [--timeout MS]`                          | Until the screen stops repainting (~250ms quiet).                                          |
+| `wait command [--timeout MS]`                       | Until the current foreground command finishes (needs shell integration).                   |
+| `wait exit [--timeout MS]`                          | Until the session's program/shell itself exits.                                            |
+| `wait ready [--timeout MS]`                         | Until the shell reports a ready prompt (needs shell integration). `open` waits by default. |
 
 ### Expect (exit 0 = pass, 1 = fail)
 
-| Command | Description |
-| --- | --- |
-| `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility plus optional color. `--no-strict` relaxes a strict single-match. |
-| `expect exit-code N [--timeout MS]` | The last command's exit code. Waits for the command to finish first. |
-| `expect output "T" [--regex]` | The last command's captured output. |
-| `expect snapshot NAME [-u] [--include-colors]` | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. |
+| Command                                                                         | Description                                                                   |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility plus optional color. `--no-strict` relaxes a strict single-match.  |
+| `expect exit-code N [--timeout MS]`                                             | The last command's exit code. Waits for the command to finish first.          |
+| `expect output "T" [--regex]`                                                   | The last command's captured output.                                           |
+| `expect snapshot NAME [-u] [--include-colors]`                                  | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. |
 
 Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 
 ### Recording, monitor & self-docs
 
-| Command | Description |
-| --- | --- |
-| `get-recording [session]` | Print a session's asciinema v2 cast to stdout (works even after it stopped). |
-| `monitor` | Watch the session live, full-color, in another terminal. |
-| `usage` / `agent-context` / `skill` | Self-documentation (see top of guide). |
+| Command                             | Description                                                                  |
+| ----------------------------------- | ---------------------------------------------------------------------------- |
+| `get-recording [session]`           | Print a session's asciinema v2 cast to stdout (works even after it stopped). |
+| `monitor`                           | Watch the session live, full-color, in another terminal.                     |
+| `usage` / `agent-context` / `skill` | Self-documentation (see top of guide).                                       |
 
 ## Workflow: run a command and check the result
 
@@ -226,22 +226,28 @@ It needs an interactive terminal (exit `2` otherwise) and an existing session
 (exit `3` if none). It only reads shared screen state, so watching never blocks
 the commands the agent runs; resizing the window re-fits the frame.
 
-## Programmatic use (Python, Node, Deno & Bun)
+This works only with standalone CLI sessions.
 
-Two client libraries drive the same daemon from code instead of the shell, with
-methods that mirror the cli command surface. Both are async and dependency-free,
-and both need the `shell-use` binary on `PATH` (or pointed to with the
-`SHELL_USE_BIN` env var, or a `binary` argument). They start and reuse the daemon
-exactly like the cli, so a session opened from code can be watched with
-`shell-use monitor` from another terminal. The JavaScript package is a single
-ESM module that runs on Node, Deno, and Bun; it imports only built-in modules,
-so it pulls in nothing extra on any of them.
+## Programmatic use (Python and JavaScript)
+
+The Python and JavaScript packages bind the Rust terminal engine directly and
+run sessions in-process. Session names, registries, and recordings are
+process-local. A native session cannot be listed, attached to, controlled, or
+monitored from another process, including by the standalone CLI.
+
+Language packages do not install or require the `shell-use` CLI. Only the
+standalone CLI uses the daemon and JSON-over-local-socket protocol described
+elsewhere in this guide.
+
+Node is the supported JavaScript runtime. Bun and Deno compatibility is best
+effort and does not gate releases. Deno requires a local `node_modules`
+directory and `--allow-ffi` in addition to read/write permissions.
 
 ```sh
 pip install shell-use              # Python 3.8+, imported as `shell_use`
 npm install @microsoft/shell-use   # Node 20+ (ESM only)
-bun add @microsoft/shell-use       # Bun
-deno add npm:@microsoft/shell-use  # Deno 2
+bun add @microsoft/shell-use       # Bun (best effort)
+deno add npm:@microsoft/shell-use  # Deno 2 (best effort)
 ```
 
 Python:
@@ -261,7 +267,7 @@ async def main():
 asyncio.run(main())
 ```
 
-Node, Deno, or Bun (the same code runs on all three):
+Node (the same API may work on Bun and Deno):
 
 ```js
 import { ShellUse } from "@microsoft/shell-use";
@@ -275,29 +281,27 @@ await su.expectExitCode(0);
 await su.close();
 ```
 
-On Windows, Deno needs `-A` (`--allow-all`) rather than just
-`--allow-read --allow-write`, because the daemon IPC uses a named pipe.
-
 Methods mirror the cli commands: `open` / `run`, `submit` / `type` / `write`,
 `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` /
-`kill`, `state`, `text`, `cells`, `get` (plus shorthands `get_command` /
-`get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size`),
-`screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit`,
-`expect_text` / `expect_exit_code` / `expect_output` / `expect_snapshot`, and
-`close`. Module-level helpers cover the rest: `sessions`, `close_all`,
-`daemon_status`, `daemon_stop`, `get_recording`. The JavaScript client uses the same names in camelCase (`waitCommand`, `expectText`, `getExitCode`, `closeAll`, etc).
+`kill`, `state`, `text`, `cells`, the dedicated `get_command` / `get_output` /
+`get_exit_code` / `get_cwd` / `get_cursor` / `get_size` methods,
+`screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit` /
+`wait_ready`, `expect_text` / `expect_exit_code` / `expect_output` /
+`expect_snapshot`, and `close`. Python module-level helpers are `sessions`,
+`close_all`, and `get_recording`; JavaScript exports `sessions`, `closeAll`,
+and `getRecording`. The JavaScript client otherwise uses the same names in
+camelCase (`waitCommand`, `expectText`, `getExitCode`, etc.).
 
-The constructor takes the session name plus optional `binary` and `home`
-overrides: `ShellUse(session="default", *, binary=None, home=None)` in Python,
-`new ShellUse(session?, { binary?, home? })` in JavaScript. `run` takes the program then its args (`await su.run("vim", "file.txt")` in Python,
+The constructors accept a session name plus timeout and artifact options:
+`ShellUse(session="default", *, timeouts=None, artifacts=None)` in Python and
+`new ShellUse(session?, { timeouts?, artifacts? })` in JavaScript. `run` takes
+the program then its arguments (`await su.run("vim", "file.txt")` in Python,
 `await su.run("vim", ["file.txt"])` in JavaScript).
 
 Failures raise typed errors instead of returning exit codes, one class per row of
-the [exit-code table](#exit-codes): `ExpectationError` (1), `UsageError` (2),
-`NoSessionError` (3), `DaemonError` (4), and `InternalError` (5), all subclasses
-of `ShellUseError`. On its first call a client also checks that the daemon's
-version matches the package and raises `VersionMismatchError` if they differ;
-stop the daemon (`daemon_stop`) so it restarts on the matching binary.
+the applicable [exit-code table](#exit-codes): `ExpectationError` (1),
+`UsageError` (2), `NoSessionError` (3), and `InternalError` (5), all subclasses
+of `ShellUseError`.
 
 ## Supported shells & integration
 

@@ -7,13 +7,15 @@ import { test } from "node:test";
 
 import {
   ExpectationError,
+  InternalError,
   NoSessionError,
   ShellUse,
-  UsageError,
+  closeAll,
   getRecording,
   sessions,
   uniqueSession,
 } from "../dist/index.js";
+import { NativeRuntime } from "../dist/native.js";
 import { withTerminal } from "../dist/test/index.js";
 
 const shell = process.platform === "win32" ? "pwsh" : undefined;
@@ -30,16 +32,27 @@ test("echo roundtrip drives a real session", async () => {
     await su.expectExitCode(0);
     const state = await su.state();
     assert.ok(state.cols > 0);
-  });
-});
+    assert.match(await su.text(), /hello-sdk/);
+    assert.match(await su.getCommand(), /echo hello-sdk/);
+    assert.match(await su.getOutput(), /hello-sdk/);
+    assert.equal(await su.getExitCode(), 0);
+    assert.equal(typeof (await su.getCwd()), "string");
+    assert.deepEqual(await su.getCursor(), state.cursor);
+    assert.deepEqual(await su.getSize(), { cols: state.cols, rows: state.rows });
 
-test("cli control requests are rejected by native sessions", async () => {
-  await withTerminal({ shell }, async (session) => {
-    await assert.rejects(
-      session.send({ kind: "shutdown" }),
-      (error) => error instanceof UsageError,
-    );
-    assert.ok((await session.state()).cols > 0);
+    await su.resize(92, 26);
+    assert.deepEqual(await su.getSize(), { cols: 92, rows: 26 });
+    assert.ok((await su.cells(0, 0, 92, 26)).length > 0);
+    assert.match(await su.screenshot(), /hello-sdk/);
+
+    await su.write("echo typed-write");
+    await su.keys("Enter");
+    await su.waitText("typed-write");
+    await su.waitCommand();
+    await su.type("echo typed-type");
+    await su.press("Enter");
+    await su.waitText("typed-type");
+    await su.waitCommand();
   });
 });
 
@@ -147,6 +160,174 @@ test("concurrent waits do not starve filesystem work", async () => {
   }
 });
 
+test("same-name clients share one serialized native session", async () => {
+  const name = uniqueSession("same-name");
+  const first = new ShellUse(name);
+  const second = new ShellUse(name);
+  try {
+    await first.open({ shell });
+    await second.submit("echo shared-native-session");
+    await second.waitCommand();
+    await first.waitText("shared-native-session");
+    assert.match(await first.text(), /shared-native-session/);
+
+    await second.resize(101, 27);
+    assert.deepEqual(await first.getSize(), { cols: 101, rows: 27 });
+  } finally {
+    await first.closeQuiet();
+    await second.closeQuiet();
+  }
+});
+
+test("abandoning a raced promise keeps later operations serialized and safe", async () => {
+  const su = new ShellUse(uniqueSession("promise-abandonment"));
+  try {
+    await su.run(process.execPath, evalArgs);
+    await su.waitText("ready", { timeout: 2000 });
+
+    const pending = su
+      .waitText("never-visible-abandonment-marker", { timeout: 250 })
+      .then(
+        () => null,
+        (error) => error,
+      );
+    const race = await Promise.race([
+      pending.then(() => "completed"),
+      new Promise((resolve) => setTimeout(() => resolve("abandoned"), 25)),
+    ]);
+    assert.equal(race, "abandoned");
+
+    const start = Date.now();
+    const laterState = su.state();
+    const error = await pending;
+    assert.ok(error instanceof ExpectationError);
+    const state = await laterState;
+    assert.ok(Date.now() - start >= 150);
+    assert.ok(state.text.includes("ready"));
+    assert.match(await su.text(), /ready/);
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("private packed screens retain full UTF-8 logical rows and own their bytes", async () => {
+  const name = uniqueSession("packed-screen");
+  const su = new ShellUse(name);
+  const runtime = new NativeRuntime(name);
+  const script =
+    "process.stdout.write('\\x1b[31mI\\x1b[0m🙂\\x1b[38;2;1;2;3mR\\x1b[0m\\n');" +
+    "setInterval(() => {}, 1000)";
+  try {
+    const args = typeof globalThis.Deno === "undefined" ? ["-e", script] : ["eval", script];
+    const opened = await su.run(process.execPath, args);
+    assert.ok(Object.hasOwn(opened, "shell_pid"));
+    await su.waitText("R", { timeout: 2000 });
+    assert.equal((await su.state()).session_shell, null);
+
+    const cells = await su.cells(0, 0, 10, 2);
+    const indexed = cells.find((cell) => cell.char === "I");
+    const rgb = cells.find((cell) => cell.char === "R");
+    assert.equal(indexed?.fg, 1);
+    assert.equal(rgb?.fg, "#010203");
+
+    const first = await runtime.packedScreen(false);
+    assert.ok(first.utf8 instanceof Uint8Array);
+    assert.ok(first.cols > 0 && first.rows > 0);
+    assert.equal(
+      Object.getOwnPropertyDescriptor(first, "utf8")?.writable,
+      false,
+    );
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    const logicalRows = decoder.decode(first.utf8).split("\n");
+    assert.equal(logicalRows.length, first.rows);
+    assert.ok(logicalRows[0].startsWith("I🙂R"));
+    assert.ok(logicalRows[0].endsWith(" "));
+    assert.equal(logicalRows.at(-1), " ".repeat(first.cols));
+    assert.ok(encoder.encode(logicalRows[0]).byteLength > first.cols);
+    assert.notEqual(first.utf8.indexOf("R".charCodeAt(0)), rgb?.x);
+
+    first.utf8.fill(0);
+    const second = await runtime.packedScreen(false);
+    assert.notStrictEqual(first.utf8, second.utf8);
+    assert.match(decoder.decode(second.utf8), /I🙂R/);
+    await su.close();
+    assert.equal(first.utf8.length > 0, true);
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("panic containment rejects as InternalError and Node keeps running", async () => {
+  const runtime = new NativeRuntime(uniqueSession("panic-probe"));
+  await assert.rejects(
+    runtime.panicProbe(),
+    (error) =>
+      error instanceof InternalError &&
+      error.message.includes("intentional native panic probe"),
+  );
+
+  try {
+    await runtime.run({ program: process.execPath, args: evalArgs });
+    await runtime.waitText("ready", { timeoutMs: 2000 });
+    assert.match(await runtime.text(), /ready/);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("typed mouse and signal operations execute against a real program", async () => {
+  const su = new ShellUse(uniqueSession("typed-input-signal"));
+  try {
+    await su.run(process.execPath, evalArgs);
+    await su.waitText("ready", { timeout: 2000 });
+    await su.mouse.move(1, 1);
+    await su.mouse.down(1, 1);
+    await su.mouse.up(1, 1);
+    await su.mouse.drag(1, 1, 2, 2);
+    await su.mouse.scroll("down", { amount: 1 });
+    await su.mouse.click(1, 1);
+    await su.signal("KILL");
+    assert.match(await su.text(), /ready/);
+    await su.close();
+    await assert.rejects(su.state(), (error) => error instanceof NoSessionError);
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("closeAll interrupts in-flight waits and closes every process-local session", async () => {
+  const terminals = [
+    new ShellUse(uniqueSession("close-all-a")),
+    new ShellUse(uniqueSession("close-all-b")),
+  ];
+  await Promise.all(terminals.map((terminal) => terminal.run(process.execPath, evalArgs)));
+  await Promise.all(
+    terminals.map((terminal) => terminal.waitText("ready", { timeout: 2000 })),
+  );
+
+  const waiting = terminals[0]
+    .waitText("never-visible-close-all-marker", { timeout: 30_000 })
+    .then(
+      () => null,
+      (error) => error,
+    );
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const start = Date.now();
+  await closeAll();
+  assert.ok(Date.now() - start < 2000);
+  assert.ok((await waiting) instanceof ExpectationError);
+
+  const open = await sessions();
+  for (const terminal of terminals) {
+    assert.ok(!open.includes(terminal.session));
+    await assert.rejects(
+      terminal.state(),
+      (error) => error instanceof NoSessionError,
+    );
+  }
+});
+
 test("sessions lists an open session", async () => {
   const su = new ShellUse(uniqueSession("nodetest"));
   await su.open({ shell });
@@ -168,10 +349,6 @@ test("close evicts the session and retains its recording", async () => {
 
   assert.ok(!(await sessions()).includes(name));
   await assert.rejects(session.state(), (error) => error instanceof NoSessionError);
-  await assert.rejects(
-    session.send({ kind: "shutdown" }),
-    (error) => error instanceof UsageError,
-  );
   assert.match(await getRecording(name), /retained-recording/);
   await assert.rejects(
     getRecording(uniqueSession("missing-recording")),
