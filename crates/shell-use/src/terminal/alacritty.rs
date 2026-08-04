@@ -16,9 +16,9 @@ use alacritty_terminal::vte::ansi::Rgb as AlacRgb;
 
 use compact_str::{CompactString, ToCompactString};
 
-use crate::profile::{Colors, Profile, Rgb};
+use crate::profile::{Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{self, Emulator};
+use crate::terminal::emu::Emulator;
 
 /// Alacritty's palette colors arrive either as a `Named` variant or an index;
 /// both funnel through [`Color::from_index`] so a given slot always yields the
@@ -156,10 +156,10 @@ pub struct AlacrittyEmu {
     rows: u16,
     pending: Arc<Mutex<Vec<u8>>>,
     queries: Arc<Mutex<Vec<(usize, ReplyFormat)>>>,
-    /// The colors this session was configured with. A program can shadow them
-    /// at runtime but never reach them, so a reset always has a value to
-    /// restore.
-    config: Colors,
+    /// The settings this session was opened with. A program can shadow the
+    /// colors at runtime but never reach them, so a reset always has a value
+    /// to restore.
+    profile: Profile,
 }
 
 impl AlacrittyEmu {
@@ -182,14 +182,12 @@ impl AlacrittyEmu {
             rows,
             pending,
             queries,
-            config: profile.colors,
+            profile: *profile,
         }
     }
 
     /// Answer any color queries parked while the last chunk was parsed.
     ///
-    /// alacritty stores a color a program set, and leaves the slot empty
-    /// otherwise, so an empty slot is answered from the session profile.
     fn answer_queries(&mut self) {
         let parked: Vec<(usize, ReplyFormat)> = match self.queries.lock() {
             Ok(mut queries) => queries.drain(..).collect(),
@@ -255,6 +253,15 @@ impl Emulator for AlacrittyEmu {
         (self.cols, self.rows)
     }
 
+    /// alacritty stores only what a program set, leaving every other slot
+    /// empty, so an empty slot means the profile's color still shows through.
+    fn color(&self, slot: usize) -> Rgb {
+        match self.term.colors()[slot] {
+            Some(set) => Rgb::new(set.r, set.g, set.b),
+            None => self.profile.colors.color(slot),
+        }
+    }
+
     fn cursor(&self) -> (u16, u16) {
         let p = self.term.grid().cursor.point;
         let y = p.line.0.max(0).min(self.rows as i32 - 1) as u16;
@@ -264,21 +271,6 @@ impl Emulator for AlacrittyEmu {
 
     fn viewable_rows(&self) -> Vec<Vec<EmuCell>> {
         self.rows_in_range(0, self.rows as i32)
-    }
-
-    fn color(&self, slot: usize) -> Rgb {
-        // `Colors` stores only what a program set; an empty slot means the
-        // session's configured color still shows through.
-        if let Some(set) = self.term.colors()[slot] {
-            return Rgb::new(set.r, set.g, set.b);
-        }
-        match slot {
-            emu::FOREGROUND => self.config.foreground,
-            emu::BACKGROUND => self.config.background,
-            emu::CURSOR => self.config.cursor,
-            i if i < emu::FOREGROUND => self.config.rgb(i as u8),
-            _ => self.config.foreground,
-        }
     }
 
     fn full_rows(&self) -> Vec<Vec<EmuCell>> {

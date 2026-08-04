@@ -11,8 +11,9 @@
 use std::fmt::Write;
 
 use super::nerd_font::NerdFont;
-use crate::profile::{Palette, Rgb};
+use crate::profile::Rgb;
 use crate::terminal::cell::{Attrs, EmuCell};
+use crate::terminal::emu::Emulator;
 
 const CELL_W: f32 = 10.0;
 const CELL_H: f32 = 21.0;
@@ -41,7 +42,7 @@ fn cell_at(row: &[EmuCell], x: usize) -> &EmuCell {
 }
 
 /// Resolved background color for a cell (honoring inverse).
-fn bg_of(cell: &EmuCell, colors: &Palette) -> Rgb {
+fn bg_of(cell: &EmuCell, colors: &dyn Emulator) -> Rgb {
     let bg = colors.resolve(cell.bg, false);
     let fg = colors.resolve(cell.fg, true);
     if cell.has(Attrs::INVERSE) {
@@ -61,7 +62,7 @@ struct Style {
     invisible: bool,
 }
 
-fn style_of(cell: &EmuCell, colors: &Palette) -> Style {
+fn style_of(cell: &EmuCell, colors: &dyn Emulator) -> Style {
     let mut fg = colors.resolve(cell.fg, true);
     let bg = colors.resolve(cell.bg, false);
     if cell.has(Attrs::INVERSE) {
@@ -102,7 +103,7 @@ fn run_text(row: &[EmuCell], start: usize, end: usize) -> String {
 }
 
 /// Render a grid to a standalone SVG document.
-pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, colors: &Palette) -> String {
+pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, colors: &dyn Emulator) -> String {
     let nerd_font = NerdFont::new(rows, FONT_SIZE);
     let cols = cols as usize;
     let x0 = MARGIN_X;
@@ -215,10 +216,14 @@ pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, colors: &Palette) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profile::Profile;
+    use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::cell::Color;
 
-    fn colors() -> Palette {
-        Palette::default()
+    /// A real emulator: the renderer resolves through the same path a session
+    /// uses, so a stand-in could not drift from it.
+    fn colors() -> AlacrittyEmu {
+        AlacrittyEmu::new(10, 2, &Profile::default())
     }
 
     fn cell(ch: &str, fg: Option<Color>, bg: Option<Color>) -> EmuCell {

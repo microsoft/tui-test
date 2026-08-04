@@ -635,7 +635,7 @@ macro_rules! emulator_conformance_tests {
                 ..Default::default()
             };
             let mut e = conformance_emu_with(10, 4, profile);
-            let background = $crate::terminal::emu::BACKGROUND;
+            let background = $crate::profile::BACKGROUND;
             assert_eq!(e.color(background), configured);
 
             e.process(b"\x1b]11;#654321\x07");
@@ -682,14 +682,14 @@ macro_rules! emulator_conformance_tests {
             e.process(b"\x1b[31mR");
             let cell = e.viewable_rows()[0][0].clone();
 
-            let before = e.palette().resolve(cell.fg, true);
+            let before = e.resolve(cell.fg, true);
             e.process(b"\x1b]4;1;#0a0b0c\x07");
             assert_eq!(
-                e.palette().resolve(cell.fg, true),
+                e.resolve(cell.fg, true),
                 Rgb::new(0x0a, 0x0b, 0x0c),
                 "recoloring the slot recolors the cell that chose it"
             );
-            assert_ne!(before, e.palette().resolve(cell.fg, true));
+            assert_ne!(before, e.resolve(cell.fg, true));
         }
 
         /// The alternate screen hides primary content and restores it on exit.

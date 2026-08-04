@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::terminal::cell::{Color, NamedColor};
+use crate::terminal::cell::NamedColor;
 
 /// Rows of scrollback a profile retains when it does not say otherwise.
 ///
@@ -193,93 +193,99 @@ impl Colors {
 
     /// Resolve any 256-color index.
     ///
-    /// Slots 0-15 come from the profile. The color cube (16-231) and gray ramp
-    /// (232-255) are fixed by the xterm spec and identical under every profile.
+    /// Slots 0-15 come from the profile; everything above comes from the
+    /// xterm table, which no profile can move.
     pub fn rgb(&self, index: u8) -> Rgb {
         match index {
             0..=15 => self.ansi()[index as usize],
-            16..=231 => {
-                let i = index as u16 - 16;
-                let level = |c: u16| -> u8 {
-                    if c == 0 {
-                        0
-                    } else {
-                        (c * 40 + 55) as u8
-                    }
-                };
-                Rgb::new(level((i / 36) % 6), level((i / 6) % 6), level(i % 6))
-            }
-            232..=255 => {
-                let v = ((index as u16 - 232) * 10 + 8) as u8;
-                Rgb::new(v, v, v)
-            }
+            _ => xterm_color(index),
         }
     }
 
-    /// Resolve a cell's color, where `None` is the terminal default.
+    /// The color a slot shows when no program has overridden it.
     ///
-    /// This is the one function both the screenshot renderer and `expect
-    /// --fg/--bg` call, which is what keeps them agreeing.
-    pub fn resolve(&self, color: Option<Color>, is_fg: bool) -> Rgb {
-        match color {
-            None => {
-                if is_fg {
-                    self.foreground
-                } else {
-                    self.background
-                }
-            }
-            Some(Color::Named(n)) => self.rgb(n.index()),
-            Some(Color::Idx(i)) => self.rgb(i),
-            Some(Color::Rgb(r, g, b)) => Rgb::new(r, g, b),
-        }
-    }
-}
-
-/// The colors a session is showing right now.
-///
-/// A snapshot of every slot, taken from the emulator, so the screenshot
-/// renderer and `expect --fg/--bg` can resolve a cell without holding the
-/// session lock or knowing which backend produced it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Palette {
-    slots: [Rgb; 259],
-}
-
-impl Palette {
-    pub fn new(slots: [Rgb; 259]) -> Self {
-        Palette { slots }
-    }
-
+    /// This is what a backend falls back to: `slot` is a palette index, or one
+    /// of [`FOREGROUND`], [`BACKGROUND`], [`CURSOR`], matching how `OSC 4` and
+    /// `OSC 10/11/12` address them.
     pub fn color(&self, slot: usize) -> Rgb {
-        self.slots.get(slot).copied().unwrap_or(self.slots[256])
-    }
-
-    /// Resolve a cell's color, where `None` is the terminal default. The grid
-    /// records the slot a cell chose, never a color, so this is where a cell
-    /// becomes something to paint or compare.
-    pub fn resolve(&self, color: Option<Color>, is_fg: bool) -> Rgb {
-        match color {
-            None => self.color(if is_fg { 256 } else { 257 }),
-            Some(Color::Named(n)) => self.color(n.index() as usize),
-            Some(Color::Idx(i)) => self.color(i as usize),
-            Some(Color::Rgb(r, g, b)) => Rgb::new(r, g, b),
+        match slot {
+            FOREGROUND => self.foreground,
+            BACKGROUND => self.background,
+            CURSOR => self.cursor,
+            index if index < FOREGROUND => self.rgb(index as u8),
+            // Above the addressable range there is nothing sensible to report;
+            // the foreground is the least surprising answer.
+            _ => self.foreground,
         }
     }
 }
 
-impl Default for Palette {
-    fn default() -> Self {
-        let config = Colors::default();
-        let mut slots = [config.foreground; 259];
-        for (i, slot) in slots.iter_mut().enumerate().take(256) {
-            *slot = config.rgb(i as u8);
-        }
-        slots[256] = config.foreground;
-        slots[257] = config.background;
-        slots[258] = config.cursor;
-        Palette { slots }
+/// Where the three dynamic colors sit when a color slot is addressed by
+/// number.
+///
+/// The numbering is not ours: `OSC 4` addresses the 256-color palette, and
+/// `OSC 10/11/12` address the three colors after it. Both emulators already
+/// index their tables this way, so a backend reads its own state directly.
+pub const FOREGROUND: usize = 256;
+pub const BACKGROUND: usize = 257;
+pub const CURSOR: usize = 258;
+
+/// The xterm 256-color table, which is the same in every terminal.
+///
+/// Slots 0-15 here are the classic VGA colors, and a profile overrides them.
+/// The rest is the 6x6x6 color cube and the 24-step gray ramp, which the
+/// specification fixes and no profile can move: `--fg 196` has to mean the
+/// same thing in every session.
+static XTERM_256: [Rgb; 256] = build_xterm_256();
+
+const fn build_xterm_256() -> [Rgb; 256] {
+    let mut table = [Rgb::new(0, 0, 0); 256];
+
+    // 0-15: VGA.
+    let vga = [
+        (0, 0, 0),
+        (128, 0, 0),
+        (0, 128, 0),
+        (128, 128, 0),
+        (0, 0, 128),
+        (128, 0, 128),
+        (0, 128, 128),
+        (192, 192, 192),
+        (128, 128, 128),
+        (255, 0, 0),
+        (0, 255, 0),
+        (255, 255, 0),
+        (0, 0, 255),
+        (255, 0, 255),
+        (0, 255, 255),
+        (255, 255, 255),
+    ];
+    let mut i = 0;
+    while i < 16 {
+        table[i] = Rgb::new(vga[i].0, vga[i].1, vga[i].2);
+        i += 1;
     }
+
+    // 16-231: a 6x6x6 cube whose levels step 0, 95, 135, 175, 215, 255.
+    let levels = [0u8, 95, 135, 175, 215, 255];
+    while i < 232 {
+        let n = i - 16;
+        table[i] = Rgb::new(levels[(n / 36) % 6], levels[(n / 6) % 6], levels[n % 6]);
+        i += 1;
+    }
+
+    // 232-255: a gray ramp from 8 to 238 in steps of 10.
+    while i < 256 {
+        let v = (i - 232) as u8 * 10 + 8;
+        table[i] = Rgb::new(v, v, v);
+        i += 1;
+    }
+    table
+}
+
+/// The color a slot has when nothing has overridden it.
+pub fn xterm_color(index: u8) -> Rgb {
+    XTERM_256[index as usize]
 }
 
 /// The settings a session runs with.
@@ -494,15 +500,60 @@ mod tests {
         assert_eq!(Colors::slot_name(16), None, "only 0-15 are configurable");
     }
 
+    /// Every slot a program can address resolves, so a backend always has a
+    /// color to fall back to and a query always has an answer.
     #[test]
-    fn a_cell_that_set_no_color_takes_the_profile_default() {
+    fn every_addressable_slot_resolves() {
         let c = Colors::default();
-        assert_eq!(c.resolve(None, true), c.foreground);
-        assert_eq!(c.resolve(None, false), c.background);
+        for index in 0u8..=255 {
+            assert_eq!(c.color(index as usize), c.rgb(index), "slot {index}");
+        }
+        assert_eq!(c.color(FOREGROUND), c.foreground);
+        assert_eq!(c.color(BACKGROUND), c.background);
+        assert_eq!(c.color(CURSOR), c.cursor);
+    }
+
+    /// The 16 configurable slots come from the profile; the rest come from the
+    /// xterm table, which is the same in every terminal.
+    #[test]
+    fn only_the_ansi_slots_follow_the_profile() {
+        let recolored = Colors {
+            red: Rgb::new(1, 2, 3),
+            ..Default::default()
+        };
+        assert_eq!(recolored.rgb(1), Rgb::new(1, 2, 3), "slot 1 follows it");
+        for index in 16u8..=255 {
+            assert_eq!(
+                recolored.rgb(index),
+                xterm_color(index),
+                "slot {index} is fixed by the specification"
+            );
+        }
+    }
+
+    /// Spot-check the static table against the values the specification
+    /// defines, so a typo in 256 entries cannot pass unnoticed.
+    #[test]
+    fn the_xterm_table_matches_the_specification() {
+        assert_eq!(xterm_color(0), Rgb::new(0, 0, 0), "VGA black");
+        assert_eq!(xterm_color(1), Rgb::new(128, 0, 0), "VGA red");
+        assert_eq!(xterm_color(15), Rgb::new(255, 255, 255), "VGA bright white");
         assert_eq!(
-            c.resolve(Some(Color::Rgb(1, 2, 3)), true),
-            Rgb::new(1, 2, 3),
-            "a true-color cell is itself whatever the profile says"
+            xterm_color(16),
+            Rgb::new(0, 0, 0),
+            "the cube starts at black"
+        );
+        assert_eq!(xterm_color(196), Rgb::new(255, 0, 0), "cube red");
+        assert_eq!(
+            xterm_color(231),
+            Rgb::new(255, 255, 255),
+            "the cube ends white"
+        );
+        assert_eq!(xterm_color(232), Rgb::new(8, 8, 8), "the ramp starts at 8");
+        assert_eq!(
+            xterm_color(255),
+            Rgb::new(238, 238, 238),
+            "the ramp ends at 238"
         );
     }
 

@@ -10,17 +10,8 @@
 //! identical shell-integration behavior by construction rather than by
 //! reimplementation.
 
-use crate::profile::{Palette, Rgb};
-use crate::terminal::cell::EmuCell;
-
-/// Runtime color slots: the 256-color palette, then the three dynamic colors.
-///
-/// The numbering is not ours — both emulators already address their special
-/// colors this way, so a backend can hand its own table straight through.
-pub const FOREGROUND: usize = 256;
-pub const BACKGROUND: usize = 257;
-pub const CURSOR: usize = 258;
-pub const COLOR_SLOTS: usize = 259;
+use crate::profile::Rgb;
+use crate::terminal::cell::{Color, EmuCell};
 
 /// A headless terminal emulator: bytes in, cell grid out.
 ///
@@ -51,30 +42,39 @@ pub trait Emulator: Send {
     /// Scrollback history followed by the visible screen.
     fn full_rows(&self) -> Vec<Vec<EmuCell>>;
 
-    /// The color a slot currently shows.
+    /// The color a slot is currently showing.
     ///
     /// Programs move these with `OSC 4` (palette) and `OSC 10/11/12` (default
     /// foreground, background, cursor), and put them back with `OSC 104` and
-    /// `OSC 110/111/112`. A reset restores the color the session was configured
-    /// with; nothing a program sends can change that configured value, so
-    /// there is always something to fall back to.
+    /// `OSC 110/111/112`. A slot nothing has overridden shows the color the
+    /// session's profile gives it, so a reset always has something to restore
+    /// and this always has an answer.
     ///
     /// Backends answer color *queries* themselves, through
     /// [`Emulator::take_pending_writes`], because each one already parses the
-    /// sequence and knows which terminator the query used. This method is how
-    /// the screenshot renderer and `expect --fg/--bg` see the same answer.
+    /// sequence and knows which terminator the query used. This reports the
+    /// same colors, so a screenshot and `expect --fg/--bg` agree with what a
+    /// program was told.
     ///
-    /// `slot` is a palette index, or one of [`FOREGROUND`], [`BACKGROUND`],
-    /// [`CURSOR`].
+    /// `slot` is a palette index, or one of [`crate::profile::FOREGROUND`],
+    /// [`crate::profile::BACKGROUND`], [`crate::profile::CURSOR`].
     fn color(&self, slot: usize) -> Rgb;
 
-    /// Every slot at once, so a consumer can resolve colors without holding
-    /// the session lock or knowing which backend produced them.
-    fn palette(&self) -> Palette {
-        let mut slots = [Rgb::new(0, 0, 0); COLOR_SLOTS];
-        for (slot, out) in slots.iter_mut().enumerate() {
-            *out = self.color(slot);
+    /// Resolve a cell's color, where `None` is the terminal default.
+    ///
+    /// The grid records which slot a cell chose, never a color, so this is
+    /// where a cell becomes something to paint or compare. Provided rather
+    /// than required so every backend resolves a cell identically.
+    fn resolve(&self, color: Option<Color>, is_fg: bool) -> Rgb {
+        match color {
+            None => self.color(if is_fg {
+                crate::profile::FOREGROUND
+            } else {
+                crate::profile::BACKGROUND
+            }),
+            Some(Color::Named(n)) => self.color(n.index() as usize),
+            Some(Color::Idx(i)) => self.color(i as usize),
+            Some(Color::Rgb(r, g, b)) => Rgb::new(r, g, b),
         }
-        Palette::new(slots)
     }
 }

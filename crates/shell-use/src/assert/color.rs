@@ -1,7 +1,7 @@
 //! Color parsing and comparison for `expect --fg/--bg`.
 
 use super::super::terminal::cell::Color;
-use crate::profile::Palette;
+use crate::terminal::emu::Emulator;
 
 /// The spelling of [`Expected::Default`], on the command line and in messages.
 pub const DEFAULT: &str = "default";
@@ -74,7 +74,7 @@ fn parse_hex(hex: &str) -> anyhow::Result<(u8, u8, u8)> {
 /// the screenshot renderer draws with. These used to be two separate hardcoded
 /// tables that disagreed on every ANSI slot, so `expect --fg "#800000"` passed
 /// on a cell a screenshot painted `#e88388`.
-pub fn matches(cell: Option<Color>, expected: &Expected, colors: &Palette) -> bool {
+pub fn matches(cell: Option<Color>, expected: &Expected, colors: &dyn Emulator) -> bool {
     let Some(cell) = cell else {
         return matches!(expected, Expected::Default);
     };
@@ -89,7 +89,7 @@ pub fn matches(cell: Option<Color>, expected: &Expected, colors: &Palette) -> bo
 }
 
 /// Render a cell's color in the same space as the expected value, for messages.
-pub fn describe_cell(cell: Option<Color>, expected: &Expected, colors: &Palette) -> String {
+pub fn describe_cell(cell: Option<Color>, expected: &Expected, colors: &dyn Emulator) -> String {
     let Some(cell) = cell else {
         return DEFAULT.to_string();
     };
@@ -129,9 +129,9 @@ mod tests {
     use crate::terminal::cell::Color;
     use crate::terminal::emu::Emulator;
 
-    /// Snapshotted from a real emulator, so these exercise the same path a
-    /// session uses rather than a stand-in that could drift from it.
-    fn emu_with(colors: Colors) -> Palette {
+    /// A real emulator, so these exercise the same resolution path a session
+    /// uses rather than a stand-in that could drift from it.
+    fn emu_with(colors: Colors) -> AlacrittyEmu {
         AlacrittyEmu::new(
             10,
             2,
@@ -140,7 +140,6 @@ mod tests {
                 ..Default::default()
             },
         )
-        .palette()
     }
 
     #[test]
