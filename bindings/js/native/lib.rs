@@ -454,6 +454,7 @@ fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptio
         return Ok(CoreOpenOptions::default());
     };
     Ok(CoreOpenOptions {
+        profile: Default::default(),
         shell: value.shell.map(Into::into),
         cols: match value.cols {
             Some(cols) => u16_value(cols, "cols")?,
@@ -475,6 +476,7 @@ fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, ShellUs
         return Err(ShellUseError::usage("program must not be empty"));
     }
     Ok(CoreRunOptions {
+        profile: Default::default(),
         program: value.program,
         args: value.args.unwrap_or_default(),
         cols: match value.cols {

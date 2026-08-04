@@ -161,7 +161,7 @@ prints a session's effective timeouts.
 
 | Command                                                      | Description                                 |
 | ------------------------------------------------------------ | ------------------------------------------- |
-| `open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V] [--timeout-<class> MS]` | Spawn a shell session.                      |
+| `open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V] [--config F] [--profile P] [--timeout-<class> MS]` | Spawn a shell session.                      |
 | `run <program> [args...]`                                    | Spawn a session running a program directly. |
 | `sessions`                                                   | List active sessions.                       |
 | `close [--all]`                                              | Close the current session (or all).         |
@@ -298,6 +298,54 @@ Every command returns a stable exit code so an agent can branch on the failure c
 | `5`  | internal error                                        |
 
 With `--json`, failures also carry a `"kind"` field (`assertion`/`usage`/`no_session`/`internal`).
+
+## Configuration
+
+Settings live in a `shell-use.toml` with named profiles. Everything is
+optional, so a file only states what it changes:
+
+```toml
+[profiles.default]
+scrollback = 10000            # rows kept beyond the visible screen
+
+[profiles.default.colors]
+background = "#000000"
+foreground = "#c0c0c0"
+cursor     = "#c0c0c0"
+red        = "#800000"        # any of the 16 ANSI slots, by name
+
+[profiles.ci]
+scrollback = 500              # inherits the default palette
+```
+
+```bash
+shell-use open                         # profile "default"
+shell-use open --profile ci
+shell-use open --config ./other.toml --profile ci
+```
+
+Looked up nearest first: `./shell-use.toml`, then
+`~/.shell-use/shell-use.toml`. `--config` or `SHELL_USE_CONFIG` replaces the
+search. Running without a config file is normal; a file that fails to parse is
+an error rather than a silent fallback.
+
+Resolution happens in the CLI, not the daemon — the daemon is long-lived and
+shared, so it has no working directory to resolve a project-local config
+against.
+
+### Colors
+
+A terminal grid stores colour *indices*, not colours. What index 1 looks like
+is the profile's choice, and shell-use needs that choice twice: to draw a
+screenshot, and to answer `expect --fg "#rrggbb"`. **Both read the same table**,
+so a colour an assertion matches is the colour a screenshot paints.
+
+Only the 16 ANSI slots and the three defaults are configurable. Indices 16-255
+are the xterm colour cube and grey ramp, fixed by the spec, so `--fg 196` means
+the same thing in every profile.
+
+The shipped palette is the classic VGA/xterm one that `TERM=xterm-256color`
+promises.
 
 ## Supported shells
 

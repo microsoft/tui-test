@@ -93,6 +93,7 @@ impl NativeSession {
                 execute_open(
                     &name,
                     Operation::Open(OpenOptions {
+                        profile: Default::default(),
                         shell: parse_shell(shell.as_deref())?,
                         cols: integer_u16(&cols, "cols")?,
                         rows: integer_u16(&rows, "rows")?,
@@ -158,6 +159,7 @@ impl NativeSession {
                 execute_open(
                     &name,
                     Operation::Run(RunOptions {
+                        profile: Default::default(),
                         program,
                         args,
                         cols: integer_u16(&cols, "cols")?,

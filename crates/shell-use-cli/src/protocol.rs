@@ -14,6 +14,12 @@ pub enum Request {
     Open {
         shell: Option<shell_use::shell::Shell>,
         program: Option<Vec<String>>,
+        /// Terminal settings, already resolved from the config file by the
+        /// client. The daemon never reads that file: it is long-lived and
+        /// shared, so it has no single working directory to resolve a
+        /// project-local config against.
+        #[serde(default)]
+        profile: shell_use::profile::Profile,
         cols: u16,
         rows: u16,
         cwd: Option<String>,
@@ -148,6 +154,7 @@ impl Request {
             Request::Open {
                 shell,
                 program,
+                profile,
                 cols,
                 rows,
                 cwd,
@@ -161,6 +168,7 @@ impl Request {
                         .next()
                         .ok_or_else(|| ShellUseError::usage("empty program"))?;
                     Ok(Operation::Run(RunOptions {
+                        profile,
                         program: executable,
                         args: parts.collect(),
                         cols,
@@ -172,6 +180,7 @@ impl Request {
                     }))
                 } else {
                     Ok(Operation::Open(OpenOptions {
+                        profile,
                         shell,
                         cols,
                         rows,
@@ -384,6 +393,7 @@ mod tests {
         Request::Open {
             shell: None,
             program: None,
+            profile: Default::default(),
             cols: 80,
             rows: 30,
             cwd: None,

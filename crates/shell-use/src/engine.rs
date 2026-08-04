@@ -47,11 +47,14 @@ pub struct LiveFrame {
     pub shell: Option<&'static str>,
 }
 
+/// One-line operation description for the verbose log. Open and Run redact env
+/// values (they may contain secrets) and report only the variable count.
 fn operation_summary(operation: &Operation) -> String {
     match operation {
         Operation::Open(options) => format!(
-            "Open {{ shell: {:?}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            "Open {{ shell: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
             options.shell,
+            options.profile.scrollback,
             options.cols,
             options.rows,
             options.cwd,
@@ -60,9 +63,10 @@ fn operation_summary(operation: &Operation) -> String {
             options.env.len()
         ),
         Operation::Run(options) => format!(
-            "Run {{ program: {:?}, args: {:?}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            "Run {{ program: {:?}, args: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
             options.program,
             options.args,
+            options.profile.scrollback,
             options.cols,
             options.rows,
             options.cwd,
@@ -133,6 +137,7 @@ impl Engine {
         self.spawn(
             options.shell,
             None,
+            options.profile,
             options.cols,
             options.rows,
             options.cwd,
@@ -149,6 +154,7 @@ impl Engine {
         self.spawn(
             None,
             Some(program),
+            options.profile,
             options.cols,
             options.rows,
             options.cwd,
@@ -163,6 +169,7 @@ impl Engine {
         &self,
         shell: Option<crate::shell::Shell>,
         program: Option<Vec<String>>,
+        profile: crate::profile::Profile,
         cols: u16,
         rows: u16,
         cwd: Option<String>,
@@ -184,6 +191,7 @@ impl Engine {
         let session = TerminalSession::open(
             shell,
             program.clone(),
+            profile,
             cols,
             rows,
             cwd,
@@ -1168,7 +1176,9 @@ fn expect_text(
         || {
             matched = match locator::find(&grid(session, full), &pattern, strict) {
                 Ok(Some(cells)) if !cells.is_empty() => {
-                    if let Some(error) = check_colors(&cells, &fg, &bg, not) {
+                    if let Some(error) =
+                        check_colors(&cells, &fg, &bg, not, &session.profile.colors)
+                    {
                         last_error = Some(error);
                         false
                     } else {
@@ -1209,17 +1219,18 @@ fn check_colors(
     fg: &Option<String>,
     bg: &Option<String>,
     not: bool,
+    colors: &crate::profile::Colors,
 ) -> Option<String> {
     let want = !not;
     if let Some(spec) = fg {
         let expected = Expected::parse(spec).ok()?;
         for cell in cells {
-            if color::matches(cell.cell.fg, &expected) != want {
+            if color::matches(cell.cell.fg, &expected, colors) != want {
                 return Some(format!(
                     "expected fg {} {}, found {} in cell '{}' at {},{}",
                     if not { "absent" } else { "present" },
                     expected.describe(),
-                    color::describe_cell(cell.cell.fg, &expected),
+                    color::describe_cell(cell.cell.fg, &expected, colors),
                     cell.cell.ch,
                     cell.x,
                     cell.y
@@ -1230,12 +1241,12 @@ fn check_colors(
     if let Some(spec) = bg {
         let expected = Expected::parse(spec).ok()?;
         for cell in cells {
-            if color::matches(cell.cell.bg, &expected) != want {
+            if color::matches(cell.cell.bg, &expected, colors) != want {
                 return Some(format!(
                     "expected bg {} {}, found {} in cell '{}' at {},{}",
                     if not { "absent" } else { "present" },
                     expected.describe(),
-                    color::describe_cell(cell.cell.bg, &expected),
+                    color::describe_cell(cell.cell.bg, &expected, colors),
                     cell.cell.ch,
                     cell.x,
                     cell.y
@@ -1339,7 +1350,12 @@ fn screenshot(
     let (rows, title) = grid_with_title(session, full, true);
     match path {
         Some(path) => {
-            let svg = crate::render::svg::render_svg(&rows, session.cols, title.as_deref());
+            let svg = crate::render::svg::render_svg(
+                &rows,
+                session.cols,
+                &session.profile.colors,
+                title.as_deref(),
+            );
             std::fs::write(&path, svg)
                 .map_err(|error| ShellUseError::internal(error.to_string()))?;
             Ok(ScreenshotResult::Path(path))

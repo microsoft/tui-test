@@ -34,6 +34,28 @@ impl From<ShellArg> for Shell {
     }
 }
 
+/// Which terminal profile a session runs with.
+#[derive(Args, Clone, Default)]
+pub struct ProfileArgs {
+    /// Config file to read (default: ./shell-use.toml, then
+    /// ~/.shell-use/shell-use.toml).
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<std::path::PathBuf>,
+    /// Named profile from the config file (default: `default`).
+    #[arg(long, value_name = "NAME")]
+    pub profile: Option<String>,
+}
+
+impl ProfileArgs {
+    /// Resolve to concrete settings. Done here, in the client, because the
+    /// daemon is long-lived and shared and so has no working directory to
+    /// resolve a project-local config against.
+    pub fn resolve(&self) -> anyhow::Result<shell_use::profile::Profile> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        shell_use::profile::resolve(self.config.as_deref(), self.profile.as_deref(), &cwd)
+    }
+}
+
 /// Per-class default timeouts for a session, in milliseconds.
 #[derive(Args, Clone, Copy, Default)]
 pub struct TimeoutArgs {
@@ -114,6 +136,8 @@ pub enum Command {
         #[arg(long, conflicts_with = "wait_ready")]
         no_wait_ready: bool,
         #[command(flatten)]
+        profile: ProfileArgs,
+        #[command(flatten)]
         timeouts: TimeoutArgs,
     },
     /// Spawn a session running a program directly.
@@ -142,6 +166,8 @@ pub enum Command {
         /// Return as soon as the program is spawned (the default).
         #[arg(long, conflicts_with = "wait_ready")]
         no_wait_ready: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
         #[command(flatten)]
         timeouts: TimeoutArgs,
     },

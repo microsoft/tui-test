@@ -30,6 +30,11 @@ impl Timeouts {
 #[derive(Debug, Clone)]
 pub struct OpenOptions {
     pub shell: Option<Shell>,
+    /// Terminal settings, already resolved from the config file by the
+    /// client. The daemon never reads that file: it is long-lived and shared,
+    /// so it has no single working directory to resolve a project-local config
+    /// against.
+    pub profile: crate::profile::Profile,
     pub cols: u16,
     pub rows: u16,
     pub cwd: Option<String>,
@@ -42,6 +47,7 @@ impl Default for OpenOptions {
     fn default() -> Self {
         Self {
             shell: None,
+            profile: crate::profile::Profile::default(),
             cols: crate::config::DEFAULT_COLS,
             rows: crate::config::DEFAULT_ROWS,
             cwd: None,
@@ -56,6 +62,11 @@ impl Default for OpenOptions {
 pub struct RunOptions {
     pub program: String,
     pub args: Vec<String>,
+    /// Terminal settings, already resolved from the config file by the
+    /// client. The daemon never reads that file: it is long-lived and shared,
+    /// so it has no single working directory to resolve a project-local config
+    /// against.
+    pub profile: crate::profile::Profile,
     pub cols: u16,
     pub rows: u16,
     pub cwd: Option<String>,
