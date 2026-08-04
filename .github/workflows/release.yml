@@ -34,49 +34,7 @@ jobs:
           node-version: "24"
 
       - name: Verify release versions
-        shell: bash
-        run: |
-          node <<'NODE'
-          const fs = require("node:fs");
-
-          const expected = process.env.RELEASE_TAG.replace(/^v/, "");
-          const jsPackage = JSON.parse(
-            fs.readFileSync("bindings/js/package.json", "utf8"),
-          );
-          const versions = {
-            "Cargo.toml": fs.readFileSync("Cargo.toml", "utf8").match(
-              /^\s*version\s*=\s*"([^"]+)"/m,
-            )?.[1],
-            "bindings/js/package.json": jsPackage.version,
-            "bindings/js/src/version.ts": fs.readFileSync(
-              "bindings/js/src/version.ts",
-              "utf8",
-            ).match(/VERSION\s*=\s*"([^"]+)"/)?.[1],
-            "bindings/python/pyproject.toml": fs.readFileSync(
-              "bindings/python/pyproject.toml",
-              "utf8",
-            ).match(/^\s*version\s*=\s*"([^"]+)"/m)?.[1],
-            "bindings/python/src/shell_use/_config.py": fs.readFileSync(
-              "bindings/python/src/shell_use/_config.py",
-              "utf8",
-            ).match(/VERSION\s*=\s*"([^"]+)"/)?.[1],
-          };
-
-          for (const [file, version] of Object.entries(versions)) {
-            if (version !== expected) {
-              throw new Error(`${file} has version ${version}; expected ${expected}`);
-            }
-          }
-          const nativeLoader = fs.readFileSync(
-            "bindings/js/native/index.js",
-            "utf8",
-          );
-          if (!nativeLoader.includes(`'${expected}'`)) {
-            throw new Error(
-              "bindings/js/native/index.js was not regenerated for " + expected,
-            );
-          }
-          NODE
+        run: node .github/scripts/release/verify-versions.mjs
 
   build-cli:
     needs: verify
@@ -254,58 +212,7 @@ jobs:
         working-directory: bindings/js
 
       - name: Pack Node packages
-        shell: bash
-        run: |
-          mkdir -p package-artifacts/npm
-          for package in bindings/js/npm/*; do
-            if ! compgen -G "$package/*.node" >/dev/null; then
-              echo "::error::Missing native addon in $package."
-              exit 1
-            fi
-            npm pack "$package" --pack-destination package-artifacts/npm
-          done
-
-          node <<'NODE'
-          const fs = require("node:fs");
-          const path = require("node:path");
-          const packagePath = "bindings/js/package.json";
-          const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-          pkg.optionalDependencies = {};
-          for (const entry of fs.readdirSync("bindings/js/npm")) {
-            const manifest = JSON.parse(
-              fs.readFileSync(
-                path.join("bindings/js/npm", entry, "package.json"),
-                "utf8",
-              ),
-            );
-            pkg.optionalDependencies[manifest.name] = manifest.version;
-          }
-          fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + "\n");
-          NODE
-
-          npm pack ./bindings/js \
-            --ignore-scripts \
-            --pack-destination package-artifacts/npm
-
-          node <<'NODE'
-          const fs = require("node:fs");
-          const packagePath = "bindings/js/package.json";
-          const readmePath = "bindings/js/README.md";
-          const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-          pkg.name = "shell-use";
-          fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + "\n");
-          fs.writeFileSync(
-            readmePath,
-            fs.readFileSync(readmePath, "utf8").replaceAll(
-              "@microsoft/shell-use",
-              "shell-use",
-            ),
-          );
-          NODE
-
-          npm pack ./bindings/js \
-            --ignore-scripts \
-            --pack-destination package-artifacts/npm
+        run: node .github/scripts/release/package-node.mjs
 
       - uses: actions/upload-artifact@v4
         with:
@@ -404,6 +311,10 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
       - uses: actions/download-artifact@v4
         with:
           name: npm-packages
@@ -415,57 +326,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Publish native and root packages
-        shell: bash
-        run: |
-          publish_if_missing() {
-            local tarball="$1"
-            local package_name
-            local package_version
-
-            read -r package_name package_version < <(
-              tar -xOf "$tarball" package/package.json |
-                node -e '
-                  let input = "";
-                  process.stdin.on("data", chunk => input += chunk);
-                  process.stdin.on("end", () => {
-                    const pkg = JSON.parse(input);
-                    console.log(`${pkg.name} ${pkg.version}`);
-                  });
-                '
-            )
-
-            if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
-              echo "${package_name}@${package_version} is already published"
-              return
-            fi
-
-            npm publish "$tarball" --access public --provenance --tag latest
-          }
-
-          shopt -s nullglob
-          packages=(npm-packages/*.tgz)
-          if [[ "${#packages[@]}" -lt 10 ]]; then
-            echo "::error::Expected eight native packages and two root packages."
-            exit 1
-          fi
-
-          for package in "${packages[@]}"; do
-            name="$(tar -xOf "$package" package/package.json | node -pe '
-              JSON.parse(require("fs").readFileSync(0, "utf8")).name
-            ')"
-            if [[ "$name" == @microsoft/shell-use-* ]]; then
-              publish_if_missing "$package"
-            fi
-          done
-
-          for package in "${packages[@]}"; do
-            name="$(tar -xOf "$package" package/package.json | node -pe '
-              JSON.parse(require("fs").readFileSync(0, "utf8")).name
-            ')"
-            if [[ "$name" == "@microsoft/shell-use" || "$name" == "shell-use" ]]; then
-              publish_if_missing "$package"
-            fi
-          done
+        run: node .github/scripts/release/publish-npm.mjs
 
   publish-pypi:
     needs:
@@ -529,6 +390,10 @@ jobs:
     needs: package-node
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
       - uses: actions/download-artifact@v4
         with:
           name: npm-packages
@@ -539,51 +404,16 @@ jobs:
           node-version: "24"
 
       - name: Install packed root and platform packages
-        shell: bash
-        run: |
-          root_package="$(
-            for package in npm-packages/*.tgz; do
-              name="$(tar -xOf "$package" package/package.json | node -pe '
-                JSON.parse(require("fs").readFileSync(0, "utf8")).name
-              ')"
-              [[ "$name" == "@microsoft/shell-use" ]] && echo "$package"
-            done
-          )"
-          platform_package="$(
-            for package in npm-packages/*.tgz; do
-              name="$(tar -xOf "$package" package/package.json | node -pe '
-                JSON.parse(require("fs").readFileSync(0, "utf8")).name
-              ')"
-              [[ "$name" == "@microsoft/shell-use-linux-x64-gnu" ]] && echo "$package"
-            done
-          )"
-
-          test -n "$root_package"
-          test -n "$platform_package"
-          mkdir smoke
-          cd smoke
-          npm init -y >/dev/null
-          npm install --ignore-scripts "../$platform_package"
-          npm install --ignore-scripts --omit=optional "../$root_package"
-
-          node --input-type=module <<'NODE'
-          import { ShellUse } from "@microsoft/shell-use";
-
-          const session = ShellUse.ephemeral("release-smoke");
-          try {
-            await session.open();
-            await session.submit("echo release-smoke");
-            await session.waitCommand();
-            await session.expectText("release-smoke", { strict: false });
-          } finally {
-            await session.closeQuiet();
-          }
-          NODE
+        run: node .github/scripts/release/smoke-node.mjs
 
   smoke-python:
     needs: build-python
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
       - uses: actions/download-artifact@v4
         with:
           name: python-wheel-x86_64-unknown-linux-gnu
@@ -594,21 +424,4 @@ jobs:
           python-version: "3.11"
 
       - name: Install built wheel
-        shell: bash
-        run: |
-          python -m venv smoke
-          smoke/bin/python -m pip install --disable-pip-version-check dist/*.whl
-
-          smoke/bin/python <<'PY'
-          import asyncio
-          from shell_use import ShellUse
-
-          async def main():
-              async with ShellUse.ephemeral("release-smoke") as session:
-                  await session.open()
-                  await session.submit("echo release-smoke")
-                  await session.wait_command()
-                  await session.expect_text("release-smoke", strict=False)
-
-          asyncio.run(main())
-          PY
+        run: python .github/scripts/release/smoke-python.py
