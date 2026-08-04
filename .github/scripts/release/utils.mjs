@@ -36,10 +36,14 @@ export function listPackageTarballs(directory) {
 }
 
 export function readPackageManifest(tarball) {
+  const absoluteTarball = path.resolve(tarball);
   const contents = execFileSync(
     "tar",
-    ["-xOf", tarball, "package/package.json"],
-    { encoding: "utf8" },
+    ["-xOf", path.basename(absoluteTarball), "package/package.json"],
+    {
+      cwd: path.dirname(absoluteTarball),
+      encoding: "utf8",
+    },
   );
   return JSON.parse(contents);
 }
