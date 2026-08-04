@@ -561,6 +561,55 @@ macro_rules! emulator_conformance_tests {
             );
         }
 
+        /// A program can hide the cursor and show it again.
+        ///
+        /// Full-screen programs hide it while they repaint, so a backend that
+        /// ignored `DECTCEM` would leave a cursor in every screenshot taken
+        /// mid-draw, parked wherever the last write happened to end.
+        #[test]
+        fn conformance_the_cursor_can_be_hidden_and_shown() {
+            let mut e = conformance_emu(10, 3, 100);
+            assert!(
+                e.cursor_visible(),
+                "a terminal starts by showing its cursor"
+            );
+
+            e.process(b"\x1b[?25l");
+            assert!(!e.cursor_visible(), "DECTCEM off hides it");
+
+            e.process(b"\x1b[?25h");
+            assert!(e.cursor_visible(), "DECTCEM on shows it again");
+        }
+
+        /// The cursor takes the shape a program asks for with `DECSCUSR`.
+        ///
+        /// Each shape has a blinking and a steady form, and both report the
+        /// same shape: a screenshot is one moment, so the blink is not part of
+        /// what a backend has to agree on.
+        #[test]
+        fn conformance_the_cursor_takes_the_shape_it_is_given() {
+            use $crate::terminal::emu::CursorShape;
+            let mut e = conformance_emu(10, 3, 100);
+            assert_eq!(e.cursor_shape(), CursorShape::Block, "block is the default");
+
+            for (sequence, expected) in [
+                (&b"\x1b[3 q"[..], CursorShape::Underline),
+                (b"\x1b[4 q", CursorShape::Underline),
+                (b"\x1b[5 q", CursorShape::Bar),
+                (b"\x1b[6 q", CursorShape::Bar),
+                (b"\x1b[1 q", CursorShape::Block),
+                (b"\x1b[2 q", CursorShape::Block),
+            ] {
+                e.process(sequence);
+                assert_eq!(
+                    e.cursor_shape(),
+                    expected,
+                    "{:?} selects {expected:?}",
+                    String::from_utf8_lossy(sequence)
+                );
+            }
+        }
+
         /// A color query is answered with the session's configured color.
         ///
         /// Programs query the background to decide whether they are on a light
