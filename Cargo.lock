@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "shell-use"
-version = "0.0.1-beta.5"
+version = "0.0.1-beta.6"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -1171,7 +1171,7 @@ dependencies = [
 
 [[package]]
 name = "shell-use-cli"
-version = "0.0.1-beta.5"
+version = "0.0.1-beta.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -1187,7 +1187,7 @@ dependencies = [
 
 [[package]]
 name = "shell-use-node"
-version = "0.0.1-beta.5"
+version = "0.0.1-beta.6"
 dependencies = [
  "napi",
  "napi-build",
@@ -1197,7 +1197,7 @@ dependencies = [
 
 [[package]]
 name = "shell-use-python"
-version = "0.0.1-beta.5"
+version = "0.0.1-beta.6"
 dependencies = [
  "anyhow",
  "pyo3",
