@@ -1,6 +1,6 @@
 {
   "name": "@microsoft/shell-use",
-  "version": "0.0.1-beta.5",
+  "version": "0.0.1-beta.6",
   "description": "Node bindings for the shell_use terminal engine",
   "type": "module",
   "exports": {
