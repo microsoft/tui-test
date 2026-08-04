@@ -13,6 +13,7 @@ fn named_runtimes_share_a_process_local_terminal() {
         Request::Open {
             shell: None,
             program: None,
+            profile: Default::default(),
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             cwd: None,
@@ -75,6 +76,7 @@ fn named_runtimes_share_a_process_local_terminal() {
                 Request::Open {
                     shell: None,
                     program: None,
+                    profile: Default::default(),
                     cols: DEFAULT_COLS,
                     rows: DEFAULT_ROWS,
                     cwd: None,
@@ -99,6 +101,7 @@ fn unrelated_session_state_does_not_wait_behind_another_session() {
                     Request::Open {
                         shell: None,
                         program: None,
+                        profile: Default::default(),
                         cols: DEFAULT_COLS,
                         rows: DEFAULT_ROWS,
                         cwd: None,

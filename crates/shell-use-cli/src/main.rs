@@ -132,10 +132,12 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             env,
             wait_ready,
             no_wait_ready,
+            profile,
             timeouts,
         } => Request::Open {
             shell: shell.map(Into::into),
             program: None,
+            profile: profile.resolve()?,
             cols,
             rows,
             cwd,
@@ -152,6 +154,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             env,
             wait_ready,
             no_wait_ready,
+            profile,
             timeouts,
         } => {
             let mut prog = vec![program];
@@ -159,6 +162,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             Request::Open {
                 shell: None,
                 program: Some(prog),
+                profile: profile.resolve()?,
                 cols,
                 rows,
                 cwd,

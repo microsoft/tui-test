@@ -48,6 +48,7 @@ fn req_summary(req: &Request) -> String {
         Request::Open {
             shell,
             program,
+            profile,
             cols,
             rows,
             cwd,
@@ -55,7 +56,8 @@ fn req_summary(req: &Request) -> String {
             wait_ready,
             timeouts,
         } => format!(
-            "Open {{ shell: {shell:?}, program: {program:?}, {cols}x{rows}, cwd: {cwd:?}, wait_ready: {wait_ready:?}, timeouts: {timeouts:?}, env: <{} vars> }}",
+            "Open {{ shell: {shell:?}, program: {program:?}, scrollback: {}, {cols}x{rows}, cwd: {cwd:?}, wait_ready: {wait_ready:?}, timeouts: {timeouts:?}, env: <{} vars> }}",
+            profile.scrollback,
             env.len()
         ),
         other => format!("{other:?}"),
@@ -88,6 +90,7 @@ impl Engine {
             Request::Open {
                 shell,
                 program,
+                profile,
                 cols,
                 rows,
                 cwd,
@@ -95,7 +98,9 @@ impl Engine {
                 wait_ready,
                 timeouts,
             } => (
-                self.open(shell, program, cols, rows, cwd, env, wait_ready, timeouts),
+                self.open(
+                    shell, program, profile, cols, rows, cwd, env, wait_ready, timeouts,
+                ),
                 false,
             ),
             Request::Close => {
@@ -115,6 +120,7 @@ impl Engine {
         &self,
         shell: Option<crate::shell::Shell>,
         program: Option<Vec<String>>,
+        profile: crate::profile::Profile,
         cols: u16,
         rows: u16,
         cwd: Option<String>,
@@ -129,6 +135,7 @@ impl Engine {
         match Session::open(
             shell,
             program.clone(),
+            profile,
             cols,
             rows,
             cwd,
@@ -720,7 +727,7 @@ fn expect_text(
     let ok = poll_until(
         || match locator::find(&grid(s, full), &pattern, strict) {
             Ok(Some(cells)) if !cells.is_empty() => {
-                if let Some(err) = check_colors(&cells, &fg, &bg, not) {
+                if let Some(err) = check_colors(&cells, &fg, &bg, not, &s.profile.colors) {
                     last_err = Some(err);
                     false
                 } else {
@@ -750,17 +757,18 @@ fn check_colors(
     fg: &Option<String>,
     bg: &Option<String>,
     not: bool,
+    colors: &crate::profile::Colors,
 ) -> Option<String> {
     let want = !not;
     if let Some(spec) = fg {
         let expected = Expected::parse(spec).ok()?;
         for c in cells {
-            if color::matches(c.cell.fg, &expected) != want {
+            if color::matches(c.cell.fg, &expected, colors) != want {
                 return Some(format!(
                     "expected fg {} {}, found {} in cell '{}' at {},{}",
                     if not { "absent" } else { "present" },
                     expected.describe(),
-                    color::describe_cell(c.cell.fg, &expected),
+                    color::describe_cell(c.cell.fg, &expected, colors),
                     c.cell.ch,
                     c.x,
                     c.y
@@ -771,12 +779,12 @@ fn check_colors(
     if let Some(spec) = bg {
         let expected = Expected::parse(spec).ok()?;
         for c in cells {
-            if color::matches(c.cell.bg, &expected) != want {
+            if color::matches(c.cell.bg, &expected, colors) != want {
                 return Some(format!(
                     "expected bg {} {}, found {} in cell '{}' at {},{}",
                     if not { "absent" } else { "present" },
                     expected.describe(),
-                    color::describe_cell(c.cell.bg, &expected),
+                    color::describe_cell(c.cell.bg, &expected, colors),
                     c.cell.ch,
                     c.x,
                     c.y
@@ -862,7 +870,7 @@ fn screenshot(s: &Session, full: bool, path: Option<String>) -> Response {
     let rows = grid(s, full);
     match path {
         Some(path) => {
-            let svg = crate::render::svg::render_svg(&rows, s.cols);
+            let svg = crate::render::svg::render_svg(&rows, s.cols, &s.profile.colors);
             match std::fs::write(&path, svg) {
                 Ok(()) => Response::with(json!({ "path": path })),
                 Err(e) => Response::internal(e.to_string()),

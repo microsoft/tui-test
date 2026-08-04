@@ -60,7 +60,7 @@ without parsing text:
 
 | Command | Description |
 | --- | --- |
-| `open [--shell S] [--cols N] [--rows N] [--cwd D] [--env K=V]...` | Spawn a shell session (auto-starts the daemon). `--env` is repeatable. |
+| `open [--shell S] [--cols N] [--rows N] [--cwd D] [--env K=V] [--config F] [--profile P]...` | Spawn a shell session (auto-starts the daemon). `--env` is repeatable. |
 | `run <program> [args...] [--cols N] [--rows N] [--cwd D] [--env K=V]...` | Spawn a session running a program directly (no shell). |
 | `sessions` | List active sessions. |
 | `close [--all]` | Close the current session (or every session with `--all`). |
@@ -298,6 +298,28 @@ the [exit-code table](#exit-codes): `ExpectationError` (1), `UsageError` (2),
 of `ShellUseError`. On its first call a client also checks that the daemon's
 version matches the package and raises `VersionMismatchError` if they differ;
 stop the daemon (`daemon_stop`) so it restarts on the matching binary.
+
+## Configuration
+
+`shell-use.toml` holds named profiles; `--profile NAME` selects one and
+`--config PATH` picks the file. Looked up nearest first: `./shell-use.toml`
+then `~/.shell-use/shell-use.toml`. No file is fine; an unparseable one errors.
+
+```toml
+[profiles.ci]
+scrollback = 500
+
+[profiles.ci.colors]
+red = "#ff0000"
+```
+
+A profile sets `scrollback` (default 10000) and colors: `foreground`,
+`background`, `cursor`, and the 16 ANSI slots by name (`red`, `bright_red`,
+...). Indices 16-255 are spec-defined and not configurable, so `--fg 196` is
+stable across profiles.
+
+The palette is what a screenshot paints **and** what `expect --fg/--bg` matches
+a `#rrggbb` against, so the two always agree.
 
 ## Supported shells & integration
 

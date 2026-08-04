@@ -35,6 +35,12 @@ pub enum Request {
     Open {
         shell: Option<Shell>,
         program: Option<Vec<String>>,
+        /// Terminal settings, already resolved from the config file by the
+        /// client. The daemon never reads that file: it is long-lived and
+        /// shared, so it has no single working directory to resolve a
+        /// project-local config against.
+        #[serde(default)]
+        profile: crate::profile::Profile,
         cols: u16,
         rows: u16,
         cwd: Option<String>,
@@ -293,6 +299,7 @@ mod tests {
         Request::Open {
             shell: None,
             program: None,
+            profile: Default::default(),
             cols: 80,
             rows: 30,
             cwd: None,

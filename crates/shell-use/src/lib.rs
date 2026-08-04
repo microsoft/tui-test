@@ -3,6 +3,7 @@ pub mod config;
 pub mod engine;
 pub mod input;
 pub mod logger;
+pub mod profile;
 pub mod protocol;
 pub mod render;
 pub mod runtime;

@@ -7,6 +7,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crate::logger::Logger;
+use crate::profile::Profile;
 use crate::shell::{self, Shell};
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::emu::Emulator;
@@ -26,6 +27,8 @@ pub struct TermState {
 
 pub struct Session {
     pub shell: Option<Shell>,
+    /// Settings this session was opened with, fixed for its lifetime.
+    pub profile: Profile,
     pub cols: u16,
     pub rows: u16,
     /// Per-class timeout defaults for the lifetime of this session.
@@ -49,6 +52,7 @@ impl Session {
     pub fn open(
         shell: Option<Shell>,
         program: Option<Vec<String>>,
+        profile: Profile,
         cols: u16,
         rows: u16,
         cwd: Option<String>,
@@ -76,7 +80,7 @@ impl Session {
         };
 
         let state = Arc::new(Mutex::new(TermState {
-            emu: Box::new(AlacrittyEmu::new(cols, rows, 5_000)),
+            emu: Box::new(AlacrittyEmu::new(cols, rows, profile.scrollback)),
             tracker: CommandTracker::new(),
             last_change: Instant::now(),
             awaiting_start: None,
@@ -139,6 +143,7 @@ impl Session {
 
         Ok(Session {
             shell,
+            profile,
             cols,
             rows,
             timeouts,
