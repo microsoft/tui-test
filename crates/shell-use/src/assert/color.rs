@@ -222,6 +222,54 @@ mod tests {
         }
     }
 
+    /// An assertion compares against what the terminal is *currently*
+    /// showing, so a program that recolors a slot changes what matches.
+    ///
+    /// This is the other half of the screenshot test: both read the same
+    /// state, so a colour a screenshot paints is a colour an assertion
+    /// matches, at every point in a session rather than only at the start.
+    #[test]
+    fn an_assertion_follows_a_color_a_program_set() {
+        use crate::terminal::emu::Emulator;
+        let mut emu = emu_with(Colors::default());
+        let red = Some(Color::from_index(1));
+        let configured = Colors::default().red;
+
+        assert!(matches(
+            red,
+            &Expected::Hex(configured.r, configured.g, configured.b),
+            &emu
+        ));
+
+        emu.process(b"\x1b]4;1;#22c55e\x07");
+        assert!(
+            matches(red, &Expected::Hex(0x22, 0xc5, 0x5e), &emu),
+            "the assertion follows the colour the program set"
+        );
+        assert!(
+            !matches(
+                red,
+                &Expected::Hex(configured.r, configured.g, configured.b),
+                &emu
+            ),
+            "the configured colour is no longer what slot 1 shows"
+        );
+        assert!(
+            matches(red, &Expected::Ansi256(1), &emu),
+            "the index is unaffected: it names a slot, not a colour"
+        );
+
+        emu.process(b"\x1b]104;1\x07");
+        assert!(
+            matches(
+                red,
+                &Expected::Hex(configured.r, configured.g, configured.b),
+                &emu
+            ),
+            "a reset restores the configured colour"
+        );
+    }
+
     /// A profile's palette is what an assertion compares against, so two
     /// profiles genuinely disagree rather than sharing one hardcoded table.
     #[test]

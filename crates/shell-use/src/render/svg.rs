@@ -235,6 +235,55 @@ mod tests {
         }
     }
 
+    /// A program that repaints the terminal repaints the screenshot.
+    ///
+    /// The renderer draws what the terminal is currently showing, not what it
+    /// was configured with, so a background set with `OSC 11` is the one that
+    /// gets painted. Nothing else covers the path from an escape sequence to
+    /// a rendered pixel.
+    #[test]
+    fn a_screenshot_follows_colors_a_program_set() {
+        use crate::terminal::emu::Emulator;
+        let mut emu = colors();
+        let rows = vec![vec![cell("x", Some(Color::from_index(1)), None)]];
+
+        let before = render_svg(&rows, 1, &emu);
+        assert!(before.contains(&hex(Profile::default().colors.red)));
+        assert!(before.contains(&hex(Profile::default().colors.background)));
+
+        // The program picks its own background and recolors palette slot 1.
+        emu.process(b"\x1b]11;#3b0764\x07\x1b]4;1;#22c55e\x07");
+
+        let after = render_svg(&rows, 1, &emu);
+        assert!(
+            after.contains("#3b0764"),
+            "the window is painted with the background the program set"
+        );
+        assert!(
+            after.contains("#22c55e"),
+            "a cell follows the slot the program recolored"
+        );
+        assert!(
+            !after.contains(&hex(Profile::default().colors.red)),
+            "the configured red is no longer what slot 1 shows"
+        );
+    }
+
+    /// And a reset puts the configured colors back on screen.
+    #[test]
+    fn a_screenshot_returns_to_the_profile_after_a_reset() {
+        use crate::terminal::emu::Emulator;
+        let mut emu = colors();
+        let rows = vec![vec![cell("x", Some(Color::from_index(1)), None)]];
+
+        emu.process(b"\x1b]11;#3b0764\x07\x1b]4;1;#22c55e\x07");
+        emu.process(b"\x1b]111\x07\x1b]104;1\x07");
+
+        let after = render_svg(&rows, 1, &emu);
+        assert!(after.contains(&hex(Profile::default().colors.background)));
+        assert!(after.contains(&hex(Profile::default().colors.red)));
+    }
+
     #[test]
     fn emits_valid_svg_with_text_and_color() {
         let rows = vec![vec![

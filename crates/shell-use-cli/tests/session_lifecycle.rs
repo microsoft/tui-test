@@ -374,20 +374,27 @@ old = termios.tcgetattr(fd)
 try:
     tty.setraw(fd)
     configured = ask(fd, b"\x1b]11;?\x07")
-    os.write(1, b"\x1b]11;#654321\x07")
+    # Every dynamic colour, not just the background: a program that sets the
+    # foreground and cursor has to be answered about those too.
+    os.write(1, b"\x1b]10;#abcdef\x07\x1b]11;#654321\x07\x1b]12;#fedcba\x07")
+    fg = ask(fd, b"\x1b]10;?\x07")
     overridden = ask(fd, b"\x1b]11;?\x07")
+    cursor = ask(fd, b"\x1b]12;?\x07")
     os.write(1, b"\x1b]111\x07")
     restored = ask(fd, b"\x1b]11;?\x07")
 finally:
     termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 strip = lambda s: s.replace("\x1b", "").replace("\x07", "")
-print("\r\nRESULT %s %s %s\r" % (strip(configured), strip(overridden), strip(restored)))
+print("\r\nRESULT %s %s %s %s %s\r" % (
+    strip(configured), strip(fg), strip(overridden), strip(cursor), strip(restored)))
 "#,
     )
     .expect("write probe");
 
-    sandbox.ok(&["run", "--cols", "80", "--", "bash", "--norc"]);
+    // Wide enough that the report is one unwrapped line: `text` returns the
+    // grid, so a wrapped reply would be split across rows.
+    sandbox.ok(&["run", "--cols", "200", "--", "bash", "--norc"]);
     sandbox.ok(&[
         "submit",
         &format!("python3 {}", probe.to_str().expect("utf-8 path")),
@@ -408,7 +415,15 @@ print("\r\nRESULT %s %s %s\r" % (strip(configured), strip(overridden), strip(res
     );
     assert!(
         line.contains("]11;rgb:6565/4343/2121"),
-        "a set color should be reported back: {line}"
+        "a set background should be reported back: {line}"
+    );
+    assert!(
+        line.contains("]10;rgb:abab/cdcd/efef"),
+        "a set foreground should be reported back: {line}"
+    );
+    assert!(
+        line.contains("]12;rgb:fefe/dcdc/baba"),
+        "a set cursor color should be reported back: {line}"
     );
     assert_eq!(
         line.matches("]11;rgb:0000/0000/0000").count(),

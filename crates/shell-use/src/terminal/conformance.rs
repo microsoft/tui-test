@@ -665,6 +665,98 @@ macro_rules! emulator_conformance_tests {
             );
         }
 
+        /// Each dynamic color is addressed by its own sequence, and each is
+        /// reset by its own.
+        ///
+        /// `OSC 11` is the one programs reach for, so it is easy to wire that
+        /// up and leave the foreground or the cursor answering the wrong slot.
+        #[test]
+        fn conformance_each_dynamic_color_is_separately_addressable() {
+            use $crate::profile::ColorSlot;
+            let mut e = conformance_emu(10, 4, 100);
+            let before = [
+                e.color(ColorSlot::Foreground),
+                e.color(ColorSlot::Background),
+                e.color(ColorSlot::Cursor),
+            ];
+
+            // Set all three to distinct colors, then check none bled into
+            // another.
+            e.process(b"\x1b]10;#111111\x07\x1b]11;#222222\x07\x1b]12;#333333\x07");
+            assert_eq!(e.color(ColorSlot::Foreground), Rgb::new(0x11, 0x11, 0x11));
+            assert_eq!(e.color(ColorSlot::Background), Rgb::new(0x22, 0x22, 0x22));
+            assert_eq!(e.color(ColorSlot::Cursor), Rgb::new(0x33, 0x33, 0x33));
+
+            // And each reset frees only its own slot.
+            e.process(b"\x1b]110\x07");
+            assert_eq!(e.color(ColorSlot::Foreground), before[0], "110 resets fg");
+            assert_eq!(
+                e.color(ColorSlot::Background),
+                Rgb::new(0x22, 0x22, 0x22),
+                "110 must leave the background alone"
+            );
+
+            e.process(b"\x1b]112\x07");
+            assert_eq!(
+                e.color(ColorSlot::Cursor),
+                before[2],
+                "112 resets the cursor"
+            );
+            assert_eq!(
+                e.color(ColorSlot::Background),
+                Rgb::new(0x22, 0x22, 0x22),
+                "112 must leave the background alone"
+            );
+
+            e.process(b"\x1b]111\x07");
+            assert_eq!(e.color(ColorSlot::Background), before[1], "111 resets bg");
+        }
+
+        /// Every dynamic color answers a query, not just the background.
+        #[test]
+        fn conformance_every_dynamic_color_answers_a_query() {
+            let mut e = conformance_emu(10, 4, 100);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]10;#010203\x07\x1b]11;#040506\x07\x1b]12;#070809\x07");
+            let _ = e.take_pending_writes();
+
+            for (query, expected) in [
+                (&b"\x1b]10;?\x07"[..], "\x1b]10;rgb:0101/0202/0303\x07"),
+                (b"\x1b]11;?\x07", "\x1b]11;rgb:0404/0505/0606\x07"),
+                (b"\x1b]12;?\x07", "\x1b]12;rgb:0707/0808/0909\x07"),
+            ] {
+                e.process(query);
+                assert_eq!(
+                    String::from_utf8_lossy(&e.take_pending_writes()),
+                    expected,
+                    "querying {:?}",
+                    String::from_utf8_lossy(query)
+                );
+            }
+        }
+
+        /// `OSC 104` with no index resets the whole palette, and leaves the
+        /// three dynamic colors alone: they have their own resets.
+        #[test]
+        fn conformance_a_bare_palette_reset_spares_the_dynamic_colors() {
+            use $crate::profile::ColorSlot;
+            let mut e = conformance_emu(10, 4, 100);
+            let configured_red = e.color(ColorSlot::Indexed(1));
+
+            e.process(b"\x1b]4;1;#111111;200;#222222\x07\x1b]11;#333333\x07");
+            assert_eq!(e.color(ColorSlot::Indexed(1)), Rgb::new(0x11, 0x11, 0x11));
+            assert_eq!(e.color(ColorSlot::Indexed(200)), Rgb::new(0x22, 0x22, 0x22));
+
+            e.process(b"\x1b]104\x07");
+            assert_eq!(e.color(ColorSlot::Indexed(1)), configured_red);
+            assert_eq!(
+                e.color(ColorSlot::Background),
+                Rgb::new(0x33, 0x33, 0x33),
+                "a palette reset is not a background reset"
+            );
+        }
+
         /// An unconfigured palette entry still answers, from the table the
         /// specification defines for it.
         #[test]
