@@ -236,6 +236,52 @@ impl Colors {
     }
 }
 
+/// The colors a session is showing right now.
+///
+/// A snapshot of every slot, taken from the emulator, so the screenshot
+/// renderer and `expect --fg/--bg` can resolve a cell without holding the
+/// session lock or knowing which backend produced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Palette {
+    slots: [Rgb; 259],
+}
+
+impl Palette {
+    pub fn new(slots: [Rgb; 259]) -> Self {
+        Palette { slots }
+    }
+
+    pub fn color(&self, slot: usize) -> Rgb {
+        self.slots.get(slot).copied().unwrap_or(self.slots[256])
+    }
+
+    /// Resolve a cell's color, where `None` is the terminal default. The grid
+    /// records the slot a cell chose, never a color, so this is where a cell
+    /// becomes something to paint or compare.
+    pub fn resolve(&self, color: Option<Color>, is_fg: bool) -> Rgb {
+        match color {
+            None => self.color(if is_fg { 256 } else { 257 }),
+            Some(Color::Named(n)) => self.color(n.index() as usize),
+            Some(Color::Idx(i)) => self.color(i as usize),
+            Some(Color::Rgb(r, g, b)) => Rgb::new(r, g, b),
+        }
+    }
+}
+
+impl Default for Palette {
+    fn default() -> Self {
+        let config = Colors::default();
+        let mut slots = [config.foreground; 259];
+        for (i, slot) in slots.iter_mut().enumerate().take(256) {
+            *slot = config.rgb(i as u8);
+        }
+        slots[256] = config.foreground;
+        slots[257] = config.background;
+        slots[258] = config.cursor;
+        Palette { slots }
+    }
+}
+
 /// The settings a session runs with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]

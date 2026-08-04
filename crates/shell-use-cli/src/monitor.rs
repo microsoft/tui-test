@@ -395,7 +395,7 @@ mod tests {
         ];
 
         for want in styles {
-            let mut emu = AlacrittyEmu::new(10, 2, 0);
+            let mut emu = AlacrittyEmu::new(10, 2, &shell_use::profile::Profile::default());
             emu.process(want.sgr().as_bytes());
             emu.process(b"x");
             let got = Style::from(&emu.viewable_rows()[0][0]);

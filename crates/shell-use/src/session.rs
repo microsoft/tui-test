@@ -80,7 +80,7 @@ impl Session {
         };
 
         let state = Arc::new(Mutex::new(TermState {
-            emu: Box::new(AlacrittyEmu::new(cols, rows, profile.scrollback)),
+            emu: Box::new(AlacrittyEmu::new(cols, rows, &profile)),
             tracker: CommandTracker::new(),
             last_change: Instant::now(),
             awaiting_start: None,

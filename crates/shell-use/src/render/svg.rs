@@ -11,7 +11,7 @@
 use std::fmt::Write;
 
 use super::nerd_font::NerdFont;
-use crate::profile::{Colors, Rgb};
+use crate::profile::{Palette, Rgb};
 use crate::terminal::cell::{Attrs, EmuCell};
 
 const CELL_W: f32 = 10.0;
@@ -41,7 +41,7 @@ fn cell_at(row: &[EmuCell], x: usize) -> &EmuCell {
 }
 
 /// Resolved background color for a cell (honoring inverse).
-fn bg_of(cell: &EmuCell, colors: &Colors) -> Rgb {
+fn bg_of(cell: &EmuCell, colors: &Palette) -> Rgb {
     let bg = colors.resolve(cell.bg, false);
     let fg = colors.resolve(cell.fg, true);
     if cell.has(Attrs::INVERSE) {
@@ -61,7 +61,7 @@ struct Style {
     invisible: bool,
 }
 
-fn style_of(cell: &EmuCell, colors: &Colors) -> Style {
+fn style_of(cell: &EmuCell, colors: &Palette) -> Style {
     let mut fg = colors.resolve(cell.fg, true);
     let bg = colors.resolve(cell.bg, false);
     if cell.has(Attrs::INVERSE) {
@@ -102,7 +102,7 @@ fn run_text(row: &[EmuCell], start: usize, end: usize) -> String {
 }
 
 /// Render a grid to a standalone SVG document.
-pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, colors: &Colors) -> String {
+pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, colors: &Palette) -> String {
     let nerd_font = NerdFont::new(rows, FONT_SIZE);
     let cols = cols as usize;
     let x0 = MARGIN_X;
@@ -119,7 +119,7 @@ pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, colors: &Colors) -> String {
     let _ = write!(
         out,
         r#"<rect width="{width:.0}" height="{height:.0}" rx="8" fill="{}"/>"#,
-        hex(colors.background)
+        hex(colors.resolve(None, false))
     );
     for (i, dot) in ["#ff5f56", "#ffbd2e", "#27c93f"].iter().enumerate() {
         let cx = MARGIN_X + 5.0 + i as f32 * 20.0;
@@ -138,7 +138,7 @@ pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, colors: &Colors) -> String {
             while x + run < cols && bg_of(cell_at(row, x + run), colors) == bg {
                 run += 1;
             }
-            if bg != colors.background {
+            if bg != colors.resolve(None, false) {
                 let rx = x0 + x as f32 * CELL_W;
                 let ry = y0 + y as f32 * CELL_H;
                 let rw = run as f32 * CELL_W;
@@ -217,6 +217,10 @@ mod tests {
     use super::*;
     use crate::terminal::cell::Color;
 
+    fn colors() -> Palette {
+        Palette::default()
+    }
+
     fn cell(ch: &str, fg: Option<Color>, bg: Option<Color>) -> EmuCell {
         EmuCell {
             ch: ch.into(),
@@ -232,12 +236,12 @@ mod tests {
             cell("h", Some(Color::from_index(1)), None),
             cell("i", Some(Color::from_index(1)), None),
         ]];
-        let svg = render_svg(&rows, 2, &Colors::default());
+        let svg = render_svg(&rows, 2, &colors());
         assert!(svg.starts_with("<svg"));
         assert!(svg.ends_with("</svg>"));
         assert!(svg.contains("textLength"));
         assert!(
-            svg.contains(&hex(Colors::default().rgb(1))),
+            svg.contains(&hex(colors().color(1))),
             "slot 1 is painted with the profile color"
         );
         assert!(svg.contains(">hi</text>"));
@@ -247,7 +251,7 @@ mod tests {
 
     #[test]
     fn emits_window_chrome() {
-        let svg = render_svg(&[vec![cell(" ", None, None)]], 1, &Colors::default());
+        let svg = render_svg(&[vec![cell(" ", None, None)]], 1, &colors());
         assert!(svg.contains("<circle"));
         assert!(svg.contains("#ff5f56"));
         assert!(svg.contains("#ffbd2e"));
@@ -256,7 +260,7 @@ mod tests {
 
     #[test]
     fn centers_the_text_font_box_in_each_cell() {
-        let svg = render_svg(&[vec![cell("x", None, None)]], 1, &Colors::default());
+        let svg = render_svg(&[vec![cell("x", None, None)]], 1, &colors());
         let expected_baseline = HEADER_H + FONT_BASELINE;
         assert!(svg.contains(&format!(r#"y="{expected_baseline:.2}""#)));
     }
@@ -264,7 +268,7 @@ mod tests {
     #[test]
     fn escapes_markup_characters() {
         let rows = vec![vec![cell("<", None, None)]];
-        let svg = render_svg(&rows, 1, &Colors::default());
+        let svg = render_svg(&rows, 1, &colors());
         assert!(svg.contains("&lt;"));
         assert!(!svg.contains("><</text>"));
     }
@@ -272,9 +276,9 @@ mod tests {
     #[test]
     fn background_run_emitted_for_non_default_bg() {
         let rows = vec![vec![cell(" ", None, Some(Color::from_index(4)))]];
-        let svg = render_svg(&rows, 1, &Colors::default());
+        let svg = render_svg(&rows, 1, &colors());
         assert!(
-            svg.contains(&hex(Colors::default().rgb(4))),
+            svg.contains(&hex(colors().color(4))),
             "slot 4 is painted with the profile color"
         );
     }
@@ -287,7 +291,7 @@ mod tests {
             cell(glyph, None, None),
             cell("b", None, None),
         ]];
-        let svg = render_svg(&rows, 3, &Colors::default());
+        let svg = render_svg(&rows, 3, &colors());
 
         assert!(svg.contains(r#"<path id="nf-f115" d=""#));
         assert!(svg.contains(r##"<use href="#nf-f115""##));
@@ -302,7 +306,7 @@ mod tests {
         let svg = render_svg(
             &[vec![cell(glyph, None, None), cell(glyph, None, None)]],
             2,
-            &Colors::default(),
+            &colors(),
         );
 
         assert_eq!(svg.matches(r#"<path id="nf-f115""#).count(), 1);
@@ -312,7 +316,7 @@ mod tests {
     #[test]
     fn leaves_unknown_private_use_glyphs_as_text() {
         let glyph = "\u{10fffd}";
-        let svg = render_svg(&[vec![cell(glyph, None, None)]], 1, &Colors::default());
+        let svg = render_svg(&[vec![cell(glyph, None, None)]], 1, &colors());
 
         assert!(svg.contains(glyph));
         assert!(!svg.contains("<defs>"));

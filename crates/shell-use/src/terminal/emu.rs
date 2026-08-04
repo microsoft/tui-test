@@ -10,7 +10,17 @@
 //! identical shell-integration behavior by construction rather than by
 //! reimplementation.
 
+use crate::profile::{Palette, Rgb};
 use crate::terminal::cell::EmuCell;
+
+/// Runtime color slots: the 256-color palette, then the three dynamic colors.
+///
+/// The numbering is not ours — both emulators already address their special
+/// colors this way, so a backend can hand its own table straight through.
+pub const FOREGROUND: usize = 256;
+pub const BACKGROUND: usize = 257;
+pub const CURSOR: usize = 258;
+pub const COLOR_SLOTS: usize = 259;
 
 /// A headless terminal emulator: bytes in, cell grid out.
 ///
@@ -40,4 +50,31 @@ pub trait Emulator: Send {
 
     /// Scrollback history followed by the visible screen.
     fn full_rows(&self) -> Vec<Vec<EmuCell>>;
+
+    /// The color a slot currently shows.
+    ///
+    /// Programs move these with `OSC 4` (palette) and `OSC 10/11/12` (default
+    /// foreground, background, cursor), and put them back with `OSC 104` and
+    /// `OSC 110/111/112`. A reset restores the color the session was configured
+    /// with; nothing a program sends can change that configured value, so
+    /// there is always something to fall back to.
+    ///
+    /// Backends answer color *queries* themselves, through
+    /// [`Emulator::take_pending_writes`], because each one already parses the
+    /// sequence and knows which terminator the query used. This method is how
+    /// the screenshot renderer and `expect --fg/--bg` see the same answer.
+    ///
+    /// `slot` is a palette index, or one of [`FOREGROUND`], [`BACKGROUND`],
+    /// [`CURSOR`].
+    fn color(&self, slot: usize) -> Rgb;
+
+    /// Every slot at once, so a consumer can resolve colors without holding
+    /// the session lock or knowing which backend produced them.
+    fn palette(&self) -> Palette {
+        let mut slots = [Rgb::new(0, 0, 0); COLOR_SLOTS];
+        for (slot, out) in slots.iter_mut().enumerate() {
+            *out = self.color(slot);
+        }
+        Palette::new(slots)
+    }
 }

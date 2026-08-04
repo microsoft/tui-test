@@ -284,6 +284,12 @@ fn await_ready(s: &Session, timeout_ms: u64) -> bool {
     }
 }
 
+/// Snapshot the colors the session is currently showing. Taken before
+/// rendering or asserting so neither holds the session lock while it works.
+fn palette(s: &Session) -> crate::profile::Palette {
+    s.state.lock().unwrap().emu.palette()
+}
+
 fn viewable(s: &Session) -> Vec<Vec<EmuCell>> {
     s.state.lock().unwrap().emu.viewable_rows()
 }
@@ -727,7 +733,7 @@ fn expect_text(
     let ok = poll_until(
         || match locator::find(&grid(s, full), &pattern, strict) {
             Ok(Some(cells)) if !cells.is_empty() => {
-                if let Some(err) = check_colors(&cells, &fg, &bg, not, &s.profile.colors) {
+                if let Some(err) = check_colors(&cells, &fg, &bg, not, &palette(s)) {
                     last_err = Some(err);
                     false
                 } else {
@@ -757,7 +763,7 @@ fn check_colors(
     fg: &Option<String>,
     bg: &Option<String>,
     not: bool,
-    colors: &crate::profile::Colors,
+    colors: &crate::profile::Palette,
 ) -> Option<String> {
     let want = !not;
     if let Some(spec) = fg {
@@ -870,7 +876,7 @@ fn screenshot(s: &Session, full: bool, path: Option<String>) -> Response {
     let rows = grid(s, full);
     match path {
         Some(path) => {
-            let svg = crate::render::svg::render_svg(&rows, s.cols, &s.profile.colors);
+            let svg = crate::render::svg::render_svg(&rows, s.cols, &palette(s));
             match std::fs::write(&path, svg) {
                 Ok(()) => Response::with(json!({ "path": path })),
                 Err(e) => Response::internal(e.to_string()),

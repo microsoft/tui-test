@@ -343,6 +343,80 @@ fn an_unknown_profile_is_rejected() {
     );
 }
 
+/// A program that asks the terminal what color it is gets an answer.
+///
+/// This is how tools decide whether they are on a light or a dark background.
+/// A terminal that stays silent leaves them blocked until they time out and
+/// guess, so this drives the whole path: daemon, emulator, and the reply on
+/// its way back up the PTY.
+#[test]
+fn a_color_query_is_answered_over_the_pty() {
+    let sandbox = Sandbox::new("osc-query");
+    let probe = sandbox.home.join("probe.py");
+    std::fs::write(
+        &probe,
+        r#"
+import os, sys, termios, tty, select
+
+# Unbuffered reads: a buffered reader would take bytes off the fd that
+# select() then cannot see, and the reply would look truncated.
+def ask(fd, query):
+    os.write(1, query)
+    buf = b""
+    while select.select([fd], [], [], 2.0)[0]:
+        buf += os.read(fd, 64)
+        if buf.endswith(b"\x07"):
+            break
+    return buf.decode("utf8", "replace")
+
+fd = sys.stdin.fileno()
+old = termios.tcgetattr(fd)
+try:
+    tty.setraw(fd)
+    configured = ask(fd, b"\x1b]11;?\x07")
+    os.write(1, b"\x1b]11;#654321\x07")
+    overridden = ask(fd, b"\x1b]11;?\x07")
+    os.write(1, b"\x1b]111\x07")
+    restored = ask(fd, b"\x1b]11;?\x07")
+finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+strip = lambda s: s.replace("\x1b", "").replace("\x07", "")
+print("\r\nRESULT %s %s %s\r" % (strip(configured), strip(overridden), strip(restored)))
+"#,
+    )
+    .expect("write probe");
+
+    sandbox.ok(&["run", "--cols", "80", "--", "bash", "--norc"]);
+    sandbox.ok(&[
+        "submit",
+        &format!("python3 {}", probe.to_str().expect("utf-8 path")),
+    ]);
+    sandbox.ok(&["wait", "command"]);
+    let text = sandbox.ok(&["text", "--full"]);
+
+    let line = text
+        .lines()
+        .find(|l| l.contains("RESULT"))
+        .unwrap_or_else(|| panic!("the probe never reported: {text}"));
+
+    // The default profile's background is black, so the terminal reports it,
+    // then the color the program set, then the configured one again.
+    assert!(
+        line.contains("]11;rgb:0000/0000/0000"),
+        "the configured background should be reported: {line}"
+    );
+    assert!(
+        line.contains("]11;rgb:6565/4343/2121"),
+        "a set color should be reported back: {line}"
+    );
+    assert_eq!(
+        line.matches("]11;rgb:0000/0000/0000").count(),
+        2,
+        "a reset should restore the configured background: {line}"
+    );
+}
+
 #[test]
 fn state_reports_effective_timeouts() {
     let sandbox = Sandbox::new("state-timeouts");
