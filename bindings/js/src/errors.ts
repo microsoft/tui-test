@@ -1,12 +1,6 @@
 import type { TerminalArtifact } from "./types.js";
 
-export type ErrorKind =
-  | "assertion"
-  | "usage"
-  | "no_session"
-  | "daemon"
-  | "version_mismatch"
-  | "internal";
+export type ErrorKind = "assertion" | "usage" | "no_session" | "internal";
 
 export class ShellUseError extends Error {
   readonly kind: ErrorKind;
@@ -39,18 +33,6 @@ export class NoSessionError extends ShellUseError {
   }
 }
 
-export class DaemonError extends ShellUseError {
-  constructor(message: string) {
-    super(message, "daemon", 4);
-  }
-}
-
-export class VersionMismatchError extends ShellUseError {
-  constructor(message: string) {
-    super(message, "version_mismatch", 4);
-  }
-}
-
 export class InternalError extends ShellUseError {
   constructor(message: string) {
     super(message, "internal", 5);
@@ -65,8 +47,6 @@ export function makeError(kind: string | undefined, message: string): ShellUseEr
       return new UsageError(message);
     case "no_session":
       return new NoSessionError(message);
-    case "daemon":
-      return new DaemonError(message);
     default:
       return new InternalError(message);
   }

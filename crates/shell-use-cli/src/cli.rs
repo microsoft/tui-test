@@ -68,7 +68,7 @@ impl From<TimeoutArgs> for TimeoutDefaults {
 }
 
 #[derive(Parser)]
-#[command(name = "shell-use", version, about = "Headless terminal CLI + daemon")]
+#[command(name = "shell-use", version, about = "Headless terminal cli + daemon")]
 pub struct Cli {
     /// Target a named session (env: SHELL_USE_SESSION).
     #[arg(long, global = true)]
@@ -270,10 +270,10 @@ pub enum Command {
     Monitor,
     /// Print a compact command cheatsheet for agents.
     Usage,
-    /// Print a machine-readable description of the full CLI surface (JSON).
+    /// Print a machine-readable description of the full cli surface (JSON).
     ///
     /// Versioned via `schema_version`; lists every command, flag, type, enum,
-    /// default, and the exit-code taxonomy. Generated from the CLI definition.
+    /// default, and the exit-code taxonomy. Generated from the cli definition.
     AgentContext,
     /// Print or install the long-form agent skill manifest (SKILL.md).
     Skill {

@@ -1,16 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { test } from "node:test";
 
 import { ExpectationError, ShellUse, uniqueSession } from "../dist/index.js";
-import {
-  resolveHome,
-  resolveTimeout,
-  socketPathIn,
-  timeoutsPayload,
-} from "../dist/config.js";
-import { createTempHome, removeTempHome } from "../dist/ephemeral.js";
+import { resolveTimeout, timeoutsPayload } from "../dist/config.js";
 import { envPairs } from "../dist/protocol.js";
 
 class CapturingClient extends ShellUse {
@@ -60,15 +52,6 @@ function withEnv(vars, fn) {
   }
 }
 
-test("long socket paths match the Rust and Python digest", () => {
-  const home =
-    "/var/folders/9k/hd3xzq_s0mn1c7b2v8t4wxyz0000gn/T/shell-use-Ab12Cd34";
-  assert.equal(
-    socketPathIn(home, "helpers-track-54321-9f8e7d6c-1"),
-    join(home, "9ba800cbf25eaece.sock"),
-  );
-});
-
 test("resolveTimeout returns undefined when nothing is configured", () => {
   for (const cls of CLASSES) {
     assert.equal(resolveTimeout(cls), undefined, `expected ${cls} -> undefined`);
@@ -83,7 +66,7 @@ test("resolveTimeout precedence: per-call beats timeouts[class] beats omitted", 
   assert.equal(resolveTimeout("text", undefined, { timeouts: { idle: 333 } }), undefined);
 });
 
-test("resolveTimeout never reads an environment variable (daemon owns ranks 3-5)", () => {
+test("resolveTimeout never reads an environment variable (engine owns ranks 3-5)", () => {
   const vars = Object.fromEntries(ALL_TIMEOUT_ENV_VARS.map((name) => [name, "1234"]));
   withEnv(vars, () => {
     for (const cls of CLASSES) {
@@ -201,35 +184,20 @@ test("envPairs passes array form through and handles empty input", () => {
   assert.deepEqual(envPairs(), []);
 });
 
-test("close is idempotent and needs no daemon", async () => {
+test("close is idempotent and needs no prior open", async () => {
   const su = new ShellUse(uniqueSession("close-idempotency"));
   await su.close();
   await su.close();
   await su.closeQuiet();
 });
 
-test("`isolated` is a flag, so no home string can ever request a temp dir", () => {
-  assert.equal(resolveHome("temp"), "temp");
-  withEnv({ SHELL_USE_HOME: "temp" }, () => {
-    assert.equal(resolveHome(undefined), "temp");
-  });
-});
-
-test("a private home is a real directory that is removed again", async () => {
-  const dir = await createTempHome();
-  assert.ok(existsSync(dir), `expected ${dir} to exist`);
-  await removeTempHome(dir);
-  assert.ok(!existsSync(dir), `expected ${dir} to be removed`);
-});
-
-test("an isolated client closes cleanly without ever provisioning", async () => {
+test("an ephemeral client closes cleanly without ever opening", async () => {
   const su = ShellUse.ephemeral("never-opened");
   await su.close();
   await su.close();
 });
 
 test("timeoutsPayload rejects an unknown class", () => {
-  // The daemon ignores fields it does not know, so a typo must not be sent.
   assert.throws(() => timeoutsPayload({ comand: 100 }), /comand/);
 });
 

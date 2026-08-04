@@ -2,6 +2,7 @@
 name = "shell-use"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "In-process terminal automation, inspection, assertions, and recording"
 license.workspace = true
 repository.workspace = true
@@ -22,4 +23,5 @@ portable-pty.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 ttf-parser.workspace = true

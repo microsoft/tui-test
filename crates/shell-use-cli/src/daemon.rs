@@ -1,4 +1,4 @@
-//! CLI daemon host: local socket listener, idle watchdog, monitor streaming,
+//! cli daemon host: local socket listener, idle watchdog, monitor streaming,
 //! and process state files around the reusable in-process engine.
 
 use std::io::Write;

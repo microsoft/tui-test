@@ -10,8 +10,6 @@ def run(coro):
 
 
 class _FakeTerminal:
-    """Stands in for a ShellUse in registry tests."""
-
     def __init__(self):
         self.closed = 0
 
@@ -34,7 +32,7 @@ class TerminalSnapshotTests(unittest.TestCase):
 
 
 class DefaultShellTests(unittest.TestCase):
-    def test_matches_the_daemon_default(self):
+    def test_matches_the_engine_default(self):
         import sys
 
         if sys.platform == "win32":
@@ -71,16 +69,12 @@ class RegistryTests(unittest.TestCase):
 
 
 class SafetyNetTests(unittest.TestCase):
-    def test_registers_the_home_sweeper_before_the_terminal_closer(self):
+    def test_registers_the_terminal_closer_at_exit(self):
         calls = []
         installed = testing._safety_net_installed
         testing._safety_net_installed = False
         try:
             with mock.patch.object(
-                testing._ephemeral,
-                "_register_sweeper",
-                side_effect=lambda: calls.append("sweeper"),
-            ), mock.patch.object(
                 testing.atexit,
                 "register",
                 side_effect=lambda callback: calls.append(callback.__name__),
@@ -89,7 +83,7 @@ class SafetyNetTests(unittest.TestCase):
         finally:
             testing._safety_net_installed = installed
 
-        self.assertEqual(calls, ["sweeper", "_close_all_tracked_blocking"])
+        self.assertEqual(calls, ["_close_all_tracked_blocking"])
 
 
 class DefaultsTests(unittest.TestCase):
@@ -97,12 +91,12 @@ class DefaultsTests(unittest.TestCase):
         testing.reset_terminal_defaults()
 
     def test_defaults_are_merged_and_reset(self):
-        testing.set_terminal_defaults(binary="/custom/shell-use", retries=5)
+        testing.set_terminal_defaults(retries=5, cols=101)
         defaults = testing.get_terminal_defaults()
-        self.assertEqual(defaults.binary, "/custom/shell-use")
         self.assertEqual(defaults.retries, 5)
+        self.assertEqual(defaults.cols, 101)
         testing.reset_terminal_defaults()
-        self.assertIsNone(testing.get_terminal_defaults().binary)
+        self.assertIsNone(testing.get_terminal_defaults().cols)
 
     def test_unknown_option_is_rejected(self):
         with self.assertRaises(TypeError) as raised:
@@ -114,12 +108,10 @@ class OptionPlumbingTests(unittest.TestCase):
     def tearDown(self):
         testing.reset_terminal_defaults()
 
-    def test_every_terminal_is_isolated(self):
-        kwargs = testing._client_kwargs(testing.TerminalOptions())
-        self.assertIs(kwargs["isolated"], True)
-        self.assertNotIn("home", kwargs)
+    def test_terminal_options_has_no_removed_process_fields(self):
         self.assertFalse(hasattr(testing.TerminalOptions(), "home"))
         self.assertFalse(hasattr(testing.TerminalOptions(), "isolated"))
+        self.assertFalse(hasattr(testing.TerminalOptions(), "binary"))
 
     def test_retries_default_to_two(self):
         self.assertEqual(testing._spawn_kwargs(testing.TerminalOptions())["retries"], 2)
@@ -147,12 +139,12 @@ class OptionPlumbingTests(unittest.TestCase):
             async def close_quiet(self):
                 pass
 
-        testing.set_terminal_defaults(cols=100, binary="/from/defaults")
+        testing.set_terminal_defaults(cols=100, artifacts={"dir": "from-defaults"})
         with mock.patch.object(testing, "ShellUse", FakeShellUse), \
              mock.patch.object(testing, "track_terminal"):
             run(testing.create_terminal(cols=42))
         self.assertEqual(created[0].open_kwargs["cols"], 42)
-        self.assertEqual(created[0].kwargs["binary"], "/from/defaults")
+        self.assertEqual(created[0].kwargs["artifacts"], {"dir": "from-defaults"})
 
     def test_unknown_create_option_is_rejected(self):
         with self.assertRaises(TypeError):

@@ -1,11 +1,11 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "shell-use"
 version = "0.0.1-beta.5"
-description = "Python client for the shell-use terminal daemon"
+description = "Python bindings for shell-use terminal automation"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
@@ -22,8 +22,8 @@ dependencies = []
 Homepage = "https://github.com/microsoft/shell-use"
 Repository = "https://github.com/microsoft/shell-use"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/shell_use"]
-
-[tool.hatch.build.targets.sdist]
-include = ["src/shell_use", "README.md"]
+[tool.maturin]
+manifest-path = "native/Cargo.toml"
+module-name = "shell_use._native"
+python-source = "src"
+features = ["extension-module"]

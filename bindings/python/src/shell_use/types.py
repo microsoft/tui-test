@@ -10,8 +10,6 @@ UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"
 
 @dataclass
 class Timeouts:
-    """Client-level default timeouts in milliseconds; unset fields are omitted so the daemon supplies them."""
-
     text: Optional[int] = None
     idle: Optional[int] = None
     command: Optional[int] = None

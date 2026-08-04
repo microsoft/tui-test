@@ -13,7 +13,6 @@ MAPPING = {
     "run": [("client", "run")],
     "close": [("client", "close"), ("module", "close_all")],
     "sessions": [("module", "sessions")],
-    "daemon": [("module", "daemon_status"), ("module", "daemon_stop")],
     "state": [("client", "state")],
     "text": [("client", "text")],
     "screenshot": [("client", "screenshot")],
@@ -33,7 +32,7 @@ MAPPING = {
     "get-recording": [("module", "get_recording")],
 }
 
-EXCLUDED = {"monitor", "usage", "agent-context", "skill"}
+EXCLUDED = {"monitor", "usage", "agent-context", "skill", "daemon"}
 
 
 def _have_binary():
@@ -54,7 +53,7 @@ class ConformanceTests(unittest.TestCase):
         for command in commands:
             if command in EXCLUDED:
                 continue
-            self.assertIn(command, MAPPING, f"CLI command '{command}' has no SDK mapping")
+            self.assertIn(command, MAPPING, f"cli command '{command}' has no SDK mapping")
             instance = ShellUse("conformance")
             for scope, attr in MAPPING[command]:
                 target = instance if scope == "client" else shell_use
@@ -70,7 +69,6 @@ class ConformanceTests(unittest.TestCase):
         self.assertEqual(shell_use.ExpectationError.exit_code, 1)
         self.assertEqual(shell_use.UsageError.exit_code, 2)
         self.assertEqual(shell_use.NoSessionError.exit_code, 3)
-        self.assertEqual(shell_use.DaemonError.exit_code, 4)
         self.assertEqual(shell_use.InternalError.exit_code, 5)
         self.assertIn("1", codes)
         self.assertIn("3", codes)

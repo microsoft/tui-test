@@ -27,7 +27,7 @@ impl TimeoutDefaults {
     }
 }
 
-/// A request sent from a stateless CLI invocation to the session daemon.
+/// A terminal operation shared by native bindings and the cli adapter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Request {
@@ -191,7 +191,7 @@ pub enum MouseAction {
     },
 }
 
-/// Classifies a failure so the CLI can map it to a stable process exit code.
+/// Classifies a failure so the cli can map it to a stable process exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
@@ -217,7 +217,7 @@ impl ErrorKind {
     }
 }
 
-/// A response returned by the daemon to the CLI.
+/// A terminal operation result shared by native bindings and the cli adapter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
     pub ok: bool,
@@ -227,7 +227,7 @@ pub struct Response {
     /// Error or assertion-failure message when `ok` is false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    /// Failure classification when `ok` is false; drives the CLI exit code.
+    /// Failure classification when `ok` is false; drives the cli exit code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<ErrorKind>,
 }

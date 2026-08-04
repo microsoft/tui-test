@@ -1,0 +1,24 @@
+[package]
+name = "shell-use-node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "napi-rs Node.js addon for the shell_use terminal engine"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "shell_use_node"
+path = "native/lib.rs"
+crate-type = ["cdylib", "rlib"]
+test = false
+
+[dependencies]
+napi = { version = "3", default-features = false, features = ["napi4", "dyn-symbols", "serde-json", "async"] }
+napi-derive = "3"
+serde_json.workspace = true
+shell-use.workspace = true
+
+[build-dependencies]
+napi-build = "2"

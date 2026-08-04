@@ -5,18 +5,15 @@ import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
   assertTimeoutClasses,
-  resolveBinary,
-  resolveHome,
   resolveSession,
   resolveTimeout,
   timeoutsPayload,
 } from "./config.js";
 import type { TimeoutClass } from "./config.js";
-import { createTempHome, removeTempHome, uniqueSession } from "./ephemeral.js";
-import { DaemonError, ExpectationError, NoSessionError } from "./errors.js";
+import { uniqueSession } from "./ephemeral.js";
+import { ExpectationError } from "./errors.js";
+import { NativeRuntime } from "./native.js";
 import { envPairs, unwrap } from "./protocol.js";
-import * as transport from "./transport.js";
-import { checkVersion } from "./version.js";
 import type {
   Cell,
   ClientOptions,
@@ -49,7 +46,6 @@ export interface MouseButtonOptions {
 
 const TERMINAL_MARKER = "Terminal content:\n";
 
-/** Pulls boxed terminal content from assertion messages, dropping trailing newlines like the Python binding. */
 function extractTerminalContent(message: string): string | undefined {
   const idx = message.indexOf(TERMINAL_MARKER);
   if (idx < 0) {
@@ -140,65 +136,27 @@ class Mouse {
 export class ShellUse {
   readonly session: string;
   readonly mouse: Mouse;
-  #binary: string;
-  #home?: string;
-  #isolated: boolean;
-  #tempHomePath?: string;
+  #runtime: NativeRuntime;
   #options: ClientOptions;
-  #versionChecked = false;
-  #closed = false;
   #artifactCounter = 0;
 
   constructor(session?: string, opts: ClientOptions = {}) {
     this.session = resolveSession(session);
-    this.#binary = resolveBinary(opts.binary);
-    this.#isolated = opts.isolated ?? false;
-    if (!this.#isolated) {
-      this.#home = resolveHome(opts.home);
-    }
     if (opts.timeouts) {
       assertTimeoutClasses(opts.timeouts);
     }
     this.#options = opts;
+    this.#runtime = new NativeRuntime(this.session);
     this.mouse = new Mouse(this);
   }
 
   static ephemeral(prefix?: string, opts: ClientOptions = {}): ShellUse {
-    return new ShellUse(uniqueSession(prefix), { ...opts, isolated: true });
+    return new ShellUse(uniqueSession(prefix), opts);
   }
 
   async send(payload: unknown): Promise<unknown> {
-    const home = await this.#resolveHome();
-    await this.#checkVersion(home);
-    const resp = await transport.request(this.session, home, this.#binary, payload);
+    const resp = await this.#runtime.request(payload);
     return unwrap(resp);
-  }
-
-  async #resolveHome(): Promise<string | undefined> {
-    if (!this.#isolated) {
-      return this.#home;
-    }
-    if (!this.#tempHomePath) {
-      this.#tempHomePath = await createTempHome();
-    }
-    return this.#tempHomePath;
-  }
-
-  #currentHome(): string | undefined {
-    return this.#isolated ? this.#tempHomePath : this.#home;
-  }
-
-  async #cleanupTempHome(): Promise<void> {
-    const dir = this.#tempHomePath;
-    if (!dir) {
-      return;
-    }
-    this.#tempHomePath = undefined;
-    try {
-      await removeTempHome(dir);
-    } catch {
-      /* best effort; the exit sweeper retries */
-    }
   }
 
   #timeout(cls: TimeoutClass, callTimeout?: number): number | undefined {
@@ -215,18 +173,6 @@ export class ShellUse {
       payload.timeout_ms = timeout;
     }
     return payload;
-  }
-
-  async #checkVersion(home: string | undefined): Promise<void> {
-    if (this.#versionChecked) {
-      return;
-    }
-    const resp = await transport.request(this.session, home, this.#binary, {
-      kind: "status",
-    });
-    const data = unwrap(resp) as { version?: string } | undefined;
-    checkVersion(data?.version);
-    this.#versionChecked = true;
   }
 
   async #guard<T>(operation: string, action: () => Promise<T>): Promise<T> {
@@ -265,15 +211,12 @@ export class ShellUse {
       if (terminal.text !== undefined || terminal.screenshot !== undefined) {
         error.terminal = terminal;
       }
-    } catch {
-      /* best effort; never mask the original error */
-    }
+    } catch {}
   }
 
   async #spawn(payload: Record<string, unknown>, retries: number): Promise<OpenResult> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
-      this.#closed = false;
       try {
         return (await this.send(payload)) as OpenResult;
       } catch (error) {
@@ -327,39 +270,13 @@ export class ShellUse {
   }
 
   async close(): Promise<void> {
-    if (this.#closed) {
-      return;
-    }
-    this.#closed = true;
-    try {
-      if (!this.#isolated || this.#tempHomePath) {
-        const home = this.#currentHome();
-        if (await transport.canConnect(this.session, home)) {
-          const resp = await transport.request(
-            this.session,
-            home,
-            this.#binary,
-            { kind: "close" },
-            false,
-          );
-          unwrap(resp);
-        }
-      }
-    } catch (error) {
-      if (!(error instanceof DaemonError) && !(error instanceof NoSessionError)) {
-        throw error;
-      }
-    } finally {
-      await this.#cleanupTempHome();
-    }
+    unwrap(await this.#runtime.request({ kind: "close" }));
   }
 
   async closeQuiet(): Promise<void> {
     try {
       await this.close();
-    } catch {
-      /* swallow everything; safe for finally blocks */
-    }
+    } catch {}
   }
 
   async type(text: string): Promise<void> {

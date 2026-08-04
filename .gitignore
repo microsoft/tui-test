@@ -1,4 +1,9 @@
 /target
 *.gif
 *.trace
+*.node
 .shell-use/
+bindings/js/target
+bindings/js/native/target
+bindings/python/target
+bindings/python/native/target

@@ -1,14 +1,13 @@
 import asyncio
 import unittest
 
-from shell_use import __version__, _transport, client
+from shell_use import client
 from shell_use._protocol import env_pairs, unwrap
 from shell_use.errors import (
     ExpectationError,
     InternalError,
     NoSessionError,
     UsageError,
-    VersionMismatchError,
 )
 
 
@@ -136,19 +135,6 @@ class ProtocolTests(unittest.TestCase):
         c = CapturingClient("s")
         run(c.wait_command())
         self.assertEqual(c.sent[0], {"kind": "wait_command"})
-
-
-class VersionCheckTests(unittest.TestCase):
-    def test_matching_version_passes(self):
-        client.check_version(__version__)
-
-    def test_mismatched_version_raises(self):
-        with self.assertRaises(VersionMismatchError):
-            client.check_version("9.9.9")
-
-    def test_missing_version_raises(self):
-        with self.assertRaises(VersionMismatchError):
-            client.check_version(None)
 
 
 if __name__ == "__main__":
