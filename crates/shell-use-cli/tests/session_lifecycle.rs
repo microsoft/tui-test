@@ -349,6 +349,14 @@ fn an_unknown_profile_is_rejected() {
 /// A terminal that stays silent leaves them blocked until they time out and
 /// guess, so this drives the whole path: daemon, emulator, and the reply on
 /// its way back up the PTY.
+///
+/// Unix only, because the probe has to put its own terminal in raw mode to
+/// read a reply that arrives without a newline and must not be echoed, and
+/// `termios` does not exist on Windows CPython. The reply itself is not
+/// platform specific: how it is formatted is covered by conformance cases
+/// that run against every backend, and the write that carries it to the child
+/// is the same `pty.write` every `type` and `submit` on Windows already uses.
+#[cfg(unix)]
 #[test]
 fn a_color_query_is_answered_over_the_pty() {
     let sandbox = Sandbox::new("osc-query");
