@@ -12,8 +12,8 @@ use std::fmt::Write;
 
 use super::nerd_font::NerdFont;
 use crate::profile::{ColorSlot, Rgb};
-use crate::terminal::cell::{truncate_to_columns, Attrs, EmuCell};
-use crate::terminal::emu::Emulator;
+use crate::terminal::cell::{truncate_to_columns, Attrs, EmuCell, CONTINUATION};
+use crate::terminal::emu::{CursorShape, Emulator};
 
 const CELL_W: f32 = 10.0;
 const CELL_H: f32 = 21.0;
@@ -142,14 +142,83 @@ fn write_title(out: &mut String, title: &str, width: f32, colors: &dyn Emulator)
     );
 }
 
-/// Render a grid to a standalone SVG document.
+/// How much of a cell the thin cursor shapes cover.
+const CURSOR_THICKNESS: f32 = 2.0;
+
+/// Draw the cursor over the cell it sits on.
 ///
-/// `title` is the window title a program set, drawn in the title bar. `None`
-/// leaves the bar bare, exactly as it was before titles were tracked.
+/// A block is filled and the character redrawn in the cell's background color,
+/// which is how a terminal keeps the character under a block cursor readable.
+/// It is drawn after the text pass so the block covers the first, normally
+/// colored draw of that character.
+fn write_cursor(
+    out: &mut String,
+    rows: &[Vec<EmuCell>],
+    (cx, cy): (u16, usize),
+    colors: &dyn Emulator,
+    nerd_font: &NerdFont,
+) {
+    let Some(row) = rows.get(cy) else {
+        return;
+    };
+    let cell = cell_at(row, cx as usize);
+    // A double-width character stores its second half as a continuation cell,
+    // so the cursor has to cover both or it clips the glyph down the middle.
+    let span = if row
+        .get(cx as usize + 1)
+        .is_some_and(|next| next.ch == CONTINUATION)
+    {
+        2.0
+    } else {
+        1.0
+    };
+    let w = span * CELL_W;
+    let x = MARGIN_X + cx as f32 * CELL_W;
+    let y = HEADER_H + cy as f32 * CELL_H;
+    let fill = hex(colors.color(ColorSlot::Cursor));
+
+    let (rx, ry, rw, rh) = match colors.cursor_shape() {
+        CursorShape::Block => (x, y, w, CELL_H),
+        CursorShape::Underline => (x, y + CELL_H - CURSOR_THICKNESS, w, CURSOR_THICKNESS),
+        CursorShape::Bar => (x, y, CURSOR_THICKNESS, CELL_H),
+    };
+    let _ = write!(
+        out,
+        r#"<rect x="{rx:.2}" y="{ry:.2}" width="{rw:.2}" height="{rh:.2}" fill="{fill}"/>"#
+    );
+
+    if colors.cursor_shape() != CursorShape::Block || cell.ch.trim().is_empty() {
+        return;
+    }
+    // Redraw exactly as the text pass would, so a vector glyph comes back as a
+    // glyph rather than as a character the text font may not even have.
+    let under = hex(bg_of(cell, colors));
+    let (text, run_x_adjust) = nerd_font.prepare_run(&cell.ch, w, CELL_W);
+    if !text.trim().is_empty() {
+        let _ = write!(
+            out,
+            r#"<text x="{x:.2}" y="{baseline:.2}" fill="{under}" textLength="{w:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{esc}</text>"#,
+            baseline = y + FONT_BASELINE,
+            esc = escape(&text),
+        );
+    }
+    for c in cell.ch.chars() {
+        nerd_font.write_use(out, c, (x, y), (CELL_W, CELL_H), run_x_adjust, &under);
+    }
+}
+
+/// Render the grid. `cursor` is where to draw the cursor *within `rows`*, so a
+/// caller passing scrollback has already offset it, and `None` means the
+/// terminal is not showing one. `title` is the window title a program set,
+/// drawn in the title bar, and `None` leaves the bar bare.
+///
+/// Its row is a `usize` because it indexes `rows`, which for a full-history
+/// render is as long as the scrollback and so is not bounded by the screen.
 pub fn render_svg(
     rows: &[Vec<EmuCell>],
     cols: u16,
     colors: &dyn Emulator,
+    cursor: Option<(u16, usize)>,
     title: Option<&str>,
 ) -> String {
     let nerd_font = NerdFont::new(rows, FONT_SIZE);
@@ -260,6 +329,10 @@ pub fn render_svg(
         }
     }
 
+    if let Some(at) = cursor {
+        write_cursor(&mut out, rows, at, colors, &nerd_font);
+    }
+
     out.push_str("</svg>");
     out
 }
@@ -286,6 +359,169 @@ mod tests {
         }
     }
 
+    /// Each shape draws something recognisably different.
+    ///
+    /// A block covers the cell, an underline sits on the bottom edge, and a
+    /// bar on the left, so all three are checked by the rectangle they emit
+    /// rather than by merely appearing.
+    #[test]
+    fn each_cursor_shape_draws_its_own_rectangle() {
+        use crate::terminal::emu::Emulator;
+        let rows = vec![vec![cell("x", None, None)]];
+        let cursor_fill = hex(Profile::default().colors.cursor);
+
+        let mut emu = colors();
+        let block = render_svg(&rows, 1, &emu, Some((0, 0)), None);
+        assert!(
+            block.contains(&format!(
+                r#"width="10.00" height="21.00" fill="{cursor_fill}""#
+            )),
+            "a block covers the whole cell: {block}"
+        );
+
+        emu.process(b"\x1b[4 q");
+        let underline = render_svg(&rows, 1, &emu, Some((0, 0)), None);
+        assert!(
+            underline.contains(&format!(
+                r#"width="10.00" height="2.00" fill="{cursor_fill}""#
+            )),
+            "an underline is a thin full-width bar: {underline}"
+        );
+
+        emu.process(b"\x1b[6 q");
+        let bar = render_svg(&rows, 1, &emu, Some((0, 0)), None);
+        assert!(
+            bar.contains(&format!(
+                r#"width="2.00" height="21.00" fill="{cursor_fill}""#
+            )),
+            "a bar is a thin full-height stripe: {bar}"
+        );
+    }
+
+    /// The character under a block cursor is redrawn in the cell background,
+    /// which is how a terminal keeps it readable rather than hiding it behind
+    /// the block.
+    #[test]
+    fn a_block_cursor_keeps_its_character_readable() {
+        let rows = vec![vec![cell("Z", None, None)]];
+        let svg = render_svg(&rows, 1, &colors(), Some((0, 0)), None);
+        let background = hex(Profile::default().colors.background);
+        assert!(
+            svg.contains(&format!(r#"fill="{background}""#)) && svg.matches(">Z<").count() == 2,
+            "the character is drawn again, in the background color: {svg}"
+        );
+    }
+
+    /// A double-width character keeps both of its halves.
+    ///
+    /// The second half lives in a continuation cell, so a cursor sized to one
+    /// cell would cover half the glyph and redraw it squashed into that half.
+    #[test]
+    fn a_block_cursor_covers_a_double_width_character() {
+        let rows = vec![vec![
+            cell("日", None, None),
+            cell(CONTINUATION, None, None),
+            cell("a", None, None),
+        ]];
+        let svg = render_svg(&rows, 3, &colors(), Some((0, 0)), None);
+        let cursor_fill = hex(Profile::default().colors.cursor);
+        assert!(
+            svg.contains(&format!(
+                r#"width="20.00" height="21.00" fill="{cursor_fill}""#
+            )),
+            "the block spans both halves: {svg}"
+        );
+        assert!(
+            svg.contains(
+                r#"textLength="20.00" lengthAdjust="spacingAndGlyphs" xml:space="preserve">日<"#
+            ),
+            "the redraw is given both halves too, so it is not squashed: {svg}"
+        );
+    }
+
+    /// A vector glyph under a block cursor comes back as a glyph.
+    ///
+    /// Nerd font characters are drawn as `<use>` references and masked out of
+    /// the text run, so redrawing one as text would emit a character the text
+    /// font has no glyph for and the block would simply swallow it.
+    #[test]
+    fn a_block_cursor_redraws_a_vector_glyph() {
+        let rows = vec![vec![cell("\u{f115}", None, None)]];
+        let background = hex(Profile::default().colors.background);
+        let svg = render_svg(&rows, 1, &colors(), Some((0, 0)), None);
+        assert_eq!(
+            svg.matches("<use href=\"#nf-f115\"").count(),
+            2,
+            "the glyph is drawn once normally and once over the block: {svg}"
+        );
+        let in_background = svg
+            .split("<use href=")
+            .skip(1)
+            .filter(|glyph| glyph.contains(&format!(r#"fill="{background}""#)))
+            .count();
+        assert_eq!(
+            in_background, 1,
+            "exactly the redrawn glyph is in the cell background color: {svg}"
+        );
+    }
+
+    /// A row past what a `u16` holds is still drawn on its own line.
+    ///
+    /// A profile can set a scrollback deeper than 65535 rows, and a full
+    /// render is as long as the scrollback. Counting the offset in a `u16`
+    /// wrapped it, which put the cursor on a line that looks plausible and is
+    /// tens of thousands of rows from where the terminal left it.
+    #[test]
+    fn a_cursor_below_the_u16_mark_keeps_its_row() {
+        let row = 70_000usize;
+        let rows = vec![vec![cell("x", None, None)]; row + 1];
+        let svg = render_svg(&rows, 1, &colors(), Some((0, row)), None);
+        let expected = HEADER_H + row as f32 * CELL_H;
+        assert!(
+            svg.contains(&format!(r#"<rect x="15.00" y="{expected:.2}""#)),
+            "the cursor sits on row {row}, not on a wrapped one"
+        );
+    }
+
+    /// No cursor is drawn when the caller says the terminal is not showing
+    /// one, and an out-of-range position is ignored rather than panicking.
+    #[test]
+    fn a_hidden_or_out_of_range_cursor_draws_nothing() {
+        use crate::terminal::emu::Emulator;
+        let rows = vec![vec![cell("x", None, None)]];
+        // A color nothing else in the image uses, so finding it can only mean
+        // the cursor was drawn. The default cursor color is the foreground,
+        // which the text itself is painted with.
+        let mut emu = colors();
+        emu.process(b"\x1b]12;#ff00ff\x07");
+
+        assert!(
+            render_svg(&rows, 1, &emu, Some((0, 0)), None).contains("#ff00ff"),
+            "the cursor is drawn when there is one to draw"
+        );
+        assert!(
+            !render_svg(&rows, 1, &emu, None, None).contains("#ff00ff"),
+            "a terminal not showing a cursor gets none"
+        );
+        // A row past the end of the grid: reachable if a caller miscounts the
+        // scrollback offset, and not worth a panic.
+        assert!(
+            !render_svg(&rows, 1, &emu, Some((0, 9)), None).contains("#ff00ff"),
+            "an out-of-range position is ignored"
+        );
+    }
+
+    /// The cursor is painted in the color `OSC 12` sets, like every other
+    /// color the terminal shows.
+    #[test]
+    fn the_cursor_follows_a_color_a_program_set() {
+        use crate::terminal::emu::Emulator;
+        let rows = vec![vec![cell("x", None, None)]];
+        let mut emu = colors();
+        emu.process(b"\x1b]12;#ff00ff\x07");
+        assert!(render_svg(&rows, 1, &emu, Some((0, 0)), None).contains("#ff00ff"));
+    }
+
     /// A program that repaints the terminal repaints the screenshot.
     ///
     /// The renderer draws what the terminal is currently showing, not what it
@@ -298,14 +534,14 @@ mod tests {
         let mut emu = colors();
         let rows = vec![vec![cell("x", Some(Color::from_index(1)), None)]];
 
-        let before = render_svg(&rows, 1, &emu, None);
+        let before = render_svg(&rows, 1, &emu, None, None);
         assert!(before.contains(&hex(Profile::default().colors.red)));
         assert!(before.contains(&hex(Profile::default().colors.background)));
 
         // The program picks its own background and recolors palette slot 1.
         emu.process(b"\x1b]11;#3b0764\x07\x1b]4;1;#22c55e\x07");
 
-        let after = render_svg(&rows, 1, &emu, None);
+        let after = render_svg(&rows, 1, &emu, None, None);
         assert!(
             after.contains("#3b0764"),
             "the window is painted with the background the program set"
@@ -330,7 +566,7 @@ mod tests {
         emu.process(b"\x1b]11;#3b0764\x07\x1b]4;1;#22c55e\x07");
         emu.process(b"\x1b]111\x07\x1b]104;1\x07");
 
-        let after = render_svg(&rows, 1, &emu, None);
+        let after = render_svg(&rows, 1, &emu, None, None);
         assert!(after.contains(&hex(Profile::default().colors.background)));
         assert!(after.contains(&hex(Profile::default().colors.red)));
     }
@@ -341,7 +577,7 @@ mod tests {
             cell("h", Some(Color::from_index(1)), None),
             cell("i", Some(Color::from_index(1)), None),
         ]];
-        let svg = render_svg(&rows, 2, &colors(), None);
+        let svg = render_svg(&rows, 2, &colors(), None, None);
         assert!(svg.starts_with("<svg"));
         assert!(svg.ends_with("</svg>"));
         assert!(svg.contains("textLength"));
@@ -356,7 +592,7 @@ mod tests {
 
     #[test]
     fn emits_window_chrome() {
-        let svg = render_svg(&[vec![cell(" ", None, None)]], 1, &colors(), None);
+        let svg = render_svg(&[vec![cell(" ", None, None)]], 1, &colors(), None, None);
         assert!(svg.contains("<circle"));
         assert!(svg.contains("#ff5f56"));
         assert!(svg.contains("#ffbd2e"));
@@ -365,7 +601,7 @@ mod tests {
 
     #[test]
     fn centers_the_text_font_box_in_each_cell() {
-        let svg = render_svg(&[vec![cell("x", None, None)]], 1, &colors(), None);
+        let svg = render_svg(&[vec![cell("x", None, None)]], 1, &colors(), None, None);
         let expected_baseline = HEADER_H + FONT_BASELINE;
         assert!(svg.contains(&format!(r#"y="{expected_baseline:.2}""#)));
     }
@@ -373,7 +609,7 @@ mod tests {
     #[test]
     fn escapes_markup_characters() {
         let rows = vec![vec![cell("<", None, None)]];
-        let svg = render_svg(&rows, 1, &colors(), None);
+        let svg = render_svg(&rows, 1, &colors(), None, None);
         assert!(svg.contains("&lt;"));
         assert!(!svg.contains("><</text>"));
     }
@@ -381,7 +617,7 @@ mod tests {
     #[test]
     fn background_run_emitted_for_non_default_bg() {
         let rows = vec![vec![cell(" ", None, Some(Color::from_index(4)))]];
-        let svg = render_svg(&rows, 1, &colors(), None);
+        let svg = render_svg(&rows, 1, &colors(), None, None);
         assert!(
             svg.contains(&hex(colors().color(ColorSlot::Indexed(4)))),
             "slot 4 is painted with the profile color"
@@ -396,7 +632,7 @@ mod tests {
             cell(glyph, None, None),
             cell("b", None, None),
         ]];
-        let svg = render_svg(&rows, 3, &colors(), None);
+        let svg = render_svg(&rows, 3, &colors(), None, None);
 
         assert!(svg.contains(r#"<path id="nf-f115" d=""#));
         assert!(svg.contains(r##"<use href="#nf-f115""##));
@@ -413,6 +649,7 @@ mod tests {
             2,
             &colors(),
             None,
+            None,
         );
 
         assert_eq!(svg.matches(r#"<path id="nf-f115""#).count(), 1);
@@ -422,7 +659,7 @@ mod tests {
     #[test]
     fn leaves_unknown_private_use_glyphs_as_text() {
         let glyph = "\u{10fffd}";
-        let svg = render_svg(&[vec![cell(glyph, None, None)]], 1, &colors(), None);
+        let svg = render_svg(&[vec![cell(glyph, None, None)]], 1, &colors(), None, None);
 
         assert!(svg.contains(glyph));
         assert!(!svg.contains("<defs>"));
@@ -435,8 +672,8 @@ mod tests {
     #[test]
     fn draws_the_window_title_centred_in_the_bar() {
         let rows = vec![vec![cell("x", None, None); 40]];
-        let bare = render_svg(&rows, 40, &colors(), None);
-        let titled = render_svg(&rows, 40, &colors(), Some("vim: notes.md"));
+        let bare = render_svg(&rows, 40, &colors(), None, None);
+        let titled = render_svg(&rows, 40, &colors(), None, Some("vim: notes.md"));
 
         assert!(
             !bare.contains("text-anchor=\"middle\""),
@@ -459,7 +696,7 @@ mod tests {
     fn truncates_a_title_that_does_not_fit() {
         let rows = vec![vec![cell("x", None, None); 20]];
         let long = "a-very-long-window-title-that-cannot-possibly-fit";
-        let svg = render_svg(&rows, 20, &colors(), Some(long));
+        let svg = render_svg(&rows, 20, &colors(), None, Some(long));
 
         assert!(!svg.contains(long), "the full title cannot have been drawn");
         let drawn = svg
@@ -480,7 +717,7 @@ mod tests {
     #[test]
     fn budgets_a_wide_glyph_title_by_column() {
         let rows = vec![vec![cell("x", None, None); 24]];
-        let svg = render_svg(&rows, 24, &colors(), Some(&"你".repeat(40)));
+        let svg = render_svg(&rows, 24, &colors(), None, Some(&"你".repeat(40)));
         let drawn = svg
             .split("text-anchor=\"middle\" xml:space=\"preserve\">")
             .nth(1)
@@ -508,7 +745,13 @@ mod tests {
     #[test]
     fn escapes_markup_in_the_title() {
         let rows = vec![vec![cell("x", None, None); 40]];
-        let svg = render_svg(&rows, 40, &colors(), Some("</text><script>x</script>"));
+        let svg = render_svg(
+            &rows,
+            40,
+            &colors(),
+            None,
+            Some("</text><script>x</script>"),
+        );
 
         assert!(!svg.contains("<script>"), "no injected element: {svg}");
         assert!(

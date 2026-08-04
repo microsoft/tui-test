@@ -1351,6 +1351,27 @@ fn do_snapshot(
     }
 }
 
+/// Where to draw the cursor within `rows`, or `None` when the terminal is not
+/// showing one.
+///
+/// `Emulator::cursor` is relative to the visible screen, so a full screenshot
+/// has to push it down past the scrollback that precedes it.
+fn cursor_in(
+    rows: &[Vec<EmuCell>],
+    emu: &dyn crate::terminal::emu::Emulator,
+) -> Option<(u16, usize)> {
+    if !emu.cursor_visible() {
+        return None;
+    }
+    let (x, y) = emu.cursor();
+    let (_, screen) = emu.size();
+    // Counted in `usize`: a full render is as long as the scrollback, which a
+    // profile can set past what a `u16` row would hold, and a wrapped offset
+    // draws the cursor on a plausible but wrong line.
+    let history = rows.len().saturating_sub(screen as usize);
+    Some((x, history + y as usize))
+}
+
 fn screenshot(
     session: &TerminalSession,
     full: bool,
@@ -1359,17 +1380,19 @@ fn screenshot(
     let (rows, title) = grid_with_title(session, full, true);
     match path {
         Some(path) => {
+            let state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let emu = state.emu.as_ref();
             let svg = crate::render::svg::render_svg(
                 &rows,
                 session.cols,
-                session
-                    .state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .emu
-                    .as_ref(),
+                emu,
+                cursor_in(&rows, emu),
                 title.as_deref(),
             );
+            drop(state);
             std::fs::write(&path, svg)
                 .map_err(|error| ShellUseError::internal(error.to_string()))?;
             Ok(ScreenshotResult::Path(path))
