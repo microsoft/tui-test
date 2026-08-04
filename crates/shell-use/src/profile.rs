@@ -201,34 +201,20 @@ impl Colors {
             _ => xterm_color(index),
         }
     }
-
-    /// The color a slot shows when no program has overridden it.
-    ///
-    /// This is what a backend falls back to: `slot` is a palette index, or one
-    /// of [`FOREGROUND`], [`BACKGROUND`], [`CURSOR`], matching how `OSC 4` and
-    /// `OSC 10/11/12` address them.
-    pub fn color(&self, slot: usize) -> Rgb {
-        match slot {
-            FOREGROUND => self.foreground,
-            BACKGROUND => self.background,
-            CURSOR => self.cursor,
-            index if index < FOREGROUND => self.rgb(index as u8),
-            // Above the addressable range there is nothing sensible to report;
-            // the foreground is the least surprising answer.
-            _ => self.foreground,
-        }
-    }
 }
 
-/// Where the three dynamic colors sit when a color slot is addressed by
-/// number.
+/// A color a program can address.
 ///
-/// The numbering is not ours: `OSC 4` addresses the 256-color palette, and
-/// `OSC 10/11/12` address the three colors after it. Both emulators already
-/// index their tables this way, so a backend reads its own state directly.
-pub const FOREGROUND: usize = 256;
-pub const BACKGROUND: usize = 257;
-pub const CURSOR: usize = 258;
+/// `OSC 4` names a palette entry and `OSC 10/11/12` name the three defaults.
+/// Emulators number these however they like internally, so each backend
+/// translates its own layout and that numbering never reaches here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorSlot {
+    Indexed(u8),
+    Foreground,
+    Background,
+    Cursor,
+}
 
 /// The xterm 256-color table, which is the same in every terminal.
 ///
@@ -498,19 +484,6 @@ mod tests {
             );
         }
         assert_eq!(Colors::slot_name(16), None, "only 0-15 are configurable");
-    }
-
-    /// Every slot a program can address resolves, so a backend always has a
-    /// color to fall back to and a query always has an answer.
-    #[test]
-    fn every_addressable_slot_resolves() {
-        let c = Colors::default();
-        for index in 0u8..=255 {
-            assert_eq!(c.color(index as usize), c.rgb(index), "slot {index}");
-        }
-        assert_eq!(c.color(FOREGROUND), c.foreground);
-        assert_eq!(c.color(BACKGROUND), c.background);
-        assert_eq!(c.color(CURSOR), c.cursor);
     }
 
     /// The 16 configurable slots come from the profile; the rest come from the

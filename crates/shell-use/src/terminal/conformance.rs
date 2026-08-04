@@ -635,7 +635,7 @@ macro_rules! emulator_conformance_tests {
                 ..Default::default()
             };
             let mut e = conformance_emu_with(10, 4, profile);
-            let background = $crate::profile::BACKGROUND;
+            let background = $crate::profile::ColorSlot::Background;
             assert_eq!(e.color(background), configured);
 
             e.process(b"\x1b]11;#654321\x07");
@@ -654,9 +654,15 @@ macro_rules! emulator_conformance_tests {
 
             // The same for a palette entry, which resets with OSC 104.
             e.process(b"\x1b]4;2;#010203\x07");
-            assert_eq!(e.color(2), Rgb::new(1, 2, 3));
+            assert_eq!(
+                e.color($crate::profile::ColorSlot::Indexed(2)),
+                Rgb::new(1, 2, 3)
+            );
             e.process(b"\x1b]104;2\x07");
-            assert_eq!(e.color(2), Colors::default().green);
+            assert_eq!(
+                e.color($crate::profile::ColorSlot::Indexed(2)),
+                Colors::default().green
+            );
         }
 
         /// An unconfigured palette entry still answers, from the table the
@@ -666,11 +672,15 @@ macro_rules! emulator_conformance_tests {
             use $crate::profile::Rgb;
             let e = conformance_emu(10, 4, 100);
             assert_eq!(
-                e.color(196),
+                e.color($crate::profile::ColorSlot::Indexed(196)),
                 Rgb::new(255, 0, 0),
                 "index 196 is pure red in the xterm color cube"
             );
-            assert_eq!(e.color(232), Rgb::new(8, 8, 8), "the gray ramp starts at 8");
+            assert_eq!(
+                e.color($crate::profile::ColorSlot::Indexed(232)),
+                Rgb::new(8, 8, 8),
+                "the gray ramp starts at 8"
+            );
         }
 
         /// A cell records which slot it chose, never a color, so what it

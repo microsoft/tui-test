@@ -216,7 +216,7 @@ pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, colors: &dyn Emulator) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::Profile;
+    use crate::profile::{ColorSlot, Profile};
     use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::cell::Color;
 
@@ -246,7 +246,7 @@ mod tests {
         assert!(svg.ends_with("</svg>"));
         assert!(svg.contains("textLength"));
         assert!(
-            svg.contains(&hex(colors().color(1))),
+            svg.contains(&hex(colors().color(ColorSlot::Indexed(1)))),
             "slot 1 is painted with the profile color"
         );
         assert!(svg.contains(">hi</text>"));
@@ -283,7 +283,7 @@ mod tests {
         let rows = vec![vec![cell(" ", None, Some(Color::from_index(4)))]];
         let svg = render_svg(&rows, 1, &colors());
         assert!(
-            svg.contains(&hex(colors().color(4))),
+            svg.contains(&hex(colors().color(ColorSlot::Indexed(4)))),
             "slot 4 is painted with the profile color"
         );
     }

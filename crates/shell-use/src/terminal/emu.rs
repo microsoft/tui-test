@@ -10,7 +10,7 @@
 //! identical shell-integration behavior by construction rather than by
 //! reimplementation.
 
-use crate::profile::Rgb;
+use crate::profile::{ColorSlot, Rgb};
 use crate::terminal::cell::{Color, EmuCell};
 
 /// A headless terminal emulator: bytes in, cell grid out.
@@ -56,9 +56,7 @@ pub trait Emulator: Send {
     /// same colors, so a screenshot and `expect --fg/--bg` agree with what a
     /// program was told.
     ///
-    /// `slot` is a palette index, or one of [`crate::profile::FOREGROUND`],
-    /// [`crate::profile::BACKGROUND`], [`crate::profile::CURSOR`].
-    fn color(&self, slot: usize) -> Rgb;
+    fn color(&self, slot: ColorSlot) -> Rgb;
 
     /// Resolve a cell's color, where `None` is the terminal default.
     ///
@@ -68,12 +66,12 @@ pub trait Emulator: Send {
     fn resolve(&self, color: Option<Color>, is_fg: bool) -> Rgb {
         match color {
             None => self.color(if is_fg {
-                crate::profile::FOREGROUND
+                ColorSlot::Foreground
             } else {
-                crate::profile::BACKGROUND
+                ColorSlot::Background
             }),
-            Some(Color::Named(n)) => self.color(n.index() as usize),
-            Some(Color::Idx(i)) => self.color(i as usize),
+            Some(Color::Named(n)) => self.color(ColorSlot::Indexed(n.index())),
+            Some(Color::Idx(i)) => self.color(ColorSlot::Indexed(i)),
             Some(Color::Rgb(r, g, b)) => Rgb::new(r, g, b),
         }
     }

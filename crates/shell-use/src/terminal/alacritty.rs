@@ -12,11 +12,12 @@ use alacritty_terminal::term::cell::Flags as AlacFlags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config as AlacConfig, Term};
 use alacritty_terminal::vte::ansi;
+use alacritty_terminal::vte::ansi::NamedColor;
 use alacritty_terminal::vte::ansi::Rgb as AlacRgb;
 
 use compact_str::{CompactString, ToCompactString};
 
-use crate::profile::{Profile, Rgb};
+use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::Emulator;
 
@@ -198,7 +199,13 @@ impl AlacrittyEmu {
         }
         let replies: String = parked
             .into_iter()
-            .map(|(slot, format)| {
+            .map(|(index, format)| {
+                let slot = match index {
+                    i if i == NamedColor::Foreground as usize => ColorSlot::Foreground,
+                    i if i == NamedColor::Background as usize => ColorSlot::Background,
+                    i if i == NamedColor::Cursor as usize => ColorSlot::Cursor,
+                    i => ColorSlot::Indexed(i as u8),
+                };
                 let c = self.color(slot);
                 format(AlacRgb {
                     r: c.r,
@@ -254,11 +261,30 @@ impl Emulator for AlacrittyEmu {
     }
 
     /// alacritty stores only what a program set, leaving every other slot
-    /// empty, so an empty slot means the profile's color still shows through.
-    fn color(&self, slot: usize) -> Rgb {
-        match self.term.colors()[slot] {
+    /// empty, so an empty slot falls through to the profile, and then to the
+    /// xterm table for an index the profile does not name.
+    ///
+    /// The indices are alacritty's own: it lays its table out as the
+    /// 256-color palette followed by the dynamic colors, which is why the
+    /// three are 256, 257, 258. That layout stops here.
+    fn color(&self, slot: ColorSlot) -> Rgb {
+        let colors = &self.profile.colors;
+        let (index, configured) = match slot {
+            ColorSlot::Indexed(index) => (
+                index as usize,
+                colors
+                    .ansi()
+                    .get(index as usize)
+                    .copied()
+                    .unwrap_or_else(|| xterm_color(index)),
+            ),
+            ColorSlot::Foreground => (NamedColor::Foreground as usize, colors.foreground),
+            ColorSlot::Background => (NamedColor::Background as usize, colors.background),
+            ColorSlot::Cursor => (NamedColor::Cursor as usize, colors.cursor),
+        };
+        match self.term.colors()[index] {
             Some(set) => Rgb::new(set.r, set.g, set.b),
-            None => self.profile.colors.color(slot),
+            None => configured,
         }
     }
 
@@ -287,4 +313,54 @@ mod tests {
     use super::*;
 
     crate::emulator_conformance_tests!(|c, r, p| Box::new(AlacrittyEmu::new(c, r, p)));
+
+    /// Every slot a program can address resolves, so a query always has an
+    /// answer and a reset always has something to restore. The profile names
+    /// sixteen; everything above falls through to the xterm table.
+    #[test]
+    fn every_slot_resolves_through_the_profile_then_xterm() {
+        use crate::profile::{Colors, Rgb};
+        let profile = Profile {
+            colors: Colors {
+                red: Rgb::new(1, 2, 3),
+                background: Rgb::new(4, 5, 6),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let emu = AlacrittyEmu::new(10, 2, &profile);
+
+        assert_eq!(
+            emu.color(ColorSlot::Indexed(1)),
+            Rgb::new(1, 2, 3),
+            "the profile names slot 1"
+        );
+        assert_eq!(emu.color(ColorSlot::Background), Rgb::new(4, 5, 6));
+        assert_eq!(
+            emu.color(ColorSlot::Foreground),
+            Colors::default().foreground,
+            "an unset profile color keeps its default"
+        );
+        for index in 16u8..=255 {
+            assert_eq!(
+                emu.color(ColorSlot::Indexed(index)),
+                xterm_color(index),
+                "slot {index} is not the profile's to name"
+            );
+        }
+    }
+
+    /// A program's color outranks the profile until it is reset, at which
+    /// point the profile shows through again.
+    #[test]
+    fn a_program_color_outranks_the_profile_until_reset() {
+        let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        let configured = emu.color(ColorSlot::Background);
+
+        emu.process(b"\x1b]11;#123456\x07");
+        assert_eq!(emu.color(ColorSlot::Background), Rgb::new(0x12, 0x34, 0x56));
+
+        emu.process(b"\x1b]111\x07");
+        assert_eq!(emu.color(ColorSlot::Background), configured);
+    }
 }
