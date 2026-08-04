@@ -1,7 +1,7 @@
 //! Color parsing and comparison for `expect --fg/--bg`.
 
 use super::super::terminal::cell::Color;
-use crate::profile::Colors;
+use crate::terminal::emu::Emulator;
 
 /// The spelling of [`Expected::Default`], on the command line and in messages.
 pub const DEFAULT: &str = "default";
@@ -74,7 +74,7 @@ fn parse_hex(hex: &str) -> anyhow::Result<(u8, u8, u8)> {
 /// the screenshot renderer draws with. These used to be two separate hardcoded
 /// tables that disagreed on every ANSI slot, so `expect --fg "#800000"` passed
 /// on a cell a screenshot painted `#e88388`.
-pub fn matches(cell: Option<Color>, expected: &Expected, colors: &Colors) -> bool {
+pub fn matches(cell: Option<Color>, expected: &Expected, colors: &dyn Emulator) -> bool {
     let Some(cell) = cell else {
         return matches!(expected, Expected::Default);
     };
@@ -89,7 +89,7 @@ pub fn matches(cell: Option<Color>, expected: &Expected, colors: &Colors) -> boo
 }
 
 /// Render a cell's color in the same space as the expected value, for messages.
-pub fn describe_cell(cell: Option<Color>, expected: &Expected, colors: &Colors) -> String {
+pub fn describe_cell(cell: Option<Color>, expected: &Expected, colors: &dyn Emulator) -> String {
     let Some(cell) = cell else {
         return DEFAULT.to_string();
     };
@@ -124,7 +124,23 @@ pub fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profile::{Colors, Profile};
+    use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::cell::Color;
+    use crate::terminal::emu::Emulator;
+
+    /// A real emulator, so these exercise the same resolution path a session
+    /// uses rather than a stand-in that could drift from it.
+    fn emu_with(colors: Colors) -> AlacrittyEmu {
+        AlacrittyEmu::new(
+            10,
+            2,
+            &Profile {
+                colors,
+                ..Default::default()
+            },
+        )
+    }
 
     #[test]
     fn parse_forms() {
@@ -144,7 +160,7 @@ mod tests {
 
     #[test]
     fn matches_palette_and_default() {
-        let c = Colors::default();
+        let c = emu_with(Colors::default());
         let idx = |i| Some(Color::from_index(i));
         assert!(matches(idx(9), &Expected::Ansi256(9), &c));
         assert!(!matches(idx(2), &Expected::Ansi256(9), &c));
@@ -161,7 +177,7 @@ mod tests {
     /// `default` keyword, which is the way to assert on it.
     #[test]
     fn default_color_matches_only_default() {
-        let c = Colors::default();
+        let c = emu_with(Colors::default());
         assert!(!matches(None, &Expected::Ansi256(0), &c));
         assert!(!matches(None, &Expected::Hex(0, 0, 0), &c));
         assert!(matches(None, &Expected::Default, &c));
@@ -170,7 +186,7 @@ mod tests {
 
     #[test]
     fn a_colored_cell_is_not_default() {
-        let c = Colors::default();
+        let c = emu_with(Colors::default());
         let red = Some(Color::from_index(1));
         assert!(!matches(red, &Expected::Default, &c));
         assert!(matches(red, &Expected::Ansi256(1), &c));
@@ -190,7 +206,7 @@ mod tests {
     /// value for every slot, because both come from the profile.
     #[test]
     fn an_assertion_matches_the_color_a_screenshot_paints() {
-        let colors = Colors::default();
+        let colors = emu_with(Colors::default());
         for index in 0u8..=255 {
             let cell = Some(Color::from_index(index));
             let painted = colors.resolve(cell, true);
@@ -206,14 +222,62 @@ mod tests {
         }
     }
 
+    /// An assertion compares against what the terminal is *currently*
+    /// showing, so a program that recolors a slot changes what matches.
+    ///
+    /// This is the other half of the screenshot test: both read the same
+    /// state, so a colour a screenshot paints is a colour an assertion
+    /// matches, at every point in a session rather than only at the start.
+    #[test]
+    fn an_assertion_follows_a_color_a_program_set() {
+        use crate::terminal::emu::Emulator;
+        let mut emu = emu_with(Colors::default());
+        let red = Some(Color::from_index(1));
+        let configured = Colors::default().red;
+
+        assert!(matches(
+            red,
+            &Expected::Hex(configured.r, configured.g, configured.b),
+            &emu
+        ));
+
+        emu.process(b"\x1b]4;1;#22c55e\x07");
+        assert!(
+            matches(red, &Expected::Hex(0x22, 0xc5, 0x5e), &emu),
+            "the assertion follows the colour the program set"
+        );
+        assert!(
+            !matches(
+                red,
+                &Expected::Hex(configured.r, configured.g, configured.b),
+                &emu
+            ),
+            "the configured colour is no longer what slot 1 shows"
+        );
+        assert!(
+            matches(red, &Expected::Ansi256(1), &emu),
+            "the index is unaffected: it names a slot, not a colour"
+        );
+
+        emu.process(b"\x1b]104;1\x07");
+        assert!(
+            matches(
+                red,
+                &Expected::Hex(configured.r, configured.g, configured.b),
+                &emu
+            ),
+            "a reset restores the configured colour"
+        );
+    }
+
     /// A profile's palette is what an assertion compares against, so two
     /// profiles genuinely disagree rather than sharing one hardcoded table.
     #[test]
     fn a_recolored_profile_moves_what_an_assertion_matches() {
-        let colors = Colors {
+        let colors = emu_with(Colors {
             red: crate::profile::Rgb::new(1, 2, 3),
             ..Default::default()
-        };
+        });
         let red = Some(Color::from_index(1));
         assert!(matches(red, &Expected::Hex(1, 2, 3), &colors));
         assert!(!matches(red, &Expected::Hex(128, 0, 0), &colors));
