@@ -387,8 +387,17 @@ jobs:
             artifacts/*
 
   smoke-node:
+    name: Smoke Node (${{ matrix.name }})
     needs: package-node
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Node 20
+            version: "20"
+          - name: Node current
+            version: "node"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -401,14 +410,23 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: ${{ matrix.version }}
 
-      - name: Install packed root and platform packages
+      - name: Smoke packed root and platform packages without the CLI
         run: node .github/scripts/release/smoke-node.mjs
 
   smoke-python:
+    name: Smoke Python (${{ matrix.name }})
     needs: build-python
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Python 3.8
+            version: "3.8"
+          - name: Python current
+            version: "3.14"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -421,7 +439,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.version }}
 
-      - name: Install built wheel
+      - name: Smoke the built abi3 wheel without the CLI
         run: python .github/scripts/release/smoke-python.py

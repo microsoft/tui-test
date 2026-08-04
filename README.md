@@ -257,6 +257,8 @@ Watch a live session in a second terminal while an agent drives it. Both share
 the same daemon. `monitor` takes over an alternate screen and streams the
 session in full color at ~20fps; press `q`, `Esc`, or `Ctrl-C` to detach.
 
+In-process Python and Node sessions cannot be monitored from another process.
+
 https://github.com/user-attachments/assets/741c985f-7861-41c5-9ceb-0f82f705b43f
 
 | Command   | Description                                                                       |

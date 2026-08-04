@@ -1,21 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ExpectationError, ShellUse, uniqueSession } from "../dist/index.js";
-import { resolveTimeout, timeoutsPayload } from "../dist/config.js";
-import { envPairs } from "../dist/protocol.js";
+import {
+  ExpectationError,
+  ShellUse,
+  UsageError,
+  uniqueSession,
+} from "../dist/index.js";
+import {
+  envPairs,
+  resolveTimeout,
+  timeoutsPayload,
+} from "../dist/config.js";
+import { NativeRuntime } from "../dist/native.js";
 
-class CapturingClient extends ShellUse {
-  constructor(...args) {
-    super(...args);
-    this.sent = [];
-    this.reply = undefined;
-  }
-  async send(payload) {
-    this.sent.push(payload);
-    return this.reply;
-  }
-}
+const shell = process.platform === "win32" ? "pwsh" : undefined;
+const evalArgs =
+  typeof globalThis.Deno === "undefined"
+    ? ["-e", "console.log('ready'); setInterval(() => {}, 1000)"]
+    : ["eval", "console.log('ready'); setInterval(() => {}, 1000)"];
 
 const ALL_TIMEOUT_ENV_VARS = [
   "SHELL_USE_TIMEOUT_MS",
@@ -54,38 +57,30 @@ function withEnv(vars, fn) {
 
 test("resolveTimeout returns undefined when nothing is configured", () => {
   for (const cls of CLASSES) {
-    assert.equal(resolveTimeout(cls), undefined, `expected ${cls} -> undefined`);
-    assert.equal(resolveTimeout(cls, undefined, {}), undefined);
+    assert.equal(resolveTimeout(cls), undefined);
     assert.equal(resolveTimeout(cls, undefined, { timeouts: {} }), undefined);
   }
 });
 
-test("resolveTimeout precedence: per-call beats timeouts[class] beats omitted", () => {
+test("resolveTimeout precedence is per-call then client class", () => {
   assert.equal(resolveTimeout("text", 111, { timeouts: { text: 333 } }), 111);
   assert.equal(resolveTimeout("text", undefined, { timeouts: { text: 333 } }), 333);
   assert.equal(resolveTimeout("text", undefined, { timeouts: { idle: 333 } }), undefined);
+  assert.equal(resolveTimeout("text", 0), 0);
 });
 
-test("resolveTimeout never reads an environment variable (engine owns ranks 3-5)", () => {
+test("resolveTimeout leaves environment fallback to the engine", () => {
   const vars = Object.fromEntries(ALL_TIMEOUT_ENV_VARS.map((name) => [name, "1234"]));
   withEnv(vars, () => {
     for (const cls of CLASSES) {
-      assert.equal(resolveTimeout(cls), undefined, `expected ${cls} to ignore env`);
+      assert.equal(resolveTimeout(cls), undefined);
     }
   });
 });
 
-test("resolveTimeout honours an explicit zero per-call timeout", () => {
-  assert.equal(resolveTimeout("text", 0), 0);
-});
-
-test("timeoutsPayload is undefined when empty so the field is omitted", () => {
+test("timeoutsPayload omits empty values and keeps known classes", () => {
   assert.equal(timeoutsPayload(undefined), undefined);
   assert.equal(timeoutsPayload({}), undefined);
-  assert.equal(timeoutsPayload({ text: undefined, ready: undefined }), undefined);
-});
-
-test("timeoutsPayload keeps only the classes that are set", () => {
   assert.deepEqual(timeoutsPayload({ text: 1000, command: 2000 }), {
     text: 1000,
     command: 2000,
@@ -93,151 +88,165 @@ test("timeoutsPayload keeps only the classes that are set", () => {
   assert.deepEqual(timeoutsPayload({ ready: 45000 }), { ready: 45000 });
 });
 
-test("wait/expect omit timeout_ms when no client timeout is configured", async () => {
-  const c = new CapturingClient("s");
-  await c.waitText("x");
-  await c.waitIdle();
-  await c.waitCommand();
-  await c.waitExit();
-  await c.waitReady();
-  await c.expectText("x");
-  await c.expectExitCode(0);
-  for (const payload of c.sent) {
-    assert.ok(
-      !Object.prototype.hasOwnProperty.call(payload, "timeout_ms"),
-      `${payload.kind} should omit timeout_ms`,
-    );
-  }
-});
-
-test("client-level timeouts are sent as an explicit timeout_ms per class", async () => {
-  const c = new CapturingClient("s", {
-    timeouts: { text: 1000, idle: 2000, command: 3000, exit: 4000, ready: 5000 },
-  });
-  await c.waitText("x");
-  await c.waitIdle();
-  await c.waitCommand();
-  await c.waitExit();
-  await c.waitReady();
-  await c.expectText("x");
-  await c.expectExitCode(0);
-  const byKind = Object.fromEntries(c.sent.map((p) => [p.kind, p.timeout_ms]));
-  assert.deepEqual(byKind, {
-    wait_text: 1000,
-    wait_idle: 2000,
-    wait_command: 3000,
-    wait_exit: 4000,
-    wait_ready: 5000,
-    expect_text: 1000, // expectText resolves through the `text` class
-    expect_exit_code: 3000, // expectExitCode resolves through the `command` class
-  });
-});
-
-test("a per-call timeout beats the client-level class default", async () => {
-  const c = new CapturingClient("s", { timeouts: { text: 1000, command: 9000 } });
-  await c.waitText("x", { timeout: 50 });
-  await c.expectExitCode(0, { timeout: 75 });
-  assert.equal(c.sent[0].timeout_ms, 50);
-  assert.equal(c.sent[1].timeout_ms, 75);
-});
-
-test("expectExitCode sends a timeout only when given one", async () => {
-  const c = new CapturingClient("s");
-  await c.expectExitCode(0);
-  assert.deepEqual(c.sent[0], { kind: "expect_exit_code", code: 0 });
-  await c.expectExitCode(1, { timeout: 250 });
-  assert.deepEqual(c.sent[1], { kind: "expect_exit_code", code: 1, timeout_ms: 250 });
-});
-
-test("open omits the timeouts object when no session defaults are set", async () => {
-  const c = new CapturingClient("s");
-  await c.open();
-  assert.ok(
-    !Object.prototype.hasOwnProperty.call(c.sent[0], "timeouts"),
-    "open should omit an empty timeouts object",
-  );
-});
-
-test("open seeds only the session-default classes that are set", async () => {
-  const c = new CapturingClient("s");
-  await c.open({ timeouts: { command: 60000, ready: 45000 } });
-  assert.deepEqual(c.sent[0].timeouts, { command: 60000, ready: 45000 });
-});
-
-test("run seeds session-default timeouts too", async () => {
-  const c = new CapturingClient("s");
-  await c.run("vim", [], { timeouts: { text: 1500 } });
-  assert.deepEqual(c.sent[0].timeouts, { text: 1500 });
-});
-
-test("envPairs coerces record values to strings", () => {
+test("envPairs coerces records and preserves pair arrays", () => {
   assert.deepEqual(envPairs({ A: "1", B: 2, C: true, D: false }), [
     ["A", "1"],
     ["B", "2"],
     ["C", "true"],
     ["D", "false"],
   ]);
-});
-
-test("envPairs passes array form through and handles empty input", () => {
   assert.deepEqual(envPairs([["X", "Y"]]), [["X", "Y"]]);
   assert.deepEqual(envPairs(), []);
 });
 
-test("close is idempotent and needs no prior open", async () => {
-  const su = new ShellUse(uniqueSession("close-idempotency"));
-  await su.close();
-  await su.close();
+test("unknown timeout classes are rejected before native dispatch", async () => {
+  assert.throws(() => timeoutsPayload({ comand: 100 }), /comand/);
+  assert.throws(() => new ShellUse("s", { timeouts: { txt: 100 } }), /txt/);
+  const su = new ShellUse(uniqueSession("bad-open-timeout"));
+  await assert.rejects(() => su.open({ timeouts: { txt: 100 } }), /txt/);
   await su.closeQuiet();
 });
 
-test("an ephemeral client closes cleanly without ever opening", async () => {
+test("session timeout defaults are visible in typed state", async () => {
+  const su = new ShellUse(uniqueSession("typed-timeouts"));
+  try {
+    await su.open({
+      shell,
+      timeouts: { text: 1234, idle: 2345, command: 3456, exit: 4567, ready: 5678 },
+    });
+    assert.deepEqual((await su.state()).timeouts, {
+      text: 1234,
+      idle: 2345,
+      command: 3456,
+      exit: 4567,
+      ready: 5678,
+    });
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("client and per-call timeout precedence reaches native waits", async () => {
+  const su = new ShellUse(uniqueSession("typed-timeout-precedence"), {
+    timeouts: { text: 120 },
+  });
+  try {
+    await su.run(process.execPath, evalArgs, { timeouts: { text: 2000 } });
+    await su.waitText("ready", { timeout: 2000 });
+    await assert.rejects(
+      su.waitText("missing-client-timeout"),
+      (error) =>
+        error instanceof ExpectationError &&
+        error.message.includes("timed out after 120ms"),
+    );
+    await assert.rejects(
+      su.waitText("missing-call-timeout", { timeout: 30 }),
+      (error) =>
+        error instanceof ExpectationError &&
+        error.message.includes("timed out after 30ms"),
+    );
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("wait and expectation failures retain operation names", async () => {
+  const su = new ShellUse(uniqueSession("typed-operation-errors"));
+  try {
+    await su.run(process.execPath, evalArgs);
+    await su.waitText("ready", { timeout: 2000 });
+    await assert.rejects(
+      su.waitText("missing-wait", { timeout: 20 }),
+      (error) =>
+        error instanceof ExpectationError &&
+        error.message.startsWith("waitText: "),
+    );
+    await assert.rejects(
+      su.expectText("missing-expect", { timeout: 20 }),
+      (error) =>
+        error instanceof ExpectationError &&
+        error.message.startsWith("expectText: "),
+    );
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("typed validation and engine usage errors map to UsageError", async () => {
+  const invalid = new ShellUse(uniqueSession("typed-invalid-size"));
+  await assert.rejects(
+    invalid.open({ cols: -1 }),
+    (error) => error instanceof UsageError && error.kind === "usage",
+  );
+  await invalid.closeQuiet();
+
+  const invalidShell = new ShellUse(uniqueSession("typed-invalid-shell"));
+  await assert.rejects(
+    invalidShell.open({ shell: "definitely-not-a-shell" }),
+    (error) => error instanceof UsageError && error.kind === "usage",
+  );
+  await invalidShell.closeQuiet();
+
+  const su = new ShellUse(uniqueSession("typed-invalid-regex"));
+  try {
+    await su.run(process.execPath, evalArgs);
+    await assert.rejects(
+      su.expectText("(", { regex: true, timeout: 20 }),
+      (error) => error instanceof UsageError && error.kind === "usage",
+    );
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("expectExitCode rejects unsafe JavaScript numbers as UsageError", async () => {
+  const su = ShellUse.ephemeral("invalid-exit-code");
+  try {
+    for (const code of [
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      2_147_483_648,
+      -2_147_483_649,
+    ]) {
+      await assert.rejects(
+        su.expectExitCode(code),
+        (error) =>
+          error instanceof UsageError &&
+          error.message.includes("code must be an integer"),
+        `expected ${String(code)} to be rejected`,
+      );
+    }
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("N-API argument conversion errors map to UsageError", async () => {
+  const runtime = new NativeRuntime(uniqueSession("native-argument-errors"));
+  const invalidCalls = [
+    () => runtime.run(null),
+    () => runtime.write(42),
+    () => runtime.resize("80", 24),
+    () => runtime.text("false"),
+    () => runtime.press("Enter"),
+  ];
+  try {
+    for (const call of invalidCalls) {
+      await assert.rejects(
+        call,
+        (error) => error instanceof UsageError && error.exitCode === 2,
+      );
+    }
+  } finally {
+    await runtime.close();
+  }
+});
+
+test("close remains idempotent without a prior open", async () => {
   const su = ShellUse.ephemeral("never-opened");
   await su.close();
   await su.close();
-});
-
-test("timeoutsPayload rejects an unknown class", () => {
-  assert.throws(() => timeoutsPayload({ comand: 100 }), /comand/);
-});
-
-test("open rejects an unknown timeout class", async () => {
-  const c = new CapturingClient("s");
-  await assert.rejects(() => c.open({ timeouts: { txt: 100 } }), /txt/);
-});
-
-test("the constructor rejects an unknown timeout class", () => {
-  assert.throws(() => new ShellUse("s", { timeouts: { txt: 100 } }), /txt/);
-  assert.doesNotThrow(() => new ShellUse("s", { timeouts: { text: 100 } }));
-  assert.doesNotThrow(() => new ShellUse("s"));
-});
-
-test("timeoutsPayload keeps every known class", () => {
-  assert.deepEqual(timeoutsPayload({ text: 1, ready: 2 }), { text: 1, ready: 2 });
-});
-
-test("every wait and expect method tags its failure with the operation", async () => {
-  const cases = {
-    waitText: ["x"],
-    waitIdle: [],
-    waitCommand: [],
-    waitExit: [],
-    waitReady: [],
-    expectText: ["x"],
-    expectExitCode: [0],
-    expectOutput: ["x"],
-    expectSnapshot: ["x"],
-  };
-  for (const [name, args] of Object.entries(cases)) {
-    const c = new CapturingClient("s");
-    c.send = async () => {
-      throw new ExpectationError("boom");
-    };
-    await assert.rejects(
-      () => c[name](...args),
-      (error) =>
-        error instanceof ExpectationError && error.message.startsWith(`${name}: `),
-      `${name} did not tag its failure`,
-    );
-  }
+  await su.closeQuiet();
 });

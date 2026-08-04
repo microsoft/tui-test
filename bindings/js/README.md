@@ -1,18 +1,18 @@
 # @microsoft/shell-use
 
- Node bindings for [`shell-use`](https://github.com/microsoft/shell-use); a terminal engine for driving and asserting on real shells and TUI programs.
+Node bindings for [`shell-use`](https://github.com/microsoft/shell-use); a terminal engine for driving and asserting on real shells and TUI programs.
 
 ## Install
 
 ```sh
 npm install @microsoft/shell-use # Node 20+
 
-bun add @microsoft/shell-use # Bun
+bun add @microsoft/shell-use # Bun (best effort)
 
-deno add npm:@microsoft/shell-use # Deno 2
+deno add npm:@microsoft/shell-use # Deno 2 (best effort)
 ```
 
-The package is only ESM
+The package is ESM only.
 
 ## Runtime Requirements
 
@@ -38,24 +38,27 @@ await su.close();
 
 Every failure maps to one of the engine's error kinds:
 
-| Class | `exitCode` | Meaning |
-| --- | --- | --- |
-| `ExpectationError` | 1 | an `expect`/`wait` condition was not met |
-| `UsageError` | 2 | invalid argument (e.g. a bad regex) |
-| `NoSessionError` | 3 | no active session |
-| `InternalError` | 5 | internal engine error |
+| Class              | `exitCode` | Meaning                                  |
+| ------------------ | ---------- | ---------------------------------------- |
+| `ExpectationError` | 1          | an `expect`/`wait` condition was not met |
+| `UsageError`       | 2          | invalid argument (e.g. a bad regex)      |
+| `NoSessionError`   | 3          | no active session                        |
+| `InternalError`    | 5          | internal engine error                    |
 
 All derive from `ShellUseError` and carry `kind` and `exitCode`. `waitX` and `expectX` reject with `ExpectationError` on failure. Assertion errors include the current visible terminal content.
 
 ## API
 
-`new ShellUse(session?, { timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get` (+ `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize`), `screenshot`, `waitText` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady`, `expectText` / `expectExitCode` / `expectOutput` / `expectSnapshot`, `close`, and `closeQuiet`.
+`new ShellUse(session?, { timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize`, `screenshot`, `waitText` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady`, `expectText` / `expectExitCode` / `expectOutput` / `expectSnapshot`, `close`, and `closeQuiet`.
 
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 
 `open` and `run` accept `{ cols, rows, cwd, env, waitReady, retries, timeouts }`. The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`; `timeouts` sets session defaults, the constructor sets client-wide ones. Unknown class names throw.
 
-`ShellUse.ephemeral(prefix?, opts?)` creates a client bound to a unique session name (via `uniqueSession()`), useful for parallel test workers that shouldn't collide. All sessions as process local. `artifacts: { dir, onFailure }` attaches the terminal contents to an `ExpectationError`.
+`ShellUse.ephemeral(prefix?, opts?)` creates a client bound to a unique session
+name (via `uniqueSession()`), useful for parallel test workers that should not
+collide. All sessions are process-local. `artifacts: { dir, onFailure }`
+attaches the terminal contents to an `ExpectationError`.
 
 `@microsoft/shell-use/test` has helpers for terminal tests: `createTerminal`, `withTerminal`, `closeAllTracked`, `defaultShell`, and `terminalSnapshot`.
 
@@ -69,18 +72,19 @@ await withTerminal({}, async (t) => {
 });
 ```
 
-Each terminal is isolated and uniquely named, so parallel workers don't collide. `setTerminalDefaults(...)` sets suite-wide options (`artifacts`, `timeouts`, ...).
+Each terminal has a unique name, so parallel workers do not collide.
+`setTerminalDefaults(...)` sets suite-wide options (`artifacts`, `timeouts`,
+...).
 
 ## Cancellation and recordings
 
-Cancelling a promise does not cancel the underlying Rust operation. Operations for single sessoins wait for completion (ex: `close()`, `closeAll()`).
+Cancelling a promise does not cancel the underlying Rust operation. Operations for single sessions wait for completion (ex: `close()`, `closeAll()`).
 
-Closing a session removes it from `sessions()`, but keeps its recording. `getRecording()` can read that recording for the rest of the
-process. The 1024 most recently closed session have their recordings retained.
+Closing a session removes it from `sessions()`, but keeps its recording. `getRecording()` can read that recording for the rest of the process. The 1024 most recently closed sessions have their recordings retained.
 
 ## Configuration
 
-| Variable | Purpose |
-| --- | --- |
-| `SHELL_USE_SESSION` | default session name |
+| Variable                       | Purpose                                                                     |
+| ------------------------------ | --------------------------------------------------------------------------- |
+| `SHELL_USE_SESSION`            | default session name                                                        |
 | `SHELL_USE_TIMEOUT_<CLASS>_MS` | fallback timeout for one class (`TEXT`, `IDLE`, `COMMAND`, `EXIT`, `READY`) |

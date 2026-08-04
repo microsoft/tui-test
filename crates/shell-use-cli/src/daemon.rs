@@ -10,8 +10,9 @@ use interprocess::local_socket::Stream;
 
 use shell_use::engine::Engine;
 use shell_use::logger::Logger;
-use shell_use::protocol::Request;
+use shell_use::Operation;
 
+use crate::protocol::{Request, Response};
 use crate::{config, ipc, monitor};
 
 pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
@@ -71,7 +72,12 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
             Request::Status => Some(true),
             _ => None,
         };
-        let (mut response, shutdown) = engine.handle(req);
+        let shutdown = matches!(&req, Request::Close | Request::Shutdown);
+        let mut response = match req {
+            Request::Ping | Request::Shutdown => Response::ok(),
+            Request::Status => status_response(&engine),
+            operation => operation.execute(&engine),
+        };
         if let Some(status) = enrich {
             enrich_cli_response(&mut response, &session_name, logging, status);
         }
@@ -86,12 +92,26 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn enrich_cli_response(
-    response: &mut shell_use::protocol::Response,
-    session: &str,
-    logging: bool,
-    status: bool,
-) {
+fn status_response(engine: &Engine) -> Response {
+    let status = engine.status();
+    let mut data = serde_json::json!({
+        "session": status.session,
+        "shell_pid": status.shell_pid,
+    });
+    if status.cols.is_some() {
+        let object = data
+            .as_object_mut()
+            .expect("daemon status is always a JSON object");
+        object.insert("cols".to_string(), serde_json::json!(status.cols));
+        object.insert("rows".to_string(), serde_json::json!(status.rows));
+        object.insert("shell".to_string(), serde_json::json!(status.shell));
+        object.insert("exited".to_string(), serde_json::json!(status.exited));
+        object.insert("timeouts".to_string(), serde_json::json!(status.timeouts));
+    }
+    Response::with(data)
+}
+
+fn enrich_cli_response(response: &mut Response, session: &str, logging: bool, status: bool) {
     let Some(data) = response
         .data
         .as_mut()
@@ -132,7 +152,7 @@ fn spawn_idle_watchdog(engine: Arc<Engine>, last_activity: Arc<Mutex<Instant>>, 
                 "idle timeout: no activity for {}s, shutting down",
                 idle.as_secs()
             ));
-            let _ = engine.handle(Request::Close);
+            let _ = engine.execute(Operation::Close);
             cleanup(&session);
             std::process::exit(0);
         }

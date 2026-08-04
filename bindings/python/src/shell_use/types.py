@@ -53,6 +53,7 @@ class State:
     last_exit: Optional[int]
     exited: Optional[int]
     ready: bool
+    timeouts: Timeouts
     text: str
     session_shell: Optional[str]
 
@@ -67,6 +68,7 @@ class State:
             last_exit=d.get("last_exit"),
             exited=d.get("exited"),
             ready=d.get("ready", False),
+            timeouts=Timeouts(**d["timeouts"]),
             text=d.get("text", ""),
             session_shell=d.get("session_shell"),
         )

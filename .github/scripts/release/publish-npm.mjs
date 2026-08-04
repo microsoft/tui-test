@@ -10,10 +10,6 @@ const packages = listPackageTarballs("npm-packages").map((tarball) => ({
   manifest: readPackageManifest(tarball),
 }));
 
-if (packages.length < 10) {
-  throw new Error("Expected eight native packages and two root packages");
-}
-
 function publishIfMissing({ tarball, manifest }) {
   const packageVersion = `${manifest.name}@${manifest.version}`;
   const result = spawnNpm(["view", packageVersion, "version"], {
@@ -47,11 +43,21 @@ function publishIfMissing({ tarball, manifest }) {
 const nativePackages = packages.filter(({ manifest }) =>
   manifest.name.startsWith("@microsoft/shell-use-"),
 );
-const rootPackages = packages.filter(
-  ({ manifest }) =>
-    manifest.name === "@microsoft/shell-use" || manifest.name === "shell-use",
+const rootPackage = packages.filter(
+  ({ manifest }) => manifest.name === "@microsoft/shell-use",
 );
 
-for (const packageArtifact of [...nativePackages, ...rootPackages]) {
+if (
+  nativePackages.length !== 8 ||
+  rootPackage.length !== 1
+) {
+  throw new Error(
+    `Expected eight native packages and @microsoft/shell-use; found ${packages
+      .map(({ manifest }) => manifest.name)
+      .join(", ")}`,
+  );
+}
+
+for (const packageArtifact of [...nativePackages, ...rootPackage]) {
   publishIfMissing(packageArtifact);
 }
