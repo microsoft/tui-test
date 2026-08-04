@@ -1,14 +1,3 @@
-"""Helpers for writing terminal tests against a real shell.
-
-    from shell_use.testing import terminal
-
-    async def test_echo():
-        async with terminal() as t:
-            await t.submit("echo hi")
-            await t.wait_command()
-            await t.expect_text("hi")
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -27,7 +16,6 @@ from typing import (
     Set,
 )
 
-from . import _ephemeral
 from ._config import IS_MACOS, IS_WINDOWS
 from ._ephemeral import unique_session
 from .client import ShellUse
@@ -52,8 +40,6 @@ DEFAULT_SHELL = "powershell" if IS_WINDOWS else "zsh" if IS_MACOS else "bash"
 
 @dataclass
 class TerminalOptions:
-    """Options accepted by :func:`create_terminal`."""
-
     shell: Optional[str] = None
     program: Optional[Sequence[str]] = None
     cols: Optional[int] = None
@@ -66,7 +52,6 @@ class TerminalOptions:
     wait_ready: Optional[bool] = None
     timeouts: Optional[Timeouts] = None
     artifacts: Optional[Dict[str, Any]] = None
-    binary: Optional[str] = None
 
 
 _DEFAULTABLE = frozenset(TerminalOptions.__dataclass_fields__)
@@ -75,7 +60,6 @@ _defaults_lock = threading.Lock()
 
 
 def set_terminal_defaults(**values: Any) -> None:
-    """Merge process-wide defaults into every terminal created by :func:`create_terminal`."""
     unknown = sorted(set(values) - _DEFAULTABLE)
     if unknown:
         raise TypeError(
@@ -106,7 +90,6 @@ def _install_safety_net() -> None:
     if _safety_net_installed:
         return
     _safety_net_installed = True
-    _ephemeral._register_sweeper()
     atexit.register(_close_all_tracked_blocking)
 
 
@@ -133,26 +116,22 @@ async def _close_quietly(terminals: Iterable[ShellUse]) -> None:
 
 
 def track_terminal(term: ShellUse) -> None:
-    """Register a terminal so the registry can close it on cleanup."""
     with _tracked_lock:
         _tracked.add(term)
     _install_safety_net()
 
 
 def untrack_terminal(term: ShellUse) -> None:
-    """Stop tracking a terminal (e.g. after it was closed explicitly)."""
     with _tracked_lock:
         _tracked.discard(term)
 
 
 def tracked_count() -> int:
-    """Number of currently tracked terminals."""
     with _tracked_lock:
         return len(_tracked)
 
 
 async def close_all_tracked() -> None:
-    """Close every tracked terminal with ``close_quiet()`` and forget them."""
     with _tracked_lock:
         pending = list(_tracked)
         _tracked.clear()
@@ -161,9 +140,7 @@ async def close_all_tracked() -> None:
 
 
 def _client_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
-    kwargs = {"isolated": True}  # type: Dict[str, Any]
-    if opts.binary is not None:
-        kwargs["binary"] = opts.binary
+    kwargs = {}  # type: Dict[str, Any]
     if opts.timeouts is not None:
         kwargs["timeouts"] = opts.timeouts
     if opts.artifacts is not None:
@@ -181,7 +158,6 @@ def _spawn_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
 
 
 async def create_terminal(**options: Any) -> ShellUse:
-    """Create a started terminal and register it for automatic cleanup."""
     per_call = TerminalOptions(**options)
     merged = dict(_defaults.__dict__)
     for key, value in per_call.__dict__.items():
@@ -208,7 +184,6 @@ async def create_terminal(**options: Any) -> ShellUse:
 
 @asynccontextmanager
 async def terminal(**options: Any) -> AsyncIterator[ShellUse]:
-    """Scoped :func:`create_terminal` that always closes the terminal."""
     term = await create_terminal(**options)
     try:
         yield term
@@ -221,7 +196,6 @@ _TRAILING_WS = re.compile(r"\s+$")
 
 
 def terminal_snapshot(text: str) -> str:
-    """Normalise terminal text for stable snapshots."""
     lines = [_TRAILING_WS.sub("", line) for line in text.split("\n")]
     while lines and lines[-1] == "":
         lines.pop()

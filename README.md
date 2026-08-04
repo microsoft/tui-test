@@ -81,7 +81,7 @@ Each command returns a stable exit code (see [Exit codes](#exit-codes)), so an a
 
 ## Programmatic usage
 
-`shell-use` has python & node client libraries that drive the daemon with the same commands as the cli. The `shell-use` binary still needs to be on your `PATH` (or pointed to with `SHELL_USE_BIN`). The clients manage the daemon for you, similar to the cli.
+`shell-use` python & node client libraries that drive shell-use with the same commands as the cli. The clients manage the sessions for you without a daemon.
 
 ### Python ([`shell-use`](bindings/python/README.md))
 
@@ -104,14 +104,14 @@ async def main():
 asyncio.run(main())
 ```
 
-### Node / Deno / Bun ([`@microsoft/shell-use`](bindings/js/README.md))
+### Node ([`@microsoft/shell-use`](bindings/js/README.md))
 
 ```sh
 npm install @microsoft/shell-use # Node 20+
 
-bun add @microsoft/shell-use # Bun
+bun add @microsoft/shell-use # Bun (best effort)
 
-deno add npm:@microsoft/shell-use # Deno 2
+deno add npm:@microsoft/shell-use # Deno 2 (best effort)
 ```
 
 ```js
@@ -126,7 +126,7 @@ await su.expectExitCode(0);
 await su.close();
 ```
 
-> Note: On Windows, Deno requires all permissions (`-A` / `--allow-all`) instead of just `--allow-read --allow-write` due to the use of named pipes for IPC with the daemon.
+Node is the supported runtime. Bun and Deno compatibility is best effort; Deno requires a local `node_modules` directory and `--allow-ffi` to load the native addon.
 
 ## Command reference
 
@@ -277,7 +277,7 @@ re-fits the frame.
 | Command         | Description                                                                                                                           |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `usage`         | Compact command cheatsheet.                                                                                                           |
-| `agent-context` | Versioned JSON describing every command, flag, enum, default, and the exit-code taxonomy (generated from the CLI, so it can't drift). |
+| `agent-context` | Versioned JSON describing every command, flag, enum, default, and the exit-code taxonomy (generated from the cli, so it can't drift). |
 | `skill`         | Long-form workflow guide ([SKILL.md](SKILL.md)).                                                                                      |
 
 ### Exit codes

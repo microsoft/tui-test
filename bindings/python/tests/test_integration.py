@@ -7,9 +7,16 @@ import unittest
 from pathlib import Path
 
 import shell_use
-from shell_use import ExpectationError, ShellUse, testing, unique_session
+from shell_use import (
+    ExpectationError,
+    NoSessionError,
+    ShellUse,
+    UsageError,
+    get_recording,
+    testing,
+    unique_session,
+)
 
-BIN = os.environ.get("SHELL_USE_BIN")
 SHELL = "pwsh" if sys.platform == "win32" else None
 
 
@@ -17,7 +24,6 @@ def run(coro):
     return asyncio.run(coro)
 
 
-@unittest.skipUnless(BIN, "set SHELL_USE_BIN to the shell-use binary to run integration tests")
 class IntegrationTests(unittest.TestCase):
     def _client(self):
         return ShellUse.ephemeral("pytest")
@@ -32,6 +38,16 @@ class IntegrationTests(unittest.TestCase):
                 await su.expect_exit_code(0)
                 st = await su.state()
                 self.assertGreater(st.cols, 0)
+
+        run(scenario())
+
+    def test_cli_control_requests_are_rejected(self):
+        async def scenario():
+            async with self._client() as su:
+                await su.open(shell=SHELL)
+                with self.assertRaises(UsageError):
+                    await su.send({"kind": "shutdown"})
+                self.assertGreater((await su.state()).cols, 0)
 
         run(scenario())
 
@@ -59,6 +75,32 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
+    def test_blocking_wait_does_not_block_event_loop(self):
+        async def scenario():
+            async with self._client() as su:
+                await su.open(shell=SHELL)
+                ticks = []
+                stop = asyncio.Event()
+
+                async def heartbeat():
+                    while not stop.is_set():
+                        ticks.append(asyncio.get_running_loop().time())
+                        await asyncio.sleep(0.01)
+
+                heartbeat_task = asyncio.create_task(heartbeat())
+                try:
+                    with self.assertRaises(ExpectationError):
+                        await su.wait_text(
+                            "text-that-will-never-appear-on-screen", timeout=300
+                        )
+                finally:
+                    stop.set()
+                    await heartbeat_task
+
+                self.assertGreaterEqual(len(ticks), 5)
+
+        run(scenario())
+
     def test_sessions_lists_open_session(self):
         async def scenario():
             su = ShellUse(unique_session("pytest"))
@@ -68,6 +110,42 @@ class IntegrationTests(unittest.TestCase):
                 self.assertIn(su.session, names)
             finally:
                 await su.close_quiet()
+
+        run(scenario())
+
+    def test_close_evicts_session_and_retains_recording(self):
+        async def scenario():
+            name = unique_session("recording")
+            su = ShellUse(name)
+            await su.open(shell=SHELL)
+            await su.submit("echo retained-recording")
+            await su.wait_command()
+            await su.close()
+
+            self.assertNotIn(name, await shell_use.sessions())
+            with self.assertRaises(NoSessionError):
+                await su.state()
+            with self.assertRaises(UsageError):
+                await su.send({"kind": "shutdown"})
+            self.assertIn("retained-recording", await get_recording(name))
+            with self.assertRaises(NoSessionError):
+                await get_recording(unique_session("missing-recording"))
+
+        run(scenario())
+
+    def test_any_shared_handle_can_close_a_reopened_named_session(self):
+        async def scenario():
+            name = unique_session("shared-close")
+            first = ShellUse(name)
+            second = ShellUse(name)
+            try:
+                await first.open(shell=SHELL)
+                await first.close()
+                await second.open(shell=SHELL)
+                await first.close()
+                self.assertNotIn(name, await shell_use.sessions())
+            finally:
+                await second.close_quiet()
 
         run(scenario())
 
@@ -88,8 +166,8 @@ class IntegrationTests(unittest.TestCase):
                         self.assertEqual(status, "written")
                         created = Path(snap_root) / "__snapshots__" / f"{name}.snap"
                         self.assertTrue(created.is_file())
-                        daemon_side = Path(original) / "__snapshots__" / f"{name}.snap"
-                        self.assertFalse(daemon_side.exists())
+                        other_cwd = Path(original) / "__snapshots__" / f"{name}.snap"
+                        self.assertFalse(other_cwd.exists())
                         self.assertEqual(await su.expect_snapshot(name), "passed")
                     finally:
                         os.chdir(original)
@@ -99,7 +177,6 @@ class IntegrationTests(unittest.TestCase):
         run(scenario())
 
 
-@unittest.skipUnless(BIN, "set SHELL_USE_BIN to the shell-use binary to run integration tests")
 class TestingHelperTests(unittest.TestCase):
     def tearDown(self):
         run(testing.close_all_tracked())

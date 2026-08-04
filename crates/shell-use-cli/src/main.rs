@@ -641,7 +641,7 @@ fn compact(value: &serde_json::Value) -> String {
 }
 
 fn usage_text() -> &'static str {
-    "shell-use: headless terminal CLI + daemon\n\
+    "shell-use: headless terminal cli + daemon\n\
 \n\
 SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           run <program> [args...]\n\
@@ -659,7 +659,7 @@ EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
 RECORD    sessions auto-record; get-recording [session] > out.cast (asciinema v2)\n\
           play with `asciinema play out.cast`, render GIF with `agg out.cast out.gif`\n\
 WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
-AGENT     agent-context (JSON CLI schema) | skill [--add] (workflow guide)\n\
+AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
 GLOBAL    --session NAME | --json | --verbose (log PTY traffic to ~/.shell-use/<session>.log)\n\
 EXIT      0 ok | 1 assertion/wait failed | 2 usage | 3 no session | 4 daemon/IPC | 5 internal\n\
 "

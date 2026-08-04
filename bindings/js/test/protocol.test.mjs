@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { ShellUse, VersionMismatchError } from "../dist/index.js";
-import { VERSION, checkVersion } from "../dist/version.js";
+import { ShellUse } from "../dist/index.js";
 
 class CapturingClient extends ShellUse {
   constructor(...args) {
@@ -104,16 +103,4 @@ test("expectText is strict by default and forwards colors", async () => {
   assert.equal(c.sent[0].strict, true);
   assert.equal(c.sent[0].fg, "#ff0000");
   assert.ok(!("timeout_ms" in c.sent[0]));
-});
-
-test("checkVersion passes when versions match", () => {
-  checkVersion(VERSION);
-});
-
-test("checkVersion throws on a version mismatch", () => {
-  assert.throws(() => checkVersion("9.9.9"), VersionMismatchError);
-});
-
-test("checkVersion throws when the daemon reports no version", () => {
-  assert.throws(() => checkVersion(undefined), VersionMismatchError);
 });

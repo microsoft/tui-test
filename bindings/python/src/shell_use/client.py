@@ -1,33 +1,37 @@
 from __future__ import annotations
 
+import asyncio
+import atexit
 import os
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from . import _config as cfg
 from . import _ephemeral as ephemeral
-from . import _transport as transport
+from . import _native as native
 from ._protocol import EnvLike, env_pairs, unwrap
-from .errors import (
-    DaemonError,
-    ExpectationError,
-    NoSessionError,
-    TerminalArtifact,
-    VersionMismatchError,
-)
+from .errors import ExpectationError, NoSessionError, TerminalArtifact
 from .types import Cell, State, Timeouts
 
 _TERMINAL_MARKER = "Terminal content:\n"
 
+_T = TypeVar("_T")
 
-def check_version(daemon_version: Optional[str]) -> None:
-    if daemon_version != cfg.VERSION:
-        raise VersionMismatchError(
-            f"shell-use version mismatch: client {cfg.VERSION}, daemon "
-            f"{daemon_version or 'unknown'}. Ensure the shell-use binary matches the "
-            "shell-use package version, or stop the daemon (daemon_stop) so it "
-            "restarts with the current binary."
-        )
+
+async def _to_thread(func: Callable[..., _T], *args: Any) -> _T:
+    # asyncio.to_thread requires Python 3.9.
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, func, *args)
+
+
+def _atexit_close_all() -> None:
+    try:
+        native.close_all()
+    except Exception:
+        pass
+
+
+atexit.register(_atexit_close_all)
 
 
 def _extract_terminal_text(message: Optional[str]) -> Optional[str]:
@@ -111,82 +115,35 @@ class ShellUse:
         self,
         session: Optional[str] = None,
         *,
-        binary: Optional[str] = None,
-        home: Optional[str] = None,
-        isolated: bool = False,
         timeouts: Optional[Timeouts] = None,
         artifacts: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._session = cfg.resolve_session(session)
-        self._binary = cfg.resolve_binary(binary)
-        self._home_input = home
-        self._isolated = isolated
-        self._temp_home = None  # type: Optional[str]
-        self._resolved_home = None  # type: Optional[str]
-        self._home_ready = False
+        self._native = native.NativeSession(self._session)
         self._timeouts = cfg.normalize_timeouts(timeouts)
         self._artifacts = artifacts
         self._artifact_counter = 0
-        self._version_checked = False
-        self._closed = False
         self.mouse = _Mouse(self)
 
     @classmethod
     def ephemeral(cls, prefix: Optional[str] = None, **kwargs: Any) -> "ShellUse":
-        """Return a client bound to a unique session and an isolated home."""
-        kwargs["isolated"] = True
         return cls(ephemeral.unique_session(prefix), **kwargs)
 
     @property
     def session(self) -> str:
         return self._session
 
-    def _ensure_home(self) -> Optional[str]:
-        if self._home_ready:
-            return self._resolved_home
-        if self._isolated:
-            home = ephemeral.provision_temp_home()
-            self._temp_home = home
-        else:
-            home = cfg.resolve_home(self._home_input)
-        self._resolved_home = home
-        self._home_ready = True
-        return home
-
-    def _cleanup_temp_home(self) -> None:
-        temp = self._temp_home
-        if temp is None:
-            return
-        self._temp_home = None
-        if self._resolved_home == temp:
-            self._resolved_home = None
-            self._home_ready = False
-        ephemeral.remove_temp_home(temp)
-
     def _with_timeout(
         self, payload: Dict[str, Any], class_name: str, call: Optional[int]
     ) -> Dict[str, Any]:
-        """Omit ``timeout_ms`` when unset so the daemon applies the session default / env / built-in."""
         value = cfg.resolve_timeout(class_name, call=call, timeouts=self._timeouts)
         if value is not None:
             payload["timeout_ms"] = value
         return payload
 
     async def send(self, payload: Dict[str, Any]) -> Any:
-        home = self._ensure_home()
-        await self._check_version(home)
-        resp = await transport.request(self._session, home, self._binary, payload)
+        resp = await _to_thread(self._native.request, payload)
         return unwrap(resp)
-
-    async def _check_version(self, home: Optional[str]) -> None:
-        if self._version_checked:
-            return
-        resp = await transport.request(
-            self._session, home, self._binary, {"kind": "status"}
-        )
-        data = unwrap(resp)
-        check_version(data.get("version") if isinstance(data, dict) else None)
-        self._version_checked = True
 
     async def _guarded(self, op_name: str, payload: Dict[str, Any]) -> Any:
         try:
@@ -238,7 +195,6 @@ class ShellUse:
     async def _spawn(self, payload: Dict[str, Any], retries: int) -> Dict[str, Any]:
         attempts = retries + 1 if retries > 0 else 1
         for attempt in range(attempts):
-            self._closed = False
             try:
                 return await self.send(payload)
             except Exception:
@@ -304,24 +260,7 @@ class ShellUse:
         return await self._spawn(payload, retries)
 
     async def close(self) -> None:
-        if self._closed:
-            return
-        if not self._home_ready and self._isolated:
-            # A private home that was never provisioned has no daemon to close.
-            self._closed = True
-            return
-        self._closed = True
-        home = self._ensure_home()
-        try:
-            if await transport.can_connect(self._session, home):
-                resp = await transport.request(
-                    self._session, home, self._binary, {"kind": "close"}, autostart=False
-                )
-                unwrap(resp)
-        except (DaemonError, NoSessionError):
-            pass
-        finally:
-            self._cleanup_temp_home()
+        await self.send({"kind": "close"})
 
     async def close_quiet(self) -> None:
         try:
@@ -502,68 +441,17 @@ class ShellUse:
         await self.close_quiet()
 
 
-async def sessions(*, home: Optional[str] = None) -> List[str]:
-    h = cfg.resolve_home(home)
-    directory = cfg.home_dir(h)
-    out: List[str] = []
-    if directory.is_dir():
-        for entry in sorted(directory.iterdir()):
-            if entry.suffix == ".pid":
-                name = entry.stem
-                if await transport.can_connect(name, h):
-                    out.append(name)
-    return out
+async def sessions() -> List[str]:
+    return await _to_thread(native.sessions)
 
 
-async def close_all(*, binary: Optional[str] = None, home: Optional[str] = None) -> None:
-    h = cfg.resolve_home(home)
-    b = cfg.resolve_binary(binary)
-    for name in await sessions(home=h):
-        try:
-            await transport.request(name, h, b, {"kind": "close"}, autostart=False)
-        except Exception:
-            pass
+async def close_all() -> None:
+    await _to_thread(native.close_all)
 
 
-async def daemon_status(
-    session: Optional[str] = None,
-    *,
-    binary: Optional[str] = None,
-    home: Optional[str] = None,
-) -> Dict[str, Any]:
-    s = cfg.resolve_session(session)
-    h = cfg.resolve_home(home)
-    b = cfg.resolve_binary(binary)
-    return unwrap(await transport.request(s, h, b, {"kind": "status"}))
-
-
-async def daemon_stop(
-    session: Optional[str] = None,
-    *,
-    binary: Optional[str] = None,
-    home: Optional[str] = None,
-) -> None:
-    s = cfg.resolve_session(session)
-    h = cfg.resolve_home(home)
-    b = cfg.resolve_binary(binary)
-    if not await transport.can_connect(s, h):
-        return
-    unwrap(await transport.request(s, h, b, {"kind": "shutdown"}, autostart=False))
-
-
-async def get_recording(
-    session: Optional[str] = None, *, home: Optional[str] = None
-) -> str:
-    import asyncio
-
-    s = cfg.resolve_session(session)
-    h = cfg.resolve_home(home)
-    path = cfg.recording_path(s, h)
-    loop = asyncio.get_running_loop()
+async def get_recording(session: Optional[str] = None) -> str:
+    name = cfg.resolve_session(session)
     try:
-        data = await loop.run_in_executor(None, path.read_bytes)
+        return await _to_thread(native.recording, name)
     except FileNotFoundError:
-        from .errors import NoSessionError
-
-        raise NoSessionError(f"no recording for session '{s}'")
-    return data.decode("utf-8", errors="replace")
+        raise NoSessionError(f"no recording for session '{name}'")

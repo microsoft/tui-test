@@ -1,9 +1,6 @@
 import asyncio
-import os
 import re
 import unittest
-from pathlib import Path
-from unittest import mock
 
 from shell_use import _config as cfg
 from shell_use import _ephemeral as ephemeral
@@ -16,28 +13,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-class SocketPathTests(unittest.TestCase):
-    def test_short_path_keeps_the_session_name(self):
-        home = Path("/tmp/shell-use")
-        self.assertEqual(
-            cfg._socket_path_in(home, "work"),
-            home / "work.sock",
-        )
-
-    def test_long_path_matches_the_rust_and_javascript_digest(self):
-        home = Path(
-            "/var/folders/9k/hd3xzq_s0mn1c7b2v8t4wxyz0000gn/T/"
-            "shell-use-Ab12Cd34"
-        )
-        self.assertEqual(
-            cfg._socket_path_in(home, "helpers-track-54321-9f8e7d6c-1"),
-            home / "9ba800cbf25eaece.sock",
-        )
-
-
 class _CapturingClient(client.ShellUse):
-    """Records payloads instead of touching the transport."""
-
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
         self.sent = []
@@ -319,78 +295,19 @@ class ArtifactCaptureTests(unittest.TestCase):
 
 
 class CloseIdempotencyTests(unittest.TestCase):
-    def test_close_is_idempotent_without_daemon(self):
+    def test_close_is_idempotent_without_an_open_terminal(self):
         async def scenario():
-            with mock.patch.object(client.transport, "can_connect") as cc:
-                async def _false(session, home):
-                    return False
-
-                cc.side_effect = _false
-                c = client.ShellUse("idem", home="ignored-dir")
-                await c.close()
-                await c.close()
-                await c.close_quiet()
+            c = client.ShellUse(ephemeral.unique_session("idem"))
+            await c.close()
+            await c.close()
+            await c.close_quiet()
 
         run(scenario())
 
-    def test_unused_temp_home_close_is_noop(self):
+    def test_ephemeral_uses_a_unique_process_local_session(self):
         c = client.ShellUse.ephemeral("worker")
-        run(c.close())
-        run(c.close())
-        self.assertIsNone(c._temp_home)
-
-    def test_close_only_talks_to_the_daemon_once(self):
-        calls = []
-
-        async def _connect(session, home):
-            calls.append(session)
-            return False
-
-        async def scenario():
-            with mock.patch.object(client.transport, "can_connect", _connect):
-                c = client.ShellUse("idem-once", home="ignored-dir")
-                await c.close()
-                await c.close()
-
-        run(scenario())
-        self.assertEqual(len(calls), 1)
-
-
-class IsolatedHomeTests(unittest.TestCase):
-    def test_isolated_provisions_a_private_directory(self):
-        c = client.ShellUse("s", isolated=True)
-        home = c._ensure_home()
-        try:
-            self.assertIsNotNone(home)
-            self.assertEqual(home, c._temp_home)
-            self.assertTrue(os.path.isdir(home))
-        finally:
-            c._cleanup_temp_home()
-        self.assertFalse(os.path.exists(home))
-
-    def test_a_directory_named_temp_is_just_a_path(self):
-        c = client.ShellUse("s", home="temp")
-        self.assertEqual(c._ensure_home(), "temp")
-        self.assertIsNone(c._temp_home)
-
-    def test_shell_use_home_env_is_honoured_verbatim(self):
-        with mock.patch.dict("os.environ", {"SHELL_USE_HOME": "temp"}):
-            c = client.ShellUse("s")
-            self.assertEqual(c._ensure_home(), "temp")
-            self.assertIsNone(c._temp_home)
-
-    def test_isolated_ignores_home(self):
-        c = client.ShellUse("s", home="ignored-dir", isolated=True)
-        home = c._ensure_home()
-        try:
-            self.assertNotEqual(home, "ignored-dir")
-        finally:
-            c._cleanup_temp_home()
-
-    def test_ephemeral_is_isolated(self):
-        c = client.ShellUse.ephemeral("worker")
-        self.assertTrue(c._isolated)
         self.assertNotEqual(c.session, "default")
+        run(c.close())
 
 
 class UnknownTimeoutClassTests(unittest.TestCase):

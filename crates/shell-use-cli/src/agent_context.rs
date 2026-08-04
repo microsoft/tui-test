@@ -1,4 +1,4 @@
-//! Machine-readable description of the full CLI surface, generated from the
+//! Machine-readable description of the full cli surface, generated from the
 //! clap command model so it can never drift from the real implementation.
 //! Printed by `shell-use agent-context`.
 

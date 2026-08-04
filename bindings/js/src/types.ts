@@ -70,23 +70,10 @@ export interface State {
 }
 
 export interface OpenResult {
-  pid: number;
   shell_pid: number | null;
   session: string;
   ready: boolean;
   recording: string;
-}
-
-export interface DaemonStatus {
-  session: string;
-  /** The daemon process, or `null` when no daemon is running. */
-  pid: number | null;
-  shell_pid?: number | null;
-  cols?: number;
-  rows?: number;
-  shell?: string | null;
-  exited?: number | null;
-  log: string | null;
 }
 
 export interface Response {
@@ -125,17 +112,6 @@ export interface ArtifactOptions {
 }
 
 export interface ClientOptions {
-  binary?: string;
-  /** Daemon state directory. Ignored when `isolated` is set. */
-  home?: string;
-  /** Use a private daemon home, created on first use and removed on close. */
-  isolated?: boolean;
   timeouts?: Timeouts;
   artifacts?: ArtifactOptions;
-}
-
-/** Module-level helper options; no `isolated` because a fresh private home cannot contain an existing daemon. */
-export interface HomeOptions {
-  binary?: string;
-  home?: string;
 }

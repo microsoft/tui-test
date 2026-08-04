@@ -24,7 +24,6 @@ const MAPPING = {
   run: [["client", "run"]],
   close: [["client", "close"], ["module", "closeAll"]],
   sessions: [["module", "sessions"]],
-  daemon: [["module", "daemonStatus"], ["module", "daemonStop"]],
   state: [["client", "state"]],
   text: [["client", "text"]],
   screenshot: [["client", "screenshot"]],
@@ -44,15 +43,15 @@ const MAPPING = {
   "get-recording": [["module", "getRecording"]],
 };
 
-const EXCLUDED = new Set(["monitor", "usage", "agent-context", "skill"]);
+const EXCLUDED = new Set(["monitor", "status", "daemon", "usage", "agent-context", "skill"]);
 
-test("every CLI command is mapped or excluded", { skip: !schema }, () => {
+test("every cli command is mapped or excluded", { skip: !schema }, () => {
   const instance = new ShellUse("conformance");
   for (const command of Object.keys(schema.commands)) {
     if (EXCLUDED.has(command)) {
       continue;
     }
-    assert.ok(MAPPING[command], `CLI command '${command}' has no SDK mapping`);
+    assert.ok(MAPPING[command], `cli command '${command}' has no SDK mapping`);
     for (const [scope, name] of MAPPING[command]) {
       const target = scope === "client" ? instance : sdk;
       assert.ok(
@@ -67,6 +66,5 @@ test("error exit codes match the taxonomy", () => {
   assert.equal(new sdk.ExpectationError("x").exitCode, 1);
   assert.equal(new sdk.UsageError("x").exitCode, 2);
   assert.equal(new sdk.NoSessionError("x").exitCode, 3);
-  assert.equal(new sdk.DaemonError("x").exitCode, 4);
   assert.equal(new sdk.InternalError("x").exitCode, 5);
 });

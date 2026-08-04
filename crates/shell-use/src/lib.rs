@@ -5,6 +5,7 @@ pub mod input;
 pub mod logger;
 pub mod protocol;
 pub mod render;
+pub mod runtime;
 pub mod session;
 pub mod shell;
 pub mod terminal;

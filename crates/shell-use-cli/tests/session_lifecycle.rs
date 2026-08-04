@@ -1,4 +1,4 @@
-//! End-to-end coverage for session lifecycle over the real CLI + daemon.
+//! End-to-end coverage for session lifecycle over the real cli + daemon.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -61,8 +61,8 @@ impl Sandbox {
         self.try_run(args).unwrap_or_else(|| {
             panic!(
                 "[{}] `shell-use {}` produced no result within {:?}. Either it could not be \
-                 spawned (see stderr above), or the CLI process exited but left its stdout pipe \
-                 open, which happens when the detached daemon inherits the CLI's standard handles.",
+                 spawned (see stderr above), or the cli process exited but left its stdout pipe \
+                 open, which happens when the detached daemon inherits the cli's standard handles.",
                 self.label,
                 args.join(" "),
                 CALL_TIMEOUT

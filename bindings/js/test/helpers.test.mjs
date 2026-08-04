@@ -13,9 +13,6 @@ import {
   withTerminal,
 } from "../dist/test/index.js";
 
-const BIN = process.env.SHELL_USE_BIN;
-const skip = !BIN;
-
 test("terminalSnapshot trims trailing whitespace per line", () => {
   assert.equal(terminalSnapshot("a  \nb\t\nc"), "a\nb\nc");
 });
@@ -94,7 +91,6 @@ test("untrackTerminal removes a terminal from the registry", async () => {
 
 test(
   "createTerminal + withTerminal drive a real shell",
-  { skip },
   async () => {
     await closeAllTracked();
     const marker = `helper-e2e-${process.pid}`;
@@ -112,7 +108,6 @@ test(
 
 test(
   "createTerminal registers the terminal for automatic cleanup",
-  { skip },
   async () => {
     await closeAllTracked();
     const terminal = await createTerminal({ prefix: "helpers-track" });
@@ -129,7 +124,6 @@ test(
 
 test(
   "createTerminal can run a raw program",
-  { skip },
   async () => {
     await closeAllTracked();
     const evalArgs =

@@ -1,5 +1,5 @@
 import { ShellUse } from "../client.js";
-import { IS_MACOS, IS_WINDOWS, resolveBinary } from "../config.js";
+import { IS_MACOS, IS_WINDOWS } from "../config.js";
 import { uniqueSession } from "../ephemeral.js";
 import type {
   ArtifactOptions,
@@ -12,7 +12,6 @@ import type {
 export type { Shell } from "../types.js";
 export { ShellUse } from "../client.js";
 
-/** Options accepted by {@link createTerminal}. */
 export interface CreateTerminalOptions {
   shell?: Shell;
   program?: string[];
@@ -26,7 +25,6 @@ export interface CreateTerminalOptions {
   waitReady?: boolean;
   timeouts?: Timeouts;
   artifacts?: ArtifactOptions;
-  binary?: string;
 }
 
 let defaults: Partial<CreateTerminalOptions> = {};
@@ -74,8 +72,8 @@ export function trackedCount(): number {
 }
 
 function clientOptions(opts: CreateTerminalOptions): ClientOptions {
-  const client: ClientOptions = { isolated: true };
-  for (const key of ["binary", "timeouts", "artifacts"] as const) {
+  const client: ClientOptions = {};
+  for (const key of ["timeouts", "artifacts"] as const) {
     const value = opts[key];
     if (value !== undefined) {
       Object.assign(client, { [key]: value });
@@ -95,7 +93,6 @@ function spawnOptions(opts: CreateTerminalOptions): SpawnOptions {
   return spawn;
 }
 
-/** Creates and tracks a ready-to-drive terminal, using `run()` when `program` is given. */
 export async function createTerminal(
   options: CreateTerminalOptions = {},
 ): Promise<ShellUse> {
@@ -119,7 +116,6 @@ export async function createTerminal(
   return terminal;
 }
 
-/** Creates a terminal for `fn`, then always closes and untracks it. */
 export async function withTerminal<T>(
   options: CreateTerminalOptions,
   fn: (terminal: ShellUse) => Promise<T> | T,
@@ -135,7 +131,6 @@ export async function withTerminal<T>(
 
 export const defaultShell: Shell = IS_WINDOWS ? "powershell" : IS_MACOS ? "zsh" : "bash";
 
-/** Normalises terminal text for stable snapshots by trimming trailing whitespace and blank lines. */
 export function terminalSnapshot(text: string): string {
   const lines = text.split("\n").map((line) => line.replace(/\s+$/u, ""));
   while (lines.length > 0 && lines[lines.length - 1] === "") {
@@ -143,5 +138,3 @@ export function terminalSnapshot(text: string): string {
   }
   return lines.join("\n");
 }
-
-export { resolveBinary };

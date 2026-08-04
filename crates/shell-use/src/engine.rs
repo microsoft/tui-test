@@ -1,7 +1,7 @@
 //! Reusable in-process terminal engine.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -18,6 +18,7 @@ use crate::terminal::locator::{self, Pattern};
 
 pub struct Engine {
     name: String,
+    operations: Mutex<()>,
     session: Mutex<Option<Session>>,
     live: Arc<Mutex<Option<LiveTarget>>>,
     logger: Arc<Logger>,
@@ -65,6 +66,7 @@ impl Engine {
     pub fn new(name: String, logger: Arc<Logger>, recording_path: PathBuf) -> Self {
         Engine {
             name,
+            operations: Mutex::new(()),
             session: Mutex::new(None),
             live: Arc::new(Mutex::new(None)),
             logger,
@@ -73,6 +75,10 @@ impl Engine {
     }
 
     pub fn handle(&self, req: Request) -> (Response, bool) {
+        let _operation = self
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.logger.enabled() {
             self.logger.event(&format!("req {}", req_summary(&req)));
         }
@@ -94,7 +100,7 @@ impl Engine {
             ),
             Request::Close => {
                 *self.live.lock().unwrap() = None;
-                if let Some(s) = self.session.lock().unwrap().as_ref() {
+                if let Some(s) = self.lock_session().take() {
                     s.kill();
                 }
                 (Response::ok(), true)
@@ -116,6 +122,10 @@ impl Engine {
         wait_ready: Option<bool>,
         timeouts: TimeoutDefaults,
     ) -> Response {
+        *self.live.lock().unwrap() = None;
+        if let Some(previous) = self.lock_session().take() {
+            previous.kill();
+        }
         match Session::open(
             shell,
             program.clone(),
@@ -151,7 +161,7 @@ impl Engine {
                     state: s.state.clone(),
                     shell: s.shell.map(|sh| sh.as_str()),
                 };
-                *self.session.lock().unwrap() = Some(s);
+                *self.lock_session() = Some(s);
                 *self.live.lock().unwrap() = Some(live);
                 Response::with(json!({
                     "shell_pid": shell_pid,
@@ -166,7 +176,7 @@ impl Engine {
     }
 
     fn status(&self) -> Response {
-        let guard = self.session.lock().unwrap();
+        let guard = self.lock_session();
         match guard.as_ref() {
             Some(s) => {
                 let st = s.state.lock().unwrap();
@@ -188,7 +198,7 @@ impl Engine {
     }
 
     fn with_session<F: FnOnce(&mut Session) -> Response>(&self, f: F) -> Response {
-        let mut guard = self.session.lock().unwrap();
+        let mut guard = self.lock_session();
         match guard.as_mut() {
             Some(s) => f(s),
             None => Response::no_session(),
@@ -211,6 +221,30 @@ impl Engine {
 
     pub fn log_event(&self, message: &str) {
         self.logger.event(message);
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.lock_session().is_some()
+    }
+
+    pub fn recording_path(&self) -> &PathBuf {
+        &self.recording_path
+    }
+
+    fn lock_session(&self) -> MutexGuard<'_, Option<Session>> {
+        self.session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if let Ok(session) = self.session.get_mut() {
+            if let Some(session) = session.take() {
+                session.kill();
+            }
+        }
     }
 }
 

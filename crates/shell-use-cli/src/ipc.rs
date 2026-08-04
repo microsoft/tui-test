@@ -1,4 +1,4 @@
-//! CLI ↔ daemon transport over an `interprocess` local socket.
+//! cli ↔ daemon transport over an `interprocess` local socket.
 //! One JSON request line per connection, one JSON response line back.
 
 use std::io::{BufRead, BufReader, Read, Write};

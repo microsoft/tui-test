@@ -1,12 +1,12 @@
 ---
 name: shell-use
-description: 'Drive, inspect, assert on, record, and watch a real terminal from the command line with the shell-use CLI. Use when running shells (bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, nushell) or TUI programs (vim, less, top, etc.) in a headless PTY; sending keystrokes, key combos, or mouse input; resizing, writing raw bytes, or signaling the child; waiting for a command to finish or the screen to settle; asserting on terminal text, colors, exit codes, output, or snapshots; capturing text or full-color SVG screenshots; recording and replaying asciinema sessions; watching a live session while an agent drives it; or doing any of this from Python or Node with the shell-use bindings.'
+description: 'Drive, inspect, assert on, record, and watch a real terminal from the command line with the shell-use cli. Use when running shells (bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, nushell) or TUI programs (vim, less, top, etc.) in a headless PTY; sending keystrokes, key combos, or mouse input; resizing, writing raw bytes, or signaling the child; waiting for a command to finish or the screen to settle; asserting on terminal text, colors, exit codes, output, or snapshots; capturing text or full-color SVG screenshots; recording and replaying asciinema sessions; watching a live session while an agent drives it; or doing any of this from Python or Node with the shell-use bindings.'
 ---
 
 # shell-use
 
 `shell-use` controls a real terminal from the command line. It runs shells and
-TUI programs in a headless PTY behind a background daemon: a stateless CLI front
+TUI programs in a headless PTY behind a background daemon: a stateless cli front
 end talks to a daemon that owns the PTY and renders it into a full terminal
 emulator. Each call connects, acts, and exits, and they all share one live
 session. With it you can spawn a session, read the rendered screen, send keys
@@ -18,7 +18,7 @@ session.
 Three commands let an agent look up the rest of the surface instead of guessing:
 
 - `shell-use agent-context`: versioned JSON describing every command, flag,
-  enum, default, and the exit-code taxonomy. It is generated from the CLI, so it
+  enum, default, and the exit-code taxonomy. It is generated from the cli, so it
   stays in sync. Read this first when you need exact argument shapes.
 - `shell-use usage`: a one-screen command cheatsheet.
 - `shell-use skill`: this guide.
@@ -29,7 +29,7 @@ Three commands let an agent look up the rest of the surface instead of guessing:
   selects a terminal. The first command auto-starts that session's daemon; the
   session persists across calls until `close`. Sessions are independent.
 - **Stateless calls.** Each invocation connects to the daemon, acts, and exits.
-  State (screen, cwd, last command) lives in the daemon, not the CLI.
+  State (screen, cwd, last command) lives in the daemon, not the cli.
 - **JSON.** Pass `--json` on any command for machine-readable output. Data goes
   to stdout, diagnostics to stderr. On failure the JSON carries a `"kind"`
   (`assertion` / `usage` / `no_session` / `internal`).
@@ -229,10 +229,10 @@ the commands the agent runs; resizing the window re-fits the frame.
 ## Programmatic use (Python, Node, Deno & Bun)
 
 Two client libraries drive the same daemon from code instead of the shell, with
-methods that mirror the CLI command surface. Both are async and dependency-free,
+methods that mirror the cli command surface. Both are async and dependency-free,
 and both need the `shell-use` binary on `PATH` (or pointed to with the
 `SHELL_USE_BIN` env var, or a `binary` argument). They start and reuse the daemon
-exactly like the CLI, so a session opened from code can be watched with
+exactly like the cli, so a session opened from code can be watched with
 `shell-use monitor` from another terminal. The JavaScript package is a single
 ESM module that runs on Node, Deno, and Bun; it imports only built-in modules,
 so it pulls in nothing extra on any of them.
@@ -278,7 +278,7 @@ await su.close();
 On Windows, Deno needs `-A` (`--allow-all`) rather than just
 `--allow-read --allow-write`, because the daemon IPC uses a named pipe.
 
-Methods mirror the CLI commands: `open` / `run`, `submit` / `type` / `write`,
+Methods mirror the cli commands: `open` / `run`, `submit` / `type` / `write`,
 `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` /
 `kill`, `state`, `text`, `cells`, `get` (plus shorthands `get_command` /
 `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size`),
