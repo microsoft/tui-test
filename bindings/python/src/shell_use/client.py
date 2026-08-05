@@ -334,6 +334,9 @@ class ShellUse:
     async def get_size(self) -> Dict[str, int]:
         return await self._await(self._native.get_size())
 
+    async def get_bell_count(self) -> int:
+        return await self._await(self._native.get_bell_count())
+
     async def screenshot(
         self, path: Optional[str] = None, *, full: bool = False
     ) -> str:
@@ -379,6 +382,12 @@ class ShellUse:
             self._native.wait_ready(self._timeout("ready", timeout)),
         )
 
+    async def wait_bell(self, *, timeout: Optional[int] = None) -> None:
+        await self._guarded(
+            "wait_bell",
+            self._native.wait_bell(self._timeout("text", timeout)),
+        )
+
     async def expect_text(
         self,
         text: str,
@@ -418,6 +427,16 @@ class ShellUse:
     async def expect_output(self, text: str, *, regex: bool = False) -> None:
         await self._guarded(
             "expect_output", self._native.expect_output(text, regex)
+        )
+
+    async def expect_bell_count(
+        self, count: int, *, timeout: Optional[int] = None
+    ) -> None:
+        await self._guarded(
+            "expect_bell_count",
+            self._native.expect_bell_count(
+                count, self._timeout("text", timeout)
+            ),
         )
 
     async def expect_snapshot(

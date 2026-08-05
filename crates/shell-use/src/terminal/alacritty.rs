@@ -15,6 +15,7 @@ use alacritty_terminal::vte::ansi;
 
 use compact_str::{CompactString, ToCompactString};
 
+use crate::event::BellTracker;
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::Emulator;
 
@@ -115,14 +116,19 @@ fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
 #[derive(Default, Clone)]
 struct CaptureProxy {
     pending: Arc<Mutex<Vec<u8>>>,
+    bells: BellTracker,
 }
 
 impl EventListener for CaptureProxy {
     fn send_event(&self, ev: Event) {
-        if let Event::PtyWrite(bytes) = ev {
-            if let Ok(mut buf) = self.pending.lock() {
-                buf.extend_from_slice(bytes.as_bytes());
+        match ev {
+            Event::PtyWrite(bytes) => {
+                if let Ok(mut buf) = self.pending.lock() {
+                    buf.extend_from_slice(bytes.as_bytes());
+                }
             }
+            Event::Bell => self.bells.ring(),
+            _ => {}
         }
     }
 }
@@ -137,6 +143,15 @@ pub struct AlacrittyEmu {
 
 impl AlacrittyEmu {
     pub fn new(cols: u16, rows: u16, scrollback: usize) -> Self {
+        Self::with_bell_tracker(cols, rows, scrollback, BellTracker::default())
+    }
+
+    pub(crate) fn with_bell_tracker(
+        cols: u16,
+        rows: u16,
+        scrollback: usize,
+        bells: BellTracker,
+    ) -> Self {
         let size = TermSize::new(cols as usize, rows as usize);
         let config = AlacConfig {
             scrolling_history: scrollback,
@@ -145,6 +160,7 @@ impl AlacrittyEmu {
         let pending: Arc<Mutex<Vec<u8>>> = Arc::default();
         let proxy = CaptureProxy {
             pending: pending.clone(),
+            bells,
         };
         AlacrittyEmu {
             term: Term::new(config, &size, proxy),
@@ -218,4 +234,25 @@ mod tests {
     use super::*;
 
     crate::emulator_conformance_tests!(|c, r, s| Box::new(AlacrittyEmu::new(c, r, s)));
+
+    #[test]
+    fn multiple_bells_in_one_chunk_are_counted_individually() {
+        let bells = BellTracker::default();
+        let mut emulator = AlacrittyEmu::with_bell_tracker(80, 24, 100, bells.clone());
+
+        emulator.process(b"\x07\x07");
+
+        assert_eq!(bells.count(), 2);
+        assert_eq!(bells.sequence(), 2);
+    }
+
+    #[test]
+    fn an_osc_bell_terminator_does_not_ring_the_terminal_bell() {
+        let bells = BellTracker::default();
+        let mut emulator = AlacrittyEmu::with_bell_tracker(80, 24, 100, bells.clone());
+
+        emulator.process(b"\x1b]0;window title\x07");
+
+        assert_eq!(bells.count(), 0);
+    }
 }

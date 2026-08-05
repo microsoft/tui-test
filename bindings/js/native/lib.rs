@@ -165,6 +165,8 @@ pub struct State {
     pub last_exit: Option<i32>,
     pub exited: Option<i32>,
     pub ready: bool,
+    #[napi(js_name = "bell_count")]
+    pub bell_count: f64,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }
@@ -181,6 +183,7 @@ impl From<CoreState> for State {
             last_exit: value.last_exit,
             exited: value.exited,
             ready: value.ready,
+            bell_count: value.bell_count as f64,
             timeouts: value.timeouts.into(),
             text: value.text,
         }
@@ -714,6 +717,20 @@ impl NativeSession {
     }
 
     #[napi]
+    pub async fn get_bell_count(&self) -> Result<f64> {
+        execute(
+            self.handle.clone(),
+            "getBellCount",
+            Operation::GetBellCount,
+            |result| match result {
+                OperationResult::BellCount(value) => Ok(value as f64),
+                _ => Err(unexpected("getBellCount")),
+            },
+        )
+        .await
+    }
+
+    #[napi]
     pub async fn write(&self, data: String) -> Result<()> {
         self.unit("write", Operation::Write { data }).await
     }
@@ -930,6 +947,14 @@ impl NativeSession {
     }
 
     #[napi]
+    pub async fn wait_bell(&self, timeout_ms: Option<f64>) -> Result<()> {
+        self.timeout_unit("waitBell", timeout_ms, |timeout_ms| Operation::WaitBell {
+            timeout_ms,
+        })
+        .await
+    }
+
+    #[napi]
     pub async fn expect_text(
         &self,
         text: String,
@@ -989,6 +1014,22 @@ impl NativeSession {
                 regex: regex.unwrap_or(false),
             },
         )
+        .await
+    }
+
+    #[napi]
+    pub async fn expect_bell_count(&self, count: f64, timeout_ms: Option<f64>) -> Result<()> {
+        let handle = self.handle.clone();
+        blocking("expectBellCount", move || {
+            let operation = Operation::ExpectBellCount {
+                count: integer(count, "count", u64::MAX)?,
+                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+            };
+            match handle.execute(operation)? {
+                OperationResult::Unit => Ok(()),
+                _ => Err(unexpected("expectBellCount")),
+            }
+        })
         .await
     }
 

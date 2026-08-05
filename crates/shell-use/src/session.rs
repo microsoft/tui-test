@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
+use crate::event::BellTracker;
 use crate::logger::Logger;
 use crate::shell::{self, Shell};
 use crate::terminal::alacritty::AlacrittyEmu;
@@ -34,6 +35,7 @@ pub struct Session {
     pub pty: Arc<Mutex<Pty>>,
     pub state: Arc<Mutex<TermState>>,
     pub cancelled: Arc<AtomicBool>,
+    pub(crate) bells: BellTracker,
     recorder: Arc<Mutex<Recorder>>,
     logger: Arc<Logger>,
     _reader: JoinHandle<()>,
@@ -77,8 +79,14 @@ impl Session {
             Pty::spawn_launch(&launch, cols, rows, cwd)?
         };
 
+        let bells = BellTracker::default();
         let state = Arc::new(Mutex::new(TermState {
-            emu: Box::new(AlacrittyEmu::new(cols, rows, 5_000)),
+            emu: Box::new(AlacrittyEmu::with_bell_tracker(
+                cols,
+                rows,
+                5_000,
+                bells.clone(),
+            )),
             tracker: CommandTracker::new(),
             last_change: Instant::now(),
             awaiting_start: None,
@@ -155,6 +163,7 @@ impl Session {
             pty,
             state,
             cancelled,
+            bells,
             recorder,
             logger,
             _reader: handle,

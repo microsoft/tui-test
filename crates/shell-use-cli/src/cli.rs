@@ -475,6 +475,34 @@ mod tests {
     }
 
     #[test]
+    fn bell_commands_parse_with_counts_and_timeouts() {
+        let cli = Cli::try_parse_from(["shell-use", "wait", "bell", "--timeout", "1234"])
+            .expect("parse wait bell");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Wait {
+                what: WaitCmd::Bell {
+                    timeout: Some(1234)
+                }
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["shell-use", "expect", "bell", "3", "--timeout", "4321"])
+            .expect("parse expect bell");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Expect {
+                what: ExpectCmd::Bell {
+                    count: 3,
+                    timeout: Some(4321)
+                }
+            })
+        ));
+
+        assert!(Cli::try_parse_from(["shell-use", "expect", "bell"]).is_err());
+    }
+
+    #[test]
     fn daemon_stop_accepts_all() {
         let cli =
             Cli::try_parse_from(["shell-use", "daemon", "stop", "--all"]).expect("parse stop");
@@ -548,6 +576,8 @@ pub enum GetArg {
     Cursor,
     /// Terminal size.
     Size,
+    /// Cumulative terminal bell count.
+    Bells,
 }
 
 #[derive(Subcommand)]
@@ -691,6 +721,12 @@ pub enum WaitCmd {
         #[arg(long, value_name = "MS")]
         timeout: Option<u64>,
     },
+    /// Wait for the next terminal bell event.
+    Bell {
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -739,6 +775,14 @@ pub enum ExpectCmd {
         /// Treat <text> as a regular expression.
         #[arg(long)]
         regex: bool,
+    },
+    /// Wait until the cumulative terminal bell count reaches this value.
+    Bell {
+        /// Minimum cumulative bell count.
+        count: u64,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
     },
     /// Assert the screen matches a saved snapshot.
     Snapshot {

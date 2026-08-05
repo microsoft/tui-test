@@ -10,6 +10,7 @@ pub mod shell;
 pub mod terminal;
 pub mod trace;
 
+mod event;
 mod session;
 
 pub use api::*;

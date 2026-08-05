@@ -220,6 +220,34 @@ fn wait_ready_without_a_session_reports_no_session() {
     );
 }
 
+#[test]
+fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
+    let sandbox = Sandbox::new("bells");
+    sandbox.ok(&["open"]);
+
+    sandbox.ok(&["submit", &two_bells_command()]);
+    sandbox.ok(&["expect", "bell", "2", "--timeout", "5000"]);
+    sandbox.ok(&["wait", "command"]);
+
+    let state = sandbox.ok(&["state"]);
+    assert!(state.contains("bell_count: 2"), "{state}");
+
+    for _ in 0..2 {
+        let response: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "get", "bells"]))
+                .expect("parse bell count response");
+        assert_eq!(response["data"]["value"], 2);
+    }
+
+    sandbox.ok(&["submit", &delayed_bell_command()]);
+    sandbox.ok(&["wait", "bell", "--timeout", "5000"]);
+    sandbox.ok(&["expect", "bell", "3", "--timeout", "5000"]);
+    let response: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "get", "bells"]))
+            .expect("parse final bell count response");
+    assert_eq!(response["data"]["value"], 3);
+}
+
 /// A session timeout default must apply to later commands without `--timeout`.
 #[test]
 fn a_session_timeout_default_applies_to_later_commands() {
@@ -392,6 +420,22 @@ fn sleeper() -> Vec<&'static str> {
         vec!["cmd", "/c", "timeout /t 30 /nobreak >nul"]
     } else {
         vec!["sleep", "30"]
+    }
+}
+
+fn two_bells_command() -> String {
+    if cfg!(windows) {
+        "[Console]::Out.Write([char]7); [Console]::Out.Write([char]7)".to_string()
+    } else {
+        "printf '\\a\\a'".to_string()
+    }
+}
+
+fn delayed_bell_command() -> String {
+    if cfg!(windows) {
+        "Start-Sleep -Seconds 1; [Console]::Out.Write([char]7)".to_string()
+    } else {
+        "sleep 1; printf '\\a'".to_string()
     }
 }
 

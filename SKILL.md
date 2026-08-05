@@ -72,11 +72,11 @@ without parsing text:
 
 | Command                                             | Description                                                                                                         |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `state`                                             | cwd, size, cursor, last command + exit code, timeouts, and a text snapshot.                                         |
+| `state`                                             | cwd, size, cursor, last command + exit code, bell count, timeouts, and a text snapshot.                             |
 | `text [--full]`                                     | Rendered viewport text, or full scrollback with `--full`.                                                           |
 | `screenshot [PATH] [-o FILE] [--full]`              | Terminal text to stdout, or a full-color SVG image (crisp at any zoom, svg-term-style window) when a path is given. |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags) for a region.                                                             |
-| `get command\|output\|exit-code\|cwd\|cursor\|size` | One structured field.                                                                                               |
+| `get command\|output\|exit-code\|cwd\|cursor\|size\|bells` | One structured field.                                                                                       |
 
 ### Input
 
@@ -107,6 +107,7 @@ without parsing text:
 | `wait command [--timeout MS]`                       | Until the current foreground command finishes (needs shell integration).                   |
 | `wait exit [--timeout MS]`                          | Until the session's program/shell itself exits.                                            |
 | `wait ready [--timeout MS]`                         | Until the shell reports a ready prompt (needs shell integration). `open` waits by default. |
+| `wait bell [--timeout MS]`                          | Until the next terminal bell event.                                                  |
 
 ### Expect (exit 0 = pass, 1 = fail)
 
@@ -115,6 +116,7 @@ without parsing text:
 | `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility plus optional color. `--no-strict` relaxes a strict single-match.  |
 | `expect exit-code N [--timeout MS]`                                             | The last command's exit code. Waits for the command to finish first.          |
 | `expect output "T" [--regex]`                                                   | The last command's captured output.                                           |
+| `expect bell N [--timeout MS]`                                                   | The cumulative bell count reaches at least N.                          |
 | `expect snapshot NAME [-u] [--include-colors]`                                  | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. |
 
 Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
@@ -284,10 +286,12 @@ await su.close();
 Methods mirror the cli commands: `open` / `run`, `submit` / `type` / `write`,
 `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` /
 `kill`, `state`, `text`, `cells`, the dedicated `get_command` / `get_output` /
-`get_exit_code` / `get_cwd` / `get_cursor` / `get_size` methods,
+`get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_bell_count`
+methods,
 `screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit` /
-`wait_ready`, `expect_text` / `expect_exit_code` / `expect_output` /
-`expect_snapshot`, and `close`. Python module-level helpers are `sessions`,
+`wait_ready` / `wait_bell`, `expect_text` / `expect_exit_code` /
+`expect_output` / `expect_bell_count` / `expect_snapshot`, and `close`.
+Python module-level helpers are `sessions`,
 `close_all`, and `get_recording`; JavaScript exports `sessions`, `closeAll`,
 and `getRecording`. The JavaScript client otherwise uses the same names in
 camelCase (`waitCommand`, `expectText`, `getExitCode`, etc.).

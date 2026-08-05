@@ -147,3 +147,75 @@ fn close_all_interrupts_in_flight_waits() {
     assert!(start.elapsed() < Duration::from_secs(2));
     assert_eq!(wait.join().unwrap().unwrap_err().kind, ErrorKind::Assertion);
 }
+
+#[test]
+fn bell_counts_waits_and_expectations_are_cumulative() {
+    let registry = SessionRegistry::default();
+    let session = registry.session("bells");
+    session.open(OpenOptions::default()).expect("open terminal");
+    session
+        .execute(Operation::Submit {
+            data: Some(two_bells_command()),
+        })
+        .expect("submit bell command");
+    session
+        .execute(Operation::ExpectBellCount {
+            count: 2,
+            timeout_ms: Some(5_000),
+        })
+        .expect("wait for two bells");
+    session
+        .execute(Operation::WaitCommand {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for bell command");
+
+    let OperationResult::State(state) = session.execute(Operation::State).expect("read state")
+    else {
+        panic!("unexpected state result");
+    };
+    assert_eq!(state.bell_count, 2);
+    for _ in 0..2 {
+        assert!(matches!(
+            session
+                .execute(Operation::GetBellCount)
+                .expect("read bell count"),
+            OperationResult::BellCount(2)
+        ));
+    }
+
+    session
+        .execute(Operation::Submit {
+            data: Some(delayed_bell_command()),
+        })
+        .expect("submit delayed bell");
+    session
+        .execute(Operation::WaitBell {
+            timeout_ms: Some(5_000),
+        })
+        .expect("wait for the next bell");
+    assert!(matches!(
+        session
+            .execute(Operation::GetBellCount)
+            .expect("read final bell count"),
+        OperationResult::BellCount(3)
+    ));
+
+    session.close().expect("close terminal");
+}
+
+fn two_bells_command() -> String {
+    if cfg!(windows) {
+        "[Console]::Out.Write([char]7); [Console]::Out.Write([char]7)".to_string()
+    } else {
+        "printf '\\a\\a'".to_string()
+    }
+}
+
+fn delayed_bell_command() -> String {
+    if cfg!(windows) {
+        "Start-Sleep -Milliseconds 300; [Console]::Out.Write([char]7)".to_string()
+    } else {
+        "sleep 0.3; printf '\\a'".to_string()
+    }
+}

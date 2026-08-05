@@ -483,6 +483,7 @@ fn dispatch(
                 .size();
             Ok(OperationResult::Size(Size { cols, rows }))
         }
+        Operation::GetBellCount => Ok(OperationResult::BellCount(session.bells.count())),
         Operation::Write { data } => {
             act(session.write(data.as_bytes()))?;
             Ok(OperationResult::Unit)
@@ -556,6 +557,13 @@ fn dispatch(
             )?;
             Ok(OperationResult::Unit)
         }
+        Operation::WaitBell { timeout_ms } => {
+            wait_bell(
+                session,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
         Operation::ExpectText {
             text,
             regex,
@@ -589,6 +597,14 @@ fn dispatch(
         }
         Operation::ExpectOutput { text, regex } => {
             expect_output(session, &text, regex)?;
+            Ok(OperationResult::Unit)
+        }
+        Operation::ExpectBellCount { count, timeout_ms } => {
+            expect_bell_count(
+                session,
+                count,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
             Ok(OperationResult::Unit)
         }
         Operation::Snapshot {
@@ -633,6 +649,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
         last_exit: state.tracker.last_exit(),
         exited: state.exited,
         ready: state.tracker.is_ready(),
+        bell_count: session.bells.count(),
         timeouts: effective_timeouts(session),
         text: text_of(&state.emu.viewable_rows()),
     }
@@ -949,6 +966,29 @@ fn wait_ready(session: &TerminalSession, timeout_ms: u64) -> Result<(), ShellUse
     }
 }
 
+fn wait_bell(session: &TerminalSession, timeout_ms: u64) -> Result<(), ShellUseError> {
+    let baseline = session.bells.sequence();
+    let mut rang = false;
+    poll_until(
+        || {
+            rang = session.bells.sequence() != baseline;
+            rang || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if rang {
+        Ok(())
+    } else if session_stopped(session) {
+        Err(ShellUseError::assertion(
+            "session exited before a bell was received",
+        ))
+    } else {
+        Err(ShellUseError::assertion(format!(
+            "wait bell: timed out after {timeout_ms}ms without receiving a bell"
+        )))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn expect_text(
     session: &TerminalSession,
@@ -1130,6 +1170,32 @@ fn expect_output(session: &TerminalSession, text: &str, regex: bool) -> Result<(
     } else {
         Err(ShellUseError::assertion(format!(
             "output did not contain '{text}'\n---\n{output}\n---"
+        )))
+    }
+}
+
+fn expect_bell_count(
+    session: &TerminalSession,
+    expected: u64,
+    timeout_ms: u64,
+) -> Result<(), ShellUseError> {
+    let mut actual = session.bells.count();
+    poll_until(
+        || {
+            actual = session.bells.count();
+            actual >= expected || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if actual >= expected {
+        Ok(())
+    } else if session_stopped(session) {
+        Err(ShellUseError::assertion(format!(
+            "session exited at bell count {actual} before reaching {expected}"
+        )))
+    } else {
+        Err(ShellUseError::assertion(format!(
+            "expected bell count {expected}: timed out after {timeout_ms}ms; current count is {actual}"
         )))
     }
 }

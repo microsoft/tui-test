@@ -199,6 +199,10 @@ export class NativeRuntime {
     return this.#call((session) => session.getSize());
   }
 
+  getBellCount(): Promise<number> {
+    return this.#call((session) => session.getBellCount());
+  }
+
   write(data: string): Promise<void> {
     return this.#call((session) => session.write(data));
   }
@@ -273,6 +277,10 @@ export class NativeRuntime {
     return this.#call((session) => session.waitReady(timeoutMs));
   }
 
+  waitBell(timeoutMs?: number): Promise<void> {
+    return this.#call((session) => session.waitBell(timeoutMs));
+  }
+
   expectText(text: string, options?: ExpectTextOptions): Promise<void> {
     return this.#call((session) => session.expectText(text, options));
   }
@@ -283,6 +291,10 @@ export class NativeRuntime {
 
   expectOutput(text: string, regex = false): Promise<void> {
     return this.#call((session) => session.expectOutput(text, regex));
+  }
+
+  expectBellCount(count: number, timeoutMs?: number): Promise<void> {
+    return this.#call((session) => session.expectBellCount(count, timeoutMs));
   }
 
   async snapshot(name: string, options?: SnapshotOptions): Promise<string> {

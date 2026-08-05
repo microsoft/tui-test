@@ -299,6 +299,15 @@ impl NativeSession {
         )
     }
 
+    fn get_bell_count<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || execute_bell_count(&name, Operation::GetBellCount),
+            u64_to_py,
+        )
+    }
+
     fn write<'py>(&self, py: Python<'py>, data: String) -> PyResult<Bound<'py, PyAny>> {
         let name = self.name.clone();
         future_blocking(
@@ -692,6 +701,28 @@ impl NativeSession {
         )
     }
 
+    #[pyo3(signature = (timeout_ms))]
+    fn wait_bell<'py>(
+        &self,
+        py: Python<'py>,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::WaitBell {
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
     #[pyo3(signature = (text, regex, full, strict, not_, fg, bg, timeout_ms))]
     #[allow(clippy::too_many_arguments)]
     fn expect_text<'py>(
@@ -764,6 +795,31 @@ impl NativeSession {
         future_blocking(
             py,
             move || execute_unit(&name, Operation::ExpectOutput { text, regex }),
+            unit_to_py,
+        )
+    }
+
+    #[pyo3(signature = (count, timeout_ms))]
+    fn expect_bell_count<'py>(
+        &self,
+        py: Python<'py>,
+        count: Bound<'py, PyAny>,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let count = capture_integer(&count);
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::ExpectBellCount {
+                        count: integer_u64(&count, "count")?,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
             unit_to_py,
         )
     }
@@ -1132,6 +1188,13 @@ fn execute_size(name: &str, operation: Operation) -> Result<Size, ShellUseError>
     }
 }
 
+fn execute_bell_count(name: &str, operation: Operation) -> Result<u64, ShellUseError> {
+    match global_registry().execute(name, operation)? {
+        OperationResult::BellCount(value) => Ok(value),
+        _ => Err(unexpected_result("the terminal bell count")),
+    }
+}
+
 fn execute_snapshot(name: &str, operation: Operation) -> Result<SnapshotResult, ShellUseError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Snapshot(value) => Ok(value),
@@ -1159,6 +1222,10 @@ fn optional_string_to_py(py: Python<'_>, value: Option<String>) -> PyResult<Py<P
 }
 
 fn optional_i32_to_py(py: Python<'_>, value: Option<i32>) -> PyResult<Py<PyAny>> {
+    Ok(value.into_pyobject(py)?.into_any().unbind())
+}
+
+fn u64_to_py(py: Python<'_>, value: u64) -> PyResult<Py<PyAny>> {
     Ok(value.into_pyobject(py)?.into_any().unbind())
 }
 
@@ -1200,6 +1267,7 @@ fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     result.set_item("last_exit", value.last_exit)?;
     result.set_item("exited", value.exited)?;
     result.set_item("ready", value.ready)?;
+    result.set_item("bell_count", value.bell_count)?;
     let timeouts = PyDict::new(py);
     timeouts.set_item("text", value.timeouts.text)?;
     timeouts.set_item("idle", value.timeouts.idle)?;

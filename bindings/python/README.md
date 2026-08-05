@@ -54,7 +54,7 @@ All derive from `ShellUseError`. `wait_*` and `expect_*` raise `ExpectationError
 
 ## API
 
-`ShellUse(session="default", *, timeouts=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size`, `screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
+`ShellUse(session="default", *, timeouts=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_bell_count`, `screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 

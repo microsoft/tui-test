@@ -81,6 +81,10 @@ pub enum Request {
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
+    WaitBell {
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
     ExpectText {
         text: String,
         regex: bool,
@@ -100,6 +104,11 @@ pub enum Request {
     ExpectOutput {
         text: String,
         regex: bool,
+    },
+    ExpectBellCount {
+        count: u64,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
     Snapshot {
         name: String,
@@ -177,6 +186,7 @@ impl Request {
                 GetField::Cwd => Operation::GetCwd,
                 GetField::Cursor => Operation::GetCursor,
                 GetField::Size => Operation::GetSize,
+                GetField::BellCount => Operation::GetBellCount,
             }),
             Request::Write { data } => Ok(Operation::Write { data }),
             Request::Submit { data } => Ok(Operation::Submit { data }),
@@ -201,6 +211,7 @@ impl Request {
             Request::WaitCommand { timeout_ms } => Ok(Operation::WaitCommand { timeout_ms }),
             Request::WaitExit { timeout_ms } => Ok(Operation::WaitExit { timeout_ms }),
             Request::WaitReady { timeout_ms } => Ok(Operation::WaitReady { timeout_ms }),
+            Request::WaitBell { timeout_ms } => Ok(Operation::WaitBell { timeout_ms }),
             Request::ExpectText {
                 text,
                 regex,
@@ -224,6 +235,9 @@ impl Request {
                 Ok(Operation::ExpectExitCode { code, timeout_ms })
             }
             Request::ExpectOutput { text, regex } => Ok(Operation::ExpectOutput { text, regex }),
+            Request::ExpectBellCount { count, timeout_ms } => {
+                Ok(Operation::ExpectBellCount { count, timeout_ms })
+            }
             Request::Snapshot {
                 name,
                 update,
@@ -254,6 +268,7 @@ pub enum GetField {
     Cwd,
     Cursor,
     Size,
+    BellCount,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,6 +340,7 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
         OperationResult::Cwd(value) => Ok(json!({ "value": value })),
         OperationResult::Cursor(value) => Ok(json!({ "value": value })),
         OperationResult::Size(value) => Ok(json!({ "value": value })),
+        OperationResult::BellCount(value) => Ok(json!({ "value": value })),
         OperationResult::Snapshot(status) => Ok(json!({ "status": status })),
         OperationResult::Screenshot(ScreenshotResult::Path(path)) => Ok(json!({ "path": path })),
         OperationResult::Screenshot(ScreenshotResult::Text(text)) => Ok(json!({ "text": text })),
@@ -386,16 +402,30 @@ mod tests {
             r#"{"kind":"wait_command"}"#,
             r#"{"kind":"wait_exit"}"#,
             r#"{"kind":"wait_ready"}"#,
+            r#"{"kind":"wait_bell"}"#,
         ] {
             let request: Request = serde_json::from_str(raw).expect("deserialize wait");
             let timeout = match request {
                 Request::WaitIdle { timeout_ms }
                 | Request::WaitCommand { timeout_ms }
                 | Request::WaitExit { timeout_ms }
-                | Request::WaitReady { timeout_ms } => timeout_ms,
+                | Request::WaitReady { timeout_ms }
+                | Request::WaitBell { timeout_ms } => timeout_ms,
                 other => panic!("expected a wait, got {other:?}"),
             };
             assert_eq!(timeout, None);
+        }
+    }
+
+    #[test]
+    fn bell_expectation_timeout_is_optional() {
+        let raw = r#"{"kind":"expect_bell_count","count":2}"#;
+        match serde_json::from_str::<Request>(raw).expect("deserialize expect_bell_count") {
+            Request::ExpectBellCount { count, timeout_ms } => {
+                assert_eq!(count, 2);
+                assert_eq!(timeout_ms, None);
+            }
+            other => panic!("expected ExpectBellCount, got {other:?}"),
         }
     }
 

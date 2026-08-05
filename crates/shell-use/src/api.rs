@@ -88,6 +88,7 @@ pub enum Operation {
     GetCwd,
     GetCursor,
     GetSize,
+    GetBellCount,
     Write {
         data: String,
     },
@@ -126,6 +127,9 @@ pub enum Operation {
     WaitReady {
         timeout_ms: Option<u64>,
     },
+    WaitBell {
+        timeout_ms: Option<u64>,
+    },
     ExpectText {
         text: String,
         regex: bool,
@@ -143,6 +147,10 @@ pub enum Operation {
     ExpectOutput {
         text: String,
         regex: bool,
+    },
+    ExpectBellCount {
+        count: u64,
+        timeout_ms: Option<u64>,
     },
     Snapshot {
         name: String,
@@ -170,6 +178,7 @@ pub enum OperationResult {
     Cwd(Option<String>),
     Cursor(Cursor),
     Size(Size),
+    BellCount(u64),
     Snapshot(SnapshotResult),
     Screenshot(ScreenshotResult),
 }
@@ -285,6 +294,7 @@ pub struct State {
     pub last_exit: Option<i32>,
     pub exited: Option<i32>,
     pub ready: bool,
+    pub bell_count: u64,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }

@@ -49,7 +49,7 @@ All derive from `ShellUseError` and carry `kind` and `exitCode`. `waitX` and `ex
 
 ## API
 
-`new ShellUse(session?, { timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize`, `screenshot`, `waitText` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady`, `expectText` / `expectExitCode` / `expectOutput` / `expectSnapshot`, `close`, and `closeQuiet`.
+`new ShellUse(session?, { timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getBellCount`, `screenshot`, `waitText` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady` / `waitBell`, `expectText` / `expectExitCode` / `expectOutput` / `expectBellCount` / `expectSnapshot`, `close`, and `closeQuiet`.
 
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 

@@ -22,6 +22,16 @@ from shell_use import (
 from shell_use.client import _panic_probe
 
 SHELL = "pwsh" if sys.platform == "win32" else None
+TWO_BELLS_COMMAND = (
+    "[Console]::Out.Write([char]7); [Console]::Out.Write([char]7)"
+    if sys.platform == "win32"
+    else "printf '\\a\\a'"
+)
+DELAYED_BELL_COMMAND = (
+    "Start-Sleep -Seconds 1; [Console]::Out.Write([char]7)"
+    if sys.platform == "win32"
+    else "sleep 1; printf '\\a'"
+)
 
 
 def run(coro):
@@ -53,6 +63,26 @@ class IntegrationTests(unittest.TestCase):
                     await su.open(shell="not-a-real-shell")
             finally:
                 await su.close_quiet()
+
+        run(scenario())
+
+    def test_bell_state_waits_and_expectations(self):
+        async def scenario():
+            async with self._client() as su:
+                await su.open(shell=SHELL)
+
+                await su.submit(TWO_BELLS_COMMAND)
+                await su.expect_bell_count(2, timeout=5000)
+                await su.wait_command()
+
+                self.assertEqual((await su.state()).bell_count, 2)
+                self.assertEqual(await su.get_bell_count(), 2)
+                self.assertEqual(await su.get_bell_count(), 2)
+
+                await su.submit(DELAYED_BELL_COMMAND)
+                await su.wait_bell(timeout=5000)
+                await su.expect_bell_count(3)
+                self.assertEqual(await su.get_bell_count(), 3)
 
         run(scenario())
 

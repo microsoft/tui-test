@@ -313,6 +313,10 @@ export class ShellUse {
     return this.#runtime.getSize();
   }
 
+  async getBellCount(): Promise<number> {
+    return this.#runtime.getBellCount();
+  }
+
   async screenshot(path: string | null = null, opts: { full?: boolean } = {}): Promise<string> {
     return this.#runtime.screenshot({
       full: opts.full ?? false,
@@ -355,6 +359,12 @@ export class ShellUse {
     );
   }
 
+  async waitBell(opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("waitBell", () =>
+      this.#runtime.waitBell(this.#timeout("text", opts.timeout)),
+    );
+  }
+
   async expectText(text: string, opts: ExpectTextOptions = {}): Promise<void> {
     await this.#guard("expectText", () =>
       this.#runtime.expectText(text, {
@@ -378,6 +388,12 @@ export class ShellUse {
   async expectOutput(text: string, opts: { regex?: boolean } = {}): Promise<void> {
     await this.#guard("expectOutput", () =>
       this.#runtime.expectOutput(text, opts.regex ?? false),
+    );
+  }
+
+  async expectBellCount(count: number, opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("expectBellCount", () =>
+      this.#runtime.expectBellCount(count, this.#timeout("text", opts.timeout)),
     );
   }
 

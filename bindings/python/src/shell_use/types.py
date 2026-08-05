@@ -56,6 +56,7 @@ class State:
     timeouts: Timeouts
     text: str
     session_shell: Optional[str]
+    bell_count: int = 0
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "State":
@@ -68,6 +69,7 @@ class State:
             last_exit=d.get("last_exit"),
             exited=d.get("exited"),
             ready=d.get("ready", False),
+            bell_count=d.get("bell_count", 0),
             timeouts=Timeouts(**d["timeouts"]),
             text=d.get("text", ""),
             session_shell=d.get("session_shell"),

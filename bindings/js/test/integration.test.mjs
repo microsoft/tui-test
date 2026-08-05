@@ -23,6 +23,14 @@ const evalArgs =
   typeof globalThis.Deno === "undefined"
     ? ["-e", "console.log('ready'); setInterval(() => {}, 1000)"]
     : ["eval", "console.log('ready'); setInterval(() => {}, 1000)"];
+const twoBellsCommand =
+  process.platform === "win32"
+    ? "[Console]::Out.Write([char]7); [Console]::Out.Write([char]7)"
+    : "printf '\\a\\a'";
+const delayedBellCommand =
+  process.platform === "win32"
+    ? "Start-Sleep -Seconds 1; [Console]::Out.Write([char]7)"
+    : "sleep 1; printf '\\a'";
 
 test("echo roundtrip drives a real session", async () => {
   await withTerminal({ shell }, async (su) => {
@@ -54,6 +62,28 @@ test("echo roundtrip drives a real session", async () => {
     await su.waitText("typed-type");
     await su.waitCommand();
   });
+});
+
+test("bell state, waits, and expectations stay consistent", async () => {
+  const su = ShellUse.ephemeral("bell-events");
+
+  try {
+    await su.open({ shell });
+    await su.submit(twoBellsCommand);
+    await su.expectBellCount(2, { timeout: 5000 });
+    await su.waitCommand();
+
+    assert.equal((await su.state()).bell_count, 2);
+    assert.equal(await su.getBellCount(), 2);
+    assert.equal(await su.getBellCount(), 2);
+
+    await su.submit(delayedBellCommand);
+    await su.waitBell({ timeout: 5000 });
+    await su.expectBellCount(3);
+    assert.equal(await su.getBellCount(), 3);
+  } finally {
+    await su.closeQuiet();
+  }
 });
 
 test(
