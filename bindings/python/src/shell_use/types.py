@@ -48,6 +48,7 @@ class State:
     cols: int
     rows: int
     cursor: Dict[str, int]
+    title: Optional[str]
     cwd: Optional[str]
     last_command: Optional[str]
     last_exit: Optional[int]
@@ -63,6 +64,7 @@ class State:
             cols=d.get("cols", 0),
             rows=d.get("rows", 0),
             cursor=d.get("cursor", {"x": 0, "y": 0}),
+            title=d.get("title"),
             cwd=d.get("cwd"),
             last_command=d.get("last_command"),
             last_exit=d.get("last_exit"),

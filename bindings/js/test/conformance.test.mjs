@@ -35,6 +35,7 @@ const MAPPING = {
     ["client", "getCwd"],
     ["client", "getCursor"],
     ["client", "getSize"],
+    ["client", "getTitle"],
   ],
   type: [["client", "type"]],
   submit: [["client", "submit"]],
@@ -45,8 +46,8 @@ const MAPPING = {
   write: [["client", "write"]],
   signal: [["client", "signal"]],
   kill: [["client", "kill"]],
-  wait: [["client", "waitText"], ["client", "waitIdle"], ["client", "waitCommand"], ["client", "waitExit"]],
-  expect: [["client", "expectText"], ["client", "expectExitCode"], ["client", "expectOutput"], ["client", "expectSnapshot"]],
+  wait: [["client", "waitTitle"], ["client", "waitText"], ["client", "waitIdle"], ["client", "waitCommand"], ["client", "waitExit"]],
+  expect: [["client", "expectTitle"], ["client", "expectText"], ["client", "expectExitCode"], ["client", "expectOutput"], ["client", "expectSnapshot"]],
   "get-recording": [["module", "getRecording"]],
 };
 

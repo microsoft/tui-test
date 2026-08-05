@@ -7,6 +7,7 @@
 
 use bitflags::bitflags;
 use compact_str::CompactString;
+use unicode_width::UnicodeWidthChar;
 
 /// The 16 themeable palette slots (ANSI 0-15).
 ///
@@ -206,6 +207,43 @@ impl Default for EmuCell {
 /// Continuation cells contribute nothing: a double-width character already
 /// carries both its columns, so emitting a filler for the second one would
 /// widen the row by one and shift every column after it.
+/// How many terminal columns a string occupies.
+///
+/// A terminal lays text out by column, not by character: a CJK glyph is one
+/// `char` but two columns, and a combining mark is one `char` but none. Any
+/// caller aligning text against the grid has to measure it this way.
+pub fn display_width(s: &str) -> usize {
+    s.chars().map(|c| c.width().unwrap_or(0)).sum()
+}
+
+/// Shorten `s` to at most `columns` terminal columns, marking a cut with `…`.
+///
+/// Counting characters instead would overrun by the difference between a
+/// glyph's character count and its column count, which is how a frame drawn
+/// around such a string ends up crooked.
+pub fn truncate_to_columns(s: &str, columns: usize) -> String {
+    if columns == 0 {
+        return String::new();
+    }
+    if display_width(s) <= columns {
+        return s.to_string();
+    }
+    // One column is held back for the ellipsis that marks the cut.
+    let budget = columns - 1;
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let width = c.width().unwrap_or(0);
+        if used + width > budget {
+            break;
+        }
+        out.push(c);
+        used += width;
+    }
+    out.push('…');
+    out
+}
+
 pub fn rows_to_strings(rows: &[Vec<EmuCell>]) -> Vec<String> {
     rows.iter()
         .map(|row| row.iter().map(|c| c.ch.as_str()).collect::<String>())

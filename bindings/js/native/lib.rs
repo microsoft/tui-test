@@ -158,6 +158,7 @@ pub struct State {
     pub cols: u16,
     pub rows: u16,
     pub cursor: Cursor,
+    pub title: Option<String>,
     pub cwd: Option<String>,
     #[napi(js_name = "last_command")]
     pub last_command: Option<String>,
@@ -176,6 +177,7 @@ impl From<CoreState> for State {
             cols: value.cols,
             rows: value.rows,
             cursor: value.cursor.into(),
+            title: value.title,
             cwd: value.cwd,
             last_command: value.last_command,
             last_exit: value.last_exit,
@@ -303,6 +305,13 @@ pub struct WaitTextOptions {
 }
 
 #[napi(object)]
+pub struct TitleOptions {
+    pub regex: Option<bool>,
+    pub not: Option<bool>,
+    pub timeout_ms: Option<f64>,
+}
+
+#[napi(object)]
 pub struct ExpectTextOptions {
     pub regex: Option<bool>,
     pub full: Option<bool>,
@@ -317,6 +326,7 @@ pub struct ExpectTextOptions {
 pub struct SnapshotOptions {
     pub update: Option<bool>,
     pub include_colors: Option<bool>,
+    pub include_title: Option<bool>,
     pub cwd: Option<String>,
 }
 
@@ -873,6 +883,66 @@ impl NativeSession {
     }
 
     #[napi]
+    pub async fn get_title(&self) -> Result<Option<String>> {
+        execute(
+            self.handle.clone(),
+            "getTitle",
+            Operation::GetTitle,
+            |result| match result {
+                OperationResult::Title(value) => Ok(value),
+                _ => Err(unexpected("getTitle")),
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn wait_title(&self, text: String, options: Option<TitleOptions>) -> Result<()> {
+        let options = options.unwrap_or(TitleOptions {
+            regex: None,
+            not: None,
+            timeout_ms: None,
+        });
+        let handle = self.handle.clone();
+        blocking("waitTitle", move || {
+            let operation = Operation::WaitTitle {
+                text,
+                regex: options.regex.unwrap_or(false),
+                timeout_ms: timeout(options.timeout_ms, "timeoutMs")?,
+                not: options.not.unwrap_or(false),
+            };
+            match handle.execute(operation)? {
+                OperationResult::Unit => Ok(()),
+                _ => Err(unexpected("waitTitle")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn expect_title(&self, text: String, options: Option<TitleOptions>) -> Result<()> {
+        let options = options.unwrap_or(TitleOptions {
+            regex: None,
+            not: None,
+            timeout_ms: None,
+        });
+        let handle = self.handle.clone();
+        blocking("expectTitle", move || {
+            let operation = Operation::ExpectTitle {
+                text,
+                regex: options.regex.unwrap_or(false),
+                not: options.not.unwrap_or(false),
+                timeout_ms: timeout(options.timeout_ms, "timeoutMs")?,
+            };
+            match handle.execute(operation)? {
+                OperationResult::Unit => Ok(()),
+                _ => Err(unexpected("expectTitle")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
     pub async fn wait_text(&self, text: String, options: Option<WaitTextOptions>) -> Result<()> {
         let options = options.unwrap_or(WaitTextOptions {
             regex: None,
@@ -1001,6 +1071,7 @@ impl NativeSession {
         let options = options.unwrap_or(SnapshotOptions {
             update: None,
             include_colors: None,
+            include_title: None,
             cwd: None,
         });
         execute(
@@ -1010,6 +1081,7 @@ impl NativeSession {
                 name,
                 update: options.update.unwrap_or(false),
                 include_colors: options.include_colors.unwrap_or(false),
+                include_title: options.include_title.unwrap_or(false),
                 cwd: options.cwd,
             },
             |result| match result {

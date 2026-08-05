@@ -76,7 +76,7 @@ without parsing text:
 | `text [--full]`                                     | Rendered viewport text, or full scrollback with `--full`.                                                           |
 | `screenshot [PATH] [-o FILE] [--full]`              | Terminal text to stdout, or a full-color SVG image (crisp at any zoom, svg-term-style window) when a path is given. |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags) for a region.                                                             |
-| `get command\|output\|exit-code\|cwd\|cursor\|size` | One structured field.                                                                                               |
+| `get command\|output\|exit-code\|cwd\|cursor\|size\|title` | One structured field.                                                                                               |
 
 ### Input
 
@@ -103,6 +103,7 @@ without parsing text:
 | Command                                             | Description                                                                                |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `wait text "T" [--regex --full --not --timeout MS]` | Until text/regex is (with `--not`, is not) visible. Most precise wait.                     |
+| `wait title "T" [--regex --not --timeout MS]`       | Until the window title (`OSC 0`/`OSC 2`) matches. Programs announce progress there.        |
 | `wait idle [--timeout MS]`                          | Until the screen stops repainting (~250ms quiet).                                          |
 | `wait command [--timeout MS]`                       | Until the current foreground command finishes (needs shell integration).                   |
 | `wait exit [--timeout MS]`                          | Until the session's program/shell itself exits.                                            |
@@ -113,9 +114,10 @@ without parsing text:
 | Command                                                                         | Description                                                                   |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility plus optional color. `--no-strict` relaxes a strict single-match.  |
+| `expect title "T" [--regex --not --timeout MS]`                                 | The window title set with `OSC 0`/`OSC 2`. An unset title matches nothing.    |
 | `expect exit-code N [--timeout MS]`                                             | The last command's exit code. Waits for the command to finish first.          |
 | `expect output "T" [--regex]`                                                   | The last command's captured output.                                           |
-| `expect snapshot NAME [-u] [--include-colors]`                                  | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. |
+| `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. `--include-title` records the window title in the frame; off by default because a prompt often sets it to a host and path. |
 
 Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 
@@ -284,7 +286,7 @@ await su.close();
 Methods mirror the cli commands: `open` / `run`, `submit` / `type` / `write`,
 `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` /
 `kill`, `state`, `text`, `cells`, the dedicated `get_command` / `get_output` /
-`get_exit_code` / `get_cwd` / `get_cursor` / `get_size` methods,
+`get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` methods,
 `screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit` /
 `wait_ready`, `expect_text` / `expect_exit_code` / `expect_output` /
 `expect_snapshot`, and `close`. Python module-level helpers are `sessions`,

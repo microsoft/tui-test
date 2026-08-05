@@ -14,6 +14,7 @@ import type {
   SnapshotOptions,
   State,
   Timeouts,
+  TitleOptions,
   WaitTextOptions,
 } from "../native/index.js";
 
@@ -191,6 +192,10 @@ export class NativeRuntime {
     return this.#call((session) => session.getCwd());
   }
 
+  getTitle(): Promise<string | null> {
+    return this.#call((session) => session.getTitle());
+  }
+
   getCursor(): Promise<Cursor> {
     return this.#call((session) => session.getCursor());
   }
@@ -257,6 +262,10 @@ export class NativeRuntime {
     return this.#call((session) => session.waitText(text, options));
   }
 
+  waitTitle(text: string, options?: TitleOptions): Promise<void> {
+    return this.#call((session) => session.waitTitle(text, options));
+  }
+
   waitIdle(timeoutMs?: number): Promise<void> {
     return this.#call((session) => session.waitIdle(timeoutMs));
   }
@@ -271,6 +280,10 @@ export class NativeRuntime {
 
   waitReady(timeoutMs?: number): Promise<void> {
     return this.#call((session) => session.waitReady(timeoutMs));
+  }
+
+  expectTitle(text: string, options?: TitleOptions): Promise<void> {
+    return this.#call((session) => session.expectTitle(text, options));
   }
 
   expectText(text: string, options?: ExpectTextOptions): Promise<void> {

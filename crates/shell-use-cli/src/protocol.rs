@@ -65,6 +65,13 @@ pub enum Request {
         timeout_ms: Option<u64>,
         not: bool,
     },
+    WaitTitle {
+        text: String,
+        regex: bool,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+        not: bool,
+    },
     WaitIdle {
         #[serde(default)]
         timeout_ms: Option<u64>,
@@ -92,6 +99,13 @@ pub enum Request {
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
+    ExpectTitle {
+        text: String,
+        regex: bool,
+        not: bool,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
     ExpectExitCode {
         code: i32,
         #[serde(default)]
@@ -105,6 +119,8 @@ pub enum Request {
         name: String,
         update: bool,
         include_colors: bool,
+        #[serde(default)]
+        include_title: bool,
         #[serde(default)]
         cwd: Option<String>,
     },
@@ -177,6 +193,7 @@ impl Request {
                 GetField::Cwd => Operation::GetCwd,
                 GetField::Cursor => Operation::GetCursor,
                 GetField::Size => Operation::GetSize,
+                GetField::Title => Operation::GetTitle,
             }),
             Request::Write { data } => Ok(Operation::Write { data }),
             Request::Submit { data } => Ok(Operation::Submit { data }),
@@ -194,6 +211,17 @@ impl Request {
                 text,
                 regex,
                 full,
+                timeout_ms,
+                not,
+            }),
+            Request::WaitTitle {
+                text,
+                regex,
+                timeout_ms,
+                not,
+            } => Ok(Operation::WaitTitle {
+                text,
+                regex,
                 timeout_ms,
                 not,
             }),
@@ -220,6 +248,17 @@ impl Request {
                 bg,
                 timeout_ms,
             }),
+            Request::ExpectTitle {
+                text,
+                regex,
+                not,
+                timeout_ms,
+            } => Ok(Operation::ExpectTitle {
+                text,
+                regex,
+                not,
+                timeout_ms,
+            }),
             Request::ExpectExitCode { code, timeout_ms } => {
                 Ok(Operation::ExpectExitCode { code, timeout_ms })
             }
@@ -228,11 +267,13 @@ impl Request {
                 name,
                 update,
                 include_colors,
+                include_title,
                 cwd,
             } => Ok(Operation::Snapshot {
                 name,
                 update,
                 include_colors,
+                include_title,
                 cwd,
             }),
             Request::Screenshot { full, path } => Ok(Operation::Screenshot { full, path }),
@@ -254,6 +295,7 @@ pub enum GetField {
     Cwd,
     Cursor,
     Size,
+    Title,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -323,6 +365,7 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
         OperationResult::Output(value) => Ok(json!({ "value": value })),
         OperationResult::ExitCode(value) => Ok(json!({ "value": value })),
         OperationResult::Cwd(value) => Ok(json!({ "value": value })),
+        OperationResult::Title(value) => Ok(json!({ "value": value })),
         OperationResult::Cursor(value) => Ok(json!({ "value": value })),
         OperationResult::Size(value) => Ok(json!({ "value": value })),
         OperationResult::Snapshot(status) => Ok(json!({ "status": status })),

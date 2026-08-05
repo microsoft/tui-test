@@ -25,6 +25,18 @@ impl Pattern {
             Pattern::Regex(r) => r.as_str().to_string(),
         }
     }
+
+    /// Whether the pattern matches somewhere in `haystack`.
+    ///
+    /// For matching against the grid use [`find`], which maps the hit back to
+    /// cells. This is for the plain strings the terminal reports alongside the
+    /// grid, such as the window title.
+    pub fn matches(&self, haystack: &str) -> bool {
+        match self {
+            Pattern::Text(t) => haystack.contains(t.as_str()),
+            Pattern::Regex(r) => r.is_match(haystack),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
