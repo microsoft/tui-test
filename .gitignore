@@ -1,9 +1,12 @@
 /target
 *.gif
+*.pyc
 *.trace
+__pycache__/
 *.node
 .shell-use/
 bindings/js/target
 bindings/js/native/target
 bindings/python/target
 bindings/python/native/target
+bindings/python/stub-gen/target

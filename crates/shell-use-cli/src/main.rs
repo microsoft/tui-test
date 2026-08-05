@@ -4,6 +4,7 @@ mod config;
 mod daemon;
 mod ipc;
 mod monitor;
+mod protocol;
 mod skill;
 
 use std::path::Path;
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant};
 use clap::{CommandFactory, Parser};
 
 use cli::{Cli, Command, DaemonCmd, ExpectCmd, GetArg, MouseCmd, WaitCmd};
-use shell_use::protocol::{GetField, MouseAction, Request, Response};
+use protocol::{GetField, MouseAction, Request, Response};
 /// Long-form agent skill manifest, printed by `shell-use skill`.
 const SKILL_MD: &str = include_str!("../../../SKILL.md");
 

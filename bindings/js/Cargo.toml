@@ -15,9 +15,8 @@ crate-type = ["cdylib", "rlib"]
 test = false
 
 [dependencies]
-napi = { version = "3", default-features = false, features = ["napi4", "dyn-symbols", "serde-json", "async"] }
+napi = { version = "3", default-features = false, features = ["napi4", "dyn-symbols", "async"] }
 napi-derive = "3"
-serde_json.workspace = true
 shell-use.workspace = true
 
 [build-dependencies]

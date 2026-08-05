@@ -6,7 +6,7 @@ import os
 import sys
 from typing import Dict, Mapping, Optional
 
-VERSION = "0.0.1-beta.5"
+VERSION = "0.0.1-beta.6"
 
 DEFAULT_COLS = 80
 DEFAULT_ROWS = 30

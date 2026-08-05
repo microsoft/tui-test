@@ -1,3 +1,13 @@
+import type {
+  Cell as NativeCell,
+  Cursor as NativeCursor,
+  EffectiveTimeouts as NativeEffectiveTimeouts,
+  OpenResult as NativeOpenResult,
+  Size as NativeSize,
+  State as NativeState,
+  Timeouts as NativeTimeouts,
+} from "../native/index.js";
+
 export type Color = "default" | number | string;
 
 /** `"none"` is a value, not an absence: an un-underlined cell reports it. */
@@ -20,33 +30,16 @@ export type Shell =
   | "elvish"
   | "nushell";
 
-export interface Cursor {
-  x: number;
-  y: number;
-}
+export type Cursor = NativeCursor;
 
-export interface Size {
-  cols: number;
-  rows: number;
-}
+export type Size = NativeSize;
 
-export interface Cell {
-  x: number;
-  y: number;
+export interface Cell extends Omit<NativeCell, "fg" | "bg" | "underline_style" | "underline_color"> {
   /** The cell's grapheme; `" "` when blank, `""` for the second column of a double-width character. */
-  char: string;
   fg: Color;
   bg: Color;
-  bold: boolean;
-  dim: boolean;
-  italic: boolean;
-  inverse: boolean;
-  invisible: boolean;
-  strike: boolean;
   /** Always `false` from the alacritty backend, which cannot report blink. */
-  blink: boolean;
   /** Shorthand for `underline_style !== "none"`. */
-  underline: boolean;
   underline_style: UnderlineStyle;
   /**
    * `"default"` means the underline follows the text color. Tracked
@@ -56,32 +49,11 @@ export interface Cell {
   underline_color: Color;
 }
 
-export interface State {
-  session_shell: string | null;
-  cols: number;
-  rows: number;
-  cursor: Cursor;
-  cwd: string | null;
-  last_command: string | null;
-  last_exit: number | null;
-  exited: number | null;
-  ready: boolean;
-  text: string;
-}
+export type EffectiveTimeouts = NativeEffectiveTimeouts;
 
-export interface OpenResult {
-  shell_pid: number | null;
-  session: string;
-  ready: boolean;
-  recording: string;
-}
+export type State = NativeState;
 
-export interface Response {
-  ok: boolean;
-  data?: unknown;
-  message?: string;
-  kind?: string;
-}
+export type OpenResult = NativeOpenResult;
 
 export interface SpawnOptions {
   cols?: number;
@@ -93,13 +65,7 @@ export interface SpawnOptions {
   timeouts?: Timeouts;
 }
 
-export interface Timeouts {
-  text?: number;
-  idle?: number;
-  command?: number;
-  exit?: number;
-  ready?: number;
-}
+export type Timeouts = NativeTimeouts;
 
 export interface TerminalArtifact {
   text?: string;

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "shell-use"
-version = "0.0.1-beta.5"
+version = "0.0.1-beta.6"
 description = "Python bindings for shell-use terminal automation"
 readme = "README.md"
 requires-python = ">=3.8"
