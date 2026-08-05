@@ -43,24 +43,26 @@ async with ShellUse("vim-session") as su:
 
 Every failure maps to one of the engine's error kinds:
 
-| Exception | Exit code | Meaning |
-| --- | --- | --- |
-| `ExpectationError` | 1 | an `expect`/`wait` condition was not met |
-| `UsageError` | 2 | invalid argument (e.g. a bad regex) |
-| `NoSessionError` | 3 | no active session |
-| `InternalError` | 5 | internal engine error |
+| Exception          | Exit code | Meaning                                  |
+| ------------------ | --------- | ---------------------------------------- |
+| `ExpectationError` | 1         | an `expect`/`wait` condition was not met |
+| `UsageError`       | 2         | invalid argument (e.g. a bad regex)      |
+| `NoSessionError`   | 3         | no active session                        |
+| `InternalError`    | 5         | internal engine error                    |
 
 All derive from `ShellUseError`. `wait_*` and `expect_*` raise `ExpectationError` on failure. Assertion errors include the current visible terminal content.
 
 ## API
 
-`ShellUse(session="default", *, timeouts=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get` (+ `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size`), `screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
+`ShellUse(session="default", *, timeouts=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size`, `screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 
 `open()` and `run()` accept `wait_ready=`, `retries=`, and `timeouts=`. The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`; `timeouts=` sets session defaults, the constructor takes the same `Timeouts` (or a dict) as a client-wide default. Unknown class names raise.
 
-`ShellUse.ephemeral(prefix=None, **kwargs)` binds a client to a unique, process local session name. `artifacts={"dir": ..., "on_failure": ...}` attaches the terminal contents to an `ExpectationError`.
+`ShellUse.ephemeral(prefix=None, **kwargs)` binds a client to a unique,
+process-local session name. `artifacts={"dir": ..., "on_failure": ...}`
+attaches the terminal contents to an `ExpectationError`.
 
 `shell_use.testing` has helpers for terminal tests: `create_terminal`, `terminal` (an async context manager), `close_all_tracked`, `DEFAULT_SHELL`, and `terminal_snapshot`.
 
@@ -78,14 +80,13 @@ Each terminal is uniquely named, so parallel workers don't collide. `set_termina
 
 ## Cancellation and recordings
 
-Cancelling a promise does not cancel the underlying Rust operation. Operations for single sessoins wait for completion (ex: `close()`, `close_all()`).
+Cancelling a task does not cancel the underlying Rust operation. Operations for single sessoins wait for completion (ex: `close()`, `close_all()`).
 
-Closing a session removes it from `sessions()`, but keeps its recording. `get_recordings()` can read that recording for the rest of the
-process. The 1024 most recently closed session have their recordings retained.
+Closing a session removes it from `sessions()`, but keeps its recording. `get_recording()` can read that recording for the rest of the process. The 1024 most recently closed sessions have their recordings retained.
 
 ## Configuration
 
-| Variable | Purpose |
-| --- | --- |
-| `SHELL_USE_SESSION` | default session name |
+| Variable                       | Purpose                                                                     |
+| ------------------------------ | --------------------------------------------------------------------------- |
+| `SHELL_USE_SESSION`            | default session name                                                        |
 | `SHELL_USE_TIMEOUT_<CLASS>_MS` | fallback timeout for one class (`TEXT`, `IDLE`, `COMMAND`, `EXIT`, `READY`) |

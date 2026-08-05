@@ -259,7 +259,7 @@ enum Action {
 
 fn stream_loop(socket: &str) -> i32 {
     use crate::ipc;
-    use shell_use::protocol::Request;
+    use crate::protocol::Request;
 
     loop {
         let (vcols, vrows) = crossterm::terminal::size().unwrap_or((80, 24));

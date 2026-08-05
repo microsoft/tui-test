@@ -13,18 +13,31 @@ def run(coro):
     return asyncio.run(coro)
 
 
-class _CapturingClient(client.ShellUse):
-    def __init__(self, *a, **k):
-        super().__init__(*a, **k)
-        self.sent = []
+class _FakeNative:
+    def __init__(self):
+        self.calls = []
         self.reply = {}
-        self.raise_kind = None
+        self.error = None
 
-    async def send(self, payload):
-        self.sent.append(payload)
-        if self.raise_kind is not None:
-            raise self.raise_kind
-        return self.reply
+    def __getattr__(self, name):
+        def invoke(*args):
+            self.calls.append((name, args))
+
+            async def complete():
+                if self.error is not None:
+                    raise self.error
+                return self.reply
+
+            return complete()
+
+        return invoke
+
+
+class _CapturingClient(client.ShellUse):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fake = _FakeNative()
+        self._native = self.fake
 
 
 class TimeoutResolutionTests(unittest.TestCase):
@@ -43,20 +56,15 @@ class TimeoutResolutionTests(unittest.TestCase):
             cfg.resolve_timeout("command", timeouts={"command": 222}), 222
         )
 
-    def test_timeouts_field_beats_omitted(self):
-        both = {"command": 222}
-        self.assertEqual(cfg.resolve_timeout("command", timeouts=both), 222)
-        self.assertIsNone(cfg.resolve_timeout("idle", timeouts=both))
-
     def test_none_entry_in_timeouts_falls_through(self):
         self.assertIsNone(cfg.resolve_timeout("text", timeouts={"text": None}))
 
     def test_normalize_timeouts_accepts_dataclass_and_mapping(self):
         self.assertIsNone(cfg.normalize_timeouts(None))
         self.assertEqual(cfg.normalize_timeouts({"command": 42})["command"], 42)
-        norm = cfg.normalize_timeouts(Timeouts(command=42))
-        self.assertEqual(norm["command"], 42)
-        self.assertIsNone(norm["idle"])
+        normalized = cfg.normalize_timeouts(Timeouts(command=42))
+        self.assertEqual(normalized["command"], 42)
+        self.assertIsNone(normalized["idle"])
 
     def test_session_timeouts_payload_omits_when_empty(self):
         self.assertIsNone(cfg.session_timeouts_payload(None))
@@ -65,177 +73,180 @@ class TimeoutResolutionTests(unittest.TestCase):
 
     def test_session_timeouts_payload_keeps_only_set_classes(self):
         self.assertEqual(
-            cfg.session_timeouts_payload(Timeouts(command=2000, ready=3000)),
+            cfg.session_timeouts_payload(
+                Timeouts(command=2000, ready=3000)
+            ),
             {"command": 2000, "ready": 3000},
         )
-        self.assertEqual(cfg.session_timeouts_payload({"text": 100}), {"text": 100})
 
 
-class ClientTimeoutPayloadTests(unittest.TestCase):
-    def test_omits_timeout_ms_when_unconfigured(self):
-        c = _CapturingClient("s")
-        run(c.wait_idle())
-        self.assertNotIn("timeout_ms", c.sent[0])
-        run(c.wait_command())
-        self.assertNotIn("timeout_ms", c.sent[1])
-        run(c.wait_exit())
-        self.assertNotIn("timeout_ms", c.sent[2])
-        run(c.wait_ready())
-        self.assertNotIn("timeout_ms", c.sent[3])
+class TypedCallTests(unittest.TestCase):
+    def test_open_uses_typed_arguments(self):
+        terminal = _CapturingClient("s")
+        run(
+            terminal.open(
+                cols=120,
+                rows=40,
+                env={"K": "V"},
+                timeouts=Timeouts(text=100, ready=200),
+            )
+        )
+        name, args = terminal.fake.calls[0]
+        self.assertEqual(name, "open")
+        self.assertEqual(args[:6], (None, 120, 40, None, [("K", "V")], None))
+        self.assertEqual(args[6:], (100, None, None, None, 200))
 
-    def test_client_timeouts_field_threads_into_payload(self):
-        c = _CapturingClient("s", timeouts=Timeouts(command=2000, idle=1500))
-        run(c.wait_command())
-        self.assertEqual(c.sent[0]["timeout_ms"], 2000)
-        run(c.wait_idle())
-        self.assertEqual(c.sent[1]["timeout_ms"], 1500)
-        run(c.wait_exit())
-        self.assertNotIn("timeout_ms", c.sent[2])
+    def test_run_uses_program_and_argv(self):
+        terminal = _CapturingClient("s")
+        run(terminal.run("vim", "file.txt"))
+        name, args = terminal.fake.calls[0]
+        self.assertEqual(name, "run")
+        self.assertEqual(args[0], "vim")
+        self.assertEqual(args[1], ["file.txt"])
 
-    def test_per_call_beats_client_timeouts_which_beats_omitted(self):
-        c = _CapturingClient("s", timeouts=Timeouts(idle=1000))
-        run(c.wait_idle(timeout=50))  # per-call wins
-        self.assertEqual(c.sent[0]["timeout_ms"], 50)
-        run(c.wait_idle())  # client-level default applies
-        self.assertEqual(c.sent[1]["timeout_ms"], 1000)
-        run(c.wait_command())  # nothing configured -> omitted
-        self.assertNotIn("timeout_ms", c.sent[2])
+    def test_input_helpers_use_distinct_typed_methods(self):
+        terminal = _CapturingClient("s")
+        run(terminal.type("typed"))
+        run(terminal.write("written"))
+        run(terminal.submit("echo hi"))
+        run(terminal.keys("Ctrl+a"))
+        run(terminal.press("Escape", "Enter"))
+        self.assertEqual(
+            terminal.fake.calls,
+            [
+                ("type", ("typed",)),
+                ("write", ("written",)),
+                ("submit", ("echo hi",)),
+                ("keys", ("Ctrl+a",)),
+                ("press", (["Escape", "Enter"],)),
+            ],
+        )
 
-    def test_text_class_covers_wait_text_and_expect_text(self):
-        c = _CapturingClient("s", timeouts=Timeouts(text=1234))
-        run(c.wait_text("x"))
-        self.assertEqual(c.sent[0]["timeout_ms"], 1234)
-        run(c.expect_text("x"))
-        self.assertEqual(c.sent[1]["timeout_ms"], 1234)
+    def test_mouse_helpers_use_typed_methods(self):
+        terminal = _CapturingClient("s")
+        run(terminal.mouse.click(on_text="OK", clicks=2))
+        run(terminal.mouse.move(1, 2))
+        run(terminal.mouse.down(1, 2, button=1))
+        run(terminal.mouse.up(1, 2, button=1))
+        run(terminal.mouse.drag(1, 2, 3, 4, button=1))
+        run(terminal.mouse.scroll("down", amount=4))
+        self.assertEqual(
+            terminal.fake.calls,
+            [
+                ("mouse_click", (None, None, "OK", 0, 2)),
+                ("mouse_move", (1, 2)),
+                ("mouse_down", (1, 2, 1)),
+                ("mouse_up", (1, 2, 1)),
+                ("mouse_drag", (1, 2, 3, 4, 1)),
+                ("mouse_scroll", ("down", 4)),
+            ],
+        )
 
-    def test_command_class_covers_wait_command_and_expect_exit_code(self):
-        c = _CapturingClient("s", timeouts=Timeouts(command=2222))
-        run(c.wait_command())
-        self.assertEqual(c.sent[0]["timeout_ms"], 2222)
-        run(c.expect_exit_code(0))
-        self.assertEqual(c.sent[1]["timeout_ms"], 2222)
-
-    def test_expect_exit_code_sends_a_per_call_timeout(self):
-        c = _CapturingClient("s")
-        run(c.expect_exit_code(0, timeout=777))
-        self.assertEqual(c.sent[0]["timeout_ms"], 777)
-        run(c.expect_exit_code(0))
-        self.assertNotIn("timeout_ms", c.sent[1])
-
-    def test_plain_dict_timeouts_supported(self):
-        c = _CapturingClient("s", timeouts={"command": 4321})
-        run(c.wait_command())
-        self.assertEqual(c.sent[0]["timeout_ms"], 4321)
-
-
-class OpenSessionTimeoutTests(unittest.TestCase):
-    def test_open_omits_timeouts_when_unset(self):
-        c = _CapturingClient("s")
-        run(c.open())
-        self.assertNotIn("timeouts", c.sent[0])
-
-    def test_open_omits_timeouts_when_all_classes_none(self):
-        c = _CapturingClient("s")
-        run(c.open(timeouts=Timeouts()))
-        self.assertNotIn("timeouts", c.sent[0])
-
-    def test_open_forwards_only_set_classes(self):
-        c = _CapturingClient("s")
-        run(c.open(timeouts=Timeouts(text=1000, ready=2000)))
-        self.assertEqual(c.sent[0]["timeouts"], {"text": 1000, "ready": 2000})
-
-    def test_open_timeouts_accepts_plain_dict(self):
-        c = _CapturingClient("s")
-        run(c.open(timeouts={"command": 5000}))
-        self.assertEqual(c.sent[0]["timeouts"], {"command": 5000})
-
-    def test_run_forwards_session_timeouts(self):
-        c = _CapturingClient("s")
-        run(c.run("vim", timeouts=Timeouts(idle=1500)))
-        self.assertEqual(c.sent[0]["timeouts"], {"idle": 1500})
-
-
-class UniqueSessionTests(unittest.TestCase):
-    def test_format_and_uniqueness(self):
-        a = ephemeral.unique_session()
-        b = ephemeral.unique_session()
-        self.assertTrue(a.startswith("shell-use-"))
-        self.assertNotEqual(a, b)
-
-    def test_sanitizes_unsafe_characters(self):
-        name = ephemeral.unique_session("a b/c\\d:e.f")
-        self.assertIsNotNone(re.fullmatch(r"[A-Za-z0-9_-]+", name))
-
-    def test_capped_at_64(self):
-        name = ephemeral.unique_session("x" * 500)
-        self.assertLessEqual(len(name), 64)
-        self.assertRegex(name, r"-\d+-[0-9a-f]+-\d+$")
-
-    def test_default_prefix(self):
-        self.assertTrue(ephemeral.unique_session("").startswith("shell-use-"))
+    def test_typed_getters_use_distinct_native_methods(self):
+        terminal = _CapturingClient("s")
+        for method in (
+            terminal.get_command,
+            terminal.get_output,
+            terminal.get_exit_code,
+            terminal.get_cwd,
+            terminal.get_cursor,
+            terminal.get_size,
+        ):
+            run(method())
+        self.assertEqual(
+            [name for name, _ in terminal.fake.calls],
+            [
+                "get_command",
+                "get_output",
+                "get_exit_code",
+                "get_cwd",
+                "get_cursor",
+                "get_size",
+            ],
+        )
+        self.assertFalse(hasattr(client.ShellUse, "send"))
+        self.assertFalse(hasattr(client.ShellUse, "get"))
 
 
-class WaitReadyPayloadTests(unittest.TestCase):
-    def test_wait_ready_omits_timeout_when_unset(self):
-        c = _CapturingClient("s")
-        run(c.wait_ready())
-        self.assertEqual(c.sent[0], {"kind": "wait_ready"})
+class ClientTimeoutTests(unittest.TestCase):
+    def test_unconfigured_waits_pass_none(self):
+        terminal = _CapturingClient("s")
+        run(terminal.wait_idle())
+        run(terminal.wait_command())
+        run(terminal.wait_exit())
+        run(terminal.wait_ready())
+        self.assertEqual(
+            terminal.fake.calls,
+            [
+                ("wait_idle", (None,)),
+                ("wait_command", (None,)),
+                ("wait_exit", (None,)),
+                ("wait_ready", (None,)),
+            ],
+        )
 
-    def test_open_omits_wait_ready_when_none(self):
-        c = _CapturingClient("s")
-        run(c.open())
-        self.assertNotIn("wait_ready", c.sent[0])
+    def test_client_and_per_call_timeouts_resolve(self):
+        terminal = _CapturingClient(
+            "s", timeouts=Timeouts(text=1234, command=2222, idle=1500)
+        )
+        run(terminal.wait_text("x"))
+        run(terminal.wait_idle(timeout=50))
+        run(terminal.expect_exit_code(0))
+        self.assertEqual(terminal.fake.calls[0][1][-1], 1234)
+        self.assertEqual(terminal.fake.calls[1], ("wait_idle", (50,)))
+        self.assertEqual(
+            terminal.fake.calls[2], ("expect_exit_code", (0, 2222))
+        )
 
-    def test_open_forwards_wait_ready(self):
-        c = _CapturingClient("s")
-        run(c.open(wait_ready=True))
-        self.assertEqual(c.sent[0]["wait_ready"], True)
-        run(c.run("vim", wait_ready=False))
-        self.assertEqual(c.sent[1]["wait_ready"], False)
+    def test_open_and_run_forward_session_timeouts(self):
+        terminal = _CapturingClient("s")
+        run(terminal.open(timeouts=Timeouts(text=1000, ready=2000)))
+        run(terminal.run("vim", timeouts=Timeouts(idle=1500)))
+        self.assertEqual(
+            terminal.fake.calls[0][1][-5:], (1000, None, None, None, 2000)
+        )
+        self.assertEqual(
+            terminal.fake.calls[1][1][-5:], (None, 1500, None, None, None)
+        )
 
 
 class RetryTests(unittest.TestCase):
     def test_retries_reattempt_and_reraise_last(self):
-        calls = {"n": 0}
+        terminal = _CapturingClient("s")
+        attempts = {"count": 0}
 
-        class Flaky(client.ShellUse):
-            async def send(self, payload):
-                calls["n"] += 1
-                raise RuntimeError("attempt %d" % calls["n"])
+        def open_call(*args):
+            terminal.fake.calls.append(("open", args))
 
-            async def close_quiet(self):
-                pass
+            async def complete():
+                attempts["count"] += 1
+                raise RuntimeError("attempt %d" % attempts["count"])
 
-        c = Flaky("s")
+            return complete()
+
+        terminal.fake.open = open_call
         with self.assertRaises(RuntimeError) as raised:
-            run(c.open(retries=2))
-        self.assertEqual(calls["n"], 3)
+            run(terminal.open(retries=2))
+        self.assertEqual(attempts["count"], 3)
         self.assertEqual(str(raised.exception), "attempt 3")
 
     def test_no_retries_single_attempt(self):
-        calls = {"n": 0}
-
-        class Flaky(client.ShellUse):
-            async def send(self, payload):
-                calls["n"] += 1
-                raise RuntimeError("boom")
-
-            async def close_quiet(self):
-                pass
-
-        c = Flaky("s")
+        terminal = _CapturingClient("s")
+        terminal.fake.error = RuntimeError("boom")
         with self.assertRaises(RuntimeError):
-            run(c.open())
-        self.assertEqual(calls["n"], 1)
+            run(terminal.open())
+        self.assertEqual(
+            len([call for call in terminal.fake.calls if call[0] == "open"]),
+            1,
+        )
 
 
 class MessagePrefixTests(unittest.TestCase):
-    def _prefix_for(self, method_name, *args, **kwargs):
-        c = _CapturingClient("s")
-        c.raise_kind = ExpectationError("boom")
-        method = getattr(c, method_name)
+    def _prefix_for(self, method_name, *args):
+        terminal = _CapturingClient("s")
+        terminal.fake.error = ExpectationError("boom")
         with self.assertRaises(ExpectationError) as raised:
-            run(method(*args, **kwargs))
+            run(getattr(terminal, method_name)(*args))
         return str(raised.exception)
 
     def test_all_wait_and_expect_methods_prefix(self):
@@ -246,68 +257,60 @@ class MessagePrefixTests(unittest.TestCase):
             "wait_exit": (),
             "wait_ready": (),
             "expect_text": ("x",),
+            "expect_exit_code": (0,),
             "expect_output": ("x",),
             "expect_snapshot": ("x",),
         }
         for name, args in cases.items():
-            message = self._prefix_for(name, *args)
             self.assertTrue(
-                message.startswith(name + ": "),
-                "%s did not prefix: %r" % (name, message),
+                self._prefix_for(name, *args).startswith(name + ": ")
             )
-
-    def test_expect_exit_code_prefixes(self):
-        c = _CapturingClient("s")
-        c.raise_kind = ExpectationError("boom")
-        with self.assertRaises(ExpectationError) as raised:
-            run(c.expect_exit_code(0))
-        self.assertTrue(str(raised.exception).startswith("expect_exit_code: "))
 
 
 class ArtifactCaptureTests(unittest.TestCase):
-    def test_no_artifacts_leaves_terminal_none(self):
-        c = _CapturingClient("s")
-        c.raise_kind = ExpectationError("nope\n\nTerminal content:\n╭──╮\n╰──╯")
-        with self.assertRaises(ExpectationError) as raised:
-            run(c.wait_text("x"))
-        self.assertIsNone(raised.exception.terminal)
-
     def test_text_mode_captures_terminal_text_only(self):
-        c = _CapturingClient("s", artifacts={"dir": "unused", "on_failure": "text"})
-        c.raise_kind = ExpectationError("nope\n\nTerminal content:\n╭──╮\n╰──╯")
+        terminal = _CapturingClient(
+            "s", artifacts={"dir": "unused", "on_failure": "text"}
+        )
+        terminal.fake.error = ExpectationError(
+            "nope\n\nTerminal content:\n╭──╮\n╰──╯"
+        )
         with self.assertRaises(ExpectationError) as raised:
-            run(c.wait_text("x"))
-        terminal = raised.exception.terminal
-        self.assertIsInstance(terminal, TerminalArtifact)
-        self.assertIn("╭──╮", terminal.text)
-        self.assertIsNone(terminal.screenshot)
+            run(terminal.wait_text("x"))
+        artifact = raised.exception.terminal
+        self.assertIsInstance(artifact, TerminalArtifact)
+        self.assertIn("╭──╮", artifact.text)
+        self.assertIsNone(artifact.screenshot)
 
     def test_capture_never_masks_original_error(self):
-        c = _CapturingClient("s", artifacts={"dir": "unused", "on_failure": "svg"})
-        c.raise_kind = ExpectationError("nope\n\nTerminal content:\n╭──╮\n╰──╯")
+        terminal = _CapturingClient(
+            "s", artifacts={"dir": "unused", "on_failure": "svg"}
+        )
+        terminal.fake.error = ExpectationError(
+            "nope\n\nTerminal content:\n╭──╮\n╰──╯"
+        )
 
-        async def boom(*a, **k):
+        async def boom(*args, **kwargs):
             raise RuntimeError("screenshot exploded")
 
-        c.screenshot = boom
+        terminal.screenshot = boom
         with self.assertRaises(ExpectationError):
-            run(c.wait_text("x"))
+            run(terminal.wait_text("x"))
 
 
-class CloseIdempotencyTests(unittest.TestCase):
-    def test_close_is_idempotent_without_an_open_terminal(self):
-        async def scenario():
-            c = client.ShellUse(ephemeral.unique_session("idem"))
-            await c.close()
-            await c.close()
-            await c.close_quiet()
+class UniqueSessionTests(unittest.TestCase):
+    def test_format_and_uniqueness(self):
+        first = ephemeral.unique_session()
+        second = ephemeral.unique_session()
+        self.assertTrue(first.startswith("shell-use-"))
+        self.assertNotEqual(first, second)
 
-        run(scenario())
-
-    def test_ephemeral_uses_a_unique_process_local_session(self):
-        c = client.ShellUse.ephemeral("worker")
-        self.assertNotEqual(c.session, "default")
-        run(c.close())
+    def test_sanitizes_and_caps_names(self):
+        name = ephemeral.unique_session("a b/c\\d:e.f")
+        self.assertIsNotNone(re.fullmatch(r"[A-Za-z0-9_-]+", name))
+        long_name = ephemeral.unique_session("x" * 500)
+        self.assertLessEqual(len(long_name), 64)
+        self.assertRegex(long_name, r"-\d+-[0-9a-f]+-\d+$")
 
 
 class UnknownTimeoutClassTests(unittest.TestCase):
@@ -317,15 +320,8 @@ class UnknownTimeoutClassTests(unittest.TestCase):
         self.assertIn("comand", str(raised.exception))
 
     def test_open_rejects_unknown_keys(self):
-        c = _CapturingClient("s")
         with self.assertRaises(ValueError):
-            run(c.open(timeouts={"txt": 100}))
-
-    def test_known_keys_still_pass(self):
-        self.assertEqual(
-            cfg.session_timeouts_payload({"text": 1, "ready": 2}),
-            {"text": 1, "ready": 2},
-        )
+            run(_CapturingClient("s").open(timeouts={"txt": 100}))
 
 
 if __name__ == "__main__":

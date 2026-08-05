@@ -5,6 +5,7 @@ import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
   assertTimeoutClasses,
+  envPairs,
   resolveSession,
   resolveTimeout,
   timeoutsPayload,
@@ -13,12 +14,13 @@ import type { TimeoutClass } from "./config.js";
 import { uniqueSession } from "./ephemeral.js";
 import { ExpectationError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
-import { envPairs, unwrap } from "./protocol.js";
 import type {
   Cell,
   ClientOptions,
+  Cursor,
   OpenResult,
   Shell,
+  Size,
   SpawnOptions,
   State,
 } from "./types.js";
@@ -69,11 +71,15 @@ function withOperation(error: unknown, operation: string): unknown {
   return error;
 }
 
-class Mouse {
-  #client: ShellUse;
+function optional<T>(value: T | null | undefined): T | undefined {
+  return value ?? undefined;
+}
 
-  constructor(client: ShellUse) {
-    this.#client = client;
+class Mouse {
+  #runtime: NativeRuntime;
+
+  constructor(runtime: NativeRuntime) {
+    this.#runtime = runtime;
   }
 
   async click(
@@ -81,35 +87,25 @@ class Mouse {
     y: number | null = null,
     opts: { onText?: string; button?: number; clicks?: number } = {},
   ): Promise<void> {
-    await this.#client.send({
-      kind: "mouse",
-      action: {
-        op: "click",
-        x,
-        y,
-        on_text: opts.onText ?? null,
-        button: opts.button ?? 0,
-        clicks: opts.clicks ?? 1,
-      },
+    await this.#runtime.mouseClick({
+      x: optional(x),
+      y: optional(y),
+      onText: opts.onText,
+      button: opts.button ?? 0,
+      clicks: opts.clicks ?? 1,
     });
   }
 
   async move(x: number, y: number): Promise<void> {
-    await this.#client.send({ kind: "mouse", action: { op: "move", x, y } });
+    await this.#runtime.mouseMove(x, y);
   }
 
   async down(x: number, y: number, opts: MouseButtonOptions = {}): Promise<void> {
-    await this.#client.send({
-      kind: "mouse",
-      action: { op: "down", x, y, button: opts.button ?? 0 },
-    });
+    await this.#runtime.mouseDown(x, y, opts.button ?? 0);
   }
 
   async up(x: number, y: number, opts: MouseButtonOptions = {}): Promise<void> {
-    await this.#client.send({
-      kind: "mouse",
-      action: { op: "up", x, y, button: opts.button ?? 0 },
-    });
+    await this.#runtime.mouseUp(x, y, opts.button ?? 0);
   }
 
   async drag(
@@ -119,17 +115,11 @@ class Mouse {
     y2: number,
     opts: MouseButtonOptions = {},
   ): Promise<void> {
-    await this.#client.send({
-      kind: "mouse",
-      action: { op: "drag", x1, y1, x2, y2, button: opts.button ?? 0 },
-    });
+    await this.#runtime.mouseDrag(x1, y1, x2, y2, opts.button ?? 0);
   }
 
   async scroll(direction: "up" | "down", opts: { amount?: number } = {}): Promise<void> {
-    await this.#client.send({
-      kind: "mouse",
-      action: { op: "scroll", direction, amount: opts.amount ?? 3 },
-    });
+    await this.#runtime.mouseScroll(direction, opts.amount ?? 3);
   }
 }
 
@@ -147,32 +137,15 @@ export class ShellUse {
     }
     this.#options = opts;
     this.#runtime = new NativeRuntime(this.session);
-    this.mouse = new Mouse(this);
+    this.mouse = new Mouse(this.#runtime);
   }
 
   static ephemeral(prefix?: string, opts: ClientOptions = {}): ShellUse {
     return new ShellUse(uniqueSession(prefix), opts);
   }
 
-  async send(payload: unknown): Promise<unknown> {
-    const resp = await this.#runtime.request(payload);
-    return unwrap(resp);
-  }
-
   #timeout(cls: TimeoutClass, callTimeout?: number): number | undefined {
     return resolveTimeout(cls, callTimeout, this.#options);
-  }
-
-  #withTimeout(
-    payload: Record<string, unknown>,
-    cls: TimeoutClass,
-    callTimeout?: number,
-  ): Record<string, unknown> {
-    const timeout = this.#timeout(cls, callTimeout);
-    if (timeout !== undefined) {
-      payload.timeout_ms = timeout;
-    }
-    return payload;
   }
 
   async #guard<T>(operation: string, action: () => Promise<T>): Promise<T> {
@@ -214,11 +187,11 @@ export class ShellUse {
     } catch {}
   }
 
-  async #spawn(payload: Record<string, unknown>, retries: number): Promise<OpenResult> {
+  async #spawn(action: () => Promise<OpenResult>, retries: number): Promise<OpenResult> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        return (await this.send(payload)) as OpenResult;
+        return await action();
       } catch (error) {
         lastError = error;
         if (attempt < retries) {
@@ -230,47 +203,40 @@ export class ShellUse {
   }
 
   async open(opts: SpawnOptions & { shell?: Shell } = {}): Promise<OpenResult> {
-    const payload: Record<string, unknown> = {
-      kind: "open",
-      shell: opts.shell ?? null,
-      program: null,
+    if (opts.timeouts) {
+      assertTimeoutClasses(opts.timeouts);
+    }
+    const options = {
+      shell: opts.shell,
       cols: opts.cols ?? DEFAULT_COLS,
       rows: opts.rows ?? DEFAULT_ROWS,
-      cwd: opts.cwd ?? null,
+      cwd: opts.cwd,
       env: envPairs(opts.env),
+      waitReady: opts.waitReady,
+      timeouts: timeoutsPayload(opts.timeouts),
     };
-    if (opts.waitReady !== undefined) {
-      payload.wait_ready = opts.waitReady;
-    }
-    const timeouts = timeoutsPayload(opts.timeouts);
-    if (timeouts !== undefined) {
-      payload.timeouts = timeouts;
-    }
-    return this.#spawn(payload, opts.retries ?? 0);
+    return this.#spawn(() => this.#runtime.open(options), opts.retries ?? 0);
   }
 
   async run(program: string, args: string[] = [], opts: SpawnOptions = {}): Promise<OpenResult> {
-    const payload: Record<string, unknown> = {
-      kind: "open",
-      shell: null,
-      program: [program, ...args],
+    if (opts.timeouts) {
+      assertTimeoutClasses(opts.timeouts);
+    }
+    const options = {
+      program,
+      args,
       cols: opts.cols ?? DEFAULT_COLS,
       rows: opts.rows ?? DEFAULT_ROWS,
-      cwd: opts.cwd ?? null,
+      cwd: opts.cwd,
       env: envPairs(opts.env),
+      waitReady: opts.waitReady,
+      timeouts: timeoutsPayload(opts.timeouts),
     };
-    if (opts.waitReady !== undefined) {
-      payload.wait_ready = opts.waitReady;
-    }
-    const timeouts = timeoutsPayload(opts.timeouts);
-    if (timeouts !== undefined) {
-      payload.timeouts = timeouts;
-    }
-    return this.#spawn(payload, opts.retries ?? 0);
+    return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0);
   }
 
   async close(): Promise<void> {
-    unwrap(await this.#runtime.request({ kind: "close" }));
+    await this.#runtime.close();
   }
 
   async closeQuiet(): Promise<void> {
@@ -280,164 +246,138 @@ export class ShellUse {
   }
 
   async type(text: string): Promise<void> {
-    await this.send({ kind: "write", data: text });
+    await this.#runtime.type(text);
   }
 
   async write(data: string): Promise<void> {
-    await this.send({ kind: "write", data });
+    await this.#runtime.write(data);
   }
 
   async submit(text: string | null = null): Promise<void> {
-    await this.send({ kind: "submit", data: text });
+    await this.#runtime.submit(optional(text));
   }
 
   async press(...keys: string[]): Promise<void> {
-    await this.send({ kind: "press", keys });
+    await this.#runtime.press(keys);
   }
 
   async keys(combo: string): Promise<void> {
-    await this.send({ kind: "press", keys: [combo] });
+    await this.#runtime.press([combo]);
   }
 
   async resize(cols: number, rows: number): Promise<void> {
-    await this.send({ kind: "resize", cols, rows });
+    await this.#runtime.resize(cols, rows);
   }
 
   async signal(name: string): Promise<void> {
-    await this.send({ kind: "signal", name });
+    await this.#runtime.signal(name);
   }
 
   async kill(): Promise<void> {
-    await this.send({ kind: "signal", name: "KILL" });
+    await this.#runtime.signal("KILL");
   }
 
   async state(): Promise<State> {
-    return (await this.send({ kind: "state" })) as State;
+    return this.#runtime.state();
   }
 
   async text(opts: { full?: boolean } = {}): Promise<string> {
-    const data = (await this.send({ kind: "text", full: opts.full ?? false })) as {
-      text: string;
-    };
-    return data.text;
+    return this.#runtime.text(opts.full ?? false);
   }
 
   async cells(x: number, y: number, w = 1, h = 1): Promise<Cell[]> {
-    const data = (await this.send({ kind: "cells", x, y, w, h })) as { cells: Cell[] };
-    return data.cells;
-  }
-
-  async get(field: string): Promise<unknown> {
-    const data = (await this.send({ kind: "get", field })) as { value: unknown };
-    return data.value;
+    return this.#runtime.cells(x, y, w, h);
   }
 
   async getCommand(): Promise<string | null> {
-    return (await this.get("command")) as string | null;
+    return this.#runtime.getCommand();
   }
 
   async getOutput(): Promise<string | null> {
-    return (await this.get("output")) as string | null;
+    return this.#runtime.getOutput();
   }
 
   async getExitCode(): Promise<number | null> {
-    return (await this.get("exit-code")) as number | null;
+    return this.#runtime.getExitCode();
   }
 
   async getCwd(): Promise<string | null> {
-    return (await this.get("cwd")) as string | null;
+    return this.#runtime.getCwd();
   }
 
-  async getCursor(): Promise<{ x: number; y: number }> {
-    return (await this.get("cursor")) as { x: number; y: number };
+  async getCursor(): Promise<Cursor> {
+    return this.#runtime.getCursor();
   }
 
-  async getSize(): Promise<{ cols: number; rows: number }> {
-    return (await this.get("size")) as { cols: number; rows: number };
+  async getSize(): Promise<Size> {
+    return this.#runtime.getSize();
   }
 
   async screenshot(path: string | null = null, opts: { full?: boolean } = {}): Promise<string> {
-    const data = (await this.send({ kind: "screenshot", full: opts.full ?? false, path })) as {
-      path?: string;
-      text?: string;
-    };
-    return (data.path ?? data.text) as string;
+    return this.#runtime.screenshot({
+      full: opts.full ?? false,
+      path: optional(path),
+    });
   }
 
   async waitText(text: string, opts: WaitTextOptions = {}): Promise<void> {
     await this.#guard("waitText", () =>
-      this.send(
-        this.#withTimeout(
-          {
-            kind: "wait_text",
-            text,
-            regex: opts.regex ?? false,
-            full: opts.full ?? false,
-            not: opts.not ?? false,
-          },
-          "text",
-          opts.timeout,
-        ),
-      ),
+      this.#runtime.waitText(text, {
+        regex: opts.regex ?? false,
+        full: opts.full ?? false,
+        not: opts.not ?? false,
+        timeoutMs: this.#timeout("text", opts.timeout),
+      }),
     );
   }
 
   async waitIdle(opts: { timeout?: number } = {}): Promise<void> {
     await this.#guard("waitIdle", () =>
-      this.send(this.#withTimeout({ kind: "wait_idle" }, "idle", opts.timeout)),
+      this.#runtime.waitIdle(this.#timeout("idle", opts.timeout)),
     );
   }
 
   async waitCommand(opts: { timeout?: number } = {}): Promise<void> {
     await this.#guard("waitCommand", () =>
-      this.send(this.#withTimeout({ kind: "wait_command" }, "command", opts.timeout)),
+      this.#runtime.waitCommand(this.#timeout("command", opts.timeout)),
     );
   }
 
   async waitExit(opts: { timeout?: number } = {}): Promise<void> {
     await this.#guard("waitExit", () =>
-      this.send(this.#withTimeout({ kind: "wait_exit" }, "exit", opts.timeout)),
+      this.#runtime.waitExit(this.#timeout("exit", opts.timeout)),
     );
   }
 
   async waitReady(opts: { timeout?: number } = {}): Promise<void> {
     await this.#guard("waitReady", () =>
-      this.send(this.#withTimeout({ kind: "wait_ready" }, "ready", opts.timeout)),
+      this.#runtime.waitReady(this.#timeout("ready", opts.timeout)),
     );
   }
 
   async expectText(text: string, opts: ExpectTextOptions = {}): Promise<void> {
     await this.#guard("expectText", () =>
-      this.send(
-        this.#withTimeout(
-          {
-            kind: "expect_text",
-            text,
-            regex: opts.regex ?? false,
-            full: opts.full ?? false,
-            strict: opts.strict ?? true,
-            not: opts.not ?? false,
-            fg: opts.fg ?? null,
-            bg: opts.bg ?? null,
-          },
-          "text",
-          opts.timeout,
-        ),
-      ),
+      this.#runtime.expectText(text, {
+        regex: opts.regex ?? false,
+        full: opts.full ?? false,
+        strict: opts.strict ?? true,
+        not: opts.not ?? false,
+        fg: opts.fg,
+        bg: opts.bg,
+        timeoutMs: this.#timeout("text", opts.timeout),
+      }),
     );
   }
 
   async expectExitCode(code: number, opts: { timeout?: number } = {}): Promise<void> {
     await this.#guard("expectExitCode", () =>
-      this.send(
-        this.#withTimeout({ kind: "expect_exit_code", code }, "command", opts.timeout),
-      ),
+      this.#runtime.expectExitCode(code, this.#timeout("command", opts.timeout)),
     );
   }
 
   async expectOutput(text: string, opts: { regex?: boolean } = {}): Promise<void> {
     await this.#guard("expectOutput", () =>
-      this.send({ kind: "expect_output", text, regex: opts.regex ?? false }),
+      this.#runtime.expectOutput(text, opts.regex ?? false),
     );
   }
 
@@ -445,16 +385,13 @@ export class ShellUse {
     name: string,
     opts: { update?: boolean; includeColors?: boolean } = {},
   ): Promise<string> {
-    const data = (await this.#guard("expectSnapshot", () =>
-      this.send({
-        kind: "snapshot",
-        name,
+    return this.#guard("expectSnapshot", () =>
+      this.#runtime.snapshot(name, {
         update: opts.update ?? false,
-        include_colors: opts.includeColors ?? false,
+        includeColors: opts.includeColors ?? false,
         cwd: process.cwd(),
       }),
-    )) as { status: string };
-    return data.status;
+    );
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
