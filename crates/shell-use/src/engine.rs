@@ -397,6 +397,35 @@ fn viewable(session: &TerminalSession) -> Vec<Vec<EmuCell>> {
         .viewable_rows()
 }
 
+/// The visible screen and the window title as of a single instant.
+///
+/// Read under one lock. Taking them separately lets the reader thread advance
+/// the terminal in between, which pairs a grid from one moment with a title
+/// from another: a shell writes its prompt and then sets its title, so a
+/// snapshot of a screen that never changed again could still come out
+/// different each time.
+fn grid_with_title(
+    session: &TerminalSession,
+    full: bool,
+    include_title: bool,
+) -> (Vec<Vec<EmuCell>>, Option<String>) {
+    let state = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let title = if include_title {
+        state.emu.title()
+    } else {
+        None
+    };
+    let rows = if full {
+        state.emu.full_rows()
+    } else {
+        state.emu.viewable_rows()
+    };
+    (rows, title)
+}
+
 fn grid(session: &TerminalSession, full: bool) -> Vec<Vec<EmuCell>> {
     let state = session
         .state
@@ -1282,11 +1311,10 @@ fn do_snapshot(
     include_title: bool,
     cwd: Option<String>,
 ) -> Result<SnapshotResult, ShellUseError> {
-    let rows = viewable(session);
-    // Off by default: a shell prompt routinely sets the title to a username,
-    // hostname, and absolute path, which would pin every baseline to one
-    // machine and make it change on `cd` while the screen stayed the same.
-    let title = include_title.then(|| title_of(session)).flatten();
+    // The title is off by default: a shell prompt routinely sets it to a
+    // username, hostname, and absolute path, which would pin every baseline to
+    // one machine and make it change on `cd` while the screen stayed the same.
+    let (rows, title) = grid_with_title(session, false, include_title);
     let content = snapshot::serialize(&rows, session.cols, include_colors, title.as_deref());
     let base = cwd
         .map(std::path::PathBuf::from)
@@ -1308,11 +1336,10 @@ fn screenshot(
     full: bool,
     path: Option<String>,
 ) -> Result<ScreenshotResult, ShellUseError> {
-    let rows = grid(session, full);
+    let (rows, title) = grid_with_title(session, full, true);
     match path {
         Some(path) => {
-            let svg =
-                crate::render::svg::render_svg(&rows, session.cols, title_of(session).as_deref());
+            let svg = crate::render::svg::render_svg(&rows, session.cols, title.as_deref());
             std::fs::write(&path, svg)
                 .map_err(|error| ShellUseError::internal(error.to_string()))?;
             Ok(ScreenshotResult::Path(path))
@@ -1330,12 +1357,8 @@ fn timeout_message(pattern: &str, timeout_ms: u64, not: bool) -> String {
 }
 
 fn assertion_message(session: &TerminalSession, message: &str) -> String {
-    let screen = snapshot::serialize(
-        &viewable(session),
-        session.cols,
-        false,
-        title_of(session).as_deref(),
-    );
+    let (rows, title) = grid_with_title(session, false, true);
+    let screen = snapshot::serialize(&rows, session.cols, false, title.as_deref());
     format!("{message}\n\nTerminal content:\n{screen}")
 }
 

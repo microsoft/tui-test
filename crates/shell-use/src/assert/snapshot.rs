@@ -69,7 +69,12 @@ fn baseline() -> EmuCell {
     EmuCell::blank()
 }
 
-/// Serialize a grid into a boxed text view plus (optionally) a color shift map.
+/// Serialize a grid into a boxed text view, optionally followed by attributes.
+///
+/// The attributes are a JSON object carrying whatever the box itself cannot
+/// record exactly: the full window title, and the color shifts when they are
+/// asked for. It is emitted only when there is something to put in it, so a
+/// plain snapshot is still just the box.
 pub fn serialize(
     rows: &[Vec<EmuCell>],
     cols: u16,
@@ -96,13 +101,24 @@ pub fn serialize(
     }
 
     let view = box_view(&lines.join("\n"), cols, title);
+    let mut attributes = Map::new();
+    // The border shows a title shortened to fit, which is readable but lossy:
+    // two long titles differing only past the cut would otherwise record as
+    // the same snapshot and pass for each other. The full one is recorded here
+    // so the baseline stays exact however narrow the frame is.
+    if let Some(title) = title {
+        attributes.insert("title".to_string(), Value::String(title.to_string()));
+    }
     if include_colors && !shifts.is_empty() {
+        attributes.insert("colors".to_string(), Value::Object(shifts));
+    }
+    if attributes.is_empty() {
+        view
+    } else {
         format!(
             "{view}\n{}",
-            serde_json::to_string_pretty(&Value::Object(shifts)).unwrap_or_default()
+            serde_json::to_string_pretty(&Value::Object(attributes)).unwrap_or_default()
         )
-    } else {
-        view
     }
 }
 
@@ -175,6 +191,14 @@ mod tests {
     use super::*;
     use crate::terminal::cell::CONTINUATION;
 
+    /// Just the framed view, dropping any attributes recorded after it.
+    fn box_of(serialized: &str) -> String {
+        match serialized.split_once("╯\n") {
+            Some((frame, _)) => format!("{frame}╯"),
+            None => serialized.to_string(),
+        }
+    }
+
     fn cell(s: &str) -> EmuCell {
         EmuCell {
             ch: s.into(),
@@ -224,8 +248,57 @@ mod tests {
         );
         assert_eq!(
             bare.lines().skip(1).collect::<Vec<_>>(),
-            titled.lines().skip(1).collect::<Vec<_>>(),
+            box_of(&titled).lines().skip(1).collect::<Vec<_>>(),
             "and nothing below the border changes"
+        );
+    }
+
+    /// The full title is recorded even when the border shows a short one.
+    ///
+    /// The border has to fit, so a long title is cut to size there. A snapshot
+    /// is an assertion rather than a picture: two titles differing only past
+    /// the cut would record identically and pass for each other, so the exact
+    /// one is kept alongside the frame.
+    #[test]
+    fn the_full_title_is_recorded_even_when_the_border_cannot_show_it() {
+        let rows = vec![vec![cell("a"); 12]];
+        let long = "building module A, step 3";
+        let other = "building module B, step 7";
+        let out = serialize(&rows, 12, false, Some(long));
+
+        assert!(
+            box_of(&out).contains('…'),
+            "the border shows a shortened title: {out}"
+        );
+        assert!(
+            out.contains(&format!(r#""title": "{long}""#)),
+            "and the exact one is recorded: {out}"
+        );
+        assert_ne!(
+            out,
+            serialize(&rows, 12, false, Some(other)),
+            "two titles that shorten alike still record differently"
+        );
+    }
+
+    /// Colors keep their own key, so a snapshot can carry both.
+    #[test]
+    fn attributes_hold_the_title_and_the_colors_apart() {
+        let rows = vec![vec![
+            cell("a"),
+            EmuCell {
+                fg: Some(Color::from_index(1)),
+                ..EmuCell::blank()
+            },
+        ]];
+        let out = serialize(&rows, 2, true, Some("t"));
+        let attributes: Value =
+            serde_json::from_str(out.split_once("╯\n").expect("a frame then attributes").1)
+                .expect("attributes parse as json");
+        assert_eq!(attributes["title"], json!("t"));
+        assert!(
+            attributes["colors"].is_object(),
+            "colors stay under their own key: {out}"
         );
     }
 
@@ -249,7 +322,7 @@ mod tests {
             "e\u{301}clair",
         ] {
             let out = serialize(&rows, 10, false, Some(title));
-            let widths: Vec<usize> = out.lines().map(display_width).collect();
+            let widths: Vec<usize> = box_of(&out).lines().map(display_width).collect();
             assert!(
                 widths.iter().all(|w| *w == 12),
                 "title {title:?} bent the frame: {widths:?}\n{out}"
@@ -263,7 +336,7 @@ mod tests {
     fn a_frame_too_narrow_for_a_title_stays_plain() {
         let rows = vec![vec![cell("a"); 3]];
         assert_eq!(
-            serialize(&rows, 3, false, Some("title")),
+            box_of(&serialize(&rows, 3, false, Some("title"))),
             serialize(&rows, 3, false, None),
             "three columns cannot hold a title, so none is drawn"
         );
