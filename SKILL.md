@@ -343,4 +343,7 @@ terminal, and `Ctrl+C` won't quit it. Confirm with `shell-use state`
 
 **Platform note.** On Windows ConPTY, `get output` and `get command` text can on some rare occasions be
 unreliable due to screen repainting; grid-based checks (`expect text`,
-`expect exit-code`) are unaffected.
+`expect exit-code`) are unaffected. ConPTY also gives a session a window title
+before anything runs (the program's path, e.g. `C:\Program Files\Git\bin\bash.EXE`),
+where a unix PTY starts with none, so treat `get title` on a fresh session as
+platform-dependent and assert on a title only after a program sets one.

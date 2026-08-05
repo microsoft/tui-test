@@ -822,21 +822,29 @@ fn status_reports_the_daemon_pid_not_the_child() {
 /// that an empty title performs. Each of those is unit tested on its own; what
 /// only an end-to-end run proves is that a title set by a real program in a
 /// real shell arrives intact.
+///
+/// It deliberately does not assert what the title is *before* the program sets
+/// one. A session does not necessarily start without a title: Windows ConPTY
+/// supplies the program's path (`C:\Program Files\Git\bin\bash.EXE`) as soon as
+/// the session opens. That a fresh emulator reports no title, and that an empty
+/// one resets rather than storing a blank, are claims about the emulator rather
+/// than about the platform, so they are pinned in the conformance suite where
+/// no PTY is involved and every backend is covered.
 #[test]
 fn a_window_title_is_tracked_asserted_and_drawn() {
     let sandbox = Sandbox::new("title");
     sandbox.ok(&["run", "--cols", "40", "--", "bash", "--norc"]);
-
-    assert_eq!(
-        sandbox.ok(&["get", "title"]).trim(),
-        "{\n  \"value\": null\n}",
-        "a session whose program set no title reports none"
-    );
+    let before = sandbox.ok(&["get", "title"]);
 
     sandbox.ok(&["submit", r#"printf '\033]2;vim: notes.md\007'"#]);
     sandbox.ok(&["expect", "title", "vim", "--timeout", "5000"]);
     sandbox.ok(&["expect", "title", "notes\\.\\w+", "--regex"]);
     sandbox.ok(&["expect", "title", "emacs", "--not"]);
+    assert_ne!(
+        sandbox.ok(&["get", "title"]),
+        before,
+        "the title the program set replaced whatever the session started with"
+    );
 
     // The title is drawn in the window chrome, not in the grid.
     let svg = sandbox.home.join("titled.svg");
@@ -850,11 +858,6 @@ fn a_window_title_is_tracked_asserted_and_drawn() {
     // An empty title clears it, which is how programs tidy up on exit.
     sandbox.ok(&["submit", r#"printf '\033]2;\007'"#]);
     sandbox.ok(&["wait", "title", "vim", "--not", "--timeout", "5000"]);
-    assert_eq!(
-        sandbox.ok(&["get", "title"]).trim(),
-        "{\n  \"value\": null\n}",
-        "an empty title resets rather than storing a blank one"
-    );
 }
 
 /// A snapshot leaves the window title out unless it is asked for.
