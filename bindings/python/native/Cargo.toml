@@ -14,10 +14,15 @@ crate-type = ["cdylib", "rlib"]
 test = false
 
 [dependencies]
+anyhow.workspace = true
 shell-use.workspace = true
-pyo3 = { version = "0.28", features = ["abi3-py38", "generate-import-lib"] }
-pythonize = "0.28"
-serde_json.workspace = true
+pyo3 = { version = "0.28" }
+pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [features]
-extension-module = ["pyo3/extension-module"]
+extension-module = [
+    "pyo3/abi3-py38",
+    "pyo3/extension-module",
+    "pyo3/generate-import-lib",
+]

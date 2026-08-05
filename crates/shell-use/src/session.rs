@@ -2,6 +2,7 @@
 //! tracker, with a background reader thread.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
@@ -32,9 +33,10 @@ pub struct Session {
     pub cols: u16,
     pub rows: u16,
     /// Per-class timeout defaults for the lifetime of this session.
-    pub timeouts: crate::protocol::TimeoutDefaults,
+    pub timeouts: crate::api::Timeouts,
     pub pty: Arc<Mutex<Pty>>,
     pub state: Arc<Mutex<TermState>>,
+    pub cancelled: Arc<AtomicBool>,
     recorder: Arc<Mutex<Recorder>>,
     logger: Arc<Logger>,
     _reader: JoinHandle<()>,
@@ -57,7 +59,7 @@ impl Session {
         rows: u16,
         cwd: Option<String>,
         env: Vec<(String, String)>,
-        timeouts: crate::protocol::TimeoutDefaults,
+        timeouts: crate::api::Timeouts,
         logger: Arc<Logger>,
         recording_path: PathBuf,
     ) -> anyhow::Result<Self> {
@@ -87,6 +89,7 @@ impl Session {
             exited: None,
         }));
         let pty = Arc::new(Mutex::new(pty));
+        let cancelled = Arc::new(AtomicBool::new(false));
 
         let mut rec_env: Vec<(&str, String)> = vec![("TERM", "xterm-256color".to_string())];
         if let Some(sh) = shell {
@@ -112,9 +115,14 @@ impl Session {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
                         reader_logger.read(&buf[..n]);
-                        reader_recorder.lock().unwrap().on_data(&buf[..n]);
+                        reader_recorder
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .on_data(&buf[..n]);
                         let pending = {
-                            let mut st = reader_state.lock().unwrap();
+                            let mut st = reader_state
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             st.emu.process(&buf[..n]);
                             st.tracker.feed(&buf[..n]);
                             st.last_change = Instant::now();
@@ -131,7 +139,9 @@ impl Session {
             }
             let code = reader_pty.lock().ok().and_then(|mut p| p.try_wait());
             reader_logger.event(&format!("pty exited code={:?}", code));
-            let mut st = reader_state.lock().unwrap();
+            let mut st = reader_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             st.exited = Some(code.unwrap_or(0));
             st.last_change = Instant::now();
         });
@@ -149,6 +159,7 @@ impl Session {
             timeouts,
             pty,
             state,
+            cancelled,
             recorder,
             logger,
             _reader: handle,
@@ -158,13 +169,19 @@ impl Session {
     pub fn write(&self, data: &[u8]) -> anyhow::Result<()> {
         self.logger.write(data);
         {
-            let mut st = self.state.lock().unwrap();
+            let mut st = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if !st.tracker.executing() {
                 let started_count = st.tracker.started_count();
                 st.awaiting_start = Some(started_count);
             }
         }
-        self.pty.lock().unwrap().write(data)?;
+        self.pty
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .write(data)?;
         Ok(())
     }
 
@@ -177,21 +194,37 @@ impl Session {
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
         self.logger.event(&format!("resize {cols}x{rows}"));
-        self.recorder.lock().unwrap().on_resize(cols, rows);
+        self.recorder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .on_resize(cols, rows);
         self.cols = cols;
         self.rows = rows;
-        let mut st = self.state.lock().unwrap();
+        let mut st = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         st.emu.resize(cols, rows);
         drop(st);
-        self.pty.lock().unwrap().resize(cols, rows)?;
+        self.pty
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .resize(cols, rows)?;
         Ok(())
     }
 
     pub fn kill(&self) {
-        self.pty.lock().unwrap().kill();
+        self.cancelled.store(true, Ordering::Release);
+        self.pty
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .kill();
     }
 
     pub fn pid(&self) -> Option<u32> {
-        self.pty.lock().unwrap().pid()
+        self.pty
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pid()
     }
 }

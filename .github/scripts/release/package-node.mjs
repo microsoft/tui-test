@@ -7,7 +7,6 @@ const bindingsDirectory = path.resolve("bindings/js");
 const nativePackagesDirectory = path.join(bindingsDirectory, "npm");
 const outputDirectory = path.resolve("package-artifacts/npm");
 const packagePath = path.join(bindingsDirectory, "package.json");
-const readmePath = path.join(bindingsDirectory, "README.md");
 
 const nativePackages = fs
   .readdirSync(nativePackagesDirectory, { withFileTypes: true })
@@ -38,7 +37,6 @@ for (const nativePackage of nativePackages) {
 }
 
 const originalPackage = fs.readFileSync(packagePath, "utf8");
-const originalReadme = fs.readFileSync(readmePath, "utf8");
 const rootPackage = JSON.parse(originalPackage);
 rootPackage.optionalDependencies = {};
 
@@ -61,24 +59,6 @@ try {
     "--pack-destination",
     outputDirectory,
   ]);
-
-  rootPackage.name = "shell-use";
-  fs.writeFileSync(
-    packagePath,
-    `${JSON.stringify(rootPackage, null, 2)}\n`,
-  );
-  fs.writeFileSync(
-    readmePath,
-    originalReadme.replaceAll("@microsoft/shell-use", "shell-use"),
-  );
-  runNpm([
-    "pack",
-    bindingsDirectory,
-    "--ignore-scripts",
-    "--pack-destination",
-    outputDirectory,
-  ]);
 } finally {
   fs.writeFileSync(packagePath, originalPackage);
-  fs.writeFileSync(readmePath, originalReadme);
 }

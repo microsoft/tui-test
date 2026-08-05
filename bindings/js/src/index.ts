@@ -21,6 +21,7 @@ export type {
   ClientOptions,
   Color,
   Cursor,
+  EffectiveTimeouts,
   OpenResult,
   Shell,
   Size,

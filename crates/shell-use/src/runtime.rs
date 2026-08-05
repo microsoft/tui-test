@@ -1,44 +1,27 @@
 use std::collections::{HashMap, VecDeque};
-use std::fmt;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, Weak};
 
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::api::{OpenOptions, OpenResult, Operation, OperationResult, RunOptions, ShellUseError};
 use crate::engine::Engine;
 use crate::logger::Logger;
-use crate::protocol::{ErrorKind, Request, Response};
 
 const MAX_COMPLETED_RECORDINGS: usize = 1024;
 
-#[derive(Debug, Clone)]
-pub struct ShellUseError {
-    pub kind: ErrorKind,
-    pub message: String,
-}
-
-impl fmt::Display for ShellUseError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for ShellUseError {}
-
 #[derive(Clone)]
-pub struct Runtime {
+pub struct Session {
     name: Arc<str>,
     engine: Arc<Engine>,
 }
 
-impl Runtime {
+impl Session {
     pub fn new(name: impl Into<String>) -> Self {
         let name = name.into();
         let recording_path = native_recording_path(&name);
-        Runtime {
+        Self {
             name: Arc::from(name.as_str()),
             engine: Arc::new(Engine::new(
                 name,
@@ -52,42 +35,38 @@ impl Runtime {
         &self.name
     }
 
-    pub fn response(&self, request: Request) -> Response {
-        if matches!(
-            request,
-            Request::Ping | Request::Status | Request::Monitor { .. } | Request::Shutdown
-        ) {
-            return Response::usage("request is only available through the cli daemon");
-        }
-        catch_unwind(AssertUnwindSafe(|| self.engine.handle(request).0)).unwrap_or_else(|payload| {
-            Response::internal(format!(
-                "native terminal operation panicked: {}",
-                panic_message(payload.as_ref())
-            ))
-        })
+    pub fn execute(&self, operation: Operation) -> Result<OperationResult, ShellUseError> {
+        self.engine.execute(operation)
     }
 
-    pub fn response_value(&self, request: Value) -> Response {
-        match serde_json::from_value(request) {
-            Ok(request) => self.response(request),
-            Err(error) => Response::usage(format!("invalid request: {error}")),
+    pub fn open(&self, options: OpenOptions) -> Result<OpenResult, ShellUseError> {
+        match self.execute(Operation::Open(options))? {
+            OperationResult::Open(result) => Ok(result),
+            _ => Err(ShellUseError::internal(
+                "open returned an unexpected result type",
+            )),
         }
     }
 
-    pub fn request(&self, request: Request) -> Result<Value, ShellUseError> {
-        unwrap_response(self.response(request))
+    pub fn run(&self, options: RunOptions) -> Result<OpenResult, ShellUseError> {
+        match self.execute(Operation::Run(options))? {
+            OperationResult::Open(result) => Ok(result),
+            _ => Err(ShellUseError::internal(
+                "run returned an unexpected result type",
+            )),
+        }
     }
 
-    pub fn request_value(&self, request: Value) -> Result<Value, ShellUseError> {
-        unwrap_response(self.response_value(request))
+    pub fn close(&self) -> Result<(), ShellUseError> {
+        self.execute(Operation::Close).map(|_| ())
+    }
+
+    pub fn interrupt(&self) {
+        self.engine.interrupt();
     }
 
     pub fn is_open(&self) -> bool {
         self.engine.is_open()
-    }
-
-    pub fn close(&self) -> Result<(), ShellUseError> {
-        self.request(Request::Close).map(|_| ())
     }
 
     pub fn recording_path(&self) -> &Path {
@@ -99,8 +78,55 @@ impl Runtime {
     }
 }
 
+#[derive(Clone)]
+pub struct SessionHandle {
+    name: Arc<str>,
+    registry: SessionRegistry,
+}
+
+impl SessionHandle {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn execute(&self, operation: Operation) -> Result<OperationResult, ShellUseError> {
+        self.registry.execute(&self.name, operation)
+    }
+
+    pub fn open(&self, options: OpenOptions) -> Result<OpenResult, ShellUseError> {
+        match self.execute(Operation::Open(options))? {
+            OperationResult::Open(result) => Ok(result),
+            _ => Err(ShellUseError::internal(
+                "open returned an unexpected result type",
+            )),
+        }
+    }
+
+    pub fn run(&self, options: RunOptions) -> Result<OpenResult, ShellUseError> {
+        match self.execute(Operation::Run(options))? {
+            OperationResult::Open(result) => Ok(result),
+            _ => Err(ShellUseError::internal(
+                "run returned an unexpected result type",
+            )),
+        }
+    }
+
+    pub fn close(&self) -> Result<(), ShellUseError> {
+        self.registry.close(&self.name)
+    }
+
+    pub fn recording(&self) -> std::io::Result<String> {
+        self.registry.recording(&self.name)
+    }
+}
+
+#[derive(Clone)]
 pub struct SessionRegistry {
-    sessions: Mutex<HashMap<String, Runtime>>,
+    inner: Arc<RegistryInner>,
+}
+
+struct RegistryInner {
+    sessions: Mutex<HashMap<String, Session>>,
     recordings: Mutex<CompletedRecordings>,
     generations: Mutex<HashMap<String, Weak<Mutex<()>>>>,
     lifecycle: RwLock<()>,
@@ -114,56 +140,66 @@ struct CompletedRecordings {
 
 impl Default for SessionRegistry {
     fn default() -> Self {
-        SessionRegistry {
-            sessions: Mutex::new(HashMap::new()),
-            recordings: Mutex::new(CompletedRecordings::default()),
-            generations: Mutex::new(HashMap::new()),
-            lifecycle: RwLock::new(()),
+        Self {
+            inner: Arc::new(RegistryInner {
+                sessions: Mutex::new(HashMap::new()),
+                recordings: Mutex::new(CompletedRecordings::default()),
+                generations: Mutex::new(HashMap::new()),
+                lifecycle: RwLock::new(()),
+            }),
         }
     }
 }
 
 impl SessionRegistry {
-    fn get_or_create_locked(&self, name: String) -> Runtime {
+    pub fn session(&self, name: impl Into<String>) -> SessionHandle {
+        let name = name.into();
+        SessionHandle {
+            name: Arc::from(name),
+            registry: self.clone(),
+        }
+    }
+
+    fn get_or_create_locked(&self, name: String) -> Session {
         let mut sessions = self.lock_sessions();
         sessions
             .entry(name.clone())
-            .or_insert_with(|| Runtime::new(name))
+            .or_insert_with(|| Session::new(name))
             .clone()
     }
 
-    pub fn response_value(&self, name: &str, request: Value) -> Response {
-        match serde_json::from_value(request) {
-            Ok(request) => self.response(name, request),
-            Err(error) => Response::usage(format!("invalid request: {error}")),
-        }
-    }
-
-    pub fn response(&self, name: &str, request: Request) -> Response {
-        if matches!(
-            request,
-            Request::Ping | Request::Status | Request::Monitor { .. } | Request::Shutdown
-        ) {
-            return Response::usage("request is only available through the cli daemon");
-        }
-        let _lifecycle = self
-            .lifecycle
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub fn execute(
+        &self,
+        name: &str,
+        operation: Operation,
+    ) -> Result<OperationResult, ShellUseError> {
         let generation = self.generation(name);
         let _generation = generation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match request {
-            Request::Open { .. } => self
-                .get_or_create_locked(name.to_string())
-                .response(request),
-            Request::Close => self.close_response_locked(name),
+        match operation {
+            Operation::Open(_) | Operation::Run(_) => {
+                let _lifecycle = self
+                    .inner
+                    .lifecycle
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                self.get_or_create_locked(name.to_string())
+                    .execute(operation)
+            }
+            Operation::Close => self.close_locked(name).map(|_| OperationResult::Unit),
             other => {
-                let runtime = self.lock_sessions().get(name).cloned();
-                runtime
-                    .map(|runtime| runtime.response(other))
-                    .unwrap_or_else(Response::no_session)
+                let session = {
+                    let _lifecycle = self
+                        .inner
+                        .lifecycle
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    self.lock_sessions().get(name).cloned()
+                };
+                session
+                    .ok_or_else(ShellUseError::no_session)?
+                    .execute(other)
             }
         }
     }
@@ -172,39 +208,36 @@ impl SessionRegistry {
         let sessions = self
             .lock_sessions()
             .iter()
-            .map(|(name, runtime)| (name.clone(), runtime.clone()))
+            .map(|(name, session)| (name.clone(), session.clone()))
             .collect::<Vec<_>>();
         let mut names = sessions
             .into_iter()
-            .filter_map(|(name, runtime)| runtime.is_open().then_some(name))
+            .filter_map(|(name, session)| session.is_open().then_some(name))
             .collect::<Vec<_>>();
         names.sort();
         names
     }
 
     pub fn close(&self, name: &str) -> Result<(), ShellUseError> {
-        let _lifecycle = self
-            .lifecycle
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let generation = self.generation(name);
         let _generation = generation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        unwrap_response(self.close_response_locked(name)).map(|_| ())
+        self.close_locked(name)
     }
 
     pub fn close_all(&self) {
-        let _lifecycle = self
-            .lifecycle
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (sessions, removed) = {
+            let _lifecycle = self
+                .inner
+                .lifecycle
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut recordings = self.lock_recordings();
             let sessions = std::mem::take(&mut *self.lock_sessions());
             let mut removed = Vec::new();
-            for (name, runtime) in &sessions {
-                let path = runtime.recording_path();
+            for (name, session) in &sessions {
+                let path = session.recording_path();
                 if path.is_file() {
                     removed.extend(Self::cache_recording(
                         &mut recordings,
@@ -216,47 +249,79 @@ impl SessionRegistry {
             (sessions, removed)
         };
         Self::remove_recording_files(removed);
-        for runtime in sessions.into_values() {
-            let _ = runtime.close();
+        for session in sessions.values() {
+            session.interrupt();
+        }
+        for session in sessions.into_values() {
+            let _ = session.close();
         }
     }
 
     pub fn recording(&self, name: &str) -> std::io::Result<String> {
-        let _lifecycle = self
-            .lifecycle
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let generation = self.generation(name);
         let _generation = generation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let recordings = self.lock_recordings();
-        let runtime = self.lock_sessions().get(name).cloned();
-        if let Some(runtime) = runtime {
-            let result = runtime.recording();
-            drop(recordings);
-            return result;
+        let (session, completed) = {
+            let _lifecycle = self
+                .inner
+                .lifecycle
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let recordings = self.lock_recordings();
+            let session = self.lock_sessions().get(name).cloned();
+            let completed = recordings.paths.get(name).cloned();
+            (session, completed)
+        };
+        if let Some(session) = session {
+            return session.recording();
         }
-        let path = recordings.paths.get(name).ok_or_else(|| {
+        let path = completed.ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, "unknown native session")
         })?;
         std::fs::read_to_string(path)
     }
 
-    fn lock_sessions(&self) -> MutexGuard<'_, HashMap<String, Runtime>> {
-        self.sessions
+    fn close_locked(&self, name: &str) -> Result<(), ShellUseError> {
+        let (session, removed) = {
+            let _lifecycle = self
+                .inner
+                .lifecycle
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut recordings = self.lock_recordings();
+            let Some(session) = self.lock_sessions().remove(name) else {
+                return Ok(());
+            };
+            let path = session.recording_path();
+            let removed = if path.is_file() {
+                Self::cache_recording(&mut recordings, name.to_string(), path.to_path_buf())
+            } else {
+                Vec::new()
+            };
+            (session, removed)
+        };
+        Self::remove_recording_files(removed);
+        session.close()
+    }
+
+    fn lock_sessions(&self) -> MutexGuard<'_, HashMap<String, Session>> {
+        self.inner
+            .sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn lock_recordings(&self) -> MutexGuard<'_, CompletedRecordings> {
-        self.recordings
+        self.inner
+            .recordings
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn generation(&self, name: &str) -> Arc<Mutex<()>> {
         let mut generations = self
+            .inner
             .generations
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -267,24 +332,6 @@ impl SessionRegistry {
         let generation = Arc::new(Mutex::new(()));
         generations.insert(name.to_string(), Arc::downgrade(&generation));
         generation
-    }
-
-    fn close_response_locked(&self, name: &str) -> Response {
-        let (runtime, removed) = {
-            let mut recordings = self.lock_recordings();
-            let Some(runtime) = self.lock_sessions().remove(name) else {
-                return Response::ok();
-            };
-            let path = runtime.recording_path();
-            let removed = if path.is_file() {
-                Self::cache_recording(&mut recordings, name.to_string(), path.to_path_buf())
-            } else {
-                Vec::new()
-            };
-            (runtime, removed)
-        };
-        Self::remove_recording_files(removed);
-        runtime.response(Request::Close)
     }
 
     #[cfg(test)]
@@ -341,32 +388,10 @@ fn native_recording_path(name: &str) -> PathBuf {
         .join(format!("{}-{sequence}.cast", &digest[..16]))
 }
 
-fn unwrap_response(response: Response) -> Result<Value, ShellUseError> {
-    if response.ok {
-        return Ok(response.data.unwrap_or(Value::Null));
-    }
-    Err(ShellUseError {
-        kind: response.kind.unwrap_or(ErrorKind::Internal),
-        message: response
-            .message
-            .unwrap_or_else(|| "shell-use operation failed".to_string()),
-    })
-}
-
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        message
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.as_str()
-    } else {
-        "unknown panic"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::api::{ErrorKind, Operation};
 
     #[test]
     fn registry_reuses_names_and_lists_only_open_sessions() {
@@ -378,24 +403,10 @@ mod tests {
     }
 
     #[test]
-    fn invalid_request_is_a_usage_error() {
-        let runtime = Runtime::new("invalid-request");
-        let response = runtime.response_value(json!({"kind": "missing"}));
-        assert_eq!(response.kind, Some(ErrorKind::Usage));
-    }
-
-    #[test]
-    fn cli_control_requests_are_rejected() {
-        let runtime = Runtime::new("cli-control");
-        for request in [
-            Request::Ping,
-            Request::Status,
-            Request::Monitor { cols: 80, rows: 24 },
-            Request::Shutdown,
-        ] {
-            let response = runtime.response(request);
-            assert_eq!(response.kind, Some(ErrorKind::Usage));
-        }
+    fn closed_session_operations_report_no_session() {
+        let registry = SessionRegistry::default();
+        let error = registry.execute("missing", Operation::State).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::NoSession);
     }
 
     #[test]
@@ -428,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn non_open_requests_do_not_hide_completed_recordings() {
+    fn missing_operations_do_not_hide_completed_recordings() {
         let registry = SessionRegistry::default();
         let path = std::env::temp_dir().join(format!(
             "shell-use-retained-recording-{}.cast",
@@ -438,12 +449,11 @@ mod tests {
         registry.remember_recording("retained".to_string(), path.clone());
 
         assert_eq!(
-            registry.response("retained", Request::State).kind,
-            Some(ErrorKind::NoSession)
-        );
-        assert_eq!(
-            registry.response("retained", Request::Shutdown).kind,
-            Some(ErrorKind::Usage)
+            registry
+                .execute("retained", Operation::State)
+                .unwrap_err()
+                .kind,
+            ErrorKind::NoSession
         );
         assert_eq!(registry.recording("retained").unwrap(), "retained");
         assert!(registry.sessions().is_empty());
@@ -471,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn active_runtime_does_not_fall_back_to_prior_recording() {
+    fn active_session_does_not_fall_back_to_prior_recording() {
         let registry = SessionRegistry::default();
         let path = std::env::temp_dir().join(format!(
             "shell-use-prior-recording-{}.cast",

@@ -720,8 +720,6 @@ dependencies = [
  "napi-sys",
  "nohash-hasher",
  "rustc-hash",
- "serde",
- "serde_json",
  "tokio",
 ]
 
@@ -908,6 +906,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyo3-async-runtimes"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e7364a95bf00e8377bbf9b0f09d7ff9715a29d8fcf93b47d1a967363b973178"
+dependencies = [
+ "futures-channel",
+ "futures-util",
+ "once_cell",
+ "pin-project-lite",
+ "pyo3",
+ "tokio",
+]
+
+[[package]]
 name = "pyo3-build-config"
 version = "0.28.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -959,16 +971,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d80ba7540edb18890d444c5aa8e1f1f99b1bdf26fb26ae383135325f4a36042b"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "pythonize"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b79f670c9626c8b651c0581011b57b6ba6970bb69faf01a7c4c0cfc81c43f95"
-dependencies = [
- "pyo3",
- "serde",
 ]
 
 [[package]]
@@ -1182,7 +1184,7 @@ dependencies = [
 
 [[package]]
 name = "shell-use"
-version = "0.0.1-beta.5"
+version = "0.0.1-beta.6"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -1201,7 +1203,7 @@ dependencies = [
 
 [[package]]
 name = "shell-use-cli"
-version = "0.0.1-beta.5"
+version = "0.0.1-beta.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -1209,6 +1211,7 @@ dependencies = [
  "dialoguer",
  "dirs",
  "interprocess",
+ "serde",
  "serde_json",
  "sha2",
  "shell-use",
@@ -1216,23 +1219,23 @@ dependencies = [
 
 [[package]]
 name = "shell-use-node"
-version = "0.0.1-beta.5"
+version = "0.0.1-beta.6"
 dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
- "serde_json",
  "shell-use",
 ]
 
 [[package]]
 name = "shell-use-python"
-version = "0.0.1-beta.5"
+version = "0.0.1-beta.6"
 dependencies = [
+ "anyhow",
  "pyo3",
- "pythonize",
- "serde_json",
+ "pyo3-async-runtimes",
  "shell-use",
+ "tokio",
 ]
 
 [[package]]

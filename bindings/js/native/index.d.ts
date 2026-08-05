@@ -3,13 +3,216 @@
 export declare class NativeSession {
   constructor(name: string)
   name(): string
-  request(payload: any): Promise<unknown>
+  open(options?: OpenOptions | undefined | null): Promise<OpenResult>
+  run(options: RunOptions): Promise<OpenResult>
+  close(): Promise<void>
+  state(): Promise<State>
+  text(full?: boolean | undefined | null): Promise<string>
+  packedScreen(full?: boolean | undefined | null): Promise<PackedScreen>
+  cells(x: number, y: number, w?: number | undefined | null, h?: number | undefined | null): Promise<Array<Cell>>
+  getCommand(): Promise<string | null>
+  getOutput(): Promise<string | null>
+  getExitCode(): Promise<number | null>
+  getCwd(): Promise<string | null>
+  getCursor(): Promise<Cursor>
+  getSize(): Promise<Size>
+  write(data: string): Promise<void>
+  type(text: string): Promise<void>
+  submit(data?: string | undefined | null): Promise<void>
+  press(keys: Array<string>): Promise<void>
+  mouseClick(options?: MouseClickOptions | undefined | null): Promise<void>
+  mouseMove(x: number, y: number): Promise<void>
+  mouseDown(x: number, y: number, button?: number | undefined | null): Promise<void>
+  mouseUp(x: number, y: number, button?: number | undefined | null): Promise<void>
+  mouseDrag(x1: number, y1: number, x2: number, y2: number, button?: number | undefined | null): Promise<void>
+  mouseScroll(direction: string, amount?: number | undefined | null): Promise<void>
+  resize(cols: number, rows: number): Promise<void>
+  signal(name: string): Promise<void>
+  waitText(text: string, options?: WaitTextOptions | undefined | null): Promise<void>
+  waitIdle(timeoutMs?: number | undefined | null): Promise<void>
+  waitCommand(timeoutMs?: number | undefined | null): Promise<void>
+  waitExit(timeoutMs?: number | undefined | null): Promise<void>
+  waitReady(timeoutMs?: number | undefined | null): Promise<void>
+  expectText(text: string, options?: ExpectTextOptions | undefined | null): Promise<void>
+  expectExitCode(code: number, timeoutMs?: number | undefined | null): Promise<void>
+  expectOutput(text: string, regex?: boolean | undefined | null): Promise<void>
+  snapshot(name: string, options?: SnapshotOptions | undefined | null): Promise<SnapshotResult>
+  screenshot(options?: ScreenshotOptions | undefined | null): Promise<string>
+  panicProbe(): Promise<void>
+}
+
+export interface Cell {
+  x: number
+  y: number
+  char: string
+  fg: Color
+  bg: Color
+  bold: boolean
+  dim: boolean
+  italic: boolean
+  inverse: boolean
+  invisible: boolean
+  strike: boolean
+  blink: boolean
+  underline: boolean
+  underline_style: UnderlineStyle
+  underline_color: Color
 }
 
 export declare function closeAll(): Promise<void>
 
 export declare function closeAllSync(): void
 
+export type Color =
+  number | string
+
+export interface Cursor {
+  x: number
+  y: number
+}
+
+export interface EffectiveTimeouts {
+  text: number
+  idle: number
+  command: number
+  exit: number
+  ready: number
+}
+
+export interface ExpectTextOptions {
+  regex?: boolean
+  full?: boolean
+  strict?: boolean
+  not?: boolean
+  fg?: string
+  bg?: string
+  timeoutMs?: number
+}
+
+export interface MouseClickOptions {
+  x?: number
+  y?: number
+  onText?: string
+  button?: number
+  clicks?: number
+}
+
+export interface OpenOptions {
+  shell?: Shell
+  cols?: number
+  rows?: number
+  cwd?: string
+  env?: Array<[string, string]>
+  waitReady?: boolean
+  timeouts?: Timeouts
+}
+
+export interface OpenResult {
+  shell_pid: number | null
+  session: string
+  ready: boolean
+  recording: string
+}
+
+/**
+ * Private native-owned packed screen snapshot.
+ *
+ * `utf8` decodes to exactly `rows` newline-delimited logical rows. Trailing
+ * spaces and blank rows are retained. UTF-8 byte offsets are not terminal cell
+ * offsets when rows contain Unicode graphemes.
+ */
+export interface PackedScreen {
+  /** Logical column count. */
+  readonly cols: number
+  /** Number of logical rows encoded in `utf8`. */
+  readonly rows: number
+  /** Detached native-owned UTF-8 bytes. Treat this private snapshot as immutable. */
+  readonly utf8: Uint8Array
+}
+
 export declare function recording(name: string): Promise<string>
 
+export interface RunOptions {
+  program: string
+  args?: Array<string>
+  cols?: number
+  rows?: number
+  cwd?: string
+  env?: Array<[string, string]>
+  waitReady?: boolean
+  timeouts?: Timeouts
+}
+
+export interface ScreenshotOptions {
+  full?: boolean
+  path?: string
+}
+
 export declare function sessions(): Promise<Array<string>>
+
+export declare const enum Shell {
+  Bash = 'bash',
+  Powershell = 'powershell',
+  Pwsh = 'pwsh',
+  Cmd = 'cmd',
+  Fish = 'fish',
+  Zsh = 'zsh',
+  Xonsh = 'xonsh',
+  Elvish = 'elvish',
+  Nushell = 'nushell'
+}
+
+export interface Size {
+  cols: number
+  rows: number
+}
+
+export interface SnapshotOptions {
+  update?: boolean
+  includeColors?: boolean
+  cwd?: string
+}
+
+export declare const enum SnapshotResult {
+  Passed = 'passed',
+  Written = 'written',
+  Updated = 'updated'
+}
+
+export interface State {
+  session_shell: string | null
+  cols: number
+  rows: number
+  cursor: Cursor
+  cwd: string | null
+  last_command: string | null
+  last_exit: number | null
+  exited: number | null
+  ready: boolean
+  timeouts: EffectiveTimeouts
+  text: string
+}
+
+export interface Timeouts {
+  text?: number
+  idle?: number
+  command?: number
+  exit?: number
+  ready?: number
+}
+
+export declare const enum UnderlineStyle {
+  None = 'none',
+  Single = 'single',
+  Double = 'double',
+  Curly = 'curly',
+  Dotted = 'dotted',
+  Dashed = 'dashed'
+}
+
+export interface WaitTextOptions {
+  regex?: boolean
+  full?: boolean
+  not?: boolean
+  timeoutMs?: number
+}

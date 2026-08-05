@@ -1,8 +1,8 @@
 use clap::{Args, Parser, Subcommand};
 
 use shell_use::config::{DEFAULT_COLS, DEFAULT_ROWS};
-use shell_use::protocol::TimeoutDefaults;
 use shell_use::shell::Shell;
+use shell_use::Timeouts;
 
 #[derive(Clone, Copy, clap::ValueEnum)]
 #[clap(rename_all = "lowercase")]
@@ -77,9 +77,9 @@ pub struct TimeoutArgs {
     pub ready: Option<u64>,
 }
 
-impl From<TimeoutArgs> for TimeoutDefaults {
+impl From<TimeoutArgs> for Timeouts {
     fn from(args: TimeoutArgs) -> Self {
-        TimeoutDefaults {
+        Timeouts {
             text: args.text,
             idle: args.idle,
             command: args.command,
@@ -450,7 +450,7 @@ mod tests {
         let Some(Command::Open { timeouts, .. }) = cli.command else {
             panic!("expected Open");
         };
-        let defaults: TimeoutDefaults = timeouts.into();
+        let defaults: Timeouts = timeouts.into();
         assert_eq!(defaults.text, Some(30_000));
         assert_eq!(defaults.idle, Some(15_000));
         assert_eq!(defaults.ready, Some(20_000));
