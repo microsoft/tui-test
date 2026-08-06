@@ -346,7 +346,7 @@ macro_rules! emulator_conformance_tests {
             let mut e = conformance_emu(5, 3, 100);
             e.process("abcd你".as_bytes());
             assert_eq!(
-                $crate::assert::snapshot::serialize(&e.viewable_rows(), 5, false),
+                $crate::assert::snapshot::serialize(&e.viewable_rows(), 5, false, None),
                 concat!(
                     "\u{256d}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256e}\n",
                     "\u{2502}abcd \u{2502}\n",
@@ -601,6 +601,84 @@ macro_rules! emulator_conformance_tests {
                 e.viewable_rows()[0][0].fg,
                 Some($crate::terminal::cell::Color::from_index(1)),
                 "a sequence split across process() calls must still apply"
+            );
+        }
+
+        /// `OSC 0` and `OSC 2` both set the window title, and either
+        /// terminator ends them. A backend that only accepted one spelling
+        /// would miss the title from whichever programs use the other.
+        #[test]
+        fn conformance_title_is_set_by_osc_0_and_2() {
+            let mut e = conformance_emu(10, 2, 100);
+            assert_eq!(e.title(), None, "a fresh terminal has no title");
+
+            e.process(b"\x1b]2;from osc 2\x07");
+            assert_eq!(e.title().as_deref(), Some("from osc 2"));
+
+            e.process(b"\x1b]0;from osc 0\x07");
+            assert_eq!(
+                e.title().as_deref(),
+                Some("from osc 0"),
+                "osc 0 sets the same title as osc 2"
+            );
+
+            e.process(b"\x1b]2;st terminated\x1b\\");
+            assert_eq!(
+                e.title().as_deref(),
+                Some("st terminated"),
+                "ST ends the sequence just as BEL does"
+            );
+        }
+
+        /// An empty title is a request for no title, not for a blank one.
+        ///
+        /// Programs clear the title this way on exit, so reporting `Some("")`
+        /// would leave a caller unable to tell a cleared title from one that
+        /// was never set without checking for a special case.
+        #[test]
+        fn conformance_an_empty_title_resets() {
+            let mut e = conformance_emu(10, 2, 100);
+            e.process(b"\x1b]2;something\x07");
+            assert!(e.title().is_some());
+
+            e.process(b"\x1b]2;\x07");
+            assert_eq!(e.title(), None, "an empty title clears it");
+
+            e.process(b"\x1b]0;again\x07");
+            e.process(b"\x1b]0;\x07");
+            assert_eq!(e.title(), None, "and osc 0 clears it too");
+        }
+
+        /// The title survives output and is not tied to the grid: clearing the
+        /// screen is not clearing the title.
+        #[test]
+        fn conformance_title_outlives_screen_content() {
+            let mut e = conformance_emu(10, 2, 100);
+            e.process(b"\x1b]2;kept\x07");
+            e.process(b"text\r\n\x1b[2J");
+            assert_eq!(
+                e.title().as_deref(),
+                Some("kept"),
+                "erasing the screen leaves the title alone"
+            );
+        }
+
+        /// The title stack (`CSI 22 t` pushes, `CSI 23 t` pops) lets a program
+        /// set a title and put back whatever was there before, which is how a
+        /// shell restores the title after running a command.
+        #[test]
+        fn conformance_title_stack_pushes_and_pops() {
+            let mut e = conformance_emu(10, 2, 100);
+            e.process(b"\x1b]2;shell\x07");
+            e.process(b"\x1b[22t");
+            e.process(b"\x1b]2;running a command\x07");
+            assert_eq!(e.title().as_deref(), Some("running a command"));
+
+            e.process(b"\x1b[23t");
+            assert_eq!(
+                e.title().as_deref(),
+                Some("shell"),
+                "popping restores the pushed title"
             );
         }
     };

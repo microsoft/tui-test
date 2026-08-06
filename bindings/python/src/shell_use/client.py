@@ -328,6 +328,9 @@ class ShellUse:
     async def get_cwd(self) -> Optional[str]:
         return await self._await(self._native.get_cwd())
 
+    async def get_title(self) -> Optional[str]:
+        return await self._await(self._native.get_title())
+
     async def get_cursor(self) -> Dict[str, int]:
         return await self._await(self._native.get_cursor())
 
@@ -355,6 +358,21 @@ class ShellUse:
             ),
         )
 
+    async def wait_title(
+        self,
+        text: str,
+        *,
+        regex: bool = False,
+        not_: bool = False,
+        timeout: Optional[int] = None,
+    ) -> None:
+        await self._guarded(
+            "wait_title",
+            self._native.wait_title(
+                text, regex, not_, self._timeout("text", timeout)
+            ),
+        )
+
     async def wait_idle(self, *, timeout: Optional[int] = None) -> None:
         await self._guarded(
             "wait_idle",
@@ -377,6 +395,21 @@ class ShellUse:
         await self._guarded(
             "wait_ready",
             self._native.wait_ready(self._timeout("ready", timeout)),
+        )
+
+    async def expect_title(
+        self,
+        text: str,
+        *,
+        regex: bool = False,
+        not_: bool = False,
+        timeout: Optional[int] = None,
+    ) -> None:
+        await self._guarded(
+            "expect_title",
+            self._native.expect_title(
+                text, regex, not_, self._timeout("text", timeout)
+            ),
         )
 
     async def expect_text(
@@ -426,11 +459,12 @@ class ShellUse:
         *,
         update: bool = False,
         include_colors: bool = False,
+        include_title: bool = False,
     ) -> str:
         return await self._guarded(
             "expect_snapshot",
             self._native.snapshot(
-                name, update, include_colors, os.getcwd()
+                name, update, include_colors, include_title, os.getcwd()
             ),
         )
 

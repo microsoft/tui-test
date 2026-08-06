@@ -32,6 +32,12 @@ export interface WaitTextOptions {
   timeout?: number;
 }
 
+export interface TitleOptions {
+  regex?: boolean;
+  not?: boolean;
+  timeout?: number;
+}
+
 export interface ExpectTextOptions {
   regex?: boolean;
   full?: boolean;
@@ -305,6 +311,10 @@ export class ShellUse {
     return this.#runtime.getCwd();
   }
 
+  async getTitle(): Promise<string | null> {
+    return this.#runtime.getTitle();
+  }
+
   async getCursor(): Promise<Cursor> {
     return this.#runtime.getCursor();
   }
@@ -325,6 +335,16 @@ export class ShellUse {
       this.#runtime.waitText(text, {
         regex: opts.regex ?? false,
         full: opts.full ?? false,
+        not: opts.not ?? false,
+        timeoutMs: this.#timeout("text", opts.timeout),
+      }),
+    );
+  }
+
+  async waitTitle(text: string, opts: TitleOptions = {}): Promise<void> {
+    await this.#guard("waitTitle", () =>
+      this.#runtime.waitTitle(text, {
+        regex: opts.regex ?? false,
         not: opts.not ?? false,
         timeoutMs: this.#timeout("text", opts.timeout),
       }),
@@ -352,6 +372,16 @@ export class ShellUse {
   async waitReady(opts: { timeout?: number } = {}): Promise<void> {
     await this.#guard("waitReady", () =>
       this.#runtime.waitReady(this.#timeout("ready", opts.timeout)),
+    );
+  }
+
+  async expectTitle(text: string, opts: TitleOptions = {}): Promise<void> {
+    await this.#guard("expectTitle", () =>
+      this.#runtime.expectTitle(text, {
+        regex: opts.regex ?? false,
+        not: opts.not ?? false,
+        timeoutMs: this.#timeout("text", opts.timeout),
+      }),
     );
   }
 
@@ -383,12 +413,13 @@ export class ShellUse {
 
   async expectSnapshot(
     name: string,
-    opts: { update?: boolean; includeColors?: boolean } = {},
+    opts: { update?: boolean; includeColors?: boolean; includeTitle?: boolean } = {},
   ): Promise<string> {
     return this.#guard("expectSnapshot", () =>
       this.#runtime.snapshot(name, {
         update: opts.update ?? false,
         includeColors: opts.includeColors ?? false,
+        includeTitle: opts.includeTitle ?? false,
         cwd: process.cwd(),
       }),
     );

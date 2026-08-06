@@ -7,6 +7,7 @@
 
 use bitflags::bitflags;
 use compact_str::CompactString;
+use unicode_width::UnicodeWidthStr;
 
 /// The 16 themeable palette slots (ANSI 0-15).
 ///
@@ -201,6 +202,45 @@ impl Default for EmuCell {
     }
 }
 
+/// How many terminal columns a string occupies.
+///
+/// A terminal lays text out by column, not by character: a CJK glyph is one
+/// `char` but two columns, and a combining mark is one `char` but none.
+///
+/// Measured over the whole string rather than by summing characters, because
+/// a sequence can be narrower than its parts: an emoji joined by zero-width
+/// joiners (`\u{200d}`) renders as a single glyph, and a base character
+/// followed by a variation selector or a keycap mark is one unit too. Summing
+/// per character reports a family emoji as eight columns where a terminal
+/// draws two.
+pub fn display_width(s: &str) -> usize {
+    s.width()
+}
+
+/// Shorten `s` to at most `columns` terminal columns, marking a cut with `…`.
+///
+/// The cut point is found by measuring real prefixes rather than by adding up
+/// character widths, so the result is exactly as wide as it was measured to be
+/// even when the cut lands inside a sequence.
+pub fn truncate_to_columns(s: &str, columns: usize) -> String {
+    if columns == 0 {
+        return String::new();
+    }
+    if display_width(s) <= columns {
+        return s.to_string();
+    }
+    // One column is held back for the ellipsis that marks the cut.
+    let budget = columns - 1;
+    let mut cut = 0;
+    for (offset, _) in s.char_indices() {
+        if display_width(&s[..offset]) > budget {
+            break;
+        }
+        cut = offset;
+    }
+    format!("{}\u{2026}", &s[..cut])
+}
+
 /// Join a grid of cells into one string per row.
 ///
 /// Continuation cells contribute nothing: a double-width character already
@@ -245,5 +285,78 @@ mod tests {
     fn blank_is_a_space_not_a_continuation() {
         assert_eq!(EmuCell::blank().ch, " ");
         assert_ne!(EmuCell::blank().ch, CONTINUATION);
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+
+    /// A sequence is measured as the glyph it renders as, not as the sum of
+    /// its parts. Summing per character is the mistake that draws a frame
+    /// around a family emoji six columns too wide.
+    #[test]
+    fn a_sequence_is_narrower_than_its_characters() {
+        for (name, text, columns) in [
+            (
+                "family",
+                "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}",
+                2,
+            ),
+            ("skin tone", "\u{1f44d}\u{1f3fd}", 2),
+            ("keycap", "1\u{fe0f}\u{20e3}", 2),
+            ("heart with a variation selector", "\u{2764}\u{fe0f}", 2),
+            ("flag", "\u{1f1fa}\u{1f1f8}", 2),
+        ] {
+            assert_eq!(display_width(text), columns, "{name} is {columns} columns");
+        }
+    }
+
+    /// The ordinary cases the grid already relies on.
+    #[test]
+    fn width_counts_columns_not_characters() {
+        assert_eq!(display_width("hello"), 5);
+        assert_eq!(
+            display_width("\u{4f60}\u{597d}"),
+            4,
+            "each CJK glyph takes two"
+        );
+        assert_eq!(display_width("e\u{301}"), 1, "a combining mark adds none");
+        assert_eq!(display_width(""), 0);
+    }
+
+    /// Truncation never exceeds its budget, whatever it has to cut through.
+    ///
+    /// The result is measured rather than assumed: a cut inside a sequence
+    /// changes how the remainder renders, so only measuring the real prefix
+    /// keeps the promise this function makes to a frame drawn around it.
+    #[test]
+    fn truncation_stays_within_its_budget() {
+        for text in [
+            "a-very-long-title-that-will-not-fit",
+            "\u{4f60}\u{597d}\u{4e16}\u{754c}\u{4f60}\u{597d}",
+            "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466} building",
+            "\u{1f680} deploy \u{4f60}\u{597d} done",
+        ] {
+            for budget in 0..12 {
+                let cut = truncate_to_columns(text, budget);
+                assert!(
+                    display_width(&cut) <= budget,
+                    "{text:?} cut to {budget} came out {} wide: {cut:?}",
+                    display_width(&cut)
+                );
+            }
+        }
+    }
+
+    /// A string that already fits is returned whole, with no ellipsis.
+    #[test]
+    fn truncation_leaves_a_string_that_fits_alone() {
+        assert_eq!(truncate_to_columns("fits", 10), "fits");
+        assert_eq!(truncate_to_columns("fits", 4), "fits");
+        assert_eq!(
+            truncate_to_columns("\u{4f60}\u{597d}", 4),
+            "\u{4f60}\u{597d}"
+        );
     }
 }

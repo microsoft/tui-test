@@ -215,6 +215,7 @@ fn map_field(f: GetArg) -> GetField {
         GetArg::Cwd => GetField::Cwd,
         GetArg::Cursor => GetField::Cursor,
         GetArg::Size => GetField::Size,
+        GetArg::Title => GetField::Title,
     }
 }
 
@@ -271,6 +272,17 @@ fn map_wait(what: WaitCmd) -> Request {
             timeout_ms: timeout,
             not,
         },
+        WaitCmd::Title {
+            text,
+            regex,
+            not,
+            timeout,
+        } => Request::WaitTitle {
+            text,
+            regex,
+            timeout_ms: timeout,
+            not,
+        },
         WaitCmd::Idle { timeout } => Request::WaitIdle {
             timeout_ms: timeout,
         },
@@ -307,6 +319,17 @@ fn map_expect(what: ExpectCmd) -> Request {
             bg,
             timeout_ms: timeout,
         },
+        ExpectCmd::Title {
+            text,
+            regex,
+            not,
+            timeout,
+        } => Request::ExpectTitle {
+            text,
+            regex,
+            not,
+            timeout_ms: timeout,
+        },
         ExpectCmd::ExitCode { code, timeout } => Request::ExpectExitCode {
             code,
             timeout_ms: timeout,
@@ -316,10 +339,12 @@ fn map_expect(what: ExpectCmd) -> Request {
             name,
             update,
             include_colors,
+            include_title,
         } => Request::Snapshot {
             name,
             update,
             include_colors,
+            include_title,
             cwd: std::env::current_dir()
                 .ok()
                 .map(|p| p.to_string_lossy().into_owned()),
@@ -648,15 +673,17 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           run <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full]\n\
-          cells X Y [W H] | get command|output|exit-code|cwd|cursor|size\n\
+          cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title\n\
 INPUT     type \"text\" | submit [\"text\"] | press <Key...> | keys \"Ctrl+a\"\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
 WAIT      wait text \"T\" [--regex --full --not --timeout MS]\n\
+          wait title \"T\" [--regex --not --timeout MS]\n\
           wait idle | wait command | wait exit | wait ready\n\
 EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
+          expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex]\n\
-          expect snapshot NAME [-u] [--include-colors]\n\
+          expect snapshot NAME [-u] [--include-colors --include-title]\n\
 RECORD    sessions auto-record; get-recording [session] > out.cast (asciinema v2)\n\
           play with `asciinema play out.cast`, render GIF with `agg out.cast out.gif`\n\
 WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
