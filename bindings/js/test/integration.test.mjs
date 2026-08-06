@@ -30,14 +30,22 @@ test("echo roundtrip drives a real session", async () => {
     await su.waitCommand();
     await su.expectText("hello-sdk", { strict: false });
     await su.expectExitCode(0);
+
     const state = await su.state();
+    // Read next to the snapshot it is compared against. The shell draws its
+    // next prompt after the command finishes, which moves the cursor, and
+    // these two calls read it separately: with other calls in between, the
+    // prompt lands between them and they disagree by its width.
+    //
+    // `waitIdle` is not the barrier it looks like here, since the screen is
+    // quiet *because* the prompt has not started, so idle arrives first.
+    assert.deepEqual(await su.getCursor(), state.cursor);
     assert.ok(state.cols > 0);
     assert.match(await su.text(), /hello-sdk/);
     assert.match(await su.getCommand(), /echo hello-sdk/);
     assert.match(await su.getOutput(), /hello-sdk/);
     assert.equal(await su.getExitCode(), 0);
     assert.equal(typeof (await su.getCwd()), "string");
-    assert.deepEqual(await su.getCursor(), state.cursor);
     assert.deepEqual(await su.getSize(), { cols: state.cols, rows: state.rows });
 
     await su.resize(92, 26);
