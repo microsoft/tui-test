@@ -33,12 +33,25 @@ jobs:
           rustup toolchain install stable --profile default
           rustup default stable
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
 
       - name: Verify release versions
-        run: node .github/scripts/release/verify-versions.mjs
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          version_files=(
+            Cargo.toml
+            bindings/js/package.json
+            bindings/js/package-lock.json
+            bindings/js/src/version.ts
+            bindings/python/pyproject.toml
+            bindings/python/src/shell_use/_config.py
+            bindings/js/native/index.js
+          )
+          diff -u \
+            <(printf '%s\n' "${version_files[@]}" | sort) \
+            <(rg -l --path-separator / --fixed-strings "$version" \
+              "${version_files[@]}" | sort)
 
       - name: Verify shell-use crate package
         run: cargo publish --locked --package shell-use --dry-run
@@ -221,6 +234,28 @@ jobs:
       - name: Pack Node packages
         run: node .github/scripts/release/package-node.mjs
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Test packed Node package with Node 20
+        shell: bash
+        run: |
+          node="$(command -v node)"
+          version="${RELEASE_TAG#v}"
+          mkdir package-test
+          cd package-test
+          npm init -y >/dev/null
+          npm install --ignore-scripts \
+            "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-shell-use-linux-x64-gnu-${version}.tgz"
+          npm install --ignore-scripts --omit=optional \
+            "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-shell-use-${version}.tgz"
+          cd "$GITHUB_WORKSPACE"
+          PATH="/usr/bin:/bin" \
+          SHELL_USE_BIN="$GITHUB_WORKSPACE/package-test/missing-shell-use" \
+          SHELL_USE_TEST_PACKAGE_ROOT="$GITHUB_WORKSPACE/package-test" \
+            "$node" --test bindings/js/test/package.integration.test.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: npm-packages
@@ -277,31 +312,45 @@ jobs:
           manylinux: ${{ matrix.compatibility || 'auto' }}
           args: --release --locked --out dist --compatibility pypi
 
+      - name: Build Python sdist
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: bindings/python
+        run: |
+          python -m pip install --disable-pip-version-check "maturin>=1.5,<2"
+          maturin sdist --manifest-path native/Cargo.toml --out dist
+
+      - uses: actions/setup-python@v5
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          python-version: "3.8"
+
+      - name: Test Python wheel with Python 3.8
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          wheels=(bindings/python/dist/*.whl)
+          test "${#wheels[@]}" -eq 1
+          [[ "${wheels[0]}" == *abi3* ]]
+          python -m venv package-test-python-38
+          package-test-python-38/bin/python -m pip install \
+            --disable-pip-version-check bindings/python/dist/*.whl
+          ! PATH="$GITHUB_WORKSPACE/package-test-python-38/bin:/usr/bin:/bin" \
+            command -v shell-use
+          PATH="$GITHUB_WORKSPACE/package-test-python-38/bin:/usr/bin:/bin" \
+          SHELL_USE_BIN="$GITHUB_WORKSPACE/package-test-python-38/missing-shell-use" \
+            "$GITHUB_WORKSPACE/package-test-python-38/bin/python" \
+            bindings/python/tests/test_integration.py \
+            IntegrationTests.test_echo_roundtrip
+
       - uses: actions/upload-artifact@v4
         with:
           name: python-wheel-${{ matrix.target }}
           path: bindings/python/dist/*.whl
           if-no-files-found: error
 
-  build-python-sdist:
-    needs: verify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - run: python -m pip install --disable-pip-version-check "maturin>=1.5,<2"
-
-      - name: Build Python sdist
-        working-directory: bindings/python
-        run: maturin sdist --manifest-path native/Cargo.toml --out dist
-
       - uses: actions/upload-artifact@v4
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         with:
           name: python-sdist
           path: bindings/python/dist/*.tar.gz
@@ -309,9 +358,9 @@ jobs:
 
   publish-npm:
     needs:
-      - smoke-node
+      - package-node
       - release
-    if: always() && needs.smoke-node.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.package-node.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -333,14 +382,36 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Publish native and root packages
-        run: node .github/scripts/release/publish-npm.mjs
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          packages=(
+            shell-use-darwin-arm64
+            shell-use-darwin-x64
+            shell-use-linux-arm64-gnu
+            shell-use-linux-arm64-musl
+            shell-use-linux-x64-gnu
+            shell-use-linux-x64-musl
+            shell-use-win32-arm64-msvc
+            shell-use-win32-x64-msvc
+            shell-use
+          )
+
+          for package in "${packages[@]}"; do
+            name="@microsoft/$package"
+            tarball="npm-packages/microsoft-${package}-${version}.tgz"
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published"
+            else
+              npm publish "$tarball" --access public --provenance --tag latest
+            fi
+          done
 
   publish-pypi:
     needs:
-      - smoke-python
-      - build-python-sdist
+      - build-python
       - release
-    if: always() && needs.smoke-python.result == 'success' && needs.build-python-sdist.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.build-python.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -399,18 +470,13 @@ jobs:
   release:
     needs:
       - build-cli
-      - smoke-node
-      - smoke-python
-      - build-python-sdist
+      - package-node
+      - build-python
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -419,65 +485,8 @@ jobs:
 
       - env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release create "$RELEASE_TAG" \
             --generate-notes \
             artifacts/*
-
-  smoke-node:
-    name: Smoke Node (${{ matrix.name }})
-    needs: package-node
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Node 20
-            version: "20"
-          - name: Node current
-            version: "node"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: npm-packages
-          path: npm-packages
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.version }}
-
-      - name: Smoke packed root and platform packages without the CLI
-        run: node .github/scripts/release/smoke-node.mjs
-
-  smoke-python:
-    name: Smoke Python (${{ matrix.name }})
-    needs: build-python
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Python 3.8
-            version: "3.8"
-          - name: Python current
-            version: "3.14"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: python-wheel-x86_64-unknown-linux-gnu
-          path: dist
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.version }}
-
-      - name: Smoke the built abi3 wheel without the CLI
-        run: python .github/scripts/release/smoke-python.py
