@@ -15,6 +15,18 @@
 cargo add tui-test-rs@0.1.0-beta.1
 ```
 
+Raster recording uses installed system fonts unless a JetBrains Mono bundle
+feature is enabled:
+
+| Feature | Bundled JetBrains Mono faces |
+| --- | --- |
+| `recording-raster` | None; use installed system fonts |
+| `recording-font-jetbrains-mono` | Full-glyph Regular |
+| `recording-font-jetbrains-mono-styles` | Regular, Bold, Italic, and Bold Italic |
+| `recording-font-jetbrains-mono-full` | All 16 static family faces |
+
+Each font feature enables `recording-raster`; the tiers are cumulative.
+
 ```rust
 use tui_test::{OpenOptions, Operation, Session};
 
