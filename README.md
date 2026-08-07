@@ -83,7 +83,50 @@ Each command returns a stable exit code (see [Exit codes](#exit-codes)), so an a
 
 `shell-use` python & node client libraries that drive shell-use with the same commands as the cli. The clients manage the sessions for you without a daemon.
 
+<<<<<<< Updated upstream
 ### Python ([`shell-use`](bindings/python/README.md))
+=======
+### Rust ([`shell-use`](https://crates.io/crates/shell-use))
+
+```sh
+cargo add shell-use
+# Add APNG/GIF export support when the Rust application needs raster recording:
+cargo add shell-use --features recording-raster
+```
+
+```rust
+use shell_use::{OpenOptions, Operation, Session};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let session = Session::new(format!("rust-example-{}", std::process::id()));
+    session.open(OpenOptions::default())?;
+    session.execute(Operation::Submit {
+        data: Some("echo hello".into()),
+    })?;
+    session.execute(Operation::WaitCommand {
+        timeout_ms: Some(30_000),
+    })?;
+    session.execute(Operation::ExpectText {
+        text: "hello".into(),
+        regex: false,
+        full: false,
+        strict: false,
+        not: false,
+        fg: None,
+        bg: None,
+        timeout_ms: Some(5_000),
+    })?;
+    session.execute(Operation::ExpectExitCode {
+        code: 0,
+        timeout_ms: Some(5_000),
+    })?;
+    session.close()?;
+    Ok(())
+}
+```
+
+### Python ([`shell-use`](https://github.com/microsoft/shell-use/blob/main/bindings/python/README.md))
+>>>>>>> Stashed changes
 
 ```sh
 pip install shell-use
@@ -240,18 +283,44 @@ Screenshots render a snapshot of the session in the current terminal by default,
 
 ### Recording
 
-Every session records automatically from the moment it opens, in the standard
-[asciinema v2](https://docs.asciinema.org/manual/asciicast/v2/) cast format.
+Record a selected part of a session directly to animated APNG (primary), GIF
+(fallback), or standard
+[asciinema v2](https://docs.asciinema.org/manual/asciicast/v2/) cast:
 
-| Command                   | Description                                     |
-| ------------------------- | ----------------------------------------------- |
-| `get-recording [session]` | Print the session's recording (cast) to stdout. |
+| Command | Description |
+| --- | --- |
+| `record start OUT [--format apng\|gif\|cast] [--fps N] [--speed N] [--idle-time-limit SEC]` | Start recording. Format is inferred from `.png`/`.apng`, `.gif`, or `.cast`. |
+| `record stop` | Stop recording and finish the output file. |
+| `get-recording [session]` | Print the separate, always-on session cast to stdout. |
 
 ```sh
-shell-use get-recording > demo.cast   # capture the current session's recording
-asciinema play demo.cast              # replay it
-agg demo.cast demo.gif                # render a GIF
+shell-use open
+shell-use record start demo.png       # lossless animated PNG
+shell-use submit "echo hello"
+shell-use wait command
+shell-use record stop
 ```
+
+APNG keeps full 24/32-bit color. APNG and GIF both render at 2x pixel density
+for sharper text; GIF additionally uses palette quantization for viewers that
+cannot display APNG. Defaults are 30 fps, 1x speed, a 5-second idle-gap limit,
+and a 3-second final hold. If a process exits before `record stop`, APNG/GIF
+capture remains beside the target as `OUT.shell-use.cast`.
+
+Raster export uses the bundled JetBrains Mono face plus installed system fonts
+for Unicode and styled fallbacks. Set
+`SHELL_USE_RECORDING_FONT_FAMILIES=Family One,Family Two` to prioritize specific
+installed families. Export fails with the missing code points instead of
+silently substituting unsupported glyphs.
+
+<p align="center">
+  <img alt="animated APNG terminal recording produced by shell-use" src="static/recording.png" width="400">
+</p>
+
+Every session also records automatically from open in `.cast` format. Export it
+with `shell-use get-recording > demo.cast` for the wider asciicast ecosystem.
+This interoperability is implemented directly from the public asciicast v2
+format and does not add or depend on GPL tooling.
 
 ### Live monitor
 
@@ -320,7 +389,7 @@ With `--json`, failures also carry a `"kind"` field (`assertion`/`usage`/`no_ses
 | Testing / snapshots                  | ✅ `expect` text / output / exit-code / snapshot | ❌                                             | ❌                                                        |
 | Color & per-cell attributes          | ✅ fg/bg, ANSI-256/hex/rgb, `cells`              | ❌ plain text (+ highlights)                   | via PNG                                                   |
 | Image screenshots                    | ✅ SVG                                           | ❌                                             | ✅ PNG                                                    |
-| Built-in recording                   | ✅ always-on asciinema cast + GIF                | ❌                                             | ❌                                                        |
+| Built-in recording                   | ✅ APNG/GIF export + always-on asciinema cast    | ❌                                             | ❌                                                        |
 | Live monitor view                    | ✅                                               | ❌                                             | ✅                                                        |
 | Stable exit-code taxonomy for agents | ✅                                               | ❌                                             | ❌                                                        |
 | Python & JavaScript bindings         | ✅                                               | ❌                                             | ❌                                                        |

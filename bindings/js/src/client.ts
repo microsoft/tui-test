@@ -52,6 +52,15 @@ export interface MouseButtonOptions {
   button?: number;
 }
 
+export type RecordingFormat = "apng" | "gif" | "cast";
+
+export interface RecordingOptions {
+  format?: RecordingFormat;
+  fps?: number;
+  speed?: number;
+  idleTimeLimit?: number;
+}
+
 const TERMINAL_MARKER = "Terminal content:\n";
 
 function extractTerminalContent(message: string): string | undefined {
@@ -328,6 +337,20 @@ export class ShellUse {
       full: opts.full ?? false,
       path: optional(path),
     });
+  }
+
+  async startRecording(path: string, opts: RecordingOptions = {}): Promise<void> {
+    await this.#runtime.startRecording({
+      path,
+      format: opts.format,
+      fps: opts.fps,
+      speed: opts.speed,
+      idleTimeLimit: opts.idleTimeLimit,
+    });
+  }
+
+  async stopRecording(): Promise<string> {
+    return this.#runtime.stopRecording();
   }
 
   async waitText(text: string, opts: WaitTextOptions = {}): Promise<void> {

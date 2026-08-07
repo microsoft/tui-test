@@ -175,6 +175,23 @@ fn capturing_output_terminates_after_the_daemon_starts() {
 }
 
 #[test]
+fn get_recording_flushes_queued_output_before_reading() {
+    let sandbox = Sandbox::new("recording-flush");
+    sandbox.ok(&["open"]);
+    sandbox.ok(&["submit", "echo recording-flush-marker"]);
+    sandbox.ok(&[
+        "wait",
+        "text",
+        "recording-flush-marker",
+        "--timeout",
+        "30000",
+    ]);
+
+    let recording = sandbox.ok(&["get-recording"]);
+    assert!(recording.contains("recording-flush-marker"));
+}
+
+#[test]
 fn close_is_idempotent() {
     let sandbox = Sandbox::new("idempotent");
     sandbox.ok(&["open"]);

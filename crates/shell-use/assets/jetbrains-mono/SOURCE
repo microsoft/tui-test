@@ -1,0 +1,4 @@
+JetBrains Mono regular
+commit: 19371302b95d218af43299bce79ddbddd0bc364d
+source: https://github.com/JetBrains/JetBrainsMono
+subset: U+0020-024F,U+2000-206F,U+20A0-20CF,U+2190-22FF,U+2500-259F,U+FFFD

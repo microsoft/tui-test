@@ -6,7 +6,7 @@ use ttf_parser::{Face, OutlineBuilder};
 use crate::terminal::cell::EmuCell;
 
 // Nerd Fonts Symbols v3.4.0 is MIT-licensed; see the adjacent LICENSE.
-const FONT_DATA: &[u8] = include_bytes!(concat!(
+pub(crate) const FONT_DATA: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/assets/nerd-fonts/SymbolsNerdFontMono-Regular.ttf"
 ));
@@ -194,14 +194,14 @@ impl NerdFont {
     }
 }
 
-fn is_private_use(c: char) -> bool {
+pub(crate) fn is_private_use(c: char) -> bool {
     matches!(
         c as u32,
         0xe000..=0xf8ff | 0xf0000..=0xffffd | 0x100000..=0x10fffd
     )
 }
 
-fn is_powerline_separator(c: char) -> bool {
+pub(crate) fn is_powerline_separator(c: char) -> bool {
     matches!(c as u32, 0xe0b0..=0xe0d4)
 }
 

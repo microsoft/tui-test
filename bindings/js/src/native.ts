@@ -8,6 +8,7 @@ import type {
   OpenOptions,
   OpenResult,
   PackedScreen,
+  RecordingOptions,
   RunOptions,
   ScreenshotOptions,
   Size,
@@ -21,6 +22,9 @@ import type {
 type NativeBinding = typeof import("../native/index.js");
 type NativeSessionHandle = InstanceType<NativeBinding["NativeSession"]>;
 type RuntimeOpenOptions = Omit<OpenOptions, "shell"> & { shell?: string };
+type RuntimeRecordingOptions = Omit<RecordingOptions, "format"> & {
+  format?: "apng" | "gif" | "cast";
+};
 
 const ERROR_PREFIX = "__shell_use_native_error__:";
 const USAGE_NAPI_CODES = new Set([
@@ -306,6 +310,14 @@ export class NativeRuntime {
     return this.#call((session) => session.screenshot(options));
   }
 
+  startRecording(options: RuntimeRecordingOptions): Promise<void> {
+    return this.#call((session) => session.startRecording(options as RecordingOptions));
+  }
+
+  stopRecording(): Promise<string> {
+    return this.#call((session) => session.stopRecording());
+  }
+
   panicProbe(): Promise<void> {
     return this.#call((session) => session.panicProbe());
   }
@@ -335,6 +347,7 @@ export type {
   OpenOptions as NativeOpenOptions,
   OpenResult as NativeOpenResult,
   PackedScreen as NativePackedScreen,
+  RecordingOptions as NativeRecordingOptions,
   RunOptions as NativeRunOptions,
   ScreenshotOptions as NativeScreenshotOptions,
   Size as NativeSize,

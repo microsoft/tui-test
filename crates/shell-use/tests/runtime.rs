@@ -35,6 +35,10 @@ fn named_handles_share_a_process_local_terminal() {
             timeout_ms: Some(5_000),
         })
         .expect("find command output");
+    assert!(second
+        .recording()
+        .expect("read active recording")
+        .contains("native-runtime"));
 
     assert!(registry.sessions().contains(&name));
     first.close().expect("close terminal");
@@ -146,4 +150,52 @@ fn close_all_interrupts_in_flight_waits() {
     registry.close_all();
     assert!(start.elapsed() < Duration::from_secs(2));
     assert_eq!(wait.join().unwrap().unwrap_err().kind, ErrorKind::Assertion);
+}
+
+#[test]
+#[cfg(feature = "recording-raster")]
+fn session_records_and_exports_an_apng() {
+    let registry = SessionRegistry::default();
+    let session = registry.session(format!("recording-export-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "shell-use-recording-export-{}.png",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+
+    session.open(OpenOptions::default()).expect("open terminal");
+    session
+        .execute(Operation::StartRecording {
+            path: path.to_string_lossy().into_owned(),
+            format: None,
+            fps: Some(30),
+            speed: Some(1.0),
+            idle_time_limit: Some(5.0),
+        })
+        .expect("start recording");
+    session
+        .execute(Operation::Submit {
+            data: Some("echo animated-recording".to_string()),
+        })
+        .expect("submit command");
+    session
+        .execute(Operation::WaitCommand {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for command");
+    let OperationResult::Recording(recorded) = session
+        .execute(Operation::StopRecording)
+        .expect("stop recording")
+    else {
+        panic!("unexpected recording result");
+    };
+    assert_eq!(recorded, path.to_string_lossy());
+    let bytes = std::fs::read(&path).expect("read apng");
+    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    assert!(bytes.windows(4).any(|window| window == b"acTL"));
+    assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 1660);
+    assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 1364);
+
+    session.close().expect("close terminal");
+    std::fs::remove_file(path).expect("remove apng");
 }

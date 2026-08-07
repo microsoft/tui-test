@@ -11,9 +11,9 @@ use shell_use::{
     global_registry, Cell as CoreCell, CellColor, Cursor as CoreCursor,
     EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, MouseAction,
     OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation, OperationResult,
-    RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
-    ShellUseError, Size as CoreSize, SnapshotResult as CoreSnapshotResult, State as CoreState,
-    Timeouts as CoreTimeouts,
+    RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
+    ScreenshotResult as CoreScreenshotResult, SessionHandle, ShellUseError, Size as CoreSize,
+    SnapshotResult as CoreSnapshotResult, State as CoreState, Timeouts as CoreTimeouts,
 };
 
 const ERROR_PREFIX: &str = "__shell_use_native_error__:";
@@ -44,6 +44,23 @@ impl From<Shell> for CoreShell {
             Shell::Xonsh => Self::Xonsh,
             Shell::Elvish => Self::Elvish,
             Shell::Nushell => Self::Nushell,
+        }
+    }
+}
+
+#[napi(string_enum = "lowercase")]
+pub enum RecordingFormat {
+    Apng,
+    Gif,
+    Cast,
+}
+
+impl From<RecordingFormat> for CoreRecordingFormat {
+    fn from(value: RecordingFormat) -> Self {
+        match value {
+            RecordingFormat::Apng => Self::Apng,
+            RecordingFormat::Gif => Self::Gif,
+            RecordingFormat::Cast => Self::Cast,
         }
     }
 }
@@ -334,6 +351,15 @@ pub struct SnapshotOptions {
 pub struct ScreenshotOptions {
     pub full: Option<bool>,
     pub path: Option<String>,
+}
+
+#[napi(object)]
+pub struct RecordingOptions {
+    pub path: String,
+    pub format: Option<RecordingFormat>,
+    pub fps: Option<f64>,
+    pub speed: Option<f64>,
+    pub idle_time_limit: Option<f64>,
 }
 
 #[napi(string_enum = "lowercase")]
@@ -1109,6 +1135,40 @@ impl NativeSession {
                 OperationResult::Screenshot(CoreScreenshotResult::Path(value))
                 | OperationResult::Screenshot(CoreScreenshotResult::Text(value)) => Ok(value),
                 _ => Err(unexpected("screenshot")),
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn start_recording(&self, options: RecordingOptions) -> Result<()> {
+        let fps = options
+            .fps
+            .map(|value| u8_value(value, "fps"))
+            .transpose()
+            .map_err(native_error)?;
+        self.unit(
+            "startRecording",
+            Operation::StartRecording {
+                path: options.path,
+                format: options.format.map(Into::into),
+                fps,
+                speed: options.speed,
+                idle_time_limit: options.idle_time_limit,
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn stop_recording(&self) -> Result<String> {
+        execute(
+            self.handle.clone(),
+            "stopRecording",
+            Operation::StopRecording,
+            |result| match result {
+                OperationResult::Recording(path) => Ok(path),
+                _ => Err(unexpected("stopRecording")),
             },
         )
         .await

@@ -6,6 +6,7 @@ from typing import Any, Dict, Literal, Optional, Union
 Color = Union[str, int]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
+RecordingFormat = Literal["apng", "gif", "cast"]
 
 
 @dataclass

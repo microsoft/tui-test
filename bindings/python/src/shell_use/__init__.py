@@ -11,7 +11,7 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Cell, State, Timeouts
+from .types import Cell, RecordingFormat, State, Timeouts
 
 __all__ = [
     "ShellUse",
@@ -26,6 +26,7 @@ __all__ = [
     "InternalError",
     "TerminalArtifact",
     "Cell",
+    "RecordingFormat",
     "State",
     "Timeouts",
     "__version__",

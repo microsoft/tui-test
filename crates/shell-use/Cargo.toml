@@ -12,6 +12,10 @@ readme = "../../README.md"
 name = "shell_use"
 path = "src/lib.rs"
 
+[features]
+default = []
+recording-raster = ["dep:fontdb", "dep:gif", "dep:png", "dep:tiny-skia"]
+
 [dependencies]
 alacritty_terminal.workspace = true
 anyhow.workspace = true
@@ -19,10 +23,14 @@ bitflags.workspace = true
 compact_str.workspace = true
 dirs.workspace = true
 flate2.workspace = true
+fontdb = { workspace = true, optional = true }
+gif = { workspace = true, optional = true }
+png = { workspace = true, optional = true }
 portable-pty.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tiny-skia = { workspace = true, optional = true }
 ttf-parser.workspace = true
 unicode-width.workspace = true

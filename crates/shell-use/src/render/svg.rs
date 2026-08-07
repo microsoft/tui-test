@@ -13,13 +13,14 @@ use std::fmt::Write;
 use super::nerd_font::NerdFont;
 use crate::terminal::cell::{truncate_to_columns, Attrs, Color, EmuCell};
 
-const CELL_W: f32 = 10.0;
-const CELL_H: f32 = 21.0;
-const FONT_SIZE: f32 = 17.0;
-const FONT_BASELINE: f32 = (CELL_H - FONT_SIZE) / 2.0 + FONT_SIZE * 0.78;
-const MARGIN_X: f32 = 15.0;
-const HEADER_H: f32 = 38.0;
+pub(crate) const CELL_W: f32 = 10.0;
+pub(crate) const CELL_H: f32 = 21.0;
+pub(crate) const FONT_SIZE: f32 = 17.0;
+pub(crate) const FONT_BASELINE: f32 = (CELL_H - FONT_SIZE) / 2.0 + FONT_SIZE * 0.78;
+pub(crate) const MARGIN_X: f32 = 15.0;
+pub(crate) const HEADER_H: f32 = 38.0;
 const MARGIN_BOTTOM: f32 = 14.0;
+<<<<<<< Updated upstream
 const DOT_R: f32 = 7.0;
 /// Title bar text, smaller than the grid font so the chrome does not compete
 /// with the terminal content itself.
@@ -27,13 +28,16 @@ const TITLE_FONT_SIZE: f32 = 13.0;
 /// Where the rightmost traffic light ends. A centred title is kept clear of
 /// this on both sides, so it can never be drawn over the controls.
 const DOTS_RIGHT: f32 = MARGIN_X + 5.0 + 2.0 * 20.0 + DOT_R;
+=======
+pub(crate) const DOT_R: f32 = 7.0;
+>>>>>>> Stashed changes
 const FONT_STACK: &str =
     "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,'DejaVu Sans Mono',monospace";
 
-struct Theme {
-    palette: [(u8, u8, u8); 16],
-    default_fg: (u8, u8, u8),
-    default_bg: (u8, u8, u8),
+pub(crate) struct Theme {
+    pub palette: [(u8, u8, u8); 16],
+    pub default_fg: (u8, u8, u8),
+    pub default_bg: (u8, u8, u8),
 }
 
 impl Default for Theme {
@@ -64,7 +68,7 @@ impl Default for Theme {
 }
 
 impl Theme {
-    fn resolve(&self, color: Option<Color>, is_fg: bool) -> (u8, u8, u8) {
+    pub(crate) fn resolve(&self, color: Option<Color>, is_fg: bool) -> (u8, u8, u8) {
         match color {
             None => {
                 if is_fg {
@@ -96,7 +100,7 @@ fn cell_at(row: &[EmuCell], x: usize) -> &EmuCell {
 }
 
 /// Resolved background color for a cell (honoring inverse).
-fn bg_of(cell: &EmuCell, theme: &Theme) -> (u8, u8, u8) {
+pub(crate) fn bg_of(cell: &EmuCell, theme: &Theme) -> (u8, u8, u8) {
     let bg = theme.resolve(cell.bg, false);
     let fg = theme.resolve(cell.fg, true);
     if cell.has(Attrs::INVERSE) {
@@ -107,16 +111,16 @@ fn bg_of(cell: &EmuCell, theme: &Theme) -> (u8, u8, u8) {
 }
 
 #[derive(PartialEq)]
-struct Style {
-    fg: (u8, u8, u8),
-    bold: bool,
-    italic: bool,
-    underline: bool,
-    strike: bool,
-    invisible: bool,
+pub(crate) struct Style {
+    pub fg: (u8, u8, u8),
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strike: bool,
+    pub invisible: bool,
 }
 
-fn style_of(cell: &EmuCell, theme: &Theme) -> Style {
+pub(crate) fn style_of(cell: &EmuCell, theme: &Theme) -> Style {
     let mut fg = theme.resolve(cell.fg, true);
     let bg = theme.resolve(cell.bg, false);
     if cell.has(Attrs::INVERSE) {
@@ -191,10 +195,18 @@ fn write_title(out: &mut String, title: &str, width: f32, theme: &Theme) {
 }
 
 /// Render a grid to a standalone SVG document.
+<<<<<<< Updated upstream
 ///
 /// `title` is the window title a program set, drawn in the title bar. `None`
 /// leaves the bar bare, exactly as it was before titles were tracked.
 pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, title: Option<&str>) -> String {
+=======
+pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16) -> String {
+    render_svg_with_font(rows, cols, FONT_STACK)
+}
+
+pub(crate) fn render_svg_with_font(rows: &[Vec<EmuCell>], cols: u16, font_family: &str) -> String {
+>>>>>>> Stashed changes
     let theme = Theme::default();
     let nerd_font = NerdFont::new(rows, FONT_SIZE);
     let cols = cols as usize;
@@ -206,7 +218,7 @@ pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, title: Option<&str>) -> Stri
     let mut out = String::new();
     let _ = write!(
         out,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" font-family="{FONT_STACK}" font-size="{FONT_SIZE}px">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{FONT_SIZE}px">"#
     );
     nerd_font.write_defs(&mut out);
     let _ = write!(
@@ -306,6 +318,13 @@ pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, title: Option<&str>) -> Stri
 
     out.push_str("</svg>");
     out
+}
+
+#[cfg(feature = "recording-raster")]
+pub(crate) fn pixel_size(cols: u16, rows: usize) -> (u32, u32) {
+    let width = (MARGIN_X * 2.0 + f32::from(cols) * CELL_W).ceil() as u32;
+    let height = (HEADER_H + MARGIN_BOTTOM + rows.max(1) as f32 * CELL_H).ceil() as u32;
+    (width + width % 2, height + height % 2)
 }
 
 #[cfg(test)]

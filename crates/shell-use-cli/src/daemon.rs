@@ -76,6 +76,10 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
         let mut response = match req {
             Request::Ping | Request::Shutdown => Response::ok(),
             Request::Status => status_response(&engine),
+            Request::FlushRecording => match engine.flush_recording() {
+                Ok(()) => Response::ok(),
+                Err(error) => Response::from_error(error),
+            },
             operation => operation.execute(&engine),
         };
         if let Some(status) = enrich {

@@ -2,7 +2,12 @@ export { ShellUse } from "./client.js";
 export type {
   ExpectTextOptions,
   MouseButtonOptions,
+<<<<<<< Updated upstream
   TitleOptions,
+=======
+  RecordingFormat,
+  RecordingOptions,
+>>>>>>> Stashed changes
   WaitTextOptions,
 } from "./client.js";
 export { uniqueSession } from "./ephemeral.js";

@@ -125,7 +125,9 @@ Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 
 | Command                             | Description                                                                  |
 | ----------------------------------- | ---------------------------------------------------------------------------- |
-| `get-recording [session]`           | Print a session's asciinema v2 cast to stdout (works even after it stopped). |
+| `record start OUT [options]`        | Start APNG, GIF, or asciicast recording (format inferred from extension).    |
+| `record stop`                       | Finish the active recording.                                                 |
+| `get-recording [session]`           | Print the always-on asciinema v2 cast (works even after the session stopped).|
 | `monitor`                           | Watch the session live, full-color, in another terminal.                     |
 | `usage` / `agent-context` / `skill` | Self-documentation (see top of guide).                                       |
 
@@ -211,8 +213,20 @@ shell-use get-recording > demo.cast    # current session's recording to stdout
 shell-use get-recording work > w.cast  # a specific session by name (even if stopped)
 ```
 
-Play it with `asciinema play demo.cast`, or render a GIF with
-`agg demo.cast demo.gif`.
+Record a selected span directly to APNG (primary), GIF (fallback), or cast:
+
+```sh
+shell-use record start demo.png
+shell-use submit "echo hello"
+shell-use wait command
+shell-use record stop
+```
+
+APNG and GIF render at 2x pixel density. Use `--fps`, `--speed`, and
+`--idle-time-limit` to tune playback. `.cast` output interoperates with the
+asciicast ecosystem without adding any GPL dependency to shell-use. If a
+process exits before `record stop`, an APNG/GIF capture remains beside the
+target as `OUT.shell-use.cast`.
 
 ## Live monitor
 
@@ -283,6 +297,7 @@ await su.expectExitCode(0);
 await su.close();
 ```
 
+<<<<<<< Updated upstream
 Methods mirror the cli commands: `open` / `run`, `submit` / `type` / `write`,
 `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` /
 `kill`, `state`, `text`, `cells`, the dedicated `get_command` / `get_output` /
@@ -293,6 +308,23 @@ Methods mirror the cli commands: `open` / `run`, `submit` / `type` / `write`,
 `close_all`, and `get_recording`; JavaScript exports `sessions`, `closeAll`,
 and `getRecording`. The JavaScript client otherwise uses the same names in
 camelCase (`waitCommand`, `expectText`, `getExitCode`, etc.).
+=======
+The Rust crate exposes `Session` and `SessionRegistry` for terminal ownership,
+plus the `Operation` and `OperationResult` enums for the command surface.
+
+Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
+/ `type` / `write`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`,
+`resize`, `signal` / `kill`, `state`, `text`, `cells`, the dedicated
+`get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` /
+`get_size` methods, `screenshot`, `start_recording` / `stop_recording`,
+`wait_text` / `wait_idle` / `wait_command` /
+`wait_exit` / `wait_ready`, `expect_text` / `expect_exit_code` /
+`expect_output` / `expect_snapshot`, and `close`. Python module-level helpers
+are `sessions`, `close_all`, and `get_recording`; JavaScript exports `sessions`,
+`closeAll`, and `getRecording`. The JavaScript client otherwise uses the same
+names in camelCase (`startRecording`, `stopRecording`, `waitCommand`,
+`expectText`, `getExitCode`, etc.).
+>>>>>>> Stashed changes
 
 The constructors accept a session name plus timeout and artifact options:
 `ShellUse(session="default", *, timeouts=None, artifacts=None)` in Python and
