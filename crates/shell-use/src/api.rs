@@ -88,6 +88,7 @@ pub enum Operation {
     GetCwd,
     GetCursor,
     GetSize,
+    GetTitle,
     Write {
         data: String,
     },
@@ -114,6 +115,12 @@ pub enum Operation {
         timeout_ms: Option<u64>,
         not: bool,
     },
+    WaitTitle {
+        text: String,
+        regex: bool,
+        timeout_ms: Option<u64>,
+        not: bool,
+    },
     WaitIdle {
         timeout_ms: Option<u64>,
     },
@@ -136,6 +143,12 @@ pub enum Operation {
         bg: Option<String>,
         timeout_ms: Option<u64>,
     },
+    ExpectTitle {
+        text: String,
+        regex: bool,
+        not: bool,
+        timeout_ms: Option<u64>,
+    },
     ExpectExitCode {
         code: i32,
         timeout_ms: Option<u64>,
@@ -148,6 +161,7 @@ pub enum Operation {
         name: String,
         update: bool,
         include_colors: bool,
+        include_title: bool,
         cwd: Option<String>,
     },
     Screenshot {
@@ -168,6 +182,7 @@ pub enum OperationResult {
     Output(Option<String>),
     ExitCode(Option<i32>),
     Cwd(Option<String>),
+    Title(Option<String>),
     Cursor(Cursor),
     Size(Size),
     Snapshot(SnapshotResult),
@@ -280,6 +295,7 @@ pub struct State {
     pub cols: u16,
     pub rows: u16,
     pub cursor: Cursor,
+    pub title: Option<String>,
     pub cwd: Option<String>,
     pub last_command: Option<String>,
     pub last_exit: Option<i32>,

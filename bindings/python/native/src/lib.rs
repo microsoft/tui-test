@@ -281,6 +281,15 @@ impl NativeSession {
         )
     }
 
+    fn get_title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || execute_title(&name, Operation::GetTitle),
+            optional_string_to_py,
+        )
+    }
+
     fn get_cursor<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let name = self.name.clone();
         future_blocking(
@@ -604,6 +613,34 @@ impl NativeSession {
         )
     }
 
+    #[pyo3(signature = (text, regex, not_, timeout_ms))]
+    fn wait_title<'py>(
+        &self,
+        py: Python<'py>,
+        text: String,
+        regex: bool,
+        not_: bool,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::WaitTitle {
+                        text,
+                        regex,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                        not: not_,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
     #[pyo3(signature = (timeout_ms))]
     fn wait_idle<'py>(
         &self,
@@ -692,6 +729,34 @@ impl NativeSession {
         )
     }
 
+    #[pyo3(signature = (text, regex, not_, timeout_ms))]
+    fn expect_title<'py>(
+        &self,
+        py: Python<'py>,
+        text: String,
+        regex: bool,
+        not_: bool,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::ExpectTitle {
+                        text,
+                        regex,
+                        not: not_,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
     #[pyo3(signature = (text, regex, full, strict, not_, fg, bg, timeout_ms))]
     #[allow(clippy::too_many_arguments)]
     fn expect_text<'py>(
@@ -768,13 +833,14 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (name, update, include_colors, cwd))]
+    #[pyo3(signature = (name, update, include_colors, include_title, cwd))]
     fn snapshot<'py>(
         &self,
         py: Python<'py>,
         name: String,
         update: bool,
         include_colors: bool,
+        include_title: bool,
         cwd: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let session = self.name.clone();
@@ -787,6 +853,7 @@ impl NativeSession {
                         name,
                         update,
                         include_colors,
+                        include_title,
                         cwd,
                     },
                 )
@@ -1118,6 +1185,13 @@ fn execute_cwd(name: &str, operation: Operation) -> Result<Option<String>, Shell
     }
 }
 
+fn execute_title(name: &str, operation: Operation) -> Result<Option<String>, ShellUseError> {
+    match global_registry().execute(name, operation)? {
+        OperationResult::Title(value) => Ok(value),
+        _ => Err(unexpected_result("the window title")),
+    }
+}
+
 fn execute_cursor(name: &str, operation: Operation) -> Result<Cursor, ShellUseError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Cursor(value) => Ok(value),
@@ -1195,6 +1269,7 @@ fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     result.set_item("cols", value.cols)?;
     result.set_item("rows", value.rows)?;
     result.set_item("cursor", cursor_dict(py, value.cursor)?)?;
+    result.set_item("title", value.title)?;
     result.set_item("cwd", value.cwd)?;
     result.set_item("last_command", value.last_command)?;
     result.set_item("last_exit", value.last_exit)?;

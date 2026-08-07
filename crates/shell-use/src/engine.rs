@@ -397,6 +397,35 @@ fn viewable(session: &TerminalSession) -> Vec<Vec<EmuCell>> {
         .viewable_rows()
 }
 
+/// The visible screen and the window title as of a single instant.
+///
+/// Read under one lock. Taking them separately lets the reader thread advance
+/// the terminal in between, which pairs a grid from one moment with a title
+/// from another: a shell writes its prompt and then sets its title, so a
+/// snapshot of a screen that never changed again could still come out
+/// different each time.
+fn grid_with_title(
+    session: &TerminalSession,
+    full: bool,
+    include_title: bool,
+) -> (Vec<Vec<EmuCell>>, Option<String>) {
+    let state = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let title = if include_title {
+        state.emu.title()
+    } else {
+        None
+    };
+    let rows = if full {
+        state.emu.full_rows()
+    } else {
+        state.emu.viewable_rows()
+    };
+    (rows, title)
+}
+
 fn grid(session: &TerminalSession, full: bool) -> Vec<Vec<EmuCell>> {
     let state = session
         .state
@@ -465,6 +494,7 @@ fn dispatch(
                 .cwd()
                 .map(str::to_string),
         )),
+        Operation::GetTitle => Ok(OperationResult::Title(title_of(session))),
         Operation::GetCursor => {
             let (x, y) = session
                 .state
@@ -528,6 +558,21 @@ fn dispatch(
             )?;
             Ok(OperationResult::Unit)
         }
+        Operation::WaitTitle {
+            text,
+            regex,
+            timeout_ms,
+            not,
+        } => {
+            wait_title(
+                session,
+                &text,
+                regex,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+                not,
+            )?;
+            Ok(OperationResult::Unit)
+        }
         Operation::WaitIdle { timeout_ms } => {
             wait_idle(
                 session,
@@ -579,6 +624,21 @@ fn dispatch(
             )?;
             Ok(OperationResult::Unit)
         }
+        Operation::ExpectTitle {
+            text,
+            regex,
+            not,
+            timeout_ms,
+        } => {
+            expect_title(
+                session,
+                &text,
+                regex,
+                not,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
         Operation::ExpectExitCode { code, timeout_ms } => {
             expect_exit_code(
                 session,
@@ -595,12 +655,14 @@ fn dispatch(
             name,
             update,
             include_colors,
+            include_title,
             cwd,
         } => Ok(OperationResult::Snapshot(do_snapshot(
             session,
             &name,
             update,
             include_colors,
+            include_title,
             cwd,
         )?)),
         Operation::Screenshot { full, path } => Ok(OperationResult::Screenshot(screenshot(
@@ -628,6 +690,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
         cols,
         rows,
         cursor: Cursor { x, y },
+        title: state.emu.title(),
         cwd: state.tracker.cwd().map(str::to_string),
         last_command: state.tracker.last_command().map(str::to_string),
         last_exit: state.tracker.last_exit(),
@@ -834,6 +897,112 @@ fn wait_text(
             not,
         )))
     }
+}
+
+/// The window title the terminal is currently reporting.
+fn title_of(session: &TerminalSession) -> Option<String> {
+    session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .emu
+        .title()
+}
+
+/// Whether the title matches now. An unset title matches nothing, so `--not`
+/// on a session that never set one succeeds.
+fn title_matches(session: &TerminalSession, pattern: &Pattern) -> bool {
+    title_of(session).is_some_and(|title| pattern.matches(&title))
+}
+
+fn wait_title(
+    session: &TerminalSession,
+    text: &str,
+    regex: bool,
+    timeout_ms: u64,
+    not: bool,
+) -> Result<(), ShellUseError> {
+    let pattern = Pattern::new(text, regex)
+        .map_err(|error| ShellUseError::usage(format!("invalid regex: {error}")))?;
+    let mut matched = false;
+    poll_until(
+        || {
+            matched = title_matches(session, &pattern) != not;
+            matched || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if matched {
+        Ok(())
+    } else if session_stopped(session) {
+        Err(ShellUseError::assertion(format!(
+            "session exited before the title '{}' became {}",
+            pattern.describe(),
+            if not { "hidden" } else { "visible" }
+        )))
+    } else {
+        Err(ShellUseError::assertion(title_timeout_message(
+            session,
+            &pattern.describe(),
+            timeout_ms,
+            not,
+        )))
+    }
+}
+
+fn expect_title(
+    session: &TerminalSession,
+    text: &str,
+    regex: bool,
+    not: bool,
+    timeout_ms: u64,
+) -> Result<(), ShellUseError> {
+    let pattern = Pattern::new(text, regex)
+        .map_err(|error| ShellUseError::usage(format!("invalid regex: {error}")))?;
+    let mut matched = false;
+    poll_until(
+        || {
+            matched = title_matches(session, &pattern) != not;
+            matched || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if matched {
+        Ok(())
+    } else if session_stopped(session) {
+        Err(ShellUseError::assertion(format!(
+            "session exited before the title '{}' became {}",
+            pattern.describe(),
+            if not { "hidden" } else { "visible" }
+        )))
+    } else {
+        Err(ShellUseError::assertion(title_timeout_message(
+            session,
+            &pattern.describe(),
+            timeout_ms,
+            not,
+        )))
+    }
+}
+
+/// Naming the title actually seen turns "expected X" into a diff a caller can
+/// act on, which matters more here than for text because the title is a single
+/// short string that the terminal screen does not show.
+fn title_timeout_message(
+    session: &TerminalSession,
+    pattern: &str,
+    timeout_ms: u64,
+    not: bool,
+) -> String {
+    let actual = match title_of(session) {
+        Some(title) => format!("'{title}'"),
+        None => "no title set".to_string(),
+    };
+    format!(
+        "timed out after {} waiting for the title '{pattern}' to be {}; the title is {actual}",
+        format_timeout(timeout_ms),
+        if not { "hidden" } else { "visible" },
+    )
 }
 
 fn wait_idle(session: &TerminalSession, timeout_ms: u64) -> Result<(), ShellUseError> {
@@ -1139,10 +1308,14 @@ fn do_snapshot(
     name: &str,
     update: bool,
     include_colors: bool,
+    include_title: bool,
     cwd: Option<String>,
 ) -> Result<SnapshotResult, ShellUseError> {
-    let rows = viewable(session);
-    let content = snapshot::serialize(&rows, session.cols, include_colors);
+    // The title is off by default: a shell prompt routinely sets it to a
+    // username, hostname, and absolute path, which would pin every baseline to
+    // one machine and make it change on `cd` while the screen stayed the same.
+    let (rows, title) = grid_with_title(session, false, include_title);
+    let content = snapshot::serialize(&rows, session.cols, include_colors, title.as_deref());
     let base = cwd
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
@@ -1163,10 +1336,10 @@ fn screenshot(
     full: bool,
     path: Option<String>,
 ) -> Result<ScreenshotResult, ShellUseError> {
-    let rows = grid(session, full);
+    let (rows, title) = grid_with_title(session, full, true);
     match path {
         Some(path) => {
-            let svg = crate::render::svg::render_svg(&rows, session.cols);
+            let svg = crate::render::svg::render_svg(&rows, session.cols, title.as_deref());
             std::fs::write(&path, svg)
                 .map_err(|error| ShellUseError::internal(error.to_string()))?;
             Ok(ScreenshotResult::Path(path))
@@ -1184,7 +1357,8 @@ fn timeout_message(pattern: &str, timeout_ms: u64, not: bool) -> String {
 }
 
 fn assertion_message(session: &TerminalSession, message: &str) -> String {
-    let screen = snapshot::serialize(&viewable(session), session.cols, false);
+    let (rows, title) = grid_with_title(session, false, true);
+    let screen = snapshot::serialize(&rows, session.cols, false, title.as_deref());
     format!("{message}\n\nTerminal content:\n{screen}")
 }
 

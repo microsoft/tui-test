@@ -2,6 +2,7 @@ export { ShellUse } from "./client.js";
 export type {
   ExpectTextOptions,
   MouseButtonOptions,
+  TitleOptions,
   WaitTextOptions,
 } from "./client.js";
 export { uniqueSession } from "./ephemeral.js";

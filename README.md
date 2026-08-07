@@ -216,11 +216,11 @@ way.
 
 | Command                                             | Description                                                                                 |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `state`                                             | cwd, size, cursor, last command + exit code, effective timeouts, text snapshot.             |
+| `state`                                             | cwd, size, cursor, window title, last command + exit code, effective timeouts, text snapshot. |
 | `text [--full]`                                     | Plain text of the viewport (or scrollback).                                                 |
 | `screenshot [-o file.svg] [--full]`                 | Terminal text to stdout, or a crisp full-color SVG image (svg-term-style window) to a file. |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags).                                                  |
-| `get command\|output\|exit-code\|cwd\|cursor\|size` | Structured getters.                                                                         |
+| `get command\|output\|exit-code\|cwd\|cursor\|size\|title` | Structured getters.                                                                         |
 
 `state` prints `key: value` lines then the screen; `text` and `screenshot`
 print the screen bare.
@@ -249,6 +249,7 @@ print the screen bare.
 | Command                                             | Description                         |
 | --------------------------------------------------- | ----------------------------------- |
 | `wait text "T" [--regex --full --not --timeout MS]` | Until text is (not) visible.        |
+| `wait title "T" [--regex --not --timeout MS]`       | Until the window title (OSC 0/2) matches. |
 | `wait idle`                                         | Until the screen stops changing.    |
 | `wait command`                                      | Until the current command finishes. |
 | `wait exit`                                         | Until the session exits.            |
@@ -259,9 +260,10 @@ print the screen bare.
 | Command                                                                         | Description                                |
 | ------------------------------------------------------------------------------- | ------------------------------------------ |
 | `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility + optional color.               |
+| `expect title "T" [--regex --not --timeout MS]`                                 | Window title set with OSC 0/2.             |
 | `expect exit-code N [--timeout MS]`                                             | Last command's exit code.                  |
 | `expect output "T" [--regex]`                                                   | Last command's captured output.            |
-| `expect snapshot NAME [-u] [--include-colors]`                                  | Compare against `__snapshots__/NAME.snap`. |
+| `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare against `__snapshots__/NAME.snap`. `--include-title` adds the window title to the frame. |
 
 Colors accept ANSI-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 

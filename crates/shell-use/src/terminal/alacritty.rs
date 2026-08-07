@@ -115,14 +115,32 @@ fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
 #[derive(Default, Clone)]
 struct CaptureProxy {
     pending: Arc<Mutex<Vec<u8>>>,
+    title: Arc<Mutex<Option<String>>>,
 }
 
 impl EventListener for CaptureProxy {
     fn send_event(&self, ev: Event) {
-        if let Event::PtyWrite(bytes) = ev {
-            if let Ok(mut buf) = self.pending.lock() {
-                buf.extend_from_slice(bytes.as_bytes());
+        match ev {
+            Event::PtyWrite(bytes) => {
+                if let Ok(mut buf) = self.pending.lock() {
+                    buf.extend_from_slice(bytes.as_bytes());
+                }
             }
+            // `OSC 0` and `OSC 2` both arrive here, and so does a pop of the
+            // title stack (`CSI 23 t`), which alacritty implements by setting
+            // the title it popped. An empty payload means the same as a reset:
+            // the program is asking for no title rather than for a blank one.
+            Event::Title(title) => self.set_title((!title.is_empty()).then_some(title)),
+            Event::ResetTitle => self.set_title(None),
+            _ => {}
+        }
+    }
+}
+
+impl CaptureProxy {
+    fn set_title(&self, title: Option<String>) {
+        if let Ok(mut current) = self.title.lock() {
+            *current = title;
         }
     }
 }
@@ -133,6 +151,7 @@ pub struct AlacrittyEmu {
     cols: u16,
     rows: u16,
     pending: Arc<Mutex<Vec<u8>>>,
+    title: Arc<Mutex<Option<String>>>,
 }
 
 impl AlacrittyEmu {
@@ -143,8 +162,10 @@ impl AlacrittyEmu {
             ..Default::default()
         };
         let pending: Arc<Mutex<Vec<u8>>> = Arc::default();
+        let title: Arc<Mutex<Option<String>>> = Arc::default();
         let proxy = CaptureProxy {
             pending: pending.clone(),
+            title: title.clone(),
         };
         AlacrittyEmu {
             term: Term::new(config, &size, proxy),
@@ -152,6 +173,7 @@ impl AlacrittyEmu {
             cols,
             rows,
             pending,
+            title,
         }
     }
 
@@ -180,6 +202,10 @@ impl Emulator for AlacrittyEmu {
             Ok(mut buf) => std::mem::take(&mut *buf),
             Err(_) => Vec::new(),
         }
+    }
+
+    fn title(&self) -> Option<String> {
+        self.title.lock().ok()?.clone()
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {

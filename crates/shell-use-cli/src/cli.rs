@@ -548,6 +548,8 @@ pub enum GetArg {
     Cursor,
     /// Terminal size.
     Size,
+    /// Window title, as set with OSC 0/2.
+    Title,
 }
 
 #[derive(Subcommand)]
@@ -658,6 +660,23 @@ pub enum WaitCmd {
         #[arg(long, value_name = "MS")]
         timeout: Option<u64>,
     },
+    /// Wait until the window title (set with OSC 0/2) matches text/regex.
+    ///
+    /// Programs set the title to announce what they are doing, so this is how
+    /// to wait for one that reports progress there rather than on screen.
+    Title {
+        /// Text or regex to wait for in the title.
+        text: String,
+        /// Treat <text> as a regular expression.
+        #[arg(long)]
+        regex: bool,
+        /// Invert: wait until the title does NOT match.
+        #[arg(long)]
+        not: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     /// Wait until the screen stops repainting (visual idle, NOT command done).
     ///
     /// A silent command (e.g. `sleep 100`) counts as idle right away. To wait
@@ -723,6 +742,20 @@ pub enum ExpectCmd {
         #[arg(long, value_name = "MS")]
         timeout: Option<u64>,
     },
+    /// Assert the window title (set with OSC 0/2) matches text/regex.
+    Title {
+        /// Text or regex to match against the title.
+        text: String,
+        /// Treat <text> as a regular expression.
+        #[arg(long)]
+        regex: bool,
+        /// Invert: assert the title does NOT match.
+        #[arg(long)]
+        not: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     /// Assert the last command's exit code.
     /// Waits for the foreground command first, so this is safe right after `submit`.
     ExitCode {
@@ -750,5 +783,10 @@ pub enum ExpectCmd {
         /// Include cell colors in the snapshot.
         #[arg(long)]
         include_colors: bool,
+        /// Include the window title in the snapshot's frame. Off by default:
+        /// a shell prompt often sets the title to a hostname and path, which
+        /// would tie the snapshot to one machine.
+        #[arg(long)]
+        include_title: bool,
     },
 }

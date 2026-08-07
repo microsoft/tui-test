@@ -35,6 +35,14 @@ pub trait Emulator: Send {
     /// Cursor position as `(x, y)` (column, row), 0-based, clamped to screen.
     fn cursor(&self) -> (u16, u16);
 
+    /// The window title a program set with `OSC 0` or `OSC 2`, or `None` when
+    /// none is set.
+    ///
+    /// A program clears the title by sending an empty one, so an empty string
+    /// is reported as `None` rather than as a title that happens to be blank.
+    /// Callers therefore never have to distinguish the two.
+    fn title(&self) -> Option<String>;
+
     /// Visible screen as rows of cells. Always `rows` entries of `cols` cells.
     fn viewable_rows(&self) -> Vec<Vec<EmuCell>>;
 

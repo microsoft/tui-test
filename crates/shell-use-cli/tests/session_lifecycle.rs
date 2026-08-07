@@ -814,3 +814,99 @@ fn status_reports_the_daemon_pid_not_the_child() {
         "the child pid should be reported separately: {live}"
     );
 }
+
+/// A program that sets the window title is tracked, asserted on, and drawn.
+///
+/// This drives the whole path in one session: the emulator picking `OSC 2` out
+/// of the PTY stream, the getter, the assertion, the screenshot, and the reset
+/// that an empty title performs. Each of those is unit tested on its own; what
+/// only an end-to-end run proves is that a title set by a real program in a
+/// real shell arrives intact.
+///
+/// It deliberately does not assert what the title is *before* the program sets
+/// one. A session does not necessarily start without a title: Windows ConPTY
+/// supplies the program's path (`C:\Program Files\Git\bin\bash.EXE`) as soon as
+/// the session opens. That a fresh emulator reports no title, and that an empty
+/// one resets rather than storing a blank, are claims about the emulator rather
+/// than about the platform, so they are pinned in the conformance suite where
+/// no PTY is involved and every backend is covered.
+#[test]
+fn a_window_title_is_tracked_asserted_and_drawn() {
+    let sandbox = Sandbox::new("title");
+    sandbox.ok(&["run", "--cols", "40", "--", "bash", "--norc"]);
+    let before = sandbox.ok(&["get", "title"]);
+
+    sandbox.ok(&["submit", r#"printf '\033]2;vim: notes.md\007'"#]);
+    sandbox.ok(&["expect", "title", "vim", "--timeout", "5000"]);
+    sandbox.ok(&["expect", "title", "notes\\.\\w+", "--regex"]);
+    sandbox.ok(&["expect", "title", "emacs", "--not"]);
+    assert_ne!(
+        sandbox.ok(&["get", "title"]),
+        before,
+        "the title the program set replaced whatever the session started with"
+    );
+
+    // The title is drawn in the window chrome, not in the grid.
+    let svg = sandbox.home.join("titled.svg");
+    sandbox.ok(&["screenshot", "--out", svg.to_str().expect("utf-8 path")]);
+    let image = std::fs::read_to_string(&svg).expect("read svg");
+    assert!(
+        image.contains(">vim: notes.md</text>") && image.contains(r#"text-anchor="middle""#),
+        "the title is drawn centred in the title bar: {image}"
+    );
+
+    // An empty title clears it, which is how programs tidy up on exit.
+    sandbox.ok(&["submit", r#"printf '\033]2;\007'"#]);
+    sandbox.ok(&["wait", "title", "vim", "--not", "--timeout", "5000"]);
+}
+
+/// A snapshot leaves the window title out unless it is asked for.
+///
+/// A shell prompt routinely sets the title to a username, hostname, and
+/// absolute path, so recording it by default would pin every stored baseline
+/// to one machine and make it change on `cd` while the screen stayed the same.
+#[test]
+fn a_snapshot_records_the_title_only_when_asked() {
+    let sandbox = Sandbox::new("snap-title");
+    // Wide enough that the title is not truncated, so the assertion is about
+    // whether it was recorded at all rather than about how it was shortened.
+    sandbox.ok(&["run", "--cols", "40", "--", "bash", "--norc"]);
+    sandbox.ok(&[
+        "submit",
+        r#"clear; printf '\033]2;ayman@host: /some/path\007'"#,
+    ]);
+    sandbox.ok(&["expect", "title", "ayman@host", "--timeout", "5000"]);
+
+    let plain = sandbox.ok(&["expect", "snapshot", "plain", "-u"]);
+    assert!(!plain.contains("ayman@host"), "default keeps the title out");
+    let stored = std::fs::read_to_string(
+        std::env::current_dir()
+            .expect("cwd")
+            .join("__snapshots__/plain.snap"),
+    )
+    .expect("read snapshot");
+    assert!(
+        stored.starts_with("╭────") && !stored.contains("ayman@host"),
+        "the border is plain, so a baseline is not tied to a machine: {stored}"
+    );
+
+    sandbox.ok(&["expect", "snapshot", "titled", "-u", "--include-title"]);
+    let titled = std::fs::read_to_string(
+        std::env::current_dir()
+            .expect("cwd")
+            .join("__snapshots__/titled.snap"),
+    )
+    .expect("read snapshot");
+    assert!(
+        titled.contains("ayman@host: /some/path"),
+        "asking for it puts it in the border: {titled}"
+    );
+
+    for name in ["plain", "titled"] {
+        let _ = std::fs::remove_file(
+            std::env::current_dir()
+                .expect("cwd")
+                .join(format!("__snapshots__/{name}.snap")),
+        );
+    }
+}
