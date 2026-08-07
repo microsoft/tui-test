@@ -1,12 +1,13 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-
-import { runNpm } from "./utils.mjs";
 
 const bindingsDirectory = path.resolve("bindings/js");
 const nativePackagesDirectory = path.join(bindingsDirectory, "npm");
 const outputDirectory = path.resolve("package-artifacts/npm");
 const packagePath = path.join(bindingsDirectory, "package.json");
+
+const runNpm = (args) => execFileSync("npm", args, { stdio: "inherit" });
 
 const nativePackages = fs
   .readdirSync(nativePackagesDirectory, { withFileTypes: true })
