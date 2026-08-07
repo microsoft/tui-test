@@ -9,8 +9,8 @@ use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
     Backend, Cell, CellColor, Cursor, ErrorKind, MouseAction, OpenOptions, OpenResult, Operation,
-    OperationResult, PackedScreen, RunOptions, ScreenshotResult, Size, SnapshotResult, State,
-    Timeouts, TuiTestError,
+    OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
+    SnapshotResult, State, Timeouts, TuiTestError,
 };
 
 pyo3::create_exception!(
@@ -896,6 +896,48 @@ impl NativeSession {
         )
     }
 
+    #[pyo3(signature = (path, format, fps, speed, idle_time_limit))]
+    fn start_recording<'py>(
+        &self,
+        py: Python<'py>,
+        path: String,
+        format: Option<String>,
+        fps: Option<Bound<'py, PyAny>>,
+        speed: Option<f64>,
+        idle_time_limit: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let fps = capture_optional_integer(fps);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::StartRecording {
+                        path,
+                        format: parse_recording_format(format.as_deref())?,
+                        fps: fps
+                            .as_ref()
+                            .map(|value| integer_u8(value, "fps"))
+                            .transpose()?,
+                        speed,
+                        idle_time_limit,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    fn stop_recording<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || execute_recording(&name, Operation::StopRecording),
+            string_to_py,
+        )
+    }
+
     fn recording<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let name = self.name.clone();
         future_blocking(
@@ -1152,6 +1194,19 @@ fn parse_backend(value: Option<&str>) -> Result<Backend, TuiTestError> {
         .map_err(TuiTestError::usage)
 }
 
+fn parse_recording_format(value: Option<&str>) -> Result<Option<RecordingFormat>, TuiTestError> {
+    value
+        .map(|value| match value {
+            "apng" => Ok(RecordingFormat::Apng),
+            "gif" => Ok(RecordingFormat::Gif),
+            "cast" => Ok(RecordingFormat::Cast),
+            other => Err(TuiTestError::usage(format!(
+                "unknown recording format '{other}'; expected apng, gif, or cast"
+            ))),
+        })
+        .transpose()
+}
+
 fn unexpected_result(expected: &str) -> TuiTestError {
     TuiTestError::internal(format!(
         "native Python binding expected {expected}, but the engine returned another result type"
@@ -1260,6 +1315,13 @@ fn execute_screenshot(name: &str, operation: Operation) -> Result<ScreenshotResu
     match global_registry().execute(name, operation)? {
         OperationResult::Screenshot(value) => Ok(value),
         _ => Err(unexpected_result("a screenshot")),
+    }
+}
+
+fn execute_recording(name: &str, operation: Operation) -> Result<String, TuiTestError> {
+    match global_registry().execute(name, operation)? {
+        OperationResult::Recording(path) => Ok(path),
+        _ => Err(unexpected_result("a recording path")),
     }
 }
 

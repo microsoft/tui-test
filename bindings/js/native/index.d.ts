@@ -41,6 +41,8 @@ export declare class NativeSession {
   expectOutput(text: string, regex?: boolean | undefined | null): Promise<void>
   snapshot(name: string, options?: SnapshotOptions | undefined | null): Promise<SnapshotResult>
   screenshot(options?: ScreenshotOptions | undefined | null): Promise<string>
+  startRecording(options: RecordingOptions): Promise<void>
+  stopRecording(): Promise<string>
   panicProbe(): Promise<void>
 }
 
@@ -142,6 +144,20 @@ export interface PackedScreen {
 }
 
 export declare function recording(name: string): Promise<string>
+
+export declare const enum RecordingFormat {
+  Apng = 'apng',
+  Gif = 'gif',
+  Cast = 'cast'
+}
+
+export interface RecordingOptions {
+  path: string
+  format?: RecordingFormat
+  fps?: number
+  speed?: number
+  idleTimeLimit?: number
+}
 
 export interface RunOptions {
   backend?: Backend

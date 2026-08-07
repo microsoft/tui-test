@@ -590,12 +590,13 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { NativeSession, Backend, closeAll, closeAllSync, recording, sessions, Shell, SnapshotResult, UnderlineStyle } = nativeBinding
+const { NativeSession, Backend, closeAll, closeAllSync, recording, RecordingFormat, sessions, Shell, SnapshotResult, UnderlineStyle } = nativeBinding
 export { NativeSession }
 export { Backend }
 export { closeAll }
 export { closeAllSync }
 export { recording }
+export { RecordingFormat }
 export { sessions }
 export { Shell }
 export { SnapshotResult }
