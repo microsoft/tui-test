@@ -5,6 +5,7 @@ pub mod engine;
 pub mod input;
 pub mod logger;
 pub mod profile;
+pub mod record;
 pub mod render;
 pub mod runtime;
 pub mod shell;
