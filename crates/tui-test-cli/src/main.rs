@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
 
-use cli::{Cli, Command, DaemonCmd, ExpectCmd, GetArg, MouseCmd, WaitCmd};
+use cli::{Cli, Command, DaemonCmd, ExpectCmd, GetArg, MouseCmd, RecordCmd, WaitCmd};
 use protocol::{GetField, MouseAction, Request, Response};
 /// Long-form agent skill manifest, printed by `tui-test skill`.
 const SKILL_MD: &str = include_str!("../../../SKILL.md");
@@ -198,6 +198,25 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             full,
             path: out.or(path),
         },
+        Command::Record {
+            cmd:
+                RecordCmd::Start {
+                    path,
+                    format,
+                    fps,
+                    speed,
+                    idle_time_limit,
+                },
+        } => Request::StartRecording {
+            path,
+            format: format.map(Into::into),
+            fps,
+            speed,
+            idle_time_limit,
+        },
+        Command::Record {
+            cmd: RecordCmd::Stop,
+        } => Request::StopRecording,
         Command::Cells { x, y, w, h } => Request::Cells { x, y, w, h },
         Command::Get { field } => Request::Get {
             field: map_field(field),
@@ -501,6 +520,32 @@ fn spawn_detached(exe: &Path, session: &str, verbose: bool) -> anyhow::Result<()
 
 /// Stream a session's recording (asciinema v2 cast) to stdout.
 fn get_recording(session: String) -> i32 {
+    let socket = config::socket_name(&session);
+    if ipc::is_running(&socket) {
+        let response = match ipc::connect(&socket) {
+            Ok(connection) => match ipc::exchange(connection, &Request::FlushRecording) {
+                Ok(response) => response,
+                Err(error) => {
+                    eprintln!("failed to flush recording: {error}");
+                    return 4;
+                }
+            },
+            Err(error) => {
+                eprintln!("failed to flush recording: {error}");
+                return 4;
+            }
+        };
+        if !response.ok {
+            eprintln!(
+                "{}",
+                response
+                    .message
+                    .as_deref()
+                    .unwrap_or("failed to flush recording")
+            );
+            return response.kind.map_or(5, shell_use::ErrorKind::exit_code);
+        }
+    }
     let path = config::recording_file(&session);
     match std::fs::read(&path) {
         Ok(bytes) => {
@@ -728,8 +773,8 @@ EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex]\n\
           expect snapshot NAME [-u] [--include-colors --include-title]\n\
-RECORD    sessions auto-record; get-recording [session] > out.cast (asciinema v2)\n\
-          play with `asciinema play out.cast`, render GIF with `agg out.cast out.gif`\n\
+RECORD    record start OUT [--format apng|gif|cast] [--fps N] [--speed N]\n\
+          record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
 WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
 GLOBAL    --session NAME | --json | --verbose (log PTY traffic to ~/.tui-test/<session>.log)\n\

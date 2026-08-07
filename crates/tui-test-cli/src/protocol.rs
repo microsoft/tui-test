@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use tui_test::{
-    Backend, Engine, OpenOptions, Operation, OperationResult, RunOptions, ScreenshotResult,
-    TuiTestError,
+    Backend, Engine, OpenOptions, Operation, OperationResult, RecordingFormat, RunOptions,
+    ScreenshotResult, TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
@@ -137,6 +137,15 @@ pub enum Request {
         full: bool,
         path: Option<String>,
     },
+    StartRecording {
+        path: String,
+        format: Option<RecordingFormat>,
+        fps: Option<u8>,
+        speed: Option<f64>,
+        idle_time_limit: Option<f64>,
+    },
+    StopRecording,
+    FlushRecording,
     Monitor {
         cols: u16,
         rows: u16,
@@ -292,11 +301,27 @@ impl Request {
                 cwd,
             }),
             Request::Screenshot { full, path } => Ok(Operation::Screenshot { full, path }),
-            Request::Ping | Request::Status | Request::Monitor { .. } | Request::Shutdown => {
-                Err(TuiTestError::usage(
-                    "daemon control request cannot execute as a terminal operation",
-                ))
-            }
+            Request::StartRecording {
+                path,
+                format,
+                fps,
+                speed,
+                idle_time_limit,
+            } => Ok(Operation::StartRecording {
+                path,
+                format,
+                fps,
+                speed,
+                idle_time_limit,
+            }),
+            Request::StopRecording => Ok(Operation::StopRecording),
+            Request::Ping
+            | Request::Status
+            | Request::FlushRecording
+            | Request::Monitor { .. }
+            | Request::Shutdown => Err(TuiTestError::usage(
+                "daemon control request cannot execute as a terminal operation",
+            )),
         }
     }
 }
