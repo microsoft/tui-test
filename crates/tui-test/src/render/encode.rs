@@ -1,7 +1,6 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-#[cfg(test)]
 use std::time::Duration;
 
 use crate::api::RecordingFormat;
@@ -25,6 +24,7 @@ pub(crate) fn encode(
         std::fs::create_dir_all(parent)?;
     }
     match format {
+        RecordingFormat::Apng => encode_apng(path, frames, renderer),
         RecordingFormat::Gif => encode_gif(path, frames, renderer),
         RecordingFormat::Cast => anyhow::bail!("cast recordings do not require animation encoding"),
     }
@@ -50,6 +50,43 @@ fn encode_gif(
     let mut output = encoder.into_inner()?;
     output.flush()?;
     Ok(())
+}
+
+fn encode_apng(
+    path: &Path,
+    frames: &[Frame],
+    renderer: &mut dyn FrameRenderer,
+) -> anyhow::Result<()> {
+    let (width, height) = renderer.pixel_size();
+    let output = BufWriter::new(File::create(path)?);
+    let mut encoder = png::Encoder::new(output, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_animated(frames.len().try_into()?, 0)?;
+    encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
+    let mut writer = encoder.write_header()?;
+    for frame in frames {
+        let image = renderer.render(frame)?;
+        let (delay_num, delay_den) = apng_delay(frame.duration);
+        writer.set_frame_delay(delay_num, delay_den)?;
+        writer.write_image_data(image.as_raw())?;
+    }
+    writer.finish()?;
+    Ok(())
+}
+
+fn apng_delay(duration: Duration) -> (u16, u16) {
+    let seconds = duration.as_secs_f64();
+    if seconds <= 0.0 {
+        return (1, u16::MAX);
+    }
+    let denominator = (f64::from(u16::MAX) / seconds)
+        .floor()
+        .clamp(1.0, f64::from(u16::MAX)) as u16;
+    let numerator = (seconds * f64::from(denominator))
+        .round()
+        .clamp(1.0, f64::from(u16::MAX)) as u16;
+    (numerator, denominator)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +144,7 @@ fn gif_timeline(frames: &[Frame]) -> Vec<GifStep> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::BufReader;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use crate::profile::Profile;
@@ -114,6 +152,19 @@ mod tests {
     use crate::render::svg::RenderState;
     use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::cell::{Color, EmuCell};
+
+    #[test]
+    fn apng_delay_preserves_common_recording_intervals() {
+        for duration in [
+            Duration::from_secs_f64(1.0 / 30.0),
+            Duration::from_millis(2500),
+            Duration::from_secs(5),
+        ] {
+            let (numerator, denominator) = apng_delay(duration);
+            let actual = f64::from(numerator) / f64::from(denominator);
+            assert!((actual - duration.as_secs_f64()).abs() < 0.000_1);
+        }
+    }
 
     #[test]
     fn gif_timing_diffuses_thirty_fps_rounding_error() {
@@ -186,21 +237,61 @@ mod tests {
     }
 
     #[test]
-    fn gif_round_trips_dimensions_delays_and_color() {
-        let path = temp_path("gif");
-        let frames = sample_frames();
-        let scale = 2;
-        let mut renderer = GridRenderer::with_scale(1, 1, scale);
-        encode(&path, RecordingFormat::Gif, &frames, &mut renderer).unwrap();
+    fn apng_and_gif_round_trip_dimensions_delays_and_color() {
+        for format in [RecordingFormat::Apng, RecordingFormat::Gif] {
+            let path = temp_path(match format {
+                RecordingFormat::Apng => "png",
+                RecordingFormat::Gif => "gif",
+                RecordingFormat::Cast => unreachable!(),
+            });
+            let frames = sample_frames();
+            let scale = 2;
+            let mut renderer = GridRenderer::with_scale(1, 1, scale);
+            encode(&path, format, &frames, &mut renderer).unwrap();
 
-        let decoded = decode_gif(&path, 20 * scale, 48 * scale);
-        assert_eq!(decoded.frames, 2);
-        assert_eq!(decoded.dimensions, renderer.pixel_size());
-        assert_eq!(decoded.delay, Duration::from_millis(400));
-        for (actual, expected) in decoded.pixel[..3].iter().zip([200u8, 10, 20]) {
-            assert!(actual.abs_diff(expected) <= 3);
+            match format {
+                RecordingFormat::Apng => {
+                    let bytes = std::fs::read(&path).unwrap();
+                    let chunks = png_chunks(&bytes);
+                    assert_eq!(png_dimensions(&chunks), renderer.pixel_size());
+                    assert_eq!(png_animation_frames(&chunks), 2);
+                    assert!(
+                        png_total_delay(&chunks).abs_diff(Duration::from_millis(400))
+                            <= Duration::from_micros(100)
+                    );
+                    let pixel = decode_first_png_pixel(&path, 20 * scale, 48 * scale);
+                    assert_eq!(&pixel[..3], &[200, 10, 20]);
+                }
+                RecordingFormat::Gif => {
+                    let decoded = decode_gif(&path, 20 * scale, 48 * scale);
+                    assert_eq!(decoded.frames, 2);
+                    assert_eq!(decoded.dimensions, renderer.pixel_size());
+                    assert_eq!(decoded.delay, Duration::from_millis(400));
+                    for (actual, expected) in decoded.pixel[..3].iter().zip([200u8, 10, 20]) {
+                        assert!(actual.abs_diff(expected) <= 3);
+                    }
+                }
+                RecordingFormat::Cast => unreachable!(),
+            }
+            std::fs::remove_file(path).unwrap();
         }
-        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn repeated_apng_encodes_are_byte_identical() {
+        let first = temp_path("png");
+        let second = temp_path("png");
+        let frames = sample_frames();
+        for path in [&first, &second] {
+            let mut renderer = GridRenderer::with_scale(1, 1, 2);
+            encode(path, RecordingFormat::Apng, &frames, &mut renderer).unwrap();
+        }
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            std::fs::read(&second).unwrap()
+        );
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_file(second).unwrap();
     }
 
     fn sample_frames() -> Vec<Frame> {
@@ -260,6 +351,54 @@ mod tests {
             delay,
             pixel,
         }
+    }
+
+    fn decode_first_png_pixel(path: &Path, x: u32, y: u32) -> [u8; 4] {
+        let decoder = png::Decoder::new(BufReader::new(File::open(path).unwrap()));
+        let mut reader = decoder.read_info().unwrap();
+        let mut buffer = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut buffer).unwrap();
+        let offset = ((y * info.width + x) * 4) as usize;
+        buffer[offset..offset + 4].try_into().unwrap()
+    }
+
+    fn png_chunks(bytes: &[u8]) -> Vec<([u8; 4], &[u8])> {
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+        let mut chunks = Vec::new();
+        let mut offset = 8;
+        while offset + 12 <= bytes.len() {
+            let length = u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+            let kind = bytes[offset + 4..offset + 8].try_into().unwrap();
+            let data = &bytes[offset + 8..offset + 8 + length];
+            chunks.push((kind, data));
+            offset += length + 12;
+        }
+        chunks
+    }
+
+    fn png_dimensions(chunks: &[([u8; 4], &[u8])]) -> (u32, u32) {
+        let data = chunks.iter().find(|(kind, _)| kind == b"IHDR").unwrap().1;
+        (
+            u32::from_be_bytes(data[..4].try_into().unwrap()),
+            u32::from_be_bytes(data[4..8].try_into().unwrap()),
+        )
+    }
+
+    fn png_animation_frames(chunks: &[([u8; 4], &[u8])]) -> u32 {
+        let data = chunks.iter().find(|(kind, _)| kind == b"acTL").unwrap().1;
+        u32::from_be_bytes(data[..4].try_into().unwrap())
+    }
+
+    fn png_total_delay(chunks: &[([u8; 4], &[u8])]) -> Duration {
+        chunks
+            .iter()
+            .filter(|(kind, _)| kind == b"fcTL")
+            .map(|(_, data)| {
+                let numerator = u16::from_be_bytes(data[20..22].try_into().unwrap());
+                let denominator = u16::from_be_bytes(data[22..24].try_into().unwrap()).max(1);
+                Duration::from_secs_f64(f64::from(numerator) / f64::from(denominator))
+            })
+            .sum()
     }
 
     fn temp_path(extension: &str) -> std::path::PathBuf {
