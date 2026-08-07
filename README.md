@@ -67,7 +67,7 @@ shell-use wait exit
 
 - `shell-use agent-context` prints versioned JSON for every command, flag, enum, default, and exit code. It is generated from the cli, so it cannot drift from the real surface.
 - `shell-use usage` prints a one-screen cheatsheet.
-- `shell-use skill` prints the full workflow guide ([SKILL.md](SKILL.md)).
+- `shell-use skill` prints the full workflow guide ([SKILL.md](https://github.com/microsoft/shell-use/blob/main/SKILL.md)).
 
 ### Skill quick start
 
@@ -81,9 +81,46 @@ Each command returns a stable exit code (see [Exit codes](#exit-codes)), so an a
 
 ## Programmatic usage
 
-`shell-use` python & node client libraries that drive shell-use with the same commands as the cli. The clients manage the sessions for you without a daemon.
+`shell-use` provides a Rust library plus Python and Node client libraries. These libraries manage in-process sessions without the cli daemon.
 
-### Python ([`shell-use`](bindings/python/README.md))
+### Rust ([`shell-use`](https://crates.io/crates/shell-use))
+
+```sh
+cargo add shell-use
+```
+
+```rust
+use shell_use::{OpenOptions, Operation, Session};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let session = Session::new(format!("rust-example-{}", std::process::id()));
+    session.open(OpenOptions::default())?;
+    session.execute(Operation::Submit {
+        data: Some("echo hello".into()),
+    })?;
+    session.execute(Operation::WaitCommand {
+        timeout_ms: Some(30_000),
+    })?;
+    session.execute(Operation::ExpectText {
+        text: "hello".into(),
+        regex: false,
+        full: false,
+        strict: false,
+        not: false,
+        fg: None,
+        bg: None,
+        timeout_ms: Some(5_000),
+    })?;
+    session.execute(Operation::ExpectExitCode {
+        code: 0,
+        timeout_ms: Some(5_000),
+    })?;
+    session.close()?;
+    Ok(())
+}
+```
+
+### Python ([`shell-use`](https://github.com/microsoft/shell-use/blob/main/bindings/python/README.md))
 
 ```sh
 pip install shell-use
@@ -104,7 +141,7 @@ async def main():
 asyncio.run(main())
 ```
 
-### Node ([`@microsoft/shell-use`](bindings/js/README.md))
+### Node ([`@microsoft/shell-use`](https://github.com/microsoft/shell-use/blob/main/bindings/js/README.md))
 
 ```sh
 npm install @microsoft/shell-use # Node 20+
@@ -282,7 +319,7 @@ re-fits the frame.
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `usage`         | Compact command cheatsheet.                                                                                                           |
 | `agent-context` | Versioned JSON describing every command, flag, enum, default, and the exit-code taxonomy (generated from the cli, so it can't drift). |
-| `skill`         | Long-form workflow guide ([SKILL.md](SKILL.md)).                                                                                      |
+| `skill`         | Long-form workflow guide ([SKILL.md](https://github.com/microsoft/shell-use/blob/main/SKILL.md)).                                      |
 
 ### Exit codes
 

@@ -29,12 +29,19 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
+      - run: |
+          rustup toolchain install stable --profile default
+          rustup default stable
+
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
 
       - name: Verify release versions
         run: node .github/scripts/release/verify-versions.mjs
+
+      - name: Verify shell-use crate package
+        run: cargo publish --locked --package shell-use --dry-run
 
   build-cli:
     needs: verify
@@ -357,6 +364,37 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
+
+  publish-crates:
+    needs:
+      - verify
+      - release
+    if: always() && needs.verify.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment:
+      name: crates-io
+      url: https://crates.io/crates/shell-use
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - run: |
+          rustup toolchain install stable --profile default
+          rustup default stable
+
+      # Match this workflow and environment in the crate's trusted publisher settings.
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish shell-use to crates.io
+        run: cargo publish --locked --package shell-use
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   release:
     needs:

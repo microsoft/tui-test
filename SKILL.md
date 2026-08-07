@@ -1,6 +1,6 @@
 ---
 name: shell-use
-description: "Drive, inspect, assert on, record, and watch a real terminal from the command line with the shell-use cli. Use when running shells (bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, nushell) or TUI programs (vim, less, top, etc.) in a headless PTY; sending keystrokes, key combos, or mouse input; resizing, writing raw bytes, or signaling the child; waiting for a command to finish or the screen to settle; asserting on terminal text, colors, exit codes, output, or snapshots; capturing text or full-color SVG screenshots; recording and replaying asciinema sessions; watching a live cli session while an agent drives it; or driving process-local sessions from Python or Node with the shell-use bindings."
+description: "Drive, inspect, assert on, record, and watch a real terminal from the command line with the shell-use cli. Use when running shells (bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, nushell) or TUI programs (vim, less, top, etc.) in a headless PTY; sending keystrokes, key combos, or mouse input; resizing, writing raw bytes, or signaling the child; waiting for a command to finish or the screen to settle; asserting on terminal text, colors, exit codes, output, or snapshots; capturing text or full-color SVG screenshots; recording and replaying asciinema sessions; watching a live cli session while an agent drives it; or driving process-local sessions from Rust, Python, or Node."
 ---
 
 # shell-use
@@ -230,26 +230,60 @@ the commands the agent runs; resizing the window re-fits the frame.
 
 This works only with standalone CLI sessions.
 
-## Programmatic use (Python and JavaScript)
+## Programmatic use (Rust, Python, and JavaScript)
 
-The Python and JavaScript packages bind the Rust terminal engine directly and
-run sessions in-process. Session names, registries, and recordings are
-process-local. A native session cannot be listed, attached to, controlled, or
-monitored from another process, including by the standalone CLI.
+The Rust crate and the Python and JavaScript packages run the terminal engine
+in-process. Session names, registries, and recordings are process-local. A
+native session cannot be listed, attached to, controlled, or monitored from
+another process, including by the standalone CLI.
 
-Language packages do not install or require the `shell-use` CLI. Only the
-standalone CLI uses the daemon and JSON-over-local-socket protocol described
-elsewhere in this guide.
+These programmatic APIs do not install or require the `shell-use` CLI. Only
+the standalone CLI uses the daemon and JSON-over-local-socket protocol
+described elsewhere in this guide.
 
 Node is the supported JavaScript runtime. Bun and Deno compatibility is best
 effort and does not gate releases. Deno requires a local `node_modules`
 directory and `--allow-ffi` in addition to read/write permissions.
 
 ```sh
+cargo add shell-use  # Rust 1.88+
 pip install shell-use              # Python 3.8+, imported as `shell_use`
 npm install @microsoft/shell-use   # Node 20+ (ESM only)
 bun add @microsoft/shell-use       # Bun (best effort)
 deno add npm:@microsoft/shell-use  # Deno 2 (best effort)
+```
+
+Rust:
+
+```rust
+use shell_use::{OpenOptions, Operation, Session};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let session = Session::new(format!("rust-example-{}", std::process::id()));
+    session.open(OpenOptions::default())?;
+    session.execute(Operation::Submit {
+        data: Some("echo hello".into()),
+    })?;
+    session.execute(Operation::WaitCommand {
+        timeout_ms: Some(30_000),
+    })?;
+    session.execute(Operation::ExpectText {
+        text: "hello".into(),
+        regex: false,
+        full: false,
+        strict: false,
+        not: false,
+        fg: None,
+        bg: None,
+        timeout_ms: Some(5_000),
+    })?;
+    session.execute(Operation::ExpectExitCode {
+        code: 0,
+        timeout_ms: Some(5_000),
+    })?;
+    session.close()?;
+    Ok(())
+}
 ```
 
 Python:
@@ -283,10 +317,14 @@ await su.expectExitCode(0);
 await su.close();
 ```
 
-Methods mirror the cli commands: `open` / `run`, `submit` / `type` / `write`,
-`press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` /
-`kill`, `state`, `text`, `cells`, the dedicated `get_command` / `get_output` /
-`get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` methods,
+The Rust crate exposes `Session` and `SessionRegistry` for terminal ownership,
+plus the `Operation` and `OperationResult` enums for the command surface.
+
+Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
+/ `type` / `write`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`,
+`resize`, `signal` / `kill`, `state`, `text`, `cells`, the dedicated
+`get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` /
+`get_size` / `get_title` methods,
 `screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit` /
 `wait_ready`, `expect_text` / `expect_exit_code` / `expect_output` /
 `expect_snapshot`, and `close`. Python module-level helpers are `sessions`,
@@ -300,10 +338,10 @@ The constructors accept a session name plus timeout and artifact options:
 the program then its arguments (`await su.run("vim", "file.txt")` in Python,
 `await su.run("vim", ["file.txt"])` in JavaScript).
 
-Failures raise typed errors instead of returning exit codes, one class per row of
-the applicable [exit-code table](#exit-codes): `ExpectationError` (1),
-`UsageError` (2), `NoSessionError` (3), and `InternalError` (5), all subclasses
-of `ShellUseError`.
+Python and JavaScript failures raise typed errors instead of returning exit
+codes, one class per row of the applicable [exit-code table](#exit-codes):
+`ExpectationError` (1), `UsageError` (2), `NoSessionError` (3), and
+`InternalError` (5), all subclasses of `ShellUseError`.
 
 ## Supported shells & integration
 
