@@ -125,7 +125,9 @@ Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 
 | Command                             | Description                                                                  |
 | ----------------------------------- | ---------------------------------------------------------------------------- |
-| `get-recording [session]`           | Print a session's asciinema v2 cast to stdout (works even after it stopped). |
+| `record start OUT [options]`        | Start APNG, GIF, or asciicast recording (format inferred from extension).    |
+| `record stop`                       | Finish the active recording.                                                 |
+| `get-recording [session]`           | Print the always-on asciinema v2 cast (works even after the session stopped).|
 | `monitor`                           | Watch the session live, full-color, in another terminal.                     |
 | `usage` / `agent-context` / `skill` | Self-documentation (see top of guide).                                       |
 
@@ -211,8 +213,20 @@ tui-test get-recording > demo.cast    # current session's recording to stdout
 tui-test get-recording work > w.cast  # a specific session by name (even if stopped)
 ```
 
-Play it with `asciinema play demo.cast`, or render a GIF with
-`agg demo.cast demo.gif`.
+Record a selected span directly to APNG (primary), GIF (fallback), or cast:
+
+```sh
+tui-test record start demo.png
+tui-test submit "echo hello"
+tui-test wait command
+tui-test record stop
+```
+
+APNG and GIF render at 2x pixel density. Use `--fps`, `--speed`, and
+`--idle-time-limit` to tune playback. `.cast` output interoperates with the
+asciicast ecosystem without adding any GPL dependency to tui-test. If a
+process exits before `record stop`, an APNG/GIF capture remains beside the
+target as `OUT.tui-test.cast`.
 
 ## Live monitor
 
@@ -325,12 +339,14 @@ Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
 `resize`, `signal` / `kill`, `state`, `text`, `cells`, the dedicated
 `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` /
 `get_size` / `get_title` methods,
-`screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit` /
+`screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_idle` /
+`wait_command` / `wait_exit` /
 `wait_ready`, `expect_text` / `expect_exit_code` / `expect_output` /
 `expect_snapshot`, and `close`. Python module-level helpers are `sessions`,
 `close_all`, and `get_recording`; JavaScript exports `sessions`, `closeAll`,
 and `getRecording`. The JavaScript client otherwise uses the same names in
-camelCase (`waitCommand`, `expectText`, `getExitCode`, etc.).
+camelCase (`startRecording`, `stopRecording`, `waitCommand`, `expectText`,
+`getExitCode`, etc.).
 
 The constructors accept a session name plus backend, profile, timeout, and
 artifact options: `TuiTest(session="default", *, backend=None, timeouts=None,

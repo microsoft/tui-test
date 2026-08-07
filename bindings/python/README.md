@@ -54,7 +54,7 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 ## API
 
-`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title`, `screenshot`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
+`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title`, `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 
@@ -111,6 +111,16 @@ Each terminal is uniquely named, so parallel workers don't collide. `set_termina
 Cancelling a task does not cancel the underlying Rust operation. Operations for single sessoins wait for completion (ex: `close()`, `close_all()`).
 
 Closing a session removes it from `sessions()`, but keeps its recording. `get_recording()` can read that recording for the rest of the process. The 1024 most recently closed sessions have their recordings retained.
+
+```python
+await su.start_recording("demo.png", fps=30, speed=1.0)
+await su.submit("echo hello")
+await su.wait_command()
+path = await su.stop_recording()
+```
+
+`.png`/`.apng` selects lossless APNG, `.gif` selects GIF, and `.cast` selects
+asciicast v2. Pass `format=` to override extension inference.
 
 ## Configuration
 
