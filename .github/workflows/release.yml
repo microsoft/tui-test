@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - "v*-beta.*"
+      - "*-beta.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing beta release tag to publish
+        description: Existing beta release tag to publish (for example, 0.1.0-beta.1)
         required: true
         type: string
 
@@ -38,15 +38,15 @@ jobs:
       - name: Verify beta release tag
         shell: bash
         run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
-            echo "Release tag must match v<major>.<minor>.<patch>-beta.<number>." >&2
+          if [[ ! "$RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            echo "Release tag must match <major>.<minor>.<patch>-beta.<number>." >&2
             exit 1
           fi
 
       - name: Verify release versions
         shell: bash
         run: |
-          version="${RELEASE_TAG#v}"
+          version="$RELEASE_TAG"
           version_files=(
             Cargo.toml
             bindings/js/package.json
@@ -250,7 +250,7 @@ jobs:
         shell: bash
         run: |
           node="$(command -v node)"
-          version="${RELEASE_TAG#v}"
+          version="$RELEASE_TAG"
           mkdir package-test
           cd package-test
           npm init -y >/dev/null
@@ -392,7 +392,7 @@ jobs:
       - name: Publish native and root packages
         shell: bash
         run: |
-          version="${RELEASE_TAG#v}"
+          version="$RELEASE_TAG"
           packages=(
             tui-test-darwin-arm64
             tui-test-darwin-x64
