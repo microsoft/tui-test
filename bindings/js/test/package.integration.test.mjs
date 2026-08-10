@@ -5,19 +5,19 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 
-const packageRoot = process.env.SHELL_USE_TEST_PACKAGE_ROOT;
+const packageRoot = process.env.TUI_TEST_TEST_PACKAGE_ROOT;
 
 if (packageRoot) {
   test("packed binding works without the CLI", async () => {
     const requireFromPackage = createRequire(join(packageRoot, "package.json"));
-    const packageEntry = requireFromPackage.resolve("@microsoft/shell-use");
+    const packageEntry = requireFromPackage.resolve("@microsoft/tui-test");
     assert.equal(
-      spawnSync("shell-use", ["--version"], { stdio: "ignore" }).error?.code,
+      spawnSync("tui-test", ["--version"], { stdio: "ignore" }).error?.code,
       "ENOENT",
     );
 
-    const { ShellUse } = await import(pathToFileURL(packageEntry).href);
-    const session = ShellUse.ephemeral("release-integration");
+    const { TuiTest } = await import(pathToFileURL(packageEntry).href);
+    const session = TuiTest.ephemeral("release-integration");
     try {
       await session.open();
       await session.submit("echo release-integration");

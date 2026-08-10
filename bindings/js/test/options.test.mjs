@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import {
   ExpectationError,
-  ShellUse,
+  TuiTest,
   UsageError,
   uniqueSession,
 } from "../dist/index.js";
@@ -21,13 +21,13 @@ const evalArgs =
     : ["eval", "console.log('ready'); setInterval(() => {}, 1000)"];
 
 const ALL_TIMEOUT_ENV_VARS = [
-  "SHELL_USE_TIMEOUT_MS",
-  "SHELL_USE_EXPECT_TIMEOUT_MS",
-  "SHELL_USE_TIMEOUT_TEXT_MS",
-  "SHELL_USE_TIMEOUT_IDLE_MS",
-  "SHELL_USE_TIMEOUT_COMMAND_MS",
-  "SHELL_USE_TIMEOUT_EXIT_MS",
-  "SHELL_USE_TIMEOUT_READY_MS",
+  "TUI_TEST_TIMEOUT_MS",
+  "TUI_TEST_EXPECT_TIMEOUT_MS",
+  "TUI_TEST_TIMEOUT_TEXT_MS",
+  "TUI_TEST_TIMEOUT_IDLE_MS",
+  "TUI_TEST_TIMEOUT_COMMAND_MS",
+  "TUI_TEST_TIMEOUT_EXIT_MS",
+  "TUI_TEST_TIMEOUT_READY_MS",
 ];
 
 const CLASSES = ["text", "idle", "command", "exit", "ready"];
@@ -101,14 +101,14 @@ test("envPairs coerces records and preserves pair arrays", () => {
 
 test("unknown timeout classes are rejected before native dispatch", async () => {
   assert.throws(() => timeoutsPayload({ comand: 100 }), /comand/);
-  assert.throws(() => new ShellUse("s", { timeouts: { txt: 100 } }), /txt/);
-  const su = new ShellUse(uniqueSession("bad-open-timeout"));
+  assert.throws(() => new TuiTest("s", { timeouts: { txt: 100 } }), /txt/);
+  const su = new TuiTest(uniqueSession("bad-open-timeout"));
   await assert.rejects(() => su.open({ timeouts: { txt: 100 } }), /txt/);
   await su.closeQuiet();
 });
 
 test("session timeout defaults are visible in typed state", async () => {
-  const su = new ShellUse(uniqueSession("typed-timeouts"));
+  const su = new TuiTest(uniqueSession("typed-timeouts"));
   try {
     await su.open({
       shell,
@@ -127,7 +127,7 @@ test("session timeout defaults are visible in typed state", async () => {
 });
 
 test("client and per-call timeout precedence reaches native waits", async () => {
-  const su = new ShellUse(uniqueSession("typed-timeout-precedence"), {
+  const su = new TuiTest(uniqueSession("typed-timeout-precedence"), {
     timeouts: { text: 120 },
   });
   try {
@@ -151,7 +151,7 @@ test("client and per-call timeout precedence reaches native waits", async () => 
 });
 
 test("wait and expectation failures retain operation names", async () => {
-  const su = new ShellUse(uniqueSession("typed-operation-errors"));
+  const su = new TuiTest(uniqueSession("typed-operation-errors"));
   try {
     await su.run(process.execPath, evalArgs);
     await su.waitText("ready", { timeout: 2000 });
@@ -173,21 +173,21 @@ test("wait and expectation failures retain operation names", async () => {
 });
 
 test("typed validation and engine usage errors map to UsageError", async () => {
-  const invalid = new ShellUse(uniqueSession("typed-invalid-size"));
+  const invalid = new TuiTest(uniqueSession("typed-invalid-size"));
   await assert.rejects(
     invalid.open({ cols: -1 }),
     (error) => error instanceof UsageError && error.kind === "usage",
   );
   await invalid.closeQuiet();
 
-  const invalidShell = new ShellUse(uniqueSession("typed-invalid-shell"));
+  const invalidShell = new TuiTest(uniqueSession("typed-invalid-shell"));
   await assert.rejects(
     invalidShell.open({ shell: "definitely-not-a-shell" }),
     (error) => error instanceof UsageError && error.kind === "usage",
   );
   await invalidShell.closeQuiet();
 
-  const su = new ShellUse(uniqueSession("typed-invalid-regex"));
+  const su = new TuiTest(uniqueSession("typed-invalid-regex"));
   try {
     await su.run(process.execPath, evalArgs);
     await assert.rejects(
@@ -200,7 +200,7 @@ test("typed validation and engine usage errors map to UsageError", async () => {
 });
 
 test("expectExitCode rejects unsafe JavaScript numbers as UsageError", async () => {
-  const su = ShellUse.ephemeral("invalid-exit-code");
+  const su = TuiTest.ephemeral("invalid-exit-code");
   try {
     for (const code of [
       1.5,
@@ -245,7 +245,7 @@ test("N-API argument conversion errors map to UsageError", async () => {
 });
 
 test("close remains idempotent without a prior open", async () => {
-  const su = ShellUse.ephemeral("never-opened");
+  const su = TuiTest.ephemeral("never-opened");
   await su.close();
   await su.close();
   await su.closeQuiet();

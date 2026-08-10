@@ -1,7 +1,7 @@
 {
-  "name": "@microsoft/shell-use",
-  "version": "0.0.1-beta.6",
-  "description": "Node bindings for the shell_use terminal engine",
+  "name": "@microsoft/tui-test",
+  "version": "0.1.0-beta.1",
+  "description": "Node bindings for the tui_test terminal engine",
   "type": "module",
   "exports": {
     ".": {
@@ -26,8 +26,8 @@
   },
   "sideEffects": false,
   "napi": {
-    "binaryName": "shell-use",
-    "packageName": "@microsoft/shell-use",
+    "binaryName": "tui-test",
+    "packageName": "@microsoft/tui-test",
     "targets": [
       "x86_64-pc-windows-msvc",
       "aarch64-pc-windows-msvc",
@@ -59,16 +59,17 @@
     "automation",
     "testing",
     "tui",
-    "shell-use"
+    "tui-test"
   ],
   "license": "MIT",
   "author": "Microsoft",
   "repository": {
     "type": "git",
-    "url": "https://github.com/microsoft/shell-use"
+    "url": "https://github.com/microsoft/tui-test"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "tag": "beta"
   },
   "dependencies": {},
   "devDependencies": {

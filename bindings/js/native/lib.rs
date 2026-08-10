@@ -6,17 +6,17 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use napi::bindgen_prelude::{spawn_blocking, Buffer, Either};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
-use shell_use::shell::Shell as CoreShell;
-use shell_use::{
+use tui_test::shell::Shell as CoreShell;
+use tui_test::{
     global_registry, Cell as CoreCell, CellColor, Cursor as CoreCursor,
     EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, MouseAction,
     OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation, OperationResult,
     RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
-    ShellUseError, Size as CoreSize, SnapshotResult as CoreSnapshotResult, State as CoreState,
-    Timeouts as CoreTimeouts,
+    Size as CoreSize, SnapshotResult as CoreSnapshotResult, State as CoreState,
+    Timeouts as CoreTimeouts, TuiTestError,
 };
 
-const ERROR_PREFIX: &str = "__shell_use_native_error__:";
+const ERROR_PREFIX: &str = "__tui_test_native_error__:";
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[napi(string_enum = "lowercase")]
@@ -199,7 +199,7 @@ pub enum UnderlineStyle {
     Dashed,
 }
 
-fn underline_style(value: String) -> std::result::Result<UnderlineStyle, ShellUseError> {
+fn underline_style(value: String) -> std::result::Result<UnderlineStyle, TuiTestError> {
     match value.as_str() {
         "none" => Ok(UnderlineStyle::None),
         "single" => Ok(UnderlineStyle::Single),
@@ -207,7 +207,7 @@ fn underline_style(value: String) -> std::result::Result<UnderlineStyle, ShellUs
         "curly" => Ok(UnderlineStyle::Curly),
         "dotted" => Ok(UnderlineStyle::Dotted),
         "dashed" => Ok(UnderlineStyle::Dashed),
-        _ => Err(ShellUseError::internal(format!(
+        _ => Err(TuiTestError::internal(format!(
             "terminal returned unknown underline style '{value}'"
         ))),
     }
@@ -246,7 +246,7 @@ pub struct Cell {
 }
 
 impl TryFrom<CoreCell> for Cell {
-    type Error = ShellUseError;
+    type Error = TuiTestError;
 
     fn try_from(value: CoreCell) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
@@ -353,7 +353,7 @@ impl From<CoreSnapshotResult> for SnapshotResult {
     }
 }
 
-fn native_error(error: ShellUseError) -> Error {
+fn native_error(error: TuiTestError) -> Error {
     Error::new(
         Status::GenericFailure,
         format!("{ERROR_PREFIX}{}\n{}", error.kind.as_str(), error.message),
@@ -370,11 +370,11 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
-fn ffi_boundary<T>(work: impl FnOnce() -> std::result::Result<T, ShellUseError>) -> Result<T> {
+fn ffi_boundary<T>(work: impl FnOnce() -> std::result::Result<T, TuiTestError>) -> Result<T> {
     match catch_unwind(AssertUnwindSafe(work)) {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => Err(native_error(error)),
-        Err(payload) => Err(native_error(ShellUseError::internal(format!(
+        Err(payload) => Err(native_error(TuiTestError::internal(format!(
             "native binding panicked: {}",
             panic_message(payload.as_ref())
         )))),
@@ -383,7 +383,7 @@ fn ffi_boundary<T>(work: impl FnOnce() -> std::result::Result<T, ShellUseError>)
 
 async fn blocking<T>(
     context: &'static str,
-    work: impl FnOnce() -> std::result::Result<T, ShellUseError> + Send + 'static,
+    work: impl FnOnce() -> std::result::Result<T, TuiTestError> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -391,43 +391,43 @@ where
     spawn_blocking(move || ffi_boundary(work))
         .await
         .map_err(|error| {
-            native_error(ShellUseError::internal(format!(
+            native_error(TuiTestError::internal(format!(
                 "{context} worker failed: {error}"
             )))
         })?
 }
 
-fn timeout(value: Option<f64>, name: &str) -> std::result::Result<Option<u64>, ShellUseError> {
+fn timeout(value: Option<f64>, name: &str) -> std::result::Result<Option<u64>, TuiTestError> {
     value
         .map(|value| integer(value, name, u64::MAX))
         .transpose()
 }
 
-fn integer(value: f64, name: &str, max: u64) -> std::result::Result<u64, ShellUseError> {
+fn integer(value: f64, name: &str, max: u64) -> std::result::Result<u64, TuiTestError> {
     let max = max.min(MAX_SAFE_INTEGER);
     if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > max as f64 {
-        return Err(ShellUseError::usage(format!(
+        return Err(TuiTestError::usage(format!(
             "{name} must be an integer between 0 and {max}"
         )));
     }
     Ok(value as u64)
 }
 
-fn u16_value(value: f64, name: &str) -> std::result::Result<u16, ShellUseError> {
+fn u16_value(value: f64, name: &str) -> std::result::Result<u16, TuiTestError> {
     Ok(integer(value, name, u64::from(u16::MAX))? as u16)
 }
 
-fn u8_value(value: f64, name: &str) -> std::result::Result<u8, ShellUseError> {
+fn u8_value(value: f64, name: &str) -> std::result::Result<u8, TuiTestError> {
     Ok(integer(value, name, u64::from(u8::MAX))? as u8)
 }
 
-fn i32_value(value: f64, name: &str) -> std::result::Result<i32, ShellUseError> {
+fn i32_value(value: f64, name: &str) -> std::result::Result<i32, TuiTestError> {
     if !value.is_finite()
         || value.fract() != 0.0
         || value < f64::from(i32::MIN)
         || value > f64::from(i32::MAX)
     {
-        return Err(ShellUseError::usage(format!(
+        return Err(TuiTestError::usage(format!(
             "{name} must be an integer between {} and {}",
             i32::MIN,
             i32::MAX
@@ -436,7 +436,7 @@ fn i32_value(value: f64, name: &str) -> std::result::Result<i32, ShellUseError> 
     Ok(value as i32)
 }
 
-fn core_timeouts(value: Option<Timeouts>) -> std::result::Result<CoreTimeouts, ShellUseError> {
+fn core_timeouts(value: Option<Timeouts>) -> std::result::Result<CoreTimeouts, TuiTestError> {
     let Some(value) = value else {
         return Ok(CoreTimeouts::default());
     };
@@ -449,7 +449,7 @@ fn core_timeouts(value: Option<Timeouts>) -> std::result::Result<CoreTimeouts, S
     })
 }
 
-fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptions, ShellUseError> {
+fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptions, TuiTestError> {
     let Some(value) = value else {
         return Ok(CoreOpenOptions::default());
     };
@@ -457,11 +457,11 @@ fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptio
         shell: value.shell.map(Into::into),
         cols: match value.cols {
             Some(cols) => u16_value(cols, "cols")?,
-            None => shell_use::config::DEFAULT_COLS,
+            None => tui_test::config::DEFAULT_COLS,
         },
         rows: match value.rows {
             Some(rows) => u16_value(rows, "rows")?,
-            None => shell_use::config::DEFAULT_ROWS,
+            None => tui_test::config::DEFAULT_ROWS,
         },
         cwd: value.cwd,
         env: value.env.unwrap_or_default(),
@@ -470,20 +470,20 @@ fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptio
     })
 }
 
-fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, ShellUseError> {
+fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, TuiTestError> {
     if value.program.is_empty() {
-        return Err(ShellUseError::usage("program must not be empty"));
+        return Err(TuiTestError::usage("program must not be empty"));
     }
     Ok(CoreRunOptions {
         program: value.program,
         args: value.args.unwrap_or_default(),
         cols: match value.cols {
             Some(cols) => u16_value(cols, "cols")?,
-            None => shell_use::config::DEFAULT_COLS,
+            None => tui_test::config::DEFAULT_COLS,
         },
         rows: match value.rows {
             Some(rows) => u16_value(rows, "rows")?,
-            None => shell_use::config::DEFAULT_ROWS,
+            None => tui_test::config::DEFAULT_ROWS,
         },
         cwd: value.cwd,
         env: value.env.unwrap_or_default(),
@@ -492,15 +492,15 @@ fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, ShellUs
     })
 }
 
-fn unexpected(operation: &str) -> ShellUseError {
-    ShellUseError::internal(format!("{operation} returned an unexpected result type"))
+fn unexpected(operation: &str) -> TuiTestError {
+    TuiTestError::internal(format!("{operation} returned an unexpected result type"))
 }
 
 async fn execute<T>(
     handle: SessionHandle,
     operation_name: &'static str,
     operation: Operation,
-    convert: impl FnOnce(OperationResult) -> std::result::Result<T, ShellUseError> + Send + 'static,
+    convert: impl FnOnce(OperationResult) -> std::result::Result<T, TuiTestError> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -1116,12 +1116,9 @@ impl NativeSession {
 
     #[napi]
     pub async fn panic_probe(&self) -> Result<()> {
-        blocking(
-            "panicProbe",
-            || -> std::result::Result<(), ShellUseError> {
-                panic!("intentional native panic probe")
-            },
-        )
+        blocking("panicProbe", || -> std::result::Result<(), TuiTestError> {
+            panic!("intentional native panic probe")
+        })
         .await
     }
 }
@@ -1185,12 +1182,12 @@ pub async fn recording(name: String) -> Result<String> {
     blocking("recording", move || {
         global_registry().recording(&name).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
-                ShellUseError::new(
+                TuiTestError::new(
                     ErrorKind::NoSession,
                     format!("no recording for session '{name}'"),
                 )
             } else {
-                ShellUseError::internal(format!(
+                TuiTestError::internal(format!(
                     "failed to read the recording for session '{name}': {error}"
                 ))
             }

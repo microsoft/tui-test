@@ -1,9 +1,9 @@
 [package]
-name = "shell-use-python"
+name = "tui-test-python"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "PyO3 bindings for the shell_use in-process terminal engine"
+description = "PyO3 bindings for the tui_test in-process terminal engine"
 license.workspace = true
 repository.workspace = true
 publish = false
@@ -15,7 +15,7 @@ test = false
 
 [dependencies]
 anyhow.workspace = true
-shell-use.workspace = true
+tui-test.workspace = true
 pyo3 = { version = "0.28" }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
