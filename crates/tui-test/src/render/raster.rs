@@ -208,7 +208,7 @@ impl FrameRenderer for GridRenderer {
             let glyphs = missing.into_iter().collect::<Vec<_>>().join(", ");
             anyhow::bail!(
                 "recording rasterizer could not render glyphs: {glyphs}; install an outline font \
-                 containing them or set SHELL_USE_RECORDING_FONT_FAMILIES"
+                 containing them or set TUI_TEST_RECORDING_FONT_FAMILIES"
             );
         }
 
