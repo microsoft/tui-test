@@ -10,7 +10,7 @@ use super::raster::GridRenderer;
 
 const COLS: u16 = 28;
 const ROWS: usize = 5;
-const UPDATE_ENV: &str = "UPDATE_SHELL_USE_RENDER_SNAPSHOTS";
+const UPDATE_ENV: &str = "UPDATE_TUI_TEST_RENDER_SNAPSHOTS";
 
 #[test]
 fn single_frame_gif_and_png_renders_match_snapshots() {
@@ -61,7 +61,7 @@ fn regular_grid() -> Vec<Vec<EmuCell>> {
         &mut grid,
         0,
         0,
-        "shell-use render snapshot",
+        "tui-test render snapshot",
         CellStyle::default(),
     );
     write_text(
@@ -305,7 +305,7 @@ fn failure_dir() -> PathBuf {
 
 fn temporary_output(name: &str, extension: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "shell-use-render-snapshot-{}-{name}.{extension}",
+        "tui-test-render-snapshot-{}-{name}.{extension}",
         std::process::id()
     ))
 }
