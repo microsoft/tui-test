@@ -3,9 +3,9 @@ import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 
 import * as sdk from "../dist/index.js";
-import { ShellUse } from "../dist/index.js";
+import { TuiTest } from "../dist/index.js";
 
-const BIN = process.env.SHELL_USE_BIN || "shell-use";
+const BIN = process.env.TUI_TEST_BIN || "tui-test";
 
 function agentContext() {
   const out = execFileSync(BIN, ["agent-context"], { encoding: "utf8" });
@@ -54,7 +54,7 @@ const MAPPING = {
 const EXCLUDED = new Set(["monitor", "status", "daemon", "usage", "agent-context", "skill"]);
 
 test("every cli command is mapped or excluded", { skip: !schema }, () => {
-  const instance = new ShellUse("conformance");
+  const instance = new TuiTest("conformance");
   for (const command of Object.keys(schema.commands)) {
     if (EXCLUDED.has(command)) {
       continue;

@@ -3,15 +3,16 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "shell-use"
-version = "0.0.1-beta.6"
-description = "Python bindings for shell-use terminal automation"
+name = "tui-test"
+version = "0.1.0-beta.1"
+description = "Python bindings for tui-test terminal automation"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [{ name = "Microsoft" }]
-keywords = ["terminal", "pty", "automation", "testing", "tui", "shell-use"]
+keywords = ["terminal", "pty", "automation", "testing", "tui", "tui-test"]
 classifiers = [
+    "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -19,11 +20,11 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/microsoft/shell-use"
-Repository = "https://github.com/microsoft/shell-use"
+Homepage = "https://github.com/microsoft/tui-test"
+Repository = "https://github.com/microsoft/tui-test"
 
 [tool.maturin]
 manifest-path = "native/Cargo.toml"
-module-name = "shell_use._native"
+module-name = "tui_test._native"
 python-source = "src"
 features = ["extension-module"]

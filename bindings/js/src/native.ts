@@ -22,7 +22,7 @@ type NativeBinding = typeof import("../native/index.js");
 type NativeSessionHandle = InstanceType<NativeBinding["NativeSession"]>;
 type RuntimeOpenOptions = Omit<OpenOptions, "shell"> & { shell?: string };
 
-const ERROR_PREFIX = "__shell_use_native_error__:";
+const ERROR_PREFIX = "__tui_test_native_error__:";
 const USAGE_NAPI_CODES = new Set([
   "InvalidArg",
   "ObjectExpected",
@@ -63,7 +63,7 @@ async function importBinding(): Promise<NativeBinding> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
-      "failed to load the @microsoft/shell-use native addon: " +
+      "failed to load the @microsoft/tui-test native addon: " +
         `${message}. Build it with \`npm run build:native\` (requires a Rust ` +
         "toolchain), or install a matching prebuilt platform package.",
       { cause: error },

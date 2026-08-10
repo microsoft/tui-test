@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - "v[0-9]+.*"
+      - "v*-beta.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to publish
+        description: Existing beta release tag to publish
         required: true
         type: string
 
@@ -35,6 +35,14 @@ jobs:
 
       - run: sudo apt-get update && sudo apt-get install -y ripgrep
 
+      - name: Verify beta release tag
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            echo "Release tag must match v<major>.<minor>.<patch>-beta.<number>." >&2
+            exit 1
+          fi
+
       - name: Verify release versions
         shell: bash
         run: |
@@ -45,7 +53,7 @@ jobs:
             bindings/js/package-lock.json
             bindings/js/src/version.ts
             bindings/python/pyproject.toml
-            bindings/python/src/shell_use/_config.py
+            bindings/python/src/tui_test/_config.py
             bindings/js/native/index.js
           )
           diff -u \
@@ -53,8 +61,8 @@ jobs:
             <(rg -l --path-separator / --fixed-strings "$version" \
               "${version_files[@]}" | sort)
 
-      - name: Verify shell-use crate package
-        run: cargo publish --locked --package shell-use --dry-run
+      - name: Verify tui-test-rs crate package
+        run: cargo publish --locked --package tui-test-rs --dry-run
 
   build-cli:
     needs: verify
@@ -104,7 +112,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
 
-      - run: cargo build --release --locked -p shell-use-cli --target ${{ matrix.target }}
+      - run: cargo build --release --locked -p tui-test-cli --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
@@ -112,20 +120,20 @@ jobs:
       - if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../shell-use-${{ matrix.target }}.tar.gz shell-use
+          tar czf ../../../tui-test-${{ matrix.target }}.tar.gz tui-test
           cd -
 
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/shell-use.exe" -DestinationPath "shell-use-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/tui-test.exe" -DestinationPath "tui-test-${{ matrix.target }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: shell-use-${{ matrix.target }}
+          name: tui-test-${{ matrix.target }}
           path: |
-            shell-use-*.tar.gz
-            shell-use-*.zip
+            tui-test-*.tar.gz
+            tui-test-*.zip
 
   build-node:
     needs: verify
@@ -247,13 +255,13 @@ jobs:
           cd package-test
           npm init -y >/dev/null
           npm install --ignore-scripts \
-            "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-shell-use-linux-x64-gnu-${version}.tgz"
+            "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-tui-test-linux-x64-gnu-${version}.tgz"
           npm install --ignore-scripts --omit=optional \
-            "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-shell-use-${version}.tgz"
+            "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-tui-test-${version}.tgz"
           cd "$GITHUB_WORKSPACE"
           PATH="/usr/bin:/bin" \
-          SHELL_USE_BIN="$GITHUB_WORKSPACE/package-test/missing-shell-use" \
-          SHELL_USE_TEST_PACKAGE_ROOT="$GITHUB_WORKSPACE/package-test" \
+          TUI_TEST_BIN="$GITHUB_WORKSPACE/package-test/missing-tui-test" \
+          TUI_TEST_TEST_PACKAGE_ROOT="$GITHUB_WORKSPACE/package-test" \
             "$node" --test bindings/js/test/package.integration.test.mjs
 
       - uses: actions/upload-artifact@v4
@@ -336,9 +344,9 @@ jobs:
           package-test-python-38/bin/python -m pip install \
             --disable-pip-version-check bindings/python/dist/*.whl
           ! PATH="$GITHUB_WORKSPACE/package-test-python-38/bin:/usr/bin:/bin" \
-            command -v shell-use
+            command -v tui-test
           PATH="$GITHUB_WORKSPACE/package-test-python-38/bin:/usr/bin:/bin" \
-          SHELL_USE_BIN="$GITHUB_WORKSPACE/package-test-python-38/missing-shell-use" \
+          TUI_TEST_BIN="$GITHUB_WORKSPACE/package-test-python-38/missing-tui-test" \
             "$GITHUB_WORKSPACE/package-test-python-38/bin/python" \
             bindings/python/tests/test_integration.py \
             IntegrationTests.test_echo_roundtrip
@@ -386,15 +394,15 @@ jobs:
         run: |
           version="${RELEASE_TAG#v}"
           packages=(
-            shell-use-darwin-arm64
-            shell-use-darwin-x64
-            shell-use-linux-arm64-gnu
-            shell-use-linux-arm64-musl
-            shell-use-linux-x64-gnu
-            shell-use-linux-x64-musl
-            shell-use-win32-arm64-msvc
-            shell-use-win32-x64-msvc
-            shell-use
+            tui-test-darwin-arm64
+            tui-test-darwin-x64
+            tui-test-linux-arm64-gnu
+            tui-test-linux-arm64-musl
+            tui-test-linux-x64-gnu
+            tui-test-linux-x64-musl
+            tui-test-win32-arm64-msvc
+            tui-test-win32-x64-msvc
+            tui-test
           )
 
           for package in "${packages[@]}"; do
@@ -403,7 +411,7 @@ jobs:
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "$name@$version is already published"
             else
-              npm publish "$tarball" --access public --provenance --tag latest
+              npm publish "$tarball" --access public --provenance --tag beta
             fi
           done
 
@@ -415,7 +423,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/shell-use
+      url: https://pypi.org/p/tui-test
     permissions:
       contents: read
       id-token: write
@@ -431,7 +439,7 @@ jobs:
           name: python-sdist
           path: dist
 
-      - name: Publish shell-use to PyPI
+      - name: Publish tui-test to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
@@ -444,7 +452,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: crates-io
-      url: https://crates.io/crates/shell-use
+      url: https://crates.io/crates/tui-test-rs
     permissions:
       contents: read
       id-token: write
@@ -462,8 +470,8 @@ jobs:
         id: auth
         uses: rust-lang/crates-io-auth-action@v1
 
-      - name: Publish shell-use to crates.io
-        run: cargo publish --locked --package shell-use
+      - name: Publish tui-test-rs to crates.io
+        run: cargo publish --locked --package tui-test-rs
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
@@ -480,7 +488,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: shell-use-*
+          pattern: tui-test-*
           merge-multiple: true
 
       - env:
@@ -489,4 +497,5 @@ jobs:
         run: |
           gh release create "$RELEASE_TAG" \
             --generate-notes \
+            --prerelease \
             artifacts/*

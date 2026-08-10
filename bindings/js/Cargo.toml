@@ -1,15 +1,15 @@
 [package]
-name = "shell-use-node"
+name = "tui-test-node"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "napi-rs Node.js addon for the shell_use terminal engine"
+description = "napi-rs Node.js addon for the tui_test terminal engine"
 repository.workspace = true
 publish = false
 
 [lib]
-name = "shell_use_node"
+name = "tui_test_node"
 path = "native/lib.rs"
 crate-type = ["cdylib", "rlib"]
 test = false
@@ -17,7 +17,7 @@ test = false
 [dependencies]
 napi = { version = "3", default-features = false, features = ["napi4", "dyn-symbols", "async"] }
 napi-derive = "3"
-shell-use.workspace = true
+tui-test.workspace = true
 
 [build-dependencies]
 napi-build = "2"

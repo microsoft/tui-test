@@ -1,5 +1,5 @@
 [package]
-name = "shell-use-python-stub-gen"
+name = "tui-test-python-stub-gen"
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.88"

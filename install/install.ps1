@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$repository = "microsoft/shell-use"
-$binaryName = "shell-use.exe"
+$repository = "microsoft/tui-test"
+$binaryName = "tui-test.exe"
 
 if ($env:OS -ne "Windows_NT") {
     throw "install.ps1 only supports Windows. Use install.sh on macOS or Linux."
@@ -22,8 +22,8 @@ switch ($processorArchitecture.ToUpperInvariant()) {
 }
 
 $target = "$architecture-pc-windows-msvc"
-$asset = "shell-use-$target.zip"
-$version = $env:SHELL_USE_VERSION
+$asset = "tui-test-$target.zip"
+$version = $env:TUI_TEST_VERSION
 
 if ([string]::IsNullOrWhiteSpace($version) -or $version -eq "latest") {
     $releaseUrl = "https://github.com/$repository/releases/latest/download"
@@ -41,7 +41,7 @@ if ([string]::IsNullOrWhiteSpace($token)) {
     $token = $env:GH_TOKEN
 }
 
-$tempDir = Join-Path ([IO.Path]::GetTempPath()) ("shell-use-" + [Guid]::NewGuid())
+$tempDir = Join-Path ([IO.Path]::GetTempPath()) ("tui-test-" + [Guid]::NewGuid())
 $archivePath = Join-Path $tempDir $asset
 $extractDir = Join-Path $tempDir "extract"
 
@@ -57,7 +57,7 @@ try {
         $request.Headers = @{ Authorization = "Bearer $token" }
     }
 
-    Write-Host "Downloading shell-use for $target..."
+    Write-Host "Downloading tui-test for $target..."
     Invoke-WebRequest @request
     Expand-Archive -LiteralPath $archivePath -DestinationPath $extractDir -Force
 
@@ -66,12 +66,12 @@ try {
         throw "Downloaded archive has unexpected contents."
     }
 
-    $installDir = $env:SHELL_USE_INSTALL_DIR
+    $installDir = $env:TUI_TEST_INSTALL_DIR
     if ([string]::IsNullOrWhiteSpace($installDir)) {
         if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
-            throw "LOCALAPPDATA is not set. Set SHELL_USE_INSTALL_DIR to a writable directory."
+            throw "LOCALAPPDATA is not set. Set TUI_TEST_INSTALL_DIR to a writable directory."
         }
-        $installDir = Join-Path $env:LOCALAPPDATA "Programs\shell-use\bin"
+        $installDir = Join-Path $env:LOCALAPPDATA "Programs\tui-test\bin"
     }
 
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
@@ -82,7 +82,7 @@ try {
     Unblock-File -LiteralPath $stagedDestination
     Move-Item -LiteralPath $stagedDestination -Destination $destination -Force
 
-    Write-Host "Installed shell-use to $destination"
+    Write-Host "Installed tui-test to $destination"
 
     function Test-PathEntry {
         param(
@@ -104,8 +104,8 @@ try {
     }
 
     function Publish-EnvironmentChange {
-        if (-not ("ShellUseInstaller.NativeMethods" -as [Type])) {
-            Add-Type -Namespace ShellUseInstaller -Name NativeMethods -MemberDefinition @'
+        if (-not ("TuiTestInstaller.NativeMethods" -as [Type])) {
+            Add-Type -Namespace TuiTestInstaller -Name NativeMethods -MemberDefinition @'
 [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
 public static extern IntPtr SendMessageTimeout(
     IntPtr hWnd,
@@ -119,7 +119,7 @@ public static extern IntPtr SendMessageTimeout(
         }
 
         $result = [UIntPtr]::Zero
-        [ShellUseInstaller.NativeMethods]::SendMessageTimeout(
+        [TuiTestInstaller.NativeMethods]::SendMessageTimeout(
             [IntPtr]0xffff,
             0x1a,
             [UIntPtr]::Zero,
@@ -178,7 +178,7 @@ public static extern IntPtr SendMessageTimeout(
         $env:Path = "$installDir;$env:Path"
     }
 
-    $skipPathUpdate = $env:SHELL_USE_NO_MODIFY_PATH -match "^(1|true|yes)$"
+    $skipPathUpdate = $env:TUI_TEST_NO_MODIFY_PATH -match "^(1|true|yes)$"
     if (-not $skipPathUpdate) {
         $userPath = Get-UserPath
         if (-not (Test-PathEntry -PathValue $userPath -Entry $installDir)) {
