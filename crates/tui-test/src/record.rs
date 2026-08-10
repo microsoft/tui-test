@@ -173,7 +173,7 @@ pub(crate) fn sidecar_path(target: &std::path::Path) -> PathBuf {
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("recording"))
         .to_os_string();
-    name.push(".shell-use.cast");
+    name.push(".tui-test.cast");
     target.with_file_name(name)
 }
 
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn flush_acknowledges_all_prior_capture_messages() {
         let path = std::env::temp_dir().join(format!(
-            "shell-use-recorder-flush-{}.cast",
+            "tui-test-recorder-flush-{}.cast",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

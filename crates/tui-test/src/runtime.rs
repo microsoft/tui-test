@@ -76,7 +76,7 @@ impl Session {
     pub fn recording(&self) -> std::io::Result<String> {
         self.engine
             .flush_recording()
-            .map_err(shell_error_to_io_error)?;
+            .map_err(tui_test_error_to_io_error)?;
         std::fs::read_to_string(self.recording_path())
     }
 }
@@ -389,7 +389,7 @@ fn native_recording_path(name: &str) -> PathBuf {
         .join(format!("{}-{sequence}.cast", &digest[..16]))
 }
 
-fn shell_error_to_io_error(error: ShellUseError) -> std::io::Error {
+fn tui_test_error_to_io_error(error: TuiTestError) -> std::io::Error {
     let kind = if error.kind == crate::api::ErrorKind::NoSession {
         std::io::ErrorKind::NotFound
     } else {

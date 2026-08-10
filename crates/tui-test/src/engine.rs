@@ -352,13 +352,13 @@ impl Engine {
         &self.recording_path
     }
 
-    pub fn flush_recording(&self) -> Result<(), ShellUseError> {
+    pub fn flush_recording(&self) -> Result<(), TuiTestError> {
         let _operation = self
             .operations
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let guard = self.lock_session();
-        let session = guard.as_ref().ok_or_else(ShellUseError::no_session)?;
+        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
         session.flush_recording()
     }
 
