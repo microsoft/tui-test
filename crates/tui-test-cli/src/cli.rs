@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn recording_start_accepts_timeline_options() {
         let cli = Cli::try_parse_from([
-            "shell-use",
+            "tui-test",
             "record",
             "start",
             "demo.png",

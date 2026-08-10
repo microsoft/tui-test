@@ -543,7 +543,7 @@ fn get_recording(session: String) -> i32 {
                     .as_deref()
                     .unwrap_or("failed to flush recording")
             );
-            return response.kind.map_or(5, shell_use::ErrorKind::exit_code);
+            return response.kind.map_or(5, tui_test::ErrorKind::exit_code);
         }
     }
     let path = config::recording_file(&session);
