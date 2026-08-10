@@ -255,47 +255,47 @@ impl Session {
         fps: Option<u8>,
         speed: Option<f64>,
         idle_time_limit: Option<f64>,
-    ) -> Result<(), crate::api::ShellUseError> {
+    ) -> Result<(), crate::api::TuiTestError> {
         if path.trim().is_empty() {
-            return Err(crate::api::ShellUseError::usage(
+            return Err(crate::api::TuiTestError::usage(
                 "recording path must not be empty",
             ));
         }
         let format = format
             .or_else(|| crate::api::RecordingFormat::infer(&path))
             .ok_or_else(|| {
-                crate::api::ShellUseError::usage(
+                crate::api::TuiTestError::usage(
                     "cannot infer recording format; use .png, .apng, .gif, or .cast",
                 )
             })?;
         #[cfg(not(feature = "recording-raster"))]
         if format != crate::api::RecordingFormat::Cast {
-            return Err(crate::api::ShellUseError::usage(
-                "APNG and GIF recording require the shell-use 'recording-raster' feature",
+            return Err(crate::api::TuiTestError::usage(
+                "APNG and GIF recording require the tui-test 'recording-raster' feature",
             ));
         }
         let fps = fps.unwrap_or(30);
         if fps == 0 {
-            return Err(crate::api::ShellUseError::usage(
+            return Err(crate::api::TuiTestError::usage(
                 "recording fps must be greater than zero",
             ));
         }
         let speed = speed.unwrap_or(1.0);
         if !speed.is_finite() || speed <= 0.0 {
-            return Err(crate::api::ShellUseError::usage(
+            return Err(crate::api::TuiTestError::usage(
                 "recording speed must be finite and greater than zero",
             ));
         }
         let idle_time_limit = idle_time_limit.unwrap_or(5.0);
         if !idle_time_limit.is_finite() || idle_time_limit < 0.0 {
-            return Err(crate::api::ShellUseError::usage(
+            return Err(crate::api::TuiTestError::usage(
                 "idle time limit must be a finite, non-negative number of seconds",
             ));
         }
         let idle_time_limit = std::time::Duration::try_from_secs_f64(idle_time_limit)
-            .map_err(|_| crate::api::ShellUseError::usage("idle time limit is too large"))?;
+            .map_err(|_| crate::api::TuiTestError::usage("idle time limit is too large"))?;
         std::time::Duration::try_from_secs_f64(idle_time_limit.as_secs_f64() / speed)
-            .map_err(|_| crate::api::ShellUseError::usage("recording speed is too small"))?;
+            .map_err(|_| crate::api::TuiTestError::usage("recording speed is too small"))?;
 
         let target_path = PathBuf::from(path);
         let capture_path = if format == crate::api::RecordingFormat::Cast {
@@ -334,7 +334,7 @@ impl Session {
         result.map_err(capture_error)
     }
 
-    pub fn stop_recording(&self) -> Result<String, crate::api::ShellUseError> {
+    pub fn stop_recording(&self) -> Result<String, crate::api::TuiTestError> {
         let state = self
             .state
             .lock()
@@ -346,7 +346,7 @@ impl Session {
         }
 
         #[cfg(not(feature = "recording-raster"))]
-        return Err(crate::api::ShellUseError::internal(
+        return Err(crate::api::TuiTestError::internal(
             "raster recording was started without the 'recording-raster' feature",
         ));
 
@@ -378,7 +378,7 @@ impl Session {
                 Ok(()) => Ok(stopped.target_path.to_string_lossy().into_owned()),
                 Err(error) => {
                     let _ = std::fs::remove_file(&temporary_path);
-                    Err(crate::api::ShellUseError::internal(format!(
+                    Err(crate::api::TuiTestError::internal(format!(
                         "failed to export recording; captured cast retained at {}: {error}",
                         stopped.capture_path.display()
                     )))
@@ -402,22 +402,22 @@ impl Session {
             .pid()
     }
 
-    pub fn flush_recording(&self) -> Result<(), crate::api::ShellUseError> {
+    pub fn flush_recording(&self) -> Result<(), crate::api::TuiTestError> {
         self.recorder.flush().map_err(capture_error)
     }
 }
 
-fn capture_error(error: CaptureError) -> crate::api::ShellUseError {
+fn capture_error(error: CaptureError) -> crate::api::TuiTestError {
     match error {
         CaptureError::AlreadyActive => {
-            crate::api::ShellUseError::usage("a recording is already active")
+            crate::api::TuiTestError::usage("a recording is already active")
         }
-        CaptureError::NotActive => crate::api::ShellUseError::usage("no recording is active"),
+        CaptureError::NotActive => crate::api::TuiTestError::usage("no recording is active"),
         CaptureError::WorkerStopped => {
-            crate::api::ShellUseError::internal("recording worker stopped unexpectedly")
+            crate::api::TuiTestError::internal("recording worker stopped unexpectedly")
         }
         CaptureError::Io(message) => {
-            crate::api::ShellUseError::internal(format!("recording capture failed: {message}"))
+            crate::api::TuiTestError::internal(format!("recording capture failed: {message}"))
         }
     }
 }
@@ -428,7 +428,7 @@ fn temporary_output_path(target: &std::path::Path) -> PathBuf {
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("recording"))
         .to_os_string();
-    name.push(".shell-use.tmp");
+    name.push(".tui-test.tmp");
     target.with_file_name(name)
 }
 
@@ -484,7 +484,7 @@ mod tests {
     #[test]
     fn failed_replacement_preserves_the_existing_output() {
         let root =
-            std::env::temp_dir().join(format!("shell-use-replace-output-{}", std::process::id()));
+            std::env::temp_dir().join(format!("tui-test-replace-output-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let target = root.join("recording.gif");
         let missing = root.join("missing.tmp");
