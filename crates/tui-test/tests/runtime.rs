@@ -303,7 +303,7 @@ fn session_records_and_exports_a_gif() {
     let registry = SessionRegistry::default();
     let session = registry.session(format!("recording-export-{}", std::process::id()));
     let path = std::env::temp_dir().join(format!(
-        "shell-use-recording-export-{}.gif",
+        "tui-test-recording-export-{}.gif",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&path);
