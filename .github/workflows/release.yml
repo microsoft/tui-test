@@ -388,10 +388,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: https://registry.npmjs.org
 
       - name: Publish native and root packages
         shell: bash
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
         run: |
           version="$RELEASE_TAG"
           packages=(
@@ -408,7 +409,11 @@ jobs:
 
           for package in "${packages[@]}"; do
             name="@microsoft/$package"
-            tarball="npm-packages/microsoft-${package}-${version}.tgz"
+            tarball="$GITHUB_WORKSPACE/npm-packages/microsoft-${package}-${version}.tgz"
+            if [[ ! -f "$tarball" ]]; then
+              echo "Missing npm package tarball: $tarball" >&2
+              exit 1
+            fi
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "$name@$version is already published"
             else
