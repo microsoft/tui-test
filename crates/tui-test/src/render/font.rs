@@ -73,7 +73,7 @@ fn style_index(bold: bool, italic: bool) -> usize {
 }
 
 fn preferred_families() -> Vec<String> {
-    let configured = std::env::var("SHELL_USE_RECORDING_FONT_FAMILIES")
+    let configured = std::env::var("TUI_TEST_RECORDING_FONT_FAMILIES")
         .ok()
         .into_iter()
         .flat_map(|value| {
