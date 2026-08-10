@@ -5,73 +5,9 @@
 > [!IMPORTANT]
 > `tui-test` is in the middle of publishing changes, package installation is currently unstable 
 
-## Install
-
-### install script
-
-macOS / Linux:
-
-```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | sh
-```
-
-Windows PowerShell:
-
-```powershell
-irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
-```
-
-Use `TUI_TEST_VERSION` to select a specific version or `TUI_TEST_INSTALL_DIR` to select an install location.
-
-### download from releases
-
-Download the latest beta from [releases](https://github.com/microsoft/tui-test/releases).
-
-## Quick start
-
-Run a command and check the result:
-
-```sh
-tui-test open                  # start a shell session (auto-starts the daemon)
-tui-test submit "echo hello"   # type the command, press Enter
-tui-test wait command          # block until it finishes
-tui-test expect text "hello"   # assert it showed up
-tui-test expect exit-code 0    # assert it exited 0
-tui-test close
-```
-
-Drive a full-screen TUI the same way:
-
-```sh
-tui-test run vim file.txt
-tui-test wait idle             # let the screen settle
-tui-test press i
-tui-test type "some text"
-tui-test press Escape : w q Enter
-tui-test wait exit
-```
-
-## Built for agents
-
-`tui-test` is an AI native cli. Point yours at the built-in docs and it can serve itself the rest:
-
-- `tui-test agent-context` prints versioned JSON for every command, flag, enum, default, and exit code. It is generated from the cli, so it cannot drift from the real surface.
-- `tui-test usage` prints a one-screen cheatsheet.
-- `tui-test skill` prints the full workflow guide ([SKILL.md](https://github.com/microsoft/tui-test/blob/main/SKILL.md)).
-
-### Skill quick start
-
-```sh
-tui-test skill --add
-```
-
-Adds the `tui-test` skill to the location the user selects in the TUI.
-
-Each command returns a stable exit code (see [Exit codes](#exit-codes)), so an agent can tell an assertion failure from a missing session without scraping text.
-
 ## Programmatic usage
 
-`tui-test` provides a Rust library plus Python and Node client libraries. These libraries manage in-process sessions without the cli daemon.
+`tui-test` provides a Rust, Python and Node libraries. These libraries are independent of the cli
 
 ### Rust ([`tui-test-rs`](https://crates.io/crates/tui-test-rs))
 
@@ -155,7 +91,71 @@ await su.close();
 
 Node is the supported runtime. Bun and Deno compatibility is best effort; Deno requires a local `node_modules` directory and `--allow-ffi` to load the native addon.
 
-## Command reference
+## Cli Installation 
+
+### install script
+
+macOS / Linux:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
+```
+
+Use `TUI_TEST_VERSION` to select a specific version or `TUI_TEST_INSTALL_DIR` to select an install location.
+
+### download from releases
+
+Download the latest beta from [releases](https://github.com/microsoft/tui-test/releases).
+
+## Cli Quick start
+
+Run a command and check the result:
+
+```sh
+tui-test open                  # start a shell session (auto-starts the daemon)
+tui-test submit "echo hello"   # type the command, press Enter
+tui-test wait command          # block until it finishes
+tui-test expect text "hello"   # assert it showed up
+tui-test expect exit-code 0    # assert it exited 0
+tui-test close
+```
+
+Drive a full-screen TUI the same way:
+
+```sh
+tui-test run vim file.txt
+tui-test wait idle             # let the screen settle
+tui-test press i
+tui-test type "some text"
+tui-test press Escape : w q Enter
+tui-test wait exit
+```
+
+## Built for agents
+
+`tui-test` has native support for AI agents:
+
+- `tui-test agent-context` prints versioned JSON for every command, flag, enum, default, and exit code. It is generated from the cli, so it cannot drift from the real surface.
+- `tui-test usage` prints a one-screen cheatsheet.
+- `tui-test skill` prints the full workflow guide ([SKILL.md](https://github.com/microsoft/tui-test/blob/main/SKILL.md)).
+
+### Skill quick start
+
+```sh
+tui-test skill --add
+```
+
+Adds the `tui-test` skill to the location the user selects in the TUI.
+
+Each command returns a stable exit code (see [Exit codes](#exit-codes)), so an agent can tell an assertion failure from a missing session without scraping text.
+
+## Cli Command reference
 
 Global flags: `--session <name>` (env `TUI_TEST_SESSION`, default `default`), `--json` for machine-readable output, and `--verbose`/`-v` to log PTY traffic (see [Debugging](#debugging)).
 
@@ -347,7 +347,7 @@ With `--json`, failures also carry a `"kind"` field (`assertion`/`usage`/`no_ses
 | Testing / snapshots                  | ✅ `expect` text / output / exit-code / snapshot | ❌                                             | ❌                                                        |
 | Color & per-cell attributes          | ✅ fg/bg, ANSI-256/hex/rgb, `cells`              | ❌ plain text (+ highlights)                   | via PNG                                                   |
 | Image screenshots                    | ✅ SVG                                           | ❌                                             | ✅ PNG                                                    |
-| Built-in recording                   | ✅ always-on asciinema cast + GIF                | ❌                                             | ❌                                                        |
+| Built-in recording                   | ✅ always-on asciinema cast                | ❌                                             | ❌                                                        |
 | Live monitor view                    | ✅                                               | ❌                                             | ✅                                                        |
 | Stable exit-code taxonomy for agents | ✅                                               | ❌                                             | ❌                                                        |
 | Python & JavaScript bindings         | ✅                                               | ❌                                             | ❌                                                        |
