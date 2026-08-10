@@ -3,7 +3,7 @@
 `tui-test` is a rust powered cli for controlling, inspecting, testing, and recording shell sessions and terminal apps. It supports all standard terminal actions (send keys, mouse clicks) & user actions (screenshot, record sessions), & testing (matches screenshot, contains text). `tui-test` supports Windows, Linux, & macOS and it supports a wide range of shells (see [Supported shells](#supported-shells)).
 
 > [!IMPORTANT]
-> `tui-test` is in the middle of publishing changes, package installation is currently unstable 
+> `tui-test` is in the middle of a major re-write, the documentation reflects the beta releases
 
 ## Programmatic usage
 
