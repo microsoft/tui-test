@@ -288,7 +288,7 @@ mod tests {
     fn temp_path(extension: &str) -> std::path::PathBuf {
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         std::env::temp_dir().join(format!(
-            "shell-use-cast-roundtrip-{}-{}.{}",
+            "tui-test-cast-roundtrip-{}-{}.{}",
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::Relaxed),
             extension
