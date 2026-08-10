@@ -34,10 +34,6 @@ VERSION="${TUI_TEST_VERSION:-latest}"
 if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
   RELEASE_URL="https://github.com/${REPOSITORY}/releases/latest/download"
 else
-  case "$VERSION" in
-    v*) ;;
-    *) VERSION="v${VERSION}" ;;
-  esac
   RELEASE_URL="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
 fi
 

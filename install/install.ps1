@@ -29,9 +29,6 @@ if ([string]::IsNullOrWhiteSpace($version) -or $version -eq "latest") {
     $releaseUrl = "https://github.com/$repository/releases/latest/download"
 }
 else {
-    if (-not $version.StartsWith("v")) {
-        $version = "v$version"
-    }
     $releaseUrl = "https://github.com/$repository/releases/download/$version"
 }
 
