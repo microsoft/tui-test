@@ -64,7 +64,7 @@ test("echo roundtrip drives a real session", async () => {
 });
 
 test("recording API writes an asciicast file", async () => {
-  const root = mkdtempSync(join(tmpdir(), "shell-use-recording-"));
+  const root = mkdtempSync(join(tmpdir(), "tui-test-recording-"));
   const path = join(root, "demo.cast");
   try {
     await withTerminal({ shell }, async (su) => {
@@ -87,7 +87,7 @@ test("recording API writes an asciicast file", async () => {
 });
 
 test("recording API exports styled Unicode to APNG and GIF", async () => {
-  const root = mkdtempSync(join(tmpdir(), "shell-use-raster-recording-"));
+  const root = mkdtempSync(join(tmpdir(), "tui-test-raster-recording-"));
   const command =
     process.platform === "win32"
       ? 'Write-Host "`e[1;3mstyled-é`e[0m"'
