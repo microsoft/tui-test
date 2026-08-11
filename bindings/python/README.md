@@ -56,6 +56,9 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 `TuiTest(session="default", *, timeouts=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title`, `screenshot`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
 
+`press()` and `keys()` follow Kitty keyboard flags negotiated by the child. Use
+tokens such as `"Repeat+Up"` and `"Release+a"` for repeat and release events.
+
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 
 `open()` and `run()` accept `wait_ready=`, `retries=`, and `timeouts=`. The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`; `timeouts=` sets session defaults, the constructor takes the same `Timeouts` (or a dict) as a client-wide default. Unknown class names raise.

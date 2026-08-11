@@ -766,9 +766,19 @@ fn cell_color(color: Option<Color>) -> CellColor {
 }
 
 fn press(session: &TerminalSession, tokens: Vec<String>) -> Result<(), TuiTestError> {
-    let sequence =
-        keys::tokens_to_seq(&tokens).map_err(|error| TuiTestError::usage(error.to_string()))?;
-    act(session.write(sequence.as_bytes()))
+    let keyboard_mode = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .emu
+        .keyboard_mode();
+    let sequence = keys::tokens_to_seq_with_mode(&tokens, keyboard_mode)
+        .map_err(|error| TuiTestError::usage(error.to_string()))?;
+    if sequence.is_empty() {
+        Ok(())
+    } else {
+        act(session.write(sequence.as_bytes()))
+    }
 }
 
 fn mouse_action(

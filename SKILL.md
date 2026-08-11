@@ -84,10 +84,15 @@ without parsing text:
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `type "text"`                                                              | Type literal text (no return key).                                           |
 | `submit ["text"]`                                                          | Type text then press the shell's return key. Omit text to just submit.       |
-| `press <Key...>`                                                           | Named keys, e.g. `press Escape : w q Enter`, `press Ctrl+C`.                 |
-| `keys "Ctrl+a"`                                                            | A single key combo.                                                          |
+| `press <Key...>`                                                           | Named keys/events, e.g. `press Ctrl+C`, `press Repeat+Up`, `press Release+a`. |
+| `keys "Ctrl+a"`                                                            | A single key combo or event.                                                 |
 | `mouse click X Y` / `mouse click --on-text "OK" [--button N] [--clicks N]` | Click by coordinates or by visible label.                                    |
 | `mouse move\|down\|up\|drag\|scroll ...`                                   | Full mouse control (`--button` default 0=left, `scroll --amount` default 3). |
+
+Key input from `press` and `keys` automatically follows the Kitty keyboard
+protocol flags negotiated by the child application. Prefix a key with `Repeat+`
+or `Release+` to send those event types; without event reporting, repeats behave
+like presses and releases produce no input.
 
 ### PTY control
 

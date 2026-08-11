@@ -221,10 +221,15 @@ print the screen bare.
 | ------------------------------------------------------------- | ------------------------------------------------------------ |
 | `type "text"`                                                 | Type literal text.                                           |
 | `submit ["text"]`                                             | Type then press the shell return key.                        |
-| `press <Key...>`                                              | Named keys, e.g. `press Escape : w q Enter`, `press Ctrl+C`. |
-| `keys "Control+a"`                                            | A single key combo.                                          |
+| `press <Key...>`                                              | Named keys and events, e.g. `press Ctrl+C`, `press Repeat+Up`, `press Release+a`. |
+| `keys "Control+a"`                                            | A single key combo or event.                                 |
 | `mouse click X Y` / `mouse click --on-text "OK" [--clicks N]` | Click by coords or label.                                    |
 | `mouse move\|down\|up\|drag\|scroll ...`                      | Full mouse control.                                          |
+
+Key input from `press` and `keys` automatically follows the Kitty keyboard
+protocol flags negotiated by the child application. Prefix a key with `Repeat+`
+or `Release+` to send those event types; without event reporting, repeats behave
+like presses and releases produce no input.
 
 ### PTY
 

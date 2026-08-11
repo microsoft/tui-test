@@ -10,13 +10,13 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags as AlacFlags;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config as AlacConfig, Term};
+use alacritty_terminal::term::{Config as AlacConfig, Term, TermMode};
 use alacritty_terminal::vte::ansi;
 
 use compact_str::{CompactString, ToCompactString};
 
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::Emulator;
+use crate::terminal::emu::{Emulator, KeyboardMode};
 
 /// Alacritty's palette colors arrive either as a `Named` variant or an index;
 /// both funnel through [`Color::from_index`] so a given slot always yields the
@@ -159,6 +159,7 @@ impl AlacrittyEmu {
         let size = TermSize::new(cols as usize, rows as usize);
         let config = AlacConfig {
             scrolling_history: scrollback,
+            kitty_keyboard: true,
             ..Default::default()
         };
         let pending: Arc<Mutex<Vec<u8>>> = Arc::default();
@@ -204,6 +205,36 @@ impl Emulator for AlacrittyEmu {
         }
     }
 
+    fn keyboard_mode(&self) -> KeyboardMode {
+        let mode = self.term.mode();
+        let mut keyboard_mode = KeyboardMode::empty();
+        for (term_mode, keyboard_flag) in [
+            (
+                TermMode::DISAMBIGUATE_ESC_CODES,
+                KeyboardMode::DISAMBIGUATE_ESC_CODES,
+            ),
+            (
+                TermMode::REPORT_EVENT_TYPES,
+                KeyboardMode::REPORT_EVENT_TYPES,
+            ),
+            (
+                TermMode::REPORT_ALTERNATE_KEYS,
+                KeyboardMode::REPORT_ALTERNATE_KEYS,
+            ),
+            (
+                TermMode::REPORT_ALL_KEYS_AS_ESC,
+                KeyboardMode::REPORT_ALL_KEYS_AS_ESC,
+            ),
+            (
+                TermMode::REPORT_ASSOCIATED_TEXT,
+                KeyboardMode::REPORT_ASSOCIATED_TEXT,
+            ),
+        ] {
+            keyboard_mode.set(keyboard_flag, mode.contains(term_mode));
+        }
+        keyboard_mode
+    }
+
     fn title(&self) -> Option<String> {
         self.title.lock().ok()?.clone()
     }
@@ -244,4 +275,18 @@ mod tests {
     use super::*;
 
     crate::emulator_conformance_tests!(|c, r, s| Box::new(AlacrittyEmu::new(c, r, s)));
+
+    #[test]
+    fn negotiates_and_reports_kitty_keyboard_modes() {
+        let mut emu = AlacrittyEmu::new(10, 2, 100);
+
+        emu.process(b"\x1b[?u");
+        assert_eq!(emu.take_pending_writes(), b"\x1b[?0u");
+
+        emu.process(b"\x1b[>31u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::all());
+
+        emu.process(b"\x1b[?u");
+        assert_eq!(emu.take_pending_writes(), b"\x1b[?31u");
+    }
 }

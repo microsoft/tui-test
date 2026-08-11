@@ -207,15 +207,15 @@ pub enum Command {
         /// Text to type before the return key (optional).
         text: Option<String>,
     },
-    /// Send named keys, e.g. `press Escape : w q Enter` or `press Ctrl+C`.
+    /// Send named keys and Kitty events, e.g. `press Ctrl+C` or `press Release+a`.
     Press {
-        /// Key names to send in sequence.
+        /// Key names to send; prefix with Repeat+ or Release+ for Kitty events.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         keys: Vec<String>,
     },
-    /// Send a single key combo, e.g. `keys Control+a`.
+    /// Send a single key combo or Kitty event, e.g. `keys Release+a`.
     Keys {
-        /// Key combo to send, e.g. Control+a.
+        /// Key combo or event to send, e.g. Control+a or Release+a.
         combo: String,
     },
     /// Mouse control.
