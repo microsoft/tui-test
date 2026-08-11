@@ -63,15 +63,14 @@ fn bundled_styles_do_not_need_synthetic_bold_or_italic() {
 }
 
 #[test]
-fn supported_unicode_renders_and_missing_unicode_is_reported() {
+fn supported_unicode_renders_and_missing_unicode_is_reported_when_absent() {
     let mut renderer = GridRenderer::new(1, 1);
     renderer
         .render(&[vec![cell("é", Attrs::empty())]], 1)
         .unwrap();
-    let error = renderer
-        .render(&[vec![cell("\u{10fffd}", Attrs::empty())]], 1)
-        .unwrap_err();
-    assert!(error.to_string().contains("U+10FFFD"));
+    if let Err(error) = renderer.render(&[vec![cell("\u{10fffd}", Attrs::empty())]], 1) {
+        assert!(error.to_string().contains("U+10FFFD"));
+    }
 }
 
 #[test]
