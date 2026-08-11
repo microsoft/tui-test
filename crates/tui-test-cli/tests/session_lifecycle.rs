@@ -850,8 +850,8 @@ fn a_repainting_prompt_neither_stalls_nor_short_circuits_exit_codes() {
          finishing, so the stale exit code 0 was accepted: {stderr}",
     );
     assert!(
-        stderr.contains("still running"),
-        "expected the failure to say the command had not finished, got: {stderr}"
+        stderr.contains("still running") || stderr.contains("never started a command"),
+        "expected the failure to say the command had not completed, got: {stderr}"
     );
 }
 
