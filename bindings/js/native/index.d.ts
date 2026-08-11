@@ -148,6 +148,7 @@ export declare function recording(name: string): Promise<string>
 export declare const enum RecordingFormat {
   Apng = 'apng',
   Gif = 'gif',
+  Mp4 = 'mp4',
   Cast = 'cast'
 }
 

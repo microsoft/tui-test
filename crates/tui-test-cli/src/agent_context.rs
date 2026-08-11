@@ -161,5 +161,14 @@ mod tests {
         assert_eq!(signal["type"], json!("enum"));
         let values = signal["values"].as_array().unwrap();
         assert!(values.contains(&json!("INT")));
+
+        let recording_format = doc["commands"]["record"]["subcommands"]["start"]["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|arg| arg["long"] == json!("--format"))
+            .unwrap();
+        let values = recording_format["values"].as_array().unwrap();
+        assert!(values.contains(&json!("mp4")));
     }
 }

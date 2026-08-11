@@ -1199,9 +1199,10 @@ fn parse_recording_format(value: Option<&str>) -> Result<Option<RecordingFormat>
         .map(|value| match value {
             "apng" => Ok(RecordingFormat::Apng),
             "gif" => Ok(RecordingFormat::Gif),
+            "mp4" => Ok(RecordingFormat::Mp4),
             "cast" => Ok(RecordingFormat::Cast),
             other => Err(TuiTestError::usage(format!(
-                "unknown recording format '{other}'; expected apng, gif, or cast"
+                "unknown recording format '{other}'; expected apng, gif, mp4, or cast"
             ))),
         })
         .transpose()

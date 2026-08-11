@@ -13,7 +13,7 @@
 
 ```sh
 cargo add tui-test-rs@0.1.0-beta.1
-# Add APNG/GIF export support when the Rust application needs raster recording:
+# Add APNG/GIF/MP4 export support when the Rust application needs raster recording:
 cargo add tui-test-rs@0.1.0-beta.1 --features recording-raster
 ```
 
@@ -321,12 +321,12 @@ Screenshots render a snapshot of the session in the current terminal by default,
 ### Recording
 
 Record a selected part of a session directly to animated APNG (primary), GIF
-(fallback), or standard
+(fallback), MP4 video, or standard
 [asciinema v2](https://docs.asciinema.org/manual/asciicast/v2/) cast:
 
 | Command | Description |
 | --- | --- |
-| `record start OUT [--format apng\|gif\|cast] [--fps N] [--speed N] [--idle-time-limit SEC]` | Start recording. Format is inferred from `.png`/`.apng`, `.gif`, or `.cast`. |
+| `record start OUT [--format apng\|gif\|mp4\|cast] [--fps N] [--speed N] [--idle-time-limit SEC]` | Start recording. Format is inferred from `.png`/`.apng`, `.gif`, `.mp4`, or `.cast`. |
 | `record stop` | Stop recording and finish the output file. |
 | `get-recording [session]` | Print the separate, always-on session cast to stdout. |
 
@@ -338,11 +338,13 @@ tui-test wait command
 tui-test record stop
 ```
 
-APNG keeps full 24/32-bit color. APNG and GIF both render at 2x pixel density
+APNG keeps full 24/32-bit color. APNG, GIF, and MP4 render at 2x pixel density
 for sharper text; GIF additionally uses palette quantization for viewers that
-cannot display APNG. Defaults are 30 fps, 1x speed, a 5-second idle-gap limit,
-and a 3-second final hold. If a process exits before `record stop`, APNG/GIF
-capture remains beside the target as `OUT.tui-test.cast`.
+cannot display APNG. MP4 export streams rendered frames to `ffmpeg` using H.264,
+and starting an MP4 recording fails immediately unless `ffmpeg` is available on
+`PATH`. Defaults are 30 fps, 1x speed, a 5-second idle-gap limit, and a 3-second
+final hold. If a process exits before `record stop`, APNG/GIF/MP4 capture remains
+beside the target as `OUT.tui-test.cast`.
 
 Raster export uses the selected JetBrains Mono bundle tier, when enabled, plus
 installed system fonts for Unicode fallbacks. The CLI and language bindings
@@ -474,7 +476,7 @@ promises.
 | Testing / snapshots                  | ✅ `expect` text / output / exit-code / snapshot | ❌                                             | ❌                                                        |
 | Color & per-cell attributes          | ✅ fg/bg, ANSI-256/hex/rgb, `cells`              | ❌ plain text (+ highlights)                   | via PNG                                                   |
 | Image screenshots                    | ✅ SVG                                           | ❌                                             | ✅ PNG                                                    |
-| Built-in recording                   | ✅ APNG/GIF export + always-on asciinema cast    | ❌                                             | ❌                                                        |
+| Built-in recording                   | ✅ APNG/GIF/MP4 export + always-on asciinema cast | ❌                                             | ❌                                                        |
 | Live monitor view                    | ✅                                               | ❌                                             | ✅                                                        |
 | Stable exit-code taxonomy for agents | ✅                                               | ❌                                             | ❌                                                        |
 | Python & JavaScript bindings         | ✅                                               | ❌                                             | ❌                                                        |

@@ -69,6 +69,7 @@ impl From<Shell> for CoreShell {
 pub enum RecordingFormat {
     Apng,
     Gif,
+    Mp4,
     Cast,
 }
 
@@ -77,6 +78,7 @@ impl From<RecordingFormat> for CoreRecordingFormat {
         match value {
             RecordingFormat::Apng => Self::Apng,
             RecordingFormat::Gif => Self::Gif,
+            RecordingFormat::Mp4 => Self::Mp4,
             RecordingFormat::Cast => Self::Cast,
         }
     }

@@ -799,7 +799,7 @@ EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex]\n\
           expect snapshot NAME [-u] [--include-colors --include-title]\n\
-RECORD    record start OUT [--format cast] [--fps N] [--speed N]\n\
+RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
 WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\

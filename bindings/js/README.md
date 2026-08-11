@@ -114,8 +114,9 @@ await su.waitCommand();
 const path = await su.stopRecording();
 ```
 
-`.png`/`.apng` selects lossless APNG, `.gif` selects GIF, and `.cast` selects
-asciicast v2. The `format` option can override extension inference.
+`.png`/`.apng` selects lossless APNG, `.gif` selects GIF, `.mp4` selects MP4,
+and `.cast` selects asciicast v2. The `format` option can override extension
+inference. MP4 recording requires `ffmpeg` to be available on `PATH`.
 
 ## Configuration
 
