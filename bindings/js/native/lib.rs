@@ -14,7 +14,8 @@ use tui_test::{
     OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation, OperationResult,
     RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
     ScreenshotResult as CoreScreenshotResult, SessionHandle, Size as CoreSize,
-    SnapshotResult as CoreSnapshotResult, State as CoreState, Timeouts as CoreTimeouts, TuiTestError,
+    SnapshotResult as CoreSnapshotResult, State as CoreState, Timeouts as CoreTimeouts,
+    TuiTestError,
 };
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
