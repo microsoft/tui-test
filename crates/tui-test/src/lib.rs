@@ -5,6 +5,7 @@ pub mod engine;
 pub mod input;
 pub mod logger;
 pub mod profile;
+#[allow(dead_code)] // The next stack layer connects the worker to terminal sessions.
 pub mod record;
 pub mod render;
 pub mod runtime;
