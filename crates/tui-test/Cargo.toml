@@ -23,9 +23,6 @@ recording-font-jetbrains-mono = []
 recording-font-jetbrains-mono-styles = ["recording-font-jetbrains-mono"]
 recording-font-jetbrains-mono-full = ["recording-font-jetbrains-mono-styles"]
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("recording-raster"))'] }
-
 [dependencies]
 alacritty_terminal.workspace = true
 anyhow.workspace = true
