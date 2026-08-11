@@ -40,7 +40,7 @@ MAPPING = {
     "get-recording": [("module", "get_recording")],
 }
 
-EXCLUDED = {"monitor", "usage", "agent-context", "skill", "daemon"}
+EXCLUDED = {"monitor", "usage", "agent-context", "skill", "daemon", "record"}
 
 
 def _have_binary():
