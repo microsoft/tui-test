@@ -52,7 +52,7 @@ const MAPPING = {
   "get-recording": [["module", "getRecording"]],
 };
 
-const EXCLUDED = new Set(["monitor", "status", "daemon", "usage", "agent-context", "skill", "record"]);
+const EXCLUDED = new Set(["monitor", "status", "daemon", "usage", "agent-context", "skill"]);
 
 test("every cli command is mapped or excluded", { skip: !schema }, () => {
   const instance = new TuiTest("conformance");
