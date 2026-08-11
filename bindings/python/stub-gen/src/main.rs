@@ -26,7 +26,7 @@ mod stubs {
         PyClassInfo {
             struct_id: TypeId::of::<NativeSession>,
             pyclass_name: "NativeSession",
-            module: Some("shell_use._native"),
+            module: Some("tui_test._native"),
             doc: "",
             getters: &[MemberInfo {
                 name: "name",
@@ -51,7 +51,7 @@ mod stubs {
                 PyClassInfo {
                     struct_id: TypeId::of::<$exception>,
                     pyclass_name: $name,
-                    module: Some("shell_use._native"),
+                    module: Some("tui_test._native"),
                     doc: $doc,
                     getters: &[],
                     setters: &[],
@@ -132,6 +132,7 @@ mod stubs {
                 def get_output(self) -> typing.Awaitable[typing.Optional[str]]: ...
                 def get_exit_code(self) -> typing.Awaitable[typing.Optional[int]]: ...
                 def get_cwd(self) -> typing.Awaitable[typing.Optional[str]]: ...
+                def get_title(self) -> typing.Awaitable[typing.Optional[str]]: ...
                 def get_cursor(self) -> typing.Awaitable[typing.Dict[str, int]]: ...
                 def get_size(self) -> typing.Awaitable[typing.Dict[str, int]]: ...
                 def get_bell_count(self) -> typing.Awaitable[int]: ...
@@ -164,6 +165,13 @@ mod stubs {
                     not_: bool,
                     timeout_ms: typing.Optional[int],
                 ) -> typing.Awaitable[None]: ...
+                def wait_title(
+                    self,
+                    text: str,
+                    regex: bool,
+                    not_: bool,
+                    timeout_ms: typing.Optional[int],
+                ) -> typing.Awaitable[None]: ...
                 def wait_idle(self, timeout_ms: typing.Optional[int]) -> typing.Awaitable[None]: ...
                 def wait_command(self, timeout_ms: typing.Optional[int]) -> typing.Awaitable[None]: ...
                 def wait_exit(self, timeout_ms: typing.Optional[int]) -> typing.Awaitable[None]: ...
@@ -180,6 +188,13 @@ mod stubs {
                     bg: typing.Optional[str],
                     timeout_ms: typing.Optional[int],
                 ) -> typing.Awaitable[None]: ...
+                def expect_title(
+                    self,
+                    text: str,
+                    regex: bool,
+                    not_: bool,
+                    timeout_ms: typing.Optional[int],
+                ) -> typing.Awaitable[None]: ...
                 def expect_exit_code(self, code: int, timeout_ms: typing.Optional[int]) -> typing.Awaitable[None]: ...
                 def expect_output(self, text: str, regex: bool) -> typing.Awaitable[None]: ...
                 def expect_bell_count(self, count: int, timeout_ms: typing.Optional[int]) -> typing.Awaitable[None]: ...
@@ -188,6 +203,7 @@ mod stubs {
                     name: str,
                     update: bool,
                     include_colors: bool,
+                    include_title: bool,
                     cwd: typing.Optional[str],
                 ) -> typing.Awaitable[str]: ...
                 def screenshot(self, path: typing.Optional[str], full: bool) -> typing.Awaitable[str]: ...
@@ -200,7 +216,7 @@ mod stubs {
         ($source:literal) => {
             pyo3_stub_gen::inventory::submit! {
                 pyo3_stub_gen_derive::gen_function_from_python! {
-                    module = "shell_use._native",
+                    module = "tui_test._native",
                     $source
                 }
             }
@@ -240,12 +256,12 @@ mod stubs {
     pub fn run(check_only: bool) -> Result<(), Box<dyn Error>> {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let pyproject = manifest_dir.join("../pyproject.toml");
-        let destination = manifest_dir.join("../src/shell_use/_native.pyi");
+        let destination = manifest_dir.join("../src/tui_test/_native.pyi");
         let stub_info = pyo3_stub_gen::StubInfo::from_pyproject_toml(pyproject)?;
-        let module = stub_info.modules.get("shell_use._native").ok_or_else(|| {
+        let module = stub_info.modules.get("tui_test._native").ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
-                "missing shell_use._native stub metadata",
+                "missing tui_test._native stub metadata",
             )
         })?;
         let generated = format!(

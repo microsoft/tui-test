@@ -7,19 +7,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import shell_use
-from shell_use import (
+import tui_test
+from tui_test import (
     ExpectationError,
     InternalError,
     NoSessionError,
-    ShellUse,
+    TuiTest,
     Timeouts,
     UsageError,
     get_recording,
     testing,
     unique_session,
 )
-from shell_use.client import _panic_probe
+from tui_test.client import _panic_probe
 
 SHELL = "pwsh" if sys.platform == "win32" else None
 TWO_BELLS_COMMAND = (
@@ -40,7 +40,7 @@ def run(coro):
 
 class IntegrationTests(unittest.TestCase):
     def _client(self):
-        return ShellUse.ephemeral("pytest")
+        return TuiTest.ephemeral("pytest")
 
     def test_echo_roundtrip(self):
         async def scenario():
@@ -183,10 +183,10 @@ class IntegrationTests(unittest.TestCase):
 
     def test_sessions_lists_open_session(self):
         async def scenario():
-            su = ShellUse(unique_session("pytest"))
+            su = TuiTest(unique_session("pytest"))
             await su.open(shell=SHELL)
             try:
-                names = await shell_use.sessions()
+                names = await tui_test.sessions()
                 self.assertIn(su.session, names)
             finally:
                 await su.close_quiet()
@@ -196,13 +196,13 @@ class IntegrationTests(unittest.TestCase):
     def test_close_evicts_session_and_retains_recording(self):
         async def scenario():
             name = unique_session("recording")
-            su = ShellUse(name)
+            su = TuiTest(name)
             await su.open(shell=SHELL)
             await su.submit("echo retained-recording")
             await su.wait_command()
             await su.close()
 
-            self.assertNotIn(name, await shell_use.sessions())
+            self.assertNotIn(name, await tui_test.sessions())
             with self.assertRaises(NoSessionError):
                 await su.state()
             self.assertIn("retained-recording", await get_recording(name))
@@ -214,14 +214,14 @@ class IntegrationTests(unittest.TestCase):
     def test_same_name_clients_share_typed_operations(self):
         async def scenario():
             name = unique_session("same-name")
-            first = ShellUse(name)
-            second = ShellUse(name)
+            first = TuiTest(name)
+            second = TuiTest(name)
             try:
                 await first.open(shell=SHELL)
                 await second.submit("echo shared-session")
                 await first.wait_command()
                 self.assertIn("shared-session", await second.text())
-                self.assertIn(name, await shell_use.sessions())
+                self.assertIn(name, await tui_test.sessions())
             finally:
                 await first.close_quiet()
                 await second.close_quiet()
@@ -234,9 +234,9 @@ class IntegrationTests(unittest.TestCase):
             second = self._client()
             await first.open(shell=SHELL)
             await second.open(shell=SHELL)
-            await shell_use.close_all()
-            self.assertNotIn(first.session, await shell_use.sessions())
-            self.assertNotIn(second.session, await shell_use.sessions())
+            await tui_test.close_all()
+            self.assertNotIn(first.session, await tui_test.sessions())
+            self.assertNotIn(second.session, await tui_test.sessions())
             with self.assertRaises(NoSessionError):
                 await first.state()
             with self.assertRaises(NoSessionError):
@@ -253,11 +253,11 @@ class IntegrationTests(unittest.TestCase):
             )
             await asyncio.sleep(0.05)
 
-            await asyncio.wait_for(shell_use.close_all(), timeout=2)
+            await asyncio.wait_for(tui_test.close_all(), timeout=2)
             with self.assertRaises(ExpectationError) as raised:
                 await wait
             self.assertIn("session exited before", str(raised.exception))
-            self.assertNotIn(su.session, await shell_use.sessions())
+            self.assertNotIn(su.session, await tui_test.sessions())
 
         run(scenario())
 
@@ -392,14 +392,14 @@ class IntegrationTests(unittest.TestCase):
     def test_any_shared_handle_can_close_a_reopened_named_session(self):
         async def scenario():
             name = unique_session("shared-close")
-            first = ShellUse(name)
-            second = ShellUse(name)
+            first = TuiTest(name)
+            second = TuiTest(name)
             try:
                 await first.open(shell=SHELL)
                 await first.close()
                 await second.open(shell=SHELL)
                 await first.close()
-                self.assertNotIn(name, await shell_use.sessions())
+                self.assertNotIn(name, await tui_test.sessions())
             finally:
                 await second.close_quiet()
 
@@ -408,7 +408,7 @@ class IntegrationTests(unittest.TestCase):
     def test_snapshot_lands_in_client_cwd(self):
         async def scenario():
             original = os.getcwd()
-            snap_root = tempfile.mkdtemp(prefix="shell-use-snap-")
+            snap_root = tempfile.mkdtemp(prefix="tui-test-snap-")
             name = f"snap-{os.path.basename(snap_root)}"
             try:
                 async with self._client() as su:

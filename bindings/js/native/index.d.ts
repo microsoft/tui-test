@@ -29,6 +29,9 @@ export declare class NativeSession {
   mouseScroll(direction: string, amount?: number | undefined | null): Promise<void>
   resize(cols: number, rows: number): Promise<void>
   signal(name: string): Promise<void>
+  getTitle(): Promise<string | null>
+  waitTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
+  expectTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
   waitText(text: string, options?: WaitTextOptions | undefined | null): Promise<void>
   waitIdle(timeoutMs?: number | undefined | null): Promise<void>
   waitCommand(timeoutMs?: number | undefined | null): Promise<void>
@@ -173,6 +176,7 @@ export interface Size {
 export interface SnapshotOptions {
   update?: boolean
   includeColors?: boolean
+  includeTitle?: boolean
   cwd?: string
 }
 
@@ -187,6 +191,7 @@ export interface State {
   cols: number
   rows: number
   cursor: Cursor
+  title: string | null
   cwd: string | null
   last_command: string | null
   last_exit: number | null
@@ -203,6 +208,12 @@ export interface Timeouts {
   command?: number
   exit?: number
   ready?: number
+}
+
+export interface TitleOptions {
+  regex?: boolean
+  not?: boolean
+  timeoutMs?: number
 }
 
 export declare const enum UnderlineStyle {

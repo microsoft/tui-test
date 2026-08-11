@@ -4,40 +4,40 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyMemoryView, PyModule, PyTuple};
-use shell_use::runtime::global_registry;
-use shell_use::shell::Shell;
-use shell_use::{
+use tui_test::runtime::global_registry;
+use tui_test::shell::Shell;
+use tui_test::{
     Cell, CellColor, Cursor, ErrorKind, MouseAction, OpenOptions, OpenResult, Operation,
-    OperationResult, PackedScreen, RunOptions, ScreenshotResult, ShellUseError, Size,
-    SnapshotResult, State, Timeouts,
+    OperationResult, PackedScreen, RunOptions, ScreenshotResult, Size, SnapshotResult, State,
+    Timeouts, TuiTestError,
 };
 
 pyo3::create_exception!(
-    shell_use._native,
+    tui_test._native,
     NativeAssertionError,
     PyException,
     "Native assertion failure."
 );
 pyo3::create_exception!(
-    shell_use._native,
+    tui_test._native,
     NativeUsageError,
     PyException,
     "Native usage error."
 );
 pyo3::create_exception!(
-    shell_use._native,
+    tui_test._native,
     NativeNoSessionError,
     PyException,
     "Native session was not found."
 );
 pyo3::create_exception!(
-    shell_use._native,
+    tui_test._native,
     NativeInternalError,
     PyException,
     "Native internal error."
 );
 
-#[pyclass(module = "shell_use._native", frozen)]
+#[pyclass(module = "tui_test._native", frozen)]
 struct NativeSession {
     #[pyo3(get)]
     name: String,
@@ -277,6 +277,15 @@ impl NativeSession {
         future_blocking(
             py,
             move || execute_cwd(&name, Operation::GetCwd),
+            optional_string_to_py,
+        )
+    }
+
+    fn get_title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || execute_title(&name, Operation::GetTitle),
             optional_string_to_py,
         )
     }
@@ -613,6 +622,34 @@ impl NativeSession {
         )
     }
 
+    #[pyo3(signature = (text, regex, not_, timeout_ms))]
+    fn wait_title<'py>(
+        &self,
+        py: Python<'py>,
+        text: String,
+        regex: bool,
+        not_: bool,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::WaitTitle {
+                        text,
+                        regex,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                        not: not_,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
     #[pyo3(signature = (timeout_ms))]
     fn wait_idle<'py>(
         &self,
@@ -723,6 +760,34 @@ impl NativeSession {
         )
     }
 
+    #[pyo3(signature = (text, regex, not_, timeout_ms))]
+    fn expect_title<'py>(
+        &self,
+        py: Python<'py>,
+        text: String,
+        regex: bool,
+        not_: bool,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::ExpectTitle {
+                        text,
+                        regex,
+                        not: not_,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
     #[pyo3(signature = (text, regex, full, strict, not_, fg, bg, timeout_ms))]
     #[allow(clippy::too_many_arguments)]
     fn expect_text<'py>(
@@ -824,13 +889,14 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (name, update, include_colors, cwd))]
+    #[pyo3(signature = (name, update, include_colors, include_title, cwd))]
     fn snapshot<'py>(
         &self,
         py: Python<'py>,
         name: String,
         update: bool,
         include_colors: bool,
+        include_title: bool,
         cwd: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let session = self.name.clone();
@@ -843,6 +909,7 @@ impl NativeSession {
                         name,
                         update,
                         include_colors,
+                        include_title,
                         cwd,
                     },
                 )
@@ -914,8 +981,8 @@ fn recording(py: Python<'_>, name: String) -> PyResult<Bound<'_, PyAny>> {
 fn panic_probe(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     future_blocking(
         py,
-        || -> Result<(), ShellUseError> {
-            panic!("shell-use Python panic probe");
+        || -> Result<(), TuiTestError> {
+            panic!("tui-test Python panic probe");
         },
         unit_to_py,
     )
@@ -933,7 +1000,7 @@ fn future_blocking<'py, T, F>(
 ) -> PyResult<Bound<'py, PyAny>>
 where
     T: Send + 'static,
-    F: FnOnce() -> Result<T, ShellUseError> + Send + 'static,
+    F: FnOnce() -> Result<T, TuiTestError> + Send + 'static,
 {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let value = run_blocking(task).await.map_err(shell_error_to_py)?;
@@ -941,21 +1008,21 @@ where
     })
 }
 
-async fn run_blocking<T, F>(task: F) -> Result<T, ShellUseError>
+async fn run_blocking<T, F>(task: F) -> Result<T, TuiTestError>
 where
     T: Send + 'static,
-    F: FnOnce() -> Result<T, ShellUseError> + Send + 'static,
+    F: FnOnce() -> Result<T, TuiTestError> + Send + 'static,
 {
     tokio::task::spawn_blocking(move || {
         catch_unwind(AssertUnwindSafe(task)).unwrap_or_else(|payload| {
-            Err(ShellUseError::internal(format!(
+            Err(TuiTestError::internal(format!(
                 "native Python operation panicked: {}",
                 panic_message(payload.as_ref())
             )))
         })
     })
     .await
-    .map_err(|error| ShellUseError::internal(format!("native Python worker failed: {error}")))?
+    .map_err(|error| TuiTestError::internal(format!("native Python worker failed: {error}")))?
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> String {
@@ -968,7 +1035,7 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
-fn shell_error_to_py(error: ShellUseError) -> PyErr {
+fn shell_error_to_py(error: TuiTestError) -> PyErr {
     Python::attach(|py| {
         let exception = match error.kind {
             ErrorKind::Assertion => py.get_type::<NativeAssertionError>(),
@@ -980,11 +1047,11 @@ fn shell_error_to_py(error: ShellUseError) -> PyErr {
     })
 }
 
-fn io_error_to_shell_error(error: std::io::Error) -> ShellUseError {
+fn io_error_to_shell_error(error: std::io::Error) -> TuiTestError {
     if error.kind() == std::io::ErrorKind::NotFound {
-        ShellUseError::new(ErrorKind::NoSession, error.to_string())
+        TuiTestError::new(ErrorKind::NoSession, error.to_string())
     } else {
-        ShellUseError::internal(error.to_string())
+        TuiTestError::internal(error.to_string())
     }
 }
 
@@ -1024,39 +1091,35 @@ fn capture_optional_integer(value: Option<Bound<'_, PyAny>>) -> Option<IntegerIn
     value.as_ref().map(capture_integer)
 }
 
-fn integer_u8(value: &IntegerInput, name: &str) -> Result<u8, ShellUseError> {
+fn integer_u8(value: &IntegerInput, name: &str) -> Result<u8, TuiTestError> {
     integer_unsigned(value, name, u8::MAX as u128).map(|value| value as u8)
 }
 
-fn integer_u16(value: &IntegerInput, name: &str) -> Result<u16, ShellUseError> {
+fn integer_u16(value: &IntegerInput, name: &str) -> Result<u16, TuiTestError> {
     integer_unsigned(value, name, u16::MAX as u128).map(|value| value as u16)
 }
 
-fn integer_u64(value: &IntegerInput, name: &str) -> Result<u64, ShellUseError> {
+fn integer_u64(value: &IntegerInput, name: &str) -> Result<u64, TuiTestError> {
     integer_unsigned(value, name, u64::MAX as u128).map(|value| value as u64)
 }
 
-fn optional_u64(value: Option<&IntegerInput>, name: &str) -> Result<Option<u64>, ShellUseError> {
+fn optional_u64(value: Option<&IntegerInput>, name: &str) -> Result<Option<u64>, TuiTestError> {
     value.map(|value| integer_u64(value, name)).transpose()
 }
 
-fn integer_unsigned(
-    value: &IntegerInput,
-    name: &str,
-    maximum: u128,
-) -> Result<u128, ShellUseError> {
+fn integer_unsigned(value: &IntegerInput, name: &str, maximum: u128) -> Result<u128, TuiTestError> {
     let parsed = match value {
         IntegerInput::NonNegative(value) => Some(*value as u128),
         IntegerInput::Negative(_) | IntegerInput::Invalid => None,
     };
     parsed.filter(|value| *value <= maximum).ok_or_else(|| {
-        ShellUseError::usage(format!(
+        TuiTestError::usage(format!(
             "{name} must be an integer in the range 0..={maximum}"
         ))
     })
 }
 
-fn integer_i32(value: &IntegerInput, name: &str) -> Result<i32, ShellUseError> {
+fn integer_i32(value: &IntegerInput, name: &str) -> Result<i32, TuiTestError> {
     let parsed = match value {
         IntegerInput::Negative(value) => Some(*value as i128),
         IntegerInput::NonNegative(value) => Some(*value as i128),
@@ -1066,7 +1129,7 @@ fn integer_i32(value: &IntegerInput, name: &str) -> Result<i32, ShellUseError> {
         .filter(|value| (i32::MIN as i128..=i32::MAX as i128).contains(value))
         .map(|value| value as i32)
         .ok_or_else(|| {
-            ShellUseError::usage(format!(
+            TuiTestError::usage(format!(
                 "{name} must be an integer in the range {}..={}",
                 i32::MIN,
                 i32::MAX
@@ -1074,7 +1137,7 @@ fn integer_i32(value: &IntegerInput, name: &str) -> Result<i32, ShellUseError> {
         })
 }
 
-fn parse_shell(value: Option<&str>) -> Result<Option<Shell>, ShellUseError> {
+fn parse_shell(value: Option<&str>) -> Result<Option<Shell>, TuiTestError> {
     value
         .map(|value| {
             let shell = match value {
@@ -1088,7 +1151,7 @@ fn parse_shell(value: Option<&str>) -> Result<Option<Shell>, ShellUseError> {
                 "elvish" => Shell::Elvish,
                 "nushell" => Shell::Nushell,
                 other => {
-                    return Err(ShellUseError::usage(format!(
+                    return Err(TuiTestError::usage(format!(
                         "unknown shell '{other}'; expected bash, powershell, pwsh, cmd, fish, zsh, xonsh, elvish, or nushell"
                     )));
                 }
@@ -1098,111 +1161,118 @@ fn parse_shell(value: Option<&str>) -> Result<Option<Shell>, ShellUseError> {
         .transpose()
 }
 
-fn unexpected_result(expected: &str) -> ShellUseError {
-    ShellUseError::internal(format!(
+fn unexpected_result(expected: &str) -> TuiTestError {
+    TuiTestError::internal(format!(
         "native Python binding expected {expected}, but the engine returned another result type"
     ))
 }
 
-fn execute_unit(name: &str, operation: Operation) -> Result<(), ShellUseError> {
+fn execute_unit(name: &str, operation: Operation) -> Result<(), TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Unit => Ok(()),
         _ => Err(unexpected_result("no value")),
     }
 }
 
-fn execute_open(name: &str, operation: Operation) -> Result<OpenResult, ShellUseError> {
+fn execute_open(name: &str, operation: Operation) -> Result<OpenResult, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Open(value) => Ok(value),
         _ => Err(unexpected_result("an open result")),
     }
 }
 
-fn execute_state(name: &str, operation: Operation) -> Result<State, ShellUseError> {
+fn execute_state(name: &str, operation: Operation) -> Result<State, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::State(value) => Ok(value),
         _ => Err(unexpected_result("terminal state")),
     }
 }
 
-fn execute_text(name: &str, operation: Operation) -> Result<String, ShellUseError> {
+fn execute_text(name: &str, operation: Operation) -> Result<String, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Text(value) => Ok(value),
         _ => Err(unexpected_result("terminal text")),
     }
 }
 
-fn execute_packed_screen(name: &str, operation: Operation) -> Result<PackedScreen, ShellUseError> {
+fn execute_packed_screen(name: &str, operation: Operation) -> Result<PackedScreen, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::PackedScreen(value) => Ok(value),
         _ => Err(unexpected_result("a packed screen")),
     }
 }
 
-fn execute_cells(name: &str, operation: Operation) -> Result<Vec<Cell>, ShellUseError> {
+fn execute_cells(name: &str, operation: Operation) -> Result<Vec<Cell>, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Cells(value) => Ok(value),
         _ => Err(unexpected_result("terminal cells")),
     }
 }
 
-fn execute_command(name: &str, operation: Operation) -> Result<Option<String>, ShellUseError> {
+fn execute_command(name: &str, operation: Operation) -> Result<Option<String>, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Command(value) => Ok(value),
         _ => Err(unexpected_result("the last command")),
     }
 }
 
-fn execute_output(name: &str, operation: Operation) -> Result<Option<String>, ShellUseError> {
+fn execute_output(name: &str, operation: Operation) -> Result<Option<String>, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Output(value) => Ok(value),
         _ => Err(unexpected_result("the last output")),
     }
 }
 
-fn execute_exit_code(name: &str, operation: Operation) -> Result<Option<i32>, ShellUseError> {
+fn execute_exit_code(name: &str, operation: Operation) -> Result<Option<i32>, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::ExitCode(value) => Ok(value),
         _ => Err(unexpected_result("the last exit code")),
     }
 }
 
-fn execute_cwd(name: &str, operation: Operation) -> Result<Option<String>, ShellUseError> {
+fn execute_cwd(name: &str, operation: Operation) -> Result<Option<String>, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Cwd(value) => Ok(value),
         _ => Err(unexpected_result("the current working directory")),
     }
 }
 
-fn execute_cursor(name: &str, operation: Operation) -> Result<Cursor, ShellUseError> {
+fn execute_title(name: &str, operation: Operation) -> Result<Option<String>, TuiTestError> {
+    match global_registry().execute(name, operation)? {
+        OperationResult::Title(value) => Ok(value),
+        _ => Err(unexpected_result("the window title")),
+    }
+}
+
+fn execute_cursor(name: &str, operation: Operation) -> Result<Cursor, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Cursor(value) => Ok(value),
         _ => Err(unexpected_result("the cursor position")),
     }
 }
 
-fn execute_size(name: &str, operation: Operation) -> Result<Size, ShellUseError> {
+fn execute_size(name: &str, operation: Operation) -> Result<Size, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Size(value) => Ok(value),
         _ => Err(unexpected_result("the terminal size")),
     }
 }
 
-fn execute_bell_count(name: &str, operation: Operation) -> Result<u64, ShellUseError> {
+fn execute_bell_count(name: &str, operation: Operation) -> Result<u64, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::BellCount(value) => Ok(value),
         _ => Err(unexpected_result("the terminal bell count")),
     }
 }
 
-fn execute_snapshot(name: &str, operation: Operation) -> Result<SnapshotResult, ShellUseError> {
+fn execute_snapshot(name: &str, operation: Operation) -> Result<SnapshotResult, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Snapshot(value) => Ok(value),
         _ => Err(unexpected_result("a snapshot status")),
     }
 }
 
-fn execute_screenshot(name: &str, operation: Operation) -> Result<ScreenshotResult, ShellUseError> {
+fn execute_screenshot(name: &str, operation: Operation) -> Result<ScreenshotResult, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Screenshot(value) => Ok(value),
         _ => Err(unexpected_result("a screenshot")),
@@ -1262,6 +1332,7 @@ fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     result.set_item("cols", value.cols)?;
     result.set_item("rows", value.rows)?;
     result.set_item("cursor", cursor_dict(py, value.cursor)?)?;
+    result.set_item("title", value.title)?;
     result.set_item("cwd", value.cwd)?;
     result.set_item("last_command", value.last_command)?;
     result.set_item("last_exit", value.last_exit)?;

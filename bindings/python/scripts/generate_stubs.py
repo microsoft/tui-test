@@ -8,7 +8,7 @@ def main() -> None:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="fail if src/shell_use/_native.pyi is out of date",
+        help="fail if src/tui_test/_native.pyi is out of date",
     )
     args = parser.parse_args()
 

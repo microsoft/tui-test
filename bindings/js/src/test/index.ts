@@ -1,4 +1,4 @@
-import { ShellUse } from "../client.js";
+import { TuiTest } from "../client.js";
 import { IS_MACOS, IS_WINDOWS } from "../config.js";
 import { uniqueSession } from "../ephemeral.js";
 import type {
@@ -10,7 +10,7 @@ import type {
 } from "../types.js";
 
 export type { Shell } from "../types.js";
-export { ShellUse } from "../client.js";
+export { TuiTest } from "../client.js";
 
 export interface CreateTerminalOptions {
   shell?: Shell;
@@ -37,7 +37,7 @@ export function resetTerminalDefaults(): void {
   defaults = {};
 }
 
-const tracked = new Set<ShellUse>();
+const tracked = new Set<TuiTest>();
 let safetyNetInstalled = false;
 
 function installSafetyNet(): void {
@@ -52,12 +52,12 @@ function installSafetyNet(): void {
   });
 }
 
-export function trackTerminal(terminal: ShellUse): void {
+export function trackTerminal(terminal: TuiTest): void {
   tracked.add(terminal);
   installSafetyNet();
 }
 
-export function untrackTerminal(terminal: ShellUse): void {
+export function untrackTerminal(terminal: TuiTest): void {
   tracked.delete(terminal);
 }
 
@@ -95,10 +95,10 @@ function spawnOptions(opts: CreateTerminalOptions): SpawnOptions {
 
 export async function createTerminal(
   options: CreateTerminalOptions = {},
-): Promise<ShellUse> {
+): Promise<TuiTest> {
   const opts: CreateTerminalOptions = { ...defaults, ...options };
   const session = opts.session ?? uniqueSession(opts.prefix);
-  const terminal = new ShellUse(session, clientOptions(opts));
+  const terminal = new TuiTest(session, clientOptions(opts));
   trackTerminal(terminal);
   const spawn = spawnOptions(opts);
   try {
@@ -118,7 +118,7 @@ export async function createTerminal(
 
 export async function withTerminal<T>(
   options: CreateTerminalOptions,
-  fn: (terminal: ShellUse) => Promise<T> | T,
+  fn: (terminal: TuiTest) => Promise<T> | T,
 ): Promise<T> {
   const terminal = await createTerminal(options);
   try {

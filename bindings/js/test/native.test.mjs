@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
-import { ShellUse } from "../dist/index.js";
+import { TuiTest } from "../dist/index.js";
 
 test("generated native declarations expose typed operations", async () => {
   const declarations = await readFile(
@@ -28,6 +28,7 @@ test("generated native declarations expose typed operations", async () => {
     "text",
     "cells",
     "getCommand",
+    "getBellCount",
     "write",
     "type",
     "submit",
@@ -36,7 +37,9 @@ test("generated native declarations expose typed operations", async () => {
     "resize",
     "signal",
     "waitText",
+    "waitBell",
     "expectText",
+    "expectBellCount",
     "snapshot",
     "screenshot",
     "packedScreen",
@@ -59,8 +62,8 @@ test("public facade omits generic request dispatchers", async () => {
     new URL("../dist/client.d.ts", import.meta.url),
     "utf8",
   );
-  assert.equal("send" in ShellUse.prototype, false);
-  assert.equal("get" in ShellUse.prototype, false);
+  assert.equal("send" in TuiTest.prototype, false);
+  assert.equal("get" in TuiTest.prototype, false);
   assert.doesNotMatch(declarations, /\bsend\(/);
   assert.doesNotMatch(declarations, /\bget\(/);
   assert.doesNotMatch(declarations, /payload|request dispatcher/);

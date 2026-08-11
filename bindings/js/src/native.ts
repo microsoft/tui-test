@@ -14,6 +14,7 @@ import type {
   SnapshotOptions,
   State,
   Timeouts,
+  TitleOptions,
   WaitTextOptions,
 } from "../native/index.js";
 
@@ -21,7 +22,7 @@ type NativeBinding = typeof import("../native/index.js");
 type NativeSessionHandle = InstanceType<NativeBinding["NativeSession"]>;
 type RuntimeOpenOptions = Omit<OpenOptions, "shell"> & { shell?: string };
 
-const ERROR_PREFIX = "__shell_use_native_error__:";
+const ERROR_PREFIX = "__tui_test_native_error__:";
 const USAGE_NAPI_CODES = new Set([
   "InvalidArg",
   "ObjectExpected",
@@ -62,7 +63,7 @@ async function importBinding(): Promise<NativeBinding> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
-      "failed to load the @microsoft/shell-use native addon: " +
+      "failed to load the @microsoft/tui-test native addon: " +
         `${message}. Build it with \`npm run build:native\` (requires a Rust ` +
         "toolchain), or install a matching prebuilt platform package.",
       { cause: error },
@@ -191,6 +192,10 @@ export class NativeRuntime {
     return this.#call((session) => session.getCwd());
   }
 
+  getTitle(): Promise<string | null> {
+    return this.#call((session) => session.getTitle());
+  }
+
   getCursor(): Promise<Cursor> {
     return this.#call((session) => session.getCursor());
   }
@@ -261,6 +266,10 @@ export class NativeRuntime {
     return this.#call((session) => session.waitText(text, options));
   }
 
+  waitTitle(text: string, options?: TitleOptions): Promise<void> {
+    return this.#call((session) => session.waitTitle(text, options));
+  }
+
   waitIdle(timeoutMs?: number): Promise<void> {
     return this.#call((session) => session.waitIdle(timeoutMs));
   }
@@ -279,6 +288,10 @@ export class NativeRuntime {
 
   waitBell(timeoutMs?: number): Promise<void> {
     return this.#call((session) => session.waitBell(timeoutMs));
+  }
+
+  expectTitle(text: string, options?: TitleOptions): Promise<void> {
+    return this.#call((session) => session.expectTitle(text, options));
   }
 
   expectText(text: string, options?: ExpectTextOptions): Promise<void> {

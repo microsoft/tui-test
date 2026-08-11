@@ -3,8 +3,8 @@ import inspect
 import unittest
 from pathlib import Path
 
-from shell_use import _native
-from shell_use import unique_session
+from tui_test import _native
+from tui_test import unique_session
 
 
 class _IndexValue:
@@ -33,6 +33,7 @@ class NativeSurfaceTests(unittest.TestCase):
             "get_cwd",
             "get_cursor",
             "get_size",
+            "get_bell_count",
             "write",
             "type",
             "submit",
@@ -52,9 +53,11 @@ class NativeSurfaceTests(unittest.TestCase):
             "wait_command",
             "wait_exit",
             "wait_ready",
+            "wait_bell",
             "expect_text",
             "expect_exit_code",
             "expect_output",
+            "expect_bell_count",
             "snapshot",
             "screenshot",
             "recording",
@@ -104,7 +107,7 @@ class NativeStubTests(unittest.TestCase):
         stub = (
             Path(__file__).resolve().parents[1]
             / "src"
-            / "shell_use"
+            / "tui_test"
             / "_native.pyi"
         ).read_text(encoding="utf-8")
         self.assertNotIn("async def ", stub)
