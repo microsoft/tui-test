@@ -386,6 +386,7 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
         OperationResult::Snapshot(status) => Ok(json!({ "status": status })),
         OperationResult::Screenshot(ScreenshotResult::Path(path)) => Ok(json!({ "path": path })),
         OperationResult::Screenshot(ScreenshotResult::Text(text)) => Ok(json!({ "text": text })),
+        OperationResult::Recording(path) => Ok(json!({ "path": path })),
     }
     .map_err(|error| TuiTestError::internal(format!("failed to encode cli response: {error}")))?;
     Ok(Some(value))

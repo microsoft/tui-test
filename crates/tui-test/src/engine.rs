@@ -352,16 +352,6 @@ impl Engine {
         &self.recording_path
     }
 
-    pub fn flush_recording(&self) -> Result<(), TuiTestError> {
-        let _operation = self
-            .operations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let guard = self.lock_session();
-        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
-        session.flush_recording()
-    }
-
     fn lock_session(&self) -> MutexGuard<'_, Option<TerminalSession>> {
         self.session
             .lock()
@@ -693,17 +683,9 @@ fn dispatch(
         Operation::Screenshot { full, path } => Ok(OperationResult::Screenshot(screenshot(
             session, full, path,
         )?)),
-        Operation::StartRecording {
-            path,
-            format,
-            fps,
-            speed,
-            idle_time_limit,
-        } => {
-            session.start_recording(path, format, fps, speed, idle_time_limit)?;
-            Ok(OperationResult::Unit)
-        }
-        Operation::StopRecording => Ok(OperationResult::Recording(session.stop_recording()?)),
+        Operation::StartRecording { .. } | Operation::StopRecording => Err(TuiTestError::internal(
+            "recording session support is not available",
+        )),
         Operation::Open(_) | Operation::Run(_) | Operation::Close => {
             Err(TuiTestError::internal("unsupported nested operation"))
         }
