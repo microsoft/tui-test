@@ -259,15 +259,17 @@ impl Session {
             .or_else(|| crate::api::RecordingFormat::infer(&path))
             .ok_or_else(|| {
                 crate::api::TuiTestError::usage(
-                    "cannot infer recording format; use .png, .apng, .gif, or .cast",
+                    "cannot infer recording format; use .png, .apng, .gif, .mp4, or .cast",
                 )
             })?;
         #[cfg(not(feature = "recording-raster"))]
         if format != crate::api::RecordingFormat::Cast {
             return Err(crate::api::TuiTestError::usage(
-                "APNG and GIF recording require the tui-test 'recording-raster' feature",
+                "APNG, GIF, and MP4 recording require the tui-test 'recording-raster' feature",
             ));
         }
+        #[cfg(feature = "recording-raster")]
+        let ffmpeg_path = recording_ffmpeg_path(format)?;
         let fps = fps.unwrap_or(30);
         if fps == 0 {
             return Err(crate::api::TuiTestError::usage(
@@ -322,6 +324,8 @@ impl Session {
                 idle_time_limit,
                 ..record::frames::TimelineOptions::default()
             },
+            #[cfg(feature = "recording-raster")]
+            ffmpeg_path,
         });
         drop(state);
         result.map_err(capture_error)
@@ -356,6 +360,8 @@ impl Session {
                     stopped.format,
                     &frames,
                     &mut renderer,
+                    stopped.timeline.fps,
+                    stopped.ffmpeg_path.as_deref(),
                 )?;
                 replace_output(&temporary_path, &stopped.target_path)?;
                 cleanup_sidecar(&stopped.capture_path, |message| self.logger.event(message));
@@ -419,6 +425,31 @@ impl Drop for Session {
             .close();
         drain_reader_and_recorder(&mut self.reader, &mut self.recorder);
     }
+}
+
+#[cfg(feature = "recording-raster")]
+fn recording_ffmpeg_path(
+    format: crate::api::RecordingFormat,
+) -> Result<Option<PathBuf>, crate::api::TuiTestError> {
+    recording_ffmpeg_path_with(format, shell::which)
+}
+
+#[cfg(feature = "recording-raster")]
+fn recording_ffmpeg_path_with(
+    format: crate::api::RecordingFormat,
+    find_executable: impl FnOnce(&str) -> Option<String>,
+) -> Result<Option<PathBuf>, crate::api::TuiTestError> {
+    if format != crate::api::RecordingFormat::Mp4 {
+        return Ok(None);
+    }
+    find_executable("ffmpeg")
+        .map(PathBuf::from)
+        .map(Some)
+        .ok_or_else(|| {
+            crate::api::TuiTestError::usage(
+                "MP4 recording requires ffmpeg to be installed and available on PATH",
+            )
+        })
 }
 
 fn capture_error(error: CaptureError) -> crate::api::TuiTestError {
@@ -551,6 +582,23 @@ mod tests {
 
         recorder.shutdown();
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "recording-raster")]
+    #[test]
+    fn mp4_requires_ffmpeg_before_recording_starts() {
+        let error = recording_ffmpeg_path_with(crate::api::RecordingFormat::Mp4, |_| None)
+            .expect_err("missing ffmpeg should reject MP4 recording");
+        assert_eq!(error.kind, crate::api::ErrorKind::Usage);
+        assert!(error.message.contains("ffmpeg"));
+
+        assert_eq!(
+            recording_ffmpeg_path_with(crate::api::RecordingFormat::Apng, |_| {
+                panic!("non-MP4 formats must not look for ffmpeg")
+            })
+            .unwrap(),
+            None
+        );
     }
 
     #[test]

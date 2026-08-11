@@ -32,6 +32,8 @@ pub(crate) struct StartRecording {
     pub initial_output: String,
     #[cfg(feature = "recording-raster")]
     pub timeline: frames::TimelineOptions,
+    #[cfg(feature = "recording-raster")]
+    pub ffmpeg_path: Option<PathBuf>,
 }
 
 pub(crate) struct StoppedRecording {
@@ -41,6 +43,8 @@ pub(crate) struct StoppedRecording {
     pub format: RecordingFormat,
     #[cfg(feature = "recording-raster")]
     pub timeline: frames::TimelineOptions,
+    #[cfg(feature = "recording-raster")]
+    pub ffmpeg_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]

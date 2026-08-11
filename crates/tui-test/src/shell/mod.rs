@@ -236,7 +236,7 @@ fn windows_exe(name: &str) -> String {
     }
 }
 
-fn which(cmd: &str) -> Option<String> {
+pub(crate) fn which(cmd: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
     let exts: Vec<String> = if cfg!(windows) {
         std::env::var("PATHEXT")
