@@ -4,7 +4,7 @@
 *.trace
 __pycache__/
 *.node
-.shell-use/
+.tui-test/
 bindings/js/target
 bindings/js/native/target
 bindings/python/target

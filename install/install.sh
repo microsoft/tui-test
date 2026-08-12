@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-REPOSITORY="microsoft/shell-use"
-BINARY_NAME="shell-use"
+REPOSITORY="microsoft/tui-test"
+BINARY_NAME="tui-test"
 
 fail() {
   echo "Error: $*" >&2
@@ -16,7 +16,7 @@ case "$(uname -s)" in
   Darwin) OS="apple-darwin" ;;
   Linux) OS="unknown-linux-musl" ;;
   MINGW*|MSYS*|CYGWIN*)
-    fail "Use install.ps1 to install shell-use on Windows."
+    fail "Use install.ps1 to install tui-test on Windows."
     ;;
   *) fail "Unsupported operating system: $(uname -s)" ;;
 esac
@@ -29,21 +29,17 @@ esac
 
 TARGET="${ARCH}-${OS}"
 ASSET="${BINARY_NAME}-${TARGET}.tar.gz"
-VERSION="${SHELL_USE_VERSION:-latest}"
+VERSION="${TUI_TEST_VERSION:-latest}"
 
 if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
   RELEASE_URL="https://github.com/${REPOSITORY}/releases/latest/download"
 else
-  case "$VERSION" in
-    v*) ;;
-    *) VERSION="v${VERSION}" ;;
-  esac
   RELEASE_URL="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
 fi
 
 DOWNLOAD_URL="${RELEASE_URL}/${ASSET}"
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t shell-use)"
+TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t tui-test)"
 ARCHIVE_PATH="${TMP_DIR}/${ASSET}"
 EXTRACT_DIR="${TMP_DIR}/extract"
 
@@ -76,7 +72,7 @@ download() {
   fi
 }
 
-echo "Downloading shell-use for ${TARGET}..."
+echo "Downloading tui-test for ${TARGET}..."
 download "$DOWNLOAD_URL" "$ARCHIVE_PATH" ||
   fail "Could not download ${DOWNLOAD_URL}"
 
@@ -90,8 +86,8 @@ esac
 mkdir -p "$EXTRACT_DIR"
 tar -xzf "$ARCHIVE_PATH" -C "$EXTRACT_DIR"
 
-if [ -n "${SHELL_USE_INSTALL_DIR:-}" ]; then
-  INSTALL_DIR="$SHELL_USE_INSTALL_DIR"
+if [ -n "${TUI_TEST_INSTALL_DIR:-}" ]; then
+  INSTALL_DIR="$TUI_TEST_INSTALL_DIR"
 elif [ -n "${PREFIX:-}" ]; then
   INSTALL_DIR="${PREFIX}/bin"
 elif [ "$(id -u 2>/dev/null || echo 1)" -eq 0 ]; then
@@ -102,7 +98,7 @@ else
 fi
 
 mkdir -p "$INSTALL_DIR" ||
-  fail "Could not create ${INSTALL_DIR}. Set SHELL_USE_INSTALL_DIR to a writable directory."
+  fail "Could not create ${INSTALL_DIR}. Set TUI_TEST_INSTALL_DIR to a writable directory."
 
 DESTINATION="${INSTALL_DIR}/${BINARY_NAME}"
 STAGED_DESTINATION="${INSTALL_DIR}/.${BINARY_NAME}.tmp.$$"
@@ -110,7 +106,7 @@ cp "${EXTRACT_DIR}/${BINARY_NAME}" "$STAGED_DESTINATION"
 chmod 755 "$STAGED_DESTINATION"
 mv -f "$STAGED_DESTINATION" "$DESTINATION"
 
-echo "Installed shell-use to ${DESTINATION}"
+echo "Installed tui-test to ${DESTINATION}"
 
 case ":${PATH:-}:" in
   *":${INSTALL_DIR}:"*) exit 0 ;;
@@ -133,7 +129,7 @@ case "$CURRENT_SHELL" in
     PATH_LINE="export PATH=\"${INSTALL_DIR}:\$PATH\""
     ;;
   fish)
-    RC_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/shell-use.fish"
+    RC_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/tui-test.fish"
     PATH_LINE="fish_add_path \"${INSTALL_DIR}\""
     ;;
   *)
@@ -142,7 +138,7 @@ case "$CURRENT_SHELL" in
     ;;
 esac
 
-case "${SHELL_USE_NO_MODIFY_PATH:-}" in
+case "${TUI_TEST_NO_MODIFY_PATH:-}" in
   1|true|TRUE|yes|YES)
     echo "Add ${INSTALL_DIR} to PATH."
     exit 0

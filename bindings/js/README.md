@@ -1,15 +1,15 @@
-# @microsoft/shell-use
+# @microsoft/tui-test
 
-Node bindings for [`shell-use`](https://github.com/microsoft/shell-use); a terminal engine for driving and asserting on real shells and TUI programs.
+Node bindings for [`tui-test`](https://github.com/microsoft/tui-test); a terminal engine for driving and asserting on real shells and TUI programs.
 
 ## Install
 
 ```sh
-npm install @microsoft/shell-use # Node 20+
+npm install @microsoft/tui-test@beta # Node 20+
 
-bun add @microsoft/shell-use # Bun (best effort)
+bun add @microsoft/tui-test@beta # Bun (best effort)
 
-deno add npm:@microsoft/shell-use # Deno 2 (best effort)
+deno add npm:@microsoft/tui-test@beta # Deno 2 (best effort)
 ```
 
 The package is ESM only.
@@ -23,9 +23,9 @@ The package is ESM only.
 ## Quick start
 
 ```js
-import { ShellUse } from "@microsoft/shell-use";
+import { TuiTest } from "@microsoft/tui-test";
 
-const su = new ShellUse();
+const su = new TuiTest();
 await su.open();
 await su.submit("echo hello");
 await su.waitCommand();
@@ -45,25 +45,25 @@ Every failure maps to one of the engine's error kinds:
 | `NoSessionError`   | 3          | no active session                        |
 | `InternalError`    | 5          | internal engine error                    |
 
-All derive from `ShellUseError` and carry `kind` and `exitCode`. `waitX` and `expectX` reject with `ExpectationError` on failure. Assertion errors include the current visible terminal content.
+All derive from `TuiTestError` and carry `kind` and `exitCode`. `waitX` and `expectX` reject with `ExpectationError` on failure. Assertion errors include the current visible terminal content.
 
 ## API
 
-`new ShellUse(session?, { timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle`, `screenshot`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectSnapshot`, `close`, and `closeQuiet`.
+`new TuiTest(session?, { timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle`, `screenshot`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectSnapshot`, `close`, and `closeQuiet`.
 
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 
 `open` and `run` accept `{ cols, rows, cwd, env, waitReady, retries, timeouts }`. The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`; `timeouts` sets session defaults, the constructor sets client-wide ones. Unknown class names throw.
 
-`ShellUse.ephemeral(prefix?, opts?)` creates a client bound to a unique session
+`TuiTest.ephemeral(prefix?, opts?)` creates a client bound to a unique session
 name (via `uniqueSession()`), useful for parallel test workers that should not
 collide. All sessions are process-local. `artifacts: { dir, onFailure }`
 attaches the terminal contents to an `ExpectationError`.
 
-`@microsoft/shell-use/test` has helpers for terminal tests: `createTerminal`, `withTerminal`, `closeAllTracked`, `defaultShell`, and `terminalSnapshot`.
+`@microsoft/tui-test/test` has helpers for terminal tests: `createTerminal`, `withTerminal`, `closeAllTracked`, `defaultShell`, and `terminalSnapshot`.
 
 ```js
-import { withTerminal } from "@microsoft/shell-use/test";
+import { withTerminal } from "@microsoft/tui-test/test";
 
 await withTerminal({}, async (t) => {
   await t.submit("echo hi");
@@ -86,5 +86,5 @@ Closing a session removes it from `sessions()`, but keeps its recording. `getRec
 
 | Variable                       | Purpose                                                                     |
 | ------------------------------ | --------------------------------------------------------------------------- |
-| `SHELL_USE_SESSION`            | default session name                                                        |
-| `SHELL_USE_TIMEOUT_<CLASS>_MS` | fallback timeout for one class (`TEXT`, `IDLE`, `COMMAND`, `EXIT`, `READY`) |
+| `TUI_TEST_SESSION`            | default session name                                                        |
+| `TUI_TEST_TIMEOUT_<CLASS>_MS` | fallback timeout for one class (`TEXT`, `IDLE`, `COMMAND`, `EXIT`, `READY`) |

@@ -15,14 +15,14 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            bin: target/debug/shell-use
+            bin: target/debug/tui-test
           - os: windows-latest
-            bin: target/debug/shell-use.exe
+            bin: target/debug/tui-test.exe
           - os: ubuntu-latest
-            bin: target/debug/shell-use
+            bin: target/debug/tui-test
     runs-on: ${{ matrix.os }}
     env:
-      SHELL_USE_BIN: ${{ github.workspace }}/${{ matrix.bin }}
+      TUI_TEST_BIN: ${{ github.workspace }}/${{ matrix.bin }}
     steps:
       - uses: actions/checkout@v4
 

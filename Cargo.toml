@@ -2,21 +2,21 @@
 members = [
     "bindings/js",
     "bindings/python/native",
-    "crates/shell-use",
-    "crates/shell-use-cli",
+    "crates/tui-test",
+    "crates/tui-test-cli",
 ]
 default-members = [
-    "crates/shell-use",
-    "crates/shell-use-cli",
+    "crates/tui-test",
+    "crates/tui-test-cli",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.1-beta.6"
+version = "0.1.0-beta.1"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/microsoft/shell-use"
+repository = "https://github.com/microsoft/tui-test"
 
 [workspace.dependencies]
 alacritty_terminal = "0.26.0"
@@ -35,7 +35,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.10.9"
 toml = "0.9"
-shell-use = { path = "crates/shell-use" }
+tui-test = { package = "tui-test-rs", path = "crates/tui-test" }
 unicode-width = "0.2.2"
 ttf-parser = { version = "0.25.1", default-features = false, features = ["std"] }
 
