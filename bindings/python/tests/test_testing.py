@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest import mock
 
-from shell_use import testing
+from tui_test import testing
 
 
 def run(coro):
@@ -126,7 +126,7 @@ class OptionPlumbingTests(unittest.TestCase):
     def test_per_call_options_win_over_defaults(self):
         created = []
 
-        class FakeShellUse:
+        class FakeTuiTest:
             def __init__(self, session, **kwargs):
                 self.session = session
                 self.kwargs = kwargs
@@ -140,7 +140,7 @@ class OptionPlumbingTests(unittest.TestCase):
                 pass
 
         testing.set_terminal_defaults(cols=100, artifacts={"dir": "from-defaults"})
-        with mock.patch.object(testing, "ShellUse", FakeShellUse), \
+        with mock.patch.object(testing, "TuiTest", FakeTuiTest), \
              mock.patch.object(testing, "track_terminal"):
             run(testing.create_terminal(cols=42))
         self.assertEqual(created[0].open_kwargs["cols"], 42)

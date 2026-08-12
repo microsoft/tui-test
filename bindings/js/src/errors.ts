@@ -2,7 +2,7 @@ import type { TerminalArtifact } from "./types.js";
 
 export type ErrorKind = "assertion" | "usage" | "no_session" | "internal";
 
-export class ShellUseError extends Error {
+export class TuiTestError extends Error {
   readonly kind: ErrorKind;
   readonly exitCode: number;
   terminal?: TerminalArtifact;
@@ -15,31 +15,31 @@ export class ShellUseError extends Error {
   }
 }
 
-export class ExpectationError extends ShellUseError {
+export class ExpectationError extends TuiTestError {
   constructor(message: string) {
     super(message, "assertion", 1);
   }
 }
 
-export class UsageError extends ShellUseError {
+export class UsageError extends TuiTestError {
   constructor(message: string) {
     super(message, "usage", 2);
   }
 }
 
-export class NoSessionError extends ShellUseError {
+export class NoSessionError extends TuiTestError {
   constructor(message: string) {
     super(message, "no_session", 3);
   }
 }
 
-export class InternalError extends ShellUseError {
+export class InternalError extends TuiTestError {
   constructor(message: string) {
     super(message, "internal", 5);
   }
 }
 
-export function makeError(kind: string | undefined, message: string): ShellUseError {
+export function makeError(kind: string | undefined, message: string): TuiTestError {
   switch (kind) {
     case "assertion":
       return new ExpectationError(message);

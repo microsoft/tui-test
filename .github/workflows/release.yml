@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - "v[0-9]+.*"
+      - "*-beta.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to publish
+        description: Existing beta release tag to publish (for example, 0.1.0-beta.1)
         required: true
         type: string
 
@@ -29,12 +29,40 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
+      - run: |
+          rustup toolchain install stable --profile default
+          rustup default stable
+
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Verify beta release tag
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            echo "Release tag must match <major>.<minor>.<patch>-beta.<number>." >&2
+            exit 1
+          fi
 
       - name: Verify release versions
-        run: node .github/scripts/release/verify-versions.mjs
+        shell: bash
+        run: |
+          version="$RELEASE_TAG"
+          version_files=(
+            Cargo.toml
+            bindings/js/package.json
+            bindings/js/package-lock.json
+            bindings/js/src/version.ts
+            bindings/python/pyproject.toml
+            bindings/python/src/tui_test/_config.py
+            bindings/js/native/index.js
+          )
+          diff -u \
+            <(printf '%s\n' "${version_files[@]}" | sort) \
+            <(rg -l --path-separator / --fixed-strings "$version" \
+              "${version_files[@]}" | sort)
+
+      - name: Verify tui-test-rs crate package
+        run: cargo publish --locked --package tui-test-rs --dry-run
 
   build-cli:
     needs: verify
@@ -84,7 +112,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
 
-      - run: cargo build --release --locked -p shell-use-cli --target ${{ matrix.target }}
+      - run: cargo build --release --locked -p tui-test-cli --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
@@ -92,20 +120,20 @@ jobs:
       - if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../shell-use-${{ matrix.target }}.tar.gz shell-use
+          tar czf ../../../tui-test-${{ matrix.target }}.tar.gz tui-test
           cd -
 
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/shell-use.exe" -DestinationPath "shell-use-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/tui-test.exe" -DestinationPath "tui-test-${{ matrix.target }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: shell-use-${{ matrix.target }}
+          name: tui-test-${{ matrix.target }}
           path: |
-            shell-use-*.tar.gz
-            shell-use-*.zip
+            tui-test-*.tar.gz
+            tui-test-*.zip
 
   build-node:
     needs: verify
@@ -214,6 +242,28 @@ jobs:
       - name: Pack Node packages
         run: node .github/scripts/release/package-node.mjs
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Test packed Node package with Node 20
+        shell: bash
+        run: |
+          node="$(command -v node)"
+          version="$RELEASE_TAG"
+          mkdir package-test
+          cd package-test
+          npm init -y >/dev/null
+          npm install --ignore-scripts \
+            "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-tui-test-linux-x64-gnu-${version}.tgz"
+          npm install --ignore-scripts --omit=optional \
+            "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-tui-test-${version}.tgz"
+          cd "$GITHUB_WORKSPACE"
+          PATH="/usr/bin:/bin" \
+          TUI_TEST_BIN="$GITHUB_WORKSPACE/package-test/missing-tui-test" \
+          TUI_TEST_TEST_PACKAGE_ROOT="$GITHUB_WORKSPACE/package-test" \
+            "$node" --test bindings/js/test/package.integration.test.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: npm-packages
@@ -270,31 +320,46 @@ jobs:
           manylinux: ${{ matrix.compatibility || 'auto' }}
           args: --release --locked --out dist --compatibility pypi
 
+      - name: Build Python sdist
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: bindings/python
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" dist
+          python -m pip install --disable-pip-version-check "maturin>=1.5,<2"
+          maturin sdist --manifest-path native/Cargo.toml --out dist
+
+      - uses: actions/setup-python@v5
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          python-version: "3.8"
+
+      - name: Test Python wheel with Python 3.8
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          wheels=(bindings/python/dist/*.whl)
+          test "${#wheels[@]}" -eq 1
+          [[ "${wheels[0]}" == *abi3* ]]
+          python -m venv package-test-python-38
+          package-test-python-38/bin/python -m pip install \
+            --disable-pip-version-check bindings/python/dist/*.whl
+          ! PATH="$GITHUB_WORKSPACE/package-test-python-38/bin:/usr/bin:/bin" \
+            command -v tui-test
+          PATH="$GITHUB_WORKSPACE/package-test-python-38/bin:/usr/bin:/bin" \
+          TUI_TEST_BIN="$GITHUB_WORKSPACE/package-test-python-38/missing-tui-test" \
+            "$GITHUB_WORKSPACE/package-test-python-38/bin/python" \
+            bindings/python/tests/test_integration.py \
+            IntegrationTests.test_echo_roundtrip
+
       - uses: actions/upload-artifact@v4
         with:
           name: python-wheel-${{ matrix.target }}
           path: bindings/python/dist/*.whl
           if-no-files-found: error
 
-  build-python-sdist:
-    needs: verify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - run: python -m pip install --disable-pip-version-check "maturin>=1.5,<2"
-
-      - name: Build Python sdist
-        working-directory: bindings/python
-        run: maturin sdist --manifest-path native/Cargo.toml --out dist
-
       - uses: actions/upload-artifact@v4
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         with:
           name: python-sdist
           path: bindings/python/dist/*.tar.gz
@@ -302,9 +367,9 @@ jobs:
 
   publish-npm:
     needs:
-      - smoke-node
+      - package-node
       - release
-    if: always() && needs.smoke-node.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.package-node.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -323,21 +388,48 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: https://registry.npmjs.org
 
       - name: Publish native and root packages
-        run: node .github/scripts/release/publish-npm.mjs
+        shell: bash
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+        run: |
+          version="$RELEASE_TAG"
+          packages=(
+            tui-test-darwin-arm64
+            tui-test-darwin-x64
+            tui-test-linux-arm64-gnu
+            tui-test-linux-arm64-musl
+            tui-test-linux-x64-gnu
+            tui-test-linux-x64-musl
+            tui-test-win32-arm64-msvc
+            tui-test-win32-x64-msvc
+            tui-test
+          )
+
+          for package in "${packages[@]}"; do
+            name="@microsoft/$package"
+            tarball="$GITHUB_WORKSPACE/npm-packages/microsoft-${package}-${version}.tgz"
+            if [[ ! -f "$tarball" ]]; then
+              echo "Missing npm package tarball: $tarball" >&2
+              exit 1
+            fi
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published"
+            else
+              npm publish "$tarball" --access public --provenance --tag beta
+            fi
+          done
 
   publish-pypi:
     needs:
-      - smoke-python
-      - build-python-sdist
+      - build-python
       - release
-    if: always() && needs.smoke-python.result == 'success' && needs.build-python-sdist.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.build-python.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/shell-use
+      url: https://pypi.org/p/tui-test
     permissions:
       contents: read
       id-token: write
@@ -353,93 +445,63 @@ jobs:
           name: python-sdist
           path: dist
 
-      - name: Publish shell-use to PyPI
+      - name: Publish tui-test to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
 
+  publish-crates:
+    needs:
+      - verify
+      - release
+    if: always() && needs.verify.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment:
+      name: crates-io
+      url: https://crates.io/crates/tui-test-rs
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - run: |
+          rustup toolchain install stable --profile default
+          rustup default stable
+
+      # Match this workflow and environment in the crate's trusted publisher settings.
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish tui-test-rs to crates.io
+        run: cargo publish --locked --package tui-test-rs
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
   release:
     needs:
       - build-cli
-      - smoke-node
-      - smoke-python
-      - build-python-sdist
+      - package-node
+      - build-python
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: shell-use-*
+          pattern: tui-test-*
           merge-multiple: true
 
       - env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release create "$RELEASE_TAG" \
             --generate-notes \
+            --prerelease \
             artifacts/*
-
-  smoke-node:
-    name: Smoke Node (${{ matrix.name }})
-    needs: package-node
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Node 20
-            version: "20"
-          - name: Node current
-            version: "node"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: npm-packages
-          path: npm-packages
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.version }}
-
-      - name: Smoke packed root and platform packages without the CLI
-        run: node .github/scripts/release/smoke-node.mjs
-
-  smoke-python:
-    name: Smoke Python (${{ matrix.name }})
-    needs: build-python
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Python 3.8
-            version: "3.8"
-          - name: Python current
-            version: "3.14"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: python-wheel-x86_64-unknown-linux-gnu
-          path: dist
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.version }}
-
-      - name: Smoke the built abi3 wheel without the CLI
-        run: python .github/scripts/release/smoke-python.py

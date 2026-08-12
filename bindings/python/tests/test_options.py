@@ -2,11 +2,11 @@ import asyncio
 import re
 import unittest
 
-from shell_use import _config as cfg
-from shell_use import _ephemeral as ephemeral
-from shell_use import client
-from shell_use.errors import ExpectationError, TerminalArtifact
-from shell_use.types import Timeouts
+from tui_test import _config as cfg
+from tui_test import _ephemeral as ephemeral
+from tui_test import client
+from tui_test.errors import ExpectationError, TerminalArtifact
+from tui_test.types import Timeouts
 
 
 def run(coro):
@@ -33,7 +33,7 @@ class _FakeNative:
         return invoke
 
 
-class _CapturingClient(client.ShellUse):
+class _CapturingClient(client.TuiTest):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fake = _FakeNative()
@@ -164,8 +164,8 @@ class TypedCallTests(unittest.TestCase):
                 "get_size",
             ],
         )
-        self.assertFalse(hasattr(client.ShellUse, "send"))
-        self.assertFalse(hasattr(client.ShellUse, "get"))
+        self.assertFalse(hasattr(client.TuiTest, "send"))
+        self.assertFalse(hasattr(client.TuiTest, "get"))
 
 
 class ClientTimeoutTests(unittest.TestCase):
@@ -302,7 +302,7 @@ class UniqueSessionTests(unittest.TestCase):
     def test_format_and_uniqueness(self):
         first = ephemeral.unique_session()
         second = ephemeral.unique_session()
-        self.assertTrue(first.startswith("shell-use-"))
+        self.assertTrue(first.startswith("tui-test-"))
         self.assertNotEqual(first, second)
 
     def test_sanitizes_and_caps_names(self):

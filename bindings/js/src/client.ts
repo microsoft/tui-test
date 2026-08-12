@@ -129,7 +129,7 @@ class Mouse {
   }
 }
 
-export class ShellUse {
+export class TuiTest {
   readonly session: string;
   readonly mouse: Mouse;
   #runtime: NativeRuntime;
@@ -146,8 +146,8 @@ export class ShellUse {
     this.mouse = new Mouse(this.#runtime);
   }
 
-  static ephemeral(prefix?: string, opts: ClientOptions = {}): ShellUse {
-    return new ShellUse(uniqueSession(prefix), opts);
+  static ephemeral(prefix?: string, opts: ClientOptions = {}): TuiTest {
+    return new TuiTest(uniqueSession(prefix), opts);
   }
 
   #timeout(cls: TimeoutClass, callTimeout?: number): number | undefined {
