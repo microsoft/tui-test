@@ -1,11 +1,11 @@
 ---
-name: shell-use
-description: "Drive, inspect, assert on, record, and watch a real terminal from the command line with the shell-use cli. Use when running shells (bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, nushell) or TUI programs (vim, less, top, etc.) in a headless PTY; sending keystrokes, key combos, or mouse input; resizing, writing raw bytes, or signaling the child; waiting for a command to finish or the screen to settle; asserting on terminal text, colors, exit codes, output, or snapshots; capturing text or full-color SVG screenshots; recording and replaying asciinema sessions; watching a live cli session while an agent drives it; or driving process-local sessions from Python or Node with the shell-use bindings."
+name: tui-test
+description: "Drive, inspect, assert on, record, and watch a real terminal from the command line with the tui-test cli. Use when running shells (bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, nushell) or TUI programs (vim, less, top, etc.) in a headless PTY; sending keystrokes, key combos, or mouse input; resizing, writing raw bytes, or signaling the child; waiting for a command to finish or the screen to settle; asserting on terminal text, colors, exit codes, output, or snapshots; capturing text or full-color SVG screenshots; recording and replaying asciinema sessions; watching a live cli session while an agent drives it; or driving process-local sessions from Rust, Python, or Node."
 ---
 
-# shell-use
+# tui-test
 
-`shell-use` controls a real terminal from the command line. It runs shells and
+`tui-test` controls a real terminal from the command line. It runs shells and
 TUI programs in a headless PTY behind a background daemon: a stateless cli front
 end talks to a daemon that owns the PTY and renders it into a full terminal
 emulator. Each call connects, acts, and exits, and they all share one live
@@ -17,15 +17,15 @@ session.
 
 Three commands let an agent look up the rest of the surface instead of guessing:
 
-- `shell-use agent-context`: versioned JSON describing every command, flag,
+- `tui-test agent-context`: versioned JSON describing every command, flag,
   enum, default, and the exit-code taxonomy. It is generated from the cli, so it
   stays in sync. Read this first when you need exact argument shapes.
-- `shell-use usage`: a one-screen command cheatsheet.
-- `shell-use skill`: this guide.
+- `tui-test usage`: a one-screen command cheatsheet.
+- `tui-test skill`: this guide.
 
 ## Core model
 
-- **Sessions.** `--session <name>` (default `default`, env `SHELL_USE_SESSION`)
+- **Sessions.** `--session <name>` (default `default`, env `TUI_TEST_SESSION`)
   selects a terminal. The first command auto-starts that session's daemon; the
   session persists across calls until `close`. Sessions are independent.
 - **Stateless calls.** Each invocation connects to the daemon, acts, and exits.
@@ -132,12 +132,12 @@ Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 ## Workflow: run a command and check the result
 
 ```sh
-shell-use open                       # start a shell session
-shell-use submit "echo hello"        # type text + Enter
-shell-use wait command               # block until the command finishes
-shell-use expect text "hello"        # assert it appeared (exit 1 if not)
-shell-use expect exit-code 0         # assert the command succeeded
-shell-use close
+tui-test open                       # start a shell session
+tui-test submit "echo hello"        # type text + Enter
+tui-test wait command               # block until the command finishes
+tui-test expect text "hello"        # assert it appeared (exit 1 if not)
+tui-test expect exit-code 0         # assert the command succeeded
+tui-test close
 ```
 
 `submit` types text then presses Enter; `type` types without Enter; `press`
@@ -147,38 +147,38 @@ combo (`keys "Ctrl+a"`).
 ## Workflow: drive a TUI program
 
 ```sh
-shell-use run vim file.txt
-shell-use wait idle                  # let the screen finish rendering
-shell-use press i                    # enter insert mode
-shell-use type "some text"
-shell-use press Escape : w q Enter   # save and quit
-shell-use wait exit
+tui-test run vim file.txt
+tui-test wait idle                  # let the screen finish rendering
+tui-test press i                    # enter insert mode
+tui-test type "some text"
+tui-test press Escape : w q Enter   # save and quit
+tui-test wait exit
 ```
 
 ## Workflow: mouse interaction
 
 ```sh
-shell-use mouse click --on-text "OK"     # click a label, no coordinates needed
-shell-use mouse click 10 5 --clicks 2    # double-click at column 10, row 5
-shell-use mouse scroll down --amount 5   # scroll the wheel
-shell-use mouse drag 2 2 20 2            # drag from (2,2) to (20,2)
+tui-test mouse click --on-text "OK"     # click a label, no coordinates needed
+tui-test mouse click 10 5 --clicks 2    # double-click at column 10, row 5
+tui-test mouse scroll down --amount 5   # scroll the wheel
+tui-test mouse drag 2 2 20 2            # drag from (2,2) to (20,2)
 ```
 
 ## Workflow: assert colors
 
 ```sh
-shell-use cells 0 0 10 1                       # inspect char/fg/bg/flags
-shell-use expect text "ERROR" --fg "#ff0000"   # text present AND red
-shell-use expect text "OK" --fg 2 --bg 0       # ansi-256 fg/bg
-shell-use expect text "plain" --fg default     # asserts the cell set no color
+tui-test cells 0 0 10 1                       # inspect char/fg/bg/flags
+tui-test expect text "ERROR" --fg "#ff0000"   # text present AND red
+tui-test expect text "OK" --fg 2 --bg 0       # ansi-256 fg/bg
+tui-test expect text "plain" --fg default     # asserts the cell set no color
 ```
 
 ## Workflow: snapshot testing
 
 ```sh
-shell-use expect snapshot main-view -u                    # create/update the snapshot
-shell-use expect snapshot main-view                       # later: assert it still matches
-shell-use expect snapshot main-view --include-colors      # also compare per-cell colors
+tui-test expect snapshot main-view -u                    # create/update the snapshot
+tui-test expect snapshot main-view                       # later: assert it still matches
+tui-test expect snapshot main-view --include-colors      # also compare per-cell colors
 ```
 
 Snapshots live in `__snapshots__/<NAME>.snap` next to where you run the command.
@@ -207,8 +207,8 @@ ones are swept when a daemon next starts (recordings of still-running sessions
 are kept).
 
 ```sh
-shell-use get-recording > demo.cast    # current session's recording to stdout
-shell-use get-recording work > w.cast  # a specific session by name (even if stopped)
+tui-test get-recording > demo.cast    # current session's recording to stdout
+tui-test get-recording work > w.cast  # a specific session by name (even if stopped)
 ```
 
 Play it with `asciinema play demo.cast`, or render a GIF with
@@ -221,7 +221,7 @@ the same daemon. `monitor` takes over an alternate screen and streams the
 session in full color at ~20fps. Press `q`, `Esc`, or `Ctrl-C` to detach.
 
 ```sh
-shell-use --session work monitor   # watch the 'work' session live
+tui-test --session work monitor   # watch the 'work' session live
 ```
 
 It needs an interactive terminal (exit `2` otherwise) and an existing session
@@ -230,36 +230,70 @@ the commands the agent runs; resizing the window re-fits the frame.
 
 This works only with standalone CLI sessions.
 
-## Programmatic use (Python and JavaScript)
+## Programmatic use (Rust, Python, and JavaScript)
 
-The Python and JavaScript packages bind the Rust terminal engine directly and
-run sessions in-process. Session names, registries, and recordings are
-process-local. A native session cannot be listed, attached to, controlled, or
-monitored from another process, including by the standalone CLI.
+The Rust crate and the Python and JavaScript packages run the terminal engine
+in-process. Session names, registries, and recordings are process-local. A
+native session cannot be listed, attached to, controlled, or monitored from
+another process, including by the standalone CLI.
 
-Language packages do not install or require the `shell-use` CLI. Only the
-standalone CLI uses the daemon and JSON-over-local-socket protocol described
-elsewhere in this guide.
+These programmatic APIs do not install or require the `tui-test` CLI. Only
+the standalone CLI uses the daemon and JSON-over-local-socket protocol
+described elsewhere in this guide.
 
 Node is the supported JavaScript runtime. Bun and Deno compatibility is best
 effort and does not gate releases. Deno requires a local `node_modules`
 directory and `--allow-ffi` in addition to read/write permissions.
 
 ```sh
-pip install shell-use              # Python 3.8+, imported as `shell_use`
-npm install @microsoft/shell-use   # Node 20+ (ESM only)
-bun add @microsoft/shell-use       # Bun (best effort)
-deno add npm:@microsoft/shell-use  # Deno 2 (best effort)
+cargo add tui-test  # Rust 1.88+
+pip install tui-test              # Python 3.8+, imported as `tui_test`
+npm install @microsoft/tui-test   # Node 20+ (ESM only)
+bun add @microsoft/tui-test       # Bun (best effort)
+deno add npm:@microsoft/tui-test  # Deno 2 (best effort)
+```
+
+Rust:
+
+```rust
+use tui_test::{OpenOptions, Operation, Session};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let session = Session::new(format!("rust-example-{}", std::process::id()));
+    session.open(OpenOptions::default())?;
+    session.execute(Operation::Submit {
+        data: Some("echo hello".into()),
+    })?;
+    session.execute(Operation::WaitCommand {
+        timeout_ms: Some(30_000),
+    })?;
+    session.execute(Operation::ExpectText {
+        text: "hello".into(),
+        regex: false,
+        full: false,
+        strict: false,
+        not: false,
+        fg: None,
+        bg: None,
+        timeout_ms: Some(5_000),
+    })?;
+    session.execute(Operation::ExpectExitCode {
+        code: 0,
+        timeout_ms: Some(5_000),
+    })?;
+    session.close()?;
+    Ok(())
+}
 ```
 
 Python:
 
 ```python
 import asyncio
-from shell_use import ShellUse
+from tui_test import TuiTest
 
 async def main():
-    async with ShellUse() as su:                     # closes the session on exit
+    async with TuiTest() as su:                     # closes the session on exit
         await su.open()
         await su.submit("echo hello")
         await su.wait_command()
@@ -272,9 +306,9 @@ asyncio.run(main())
 Node (the same API may work on Bun and Deno):
 
 ```js
-import { ShellUse } from "@microsoft/shell-use";
+import { TuiTest } from "@microsoft/tui-test";
 
-const su = new ShellUse();
+const su = new TuiTest();
 await su.open();
 await su.submit("echo hello");
 await su.waitCommand();
@@ -283,10 +317,14 @@ await su.expectExitCode(0);
 await su.close();
 ```
 
-Methods mirror the cli commands: `open` / `run`, `submit` / `type` / `write`,
-`press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` /
-`kill`, `state`, `text`, `cells`, the dedicated `get_command` / `get_output` /
-`get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` methods,
+The Rust crate exposes `Session` and `SessionRegistry` for terminal ownership,
+plus the `Operation` and `OperationResult` enums for the command surface.
+
+Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
+/ `type` / `write`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`,
+`resize`, `signal` / `kill`, `state`, `text`, `cells`, the dedicated
+`get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` /
+`get_size` / `get_title` methods,
 `screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit` /
 `wait_ready`, `expect_text` / `expect_exit_code` / `expect_output` /
 `expect_snapshot`, and `close`. Python module-level helpers are `sessions`,
@@ -295,21 +333,21 @@ and `getRecording`. The JavaScript client otherwise uses the same names in
 camelCase (`waitCommand`, `expectText`, `getExitCode`, etc.).
 
 The constructors accept a session name plus timeout and artifact options:
-`ShellUse(session="default", *, timeouts=None, artifacts=None)` in Python and
-`new ShellUse(session?, { timeouts?, artifacts? })` in JavaScript. `run` takes
+`TuiTest(session="default", *, timeouts=None, artifacts=None)` in Python and
+`new TuiTest(session?, { timeouts?, artifacts? })` in JavaScript. `run` takes
 the program then its arguments (`await su.run("vim", "file.txt")` in Python,
 `await su.run("vim", ["file.txt"])` in JavaScript).
 
-Failures raise typed errors instead of returning exit codes, one class per row of
-the applicable [exit-code table](#exit-codes): `ExpectationError` (1),
-`UsageError` (2), `NoSessionError` (3), and `InternalError` (5), all subclasses
-of `ShellUseError`.
+Python and JavaScript failures raise typed errors instead of returning exit
+codes, one class per row of the applicable [exit-code table](#exit-codes):
+`ExpectationError` (1), `UsageError` (2), `NoSessionError` (3), and
+`InternalError` (5), all subclasses of `TuiTestError`.
 
 ## Configuration
 
-`shell-use.toml` holds named profiles; `--profile NAME` selects one and
-`--config PATH` picks the file. Looked up nearest first: `./shell-use.toml`
-then `~/.shell-use/shell-use.toml`. No file is fine; an unparseable one errors.
+`tui-test.toml` holds named profiles; `--profile NAME` selects one and
+`--config PATH` picks the file. Looked up nearest first: `./tui-test.toml`
+then `~/.tui-test/tui-test.toml`. No file is fine; an unparseable one errors.
 
 ```toml
 [profiles.ci]
@@ -332,7 +370,7 @@ a `#rrggbb` against, so the two always agree.
 `open --shell S` accepts: `bash`, `zsh`, `fish`, `powershell`, `pwsh`, `cmd`,
 `xonsh`, `elvish`, `nushell`. Omit `--shell` to use the platform default.
 
-`shell-use` injects shell integration (standard OSC 133 semantic-prompt markers,
+`tui-test` injects shell integration (standard OSC 133 semantic-prompt markers,
 plus OSC 7 for cwd) so it can track command boundaries, exit codes, cwd, and
 command/output text across shells. This is what powers `wait command`,
 `expect exit-code`, `get cwd`, and `get command|output`.
@@ -345,23 +383,23 @@ prompt-only.
 
 By default the daemon writes no log. Start it with `--verbose` to record every
 byte read from and written to the PTY, plus lifecycle events, to
-`~/.shell-use/<session>.log`. Logging is fixed when the daemon starts, so enable
+`~/.tui-test/<session>.log`. Logging is fixed when the daemon starts, so enable
 it on a fresh daemon (close any existing one first):
 
 ```sh
-shell-use --session work close            # stop any existing daemon
-shell-use --session work --verbose open   # start one with logging on
-shell-use --session work submit "ls"
-cat ~/.shell-use/work.log
+tui-test --session work close            # stop any existing daemon
+tui-test --session work --verbose open   # start one with logging on
+tui-test --session work submit "ls"
+cat ~/.tui-test/work.log
 ```
 
-`shell-use daemon status` reports the active log path.
+`tui-test daemon status` reports the active log path.
 
 **Stuck session?** If the screen is frozen and input seems ignored (e.g. after
 `git log` / `git diff`), a full-screen pager such as `less` is likely holding the
-terminal, and `Ctrl+C` won't quit it. Confirm with `shell-use state`
+terminal, and `Ctrl+C` won't quit it. Confirm with `tui-test state`
 (`"ready": false` and a stale last command). Quit the pager with
-`shell-use press q`, or avoid it with `git --no-pager <cmd>` or `GIT_PAGER=cat`.
+`tui-test press q`, or avoid it with `git --no-pager <cmd>` or `GIT_PAGER=cat`.
 
 **Platform note.** On Windows ConPTY, `get output` and `get command` text can on some rare occasions be
 unreliable due to screen repainting; grid-based checks (`expect text`,

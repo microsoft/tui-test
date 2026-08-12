@@ -3,10 +3,10 @@ import os
 import subprocess
 import unittest
 
-import shell_use
-from shell_use import ShellUse
+import tui_test
+from tui_test import TuiTest
 
-BIN = os.environ.get("SHELL_USE_BIN") or "shell-use"
+BIN = os.environ.get("TUI_TEST_BIN") or "tui-test"
 
 MAPPING = {
     "open": [("client", "open")],
@@ -51,7 +51,7 @@ def _have_binary():
         return False
 
 
-@unittest.skipUnless(_have_binary(), "shell-use binary not available for agent-context")
+@unittest.skipUnless(_have_binary(), "tui-test binary not available for agent-context")
 class ConformanceTests(unittest.TestCase):
     def test_every_command_is_mapped_or_excluded(self):
         out = subprocess.run([BIN, "agent-context"], capture_output=True, check=True, text=True).stdout
@@ -62,9 +62,9 @@ class ConformanceTests(unittest.TestCase):
             if command in EXCLUDED:
                 continue
             self.assertIn(command, MAPPING, f"cli command '{command}' has no SDK mapping")
-            instance = ShellUse("conformance")
+            instance = TuiTest("conformance")
             for scope, attr in MAPPING[command]:
-                target = instance if scope == "client" else shell_use
+                target = instance if scope == "client" else tui_test
                 self.assertTrue(
                     hasattr(target, attr),
                     f"missing SDK member for '{command}': {scope}.{attr}",
@@ -74,10 +74,10 @@ class ConformanceTests(unittest.TestCase):
         out = subprocess.run([BIN, "agent-context"], capture_output=True, check=True, text=True).stdout
         schema = json.loads(out)
         codes = schema["exit_codes"]
-        self.assertEqual(shell_use.ExpectationError.exit_code, 1)
-        self.assertEqual(shell_use.UsageError.exit_code, 2)
-        self.assertEqual(shell_use.NoSessionError.exit_code, 3)
-        self.assertEqual(shell_use.InternalError.exit_code, 5)
+        self.assertEqual(tui_test.ExpectationError.exit_code, 1)
+        self.assertEqual(tui_test.UsageError.exit_code, 2)
+        self.assertEqual(tui_test.NoSessionError.exit_code, 3)
+        self.assertEqual(tui_test.InternalError.exit_code, 5)
         self.assertIn("1", codes)
         self.assertIn("3", codes)
 

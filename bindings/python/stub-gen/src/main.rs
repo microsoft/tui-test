@@ -26,7 +26,7 @@ mod stubs {
         PyClassInfo {
             struct_id: TypeId::of::<NativeSession>,
             pyclass_name: "NativeSession",
-            module: Some("shell_use._native"),
+            module: Some("tui_test._native"),
             doc: "",
             getters: &[MemberInfo {
                 name: "name",
@@ -51,7 +51,7 @@ mod stubs {
                 PyClassInfo {
                     struct_id: TypeId::of::<$exception>,
                     pyclass_name: $name,
-                    module: Some("shell_use._native"),
+                    module: Some("tui_test._native"),
                     doc: $doc,
                     getters: &[],
                     setters: &[],
@@ -213,7 +213,7 @@ mod stubs {
         ($source:literal) => {
             pyo3_stub_gen::inventory::submit! {
                 pyo3_stub_gen_derive::gen_function_from_python! {
-                    module = "shell_use._native",
+                    module = "tui_test._native",
                     $source
                 }
             }
@@ -253,12 +253,12 @@ mod stubs {
     pub fn run(check_only: bool) -> Result<(), Box<dyn Error>> {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let pyproject = manifest_dir.join("../pyproject.toml");
-        let destination = manifest_dir.join("../src/shell_use/_native.pyi");
+        let destination = manifest_dir.join("../src/tui_test/_native.pyi");
         let stub_info = pyo3_stub_gen::StubInfo::from_pyproject_toml(pyproject)?;
-        let module = stub_info.modules.get("shell_use._native").ok_or_else(|| {
+        let module = stub_info.modules.get("tui_test._native").ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
-                "missing shell_use._native stub metadata",
+                "missing tui_test._native stub metadata",
             )
         })?;
         let generated = format!(

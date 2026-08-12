@@ -648,14 +648,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shell-use-python-stub-gen"
-version = "0.0.0"
-dependencies = [
- "pyo3-stub-gen",
- "pyo3-stub-gen-derive",
-]
-
-[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -773,6 +765,14 @@ name = "toml_writer"
 version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
+
+[[package]]
+name = "tui-test-python-stub-gen"
+version = "0.0.0"
+dependencies = [
+ "pyo3-stub-gen",
+ "pyo3-stub-gen-derive",
+]
 
 [[package]]
 name = "unic-char-property"

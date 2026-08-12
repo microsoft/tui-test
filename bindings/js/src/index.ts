@@ -1,4 +1,4 @@
-export { ShellUse } from "./client.js";
+export { TuiTest } from "./client.js";
 export type {
   ExpectTextOptions,
   MouseButtonOptions,
@@ -11,7 +11,7 @@ export {
   ExpectationError,
   InternalError,
   NoSessionError,
-  ShellUseError,
+  TuiTestError,
   UsageError,
 } from "./errors.js";
 export type { ErrorKind } from "./errors.js";

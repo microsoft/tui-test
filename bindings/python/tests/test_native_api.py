@@ -3,8 +3,8 @@ import inspect
 import unittest
 from pathlib import Path
 
-from shell_use import _native
-from shell_use import unique_session
+from tui_test import _native
+from tui_test import unique_session
 
 
 class _IndexValue:
@@ -104,7 +104,7 @@ class NativeStubTests(unittest.TestCase):
         stub = (
             Path(__file__).resolve().parents[1]
             / "src"
-            / "shell_use"
+            / "tui_test"
             / "_native.pyi"
         ).read_text(encoding="utf-8")
         self.assertNotIn("async def ", stub)

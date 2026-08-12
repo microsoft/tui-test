@@ -1183,63 +1183,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shell-use"
-version = "0.0.1-beta.6"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "bitflags 2.13.1",
- "compact_str",
- "dirs",
- "flate2",
- "portable-pty",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "toml",
- "ttf-parser",
- "unicode-width",
-]
-
-[[package]]
-name = "shell-use-cli"
-version = "0.0.1-beta.6"
-dependencies = [
- "anyhow",
- "clap",
- "crossterm",
- "dialoguer",
- "dirs",
- "interprocess",
- "serde",
- "serde_json",
- "sha2",
- "shell-use",
-]
-
-[[package]]
-name = "shell-use-node"
-version = "0.0.1-beta.6"
-dependencies = [
- "napi",
- "napi-build",
- "napi-derive",
- "shell-use",
-]
-
-[[package]]
-name = "shell-use-python"
-version = "0.0.1-beta.6"
-dependencies = [
- "anyhow",
- "pyo3",
- "pyo3-async-runtimes",
- "shell-use",
- "tokio",
-]
-
-[[package]]
 name = "shell-words"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1432,6 +1375,63 @@ name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
+
+[[package]]
+name = "tui-test-cli"
+version = "0.1.0-beta.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm",
+ "dialoguer",
+ "dirs",
+ "interprocess",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tui-test-rs",
+]
+
+[[package]]
+name = "tui-test-node"
+version = "0.1.0-beta.1"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "tui-test-rs",
+]
+
+[[package]]
+name = "tui-test-python"
+version = "0.1.0-beta.1"
+dependencies = [
+ "anyhow",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "tokio",
+ "tui-test-rs",
+]
+
+[[package]]
+name = "tui-test-rs"
+version = "0.1.0-beta.1"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "bitflags 2.13.1",
+ "compact_str",
+ "dirs",
+ "flate2",
+ "portable-pty",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+ "ttf-parser",
+ "unicode-width",
+]
 
 [[package]]
 name = "typenum"

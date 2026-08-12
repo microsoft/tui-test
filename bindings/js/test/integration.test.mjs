@@ -9,7 +9,7 @@ import {
   ExpectationError,
   InternalError,
   NoSessionError,
-  ShellUse,
+  TuiTest,
   closeAll,
   getRecording,
   sessions,
@@ -133,10 +133,10 @@ test("a blocking native wait runs off the JS event loop", async () => {
 });
 
 test("concurrent waits do not starve filesystem work", async () => {
-  const root = mkdtempSync(join(tmpdir(), "shell-use-pool-"));
+  const root = mkdtempSync(join(tmpdir(), "tui-test-pool-"));
   const terminals = Array.from(
     { length: 6 },
-    (_, index) => ShellUse.ephemeral(`pool-${index}`),
+    (_, index) => TuiTest.ephemeral(`pool-${index}`),
   );
   try {
     await Promise.all(
@@ -170,8 +170,8 @@ test("concurrent waits do not starve filesystem work", async () => {
 
 test("same-name clients share one serialized native session", async () => {
   const name = uniqueSession("same-name");
-  const first = new ShellUse(name);
-  const second = new ShellUse(name);
+  const first = new TuiTest(name);
+  const second = new TuiTest(name);
   try {
     await first.open({ shell });
     await second.submit("echo shared-native-session");
@@ -188,7 +188,7 @@ test("same-name clients share one serialized native session", async () => {
 });
 
 test("abandoning a raced promise keeps later operations serialized and safe", async () => {
-  const su = new ShellUse(uniqueSession("promise-abandonment"));
+  const su = new TuiTest(uniqueSession("promise-abandonment"));
   try {
     await su.run(process.execPath, evalArgs);
     await su.waitText("ready", { timeout: 2000 });
@@ -220,7 +220,7 @@ test("abandoning a raced promise keeps later operations serialized and safe", as
 
 test("private packed screens retain full UTF-8 logical rows and own their bytes", async () => {
   const name = uniqueSession("packed-screen");
-  const su = new ShellUse(name);
+  const su = new TuiTest(name);
   const runtime = new NativeRuntime(name);
   const script =
     "process.stdout.write('\\x1b[31mI\\x1b[0m🙂\\x1b[38;2;1;2;3mR\\x1b[0m\\n');" +
@@ -285,7 +285,7 @@ test("panic containment rejects as InternalError and Node keeps running", async 
 });
 
 test("typed mouse and signal operations execute against a real program", async () => {
-  const su = new ShellUse(uniqueSession("typed-input-signal"));
+  const su = new TuiTest(uniqueSession("typed-input-signal"));
   try {
     await su.run(process.execPath, evalArgs);
     await su.waitText("ready", { timeout: 2000 });
@@ -306,8 +306,8 @@ test("typed mouse and signal operations execute against a real program", async (
 
 test("closeAll interrupts in-flight waits and closes every process-local session", async () => {
   const terminals = [
-    new ShellUse(uniqueSession("close-all-a")),
-    new ShellUse(uniqueSession("close-all-b")),
+    new TuiTest(uniqueSession("close-all-a")),
+    new TuiTest(uniqueSession("close-all-b")),
   ];
   await Promise.all(terminals.map((terminal) => terminal.run(process.execPath, evalArgs)));
   await Promise.all(
@@ -337,7 +337,7 @@ test("closeAll interrupts in-flight waits and closes every process-local session
 });
 
 test("sessions lists an open session", async () => {
-  const su = new ShellUse(uniqueSession("nodetest"));
+  const su = new TuiTest(uniqueSession("nodetest"));
   await su.open({ shell });
   try {
     const names = await sessions();
@@ -349,7 +349,7 @@ test("sessions lists an open session", async () => {
 
 test("close evicts the session and retains its recording", async () => {
   const name = uniqueSession("recording");
-  const session = new ShellUse(name);
+  const session = new TuiTest(name);
   await session.open({ shell });
   await session.submit("echo retained-recording");
   await session.waitCommand();
@@ -366,8 +366,8 @@ test("close evicts the session and retains its recording", async () => {
 
 test("any shared handle can close a reopened named session", async () => {
   const name = uniqueSession("shared-close");
-  const first = new ShellUse(name);
-  const second = new ShellUse(name);
+  const first = new TuiTest(name);
+  const second = new TuiTest(name);
   try {
     await first.open({ shell });
     await first.close();
@@ -380,7 +380,7 @@ test("any shared handle can close a reopened named session", async () => {
 });
 
 test("snapshot lands in the client cwd", async () => {
-  const snapRoot = mkdtempSync(join(tmpdir(), "shell-use-snap-"));
+  const snapRoot = mkdtempSync(join(tmpdir(), "tui-test-snap-"));
   const name = `snap-${basename(snapRoot)}`;
   const original = process.cwd();
   try {
