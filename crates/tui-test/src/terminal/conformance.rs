@@ -16,7 +16,7 @@
 //! the test pins only the part that is universal and says why it stops short.
 
 /// Generates the conformance tests for one backend. `$make` builds a boxed
-/// emulator from `(cols, rows, scrollback)`.
+/// emulator from `(cols, rows, &Profile)`.
 ///
 /// The body is fully path-qualified because it expands into the caller's
 /// module; it must not collide with whatever that module already imports.
@@ -28,8 +28,27 @@ macro_rules! emulator_conformance_tests {
             rows: u16,
             scrollback: usize,
         ) -> Box<dyn $crate::terminal::emu::Emulator> {
-            let make: fn(u16, u16, usize) -> Box<dyn $crate::terminal::emu::Emulator> = $make;
-            make(cols, rows, scrollback)
+            conformance_emu_with(
+                cols,
+                rows,
+                $crate::profile::Profile {
+                    scrollback,
+                    ..Default::default()
+                },
+            )
+        }
+
+        fn conformance_emu_with(
+            cols: u16,
+            rows: u16,
+            profile: $crate::profile::Profile,
+        ) -> Box<dyn $crate::terminal::emu::Emulator> {
+            let make: fn(
+                u16,
+                u16,
+                &$crate::profile::Profile,
+            ) -> Box<dyn $crate::terminal::emu::Emulator> = $make;
+            make(cols, rows, &profile)
         }
 
         /// Row text with trailing blanks removed, for readable assertions.
@@ -540,6 +559,284 @@ macro_rules! emulator_conformance_tests {
                 e.take_pending_writes().is_empty(),
                 "draining must consume the queue"
             );
+        }
+
+        /// A color query is answered with the session's configured color.
+        ///
+        /// Programs query the background to decide whether they are on a light
+        /// or a dark terminal. A backend that stays silent leaves them blocked
+        /// until they time out and guess.
+        #[test]
+        fn conformance_color_queries_are_answered() {
+            use $crate::profile::{Colors, Profile, Rgb};
+            let profile = Profile {
+                colors: Colors {
+                    background: Rgb::new(0x12, 0x34, 0x56),
+                    red: Rgb::new(0xab, 0xcd, 0xef),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut e = conformance_emu_with(10, 4, profile);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]11;?\x07");
+            assert_eq!(
+                String::from_utf8_lossy(&e.take_pending_writes()),
+                "\x1b]11;rgb:1212/3434/5656\x07",
+                "OSC 11 must report the configured background"
+            );
+
+            e.process(b"\x1b]4;1;?\x07");
+            assert_eq!(
+                String::from_utf8_lossy(&e.take_pending_writes()),
+                "\x1b]4;1;rgb:abab/cdcd/efef\x07",
+                "OSC 4 must report the configured palette entry"
+            );
+        }
+
+        /// A reply uses the terminator the query used. A program that reads
+        /// until the terminator it sent would otherwise wait for one that
+        /// never comes.
+        #[test]
+        fn conformance_a_color_reply_echoes_the_terminator() {
+            let mut e = conformance_emu(10, 4, 100);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]11;?\x07");
+            let bel = e.take_pending_writes();
+            assert!(
+                bel.ends_with(b"\x07"),
+                "a BEL query is answered with BEL: {:?}",
+                String::from_utf8_lossy(&bel)
+            );
+
+            e.process(b"\x1b]11;?\x1b\\");
+            let st = e.take_pending_writes();
+            assert!(
+                st.ends_with(b"\x1b\\"),
+                "an ST query is answered with ST: {:?}",
+                String::from_utf8_lossy(&st)
+            );
+        }
+
+        /// Replies leave in the order the program asked for them.
+        ///
+        /// A batch of queries is commonly ended with a device attributes
+        /// request, whose reply every terminal sends, and the reply to it is
+        /// read as the end of the batch. An answer that arrived after it would
+        /// look like the query went unanswered, and would then be read as
+        /// though the user had typed it.
+        #[test]
+        fn conformance_replies_keep_the_order_they_were_asked_in() {
+            let mut e = conformance_emu(10, 4, 100);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]11;?\x07\x1b[c");
+            let asked_color_first = e.take_pending_writes();
+            let color = asked_color_first
+                .windows(2)
+                .position(|w| w == b"]1")
+                .expect("a color reply");
+            let attributes = asked_color_first
+                .windows(2)
+                .position(|w| w == b"[?")
+                .expect("a device attributes reply");
+            assert!(
+                color < attributes,
+                "the color was asked for first, so it is answered first: {:?}",
+                String::from_utf8_lossy(&asked_color_first)
+            );
+
+            e.process(b"\x1b[c\x1b]11;?\x07");
+            let asked_color_second = e.take_pending_writes();
+            let color = asked_color_second
+                .windows(2)
+                .position(|w| w == b"]1")
+                .expect("a color reply");
+            let attributes = asked_color_second
+                .windows(2)
+                .position(|w| w == b"[?")
+                .expect("a device attributes reply");
+            assert!(
+                attributes < color,
+                "and asked for second, it is answered second: {:?}",
+                String::from_utf8_lossy(&asked_color_second)
+            );
+        }
+
+        /// A program can shadow a color, and a reset puts the configured one
+        /// back. The configured color is never reachable, so a reset always
+        /// has something to restore.
+        #[test]
+        fn conformance_a_color_set_is_undone_by_a_reset() {
+            use $crate::profile::{Colors, Profile, Rgb};
+            let configured = Rgb::new(0x11, 0x22, 0x33);
+            let profile = Profile {
+                colors: Colors {
+                    background: configured,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut e = conformance_emu_with(10, 4, profile);
+            let background = $crate::profile::ColorSlot::Background;
+            assert_eq!(e.color(background), configured);
+
+            e.process(b"\x1b]11;#654321\x07");
+            assert_eq!(
+                e.color(background),
+                Rgb::new(0x65, 0x43, 0x21),
+                "a set shadows the configured color"
+            );
+
+            e.process(b"\x1b]111\x07");
+            assert_eq!(
+                e.color(background),
+                configured,
+                "OSC 111 restores the configured color"
+            );
+
+            // The same for a palette entry, which resets with OSC 104.
+            e.process(b"\x1b]4;2;#010203\x07");
+            assert_eq!(
+                e.color($crate::profile::ColorSlot::Indexed(2)),
+                Rgb::new(1, 2, 3)
+            );
+            e.process(b"\x1b]104;2\x07");
+            assert_eq!(
+                e.color($crate::profile::ColorSlot::Indexed(2)),
+                Colors::default().green
+            );
+        }
+
+        /// Each dynamic color is addressed by its own sequence, and each is
+        /// reset by its own.
+        ///
+        /// `OSC 11` is the one programs reach for, so it is easy to wire that
+        /// up and leave the foreground or the cursor answering the wrong slot.
+        #[test]
+        fn conformance_each_dynamic_color_is_separately_addressable() {
+            use $crate::profile::ColorSlot;
+            let mut e = conformance_emu(10, 4, 100);
+            let before = [
+                e.color(ColorSlot::Foreground),
+                e.color(ColorSlot::Background),
+                e.color(ColorSlot::Cursor),
+            ];
+
+            // Set all three to distinct colors, then check none bled into
+            // another.
+            e.process(b"\x1b]10;#111111\x07\x1b]11;#222222\x07\x1b]12;#333333\x07");
+            assert_eq!(e.color(ColorSlot::Foreground), Rgb::new(0x11, 0x11, 0x11));
+            assert_eq!(e.color(ColorSlot::Background), Rgb::new(0x22, 0x22, 0x22));
+            assert_eq!(e.color(ColorSlot::Cursor), Rgb::new(0x33, 0x33, 0x33));
+
+            // And each reset frees only its own slot.
+            e.process(b"\x1b]110\x07");
+            assert_eq!(e.color(ColorSlot::Foreground), before[0], "110 resets fg");
+            assert_eq!(
+                e.color(ColorSlot::Background),
+                Rgb::new(0x22, 0x22, 0x22),
+                "110 must leave the background alone"
+            );
+
+            e.process(b"\x1b]112\x07");
+            assert_eq!(
+                e.color(ColorSlot::Cursor),
+                before[2],
+                "112 resets the cursor"
+            );
+            assert_eq!(
+                e.color(ColorSlot::Background),
+                Rgb::new(0x22, 0x22, 0x22),
+                "112 must leave the background alone"
+            );
+
+            e.process(b"\x1b]111\x07");
+            assert_eq!(e.color(ColorSlot::Background), before[1], "111 resets bg");
+        }
+
+        /// Every dynamic color answers a query, not just the background.
+        #[test]
+        fn conformance_every_dynamic_color_answers_a_query() {
+            let mut e = conformance_emu(10, 4, 100);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]10;#010203\x07\x1b]11;#040506\x07\x1b]12;#070809\x07");
+            let _ = e.take_pending_writes();
+
+            for (query, expected) in [
+                (&b"\x1b]10;?\x07"[..], "\x1b]10;rgb:0101/0202/0303\x07"),
+                (b"\x1b]11;?\x07", "\x1b]11;rgb:0404/0505/0606\x07"),
+                (b"\x1b]12;?\x07", "\x1b]12;rgb:0707/0808/0909\x07"),
+            ] {
+                e.process(query);
+                assert_eq!(
+                    String::from_utf8_lossy(&e.take_pending_writes()),
+                    expected,
+                    "querying {:?}",
+                    String::from_utf8_lossy(query)
+                );
+            }
+        }
+
+        /// `OSC 104` with no index resets the whole palette, and leaves the
+        /// three dynamic colors alone: they have their own resets.
+        #[test]
+        fn conformance_a_bare_palette_reset_spares_the_dynamic_colors() {
+            use $crate::profile::ColorSlot;
+            let mut e = conformance_emu(10, 4, 100);
+            let configured_red = e.color(ColorSlot::Indexed(1));
+
+            e.process(b"\x1b]4;1;#111111;200;#222222\x07\x1b]11;#333333\x07");
+            assert_eq!(e.color(ColorSlot::Indexed(1)), Rgb::new(0x11, 0x11, 0x11));
+            assert_eq!(e.color(ColorSlot::Indexed(200)), Rgb::new(0x22, 0x22, 0x22));
+
+            e.process(b"\x1b]104\x07");
+            assert_eq!(e.color(ColorSlot::Indexed(1)), configured_red);
+            assert_eq!(
+                e.color(ColorSlot::Background),
+                Rgb::new(0x33, 0x33, 0x33),
+                "a palette reset is not a background reset"
+            );
+        }
+
+        /// An unconfigured palette entry still answers, from the table the
+        /// specification defines for it.
+        #[test]
+        fn conformance_an_unconfigured_index_resolves_from_the_spec_table() {
+            use $crate::profile::Rgb;
+            let e = conformance_emu(10, 4, 100);
+            assert_eq!(
+                e.color($crate::profile::ColorSlot::Indexed(196)),
+                Rgb::new(255, 0, 0),
+                "index 196 is pure red in the xterm color cube"
+            );
+            assert_eq!(
+                e.color($crate::profile::ColorSlot::Indexed(232)),
+                Rgb::new(8, 8, 8),
+                "the gray ramp starts at 8"
+            );
+        }
+
+        /// A cell records which slot it chose, never a color, so what it
+        /// paints follows whatever that slot currently holds.
+        #[test]
+        fn conformance_a_cell_follows_its_slot() {
+            use $crate::profile::Rgb;
+            let mut e = conformance_emu(10, 4, 100);
+            e.process(b"\x1b[31mR");
+            let cell = e.viewable_rows()[0][0].clone();
+
+            let before = e.resolve(cell.fg, true);
+            e.process(b"\x1b]4;1;#0a0b0c\x07");
+            assert_eq!(
+                e.resolve(cell.fg, true),
+                Rgb::new(0x0a, 0x0b, 0x0c),
+                "recoloring the slot recolors the cell that chose it"
+            );
+            assert_ne!(before, e.resolve(cell.fg, true));
         }
 
         /// The alternate screen hides primary content and restores it on exit.

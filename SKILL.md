@@ -365,6 +365,12 @@ stable across profiles.
 The palette is what a screenshot paints **and** what `expect --fg/--bg` matches
 a `#rrggbb` against, so the two always agree.
 
+Programs can also set and query colours at runtime with `OSC 4/10/11/12` and
+reset them with `OSC 104/110/111/112`. A query is answered with the colour
+currently showing; a reset restores the profile's colour, which no escape
+sequence can change. Note that a program setting a colour also changes what a
+screenshot of that session looks like.
+
 ## Supported shells & integration
 
 `open --shell S` accepts: `bash`, `zsh`, `fish`, `powershell`, `pwsh`, `cmd`,

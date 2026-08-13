@@ -343,6 +343,111 @@ fn an_unknown_profile_is_rejected() {
     );
 }
 
+/// A program that asks the terminal what color it is gets an answer.
+///
+/// This is how tools decide whether they are on a light or a dark background.
+/// A terminal that stays silent leaves them blocked until they time out and
+/// guess, so this drives the whole path: daemon, emulator, and the reply on
+/// its way back up the PTY.
+///
+/// Unix only, because the probe has to put its own terminal in raw mode to
+/// read a reply that arrives without a newline and must not be echoed, and
+/// `termios` does not exist on Windows CPython. The reply itself is not
+/// platform specific: how it is formatted is covered by conformance cases
+/// that run against every backend, and the write that carries it to the child
+/// is the same `pty.write` every `type` and `submit` on Windows already uses.
+#[cfg(unix)]
+#[test]
+fn a_color_query_is_answered_over_the_pty() {
+    let sandbox = Sandbox::new("osc-query");
+    let probe = sandbox.home.join("probe.py");
+    std::fs::write(
+        &probe,
+        r#"
+import os, sys, termios, tty, select
+
+# Unbuffered reads: a buffered reader would take bytes off the fd that
+# select() then cannot see, and the reply would look truncated.
+def ask(fd, query):
+    os.write(1, query)
+    buf = b""
+    while select.select([fd], [], [], 2.0)[0]:
+        buf += os.read(fd, 64)
+        if buf.endswith(b"\x07"):
+            break
+    return buf.decode("utf8", "replace")
+
+fd = sys.stdin.fileno()
+old = termios.tcgetattr(fd)
+try:
+    tty.setraw(fd)
+    configured = ask(fd, b"\x1b]11;?\x07")
+    # Every dynamic colour, not just the background: a program that sets the
+    # foreground and cursor has to be answered about those too.
+    os.write(1, b"\x1b]10;#abcdef\x07\x1b]11;#654321\x07\x1b]12;#fedcba\x07")
+    fg = ask(fd, b"\x1b]10;?\x07")
+    overridden = ask(fd, b"\x1b]11;?\x07")
+    cursor = ask(fd, b"\x1b]12;?\x07")
+    os.write(1, b"\x1b]111\x07")
+    restored = ask(fd, b"\x1b]11;?\x07")
+finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+strip = lambda s: s.replace("\x1b", "").replace("\x07", "")
+print("\r\nRESULT %s %s %s %s %s\r" % (
+    strip(configured), strip(fg), strip(overridden), strip(cursor), strip(restored)))
+"#,
+    )
+    .expect("write probe");
+
+    // Wide enough that the report is one unwrapped line: `text` returns the
+    // grid, so a wrapped reply would be split across rows.
+    sandbox.ok(&["run", "--cols", "200", "--", "bash", "--norc"]);
+    sandbox.ok(&[
+        "submit",
+        &format!("python3 {}", probe.to_str().expect("utf-8 path")),
+    ]);
+    // Wait for the line this test reads, not for the command.
+    //
+    // The probe prints nothing until it is done: its queries go to the
+    // terminal, which answers them rather than echoing them, so the screen
+    // stays unchanged for as long as python takes to start. `bash --norc` has
+    // no shell integration, so `wait command` falls back to "the prompt came
+    // back and the screen is idle", and on a loaded machine an idle screen
+    // arrives long before the report does.
+    sandbox.ok(&["wait", "text", "RESULT", "--timeout", "30000"]);
+    let text = sandbox.ok(&["text", "--full"]);
+
+    let line = text
+        .lines()
+        .find(|l| l.contains("RESULT"))
+        .unwrap_or_else(|| panic!("the probe never reported: {text}"));
+
+    // The default profile's background is black, so the terminal reports it,
+    // then the color the program set, then the configured one again.
+    assert!(
+        line.contains("]11;rgb:0000/0000/0000"),
+        "the configured background should be reported: {line}"
+    );
+    assert!(
+        line.contains("]11;rgb:6565/4343/2121"),
+        "a set background should be reported back: {line}"
+    );
+    assert!(
+        line.contains("]10;rgb:abab/cdcd/efef"),
+        "a set foreground should be reported back: {line}"
+    );
+    assert!(
+        line.contains("]12;rgb:fefe/dcdc/baba"),
+        "a set cursor color should be reported back: {line}"
+    );
+    assert_eq!(
+        line.matches("]11;rgb:0000/0000/0000").count(),
+        2,
+        "a reset should restore the configured background: {line}"
+    );
+}
+
 #[test]
 fn state_reports_effective_timeouts() {
     let sandbox = Sandbox::new("state-timeouts");

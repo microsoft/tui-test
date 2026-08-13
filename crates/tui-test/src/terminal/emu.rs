@@ -10,7 +10,8 @@
 //! identical shell-integration behavior by construction rather than by
 //! reimplementation.
 
-use crate::terminal::cell::EmuCell;
+use crate::profile::{ColorSlot, Rgb};
+use crate::terminal::cell::{Color, EmuCell};
 
 /// A headless terminal emulator: bytes in, cell grid out.
 ///
@@ -48,4 +49,38 @@ pub trait Emulator: Send {
 
     /// Scrollback history followed by the visible screen.
     fn full_rows(&self) -> Vec<Vec<EmuCell>>;
+
+    /// The color a slot is currently showing.
+    ///
+    /// Programs move these with `OSC 4` (palette) and `OSC 10/11/12` (default
+    /// foreground, background, cursor), and put them back with `OSC 104` and
+    /// `OSC 110/111/112`. A slot nothing has overridden shows the color the
+    /// session's profile gives it, so a reset always has something to restore
+    /// and this always has an answer.
+    ///
+    /// Backends answer color *queries* themselves, through
+    /// [`Emulator::take_pending_writes`], because each one already parses the
+    /// sequence and knows which terminator the query used. This reports the
+    /// same colors, so a screenshot and `expect --fg/--bg` agree with what a
+    /// program was told.
+    ///
+    fn color(&self, slot: ColorSlot) -> Rgb;
+
+    /// Resolve a cell's color, where `None` is the terminal default.
+    ///
+    /// The grid records which slot a cell chose, never a color, so this is
+    /// where a cell becomes something to paint or compare. Provided rather
+    /// than required so every backend resolves a cell identically.
+    fn resolve(&self, color: Option<Color>, is_fg: bool) -> Rgb {
+        match color {
+            None => self.color(if is_fg {
+                ColorSlot::Foreground
+            } else {
+                ColorSlot::Background
+            }),
+            Some(Color::Named(n)) => self.color(ColorSlot::Indexed(n.index())),
+            Some(Color::Idx(i)) => self.color(ColorSlot::Indexed(i)),
+            Some(Color::Rgb(r, g, b)) => Rgb::new(r, g, b),
+        }
+    }
 }

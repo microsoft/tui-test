@@ -199,6 +199,43 @@ mod tests {
         }
     }
 
+    /// A snapshot records the palette *slot* a cell chose, never the color
+    /// that slot resolves to.
+    ///
+    /// This is what lets a saved baseline outlive a profile change: the same
+    /// screen recorded under two profiles that disagree about what red looks
+    /// like still produces the same snapshot, so recoloring a terminal does
+    /// not invalidate every snapshot in a suite.
+    #[test]
+    fn a_snapshot_records_the_slot_rather_than_the_color() {
+        let colored = EmuCell {
+            ch: "x".into(),
+            fg: Some(Color::from_index(1)),
+            ..EmuCell::blank()
+        };
+        let out = serialize(&[vec![colored]], 1, true, None);
+        assert!(
+            out.contains("\"fg\": 1"),
+            "the slot is recorded, not an rgb value: {out}"
+        );
+        assert!(
+            !out.contains('#'),
+            "a palette color must not be resolved into the snapshot: {out}"
+        );
+    }
+
+    /// A true-color cell names its own color, so that one *is* recorded
+    /// literally: no profile can change what `38;2;r;g;b` means.
+    #[test]
+    fn a_true_color_cell_records_its_own_value() {
+        let rgb = EmuCell {
+            ch: "x".into(),
+            fg: Some(Color::Rgb(0x11, 0x22, 0x33)),
+            ..EmuCell::blank()
+        };
+        assert!(serialize(&[vec![rgb]], 1, true, None).contains("#112233"));
+    }
+
     fn cell(s: &str) -> EmuCell {
         EmuCell {
             ch: s.into(),

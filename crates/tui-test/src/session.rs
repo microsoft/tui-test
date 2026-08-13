@@ -28,8 +28,6 @@ pub struct TermState {
 
 pub struct Session {
     pub shell: Option<Shell>,
-    /// Settings this session was opened with, fixed for its lifetime.
-    pub profile: Profile,
     pub cols: u16,
     pub rows: u16,
     /// Per-class timeout defaults for the lifetime of this session.
@@ -82,7 +80,7 @@ impl Session {
         };
 
         let state = Arc::new(Mutex::new(TermState {
-            emu: Box::new(AlacrittyEmu::new(cols, rows, profile.scrollback)),
+            emu: Box::new(AlacrittyEmu::new(cols, rows, &profile)),
             tracker: CommandTracker::new(),
             last_change: Instant::now(),
             awaiting_start: None,
@@ -153,7 +151,6 @@ impl Session {
 
         Ok(Session {
             shell,
-            profile,
             cols,
             rows,
             timeouts,

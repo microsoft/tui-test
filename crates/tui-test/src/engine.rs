@@ -1176,9 +1176,18 @@ fn expect_text(
         || {
             matched = match locator::find(&grid(session, full), &pattern, strict) {
                 Ok(Some(cells)) if !cells.is_empty() => {
-                    if let Some(error) =
-                        check_colors(&cells, &fg, &bg, not, &session.profile.colors)
-                    {
+                    if let Some(error) = check_colors(
+                        &cells,
+                        &fg,
+                        &bg,
+                        not,
+                        session
+                            .state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .emu
+                            .as_ref(),
+                    ) {
                         last_error = Some(error);
                         false
                     } else {
@@ -1219,7 +1228,7 @@ fn check_colors(
     fg: &Option<String>,
     bg: &Option<String>,
     not: bool,
-    colors: &crate::profile::Colors,
+    colors: &dyn crate::terminal::emu::Emulator,
 ) -> Option<String> {
     let want = !not;
     if let Some(spec) = fg {
@@ -1353,7 +1362,12 @@ fn screenshot(
             let svg = crate::render::svg::render_svg(
                 &rows,
                 session.cols,
-                &session.profile.colors,
+                session
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .emu
+                    .as_ref(),
                 title.as_deref(),
             );
             std::fs::write(&path, svg)
