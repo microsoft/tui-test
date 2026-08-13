@@ -51,8 +51,7 @@ All derive from `TuiTestError` and carry `kind` and `exitCode`. `waitX` and `exp
 
 `new TuiTest(session?, { timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle`, `screenshot`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectSnapshot`, `close`, and `closeQuiet`.
 
-`press()` and `keys()` follow Kitty keyboard flags negotiated by the child. Use
-tokens such as `"Repeat+Up"` and `"Release+a"` for repeat and release events.
+`press()` and `keys()` follow the Kitty keyboard protocol negotiated by the child, including `"Repeat+Up"` and `"Release+a"` events.
 
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 

@@ -215,7 +215,7 @@ pub enum Command {
     },
     /// Send a single key combo or Kitty event, e.g. `keys Release+a`.
     Keys {
-        /// Key combo or event to send, e.g. Control+a or Release+a.
+        /// Key combo or event to send, e.g. Ctrl+a or Release+a.
         combo: String,
     },
     /// Mouse control.

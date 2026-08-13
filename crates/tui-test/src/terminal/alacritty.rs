@@ -277,16 +277,96 @@ mod tests {
     crate::emulator_conformance_tests!(|c, r, s| Box::new(AlacrittyEmu::new(c, r, s)));
 
     #[test]
-    fn negotiates_and_reports_kitty_keyboard_modes() {
+    fn queries_pushes_and_pops_kitty_keyboard_modes() {
         let mut emu = AlacrittyEmu::new(10, 2, 100);
 
         emu.process(b"\x1b[?u");
         assert_eq!(emu.take_pending_writes(), b"\x1b[?0u");
 
-        emu.process(b"\x1b[>31u");
-        assert_eq!(emu.keyboard_mode(), KeyboardMode::all());
+        emu.process(b"\x1b[>3u");
+        assert_eq!(
+            emu.keyboard_mode(),
+            KeyboardMode::DISAMBIGUATE_ESC_CODES | KeyboardMode::REPORT_EVENT_TYPES
+        );
 
         emu.process(b"\x1b[?u");
-        assert_eq!(emu.take_pending_writes(), b"\x1b[?31u");
+        assert_eq!(emu.take_pending_writes(), b"\x1b[?3u");
+
+        emu.process(b"\x1b[>8u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_ALL_KEYS_AS_ESC);
+        emu.process(b"\x1b[<u");
+        assert_eq!(
+            emu.keyboard_mode(),
+            KeyboardMode::DISAMBIGUATE_ESC_CODES | KeyboardMode::REPORT_EVENT_TYPES
+        );
+        emu.process(b"\x1b[<u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::empty());
+    }
+
+    #[test]
+    fn sets_kitty_keyboard_modes_with_each_apply_behavior() {
+        let mut emu = AlacrittyEmu::new(10, 2, 100);
+
+        emu.process(b"\x1b[=1u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::DISAMBIGUATE_ESC_CODES);
+
+        emu.process(b"\x1b[=2;2u");
+        assert_eq!(
+            emu.keyboard_mode(),
+            KeyboardMode::DISAMBIGUATE_ESC_CODES | KeyboardMode::REPORT_EVENT_TYPES
+        );
+
+        emu.process(b"\x1b[=1;3u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_EVENT_TYPES);
+
+        emu.process(b"\x1b[=8u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_ALL_KEYS_AS_ESC);
+    }
+
+    #[test]
+    fn main_and_alternate_screens_keep_independent_keyboard_modes() {
+        let mut emu = AlacrittyEmu::new(10, 2, 100);
+
+        emu.process(b"\x1b[>1u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::DISAMBIGUATE_ESC_CODES);
+
+        emu.process(b"\x1b[?1049h");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::empty());
+        emu.process(b"\x1b[>2u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_EVENT_TYPES);
+
+        emu.process(b"\x1b[?1049l");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::DISAMBIGUATE_ESC_CODES);
+        emu.process(b"\x1b[?1049h");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_EVENT_TYPES);
+
+        emu.process(b"\x1b[<u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::empty());
+        emu.process(b"\x1b[?1049l");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::DISAMBIGUATE_ESC_CODES);
+    }
+
+    #[test]
+    fn key_encoding_follows_the_active_negotiated_mode() {
+        use crate::input::keys::token_to_seq_with_mode;
+
+        let mut emu = AlacrittyEmu::new(10, 2, 100);
+        emu.process(b"\x1b[>1u");
+        assert_eq!(
+            token_to_seq_with_mode("Ctrl+i", emu.keyboard_mode()).unwrap(),
+            "\x1b[105;5u"
+        );
+
+        emu.process(b"\x1b[<u");
+        assert_eq!(
+            token_to_seq_with_mode("Ctrl+i", emu.keyboard_mode()).unwrap(),
+            "\t"
+        );
+
+        emu.process(b"\x1b[>10u");
+        assert_eq!(
+            token_to_seq_with_mode("Repeat+a", emu.keyboard_mode()).unwrap(),
+            "\x1b[97;1:2u"
+        );
     }
 }

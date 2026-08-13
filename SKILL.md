@@ -90,9 +90,9 @@ without parsing text:
 | `mouse move\|down\|up\|drag\|scroll ...`                                   | Full mouse control (`--button` default 0=left, `scroll --amount` default 3). |
 
 Key input from `press` and `keys` automatically follows the Kitty keyboard
-protocol flags negotiated by the child application. Prefix a key with `Repeat+`
-or `Release+` to send those event types; without event reporting, repeats behave
-like presses and releases produce no input.
+protocol flags negotiated by the child application; modifiers are `Ctrl`, `Alt`,
+`Shift`, `Super`, `Hyper`, and `KittyMeta` (`Meta` aliases `Alt`), and events use
+`Repeat+` or `Release+`.
 
 ### PTY control
 
