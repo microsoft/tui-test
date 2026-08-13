@@ -251,6 +251,98 @@ fn a_session_timeout_default_applies_to_later_commands() {
     );
 }
 
+/// The color a screenshot paints is the color an assertion matches.
+///
+/// These came from two separate hardcoded tables that disagreed on every ANSI
+/// slot, so `expect --fg "#800000"` passed on a cell the screenshot painted
+/// `#e88388`. Both now resolve through the session profile, and this drives the
+/// whole path — daemon, renderer, assertion — rather than the resolver alone.
+#[test]
+fn a_screenshot_and_an_assertion_agree_on_a_color() {
+    let sandbox = Sandbox::new("palette-agree");
+    // Printed lowercase so the match is the output, not the echoed command.
+    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)""#;
+    sandbox.ok(&["run", "--cols", "44", "--", "bash", "--norc"]);
+    sandbox.ok(&["submit", print_red]);
+    sandbox.ok(&["wait", "command"]);
+
+    // The default profile is the VGA palette, so slot 1 is #800000.
+    sandbox.ok(&["expect", "text", "qrsx", "--fg", "#800000"]);
+
+    let svg = sandbox.home.join("shot.svg");
+    let path = svg.to_str().expect("utf-8 path");
+    sandbox.ok(&["screenshot", "--out", path]);
+    let drawing = std::fs::read_to_string(&svg).expect("read screenshot");
+    assert!(
+        drawing.contains("fill=\"#800000\""),
+        "the screenshot must paint the color the assertion matched"
+    );
+}
+
+/// A profile's palette drives both, so recoloring a slot moves the screenshot
+/// and the assertion together.
+#[test]
+fn a_custom_profile_recolors_screenshots_and_assertions_together() {
+    let sandbox = Sandbox::new("palette-profile");
+    let config = sandbox.home.join("custom.toml");
+    std::fs::write(&config, "[profiles.neon.colors]\nred = \"#ff00ff\"\n").expect("write config");
+    let config_path = config.to_str().expect("utf-8 path");
+
+    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)""#;
+    sandbox.ok(&[
+        "run",
+        "--config",
+        config_path,
+        "--profile",
+        "neon",
+        "--cols",
+        "44",
+        "--",
+        "bash",
+        "--norc",
+    ]);
+    sandbox.ok(&["submit", print_red]);
+    sandbox.ok(&["wait", "command"]);
+
+    sandbox.ok(&["expect", "text", "qrsx", "--fg", "#ff00ff"]);
+    let out = sandbox.run(&["expect", "text", "qrsx", "--fg", "#800000"]);
+    assert!(
+        !out.status.success(),
+        "the profile replaced the default red, so the default must no longer match"
+    );
+
+    let svg = sandbox.home.join("neon.svg");
+    let path = svg.to_str().expect("utf-8 path");
+    sandbox.ok(&["screenshot", "--out", path]);
+    let drawing = std::fs::read_to_string(&svg).expect("read screenshot");
+    assert!(
+        drawing.contains("fill=\"#ff00ff\""),
+        "the screenshot follows the profile too"
+    );
+}
+
+/// A profile that does not exist is an error naming the ones that do, rather
+/// than a session that silently ran with the defaults.
+#[test]
+fn an_unknown_profile_is_rejected() {
+    let sandbox = Sandbox::new("palette-unknown");
+    let config = sandbox.home.join("c.toml");
+    std::fs::write(&config, "[profiles.ci]\n").expect("write config");
+    let out = sandbox.run(&[
+        "open",
+        "--config",
+        config.to_str().expect("utf-8 path"),
+        "--profile",
+        "nope",
+    ]);
+    assert!(!out.status.success(), "an unknown profile must not open");
+    let msg = String::from_utf8_lossy(&out.stderr) + String::from_utf8_lossy(&out.stdout);
+    assert!(
+        msg.contains("ci"),
+        "the error should name the real profile: {msg}"
+    );
+}
+
 #[test]
 fn state_reports_effective_timeouts() {
     let sandbox = Sandbox::new("state-timeouts");

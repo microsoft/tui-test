@@ -11,7 +11,8 @@
 use std::fmt::Write;
 
 use super::nerd_font::NerdFont;
-use crate::terminal::cell::{truncate_to_columns, Attrs, Color, EmuCell};
+use crate::profile::{Colors, Rgb};
+use crate::terminal::cell::{truncate_to_columns, Attrs, EmuCell};
 
 const CELL_W: f32 = 10.0;
 const CELL_H: f32 = 21.0;
@@ -30,63 +31,13 @@ const DOTS_RIGHT: f32 = MARGIN_X + 5.0 + 2.0 * 20.0 + DOT_R;
 const FONT_STACK: &str =
     "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,'DejaVu Sans Mono',monospace";
 
-struct Theme {
-    palette: [(u8, u8, u8); 16],
-    default_fg: (u8, u8, u8),
-    default_bg: (u8, u8, u8),
+fn hex(c: Rgb) -> String {
+    c.to_hex()
 }
 
-impl Default for Theme {
-    fn default() -> Self {
-        Theme {
-            palette: [
-                (40, 45, 53),
-                (232, 131, 136),
-                (168, 204, 140),
-                (219, 171, 121),
-                (113, 190, 242),
-                (210, 144, 228),
-                (102, 194, 205),
-                (185, 191, 202),
-                (111, 119, 131),
-                (232, 131, 136),
-                (168, 204, 140),
-                (219, 171, 121),
-                (115, 190, 243),
-                (210, 144, 227),
-                (102, 194, 205),
-                (255, 255, 255),
-            ],
-            default_fg: (185, 191, 202),
-            default_bg: (40, 45, 53),
-        }
-    }
-}
-
-impl Theme {
-    fn resolve(&self, color: Option<Color>, is_fg: bool) -> (u8, u8, u8) {
-        match color {
-            None => {
-                if is_fg {
-                    self.default_fg
-                } else {
-                    self.default_bg
-                }
-            }
-            Some(Color::Named(n)) => self.palette[n.index() as usize],
-            Some(Color::Idx(i)) => crate::assert::color::ansi256_to_rgb(i),
-            Some(Color::Rgb(r, g, b)) => (r, g, b),
-        }
-    }
-}
-
-fn hex((r, g, b): (u8, u8, u8)) -> String {
-    format!("#{r:02x}{g:02x}{b:02x}")
-}
-
-fn dim((r, g, b): (u8, u8, u8)) -> (u8, u8, u8) {
+fn dim(c: Rgb) -> Rgb {
     let s = |v: u8| (v as f32 * 0.6) as u8;
-    (s(r), s(g), s(b))
+    Rgb::new(s(c.r), s(c.g), s(c.b))
 }
 
 static BLANK: EmuCell = EmuCell::blank();
@@ -96,9 +47,9 @@ fn cell_at(row: &[EmuCell], x: usize) -> &EmuCell {
 }
 
 /// Resolved background color for a cell (honoring inverse).
-fn bg_of(cell: &EmuCell, theme: &Theme) -> (u8, u8, u8) {
-    let bg = theme.resolve(cell.bg, false);
-    let fg = theme.resolve(cell.fg, true);
+fn bg_of(cell: &EmuCell, colors: &Colors) -> Rgb {
+    let bg = colors.resolve(cell.bg, false);
+    let fg = colors.resolve(cell.fg, true);
     if cell.has(Attrs::INVERSE) {
         fg
     } else {
@@ -108,7 +59,7 @@ fn bg_of(cell: &EmuCell, theme: &Theme) -> (u8, u8, u8) {
 
 #[derive(PartialEq)]
 struct Style {
-    fg: (u8, u8, u8),
+    fg: Rgb,
     bold: bool,
     italic: bool,
     underline: bool,
@@ -116,9 +67,9 @@ struct Style {
     invisible: bool,
 }
 
-fn style_of(cell: &EmuCell, theme: &Theme) -> Style {
-    let mut fg = theme.resolve(cell.fg, true);
-    let bg = theme.resolve(cell.bg, false);
+fn style_of(cell: &EmuCell, colors: &Colors) -> Style {
+    let mut fg = colors.resolve(cell.fg, true);
+    let bg = colors.resolve(cell.bg, false);
     if cell.has(Attrs::INVERSE) {
         fg = bg;
     }
@@ -163,7 +114,7 @@ fn run_text(row: &[EmuCell], start: usize, end: usize) -> String {
 /// computed width would distort it. It is instead truncated to what fits, and
 /// kept clear of the traffic lights by reserving the same margin on both
 /// sides, which also keeps it centred on the space that remains.
-fn write_title(out: &mut String, title: &str, width: f32, theme: &Theme) {
+fn write_title(out: &mut String, title: &str, width: f32, colors: &Colors) {
     const GAP: f32 = 8.0;
     let available = width - 2.0 * (DOTS_RIGHT + GAP);
     // A monospace advance, scaled from the grid font's known cell width.
@@ -185,7 +136,7 @@ fn write_title(out: &mut String, title: &str, width: f32, theme: &Theme) {
         baseline = HEADER_H / 2.0 + TITLE_FONT_SIZE * 0.35,
         // The dim grey of the palette, so the title reads as chrome next to
         // the terminal's own foreground.
-        fill = hex(theme.palette[8]),
+        fill = hex(colors.rgb(8)),
         esc = escape(&shown),
     );
 }
@@ -194,8 +145,12 @@ fn write_title(out: &mut String, title: &str, width: f32, theme: &Theme) {
 ///
 /// `title` is the window title a program set, drawn in the title bar. `None`
 /// leaves the bar bare, exactly as it was before titles were tracked.
-pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, title: Option<&str>) -> String {
-    let theme = Theme::default();
+pub fn render_svg(
+    rows: &[Vec<EmuCell>],
+    cols: u16,
+    colors: &Colors,
+    title: Option<&str>,
+) -> String {
     let nerd_font = NerdFont::new(rows, FONT_SIZE);
     let cols = cols as usize;
     let x0 = MARGIN_X;
@@ -212,7 +167,7 @@ pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, title: Option<&str>) -> Stri
     let _ = write!(
         out,
         r#"<rect width="{width:.0}" height="{height:.0}" rx="8" fill="{}"/>"#,
-        hex(theme.default_bg)
+        hex(colors.background)
     );
     for (i, dot) in ["#ff5f56", "#ffbd2e", "#27c93f"].iter().enumerate() {
         let cx = MARGIN_X + 5.0 + i as f32 * 20.0;
@@ -223,18 +178,18 @@ pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, title: Option<&str>) -> Stri
         );
     }
     if let Some(title) = title {
-        write_title(&mut out, title, width, &theme);
+        write_title(&mut out, title, width, colors);
     }
 
     for (y, row) in rows.iter().enumerate() {
         let mut x = 0;
         while x < cols {
-            let bg = bg_of(cell_at(row, x), &theme);
+            let bg = bg_of(cell_at(row, x), colors);
             let mut run = 1;
-            while x + run < cols && bg_of(cell_at(row, x + run), &theme) == bg {
+            while x + run < cols && bg_of(cell_at(row, x + run), colors) == bg {
                 run += 1;
             }
-            if bg != theme.default_bg {
+            if bg != colors.background {
                 let rx = x0 + x as f32 * CELL_W;
                 let ry = y0 + y as f32 * CELL_H;
                 let rw = run as f32 * CELL_W;
@@ -252,9 +207,9 @@ pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, title: Option<&str>) -> Stri
         let baseline = y0 + y as f32 * CELL_H + FONT_BASELINE;
         let mut x = 0;
         while x < cols {
-            let style = style_of(cell_at(row, x), &theme);
+            let style = style_of(cell_at(row, x), colors);
             let mut run = 1;
-            while x + run < cols && style_of(cell_at(row, x + run), &theme) == style {
+            while x + run < cols && style_of(cell_at(row, x + run), colors) == style {
                 run += 1;
             }
             if !style.invisible {
@@ -311,6 +266,7 @@ pub fn render_svg(rows: &[Vec<EmuCell>], cols: u16, title: Option<&str>) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::cell::Color;
 
     fn cell(ch: &str, fg: Option<Color>, bg: Option<Color>) -> EmuCell {
         EmuCell {
@@ -327,11 +283,14 @@ mod tests {
             cell("h", Some(Color::from_index(1)), None),
             cell("i", Some(Color::from_index(1)), None),
         ]];
-        let svg = render_svg(&rows, 2, None);
+        let svg = render_svg(&rows, 2, &Colors::default(), None);
         assert!(svg.starts_with("<svg"));
         assert!(svg.ends_with("</svg>"));
         assert!(svg.contains("textLength"));
-        assert!(svg.contains(&hex((232, 131, 136))));
+        assert!(
+            svg.contains(&hex(Colors::default().rgb(1))),
+            "slot 1 is painted with the profile color"
+        );
         assert!(svg.contains(">hi</text>"));
         assert!(!svg.contains("<defs>"));
         assert!(!svg.contains("<use"));
@@ -339,7 +298,7 @@ mod tests {
 
     #[test]
     fn emits_window_chrome() {
-        let svg = render_svg(&[vec![cell(" ", None, None)]], 1, None);
+        let svg = render_svg(&[vec![cell(" ", None, None)]], 1, &Colors::default(), None);
         assert!(svg.contains("<circle"));
         assert!(svg.contains("#ff5f56"));
         assert!(svg.contains("#ffbd2e"));
@@ -348,7 +307,7 @@ mod tests {
 
     #[test]
     fn centers_the_text_font_box_in_each_cell() {
-        let svg = render_svg(&[vec![cell("x", None, None)]], 1, None);
+        let svg = render_svg(&[vec![cell("x", None, None)]], 1, &Colors::default(), None);
         let expected_baseline = HEADER_H + FONT_BASELINE;
         assert!(svg.contains(&format!(r#"y="{expected_baseline:.2}""#)));
     }
@@ -356,7 +315,7 @@ mod tests {
     #[test]
     fn escapes_markup_characters() {
         let rows = vec![vec![cell("<", None, None)]];
-        let svg = render_svg(&rows, 1, None);
+        let svg = render_svg(&rows, 1, &Colors::default(), None);
         assert!(svg.contains("&lt;"));
         assert!(!svg.contains("><</text>"));
     }
@@ -364,8 +323,11 @@ mod tests {
     #[test]
     fn background_run_emitted_for_non_default_bg() {
         let rows = vec![vec![cell(" ", None, Some(Color::from_index(4)))]];
-        let svg = render_svg(&rows, 1, None);
-        assert!(svg.contains(&hex((113, 190, 242))));
+        let svg = render_svg(&rows, 1, &Colors::default(), None);
+        assert!(
+            svg.contains(&hex(Colors::default().rgb(4))),
+            "slot 4 is painted with the profile color"
+        );
     }
 
     #[test]
@@ -376,7 +338,7 @@ mod tests {
             cell(glyph, None, None),
             cell("b", None, None),
         ]];
-        let svg = render_svg(&rows, 3, None);
+        let svg = render_svg(&rows, 3, &Colors::default(), None);
 
         assert!(svg.contains(r#"<path id="nf-f115" d=""#));
         assert!(svg.contains(r##"<use href="#nf-f115""##));
@@ -391,6 +353,7 @@ mod tests {
         let svg = render_svg(
             &[vec![cell(glyph, None, None), cell(glyph, None, None)]],
             2,
+            &Colors::default(),
             None,
         );
 
@@ -401,7 +364,12 @@ mod tests {
     #[test]
     fn leaves_unknown_private_use_glyphs_as_text() {
         let glyph = "\u{10fffd}";
-        let svg = render_svg(&[vec![cell(glyph, None, None)]], 1, None);
+        let svg = render_svg(
+            &[vec![cell(glyph, None, None)]],
+            1,
+            &Colors::default(),
+            None,
+        );
 
         assert!(svg.contains(glyph));
         assert!(!svg.contains("<defs>"));
@@ -414,8 +382,8 @@ mod tests {
     #[test]
     fn draws_the_window_title_centred_in_the_bar() {
         let rows = vec![vec![cell("x", None, None); 40]];
-        let bare = render_svg(&rows, 40, None);
-        let titled = render_svg(&rows, 40, Some("vim: notes.md"));
+        let bare = render_svg(&rows, 40, &Colors::default(), None);
+        let titled = render_svg(&rows, 40, &Colors::default(), Some("vim: notes.md"));
 
         assert!(
             !bare.contains("text-anchor=\"middle\""),
@@ -438,7 +406,7 @@ mod tests {
     fn truncates_a_title_that_does_not_fit() {
         let rows = vec![vec![cell("x", None, None); 20]];
         let long = "a-very-long-window-title-that-cannot-possibly-fit";
-        let svg = render_svg(&rows, 20, Some(long));
+        let svg = render_svg(&rows, 20, &Colors::default(), Some(long));
 
         assert!(!svg.contains(long), "the full title cannot have been drawn");
         let drawn = svg
@@ -459,7 +427,7 @@ mod tests {
     #[test]
     fn budgets_a_wide_glyph_title_by_column() {
         let rows = vec![vec![cell("x", None, None); 24]];
-        let svg = render_svg(&rows, 24, Some(&"你".repeat(40)));
+        let svg = render_svg(&rows, 24, &Colors::default(), Some(&"你".repeat(40)));
         let drawn = svg
             .split("text-anchor=\"middle\" xml:space=\"preserve\">")
             .nth(1)
@@ -487,7 +455,12 @@ mod tests {
     #[test]
     fn escapes_markup_in_the_title() {
         let rows = vec![vec![cell("x", None, None); 40]];
-        let svg = render_svg(&rows, 40, Some("</text><script>x</script>"));
+        let svg = render_svg(
+            &rows,
+            40,
+            &Colors::default(),
+            Some("</text><script>x</script>"),
+        );
 
         assert!(!svg.contains("<script>"), "no injected element: {svg}");
         assert!(
