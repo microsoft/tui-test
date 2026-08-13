@@ -2,9 +2,12 @@ use std::collections::BTreeSet;
 
 use tiny_skia::Pixmap;
 
+use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{EmuCell, CONTINUATION};
+use crate::terminal::emu::CursorShape;
 
 use super::svg;
+use super::svg::RenderColors;
 
 mod draw;
 mod font;
@@ -14,6 +17,29 @@ use draw::{
     is_default_ignorable, unpremultiply, unsupported_grapheme,
 };
 use font::{FontSystem, GlyphKey};
+
+struct RecordingColors(Profile);
+
+impl Default for RecordingColors {
+    fn default() -> Self {
+        Self(Profile::default())
+    }
+}
+
+impl RenderColors for RecordingColors {
+    fn color(&self, slot: ColorSlot) -> Rgb {
+        match slot {
+            ColorSlot::Indexed(index) => self.0.colors.rgb(index),
+            ColorSlot::Foreground => self.0.colors.foreground,
+            ColorSlot::Background => self.0.colors.background,
+            ColorSlot::Cursor => self.0.colors.cursor,
+        }
+    }
+
+    fn cursor_shape(&self) -> CursorShape {
+        CursorShape::Block
+    }
+}
 
 #[derive(Debug)]
 pub struct RgbaFrame {
@@ -85,7 +111,7 @@ impl FrameRenderer for GridRenderer {
         }
 
         let scale = self.scale as f32;
-        let theme = svg::Theme::default();
+        let colors = RecordingColors::default();
         self.pixmap.fill(tiny_skia::Color::from_rgba8(0, 0, 0, 0));
         fill_rounded_rect(
             &mut self.pixmap,
@@ -94,9 +120,13 @@ impl FrameRenderer for GridRenderer {
             self.width as f32,
             self.height as f32,
             8.0 * scale,
-            theme.default_bg,
+            colors.resolve(None, false),
         );
-        for (index, color) in [(255, 95, 86), (255, 189, 46), (39, 201, 63)]
+        for (index, color) in [
+            Rgb::new(255, 95, 86),
+            Rgb::new(255, 189, 46),
+            Rgb::new(39, 201, 63),
+        ]
             .into_iter()
             .enumerate()
         {
@@ -109,8 +139,8 @@ impl FrameRenderer for GridRenderer {
         for (y, row) in grid.iter().enumerate() {
             for x in 0..usize::from(cols) {
                 let cell = row.get(x).unwrap_or(&blank);
-                let background = svg::bg_of(cell, &theme);
-                if background != theme.default_bg {
+                let background = svg::bg_of(cell, &colors);
+                if background != colors.resolve(None, false) {
                     fill_rect(
                         &mut self.pixmap,
                         (svg::MARGIN_X + x as f32 * svg::CELL_W) * scale,
@@ -131,7 +161,7 @@ impl FrameRenderer for GridRenderer {
                 if cell.ch.as_str() == CONTINUATION {
                     continue;
                 }
-                let style = svg::style_of(cell, &theme);
+                let style = svg::style_of(cell, &colors);
                 if style.invisible {
                     continue;
                 }
