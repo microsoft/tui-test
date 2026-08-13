@@ -343,6 +343,29 @@ fn an_unknown_profile_is_rejected() {
     );
 }
 
+#[test]
+fn a_missing_environment_config_is_rejected() {
+    let sandbox = Sandbox::new("palette-env-missing");
+    let missing = sandbox.home.join("missing.toml");
+    let out = Command::new(BIN)
+        .args(["--session", &sandbox.session, "open"])
+        .env("TUI_TEST_HOME", &sandbox.home)
+        .env("TUI_TEST_CONFIG", &missing)
+        .output()
+        .expect("spawn tui-test");
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "explicit config is a usage error"
+    );
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("missing.toml"),
+        "the missing override should be named: {message}"
+    );
+}
+
 /// A program that asks the terminal what color it is gets an answer.
 ///
 /// This is how tools decide whether they are on a light or a dark background.

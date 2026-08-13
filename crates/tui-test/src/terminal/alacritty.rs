@@ -3,6 +3,7 @@
 //! proxy that queues the terminal's replies so the reader can forward them
 //! back to the PTY.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener};
@@ -123,10 +124,9 @@ type ReplyFormat = Arc<dyn Fn(AlacRgb) -> String + Send + Sync>;
 
 /// One thing the terminal wants to say back to the PTY.
 ///
-/// A color query cannot be answered where it arrives: the color lives in the
-/// terminal's own palette, and this listener is constructed before the
-/// terminal it listens to. It is parked as a [`Reply::Color`] and resolved by
-/// [`AlacrittyEmu::answer_queries`] once `process` returns.
+/// A color query cannot be answered inside the listener: the color lives in
+/// the terminal that owns this listener. It is parked as a [`Reply::Color`]
+/// until `process` regains access to the terminal at the query boundary.
 enum Reply {
     Bytes(Vec<u8>),
     Color(usize, ReplyFormat),
@@ -145,28 +145,37 @@ enum Reply {
 struct CaptureProxy {
     pending: Arc<Mutex<Vec<Reply>>>,
     title: Arc<Mutex<Option<String>>>,
+    color_query_pending: Arc<AtomicBool>,
 }
 
 impl EventListener for CaptureProxy {
     fn send_event(&self, ev: Event) {
-        let reply = match ev {
-            Event::PtyWrite(bytes) => Reply::Bytes(bytes.as_bytes().to_vec()),
-            Event::ColorRequest(slot, format) => Reply::Color(slot, format),
+        match ev {
+            Event::PtyWrite(bytes) => {
+                self.push_reply(Reply::Bytes(bytes.as_bytes().to_vec()), false)
+            }
+            Event::ColorRequest(slot, format) => self.push_reply(Reply::Color(slot, format), true),
             // `OSC 0` and `OSC 2` both arrive here, and so does a pop of the
             // title stack (`CSI 23 t`), which alacritty implements by setting
             // the title it popped. An empty payload means the same as a reset:
             // the program is asking for no title rather than for a blank one.
-            Event::Title(title) => return self.set_title((!title.is_empty()).then_some(title)),
-            Event::ResetTitle => return self.set_title(None),
-            _ => return,
-        };
-        if let Ok(mut queue) = self.pending.lock() {
-            queue.push(reply);
+            Event::Title(title) => self.set_title((!title.is_empty()).then_some(title)),
+            Event::ResetTitle => self.set_title(None),
+            _ => {}
         }
     }
 }
 
 impl CaptureProxy {
+    fn push_reply(&self, reply: Reply, color_query: bool) {
+        if let Ok(mut queue) = self.pending.lock() {
+            queue.push(reply);
+            if color_query {
+                self.color_query_pending.store(true, Ordering::Release);
+            }
+        }
+    }
+
     fn set_title(&self, title: Option<String>) {
         if let Ok(mut current) = self.title.lock() {
             *current = title;
@@ -181,6 +190,7 @@ pub struct AlacrittyEmu {
     rows: u16,
     pending: Arc<Mutex<Vec<Reply>>>,
     title: Arc<Mutex<Option<String>>>,
+    color_query_pending: Arc<AtomicBool>,
     /// The settings this session was opened with. A program can shadow the
     /// colors at runtime but never reach them, so a reset always has a value
     /// to restore.
@@ -196,9 +206,11 @@ impl AlacrittyEmu {
         };
         let pending: Arc<Mutex<Vec<Reply>>> = Arc::default();
         let title: Arc<Mutex<Option<String>>> = Arc::default();
+        let color_query_pending = Arc::new(AtomicBool::new(false));
         let proxy = CaptureProxy {
             pending: pending.clone(),
             title: title.clone(),
+            color_query_pending: color_query_pending.clone(),
         };
         AlacrittyEmu {
             term: Term::new(alac_config, &size, proxy),
@@ -207,17 +219,18 @@ impl AlacrittyEmu {
             rows,
             pending,
             title,
+            color_query_pending,
             profile: *profile,
         }
     }
 
-    /// Resolve any color queries parked while the last chunk was parsed.
+    /// Resolve any color queries parked at the current parser position.
     ///
     /// Each answer replaces the query where it sits in the queue, so replies
-    /// leave in the order the program asked for them. Resolving them at the
-    /// end of the chunk rather than where they arrived is what makes this
-    /// necessary: the palette lives in the terminal, which the listener that
-    /// received the query cannot reach.
+    /// leave in the order the program asked for them. The listener cannot read
+    /// the terminal palette itself, so `process` calls this immediately after
+    /// the byte that completed the query and before parsing any later color
+    /// change from the same PTY chunk.
     fn answer_queries(&mut self) {
         let parked: Vec<Reply> = match self.pending.lock() {
             Ok(mut queue) => {
@@ -274,10 +287,27 @@ impl AlacrittyEmu {
 
 impl Emulator for AlacrittyEmu {
     fn process(&mut self, bytes: &[u8]) {
-        self.processor.advance(&mut self.term, bytes);
-        // Queries are answered here rather than in the listener because the
-        // terminal holding the palette is only in scope once parsing is done.
-        self.answer_queries();
+        let mut start = 0;
+        for (index, byte) in bytes.iter().enumerate() {
+            // OSC replies are emitted when BEL, ST (ESC \), or C1 ST closes
+            // the sequence. A backslash is also a cheap split point when it
+            // is ordinary text, and catches ST split across two PTY reads.
+            if !matches!(*byte, b'\x07' | b'\\' | b'\x9c') {
+                continue;
+            }
+            self.processor
+                .advance(&mut self.term, &bytes[start..=index]);
+            if self.color_query_pending.swap(false, Ordering::AcqRel) {
+                self.answer_queries();
+            }
+            start = index + 1;
+        }
+        if start < bytes.len() {
+            self.processor.advance(&mut self.term, &bytes[start..]);
+            if self.color_query_pending.swap(false, Ordering::AcqRel) {
+                self.answer_queries();
+            }
+        }
     }
 
     fn take_pending_writes(&mut self) -> Vec<u8> {
@@ -289,8 +319,8 @@ impl Emulator for AlacrittyEmu {
             .into_iter()
             .flat_map(|reply| match reply {
                 Reply::Bytes(bytes) => bytes,
-                // `answer_queries` runs at the end of every chunk, so a query
-                // is always resolved before anything can drain it.
+                // `answer_queries` runs at every query boundary, so a query is
+                // always resolved before anything can drain it.
                 Reply::Color(..) => Vec::new(),
             })
             .collect()

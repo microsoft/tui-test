@@ -644,6 +644,36 @@ macro_rules! emulator_conformance_tests {
             );
         }
 
+        /// A query observes the color at the point where it appears in the
+        /// byte stream, not a set or reset that follows in the same read.
+        #[test]
+        fn conformance_color_queries_are_resolved_at_the_query_boundary() {
+            use $crate::profile::{ColorSlot, Rgb};
+            let mut e = conformance_emu(10, 4, 100);
+            let background = ColorSlot::Background;
+            let configured = e.color(background);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]11;?\x07\x1b]11;#123456\x07");
+            assert_eq!(
+                String::from_utf8_lossy(&e.take_pending_writes()),
+                format!(
+                    "\x1b]11;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}\x07",
+                    configured.r, configured.g, configured.b
+                ),
+                "the later set must not change the preceding answer"
+            );
+            assert_eq!(e.color(background), Rgb::new(0x12, 0x34, 0x56));
+
+            e.process(b"\x1b]11;?\x07\x1b]111\x07");
+            assert_eq!(
+                String::from_utf8_lossy(&e.take_pending_writes()),
+                "\x1b]11;rgb:1212/3434/5656\x07",
+                "the later reset must not change the preceding answer"
+            );
+            assert_eq!(e.color(background), configured);
+        }
+
         /// A reply uses the terminator the query used. A program that reads
         /// until the terminator it sent would otherwise wait for one that
         /// never comes.

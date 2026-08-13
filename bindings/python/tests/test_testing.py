@@ -3,6 +3,7 @@ import unittest
 from unittest import mock
 
 from tui_test import testing
+from tui_test.types import Colors, Profile
 
 
 def run(coro):
@@ -139,11 +140,17 @@ class OptionPlumbingTests(unittest.TestCase):
             async def close_quiet(self):
                 pass
 
-        testing.set_terminal_defaults(cols=100, artifacts={"dir": "from-defaults"})
+        profile = Profile(colors=Colors(red="#010203"))
+        testing.set_terminal_defaults(
+            cols=100,
+            profile=profile,
+            artifacts={"dir": "from-defaults"},
+        )
         with mock.patch.object(testing, "TuiTest", FakeTuiTest), \
              mock.patch.object(testing, "track_terminal"):
             run(testing.create_terminal(cols=42))
         self.assertEqual(created[0].open_kwargs["cols"], 42)
+        self.assertEqual(created[0].kwargs["profile"], profile)
         self.assertEqual(created[0].kwargs["artifacts"], {"dir": "from-defaults"})
 
     def test_unknown_create_option_is_rejected(self):

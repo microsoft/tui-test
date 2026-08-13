@@ -6,6 +6,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use napi::bindgen_prelude::{spawn_blocking, Buffer, Either};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
+use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::shell::Shell as CoreShell;
 use tui_test::{
     global_registry, Cell as CoreCell, CellColor, Cursor as CoreCursor,
@@ -65,6 +66,8 @@ pub struct OpenOptions {
     pub cwd: Option<String>,
     pub env: Option<Vec<(String, String)>>,
     pub wait_ready: Option<bool>,
+    pub profile_scrollback: Option<f64>,
+    pub profile_colors: Option<Vec<(String, String)>>,
     pub timeouts: Option<Timeouts>,
 }
 
@@ -77,6 +80,8 @@ pub struct RunOptions {
     pub cwd: Option<String>,
     pub env: Option<Vec<(String, String)>>,
     pub wait_ready: Option<bool>,
+    pub profile_scrollback: Option<f64>,
+    pub profile_colors: Option<Vec<(String, String)>>,
     pub timeouts: Option<Timeouts>,
 }
 
@@ -449,12 +454,36 @@ fn core_timeouts(value: Option<Timeouts>) -> std::result::Result<CoreTimeouts, T
     })
 }
 
+fn core_profile(
+    scrollback: Option<f64>,
+    colors: &[(String, String)],
+) -> std::result::Result<CoreProfile, TuiTestError> {
+    let mut profile = CoreProfile::default();
+    if let Some(scrollback) = scrollback {
+        profile.scrollback = integer(scrollback, "profile.scrollback", usize::MAX as u64)? as usize;
+    }
+    for (name, value) in colors {
+        let value = Rgb::parse(value)
+            .map_err(|error| TuiTestError::usage(format!("profile.colors.{name}: {error}")))?;
+        if !profile.colors.set_named(name, value) {
+            return Err(TuiTestError::usage(format!(
+                "unknown profile color {name:?}"
+            )));
+        }
+    }
+    Ok(profile)
+}
+
 fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptions, TuiTestError> {
     let Some(value) = value else {
         return Ok(CoreOpenOptions::default());
     };
+    let profile = core_profile(
+        value.profile_scrollback,
+        value.profile_colors.as_deref().unwrap_or_default(),
+    )?;
     Ok(CoreOpenOptions {
-        profile: Default::default(),
+        profile,
         shell: value.shell.map(Into::into),
         cols: match value.cols {
             Some(cols) => u16_value(cols, "cols")?,
@@ -475,8 +504,12 @@ fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, TuiTest
     if value.program.is_empty() {
         return Err(TuiTestError::usage("program must not be empty"));
     }
+    let profile = core_profile(
+        value.profile_scrollback,
+        value.profile_colors.as_deref().unwrap_or_default(),
+    )?;
     Ok(CoreRunOptions {
-        profile: Default::default(),
+        profile,
         program: value.program,
         args: value.args.unwrap_or_default(),
         cols: match value.cols {

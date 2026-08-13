@@ -4,12 +4,13 @@ import { uniqueSession } from "../ephemeral.js";
 import type {
   ArtifactOptions,
   ClientOptions,
+  Profile,
   Shell,
   SpawnOptions,
   Timeouts,
 } from "../types.js";
 
-export type { Shell } from "../types.js";
+export type { Profile, Shell } from "../types.js";
 export { TuiTest } from "../client.js";
 
 export interface CreateTerminalOptions {
@@ -24,6 +25,7 @@ export interface CreateTerminalOptions {
   retries?: number;
   waitReady?: boolean;
   timeouts?: Timeouts;
+  profile?: Profile;
   artifacts?: ArtifactOptions;
 }
 
@@ -73,7 +75,7 @@ export function trackedCount(): number {
 
 function clientOptions(opts: CreateTerminalOptions): ClientOptions {
   const client: ClientOptions = {};
-  for (const key of ["timeouts", "artifacts"] as const) {
+  for (const key of ["timeouts", "profile", "artifacts"] as const) {
     const value = opts[key];
     if (value !== undefined) {
       Object.assign(client, { [key]: value });

@@ -9,6 +9,7 @@ import {
 } from "../dist/index.js";
 import {
   envPairs,
+  profilePayload,
   resolveTimeout,
   timeoutsPayload,
 } from "../dist/config.js";
@@ -99,6 +100,19 @@ test("envPairs coerces records and preserves pair arrays", () => {
   assert.deepEqual(envPairs(), []);
 });
 
+test("profilePayload validates profile and color fields", () => {
+  assert.deepEqual(profilePayload({ scrollback: 50, colors: { red: "#010203" } }), {
+    scrollback: 50,
+    colors: [["red", "#010203"]],
+  });
+  assert.throws(() => profilePayload({ scrollbacks: 50 }), /scrollbacks/);
+  assert.throws(
+    () => profilePayload({ colors: { chartreuse: "#010203" } }),
+    /chartreuse/,
+  );
+  assert.throws(() => profilePayload({ colors: { red: 123 } }), /must be a string/);
+});
+
 test("unknown timeout classes are rejected before native dispatch", async () => {
   assert.throws(() => timeoutsPayload({ comand: 100 }), /comand/);
   assert.throws(() => new TuiTest("s", { timeouts: { txt: 100 } }), /txt/);
@@ -121,6 +135,32 @@ test("session timeout defaults are visible in typed state", async () => {
       exit: 4567,
       ready: 5678,
     });
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("constructor and per-run profile objects recolor the terminal", async () => {
+  const su = new TuiTest(uniqueSession("typed-profile"), {
+    profile: { colors: { red: "#010203" } },
+  });
+  const argsFor = (marker) =>
+    typeof globalThis.Deno === "undefined"
+      ? ["-e", `process.stdout.write("\\u001b[31m${marker}\\u001b[0m")`]
+      : [
+          "eval",
+          `Deno.stdout.writeSync(new TextEncoder().encode("\\u001b[31m${marker}\\u001b[0m"))`,
+        ];
+  try {
+    await su.run(process.execPath, argsFor("constructor-profile"));
+    await su.waitText("constructor-profile", { timeout: 5000 });
+    await su.expectText("constructor-profile", { fg: "#010203" });
+
+    await su.run(process.execPath, argsFor("call-profile"), {
+      profile: { colors: { red: "#040506" } },
+    });
+    await su.waitText("call-profile", { timeout: 5000 });
+    await su.expectText("call-profile", { fg: "#040506" });
   } finally {
     await su.closeQuiet();
   }

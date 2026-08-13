@@ -54,11 +54,29 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 ## API
 
-`TuiTest(session="default", *, timeouts=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title`, `screenshot`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
+`TuiTest(session="default", *, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title`, `screenshot`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 
-`open()` and `run()` accept `wait_ready=`, `retries=`, and `timeouts=`. The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`; `timeouts=` sets session defaults, the constructor takes the same `Timeouts` (or a dict) as a client-wide default. Unknown class names raise.
+`open()` and `run()` accept `wait_ready=`, `retries=`, `profile=`, and
+`timeouts=`. The constructor also accepts `profile=` as the default for later
+opens and runs. Profiles are partial; omitted fields use the built-in defaults:
+
+```python
+from tui_test import Colors, Profile, TuiTest
+
+terminal = TuiTest(
+    profile=Profile(
+        scrollback=500,
+        colors=Colors(red="#ff0000"),
+    )
+)
+```
+
+Mappings with the same shape are also accepted. The timeout classes are
+`text`, `idle`, `command`, `exit`, and `ready`; `timeouts=` sets session
+defaults, and the constructor takes the same `Timeouts` (or a dict) as a
+client-wide default. Unknown fields raise.
 
 `TuiTest.ephemeral(prefix=None, **kwargs)` binds a client to a unique,
 process-local session name. `artifacts={"dir": ..., "on_failure": ...}`
@@ -76,7 +94,7 @@ async def test_echo():
         await t.expect_text("hi")
 ```
 
-Each terminal is uniquely named, so parallel workers don't collide. `set_terminal_defaults(...)` sets suite-wide options (`timeouts`, `artifacts`, ...).
+Each terminal is uniquely named, so parallel workers don't collide. `set_terminal_defaults(...)` sets suite-wide options (`profile`, `timeouts`, `artifacts`, ...).
 
 ## Cancellation and recordings
 
