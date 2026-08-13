@@ -13,6 +13,19 @@
 use crate::profile::{ColorSlot, Rgb};
 use crate::terminal::cell::{Color, EmuCell};
 
+/// The shape a terminal draws its cursor as, set with `DECSCUSR` (`CSI Ps SP q`).
+///
+/// The specification defines three, each in a blinking and a steady form. The
+/// blink is not represented: a screenshot is a single moment, and a blinking
+/// cursor is drawn in the half of that cycle where it is visible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorShape {
+    #[default]
+    Block,
+    Underline,
+    Bar,
+}
+
 /// A headless terminal emulator: bytes in, cell grid out.
 ///
 /// Implementations must be `Send`; the daemon shares the emulator across its
@@ -34,6 +47,9 @@ pub trait Emulator: Send {
     fn size(&self) -> (u16, u16);
 
     /// Cursor position as `(x, y)` (column, row), 0-based, clamped to screen.
+    ///
+    /// Always relative to the visible screen, never to the scrollback, so a
+    /// caller drawing over `full_rows` has to offset it by the history above.
     fn cursor(&self) -> (u16, u16);
 
     /// The window title a program set with `OSC 0` or `OSC 2`, or `None` when
@@ -43,6 +59,15 @@ pub trait Emulator: Send {
     /// is reported as `None` rather than as a title that happens to be blank.
     /// Callers therefore never have to distinguish the two.
     fn title(&self) -> Option<String>;
+
+    /// Whether the cursor is being drawn, which programs toggle with
+    /// `DECTCEM` (`CSI ?25 h` and `l`). Full-screen programs routinely hide it
+    /// while repainting, so a screenshot that ignored this would show a cursor
+    /// parked wherever the last write happened to leave it.
+    fn cursor_visible(&self) -> bool;
+
+    /// The shape the cursor is currently drawn as.
+    fn cursor_shape(&self) -> CursorShape;
 
     /// Visible screen as rows of cells. Always `rows` entries of `cols` cells.
     fn viewable_rows(&self) -> Vec<Vec<EmuCell>>;

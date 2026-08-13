@@ -10,8 +10,9 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags as AlacFlags;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config as AlacConfig, Term};
+use alacritty_terminal::term::{Config as AlacConfig, Term, TermMode};
 use alacritty_terminal::vte::ansi;
+use alacritty_terminal::vte::ansi::CursorShape as AlacCursorShape;
 use alacritty_terminal::vte::ansi::NamedColor;
 use alacritty_terminal::vte::ansi::Rgb as AlacRgb;
 
@@ -19,7 +20,7 @@ use compact_str::{CompactString, ToCompactString};
 
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::Emulator;
+use crate::terminal::emu::{CursorShape, Emulator};
 
 /// Alacritty's palette colors arrive either as a `Named` variant or an index;
 /// both funnel through [`Color::from_index`] so a given slot always yields the
@@ -335,6 +336,23 @@ impl Emulator for AlacrittyEmu {
         match self.term.colors()[index] {
             Some(set) => Rgb::new(set.r, set.g, set.b),
             None => configured,
+        }
+    }
+
+    fn cursor_visible(&self) -> bool {
+        // `Hidden` is a shape alacritty uses for a cursor it will not draw, so
+        // it means the same thing as the mode being off.
+        self.term.mode().contains(TermMode::SHOW_CURSOR)
+            && self.term.cursor_style().shape != AlacCursorShape::Hidden
+    }
+
+    fn cursor_shape(&self) -> CursorShape {
+        match self.term.cursor_style().shape {
+            AlacCursorShape::Underline => CursorShape::Underline,
+            AlacCursorShape::Beam => CursorShape::Bar,
+            // `HollowBlock` is what alacritty draws for an unfocused window,
+            // which a headless terminal has no notion of.
+            _ => CursorShape::Block,
         }
     }
 
