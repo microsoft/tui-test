@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use crate::profile::Profile;
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::Emulator;
@@ -40,7 +41,7 @@ pub(crate) fn from_cast<R: BufRead>(
     validate_options(options)?;
     let cols = cast.header.width;
     let rows = cast.header.height;
-    let mut emulator = AlacrittyEmu::new(cols, rows, 0);
+    let mut emulator = AlacrittyEmu::new(cols, rows, &Profile::default());
     let mut clock = TimelineClock::default();
     let mut pending: Option<TimedGrid> = None;
     let mut collector = FrameCollector::new(Duration::from_secs_f64(1.0 / f64::from(options.fps)));
