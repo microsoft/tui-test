@@ -189,7 +189,7 @@ prints a session's effective timeouts.
 | Command                                                      | Description                                 |
 | ------------------------------------------------------------ | ------------------------------------------- |
 | `open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V] [--config F] [--profile P] [--timeout-<class> MS]` | Spawn a shell session.                      |
-| `run <program> [args...]`                                    | Spawn a session running a program directly. |
+| `run [--config F] [--profile P] <program> [args...]`         | Spawn a session running a program directly. |
 | `sessions`                                                   | List active sessions.                       |
 | `close [--all]`                                              | Close the current session (or all).         |
 | `daemon start` / `daemon status` / `daemon stop --session N \| --all` | Start, inspect, or stop a session's daemon. |
@@ -342,7 +342,7 @@ cursor     = "#c0c0c0"
 red        = "#800000"        # any of the 16 ANSI slots, by name
 
 [profiles.ci]
-scrollback = 500              # inherits the default palette
+scrollback = 500              # other fields use built-in defaults
 ```
 
 ```bash
@@ -353,12 +353,11 @@ tui-test open --config ./other.toml --profile ci
 
 Looked up nearest first: `./tui-test.toml`, then
 `~/.tui-test/tui-test.toml`. `--config` or `TUI_TEST_CONFIG` replaces the
-search. Running without a config file is normal; a file that fails to parse is
-an error rather than a silent fallback.
+search.
 
-Resolution happens in the CLI, not the daemon — the daemon is long-lived and
-shared, so it has no working directory to resolve a project-local config
-against.
+Named profiles do not inherit from `[profiles.default]`; every omitted field
+uses tui-test's built-in default.  `tui-test.toml` affect the cLI only, the libraries
+accept profile configurations when starting a new session.
 
 ### Colors
 

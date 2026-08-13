@@ -55,6 +55,33 @@ export type State = NativeState;
 
 export type OpenResult = NativeOpenResult;
 
+export interface Colors {
+  foreground?: string;
+  background?: string;
+  cursor?: string;
+  black?: string;
+  red?: string;
+  green?: string;
+  yellow?: string;
+  blue?: string;
+  magenta?: string;
+  cyan?: string;
+  white?: string;
+  brightBlack?: string;
+  brightRed?: string;
+  brightGreen?: string;
+  brightYellow?: string;
+  brightBlue?: string;
+  brightMagenta?: string;
+  brightCyan?: string;
+  brightWhite?: string;
+}
+
+export interface Profile {
+  scrollback?: number;
+  colors?: Colors;
+}
+
 export interface SpawnOptions {
   cols?: number;
   rows?: number;
@@ -62,6 +89,7 @@ export interface SpawnOptions {
   env?: Record<string, string | number | boolean> | [string, string][];
   waitReady?: boolean;
   retries?: number;
+  profile?: Profile;
   timeouts?: Timeouts;
 }
 
@@ -78,6 +106,7 @@ export interface ArtifactOptions {
 }
 
 export interface ClientOptions {
+  profile?: Profile;
   timeouts?: Timeouts;
   artifacts?: ArtifactOptions;
 }

@@ -4,7 +4,7 @@ import collections.abc
 import dataclasses
 import os
 import sys
-from typing import Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 VERSION = "0.1.0-beta.1"
 
@@ -20,6 +20,30 @@ def resolve_session(session: Optional[str]) -> str:
 
 
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
+_PROFILE_FIELDS = frozenset(("scrollback", "colors"))
+_COLOR_FIELDS = frozenset(
+    (
+        "foreground",
+        "background",
+        "cursor",
+        "black",
+        "red",
+        "green",
+        "yellow",
+        "blue",
+        "magenta",
+        "cyan",
+        "white",
+        "bright_black",
+        "bright_red",
+        "bright_green",
+        "bright_yellow",
+        "bright_blue",
+        "bright_magenta",
+        "bright_cyan",
+        "bright_white",
+    )
+)
 
 
 def resolve_timeout(
@@ -64,3 +88,49 @@ def session_timeouts_payload(timeouts: object) -> Optional[Dict[str, int]]:
         if value is not None
     }
     return payload or None
+
+
+def _object_mapping(value: object, name: str) -> Dict[str, Any]:
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return dataclasses.asdict(value)
+    if isinstance(value, collections.abc.Mapping):
+        return dict(value)
+    raise TypeError("{} must be a dataclass or mapping".format(name))
+
+
+def normalize_profile(profile: object) -> Optional[Dict[str, Any]]:
+    if profile is None:
+        return None
+    raw = _object_mapping(profile, "profile")
+    unknown = sorted(set(raw) - _PROFILE_FIELDS)
+    if unknown:
+        raise ValueError(
+            "unknown profile field {}".format(
+                ", ".join(repr(name) for name in unknown)
+            )
+        )
+
+    normalized = {}  # type: Dict[str, Any]
+    if raw.get("scrollback") is not None:
+        normalized["scrollback"] = raw["scrollback"]
+
+    raw_colors = raw.get("colors")
+    if raw_colors is not None:
+        colors = _object_mapping(raw_colors, "profile.colors")
+        unknown = sorted(set(colors) - _COLOR_FIELDS)
+        if unknown:
+            raise ValueError(
+                "unknown profile color {}".format(
+                    ", ".join(repr(name) for name in unknown)
+                )
+            )
+        normalized_colors = {}
+        for name, value in colors.items():
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise TypeError("profile.colors.{} must be a string".format(name))
+            normalized_colors[name] = value
+        if normalized_colors:
+            normalized["colors"] = normalized_colors
+    return normalized

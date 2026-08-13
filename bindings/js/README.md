@@ -49,11 +49,27 @@ All derive from `TuiTestError` and carry `kind` and `exitCode`. `waitX` and `exp
 
 ## API
 
-`new TuiTest(session?, { timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle`, `screenshot`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectSnapshot`, `close`, and `closeQuiet`.
+`new TuiTest(session?, { profile?, timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle`, `screenshot`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectSnapshot`, `close`, and `closeQuiet`.
 
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 
-`open` and `run` accept `{ cols, rows, cwd, env, waitReady, retries, timeouts }`. The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`; `timeouts` sets session defaults, the constructor sets client-wide ones. Unknown class names throw.
+`open` and `run` accept
+`{ cols, rows, cwd, env, waitReady, retries, profile, timeouts }`. The
+constructor also accepts `profile` as the default for later opens and runs.
+Profiles are partial; omitted fields use the built-in defaults:
+
+```js
+const terminal = new TuiTest("work", {
+  profile: {
+    scrollback: 500,
+    colors: { red: "#ff0000", brightBlue: "#3366ff" },
+  },
+});
+```
+
+The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`;
+`timeouts` sets session defaults, and the constructor sets client-wide ones.
+Unknown fields throw.
 
 `TuiTest.ephemeral(prefix?, opts?)` creates a client bound to a unique session
 name (via `uniqueSession()`), useful for parallel test workers that should not
@@ -73,8 +89,8 @@ await withTerminal({}, async (t) => {
 ```
 
 Each terminal has a unique name, so parallel workers do not collide.
-`setTerminalDefaults(...)` sets suite-wide options (`artifacts`, `timeouts`,
-...).
+`setTerminalDefaults(...)` sets suite-wide options (`profile`, `artifacts`,
+`timeouts`, ...).
 
 ## Cancellation and recordings
 

@@ -19,7 +19,7 @@ from typing import (
 from ._config import IS_MACOS, IS_WINDOWS
 from ._ephemeral import unique_session
 from .client import TuiTest
-from .types import Timeouts
+from .types import Profile, Timeouts
 
 __all__ = [
     "TerminalOptions",
@@ -51,6 +51,7 @@ class TerminalOptions:
     retries: Optional[int] = None
     wait_ready: Optional[bool] = None
     timeouts: Optional[Timeouts] = None
+    profile: Optional[Profile] = None
     artifacts: Optional[Dict[str, Any]] = None
 
 
@@ -143,6 +144,8 @@ def _client_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
     kwargs = {}  # type: Dict[str, Any]
     if opts.timeouts is not None:
         kwargs["timeouts"] = opts.timeouts
+    if opts.profile is not None:
+        kwargs["profile"] = opts.profile
     if opts.artifacts is not None:
         kwargs["artifacts"] = opts.artifacts
     return kwargs

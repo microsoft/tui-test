@@ -96,7 +96,7 @@ pub struct Colors {
     pub foreground: Rgb,
     /// The color an unpainted cell takes.
     pub background: Rgb,
-    /// Tracked for `OSC 12`; nothing draws a cursor yet.
+    /// The color used to draw the cursor.
     pub cursor: Rgb,
 
     pub black: Rgb,
@@ -189,6 +189,34 @@ impl Colors {
             NamedColor::BrightCyan => "bright_cyan",
             NamedColor::BrightWhite => "bright_white",
         })
+    }
+
+    /// Set one color by the name used in config files and language bindings.
+    pub fn set_named(&mut self, name: &str, value: Rgb) -> bool {
+        let target = match name {
+            "foreground" => &mut self.foreground,
+            "background" => &mut self.background,
+            "cursor" => &mut self.cursor,
+            "black" => &mut self.black,
+            "red" => &mut self.red,
+            "green" => &mut self.green,
+            "yellow" => &mut self.yellow,
+            "blue" => &mut self.blue,
+            "magenta" => &mut self.magenta,
+            "cyan" => &mut self.cyan,
+            "white" => &mut self.white,
+            "bright_black" => &mut self.bright_black,
+            "bright_red" => &mut self.bright_red,
+            "bright_green" => &mut self.bright_green,
+            "bright_yellow" => &mut self.bright_yellow,
+            "bright_blue" => &mut self.bright_blue,
+            "bright_magenta" => &mut self.bright_magenta,
+            "bright_cyan" => &mut self.bright_cyan,
+            "bright_white" => &mut self.bright_white,
+            _ => return false,
+        };
+        *target = value;
+        true
     }
 
     /// Resolve any 256-color index.
@@ -340,6 +368,10 @@ pub fn search_paths(cwd: &Path) -> Vec<PathBuf> {
     if let Ok(explicit) = std::env::var("TUI_TEST_CONFIG") {
         return vec![PathBuf::from(explicit)];
     }
+    default_search_paths(cwd)
+}
+
+fn default_search_paths(cwd: &Path) -> Vec<PathBuf> {
     vec![
         cwd.join(CONFIG_FILE),
         crate::config::home_dir().join(CONFIG_FILE),
@@ -349,9 +381,10 @@ pub fn search_paths(cwd: &Path) -> Vec<PathBuf> {
 /// Resolve a profile: an explicit file if given, else the first file found on
 /// the search path, else the built-in defaults.
 ///
-/// A missing file is not an error — tui-test runs without one. A file that
-/// exists but does not parse *is* an error, because silently ignoring it would
-/// run the session with settings the user did not ask for.
+/// Missing discovered files are normal — tui-test runs without one. A path
+/// explicitly named by `--config` or `TUI_TEST_CONFIG` must exist, because
+/// silently ignoring it would run the session with settings the user did not
+/// ask for.
 pub fn resolve(
     explicit_config: Option<&Path>,
     profile_name: Option<&str>,
@@ -360,7 +393,10 @@ pub fn resolve(
     if let Some(path) = explicit_config {
         return ConfigFile::load(path)?.profile(profile_name);
     }
-    for path in search_paths(cwd) {
+    if let Some(path) = std::env::var_os("TUI_TEST_CONFIG").map(PathBuf::from) {
+        return ConfigFile::load(&path)?.profile(profile_name);
+    }
+    for path in default_search_paths(cwd) {
         if path.is_file() {
             return ConfigFile::load(&path)?.profile(profile_name);
         }
@@ -374,6 +410,8 @@ pub fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn hex_colors_round_trip() {
@@ -486,6 +524,59 @@ mod tests {
         assert_eq!(Colors::slot_name(16), None, "only 0-15 are configurable");
     }
 
+    #[test]
+    fn every_binding_color_name_is_settable() {
+        let mut colors = Colors::default();
+        let replacement = Rgb::new(1, 2, 3);
+        for name in [
+            "foreground",
+            "background",
+            "cursor",
+            "black",
+            "red",
+            "green",
+            "yellow",
+            "blue",
+            "magenta",
+            "cyan",
+            "white",
+            "bright_black",
+            "bright_red",
+            "bright_green",
+            "bright_yellow",
+            "bright_blue",
+            "bright_magenta",
+            "bright_cyan",
+            "bright_white",
+        ] {
+            assert!(colors.set_named(name, replacement), "{name}");
+        }
+        assert!(!colors.set_named("chartreuse", replacement));
+        assert!([
+            colors.foreground,
+            colors.background,
+            colors.cursor,
+            colors.black,
+            colors.red,
+            colors.green,
+            colors.yellow,
+            colors.blue,
+            colors.magenta,
+            colors.cyan,
+            colors.white,
+            colors.bright_black,
+            colors.bright_red,
+            colors.bright_green,
+            colors.bright_yellow,
+            colors.bright_blue,
+            colors.bright_magenta,
+            colors.bright_cyan,
+            colors.bright_white,
+        ]
+        .into_iter()
+        .all(|color| color == replacement));
+    }
+
     /// The 16 configurable slots come from the profile; the rest come from the
     /// xterm table, which is the same in every terminal.
     #[test]
@@ -534,7 +625,6 @@ mod tests {
     /// terminal its tests expect. `TUI_TEST_CONFIG` overrides both.
     #[test]
     fn the_search_order_puts_the_project_first() {
-        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = ENV_LOCK.lock().unwrap();
 
         let old = std::env::var_os("TUI_TEST_CONFIG");
@@ -562,6 +652,33 @@ mod tests {
         if let Some(value) = old {
             std::env::set_var("TUI_TEST_CONFIG", value);
         }
+        result.unwrap();
+    }
+
+    /// An environment override is an explicit request, just like `--config`,
+    /// so a typo must not silently fall back to the built-in profile.
+    #[test]
+    fn a_missing_environment_override_is_an_error() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let old = std::env::var_os("TUI_TEST_CONFIG");
+        let dir = std::env::temp_dir().join(format!("su-profile-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("missing.toml");
+
+        std::env::set_var("TUI_TEST_CONFIG", &missing);
+        let result = std::panic::catch_unwind(|| {
+            let err = resolve(None, None, &dir).unwrap_err().to_string();
+            assert!(
+                err.contains("missing.toml"),
+                "the explicit missing path is named: {err}"
+            );
+        });
+
+        std::env::remove_var("TUI_TEST_CONFIG");
+        if let Some(value) = old {
+            std::env::set_var("TUI_TEST_CONFIG", value);
+        }
+        std::fs::remove_dir_all(&dir).ok();
         result.unwrap();
     }
 

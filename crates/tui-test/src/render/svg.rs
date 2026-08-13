@@ -12,7 +12,7 @@ use std::fmt::Write;
 
 use super::nerd_font::NerdFont;
 use crate::profile::{ColorSlot, Rgb};
-use crate::terminal::cell::{truncate_to_columns, Attrs, EmuCell, CONTINUATION};
+use crate::terminal::cell::{truncate_to_columns, Attrs, Color, EmuCell, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator};
 
 const CELL_W: f32 = 10.0;
@@ -47,8 +47,73 @@ fn cell_at(row: &[EmuCell], x: usize) -> &EmuCell {
     row.get(x).unwrap_or(&BLANK)
 }
 
+pub(crate) trait RenderColors {
+    fn color(&self, slot: ColorSlot) -> Rgb;
+    fn cursor_shape(&self) -> CursorShape;
+
+    fn resolve(&self, color: Option<Color>, is_fg: bool) -> Rgb {
+        match color {
+            None => self.color(if is_fg {
+                ColorSlot::Foreground
+            } else {
+                ColorSlot::Background
+            }),
+            Some(Color::Named(n)) => self.color(ColorSlot::Indexed(n.index())),
+            Some(Color::Idx(i)) => self.color(ColorSlot::Indexed(i)),
+            Some(Color::Rgb(r, g, b)) => Rgb::new(r, g, b),
+        }
+    }
+}
+
+impl<T: Emulator + ?Sized> RenderColors for T {
+    fn color(&self, slot: ColorSlot) -> Rgb {
+        Emulator::color(self, slot)
+    }
+
+    fn cursor_shape(&self) -> CursorShape {
+        Emulator::cursor_shape(self)
+    }
+}
+
+/// The renderer-owned terminal state captured together with the grid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RenderState {
+    indexed: [Rgb; 256],
+    foreground: Rgb,
+    background: Rgb,
+    cursor: Rgb,
+    cursor_shape: CursorShape,
+}
+
+impl RenderState {
+    pub(crate) fn capture(emu: &dyn Emulator) -> Self {
+        Self {
+            indexed: std::array::from_fn(|index| emu.color(ColorSlot::Indexed(index as u8))),
+            foreground: emu.color(ColorSlot::Foreground),
+            background: emu.color(ColorSlot::Background),
+            cursor: emu.color(ColorSlot::Cursor),
+            cursor_shape: emu.cursor_shape(),
+        }
+    }
+}
+
+impl RenderColors for RenderState {
+    fn color(&self, slot: ColorSlot) -> Rgb {
+        match slot {
+            ColorSlot::Indexed(index) => self.indexed[index as usize],
+            ColorSlot::Foreground => self.foreground,
+            ColorSlot::Background => self.background,
+            ColorSlot::Cursor => self.cursor,
+        }
+    }
+
+    fn cursor_shape(&self) -> CursorShape {
+        self.cursor_shape
+    }
+}
+
 /// Resolved background color for a cell (honoring inverse).
-fn bg_of(cell: &EmuCell, colors: &dyn Emulator) -> Rgb {
+fn bg_of(cell: &EmuCell, colors: &dyn RenderColors) -> Rgb {
     let bg = colors.resolve(cell.bg, false);
     let fg = colors.resolve(cell.fg, true);
     if cell.has(Attrs::INVERSE) {
@@ -58,7 +123,7 @@ fn bg_of(cell: &EmuCell, colors: &dyn Emulator) -> Rgb {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 struct Style {
     fg: Rgb,
     bold: bool,
@@ -68,7 +133,7 @@ struct Style {
     invisible: bool,
 }
 
-fn style_of(cell: &EmuCell, colors: &dyn Emulator) -> Style {
+fn style_of(cell: &EmuCell, colors: &dyn RenderColors) -> Style {
     let mut fg = colors.resolve(cell.fg, true);
     let bg = colors.resolve(cell.bg, false);
     if cell.has(Attrs::INVERSE) {
@@ -108,6 +173,63 @@ fn run_text(row: &[EmuCell], start: usize, end: usize) -> String {
     text
 }
 
+fn write_text_run(
+    out: &mut String,
+    row: &[EmuCell],
+    start: usize,
+    end: usize,
+    y: usize,
+    style: Style,
+    nerd_font: &NerdFont,
+) {
+    if style.invisible {
+        return;
+    }
+    let fg = hex(style.fg);
+    let tx = MARGIN_X + start as f32 * CELL_W;
+    let baseline = HEADER_H + y as f32 * CELL_H + FONT_BASELINE;
+    let width = (end - start) as f32 * CELL_W;
+    let original_text = run_text(row, start, end);
+    let (text, run_x_adjust) = nerd_font.prepare_run(&original_text, width, CELL_W);
+
+    // Preserve decoration for runs containing only vector glyphs.
+    if !original_text.trim().is_empty() {
+        let weight = if style.bold {
+            r#" font-weight="bold""#
+        } else {
+            ""
+        };
+        let italic = if style.italic {
+            r#" font-style="italic""#
+        } else {
+            ""
+        };
+        let deco = match (style.underline, style.strike) {
+            (true, true) => r#" text-decoration="underline line-through""#,
+            (true, false) => r#" text-decoration="underline""#,
+            (false, true) => r#" text-decoration="line-through""#,
+            (false, false) => "",
+        };
+        let _ = write!(
+            out,
+            r#"<text x="{tx:.2}" y="{baseline:.2}" fill="{fg}"{weight}{italic}{deco} textLength="{width:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{esc}</text>"#,
+            esc = escape(&text)
+        );
+    }
+    for i in start..end {
+        for c in cell_at(row, i).ch.chars() {
+            nerd_font.write_use(
+                out,
+                c,
+                (MARGIN_X + i as f32 * CELL_W, HEADER_H + y as f32 * CELL_H),
+                (CELL_W, CELL_H),
+                run_x_adjust,
+                &fg,
+            );
+        }
+    }
+}
+
 /// Draw the window title centred in the title bar.
 ///
 /// The title is chrome rather than grid content, so unlike a cell run it is
@@ -115,7 +237,7 @@ fn run_text(row: &[EmuCell], start: usize, end: usize) -> String {
 /// computed width would distort it. It is instead truncated to what fits, and
 /// kept clear of the traffic lights by reserving the same margin on both
 /// sides, which also keeps it centred on the space that remains.
-fn write_title(out: &mut String, title: &str, width: f32, colors: &dyn Emulator) {
+fn write_title(out: &mut String, title: &str, width: f32, colors: &dyn RenderColors) {
     const GAP: f32 = 8.0;
     let available = width - 2.0 * (DOTS_RIGHT + GAP);
     // A monospace advance, scaled from the grid font's known cell width.
@@ -155,7 +277,7 @@ fn write_cursor(
     out: &mut String,
     rows: &[Vec<EmuCell>],
     (cx, cy): (u16, usize),
-    colors: &dyn Emulator,
+    colors: &dyn RenderColors,
     nerd_font: &NerdFont,
 ) {
     let Some(row) = rows.get(cy) else {
@@ -187,24 +309,20 @@ fn write_cursor(
         r#"<rect x="{rx:.2}" y="{ry:.2}" width="{rw:.2}" height="{rh:.2}" fill="{fill}"/>"#
     );
 
-    if colors.cursor_shape() != CursorShape::Block || cell.ch.trim().is_empty() {
+    if colors.cursor_shape() != CursorShape::Block {
         return;
     }
-    // Redraw exactly as the text pass would, so a vector glyph comes back as a
-    // glyph rather than as a character the text font may not even have.
-    let under = hex(bg_of(cell, colors));
-    let (text, run_x_adjust) = nerd_font.prepare_run(&cell.ch, w, CELL_W);
-    if !text.trim().is_empty() {
-        let _ = write!(
-            out,
-            r#"<text x="{x:.2}" y="{baseline:.2}" fill="{under}" textLength="{w:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{esc}</text>"#,
-            baseline = y + FONT_BASELINE,
-            esc = escape(&text),
-        );
-    }
-    for c in cell.ch.chars() {
-        nerd_font.write_use(out, c, (x, y), (CELL_W, CELL_H), run_x_adjust, &under);
-    }
+    let mut style = style_of(cell, colors);
+    style.fg = bg_of(cell, colors);
+    write_text_run(
+        out,
+        row,
+        cx as usize,
+        cx as usize + span as usize,
+        cy,
+        style,
+        nerd_font,
+    );
 }
 
 /// Render the grid. `cursor` is where to draw the cursor *within `rows`*, so a
@@ -214,10 +332,10 @@ fn write_cursor(
 ///
 /// Its row is a `usize` because it indexes `rows`, which for a full-history
 /// render is as long as the scrollback and so is not bounded by the screen.
-pub fn render_svg(
+pub(crate) fn render_svg(
     rows: &[Vec<EmuCell>],
     cols: u16,
-    colors: &dyn Emulator,
+    colors: &dyn RenderColors,
     cursor: Option<(u16, usize)>,
     title: Option<&str>,
 ) -> String {
@@ -274,7 +392,6 @@ pub fn render_svg(
     }
 
     for (y, row) in rows.iter().enumerate() {
-        let baseline = y0 + y as f32 * CELL_H + FONT_BASELINE;
         let mut x = 0;
         while x < cols {
             let style = style_of(cell_at(row, x), colors);
@@ -282,49 +399,7 @@ pub fn render_svg(
             while x + run < cols && style_of(cell_at(row, x + run), colors) == style {
                 run += 1;
             }
-            if !style.invisible {
-                let fg = hex(style.fg);
-                let tx = x0 + x as f32 * CELL_W;
-                let tl = run as f32 * CELL_W;
-                let original_text = run_text(row, x, x + run);
-                let (text, run_x_adjust) = nerd_font.prepare_run(&original_text, tl, CELL_W);
-                // Preserve decoration for runs containing only vector glyphs.
-                if !original_text.trim().is_empty() {
-                    let weight = if style.bold {
-                        r#" font-weight="bold""#
-                    } else {
-                        ""
-                    };
-                    let italic = if style.italic {
-                        r#" font-style="italic""#
-                    } else {
-                        ""
-                    };
-                    let deco = match (style.underline, style.strike) {
-                        (true, true) => r#" text-decoration="underline line-through""#,
-                        (true, false) => r#" text-decoration="underline""#,
-                        (false, true) => r#" text-decoration="line-through""#,
-                        (false, false) => "",
-                    };
-                    let _ = write!(
-                        out,
-                        r#"<text x="{tx:.2}" y="{baseline:.2}" fill="{fg}"{weight}{italic}{deco} textLength="{tl:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{esc}</text>"#,
-                        esc = escape(&text)
-                    );
-                }
-                for i in x..x + run {
-                    for c in cell_at(row, i).ch.chars() {
-                        nerd_font.write_use(
-                            &mut out,
-                            c,
-                            (x0 + i as f32 * CELL_W, y0 + y as f32 * CELL_H),
-                            (CELL_W, CELL_H),
-                            run_x_adjust,
-                            &fg,
-                        );
-                    }
-                }
-            }
+            write_text_run(&mut out, row, x, x + run, y, style, &nerd_font);
             x += run;
         }
     }
@@ -342,7 +417,7 @@ mod tests {
     use super::*;
     use crate::profile::{ColorSlot, Profile};
     use crate::terminal::alacritty::AlacrittyEmu;
-    use crate::terminal::cell::Color;
+    use crate::terminal::cell::{Color, UnderlineStyle};
 
     /// A real emulator: the renderer resolves through the same path a session
     /// uses, so a stand-in could not drift from it.
@@ -412,6 +487,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_block_cursor_does_not_reveal_invisible_text() {
+        let mut hidden = cell("X", None, None);
+        hidden.attrs = Attrs::INVISIBLE;
+        let svg = render_svg(&[vec![hidden]], 1, &colors(), Some((0, 0)), None);
+        assert!(
+            !svg.contains('X'),
+            "the cursor must not redraw text hidden with SGR 8: {svg}"
+        );
+    }
+
+    #[test]
+    fn a_block_cursor_preserves_the_character_style() {
+        let mut styled = cell("S", None, None);
+        styled.attrs = Attrs::BOLD | Attrs::ITALIC | Attrs::STRIKE;
+        styled.underline = UnderlineStyle::Single;
+        let svg = render_svg(&[vec![styled]], 1, &colors(), Some((0, 0)), None);
+
+        for attribute in [
+            r#"font-weight="bold""#,
+            r#"font-style="italic""#,
+            r#"text-decoration="underline line-through""#,
+        ] {
+            assert_eq!(
+                svg.matches(attribute).count(),
+                2,
+                "the normal draw and cursor redraw both preserve {attribute}: {svg}"
+            );
+        }
+    }
+
     /// A double-width character keeps both of its halves.
     ///
     /// The second half lives in a continuation cell, so a cursor sized to one
@@ -455,9 +561,13 @@ mod tests {
             "the glyph is drawn once normally and once over the block: {svg}"
         );
         let in_background = svg
-            .split("<use href=")
-            .skip(1)
-            .filter(|glyph| glyph.contains(&format!(r#"fill="{background}""#)))
+            .match_indices(r##"<use href="#nf-f115""##)
+            .filter(|(start, _)| {
+                svg[*start..]
+                    .split("/>")
+                    .next()
+                    .is_some_and(|glyph| glyph.contains(&format!(r#"fill="{background}""#)))
+            })
             .count();
         assert_eq!(
             in_background, 1,
@@ -582,7 +692,7 @@ mod tests {
         assert!(svg.ends_with("</svg>"));
         assert!(svg.contains("textLength"));
         assert!(
-            svg.contains(&hex(colors().color(ColorSlot::Indexed(1)))),
+            svg.contains(&hex(Emulator::color(&colors(), ColorSlot::Indexed(1)))),
             "slot 1 is painted with the profile color"
         );
         assert!(svg.contains(">hi</text>"));
@@ -619,7 +729,7 @@ mod tests {
         let rows = vec![vec![cell(" ", None, Some(Color::from_index(4)))]];
         let svg = render_svg(&rows, 1, &colors(), None, None);
         assert!(
-            svg.contains(&hex(colors().color(ColorSlot::Indexed(4)))),
+            svg.contains(&hex(Emulator::color(&colors(), ColorSlot::Indexed(4)))),
             "slot 4 is painted with the profile color"
         );
     }

@@ -66,36 +66,45 @@ fn parse_hex(hex: &str) -> anyhow::Result<(u8, u8, u8)> {
 
 /// Does a cell's resolved color match the expected color?
 ///
-/// A cell that set no color of its own matches only `default`. It cannot match
-/// a concrete value: which value it paints is the profile's choice, and the
-/// grid only records that the cell chose nothing.
+/// A cell that set no color of its own matches `default`, and also matches the
+/// concrete RGB value the terminal currently uses for that foreground or
+/// background. It never matches an ANSI index because it did not select one.
 ///
 /// A concrete `#rrggbb` is resolved through the session profile, the same table
 /// the screenshot renderer draws with. These used to be two separate hardcoded
 /// tables that disagreed on every ANSI slot, so `expect --fg "#800000"` passed
 /// on a cell a screenshot painted `#e88388`.
-pub fn matches(cell: Option<Color>, expected: &Expected, colors: &dyn Emulator) -> bool {
-    let Some(cell) = cell else {
-        return matches!(expected, Expected::Default);
-    };
+pub fn matches(
+    cell: Option<Color>,
+    expected: &Expected,
+    colors: &dyn Emulator,
+    is_fg: bool,
+) -> bool {
     match expected {
-        Expected::Default => false,
-        Expected::Ansi256(n) => cell.to_index() == *n,
+        Expected::Default => cell.is_none(),
+        Expected::Ansi256(n) => cell.is_some_and(|cell| cell.to_index() == *n),
         Expected::Hex(er, eg, eb) | Expected::Rgb(er, eg, eb) => {
-            let got = colors.resolve(Some(cell), true);
+            let got = colors.resolve(cell, is_fg);
             (got.r, got.g, got.b) == (*er, *eg, *eb)
         }
     }
 }
 
 /// Render a cell's color in the same space as the expected value, for messages.
-pub fn describe_cell(cell: Option<Color>, expected: &Expected, colors: &dyn Emulator) -> String {
-    let Some(cell) = cell else {
-        return DEFAULT.to_string();
-    };
+pub fn describe_cell(
+    cell: Option<Color>,
+    expected: &Expected,
+    colors: &dyn Emulator,
+    is_fg: bool,
+) -> String {
     match expected {
-        Expected::Default | Expected::Ansi256(_) => cell.to_index().to_string(),
-        _ => colors.resolve(Some(cell), true).to_hex(),
+        Expected::Default => cell
+            .map(|cell| cell.to_index().to_string())
+            .unwrap_or_else(|| DEFAULT.to_string()),
+        Expected::Ansi256(_) => cell
+            .map(|cell| cell.to_index().to_string())
+            .unwrap_or_else(|| DEFAULT.to_string()),
+        _ => colors.resolve(cell, is_fg).to_hex(),
     }
 }
 
@@ -162,34 +171,45 @@ mod tests {
     fn matches_palette_and_default() {
         let c = emu_with(Colors::default());
         let idx = |i| Some(Color::from_index(i));
-        assert!(matches(idx(9), &Expected::Ansi256(9), &c));
-        assert!(!matches(idx(2), &Expected::Ansi256(9), &c));
-        assert!(matches(idx(196), &Expected::Ansi256(196), &c));
+        assert!(matches(idx(9), &Expected::Ansi256(9), &c, true));
+        assert!(!matches(idx(2), &Expected::Ansi256(9), &c, true));
+        assert!(matches(idx(196), &Expected::Ansi256(196), &c, true));
         assert!(matches(
             Some(Color::Rgb(255, 0, 0)),
             &Expected::Rgb(255, 0, 0),
-            &c
+            &c,
+            true
         ));
     }
 
-    /// A default-colored cell used to match `--fg 0`, claiming it was black
-    /// when the theme actually paints it light gray. It now matches only the
-    /// `default` keyword, which is the way to assert on it.
     #[test]
-    fn default_color_matches_only_default() {
+    fn default_color_matches_its_resolved_foreground_or_background() {
         let c = emu_with(Colors::default());
-        assert!(!matches(None, &Expected::Ansi256(0), &c));
-        assert!(!matches(None, &Expected::Hex(0, 0, 0), &c));
-        assert!(matches(None, &Expected::Default, &c));
-        assert_eq!(describe_cell(None, &Expected::Ansi256(0), &c), "default");
+        assert!(!matches(None, &Expected::Ansi256(0), &c, true));
+        assert!(matches(None, &Expected::Hex(192, 192, 192), &c, true));
+        assert!(matches(None, &Expected::Hex(0, 0, 0), &c, false));
+        assert!(!matches(None, &Expected::Hex(0, 0, 0), &c, true));
+        assert!(matches(None, &Expected::Default, &c, true));
+        assert_eq!(
+            describe_cell(None, &Expected::Hex(0, 0, 0), &c, true),
+            "#c0c0c0"
+        );
+    }
+
+    #[test]
+    fn default_color_assertions_follow_runtime_changes() {
+        let mut c = emu_with(Colors::default());
+        c.process(b"\x1b]10;#010203\x07\x1b]11;#040506\x07");
+        assert!(matches(None, &Expected::Hex(1, 2, 3), &c, true));
+        assert!(matches(None, &Expected::Hex(4, 5, 6), &c, false));
     }
 
     #[test]
     fn a_colored_cell_is_not_default() {
         let c = emu_with(Colors::default());
         let red = Some(Color::from_index(1));
-        assert!(!matches(red, &Expected::Default, &c));
-        assert!(matches(red, &Expected::Ansi256(1), &c));
+        assert!(!matches(red, &Expected::Default, &c, true));
+        assert!(matches(red, &Expected::Ansi256(1), &c, true));
         assert!(matches!(
             Expected::parse("default").unwrap(),
             Expected::Default
@@ -198,7 +218,7 @@ mod tests {
             Expected::parse("DEFAULT").unwrap(),
             Expected::Default
         ));
-        assert_eq!(describe_cell(red, &Expected::Default, &c), "1");
+        assert_eq!(describe_cell(red, &Expected::Default, &c, true), "1");
     }
 
     /// The regression test for the bug this module used to carry: the color a
@@ -214,7 +234,8 @@ mod tests {
                 matches(
                     cell,
                     &Expected::Hex(painted.r, painted.g, painted.b),
-                    &colors
+                    &colors,
+                    true
                 ),
                 "slot {index} paints {} but does not match it",
                 painted.to_hex()
@@ -238,24 +259,26 @@ mod tests {
         assert!(matches(
             red,
             &Expected::Hex(configured.r, configured.g, configured.b),
-            &emu
+            &emu,
+            true
         ));
 
         emu.process(b"\x1b]4;1;#22c55e\x07");
         assert!(
-            matches(red, &Expected::Hex(0x22, 0xc5, 0x5e), &emu),
+            matches(red, &Expected::Hex(0x22, 0xc5, 0x5e), &emu, true),
             "the assertion follows the colour the program set"
         );
         assert!(
             !matches(
                 red,
                 &Expected::Hex(configured.r, configured.g, configured.b),
-                &emu
+                &emu,
+                true
             ),
             "the configured colour is no longer what slot 1 shows"
         );
         assert!(
-            matches(red, &Expected::Ansi256(1), &emu),
+            matches(red, &Expected::Ansi256(1), &emu, true),
             "the index is unaffected: it names a slot, not a colour"
         );
 
@@ -264,7 +287,8 @@ mod tests {
             matches(
                 red,
                 &Expected::Hex(configured.r, configured.g, configured.b),
-                &emu
+                &emu,
+                true
             ),
             "a reset restores the configured colour"
         );
@@ -279,10 +303,10 @@ mod tests {
             ..Default::default()
         });
         let red = Some(Color::from_index(1));
-        assert!(matches(red, &Expected::Hex(1, 2, 3), &colors));
-        assert!(!matches(red, &Expected::Hex(128, 0, 0), &colors));
+        assert!(matches(red, &Expected::Hex(1, 2, 3), &colors, true));
+        assert!(!matches(red, &Expected::Hex(128, 0, 0), &colors, true));
         assert!(
-            matches(red, &Expected::Ansi256(1), &colors),
+            matches(red, &Expected::Ansi256(1), &colors, true),
             "the index is unaffected by the palette"
         );
     }
