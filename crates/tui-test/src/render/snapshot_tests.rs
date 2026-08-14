@@ -1,4 +1,3 @@
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -285,12 +284,7 @@ fn assert_snapshot(name: &str, extension: &str, actual: &[u8]) {
             expected_path.display()
         )
     });
-    let matches = match extension {
-        "gif" => gif_snapshots_match(&expected, actual),
-        "png" => png_snapshots_match(&expected, actual),
-        _ => expected == actual,
-    };
-    if !matches {
+    if expected != actual {
         let actual_path = failure_dir().join(format!("{name}.actual.{extension}"));
         std::fs::create_dir_all(failure_dir()).unwrap();
         std::fs::write(&actual_path, actual).unwrap();
@@ -303,92 +297,6 @@ fn assert_snapshot(name: &str, extension: &str, actual: &[u8]) {
             actual_path.display()
         );
     }
-}
-
-#[derive(Debug)]
-struct DecodedGif {
-    dimensions: (u16, u16),
-    frames: Vec<DecodedGifFrame>,
-}
-
-#[derive(Debug)]
-struct DecodedGifFrame {
-    left: u16,
-    top: u16,
-    width: u16,
-    height: u16,
-    delay: u16,
-    pixels: Vec<u8>,
-}
-
-fn decode_gif(bytes: &[u8]) -> DecodedGif {
-    let mut options = gif::DecodeOptions::new();
-    options.set_color_output(gif::ColorOutput::RGBA);
-    let mut decoder = options.read_info(Cursor::new(bytes)).unwrap();
-    let dimensions = (decoder.width(), decoder.height());
-    let mut frames = Vec::new();
-    while let Some(frame) = decoder.read_next_frame().unwrap() {
-        frames.push(DecodedGifFrame {
-            left: frame.left,
-            top: frame.top,
-            width: frame.width,
-            height: frame.height,
-            delay: frame.delay,
-            pixels: frame.buffer.to_vec(),
-        });
-    }
-    DecodedGif { dimensions, frames }
-}
-
-fn gif_snapshots_match(expected: &[u8], actual: &[u8]) -> bool {
-    let expected = decode_gif(expected);
-    let actual = decode_gif(actual);
-    expected.dimensions == actual.dimensions
-        && expected.frames.len() == actual.frames.len()
-        && expected
-            .frames
-            .iter()
-            .zip(actual.frames.iter())
-            .all(|(expected, actual)| {
-                expected.left == actual.left
-                    && expected.top == actual.top
-                    && expected.width == actual.width
-                    && expected.height == actual.height
-                    && expected.delay == actual.delay
-                    && pixels_are_close(&expected.pixels, &actual.pixels)
-            })
-}
-
-fn png_snapshots_match(expected: &[u8], actual: &[u8]) -> bool {
-    let (expected_dimensions, expected_pixels) = decode_png(expected);
-    let (actual_dimensions, actual_pixels) = decode_png(actual);
-    expected_dimensions == actual_dimensions && pixels_are_close(&expected_pixels, &actual_pixels)
-}
-
-fn decode_png(bytes: &[u8]) -> ((u32, u32), Vec<u8>) {
-    let decoder = png::Decoder::new(Cursor::new(bytes));
-    let mut reader = decoder.read_info().unwrap();
-    let mut pixels = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut pixels).unwrap();
-    pixels.truncate(info.buffer_size());
-    ((info.width, info.height), pixels)
-}
-
-fn pixels_are_close(expected: &[u8], actual: &[u8]) -> bool {
-    if expected.len() != actual.len() || !expected.len().is_multiple_of(4) {
-        return false;
-    }
-    let mut total_error = 0u64;
-    let mut significant_pixels = 0usize;
-    for (expected, actual) in expected.chunks_exact(4).zip(actual.chunks_exact(4)) {
-        let errors =
-            std::array::from_fn::<_, 4, _>(|index| expected[index].abs_diff(actual[index]));
-        total_error += errors.iter().map(|error| u64::from(*error)).sum::<u64>();
-        significant_pixels += usize::from(errors.iter().any(|error| *error > 24));
-    }
-    let channels = expected.len();
-    let pixels = channels / 4;
-    total_error <= channels as u64 * 4 && significant_pixels * 100 <= pixels * 15
 }
 
 fn snapshot_dir() -> PathBuf {
