@@ -263,6 +263,7 @@ fn a_screenshot_and_an_assertion_agree_on_a_color() {
     // Printed lowercase so the match is the output, not the echoed command.
     let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)""#;
     sandbox.ok(&["run", "--cols", "44", "--", "bash", "--norc"]);
+    sandbox.ok(&["wait", "text", "bash-", "--timeout", "30000"]);
     sandbox.ok(&["submit", print_red]);
     sandbox.ok(&["wait", "command"]);
 
@@ -301,6 +302,7 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
         "bash",
         "--norc",
     ]);
+    sandbox.ok(&["wait", "text", "bash-", "--timeout", "30000"]);
     sandbox.ok(&["submit", print_red]);
     sandbox.ok(&["wait", "command"]);
 
@@ -1131,6 +1133,7 @@ fn a_snapshot_records_the_title_only_when_asked() {
     // Wide enough that the title is not truncated, so the assertion is about
     // whether it was recorded at all rather than about how it was shortened.
     sandbox.ok(&["run", "--cols", "40", "--", "bash", "--norc"]);
+    sandbox.ok(&["wait", "text", "bash-", "--timeout", "30000"]);
     sandbox.ok(&[
         "submit",
         r#"clear; printf '\033]2;ayman@host: /some/path\007'"#,
