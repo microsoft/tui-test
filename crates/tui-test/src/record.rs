@@ -124,6 +124,13 @@ impl Recorder {
             rows,
         });
     }
+
+    pub fn shutdown(&mut self) {
+        let _ = self.sender.send(Message::Shutdown);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 impl Capture {
@@ -137,10 +144,7 @@ impl Capture {
 
 impl Drop for Recorder {
     fn drop(&mut self) {
-        let _ = self.sender.send(Message::Shutdown);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        self.shutdown();
     }
 }
 

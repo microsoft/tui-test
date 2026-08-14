@@ -10,8 +10,6 @@ use std::time::{Duration, Instant};
 use crate::logger::Logger;
 use crate::profile::Profile;
 use crate::record::{self, CaptureError, Recorder, StartRecording};
-#[cfg(feature = "recording-raster")]
-use crate::render::raster::GridRenderer;
 use crate::shell::{self, Shell};
 use crate::terminal::backend::Backend;
 use crate::terminal::emu::Emulator;
@@ -40,7 +38,7 @@ pub struct Session {
     pub cancelled: Arc<AtomicBool>,
     recorder: Recorder,
     logger: Arc<Logger>,
-    _reader: JoinHandle<()>,
+    reader: Option<JoinHandle<()>>,
     _process_watcher: JoinHandle<()>,
 }
 
@@ -199,7 +197,7 @@ impl Session {
             cancelled,
             recorder,
             logger,
-            _reader: reader_handle,
+            reader: Some(reader_handle),
             _process_watcher: process_watcher,
         })
     }
@@ -234,13 +232,7 @@ impl Session {
         self.logger.event(&format!("resize {cols}x{rows}"));
         self.cols = cols;
         self.rows = rows;
-        let mut st = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.recorder.on_resize(cols, rows);
-        st.emu.resize(cols, rows);
-        drop(st);
+        resize_emulator_and_record(&self.state, &self.recorder, cols, rows);
         self.pty
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -264,16 +256,8 @@ impl Session {
         let format = format
             .or_else(|| crate::api::RecordingFormat::infer(&path))
             .ok_or_else(|| {
-                crate::api::TuiTestError::usage(
-                    "cannot infer recording format; use .png, .apng, .gif, or .cast",
-                )
+                crate::api::TuiTestError::usage("cannot infer recording format; use .cast")
             })?;
-        #[cfg(not(feature = "recording-raster"))]
-        if format != crate::api::RecordingFormat::Cast {
-            return Err(crate::api::TuiTestError::usage(
-                "APNG and GIF recording require the tui-test 'recording-raster' feature",
-            ));
-        }
         let fps = fps.unwrap_or(30);
         if fps == 0 {
             return Err(crate::api::TuiTestError::usage(
@@ -298,11 +282,7 @@ impl Session {
             .map_err(|_| crate::api::TuiTestError::usage("recording speed is too small"))?;
 
         let target_path = PathBuf::from(path);
-        let capture_path = if format == crate::api::RecordingFormat::Cast {
-            target_path.clone()
-        } else {
-            record::sidecar_path(&target_path)
-        };
+        let capture_path = target_path.clone();
         let mut env = vec![("TERM".to_string(), "xterm-256color".to_string())];
         if let Some(shell) = self.shell {
             env.push(("SHELL".to_string(), shell.as_str().to_string()));
@@ -312,8 +292,7 @@ impl Session {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (cols, rows) = state.emu.size();
-        let initial_output =
-            record::cast::snapshot_to_ansi(&state.emu.viewable_rows(), cols, state.emu.cursor());
+        let initial_output = record::cast::snapshot_to_ansi(state.emu.as_ref());
         let result = self.recorder.start(StartRecording {
             target_path,
             capture_path,
@@ -341,50 +320,7 @@ impl Session {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let stopped = self.recorder.stop().map_err(capture_error)?;
         drop(state);
-        if stopped.format == crate::api::RecordingFormat::Cast {
-            return Ok(stopped.target_path.to_string_lossy().into_owned());
-        }
-
-        #[cfg(not(feature = "recording-raster"))]
-        return Err(crate::api::TuiTestError::internal(
-            "raster recording was started without the 'recording-raster' feature",
-        ));
-
-        #[cfg(feature = "recording-raster")]
-        {
-            let temporary_path = temporary_output_path(&stopped.target_path);
-            let result = (|| -> anyhow::Result<()> {
-                let cast = record::cast::read(&stopped.capture_path)?;
-                let frames = record::frames::from_cast(cast, &stopped.timeline)?;
-                let scale = match stopped.format {
-                    crate::api::RecordingFormat::Apng | crate::api::RecordingFormat::Gif => 2,
-                    crate::api::RecordingFormat::Cast => unreachable!(),
-                };
-                let mut renderer =
-                    GridRenderer::with_scale(stopped.cols, usize::from(stopped.rows), scale);
-                crate::render::encode::encode(
-                    &temporary_path,
-                    stopped.format,
-                    &frames,
-                    &mut renderer,
-                    stopped.cols,
-                )?;
-                replace_output(&temporary_path, &stopped.target_path)?;
-                std::fs::remove_file(&stopped.capture_path)?;
-                Ok(())
-            })();
-
-            match result {
-                Ok(()) => Ok(stopped.target_path.to_string_lossy().into_owned()),
-                Err(error) => {
-                    let _ = std::fs::remove_file(&temporary_path);
-                    Err(crate::api::TuiTestError::internal(format!(
-                        "failed to export recording; captured cast retained at {}: {error}",
-                        stopped.capture_path.display()
-                    )))
-                }
-            }
-        }
+        Ok(stopped.target_path.to_string_lossy().into_owned())
     }
 
     pub fn kill(&self) {
@@ -407,6 +343,32 @@ impl Session {
     }
 }
 
+fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, cols: u16, rows: u16) {
+    let mut state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    recorder.on_resize(cols, rows);
+    state.emu.resize(cols, rows);
+}
+
+fn drain_reader_and_recorder(reader: &mut Option<JoinHandle<()>>, recorder: &mut Recorder) {
+    if let Some(reader) = reader.take() {
+        let _ = reader.join();
+    }
+    recorder.shutdown();
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        self.pty
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .kill();
+        drain_reader_and_recorder(&mut self.reader, &mut self.recorder);
+    }
+}
+
 fn capture_error(error: CaptureError) -> crate::api::TuiTestError {
     match error {
         CaptureError::AlreadyActive => {
@@ -422,78 +384,86 @@ fn capture_error(error: CaptureError) -> crate::api::TuiTestError {
     }
 }
 
-#[cfg(feature = "recording-raster")]
-fn temporary_output_path(target: &std::path::Path) -> PathBuf {
-    let mut name = target
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("recording"))
-        .to_os_string();
-    name.push(".tui-test.tmp");
-    target.with_file_name(name)
-}
-
-#[cfg(all(feature = "recording-raster", not(windows)))]
-fn replace_output(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
-    std::fs::rename(source, target)
-}
-
-#[cfg(all(feature = "recording-raster", windows))]
-fn replace_output(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
-    const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
-    const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
-
-    extern "system" {
-        fn MoveFileExW(
-            existing_file_name: *const u16,
-            new_file_name: *const u16,
-            flags: u32,
-        ) -> i32;
-    }
-
-    let source = source
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let target = target
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    // Safety: both buffers are NUL-terminated and remain alive for the call.
-    let replaced = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            target.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if replaced == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(all(test, feature = "recording-raster"))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
 
     #[test]
-    fn failed_replacement_preserves_the_existing_output() {
-        let root =
-            std::env::temp_dir().join(format!("tui-test-replace-output-{}", std::process::id()));
+    fn resize_is_queued_after_output_already_processing_at_the_old_size() {
+        let path = test_path("resize-order");
+        let mut recorder = Recorder::create(path.clone(), 1, 1, &[], Arc::new(Logger::disabled()));
+        let state = Arc::new(Mutex::new(TermState {
+            emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
+            tracker: CommandTracker::new(),
+            last_change: Instant::now(),
+            awaiting_start: None,
+            exited: None,
+        }));
+        let capture = recorder.capture();
+        let output_state = Arc::clone(&state);
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let output = std::thread::spawn(move || {
+            let _state = output_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            locked_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            capture.on_data(b"old-size-output");
+        });
+        locked_rx.recv().unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            release_tx.send(()).unwrap();
+        });
+
+        resize_emulator_and_record(&state, &recorder, 2, 1);
+        release.join().unwrap();
+        output.join().unwrap();
+        recorder.capture().on_data(b"new-size-output");
+        recorder.flush().unwrap();
+
+        let cast = std::fs::read_to_string(&path).unwrap();
+        let old = cast.find("old-size-output").unwrap();
+        let resize = cast.find("\"r\",\"2x1\"").unwrap();
+        let new = cast.find("new-size-output").unwrap();
+        assert!(old < resize && resize < new, "{cast}");
+
+        recorder.shutdown();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn shutdown_drains_reader_tail_before_stopping_recorder() {
+        let path = test_path("reader-tail");
+        let mut recorder = Recorder::create(path.clone(), 1, 1, &[], Arc::new(Logger::disabled()));
+        let capture = recorder.capture();
+        let mut reader = Some(std::thread::spawn(move || {
+            capture.on_data(b"reader-tail-marker");
+        }));
+
+        drain_reader_and_recorder(&mut reader, &mut recorder);
+
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("reader-tail-marker"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    fn test_path(label: &str) -> PathBuf {
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("session-tests");
         std::fs::create_dir_all(&root).unwrap();
-        let target = root.join("recording.gif");
-        let missing = root.join("missing.tmp");
-        std::fs::write(&target, b"previous recording").unwrap();
-
-        assert!(replace_output(&missing, &target).is_err());
-        assert_eq!(std::fs::read(&target).unwrap(), b"previous recording");
-
-        std::fs::remove_file(target).unwrap();
-        std::fs::remove_dir(root).unwrap();
+        root.join(format!(
+            "{label}-{}-{}.cast",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ))
     }
 }
