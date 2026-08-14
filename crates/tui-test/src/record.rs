@@ -233,6 +233,8 @@ mod tests {
                 env: Vec::new(),
                 initial_output: String::new(),
                 #[cfg(feature = "recording-raster")]
+                zoom: 1.0,
+                #[cfg(feature = "recording-raster")]
                 timeline: frames::TimelineOptions::default(),
                 #[cfg(feature = "recording-raster")]
                 ffmpeg_path: None,
