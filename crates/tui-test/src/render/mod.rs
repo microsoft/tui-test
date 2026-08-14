@@ -2,7 +2,6 @@ mod nerd_font;
 pub mod svg;
 
 #[cfg(feature = "recording-raster")]
-#[allow(dead_code)] // Session export consumes the encoder later in the stack.
 pub mod encode;
 #[cfg(feature = "recording-raster")]
 mod font;
