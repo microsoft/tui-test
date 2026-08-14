@@ -382,4 +382,88 @@ fn capture_error(error: CaptureError) -> crate::api::TuiTestError {
             crate::api::TuiTestError::internal(format!("recording capture failed: {message}"))
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::Duration;
+
+        #[test]
+        fn resize_is_queued_after_output_already_processing_at_the_old_size() {
+            let path = test_path("resize-order");
+            let mut recorder = Recorder::create(path.clone(), 1, 1, &[], Arc::new(Logger::disabled()));
+            let state = Arc::new(Mutex::new(TermState {
+                emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
+                tracker: CommandTracker::new(),
+                last_change: Instant::now(),
+                awaiting_start: None,
+                exited: None,
+            }));
+            let capture = recorder.capture();
+            let output_state = Arc::clone(&state);
+            let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let output = std::thread::spawn(move || {
+                let _state = output_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                locked_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                capture.on_data(b"old-size-output");
+            });
+            locked_rx.recv().unwrap();
+            let release = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                release_tx.send(()).unwrap();
+            });
+
+            resize_emulator_and_record(&state, &recorder, 2, 1);
+            release.join().unwrap();
+            output.join().unwrap();
+            recorder.capture().on_data(b"new-size-output");
+            recorder.flush().unwrap();
+
+            let cast = std::fs::read_to_string(&path).unwrap();
+            let old = cast.find("old-size-output").unwrap();
+            let resize = cast.find("\"r\",\"2x1\"").unwrap();
+            let new = cast.find("new-size-output").unwrap();
+            assert!(old < resize && resize < new, "{cast}");
+
+            recorder.shutdown();
+            std::fs::remove_file(path).unwrap();
+        }
+
+        #[test]
+        fn shutdown_drains_reader_tail_before_stopping_recorder() {
+            let path = test_path("reader-tail");
+            let mut recorder = Recorder::create(path.clone(), 1, 1, &[], Arc::new(Logger::disabled()));
+            let capture = recorder.capture();
+            let mut reader = Some(std::thread::spawn(move || {
+                capture.on_data(b"reader-tail-marker");
+            }));
+
+            drain_reader_and_recorder(&mut reader, &mut recorder);
+
+            assert!(std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("reader-tail-marker"));
+            std::fs::remove_file(path).unwrap();
+        }
+
+        fn test_path(label: &str) -> PathBuf {
+            static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("target")
+                .join("session-tests");
+            std::fs::create_dir_all(&root).unwrap();
+            root.join(format!(
+                "{label}-{}-{}.cast",
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ))
+        }
+    }
 }
