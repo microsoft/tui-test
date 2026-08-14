@@ -245,6 +245,9 @@ pub enum Command {
         /// Include scrollback, not just the visible viewport.
         #[arg(long)]
         full: bool,
+        /// Scale the SVG dimensions while keeping the same terminal cells.
+        #[arg(long)]
+        zoom: Option<f64>,
     },
     /// Start or stop an animated terminal recording.
     Record {
@@ -376,6 +379,9 @@ pub enum RecordCmd {
         /// Clamp idle gaps to this many seconds.
         #[arg(long)]
         idle_time_limit: Option<f64>,
+        /// Scale image/video dimensions while keeping the same terminal cells.
+        #[arg(long)]
+        zoom: Option<f64>,
     },
     /// Stop the active recording and finish its output file.
     Stop,
@@ -552,6 +558,8 @@ mod tests {
             "2",
             "--idle-time-limit",
             "3",
+            "--zoom",
+            "0.5",
         ])
         .expect("parse recording start");
         assert!(matches!(
@@ -562,8 +570,29 @@ mod tests {
                     fps: Some(24),
                     speed: Some(2.0),
                     idle_time_limit: Some(3.0),
+                    zoom: Some(0.5),
                     ..
                 }
+            })
+        ));
+    }
+
+    #[test]
+    fn screenshot_accepts_zoom() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "screenshot",
+            "--out",
+            "screen.svg",
+            "--zoom",
+            "0.5",
+        ])
+        .expect("parse screenshot zoom");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Screenshot {
+                zoom: Some(0.5),
+                ..
             })
         ));
     }

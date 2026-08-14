@@ -61,6 +61,12 @@ export interface RecordingOptions {
   fps?: number;
   speed?: number;
   idleTimeLimit?: number;
+  zoom?: number;
+}
+
+export interface ScreenshotOptions {
+  full?: boolean;
+  zoom?: number;
 }
 
 const TERMINAL_MARKER = "Terminal content:\n";
@@ -344,10 +350,11 @@ export class TuiTest {
     return this.#runtime.getSize();
   }
 
-  async screenshot(path: string | null = null, opts: { full?: boolean } = {}): Promise<string> {
+  async screenshot(path: string | null = null, opts: ScreenshotOptions = {}): Promise<string> {
     return this.#runtime.screenshot({
       full: opts.full ?? false,
       path: optional(path),
+      zoom: opts.zoom,
     });
   }
 
@@ -358,6 +365,7 @@ export class TuiTest {
       fps: opts.fps,
       speed: opts.speed,
       idleTimeLimit: opts.idleTimeLimit,
+      zoom: opts.zoom,
     });
   }
 

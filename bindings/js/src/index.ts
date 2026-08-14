@@ -5,6 +5,7 @@ export type {
   TitleOptions,
   RecordingFormat,
   RecordingOptions,
+  ScreenshotOptions,
   WaitTextOptions,
 } from "./client.js";
 export { uniqueSession } from "./ephemeral.js";

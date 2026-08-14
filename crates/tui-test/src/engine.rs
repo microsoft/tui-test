@@ -690,8 +690,8 @@ fn dispatch(
             include_title,
             cwd,
         )?)),
-        Operation::Screenshot { full, path } => Ok(OperationResult::Screenshot(screenshot(
-            session, full, path,
+        Operation::Screenshot { full, path, zoom } => Ok(OperationResult::Screenshot(screenshot(
+            session, full, path, zoom,
         )?)),
         Operation::StartRecording {
             path,
@@ -699,8 +699,9 @@ fn dispatch(
             fps,
             speed,
             idle_time_limit,
+            zoom,
         } => {
-            session.start_recording(path, format, fps, speed, idle_time_limit)?;
+            session.start_recording(path, format, fps, speed, idle_time_limit, zoom)?;
             Ok(OperationResult::Unit)
         }
         Operation::StopRecording => Ok(OperationResult::Recording(session.stop_recording()?)),
@@ -1443,16 +1444,19 @@ fn screenshot(
     session: &TerminalSession,
     full: bool,
     path: Option<String>,
+    zoom: Option<f64>,
 ) -> Result<ScreenshotResult, TuiTestError> {
+    let zoom = crate::api::resolve_zoom(zoom)?;
     match path {
         Some(path) => {
             let snapshot = svg_snapshot(session, full);
-            let svg = crate::render::svg::render_svg(
+            let svg = crate::render::svg::render_svg_with_zoom(
                 &snapshot.rows,
                 snapshot.cols,
                 &snapshot.render_state,
                 snapshot.cursor,
                 snapshot.title.as_deref(),
+                zoom,
             );
             std::fs::write(&path, svg)
                 .map_err(|error| TuiTestError::internal(error.to_string()))?;

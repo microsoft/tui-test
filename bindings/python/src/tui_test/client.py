@@ -368,9 +368,13 @@ class TuiTest:
         return await self._await(self._native.get_size())
 
     async def screenshot(
-        self, path: Optional[str] = None, *, full: bool = False
+        self,
+        path: Optional[str] = None,
+        *,
+        full: bool = False,
+        zoom: Optional[float] = None,
     ) -> str:
-        return await self._await(self._native.screenshot(path, full))
+        return await self._await(self._native.screenshot(path, full, zoom))
 
     async def start_recording(
         self,
@@ -380,10 +384,11 @@ class TuiTest:
         fps: Optional[int] = None,
         speed: Optional[float] = None,
         idle_time_limit: Optional[float] = None,
+        zoom: Optional[float] = None,
     ) -> None:
         await self._await(
             self._native.start_recording(
-                path, format, fps, speed, idle_time_limit
+                path, format, fps, speed, idle_time_limit, zoom
             )
         )
 

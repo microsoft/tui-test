@@ -136,6 +136,8 @@ pub enum Request {
     Screenshot {
         full: bool,
         path: Option<String>,
+        #[serde(default)]
+        zoom: Option<f64>,
     },
     StartRecording {
         path: String,
@@ -143,6 +145,8 @@ pub enum Request {
         fps: Option<u8>,
         speed: Option<f64>,
         idle_time_limit: Option<f64>,
+        #[serde(default)]
+        zoom: Option<f64>,
     },
     StopRecording,
     FlushRecording,
@@ -300,19 +304,23 @@ impl Request {
                 include_title,
                 cwd,
             }),
-            Request::Screenshot { full, path } => Ok(Operation::Screenshot { full, path }),
+            Request::Screenshot { full, path, zoom } => {
+                Ok(Operation::Screenshot { full, path, zoom })
+            }
             Request::StartRecording {
                 path,
                 format,
                 fps,
                 speed,
                 idle_time_limit,
+                zoom,
             } => Ok(Operation::StartRecording {
                 path,
                 format,
                 fps,
                 speed,
                 idle_time_limit,
+                zoom,
             }),
             Request::StopRecording => Ok(Operation::StopRecording),
             Request::Ping
@@ -507,6 +515,24 @@ mod tests {
             }
             other => panic!("expected ExpectExitCode, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn image_zoom_is_optional_for_older_clients() {
+        let screenshot: Request =
+            serde_json::from_str(r#"{"kind":"screenshot","full":false,"path":"screen.svg"}"#)
+                .expect("deserialize legacy screenshot");
+        assert!(matches!(screenshot, Request::Screenshot { zoom: None, .. }));
+
+        let recording: Request = serde_json::from_str(
+            r#"{"kind":"start_recording","path":"demo.png","format":null,
+                "fps":null,"speed":null,"idle_time_limit":null}"#,
+        )
+        .expect("deserialize legacy recording");
+        assert!(matches!(
+            recording,
+            Request::StartRecording { zoom: None, .. }
+        ));
     }
 
     #[test]

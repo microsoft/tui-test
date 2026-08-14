@@ -54,6 +54,30 @@ fn scaled_renderers_multiply_output_dimensions() {
 }
 
 #[test]
+fn fractional_zoom_shrinks_output_without_changing_grid_dimensions() {
+    let standard = GridRenderer::new(80, 30);
+    let half = GridRenderer::with_zoom(80, 30, 0.5).unwrap();
+    assert_eq!(
+        half.pixel_size(),
+        (
+            standard.pixel_size().0.div_ceil(2),
+            standard.pixel_size().1.div_ceil(2)
+        )
+    );
+
+    let mut half = half;
+    half.render(&vec![vec![EmuCell::blank(); 80]; 30], 80)
+        .unwrap();
+}
+
+#[test]
+fn invalid_zoom_is_rejected() {
+    for zoom in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+        assert!(GridRenderer::with_zoom(1, 1, zoom).is_err());
+    }
+}
+
+#[test]
 fn smaller_terminal_is_centered_on_the_recording_canvas() {
     let mut renderer = GridRenderer::new(4, 3);
     let mut content_cell = cell(" ", Attrs::empty());

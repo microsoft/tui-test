@@ -82,8 +82,18 @@ class IntegrationTests(unittest.TestCase):
                         path = Path(root) / f"styled.{extension}"
                         async with self._client() as su:
                             await su.open(shell=SHELL, cols=20, rows=4)
+                            if format == "apng":
+                                screenshot = Path(root) / "zoomed.svg"
+                                await su.screenshot(
+                                    str(screenshot), zoom=0.5
+                                )
+                                self.assertIn(
+                                    'width="115" height="68" '
+                                    'viewBox="0 0 230 136"',
+                                    screenshot.read_text(encoding="utf-8"),
+                                )
                             await su.start_recording(
-                                str(path), format=format, fps=30
+                                str(path), format=format, fps=30, zoom=0.5
                             )
                             await su.submit(command)
                             await su.wait_command()
@@ -94,8 +104,20 @@ class IntegrationTests(unittest.TestCase):
                         if format == "apng":
                             self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
                             self.assertIn(b"acTL", data)
+                            self.assertEqual(
+                                int.from_bytes(data[16:20], "big"), 278
+                            )
+                            self.assertEqual(
+                                int.from_bytes(data[20:24], "big"), 184
+                            )
                         else:
                             self.assertEqual(data[:6], b"GIF89a")
+                            self.assertEqual(
+                                int.from_bytes(data[6:8], "little"), 278
+                            )
+                            self.assertEqual(
+                                int.from_bytes(data[8:10], "little"), 184
+                            )
 
         run(scenario())
 

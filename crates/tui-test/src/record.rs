@@ -30,6 +30,7 @@ pub(crate) struct StartRecording {
     pub rows: u16,
     pub env: Vec<(String, String)>,
     pub initial_output: String,
+    pub zoom: f64,
     #[cfg(feature = "recording-raster")]
     pub timeline: frames::TimelineOptions,
     #[cfg(feature = "recording-raster")]
@@ -41,6 +42,7 @@ pub(crate) struct StoppedRecording {
     #[cfg(feature = "recording-raster")]
     pub capture_path: PathBuf,
     pub format: RecordingFormat,
+    pub zoom: f64,
     #[cfg(feature = "recording-raster")]
     pub timeline: frames::TimelineOptions,
     #[cfg(feature = "recording-raster")]
