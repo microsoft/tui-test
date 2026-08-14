@@ -2,7 +2,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::api::RecordingFormat;
+use crate::profile::Profile;
 use crate::record::frames::Frame;
+use crate::render::svg::RenderState;
+use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::cell::{Attrs, Color, EmuCell, NamedColor, UnderlineStyle};
 
 use super::encode;
@@ -22,10 +25,17 @@ fn single_frame_gif_and_png_renders_match_snapshots() {
             let output = temporary_output(case.name, extension);
             let frame = Frame {
                 grid: case.grid.clone(),
+                title: None,
                 duration: Duration::from_millis(250),
+                render_state: RenderState::capture(&AlacrittyEmu::new(
+                    COLS,
+                    ROWS as u16,
+                    &Profile::default(),
+                )),
+                cursor: None,
             };
             let mut renderer = GridRenderer::new(COLS, ROWS);
-            encode::encode(&output, format, &[frame], &mut renderer, COLS).unwrap();
+            encode::encode(&output, format, &[frame], &mut renderer).unwrap();
             let actual = std::fs::read(&output).unwrap();
             std::fs::remove_file(output).unwrap();
             assert_snapshot(case.name, extension, &actual);
