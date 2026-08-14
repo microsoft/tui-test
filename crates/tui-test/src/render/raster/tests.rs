@@ -66,7 +66,7 @@ fn fractional_zoom_shrinks_output_without_changing_grid_dimensions() {
     );
 
     let mut half = half;
-    half.render(&vec![vec![EmuCell::blank(); 80]; 30], 80)
+    half.render(&frame(vec![vec![EmuCell::blank(); 80]; 30]))
         .unwrap();
 }
 
