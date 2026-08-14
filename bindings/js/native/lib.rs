@@ -67,16 +67,12 @@ impl From<Shell> for CoreShell {
 
 #[napi(string_enum = "lowercase")]
 pub enum RecordingFormat {
-    Apng,
-    Gif,
     Cast,
 }
 
 impl From<RecordingFormat> for CoreRecordingFormat {
     fn from(value: RecordingFormat) -> Self {
         match value {
-            RecordingFormat::Apng => Self::Apng,
-            RecordingFormat::Gif => Self::Gif,
             RecordingFormat::Cast => Self::Cast,
         }
     }

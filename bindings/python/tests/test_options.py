@@ -228,8 +228,8 @@ class TypedCallTests(unittest.TestCase):
         terminal = _CapturingClient("s")
         run(
             terminal.start_recording(
-                "demo.png",
-                format="apng",
+                "demo.cast",
+                format="cast",
                 fps=24,
                 speed=2.0,
                 idle_time_limit=3.0,
@@ -241,7 +241,7 @@ class TypedCallTests(unittest.TestCase):
             [
                 (
                     "start_recording",
-                    ("demo.png", "apng", 24, 2.0, 3.0),
+                    ("demo.cast", "cast", 24, 2.0, 3.0),
                 ),
                 ("stop_recording", ()),
             ],
