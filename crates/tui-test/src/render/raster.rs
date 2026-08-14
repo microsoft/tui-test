@@ -19,6 +19,9 @@ use draw::{
 };
 use font::{FontSystem, GlyphKey};
 
+pub(crate) const CANVAS_PADDING: u32 = 24;
+pub(crate) const CANVAS_BACKGROUND: Rgb = Rgb::new(22, 25, 30);
+
 #[derive(Debug)]
 pub struct RgbaFrame {
     width: u32,
@@ -46,8 +49,8 @@ pub trait FrameRenderer {
 }
 
 pub struct GridRenderer {
-    cols: u16,
-    rows: usize,
+    max_cols: u16,
+    max_rows: usize,
     scale: u32,
     width: u32,
     height: u32,
@@ -63,15 +66,21 @@ impl GridRenderer {
     pub fn with_scale(cols: u16, rows: usize, scale: u32) -> Self {
         assert!(scale > 0, "recording raster scale must be non-zero");
         let (base_width, base_height) = svg::pixel_size(cols, rows);
+        let padding = CANVAS_PADDING
+            .checked_mul(scale)
+            .and_then(|padding| padding.checked_mul(2))
+            .expect("recording canvas padding must fit in u32");
         let width = base_width
             .checked_mul(scale)
+            .and_then(|width| width.checked_add(padding))
             .expect("recording width must fit in u32");
         let height = base_height
             .checked_mul(scale)
+            .and_then(|height| height.checked_add(padding))
             .expect("recording height must fit in u32");
         Self {
-            cols,
-            rows,
+            max_cols: cols,
+            max_rows: rows,
             scale,
             width,
             height,
@@ -85,27 +94,41 @@ impl GridRenderer {
 impl FrameRenderer for GridRenderer {
     fn render(&mut self, frame: &Frame) -> anyhow::Result<RgbaFrame> {
         let grid = &frame.grid;
-        let cols: u16 = grid
-            .first()
-            .map_or(0, Vec::len)
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("recording frame width exceeds u16"))?;
-        if cols != self.cols || grid.len() != self.rows {
-            anyhow::bail!("recording frame dimensions changed during export");
+        let (cols, rows) = frame.dimensions()?;
+        if cols > self.max_cols || rows > self.max_rows {
+            anyhow::bail!(
+                "recording frame dimensions {cols}x{rows} exceed canvas dimensions {}x{}",
+                self.max_cols,
+                self.max_rows
+            );
         }
-        if grid.iter().any(|row| row.len() != usize::from(cols)) {
-            anyhow::bail!("recording frame rows have inconsistent widths");
+        if grid.iter().any(|row| row.len() > usize::from(cols)) {
+            anyhow::bail!("recording frame row exceeds its declared width");
         }
 
         let scale = self.scale as f32;
         let colors = &frame.render_state;
-        self.pixmap.fill(tiny_skia::Color::from_rgba8(0, 0, 0, 0));
+        let (base_width, base_height) = svg::pixel_size(cols, rows);
+        let panel_width = base_width
+            .checked_mul(self.scale)
+            .expect("recording frame width must fit in u32");
+        let panel_height = base_height
+            .checked_mul(self.scale)
+            .expect("recording frame height must fit in u32");
+        let origin_x = (self.width - panel_width) as f32 / 2.0;
+        let origin_y = (self.height - panel_height) as f32 / 2.0;
+        self.pixmap.fill(tiny_skia::Color::from_rgba8(
+            CANVAS_BACKGROUND.r,
+            CANVAS_BACKGROUND.g,
+            CANVAS_BACKGROUND.b,
+            255,
+        ));
         fill_rounded_rect(
             &mut self.pixmap,
-            0.0,
-            0.0,
-            self.width as f32,
-            self.height as f32,
+            origin_x,
+            origin_y,
+            panel_width as f32,
+            panel_height as f32,
             8.0 * scale,
             colors.resolve(None, false),
         );
@@ -117,8 +140,8 @@ impl FrameRenderer for GridRenderer {
         .into_iter()
         .enumerate()
         {
-            let cx = (svg::MARGIN_X + 5.0 + index as f32 * 20.0) * scale;
-            let cy = svg::HEADER_H / 2.0 * scale;
+            let cx = origin_x + (svg::MARGIN_X + 5.0 + index as f32 * 20.0) * scale;
+            let cy = origin_y + svg::HEADER_H / 2.0 * scale;
             fill_circle(&mut self.pixmap, cx, cy, svg::DOT_R * scale, color);
         }
 
@@ -130,8 +153,8 @@ impl FrameRenderer for GridRenderer {
                 if background != colors.resolve(None, false) {
                     fill_rect(
                         &mut self.pixmap,
-                        (svg::MARGIN_X + x as f32 * svg::CELL_W) * scale,
-                        (svg::HEADER_H + y as f32 * svg::CELL_H) * scale,
+                        origin_x + (svg::MARGIN_X + x as f32 * svg::CELL_W) * scale,
+                        origin_y + (svg::HEADER_H + y as f32 * svg::CELL_H) * scale,
                         svg::CELL_W * scale,
                         svg::CELL_H * scale,
                         background,
@@ -160,12 +183,12 @@ impl FrameRenderer for GridRenderer {
                 } else {
                     1
                 };
-                let origin_x = (svg::MARGIN_X + x as f32 * svg::CELL_W) * scale;
-                let origin_y = (svg::HEADER_H + y as f32 * svg::CELL_H) * scale;
+                let cell_origin_x = origin_x + (svg::MARGIN_X + x as f32 * svg::CELL_W) * scale;
+                let cell_origin_y = origin_y + (svg::HEADER_H + y as f32 * svg::CELL_H) * scale;
                 let cell_width = svg::CELL_W * span as f32 * scale;
                 let cell_height = svg::CELL_H * scale;
-                let baseline =
-                    (svg::HEADER_H + y as f32 * svg::CELL_H + svg::FONT_BASELINE) * scale;
+                let baseline = origin_y
+                    + (svg::HEADER_H + y as f32 * svg::CELL_H + svg::FONT_BASELINE) * scale;
 
                 if unsupported_grapheme(cell.ch.as_str()) {
                     missing.insert(format_glyph_sequence(cell.ch.as_str()));
@@ -184,8 +207,8 @@ impl FrameRenderer for GridRenderer {
                         Some(glyph) => draw_glyph(
                             pixmap,
                             glyph,
-                            origin_x,
-                            origin_y,
+                            cell_origin_x,
+                            cell_origin_y,
                             cell_width,
                             cell_height,
                             baseline,
@@ -201,8 +224,8 @@ impl FrameRenderer for GridRenderer {
                 if style.underline {
                     fill_rect(
                         pixmap,
-                        origin_x,
-                        origin_y + cell_height - 3.0 * scale,
+                        cell_origin_x,
+                        cell_origin_y + cell_height - 3.0 * scale,
                         cell_width,
                         scale.max(1.0),
                         style.fg,
@@ -211,7 +234,7 @@ impl FrameRenderer for GridRenderer {
                 if style.strike {
                     fill_rect(
                         pixmap,
-                        origin_x,
+                        cell_origin_x,
                         baseline - svg::FONT_SIZE * 0.32 * scale,
                         cell_width,
                         scale.max(1.0),
@@ -228,6 +251,8 @@ impl FrameRenderer for GridRenderer {
                 grid,
                 cursor,
                 colors,
+                origin_x,
+                origin_y,
                 scale,
                 &mut missing,
             );
@@ -264,6 +289,8 @@ fn draw_cursor(
     grid: &[Vec<EmuCell>],
     (cx, cy): (u16, usize),
     colors: &dyn RenderColors,
+    panel_origin_x: f32,
+    panel_origin_y: f32,
     scale: f32,
     missing: &mut BTreeSet<String>,
 ) {
@@ -281,8 +308,9 @@ fn draw_cursor(
     } else {
         1
     };
-    let origin_x = (svg::MARGIN_X + f32::from(cx) * svg::CELL_W) * scale;
-    let origin_y = (svg::HEADER_H + cy as f32 * svg::CELL_H) * scale;
+    let origin_x =
+        panel_origin_x + (svg::MARGIN_X + f32::from(cx) * svg::CELL_W) * scale;
+    let origin_y = panel_origin_y + (svg::HEADER_H + cy as f32 * svg::CELL_H) * scale;
     let cell_width = svg::CELL_W * span as f32 * scale;
     let cell_height = svg::CELL_H * scale;
     let thickness = 2.0 * scale;
@@ -319,7 +347,8 @@ fn draw_cursor(
         missing.insert(format_glyph_sequence(cell.ch.as_str()));
         return;
     }
-    let baseline = (svg::HEADER_H + cy as f32 * svg::CELL_H + svg::FONT_BASELINE) * scale;
+    let baseline = panel_origin_y
+        + (svg::HEADER_H + cy as f32 * svg::CELL_H + svg::FONT_BASELINE) * scale;
     for character in cell.ch.chars() {
         if is_default_ignorable(character) {
             continue;

@@ -81,8 +81,8 @@ pub(crate) fn from_cast<R: BufRead>(
     options: &TimelineOptions,
 ) -> anyhow::Result<Vec<Frame>> {
     validate_options(options)?;
-    let cols = cast.header.width;
-    let rows = cast.header.height;
+    let mut cols = cast.header.width;
+    let mut rows = cast.header.height;
     let mut emulator = AlacrittyEmu::new(cols, rows, &Profile::default());
     let mut clock = TimelineClock::default();
     let mut pending: Option<TimedGrid> = None;
@@ -102,7 +102,11 @@ pub(crate) fn from_cast<R: BufRead>(
         }
         match event.kind {
             CastEventKind::Output(output) => emulator.process(output.as_bytes()),
-            CastEventKind::Resize(width, height) => emulator.resize(width, height),
+            CastEventKind::Resize(width, height) => {
+                emulator.resize(width, height);
+                cols = width;
+                rows = height;
+            }
         }
         pending = Some(TimedGrid {
             at,
@@ -400,6 +404,43 @@ mod tests {
 
     #[test]
     #[cfg(feature = "recording-raster")]
+    fn replay_preserves_resize_dimensions() {
+        let cast_path = temp_path("cast");
+        let started = std::time::Instant::now();
+        let mut writer = CastWriter::create(&cast_path, 2, 1, &[], started).unwrap();
+        writer.write_output(started, "A").unwrap();
+        writer
+            .write_resize(started + Duration::from_millis(100), 4, 2)
+            .unwrap();
+        writer
+            .write_output(started + Duration::from_millis(200), "\x1b[2J\x1b[HB")
+            .unwrap();
+        writer
+            .write_resize(started + Duration::from_millis(300), 1, 1)
+            .unwrap();
+        writer
+            .write_output(started + Duration::from_millis(400), "\x1b[2J\x1b[HC")
+            .unwrap();
+        writer.flush().unwrap();
+
+        let frames = from_cast(
+            crate::record::cast::read(&cast_path).unwrap(),
+            &TimelineOptions::default(),
+        )
+        .unwrap();
+        let mut dimensions = frames
+            .iter()
+            .map(|frame| frame.dimensions().unwrap())
+            .collect::<Vec<_>>();
+        dimensions.dedup();
+        assert_eq!(dimensions, vec![(2, 1), (4, 2), (1, 1)]);
+        assert_eq!(max_dimensions(&frames).unwrap(), (4, 2));
+
+        std::fs::remove_file(cast_path).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "recording-raster")]
     fn scripted_cast_round_trips_to_apng() {
         let cast_path = temp_path("cast");
         let apng_path = temp_path("png");
@@ -440,7 +481,8 @@ mod tests {
         let encoded = std::fs::read(&apng_path).unwrap();
         assert_eq!(&encoded[..8], b"\x89PNG\r\n\x1a\n");
         assert!(encoded.windows(4).any(|window| window == b"acTL"));
-        assert_eq!(renderer.pixel_size(), (100, 148));
+        assert_eq!(renderer.pixel_size(), (196, 244));
+
         std::fs::remove_file(cast_path).unwrap();
         std::fs::remove_file(apng_path).unwrap();
     }

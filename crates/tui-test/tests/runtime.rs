@@ -338,8 +338,8 @@ fn session_records_and_exports_an_apng() {
     let bytes = std::fs::read(&path).expect("read apng");
     assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
     assert!(bytes.windows(4).any(|window| window == b"acTL"));
-    assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 1660);
-    assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 1364);
+    assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 1756);
+    assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 1460);
 
     session.close().expect("close terminal");
     std::fs::remove_file(path).expect("remove apng");

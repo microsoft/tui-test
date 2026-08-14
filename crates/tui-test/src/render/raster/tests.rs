@@ -1,6 +1,6 @@
 #[cfg(feature = "recording-font-jetbrains-mono-styles")]
 use super::font::{FontSystem, GlyphKey};
-use super::{FrameRenderer, GridRenderer};
+use super::{FrameRenderer, GridRenderer, RgbaFrame, CANVAS_BACKGROUND, CANVAS_PADDING};
 use crate::profile::Profile;
 use crate::record::frames::Frame;
 use crate::render::svg::RenderState;
@@ -54,6 +54,46 @@ fn scaled_renderers_multiply_output_dimensions() {
 }
 
 #[test]
+fn smaller_terminal_is_centered_on_the_recording_canvas() {
+    let mut renderer = GridRenderer::new(4, 3);
+    let frame = renderer
+        .render(&[vec![cell(" ", Attrs::empty()); 2]], 2)
+        .unwrap();
+    let (width, height) = frame.dimensions();
+    let (panel_width, panel_height) = crate::render::svg::pixel_size(2, 1);
+    let origin_x = (width - panel_width) / 2;
+    let origin_y = (height - panel_height) / 2;
+    let profile = Profile::default();
+
+    assert_eq!(
+        pixel_at(&frame, 0, 0),
+        [
+            CANVAS_BACKGROUND.r,
+            CANVAS_BACKGROUND.g,
+            CANVAS_BACKGROUND.b,
+            255
+        ]
+    );
+    assert_eq!(
+        pixel_at(&frame, origin_x + panel_width / 2, origin_y + 10),
+        [
+            profile.colors.background.r,
+            profile.colors.background.g,
+            profile.colors.background.b,
+            255
+        ]
+    );
+    assert_eq!(
+        pixel_at(&frame, origin_x - 1, origin_y + panel_height / 2),
+        pixel_at(&frame, 0, 0)
+    );
+    assert_eq!(
+        pixel_at(&frame, origin_x + panel_width, origin_y + panel_height / 2),
+        pixel_at(&frame, 0, 0)
+    );
+}
+
+#[test]
 fn bold_and_italic_change_the_rasterized_glyph() {
     let mut renderer = GridRenderer::new(1, 1);
     let regular = renderer
@@ -67,6 +107,23 @@ fn bold_and_italic_change_the_rasterized_glyph() {
         .unwrap();
     assert_ne!(regular.as_raw(), bold.as_raw());
     assert_ne!(regular.as_raw(), italic.as_raw());
+}
+
+#[cfg(feature = "recording-font-jetbrains-mono-styles")]
+#[test]
+fn bundled_styles_do_not_need_synthetic_bold_or_italic() {
+    let mut fonts = FontSystem::new();
+    for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+        let glyph = fonts
+            .resolve(GlyphKey {
+                character: 'M',
+                bold,
+                italic,
+            })
+            .unwrap();
+        assert!(!glyph.synthetic_bold);
+        assert!(!glyph.synthetic_italic);
+    }
 }
 
 #[cfg(feature = "recording-font-jetbrains-mono-styles")]
@@ -152,8 +209,8 @@ fn frame_palette_and_cursor_state_change_the_pixels() {
     assert_ne!(first_pixels, second_pixels);
 
     let width = renderer.pixel_size().0 as usize;
-    let x = super::super::svg::MARGIN_X as usize;
-    let y = super::super::svg::HEADER_H as usize;
+    let x = (CANVAS_PADDING + super::super::svg::MARGIN_X as u32) as usize;
+    let y = (CANVAS_PADDING + super::super::svg::HEADER_H as u32) as usize;
     let cursor = (y * width + x) * 4;
     assert_eq!(&first_pixels[cursor..cursor + 3], &[255, 0, 255]);
 }
@@ -181,4 +238,10 @@ fn block_cursor_does_not_reveal_invisible_text() {
     let hidden_pixels = renderer.render(&hidden).unwrap().into_raw();
     let blank_pixels = renderer.render(&blank).unwrap().into_raw();
     assert_eq!(hidden_pixels, blank_pixels);
+}
+
+fn pixel_at(frame: &RgbaFrame, x: u32, y: u32) -> [u8; 4] {
+    let (width, _) = frame.dimensions();
+    let offset = ((y * width + x) * 4) as usize;
+    frame.as_raw()[offset..offset + 4].try_into().unwrap()
 }
