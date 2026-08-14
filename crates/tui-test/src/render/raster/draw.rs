@@ -121,6 +121,41 @@ pub(super) fn fill_rounded_rect(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fill_top_rounded_rect(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+    color: Rgb,
+) {
+    let right = x + width;
+    let bottom = y + height;
+    let radius = radius.min(width / 2.0).min(height);
+    let mut path = PathBuilder::new();
+    path.move_to(x, y + radius);
+    path.quad_to(x, y, x + radius, y);
+    path.line_to(right - radius, y);
+    path.quad_to(right, y, right, y + radius);
+    path.line_to(right, bottom);
+    path.line_to(x, bottom);
+    path.close();
+    let Some(path) = path.finish() else {
+        return;
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, 255);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+}
+
 pub(super) fn is_default_ignorable(character: char) -> bool {
     matches!(
         character as u32,

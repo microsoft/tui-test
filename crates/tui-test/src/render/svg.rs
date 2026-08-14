@@ -11,7 +11,7 @@
 use std::fmt::Write;
 
 use super::nerd_font::NerdFont;
-use crate::profile::{ColorSlot, Rgb};
+use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{truncate_to_columns, Attrs, Color, EmuCell, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator};
 
@@ -20,9 +20,22 @@ pub(crate) const CELL_H: f32 = 21.0;
 pub(crate) const FONT_SIZE: f32 = 17.0;
 pub(crate) const FONT_BASELINE: f32 = (CELL_H - FONT_SIZE) / 2.0 + FONT_SIZE * 0.78;
 pub(crate) const MARGIN_X: f32 = 15.0;
-pub(crate) const HEADER_H: f32 = 38.0;
+pub(crate) const HEADER_H: f32 = 34.0;
+pub(crate) const CONTENT_PADDING_TOP: f32 = 4.0;
 const MARGIN_BOTTOM: f32 = 14.0;
 pub(crate) const DOT_R: f32 = 7.0;
+pub(crate) const RED_DOT_R: f32 = 2.5;
+pub(crate) const RED_DOT_COLOR: Rgb = Rgb::new(105, 17, 10);
+pub(crate) const WINDOW_RADIUS: f32 = 8.0;
+pub(crate) const TITLE_DIVIDER_H: f32 = 1.0;
+pub(crate) const TITLE_BG: Rgb = Rgb::new(217, 217, 232);
+const TITLE_FG: Rgb = Rgb::new(65, 65, 69);
+pub(crate) const TITLE_DIVIDER: Rgb = Rgb::new(0, 0, 0);
+pub(crate) const TRAFFIC_LIGHTS: [Rgb; 3] = [
+    Rgb::new(236, 106, 94),
+    Rgb::new(244, 191, 79),
+    Rgb::new(97, 197, 84),
+];
 /// Title bar text, smaller than the grid font so the chrome does not compete
 /// with the terminal content itself.
 const TITLE_FONT_SIZE: f32 = 13.0;
@@ -72,6 +85,21 @@ impl<T: Emulator + ?Sized> RenderColors for T {
 
     fn cursor_shape(&self) -> CursorShape {
         Emulator::cursor_shape(self)
+    }
+}
+
+impl RenderColors for Profile {
+    fn color(&self, slot: ColorSlot) -> Rgb {
+        match slot {
+            ColorSlot::Indexed(index) => self.colors.rgb(index),
+            ColorSlot::Foreground => self.colors.foreground,
+            ColorSlot::Background => self.colors.background,
+            ColorSlot::Cursor => self.colors.cursor,
+        }
+    }
+
+    fn cursor_shape(&self) -> CursorShape {
+        CursorShape::Block
     }
 }
 
@@ -187,7 +215,7 @@ fn write_text_run(
     }
     let fg = hex(style.fg);
     let tx = MARGIN_X + start as f32 * CELL_W;
-    let baseline = HEADER_H + y as f32 * CELL_H + FONT_BASELINE;
+    let baseline = HEADER_H + CONTENT_PADDING_TOP + y as f32 * CELL_H + FONT_BASELINE;
     let width = (end - start) as f32 * CELL_W;
     let original_text = run_text(row, start, end);
     let (text, run_x_adjust) = nerd_font.prepare_run(&original_text, width, CELL_W);
@@ -221,7 +249,10 @@ fn write_text_run(
             nerd_font.write_use(
                 out,
                 c,
-                (MARGIN_X + i as f32 * CELL_W, HEADER_H + y as f32 * CELL_H),
+                (
+                    MARGIN_X + i as f32 * CELL_W,
+                    HEADER_H + CONTENT_PADDING_TOP + y as f32 * CELL_H,
+                ),
                 (CELL_W, CELL_H),
                 run_x_adjust,
                 &fg,
@@ -237,7 +268,7 @@ fn write_text_run(
 /// computed width would distort it. It is instead truncated to what fits, and
 /// kept clear of the traffic lights by reserving the same margin on both
 /// sides, which also keeps it centred on the space that remains.
-fn write_title(out: &mut String, title: &str, width: f32, colors: &dyn RenderColors) {
+fn write_title(out: &mut String, title: &str, width: f32) {
     const GAP: f32 = 8.0;
     let available = width - 2.0 * (DOTS_RIGHT + GAP);
     // A monospace advance, scaled from the grid font's known cell width.
@@ -254,12 +285,10 @@ fn write_title(out: &mut String, title: &str, width: f32, colors: &dyn RenderCol
     let shown = truncate_to_columns(title, fits);
     let _ = write!(
         out,
-        r#"<text x="{cx:.2}" y="{baseline:.2}" fill="{fill}" font-size="{TITLE_FONT_SIZE}px" text-anchor="middle" xml:space="preserve">{esc}</text>"#,
+        r#"<text x="{cx:.2}" y="{baseline:.2}" fill="{fill}" font-size="{TITLE_FONT_SIZE}px" font-weight="bold" text-anchor="middle" xml:space="preserve">{esc}</text>"#,
         cx = width / 2.0,
         baseline = HEADER_H / 2.0 + TITLE_FONT_SIZE * 0.35,
-        // The dim grey of the palette, so the title reads as chrome next to
-        // the terminal's own foreground.
-        fill = hex(colors.color(ColorSlot::Indexed(8))),
+        fill = hex(TITLE_FG),
         esc = escape(&shown),
     );
 }
@@ -296,7 +325,7 @@ fn write_cursor(
     };
     let w = span * CELL_W;
     let x = MARGIN_X + cx as f32 * CELL_W;
-    let y = HEADER_H + cy as f32 * CELL_H;
+    let y = HEADER_H + CONTENT_PADDING_TOP + cy as f32 * CELL_H;
     let fill = hex(colors.color(ColorSlot::Cursor));
 
     let (rx, ry, rw, rh) = match colors.cursor_shape() {
@@ -353,9 +382,9 @@ pub(crate) fn render_svg_with_font(
     let nerd_font = NerdFont::new(rows, FONT_SIZE);
     let cols = cols as usize;
     let x0 = MARGIN_X;
-    let y0 = HEADER_H;
+    let y0 = HEADER_H + CONTENT_PADDING_TOP;
     let width = MARGIN_X * 2.0 + cols as f32 * CELL_W;
-    let height = HEADER_H + MARGIN_BOTTOM + rows.len().max(1) as f32 * CELL_H;
+    let height = HEADER_H + CONTENT_PADDING_TOP + MARGIN_BOTTOM + rows.len().max(1) as f32 * CELL_H;
 
     let mut out = String::new();
     let _ = write!(
@@ -365,19 +394,39 @@ pub(crate) fn render_svg_with_font(
     nerd_font.write_defs(&mut out);
     let _ = write!(
         out,
-        r#"<rect width="{width:.0}" height="{height:.0}" rx="8" fill="{}"/>"#,
+        r#"<rect width="{width:.0}" height="{height:.0}" rx="{WINDOW_RADIUS:.0}" fill="{}"/>"#,
         hex(colors.resolve(None, false))
     );
-    for (i, dot) in ["#ff5f56", "#ffbd2e", "#27c93f"].iter().enumerate() {
+    let title_bottom = HEADER_H - TITLE_DIVIDER_H;
+    let right_curve = width - WINDOW_RADIUS;
+    let _ = write!(
+        out,
+        r#"<path d="M0 {WINDOW_RADIUS:.1} Q0 0 {WINDOW_RADIUS:.1} 0 H{right_curve:.1} Q{width:.1} 0 {width:.1} {WINDOW_RADIUS:.1} V{title_bottom:.1} H0 Z" fill="{}"/>"#,
+        hex(TITLE_BG)
+    );
+    let _ = write!(
+        out,
+        r#"<rect y="{title_bottom:.1}" width="{width:.0}" height="{TITLE_DIVIDER_H:.1}" fill="{}"/>"#,
+        hex(TITLE_DIVIDER)
+    );
+    for (i, dot) in TRAFFIC_LIGHTS.iter().copied().enumerate() {
         let cx = MARGIN_X + 5.0 + i as f32 * 20.0;
         let _ = write!(
             out,
-            r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{DOT_R:.1}" fill="{dot}"/>"#,
+            r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{DOT_R:.1}" fill="{}"/>"#,
+            hex(dot),
             cy = HEADER_H / 2.0,
         );
     }
+    let _ = write!(
+        out,
+        r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{RED_DOT_R:.1}" fill="{}"/>"#,
+        hex(RED_DOT_COLOR),
+        cx = MARGIN_X + 5.0,
+        cy = HEADER_H / 2.0,
+    );
     if let Some(title) = title {
-        write_title(&mut out, title, width, colors);
+        write_title(&mut out, title, width);
     }
 
     for (y, row) in rows.iter().enumerate() {
@@ -426,7 +475,8 @@ pub(crate) fn render_svg_with_font(
 #[cfg(feature = "recording-raster")]
 pub(crate) fn pixel_size(cols: u16, rows: usize) -> (u32, u32) {
     let width = (MARGIN_X * 2.0 + f32::from(cols) * CELL_W).ceil() as u32;
-    let height = (HEADER_H + MARGIN_BOTTOM + rows.max(1) as f32 * CELL_H).ceil() as u32;
+    let height = (HEADER_H + CONTENT_PADDING_TOP + MARGIN_BOTTOM + rows.max(1) as f32 * CELL_H)
+        .ceil() as u32;
     (width + width % 2, height + height % 2)
 }
 
@@ -604,7 +654,7 @@ mod tests {
         let row = 70_000usize;
         let rows = vec![vec![cell("x", None, None)]; row + 1];
         let svg = render_svg(&rows, 1, &colors(), Some((0, row)), None);
-        let expected = HEADER_H + row as f32 * CELL_H;
+        let expected = HEADER_H + CONTENT_PADDING_TOP + row as f32 * CELL_H;
         assert!(
             svg.contains(&format!(r#"<rect x="15.00" y="{expected:.2}""#)),
             "the cursor sits on row {row}, not on a wrapped one"
@@ -722,15 +772,20 @@ mod tests {
     fn emits_window_chrome() {
         let svg = render_svg(&[vec![cell(" ", None, None)]], 1, &colors(), None, None);
         assert!(svg.contains("<circle"));
-        assert!(svg.contains("#ff5f56"));
-        assert!(svg.contains("#ffbd2e"));
-        assert!(svg.contains("#27c93f"));
+        assert!(svg.contains(&hex(Profile::default().colors.background)));
+        assert!(svg.contains("#d9d9e8"));
+        assert!(svg.contains("#000000"));
+        assert!(svg.contains("#ec6a5e"));
+        assert!(svg.contains("#f4bf4f"));
+        assert!(svg.contains("#61c554"));
+        assert!(svg.contains("#69110a"));
+        assert!(svg.contains(r#"r="2.5""#));
     }
 
     #[test]
     fn centers_the_text_font_box_in_each_cell() {
         let svg = render_svg(&[vec![cell("x", None, None)]], 1, &colors(), None, None);
-        let expected_baseline = HEADER_H + FONT_BASELINE;
+        let expected_baseline = HEADER_H + CONTENT_PADDING_TOP + FONT_BASELINE;
         assert!(svg.contains(&format!(r#"y="{expected_baseline:.2}""#)));
     }
 
@@ -810,6 +865,10 @@ mod tests {
         assert!(
             titled.contains(">vim: notes.md</text>") && titled.contains("text-anchor=\"middle\""),
             "the title is drawn, centred: {titled}"
+        );
+        assert!(
+            titled.contains(r##"fill="#414145" font-size="13px" font-weight="bold""##),
+            "the title uses the dark title-bar foreground: {titled}"
         );
         // The panel is 2*15 margin + 40 cells of 10, so its middle is 215.
         assert!(
