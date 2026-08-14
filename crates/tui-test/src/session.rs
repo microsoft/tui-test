@@ -328,7 +328,7 @@ impl Session {
         self.pty
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .kill();
+            .close();
     }
 
     pub fn pid(&self) -> Option<u32> {
@@ -364,7 +364,7 @@ impl Drop for Session {
         self.pty
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .kill();
+            .close();
         drain_reader_and_recorder(&mut self.reader, &mut self.recorder);
     }
 }
