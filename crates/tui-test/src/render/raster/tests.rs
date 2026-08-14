@@ -56,17 +56,16 @@ fn scaled_renderers_multiply_output_dimensions() {
 #[test]
 fn smaller_terminal_is_centered_on_the_recording_canvas() {
     let mut renderer = GridRenderer::new(4, 3);
-    let frame = renderer
-        .render(&[vec![cell(" ", Attrs::empty()); 2]], 2)
-        .unwrap();
-    let (width, height) = frame.dimensions();
+    let content = frame(vec![vec![cell(" ", Attrs::empty()); 2]]);
+    let image = renderer.render(&content).unwrap();
+    let (width, height) = image.dimensions();
     let (panel_width, panel_height) = crate::render::svg::pixel_size(2, 1);
     let origin_x = (width - panel_width) / 2;
     let origin_y = (height - panel_height) / 2;
     let profile = Profile::default();
 
     assert_eq!(
-        pixel_at(&frame, 0, 0),
+        pixel_at(&image, 0, 0),
         [
             CANVAS_BACKGROUND.r,
             CANVAS_BACKGROUND.g,
@@ -75,7 +74,7 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
         ]
     );
     assert_eq!(
-        pixel_at(&frame, origin_x + panel_width / 2, origin_y + 10),
+        pixel_at(&image, origin_x + panel_width / 2, origin_y + 10),
         [
             profile.colors.background.r,
             profile.colors.background.g,
@@ -84,12 +83,12 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
         ]
     );
     assert_eq!(
-        pixel_at(&frame, origin_x - 1, origin_y + panel_height / 2),
-        pixel_at(&frame, 0, 0)
+        pixel_at(&image, origin_x - 1, origin_y + panel_height / 2),
+        pixel_at(&image, 0, 0)
     );
     assert_eq!(
-        pixel_at(&frame, origin_x + panel_width, origin_y + panel_height / 2),
-        pixel_at(&frame, 0, 0)
+        pixel_at(&image, origin_x + panel_width, origin_y + panel_height / 2),
+        pixel_at(&image, 0, 0)
     );
 }
 
