@@ -17,12 +17,6 @@ default = []
 ghostty = ["dep:ghostty-vt"]
 recording-raster = ["dep:fontdb", "dep:tiny-skia"]
 
-[features]
-default = []
-recording-font-jetbrains-mono = []
-recording-font-jetbrains-mono-styles = ["recording-font-jetbrains-mono"]
-recording-font-jetbrains-mono-full = ["recording-font-jetbrains-mono-styles"]
-
 [dependencies]
 alacritty_terminal.workspace = true
 anyhow.workspace = true
