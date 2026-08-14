@@ -35,16 +35,24 @@ impl Sandbox {
 
     /// Captures output to catch daemon-inherited stdout pipe hangs.
     fn try_run(&self, args: &[&str]) -> Option<Output> {
+        self.try_run_in(None, args)
+    }
+
+    fn try_run_in(&self, cwd: Option<PathBuf>, args: &[&str]) -> Option<Output> {
         let session = self.session.clone();
         let home = self.home.clone();
         let owned: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let out = Command::new(BIN)
+            let mut command = Command::new(BIN);
+            command
                 .args(["--session", &session])
                 .args(&owned)
-                .env("TUI_TEST_HOME", &home)
-                .output();
+                .env("TUI_TEST_HOME", &home);
+            if let Some(cwd) = cwd {
+                command.current_dir(cwd);
+            }
+            let out = command.output();
             let _ = tx.send(out);
         });
         match rx.recv_timeout(CALL_TIMEOUT) {
@@ -58,16 +66,21 @@ impl Sandbox {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        self.try_run(args).unwrap_or_else(|| {
-            panic!(
-                "[{}] `tui-test {}` produced no result within {:?}. Either it could not be \
+        self.run_in(None, args)
+    }
+
+    fn run_in(&self, cwd: Option<&std::path::Path>, args: &[&str]) -> Output {
+        self.try_run_in(cwd.map(std::path::Path::to_path_buf), args)
+            .unwrap_or_else(|| {
+                panic!(
+                    "[{}] `tui-test {}` produced no result within {:?}. Either it could not be \
                  spawned (see stderr above), or the cli process exited but left its stdout pipe \
                  open, which happens when the detached daemon inherits the cli's standard handles.",
-                self.label,
-                args.join(" "),
-                CALL_TIMEOUT
-            )
-        })
+                    self.label,
+                    args.join(" "),
+                    CALL_TIMEOUT
+                )
+            })
     }
 
     /// Run without any explicit or environment session target.
@@ -104,7 +117,11 @@ impl Sandbox {
     }
 
     fn ok(&self, args: &[&str]) -> String {
-        let out = self.run(args);
+        self.ok_in(None, args)
+    }
+
+    fn ok_in(&self, cwd: Option<&std::path::Path>, args: &[&str]) -> String {
+        let out = self.run_in(cwd, args);
         assert!(
             out.status.success(),
             "[{}] `tui-test {}` failed with {:?}\nstdout: {}\nstderr: {}",
@@ -183,6 +200,28 @@ fn get_recording_flushes_queued_output_before_reading() {
 
     let recording = sandbox.ok(&["get-recording"]);
     assert!(recording.contains("recording-flush-marker"));
+}
+
+#[test]
+fn relative_recording_path_uses_the_invoking_client_directory() {
+    let sandbox = Sandbox::new("recording-client-cwd");
+    let daemon_cwd = sandbox.home.join("daemon-cwd");
+    let client_cwd = sandbox.home.join("client-cwd");
+    std::fs::create_dir_all(&daemon_cwd).unwrap();
+    std::fs::create_dir_all(&client_cwd).unwrap();
+
+    sandbox.ok_in(Some(&daemon_cwd), &["open"]);
+    sandbox.ok_in(Some(&client_cwd), &["record", "start", "relative.cast"]);
+    let stopped = sandbox.ok_in(Some(&client_cwd), &["--json", "record", "stop"]);
+    let stopped: serde_json::Value = serde_json::from_str(&stopped).unwrap();
+
+    let expected = client_cwd.join("relative.cast");
+    assert!(
+        expected.is_file(),
+        "recording was not written to {expected:?}"
+    );
+    assert!(!daemon_cwd.join("relative.cast").exists());
+    assert_eq!(stopped["data"]["path"].as_str(), expected.to_str());
 }
 
 #[test]

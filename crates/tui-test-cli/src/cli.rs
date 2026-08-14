@@ -75,16 +75,12 @@ impl ProfileArgs {
 #[derive(Clone, Copy, clap::ValueEnum)]
 #[clap(rename_all = "lowercase")]
 pub enum RecordingFormatArg {
-    Apng,
-    Gif,
     Cast,
 }
 
 impl From<RecordingFormatArg> for RecordingFormat {
     fn from(format: RecordingFormatArg) -> Self {
         match format {
-            RecordingFormatArg::Apng => RecordingFormat::Apng,
-            RecordingFormatArg::Gif => RecordingFormat::Gif,
             RecordingFormatArg::Cast => RecordingFormat::Cast,
         }
     }
@@ -358,9 +354,9 @@ pub enum Command {
 
 #[derive(Subcommand)]
 pub enum RecordCmd {
-    /// Start recording terminal output to APNG, GIF, or asciicast v2.
+    /// Start recording terminal output to asciicast v2.
     Start {
-        /// Output path. The extension selects APNG (.png/.apng), GIF, or cast.
+        /// Output path. Use the .cast extension.
         path: String,
         /// Override the format inferred from the output extension.
         #[arg(long, value_enum)]
@@ -541,7 +537,7 @@ mod tests {
             "tui-test",
             "record",
             "start",
-            "demo.png",
+            "demo.cast",
             "--fps",
             "24",
             "--speed",

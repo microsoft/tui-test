@@ -208,7 +208,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                     idle_time_limit,
                 },
         } => Request::StartRecording {
-            path,
+            path: resolve_client_path(path)?,
             format: format.map(Into::into),
             fps,
             speed,
@@ -241,6 +241,16 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         _ => anyhow::bail!("unsupported command"),
     };
     Ok(req)
+}
+
+fn resolve_client_path(path: String) -> anyhow::Result<String> {
+    let path = std::path::PathBuf::from(path);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    Ok(path.to_string_lossy().into_owned())
 }
 
 fn map_field(f: GetArg) -> GetField {
@@ -773,7 +783,7 @@ EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex]\n\
           expect snapshot NAME [-u] [--include-colors --include-title]\n\
-RECORD    record start OUT [--format apng|gif|cast] [--fps N] [--speed N]\n\
+RECORD    record start OUT [--format cast] [--fps N] [--speed N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
 WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
