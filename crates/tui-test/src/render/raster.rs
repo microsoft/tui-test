@@ -5,6 +5,7 @@ use tiny_skia::Pixmap;
 use crate::profile::{ColorSlot, Rgb};
 use crate::record::frames::Frame;
 use crate::terminal::cell::{EmuCell, CONTINUATION};
+use crate::terminal::emu::CursorShape;
 
 use super::svg;
 use super::svg::RenderColors;
