@@ -18,13 +18,8 @@ use draw::{
 };
 use font::{FontSystem, GlyphKey};
 
+#[derive(Default)]
 struct RecordingColors(Profile);
-
-impl Default for RecordingColors {
-    fn default() -> Self {
-        Self(Profile::default())
-    }
-}
 
 impl RenderColors for RecordingColors {
     fn color(&self, slot: ColorSlot) -> Rgb {
