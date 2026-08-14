@@ -27,7 +27,7 @@ type RuntimeOpenOptions = Omit<OpenOptions, "shell" | "backend"> & {
 };
 type RuntimeRunOptions = Omit<RunOptions, "backend"> & { backend?: string };
 type RuntimeRecordingOptions = Omit<RecordingOptions, "format"> & {
-  format?: "gif" | "cast";
+  format?: "apng" | "gif" | "cast";
 };
 
 const ERROR_PREFIX = "__tui_test_native_error__:";

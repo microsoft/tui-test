@@ -1197,10 +1197,11 @@ fn parse_backend(value: Option<&str>) -> Result<Backend, TuiTestError> {
 fn parse_recording_format(value: Option<&str>) -> Result<Option<RecordingFormat>, TuiTestError> {
     value
         .map(|value| match value {
+            "apng" => Ok(RecordingFormat::Apng),
             "gif" => Ok(RecordingFormat::Gif),
             "cast" => Ok(RecordingFormat::Cast),
             other => Err(TuiTestError::usage(format!(
-                "unknown recording format '{other}'; expected gif or cast"
+                "unknown recording format '{other}'; expected apng, gif, or cast"
             ))),
         })
         .transpose()

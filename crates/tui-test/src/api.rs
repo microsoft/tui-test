@@ -394,6 +394,7 @@ pub enum ScreenshotResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RecordingFormat {
+    Apng,
     Gif,
     Cast,
 }
@@ -405,6 +406,7 @@ impl RecordingFormat {
             .to_str()?
             .to_ascii_lowercase();
         match extension.as_str() {
+            "png" | "apng" => Some(Self::Apng),
             "gif" => Some(Self::Gif),
             "cast" => Some(Self::Cast),
             _ => None,
