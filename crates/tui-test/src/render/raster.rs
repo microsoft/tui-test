@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use tiny_skia::Pixmap;
 
-use crate::profile::{ColorSlot, Rgb};
+use crate::profile::ColorSlot;
 use crate::record::frames::Frame;
 use crate::terminal::cell::{EmuCell, CONTINUATION};
 use crate::terminal::emu::CursorShape;
@@ -20,8 +20,7 @@ use draw::{
 };
 use font::{FontSystem, GlyphKey};
 
-pub(crate) const CANVAS_PADDING: u32 = 24;
-pub(crate) const CANVAS_BACKGROUND: Rgb = Rgb::new(104, 103, 170);
+pub(crate) use svg::{CANVAS_BACKGROUND, CANVAS_PADDING};
 
 #[derive(Debug)]
 pub struct RgbaFrame {
@@ -427,13 +426,7 @@ fn draw_cursor(
 }
 
 fn draw_shadow(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, scale: f32) {
-    const SHADOW: Rgb = Rgb::new(8, 8, 18);
-    for (spread, offset_y, alpha) in [
-        (7.0, 5.0, 18),
-        (5.0, 4.0, 20),
-        (3.0, 3.0, 22),
-        (1.0, 2.0, 24),
-    ] {
+    for (spread, offset_y, alpha) in svg::SHADOW_LAYERS {
         let spread = spread * scale;
         fill_rounded_rect_alpha(
             pixmap,
@@ -442,7 +435,7 @@ fn draw_shadow(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, sca
             width + spread * 2.0,
             height + spread * 2.0,
             svg::WINDOW_RADIUS * scale + spread,
-            SHADOW,
+            svg::SHADOW_COLOR,
             alpha,
         );
     }

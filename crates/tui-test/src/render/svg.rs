@@ -30,6 +30,15 @@ pub(crate) const WINDOW_RADIUS: f32 = 8.0;
 pub(crate) const TITLE_DIVIDER_H: f32 = 1.0;
 pub(crate) const TITLE_BG: Rgb = Rgb::new(217, 217, 232);
 pub(crate) const TITLE_DIVIDER: Rgb = Rgb::new(0, 0, 0);
+pub(crate) const CANVAS_PADDING: u32 = 24;
+pub(crate) const CANVAS_BACKGROUND: Rgb = Rgb::new(104, 103, 170);
+pub(crate) const SHADOW_COLOR: Rgb = Rgb::new(8, 8, 18);
+pub(crate) const SHADOW_LAYERS: [(f32, f32, u8); 4] = [
+    (7.0, 5.0, 18),
+    (5.0, 4.0, 20),
+    (3.0, 3.0, 22),
+    (1.0, 2.0, 24),
+];
 pub(crate) const TRAFFIC_LIGHTS: [Rgb; 3] = [
     Rgb::new(236, 106, 94),
     Rgb::new(244, 191, 79),
@@ -409,8 +418,12 @@ pub(crate) fn render_svg_with_font(
     let cols = cols as usize;
     let x0 = MARGIN_X;
     let y0 = HEADER_H + CONTENT_PADDING_TOP;
-    let width = MARGIN_X * 2.0 + cols as f32 * CELL_W;
-    let height = HEADER_H + CONTENT_PADDING_TOP + MARGIN_BOTTOM + rows.len().max(1) as f32 * CELL_H;
+    let panel_width = MARGIN_X * 2.0 + cols as f32 * CELL_W;
+    let panel_height =
+        HEADER_H + CONTENT_PADDING_TOP + MARGIN_BOTTOM + rows.len().max(1) as f32 * CELL_H;
+    let padding = CANVAS_PADDING as f32;
+    let width = panel_width + padding * 2.0;
+    let height = panel_height + padding * 2.0;
 
     let mut out = String::new();
     let _ = write!(
@@ -420,19 +433,37 @@ pub(crate) fn render_svg_with_font(
     nerd_font.write_defs(&mut out);
     let _ = write!(
         out,
-        r#"<rect width="{width:.0}" height="{height:.0}" rx="{WINDOW_RADIUS:.0}" fill="{}"/>"#,
+        r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
+        hex(CANVAS_BACKGROUND)
+    );
+    for (spread, offset_y, alpha) in SHADOW_LAYERS {
+        let shadow_x = padding - spread;
+        let shadow_y = padding - spread + offset_y;
+        let shadow_width = panel_width + spread * 2.0;
+        let shadow_height = panel_height + spread * 2.0;
+        let shadow_radius = WINDOW_RADIUS + spread;
+        let opacity = f32::from(alpha) / 255.0;
+        let _ = write!(
+            out,
+            r#"<rect x="{shadow_x:.1}" y="{shadow_y:.1}" width="{shadow_width:.1}" height="{shadow_height:.1}" rx="{shadow_radius:.1}" fill="{}" fill-opacity="{opacity:.6}"/>"#,
+            hex(SHADOW_COLOR)
+        );
+    }
+    let _ = write!(
+        out,
+        r#"<g transform="translate({padding:.0} {padding:.0})"><rect width="{panel_width:.0}" height="{panel_height:.0}" rx="{WINDOW_RADIUS:.0}" fill="{}"/>"#,
         hex(colors.resolve(None, false))
     );
     let title_bottom = HEADER_H - TITLE_DIVIDER_H;
-    let right_curve = width - WINDOW_RADIUS;
+    let right_curve = panel_width - WINDOW_RADIUS;
     let _ = write!(
         out,
-        r#"<path d="M0 {WINDOW_RADIUS:.1} Q0 0 {WINDOW_RADIUS:.1} 0 H{right_curve:.1} Q{width:.1} 0 {width:.1} {WINDOW_RADIUS:.1} V{title_bottom:.1} H0 Z" fill="{}"/>"#,
+        r#"<path d="M0 {WINDOW_RADIUS:.1} Q0 0 {WINDOW_RADIUS:.1} 0 H{right_curve:.1} Q{panel_width:.1} 0 {panel_width:.1} {WINDOW_RADIUS:.1} V{title_bottom:.1} H0 Z" fill="{}"/>"#,
         hex(TITLE_BG)
     );
     let _ = write!(
         out,
-        r#"<rect y="{title_bottom:.1}" width="{width:.0}" height="{TITLE_DIVIDER_H:.1}" fill="{}"/>"#,
+        r#"<rect y="{title_bottom:.1}" width="{panel_width:.0}" height="{TITLE_DIVIDER_H:.1}" fill="{}"/>"#,
         hex(TITLE_DIVIDER)
     );
     for (i, dot) in TRAFFIC_LIGHTS.iter().copied().enumerate() {
@@ -451,7 +482,7 @@ pub(crate) fn render_svg_with_font(
         cx = MARGIN_X + 5.0,
         cy = HEADER_H / 2.0,
     );
-    write_title(&mut out, title, cols as u16, rows.len().max(1), width);
+    write_title(&mut out, title, cols as u16, rows.len().max(1), panel_width);
 
     for (y, row) in rows.iter().enumerate() {
         let mut x = 0;
@@ -492,7 +523,7 @@ pub(crate) fn render_svg_with_font(
         write_cursor(&mut out, rows, at, colors, &nerd_font);
     }
 
-    out.push_str("</svg>");
+    out.push_str("</g></svg>");
     out
 }
 
@@ -796,6 +827,9 @@ mod tests {
     fn emits_window_chrome() {
         let svg = render_svg(&[vec![cell(" ", None, None)]], 1, &colors(), None, None);
         assert!(svg.contains("<circle"));
+        assert!(svg.contains(r##"<rect width="88" height="121" fill="#6867aa"/>"##));
+        assert!(svg.contains(r#"<g transform="translate(24 24)">"#));
+        assert!(svg.contains(r##"fill="#080812" fill-opacity="0.070588""##));
         assert!(svg.contains(&hex(Profile::default().colors.background)));
         assert!(svg.contains("#d9d9e8"));
         assert!(svg.contains("#000000"));
