@@ -122,8 +122,8 @@ impl FrameRenderer for GridRenderer {
             Rgb::new(255, 189, 46),
             Rgb::new(39, 201, 63),
         ]
-            .into_iter()
-            .enumerate()
+        .into_iter()
+        .enumerate()
         {
             let cx = (svg::MARGIN_X + 5.0 + index as f32 * 20.0) * scale;
             let cy = svg::HEADER_H / 2.0 * scale;

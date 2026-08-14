@@ -59,14 +59,7 @@ pub(super) fn draw_glyph(
     }
 }
 
-pub(super) fn fill_rect(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    color: Rgb,
-) {
+pub(super) fn fill_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color: Rgb) {
     let Some(rect) = Rect::from_xywh(x, y, width, height) else {
         return;
     };
