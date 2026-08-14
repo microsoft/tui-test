@@ -9,12 +9,12 @@ use std::time::{Duration, Instant};
 
 use crate::logger::Logger;
 use crate::profile::Profile;
+use crate::record::Recorder;
 use crate::shell::{self, Shell};
 use crate::terminal::backend::Backend;
 use crate::terminal::emu::Emulator;
 use crate::terminal::integration::CommandTracker;
 use crate::terminal::pty::{Pty, SpawnOptions};
-use crate::trace::recorder::Recorder;
 
 pub struct TermState {
     pub emu: Box<dyn Emulator>,
@@ -36,7 +36,7 @@ pub struct Session {
     pub pty: Arc<Mutex<Pty>>,
     pub state: Arc<Mutex<TermState>>,
     pub cancelled: Arc<AtomicBool>,
-    recorder: Arc<Mutex<Recorder>>,
+    recorder: Recorder,
     logger: Arc<Logger>,
     _reader: JoinHandle<()>,
     _process_watcher: JoinHandle<()>,
@@ -95,21 +95,22 @@ impl Session {
         let pty = Arc::new(Mutex::new(pty));
         let cancelled = Arc::new(AtomicBool::new(false));
 
-        let mut rec_env: Vec<(&str, String)> = vec![("TERM", "xterm-256color".to_string())];
+        let mut rec_env = vec![("TERM".to_string(), "xterm-256color".to_string())];
         if let Some(sh) = shell {
-            rec_env.push(("SHELL", sh.as_str().to_string()));
+            rec_env.push(("SHELL".to_string(), sh.as_str().to_string()));
         }
-        let recorder = Arc::new(Mutex::new(Recorder::create(
-            &recording_path,
+        let recorder = Recorder::create(
+            recording_path,
             cols,
             rows,
             &rec_env,
-        )));
+            logger.clone(),
+        );
 
         let reader_state = state.clone();
         let reader_pty = pty.clone();
         let reader_logger = logger.clone();
-        let reader_recorder = recorder.clone();
+        let reader_recorder = recorder.capture();
         let mut reader = reader;
         let reader_handle = std::thread::spawn(move || {
             use std::io::Read;
@@ -126,10 +127,6 @@ impl Session {
                     }
                     Ok(n) => {
                         reader_logger.read(&buf[..n]);
-                        reader_recorder
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .on_data(&buf[..n]);
                         let pending = {
                             let mut st = reader_state
                                 .lock()
@@ -137,6 +134,7 @@ impl Session {
                             st.emu.process(&buf[..n]);
                             st.tracker.feed(&buf[..n]);
                             st.last_change = Instant::now();
+                            reader_recorder.on_data(&buf[..n]);
                             st.emu.take_pending_writes()
                         };
                         if !pending.is_empty() {
@@ -238,16 +236,13 @@ impl Session {
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
         self.logger.event(&format!("resize {cols}x{rows}"));
-        self.recorder
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .on_resize(cols, rows);
         self.cols = cols;
         self.rows = rows;
         let mut st = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.recorder.on_resize(cols, rows);
         st.emu.resize(cols, rows);
         drop(st);
         self.pty
