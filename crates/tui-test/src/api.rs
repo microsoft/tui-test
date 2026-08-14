@@ -476,7 +476,10 @@ mod tests {
             Some(RecordingFormat::Cast)
         );
         assert_eq!(RecordingFormat::infer("demo.png"), None);
-        assert_eq!(RecordingFormat::infer("demo.gif"), None);
+        assert_eq!(
+            RecordingFormat::infer("demo.gif"),
+            Some(RecordingFormat::Gif)
+        );
         assert_eq!(RecordingFormat::infer("demo.mp4"), None);
     }
 }
