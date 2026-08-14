@@ -300,6 +300,12 @@ pub struct Size {
     pub rows: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct BellEvent {
+    pub sequence: u64,
+    pub elapsed_ms: u64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct EffectiveTimeouts {
     pub text: u64,
@@ -322,6 +328,7 @@ pub struct State {
     pub exited: Option<i32>,
     pub ready: bool,
     pub bell_count: u64,
+    pub bell_events: Vec<BellEvent>,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }

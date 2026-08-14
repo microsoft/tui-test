@@ -9,7 +9,7 @@ use napi_derive::napi;
 use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::shell::Shell as CoreShell;
 use tui_test::{
-    global_registry, Cell as CoreCell, CellColor, Cursor as CoreCursor,
+    global_registry, BellEvent as CoreBellEvent, Cell as CoreCell, CellColor, Cursor as CoreCursor,
     EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, MouseAction,
     OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation, OperationResult,
     RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
@@ -156,6 +156,22 @@ impl From<CoreEffectiveTimeouts> for EffectiveTimeouts {
     }
 }
 
+#[napi(object)]
+pub struct BellEvent {
+    pub sequence: f64,
+    #[napi(js_name = "elapsed_ms")]
+    pub elapsed_ms: f64,
+}
+
+impl From<CoreBellEvent> for BellEvent {
+    fn from(value: CoreBellEvent) -> Self {
+        Self {
+            sequence: value.sequence as f64,
+            elapsed_ms: value.elapsed_ms as f64,
+        }
+    }
+}
+
 #[napi(object, use_nullable = true)]
 pub struct State {
     #[napi(js_name = "session_shell")]
@@ -173,6 +189,8 @@ pub struct State {
     pub ready: bool,
     #[napi(js_name = "bell_count")]
     pub bell_count: f64,
+    #[napi(js_name = "bell_events")]
+    pub bell_events: Vec<BellEvent>,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }
@@ -191,6 +209,7 @@ impl From<CoreState> for State {
             exited: value.exited,
             ready: value.ready,
             bell_count: value.bell_count as f64,
+            bell_events: value.bell_events.into_iter().map(Into::into).collect(),
             timeouts: value.timeouts.into(),
             text: value.text,
         }

@@ -8,7 +8,7 @@ use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
-    Cell, CellColor, Cursor, ErrorKind, MouseAction, OpenOptions, OpenResult, Operation,
+    BellEvent, Cell, CellColor, Cursor, ErrorKind, MouseAction, OpenOptions, OpenResult, Operation,
     OperationResult, PackedScreen, RunOptions, ScreenshotResult, Size, SnapshotResult, State,
     Timeouts, TuiTestError,
 };
@@ -1360,6 +1360,17 @@ fn size_dict(py: Python<'_>, size: Size) -> PyResult<Bound<'_, PyDict>> {
     Ok(value)
 }
 
+fn bell_events_to_py<'py>(py: Python<'py>, events: Vec<BellEvent>) -> PyResult<Bound<'py, PyList>> {
+    let values = PyList::empty(py);
+    for event in events {
+        let value = PyDict::new(py);
+        value.set_item("sequence", event.sequence)?;
+        value.set_item("elapsed_ms", event.elapsed_ms)?;
+        values.append(value)?;
+    }
+    Ok(values)
+}
+
 fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     let result = PyDict::new(py);
     result.set_item("session_shell", value.session_shell)?;
@@ -1373,6 +1384,7 @@ fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     result.set_item("exited", value.exited)?;
     result.set_item("ready", value.ready)?;
     result.set_item("bell_count", value.bell_count)?;
+    result.set_item("bell_events", bell_events_to_py(py, value.bell_events)?)?;
     let timeouts = PyDict::new(py);
     timeouts.set_item("text", value.timeouts.text)?;
     timeouts.set_item("idle", value.timeouts.idle)?;

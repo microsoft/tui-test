@@ -32,7 +32,13 @@ impl Recorder {
     }
 
     /// Create (truncating) a cast file and write the asciinema v2 header.
-    pub fn create(path: &Path, cols: u16, rows: u16, env: &[(&str, String)]) -> Self {
+    pub fn create(
+        path: &Path,
+        cols: u16,
+        rows: u16,
+        env: &[(&str, String)],
+        start: Instant,
+    ) -> Self {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -44,7 +50,7 @@ impl Recorder {
             .ok()
             .map(BufWriter::new);
         let mut rec = Recorder {
-            start: Instant::now(),
+            start,
             sink,
             pending: Vec::new(),
         };

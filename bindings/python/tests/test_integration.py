@@ -77,7 +77,16 @@ class IntegrationTests(unittest.TestCase):
                 await su.expect_bell_count(2, timeout=5000)
                 await su.wait_command()
 
-                self.assertEqual((await su.state()).bell_count, 2)
+                initial_state = await su.state()
+                self.assertEqual(initial_state.bell_count, 2)
+                self.assertEqual(
+                    [event.sequence for event in initial_state.bell_events],
+                    [1, 2],
+                )
+                self.assertGreaterEqual(
+                    initial_state.bell_events[1].elapsed_ms,
+                    initial_state.bell_events[0].elapsed_ms,
+                )
                 self.assertEqual(await su.get_bell_count(), 2)
                 self.assertEqual(await su.get_bell_count(), 2)
 
@@ -85,6 +94,15 @@ class IntegrationTests(unittest.TestCase):
                 await su.wait_bell(timeout=5000)
                 await su.expect_bell_count(3)
                 self.assertEqual(await su.get_bell_count(), 3)
+                final_state = await su.state()
+                self.assertEqual(
+                    [event.sequence for event in final_state.bell_events],
+                    [1, 2, 3],
+                )
+                self.assertGreaterEqual(
+                    final_state.bell_events[2].elapsed_ms,
+                    final_state.bell_events[1].elapsed_ms,
+                )
 
         run(scenario())
 

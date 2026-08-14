@@ -81,7 +81,16 @@ test("bell state, waits, and expectations stay consistent", async () => {
     await su.expectBellCount(2, { timeout: 5000 });
     await su.waitCommand();
 
-    assert.equal((await su.state()).bell_count, 2);
+    const initialState = await su.state();
+    assert.equal(initialState.bell_count, 2);
+    assert.deepEqual(
+      initialState.bell_events.map((event) => event.sequence),
+      [1, 2],
+    );
+    assert.ok(
+      initialState.bell_events[1].elapsed_ms >=
+        initialState.bell_events[0].elapsed_ms,
+    );
     assert.equal(await su.getBellCount(), 2);
     assert.equal(await su.getBellCount(), 2);
 
@@ -89,6 +98,15 @@ test("bell state, waits, and expectations stay consistent", async () => {
     await su.waitBell({ timeout: 5000 });
     await su.expectBellCount(3);
     assert.equal(await su.getBellCount(), 3);
+    const finalState = await su.state();
+    assert.deepEqual(
+      finalState.bell_events.map((event) => event.sequence),
+      [1, 2, 3],
+    );
+    assert.ok(
+      finalState.bell_events[2].elapsed_ms >=
+        finalState.bell_events[1].elapsed_ms,
+    );
   } finally {
     await su.closeQuiet();
   }

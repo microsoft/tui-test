@@ -47,6 +47,11 @@ export declare class NativeSession {
   panicProbe(): Promise<void>
 }
 
+export interface BellEvent {
+  sequence: number
+  elapsed_ms: number
+}
+
 export interface Cell {
   x: number
   y: number
@@ -202,6 +207,7 @@ export interface State {
   exited: number | null
   ready: boolean
   bell_count: number
+  bell_events: Array<BellEvent>
   timeouts: EffectiveTimeouts
   text: string
 }

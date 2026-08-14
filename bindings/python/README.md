@@ -56,6 +56,9 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 `TuiTest(session="default", *, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count`, `screenshot`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
 
+`state()` includes `bell_count` plus the latest 1024 `bell_events`, each with
+a 1-based `sequence` and monotonic `elapsed_ms` since recording began.
+
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 
 `open()` and `run()` accept `wait_ready=`, `retries=`, `profile=`, and

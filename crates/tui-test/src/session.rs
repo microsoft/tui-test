@@ -81,7 +81,8 @@ impl Session {
             Pty::spawn_launch(&launch, cols, rows, cwd)?
         };
 
-        let bells = BellTracker::default();
+        let started_at = Instant::now();
+        let bells = BellTracker::new(started_at);
         let state = Arc::new(Mutex::new(TermState {
             emu: Box::new(AlacrittyEmu::with_bell_tracker(
                 cols,
@@ -106,6 +107,7 @@ impl Session {
             cols,
             rows,
             &rec_env,
+            started_at,
         )));
 
         let reader_state = state.clone();

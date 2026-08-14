@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional, Union
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Optional, Union
 
 Color = Union[str, int]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
@@ -73,6 +73,12 @@ class Cell:
 
 
 @dataclass
+class BellEvent:
+    sequence: int
+    elapsed_ms: int
+
+
+@dataclass
 class State:
     cols: int
     rows: int
@@ -87,6 +93,7 @@ class State:
     text: str
     session_shell: Optional[str]
     bell_count: int = 0
+    bell_events: List[BellEvent] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "State":
@@ -101,6 +108,13 @@ class State:
             exited=d.get("exited"),
             ready=d.get("ready", False),
             bell_count=d.get("bell_count", 0),
+            bell_events=[
+                BellEvent(
+                    sequence=event.get("sequence", 0),
+                    elapsed_ms=event.get("elapsed_ms", 0),
+                )
+                for event in d.get("bell_events", [])
+            ],
             timeouts=Timeouts(**d["timeouts"]),
             text=d.get("text", ""),
             session_shell=d.get("session_shell"),

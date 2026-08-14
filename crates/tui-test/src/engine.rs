@@ -710,6 +710,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (x, y) = state.emu.cursor();
     let (cols, rows) = state.emu.size();
+    let bells = session.bells.snapshot();
     crate::api::State {
         session_shell: session.shell.map(|value| value.as_str().to_string()),
         cols,
@@ -721,7 +722,8 @@ fn state(session: &TerminalSession) -> crate::api::State {
         last_exit: state.tracker.last_exit(),
         exited: state.exited,
         ready: state.tracker.is_ready(),
-        bell_count: session.bells.count(),
+        bell_count: bells.count,
+        bell_events: bells.events,
         timeouts: effective_timeouts(session),
         text: text_of(&state.emu.viewable_rows()),
     }

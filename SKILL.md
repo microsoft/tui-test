@@ -72,7 +72,7 @@ without parsing text:
 
 | Command                                             | Description                                                                                                         |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, timeouts, and a text snapshot.              |
+| `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count and recent timestamped bell events, timeouts, and a text snapshot. |
 | `text [--full]`                                     | Rendered viewport text, or full scrollback with `--full`.                                                           |
 | `screenshot [PATH] [-o FILE] [--full]`              | Terminal text to stdout, or a full-color SVG image (crisp at any zoom, svg-term-style window) when a path is given. |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags) for a region.                                                             |
@@ -120,6 +120,10 @@ without parsing text:
 | `expect output "T" [--regex]`                                                   | The last command's captured output.                                           |
 | `expect bell N [--timeout MS]`                                                  | The cumulative bell count reaches at least N.                                 |
 | `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. `--include-title` records the window title in the frame; off by default because a prompt often sets it to a host and path. |
+
+Bell events in `state` include a 1-based `sequence` and monotonic `elapsed_ms`
+since the session recording began. The latest 1024 events are retained; the
+cumulative `bell_count` is not truncated.
 
 Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 

@@ -1,4 +1,5 @@
 import type {
+  BellEvent as NativeBellEvent,
   Cell as NativeCell,
   Cursor as NativeCursor,
   EffectiveTimeouts as NativeEffectiveTimeouts,
@@ -50,6 +51,8 @@ export interface Cell extends Omit<NativeCell, "fg" | "bg" | "underline_style" |
 }
 
 export type EffectiveTimeouts = NativeEffectiveTimeouts;
+
+export type BellEvent = NativeBellEvent;
 
 export type State = NativeState;
 
