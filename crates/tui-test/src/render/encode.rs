@@ -398,10 +398,7 @@ mod tests {
     #[test]
     fn mp4_timing_diffuses_thirty_fps_rounding_error() {
         let frames = (0..30)
-            .map(|_| Frame {
-                grid: sample_grid(Color::Rgb(1, 2, 3)),
-                duration: Duration::from_secs_f64(1.0 / 30.0),
-            })
+            .map(|_| frame(Color::Rgb(1, 2, 3), Duration::from_secs_f64(1.0 / 30.0)))
             .collect::<Vec<_>>();
         let timeline = mp4_timeline(&frames, 30).unwrap();
         assert!(timeline.iter().all(|step| step.repeats > 0));
@@ -415,10 +412,7 @@ mod tests {
             (1, Duration::from_millis(4)),
         ]
         .into_iter()
-        .map(|(red, duration)| Frame {
-            grid: sample_grid(Color::Rgb(red, 0, 0)),
-            duration,
-        })
+        .map(|(red, duration)| frame(Color::Rgb(red, 0, 0), duration))
         .collect::<Vec<_>>();
         assert_eq!(
             mp4_timeline(&frames, 30).unwrap(),
