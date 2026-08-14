@@ -85,9 +85,10 @@ impl Pty {
     }
 
     pub fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
-        let writer = self.writer.as_mut().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "PTY is closed")
-        })?;
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "PTY is closed"))?;
         writer.write_all(data)?;
         writer.flush()
     }
