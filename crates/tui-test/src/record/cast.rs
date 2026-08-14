@@ -5,6 +5,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const WIN32_INPUT_MODE: &[u8] = b"\x1b[?9001h";
 
+#[cfg(feature = "recording-raster")]
+mod reader;
+
 pub(crate) struct CastWriter {
     start: Instant,
     sink: BufWriter<File>,
