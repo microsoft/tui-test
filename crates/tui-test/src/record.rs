@@ -35,6 +35,7 @@ pub(crate) struct StartRecording {
     pub timeline: frames::TimelineOptions,
 }
 
+#[allow(dead_code)] // Raster export consumes the capture metadata later in the stack.
 pub(crate) struct StoppedRecording {
     pub target_path: PathBuf,
     #[cfg(feature = "recording-raster")]
@@ -172,6 +173,7 @@ enum Message {
     Shutdown,
 }
 
+#[allow(dead_code)] // Raster export uses sidecar casts later in the stack.
 pub(crate) fn sidecar_path(target: &std::path::Path) -> PathBuf {
     let mut name = target
         .file_name()
