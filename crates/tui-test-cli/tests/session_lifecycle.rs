@@ -1130,14 +1130,17 @@ fn a_snapshot_records_the_title_only_when_asked() {
     let sandbox = Sandbox::new("snap-title");
     // Wide enough that the title is not truncated, so the assertion is about
     // whether it was recorded at all rather than about how it was shortened.
-    let set_title = r#"clear; printf '\033]2;ayman@host: /some/path\007'; sleep 30"#;
+    let set_title = r#"clear; printf '\033]2;tui-test-user@host: /some/path\007'; sleep 30"#;
     sandbox.ok(&[
         "run", "--cols", "40", "--", "bash", "--norc", "-c", set_title,
     ]);
-    sandbox.ok(&["expect", "title", "ayman@host", "--timeout", "5000"]);
+    sandbox.ok(&["expect", "title", "tui-test-user@host", "--timeout", "5000"]);
 
     let plain = sandbox.ok(&["expect", "snapshot", "plain", "-u"]);
-    assert!(!plain.contains("ayman@host"), "default keeps the title out");
+    assert!(
+        !plain.contains("tui-test-user@host"),
+        "default keeps the title out"
+    );
     let stored = std::fs::read_to_string(
         std::env::current_dir()
             .expect("cwd")
@@ -1145,7 +1148,7 @@ fn a_snapshot_records_the_title_only_when_asked() {
     )
     .expect("read snapshot");
     assert!(
-        stored.starts_with("╭────") && !stored.contains("ayman@host"),
+        stored.starts_with("╭────") && !stored.contains("tui-test-user@host"),
         "the border is plain, so a baseline is not tied to a machine: {stored}"
     );
 
@@ -1157,7 +1160,7 @@ fn a_snapshot_records_the_title_only_when_asked() {
     )
     .expect("read snapshot");
     assert!(
-        titled.contains("ayman@host: /some/path"),
+        titled.contains("tui-test-user@host: /some/path"),
         "asking for it puts it in the border: {titled}"
     );
 
