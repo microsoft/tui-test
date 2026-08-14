@@ -221,7 +221,12 @@ fn relative_recording_path_uses_the_invoking_client_directory() {
         "recording was not written to {expected:?}"
     );
     assert!(!daemon_cwd.join("relative.cast").exists());
-    assert_eq!(stopped["data"]["path"].as_str(), expected.to_str());
+    let actual = std::path::PathBuf::from(stopped["data"]["path"].as_str().unwrap());
+    assert!(actual.is_absolute());
+    assert_eq!(
+        std::fs::canonicalize(actual).unwrap(),
+        std::fs::canonicalize(expected).unwrap()
+    );
 }
 
 #[test]
