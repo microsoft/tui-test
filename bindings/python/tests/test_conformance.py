@@ -28,8 +28,8 @@ MAPPING = {
     ],
     "type": [("client", "type")],
     "submit": [("client", "submit")],
+    "key": [("client", "keyboard")],
     "press": [("client", "press")],
-    "keys": [("client", "keys")],
     "mouse": [("client", "mouse")],
     "resize": [("client", "resize")],
     "write": [("client", "write")],
@@ -69,6 +69,11 @@ class ConformanceTests(unittest.TestCase):
                     hasattr(target, attr),
                     f"missing SDK member for '{command}': {scope}.{attr}",
                 )
+
+    def test_keyboard_exposes_every_key_action(self):
+        keyboard = TuiTest("keyboard-conformance").keyboard
+        for method in ("press", "down", "repeat", "up"):
+            self.assertTrue(hasattr(keyboard, method), method)
 
     def test_exit_codes_match(self):
         out = subprocess.run([BIN, "agent-context"], capture_output=True, check=True, text=True).stdout

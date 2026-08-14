@@ -565,7 +565,8 @@ mod tests {
 
     #[test]
     fn key_encoding_follows_the_active_negotiated_mode() {
-        use crate::input::keys::token_to_seq_with_mode;
+        use crate::input::keys::{token_to_seq_for_action_with_mode, token_to_seq_with_mode};
+        use crate::KeyAction;
 
         let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
         emu.process(b"\x1b[>1u");
@@ -582,7 +583,7 @@ mod tests {
 
         emu.process(b"\x1b[>10u");
         assert_eq!(
-            token_to_seq_with_mode("Repeat+a", emu.keyboard_mode()).unwrap(),
+            token_to_seq_for_action_with_mode("a", KeyAction::Repeat, emu.keyboard_mode()).unwrap(),
             "\x1b[97;1:2u"
         );
     }

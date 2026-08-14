@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use tui_test::{
-    Engine, OpenOptions, Operation, OperationResult, RunOptions, ScreenshotResult, TuiTestError,
+    Engine, KeyAction, OpenOptions, Operation, OperationResult, RunOptions, ScreenshotResult,
+    TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
@@ -50,6 +51,11 @@ pub enum Request {
     Submit {
         data: Option<String>,
     },
+    Key {
+        action: KeyAction,
+        keys: Vec<String>,
+    },
+    /// Backward-compatible request from older clients.
     Press {
         keys: Vec<String>,
     },
@@ -206,7 +212,11 @@ impl Request {
             }),
             Request::Write { data } => Ok(Operation::Write { data }),
             Request::Submit { data } => Ok(Operation::Submit { data }),
-            Request::Press { keys } => Ok(Operation::Press { keys }),
+            Request::Key { action, keys } => Ok(Operation::Key { keys, action }),
+            Request::Press { keys } => Ok(Operation::Key {
+                keys,
+                action: KeyAction::Press,
+            }),
             Request::Mouse { action } => Ok(Operation::Mouse { action }),
             Request::Resize { cols, rows } => Ok(Operation::Resize { cols, rows }),
             Request::Signal { name } => Ok(Operation::Signal { name }),
@@ -400,6 +410,44 @@ mod tests {
             env: vec![],
             wait_ready,
             timeouts,
+        }
+    }
+
+    #[test]
+    fn key_actions_use_public_names_and_map_to_core_actions() {
+        for (action, name) in [
+            (KeyAction::Press, "press"),
+            (KeyAction::Down, "down"),
+            (KeyAction::Repeat, "repeat"),
+            (KeyAction::Up, "up"),
+        ] {
+            let request = Request::Key {
+                action,
+                keys: vec!["Ctrl+a".into()],
+            };
+            let value = serde_json::to_value(&request).unwrap();
+            assert_eq!(value["kind"], "key");
+            assert_eq!(value["action"], name);
+            match request.into_operation().unwrap() {
+                Operation::Key {
+                    keys,
+                    action: actual,
+                } => {
+                    assert_eq!(keys, ["Ctrl+a"]);
+                    assert_eq!(actual, action);
+                }
+                other => panic!("expected key operation, got {other:?}"),
+            }
+        }
+
+        match (Request::Press {
+            keys: vec!["Ctrl+a".into()],
+        })
+        .into_operation()
+        .unwrap()
+        {
+            Operation::Key { action, .. } => assert_eq!(action, KeyAction::Press),
+            other => panic!("expected key operation, got {other:?}"),
         }
     }
 

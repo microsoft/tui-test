@@ -84,15 +84,16 @@ without parsing text:
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `type "text"`                                                              | Type literal text (no return key).                                           |
 | `submit ["text"]`                                                          | Type text then press the shell's return key. Omit text to just submit.       |
-| `press <Key...>`                                                           | Named keys/events, e.g. `press Ctrl+C`, `press Repeat+Up`, `press Release+a`. |
-| `keys "Ctrl+a"`                                                            | A single key combo or event.                                                 |
+| `key press <Key...>`                                                       | Send down then up, e.g. `key press Ctrl+C`.                                  |
+| `key down <Key...>` / `key up <Key...>`                                    | Send explicit down and up events.                                            |
+| `key repeat <Key...>`                                                      | Send repeat events for keys that are currently down.                         |
 | `mouse click X Y` / `mouse click --on-text "OK" [--button N] [--clicks N]` | Click by coordinates or by visible label.                                    |
 | `mouse move\|down\|up\|drag\|scroll ...`                                   | Full mouse control (`--button` default 0=left, `scroll --amount` default 3). |
 
-Key input from `press` and `keys` automatically follows the Kitty keyboard
-protocol flags negotiated by the child application; modifiers are `Ctrl`, `Alt`,
-`Shift`, `Super`, `Hyper`, and `KittyMeta` (`Meta` aliases `Alt`), and events use
-`Repeat+` or `Release+`.
+Key input automatically follows the Kitty keyboard protocol flags negotiated by
+the child application. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`,
+`Hyper`, and `Meta`. Top-level `press` remains a compatibility alias for
+`key press`.
 
 ### PTY control
 
@@ -145,18 +146,18 @@ tui-test expect exit-code 0         # assert the command succeeded
 tui-test close
 ```
 
-`submit` types text then presses Enter; `type` types without Enter; `press`
-sends named keys (`press Escape : w q Enter`, `press Ctrl+C`); `keys` sends one
-combo (`keys "Ctrl+a"`).
+`submit` types text then presses Enter; `type` types without Enter; `key press`
+sends complete key actions (`key press Escape : w q Enter`, `key press Ctrl+C`);
+`key down` and `key up` model held keys, and `key repeat` sends repeat events.
 
 ## Workflow: drive a TUI program
 
 ```sh
 tui-test run vim file.txt
 tui-test wait idle                  # let the screen finish rendering
-tui-test press i                    # enter insert mode
+tui-test key press i                # enter insert mode
 tui-test type "some text"
-tui-test press Escape : w q Enter   # save and quit
+tui-test key press Escape : w q Enter # save and quit
 tui-test wait exit
 ```
 
@@ -326,7 +327,9 @@ The Rust crate exposes `Session` and `SessionRegistry` for terminal ownership,
 plus the `Operation` and `OperationResult` enums for the command surface.
 
 Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
-/ `type` / `write`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`,
+/ `type` / `write`, `keyboard.press|down|repeat|up`, compatibility
+`press`,
+`mouse.click|move|down|up|drag|scroll`,
 `resize`, `signal` / `kill`, `state`, `text`, `cells`, the dedicated
 `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` /
 `get_size` / `get_title` methods,
@@ -418,7 +421,8 @@ cat ~/.tui-test/work.log
 `git log` / `git diff`), a full-screen pager such as `less` is likely holding the
 terminal, and `Ctrl+C` won't quit it. Confirm with `tui-test state`
 (`"ready": false` and a stale last command). Quit the pager with
-`tui-test press q`, or avoid it with `git --no-pager <cmd>` or `GIT_PAGER=cat`.
+`tui-test key press q`, or avoid it with `git --no-pager <cmd>` or
+`GIT_PAGER=cat`.
 
 **Platform note.** On Windows ConPTY, `get output` and `get command` text can on some rare occasions be
 unreliable due to screen repainting; grid-based checks (`expect text`,

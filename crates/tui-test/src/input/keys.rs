@@ -1,5 +1,6 @@
 //! Key-name and key-event to terminal input sequence mapping.
 
+use crate::api::KeyAction;
 use crate::terminal::emu::KeyboardMode;
 
 const ESC: &str = "\u{1b}";
@@ -60,7 +61,6 @@ impl Mods {
 struct ParsedToken<'a> {
     key: &'a str,
     mods: Mods,
-    event: KeyEventKind,
 }
 
 fn parse_token(token: &str) -> anyhow::Result<ParsedToken<'_>> {
@@ -68,7 +68,6 @@ fn parse_token(token: &str) -> anyhow::Result<ParsedToken<'_>> {
         return Ok(ParsedToken {
             key: token,
             mods: Mods::default(),
-            event: KeyEventKind::Press,
         });
     }
 
@@ -81,34 +80,19 @@ fn parse_token(token: &str) -> anyhow::Result<ParsedToken<'_>> {
     }
 
     let mut mods = Mods::default();
-    let mut event = None;
     for prefix in prefixes {
         match prefix.to_ascii_lowercase().as_str() {
             "ctrl" | "control" => mods.ctrl = true,
-            "alt" | "option" | "meta" => mods.alt = true,
+            "alt" | "option" => mods.alt = true,
             "shift" => mods.shift = true,
             "super" | "command" | "cmd" | "win" | "windows" => mods.super_key = true,
             "hyper" => mods.hyper = true,
-            "kittymeta" | "kitty_meta" => mods.meta = true,
-            "press" => set_event(&mut event, KeyEventKind::Press)?,
-            "repeat" => set_event(&mut event, KeyEventKind::Repeat)?,
-            "release" => set_event(&mut event, KeyEventKind::Release)?,
-            other => anyhow::bail!("unknown modifier or event type: {other}"),
+            "meta" => mods.meta = true,
+            other => anyhow::bail!("unknown modifier: {other}"),
         }
     }
 
-    Ok(ParsedToken {
-        key,
-        mods,
-        event: event.unwrap_or_default(),
-    })
-}
-
-fn set_event(current: &mut Option<KeyEventKind>, event: KeyEventKind) -> anyhow::Result<()> {
-    if current.replace(event).is_some() {
-        anyhow::bail!("multiple key event types");
-    }
-    Ok(())
+    Ok(ParsedToken { key, mods })
 }
 
 fn kitty_sequences(mode: KeyboardMode) -> bool {
@@ -425,11 +409,6 @@ fn literal_key(ch: char) -> (char, Mods) {
     }
 }
 
-fn literal_character(ch: char, mode: KeyboardMode) -> String {
-    let (key, mods) = literal_key(ch);
-    character(key, mods, KeyEventKind::Press, mode)
-}
-
 fn character(ch: char, mods: Mods, event: KeyEventKind, mode: KeyboardMode) -> String {
     let report_events = mode.contains(KeyboardMode::REPORT_EVENT_TYPES);
     if event == KeyEventKind::Release && !report_events {
@@ -500,52 +479,98 @@ fn kitty_u(
     sequence
 }
 
-/// Translate a single `press` token using the active terminal keyboard mode.
-pub fn token_to_seq_with_mode(token: &str, mode: KeyboardMode) -> anyhow::Result<String> {
+fn action_events(action: KeyAction) -> &'static [KeyEventKind] {
+    match action {
+        KeyAction::Press => &[KeyEventKind::Press, KeyEventKind::Release],
+        KeyAction::Down => &[KeyEventKind::Press],
+        KeyAction::Repeat => &[KeyEventKind::Repeat],
+        KeyAction::Up => &[KeyEventKind::Release],
+    }
+}
+
+/// Translate one key token and action using the active terminal keyboard mode.
+pub fn token_to_seq_for_action_with_mode(
+    token: &str,
+    action: KeyAction,
+    mode: KeyboardMode,
+) -> anyhow::Result<String> {
     if token.is_empty() {
         return Ok(String::new());
     }
 
     let parsed = parse_token(token)?;
-    if let Some(sequence) = named(parsed.key, parsed.mods, parsed.event, mode) {
-        return Ok(sequence);
+    let events = action_events(action);
+    let (&first_event, remaining_events) = events
+        .split_first()
+        .expect("every key action has at least one event");
+    if let Some(sequence) = named(parsed.key, parsed.mods, first_event, mode) {
+        let mut out = String::new();
+        out.push_str(&sequence);
+        for &event in remaining_events {
+            out.push_str(
+                &named(parsed.key, parsed.mods, event, mode)
+                    .expect("named key classification does not depend on event type"),
+            );
+        }
+        return Ok(out);
     }
 
     let mut chars = parsed.key.chars();
     if let (Some(ch), None) = (chars.next(), chars.next()) {
-        return Ok(if parsed.mods.any() {
-            character(ch, parsed.mods, parsed.event, mode)
+        let (key, mods) = if parsed.mods.any() {
+            (ch, parsed.mods)
         } else {
-            let (key, mods) = literal_key(ch);
-            character(key, mods, parsed.event, mode)
-        });
+            literal_key(ch)
+        };
+        let mut out = String::new();
+        for &event in events {
+            out.push_str(&character(key, mods, event, mode));
+        }
+        return Ok(out);
     }
 
-    if parsed.mods.any() || parsed.event != KeyEventKind::Press {
+    if parsed.mods.any() {
         anyhow::bail!("invalid key: '{}'", parsed.key);
     }
     let mut out = String::new();
     for ch in parsed.key.chars() {
-        out.push_str(&literal_character(ch, mode));
+        let (key, mods) = literal_key(ch);
+        for &event in events {
+            out.push_str(&character(key, mods, event, mode));
+        }
     }
     Ok(out)
 }
 
-/// Translate `press` tokens using the active terminal keyboard mode.
-pub fn tokens_to_seq_with_mode(tokens: &[String], mode: KeyboardMode) -> anyhow::Result<String> {
+/// Translate one key-down event using the active terminal keyboard mode.
+pub fn token_to_seq_with_mode(token: &str, mode: KeyboardMode) -> anyhow::Result<String> {
+    token_to_seq_for_action_with_mode(token, KeyAction::Down, mode)
+}
+
+/// Translate key tokens and an action using the active terminal keyboard mode.
+pub fn tokens_to_seq_for_action_with_mode(
+    tokens: &[String],
+    action: KeyAction,
+    mode: KeyboardMode,
+) -> anyhow::Result<String> {
     let mut out = String::new();
     for token in tokens {
-        out.push_str(&token_to_seq_with_mode(token, mode)?);
+        out.push_str(&token_to_seq_for_action_with_mode(token, action, mode)?);
     }
     Ok(out)
 }
 
-/// Translate a single `press` token using legacy terminal input encoding.
+/// Translate key-down tokens using the active terminal keyboard mode.
+pub fn tokens_to_seq_with_mode(tokens: &[String], mode: KeyboardMode) -> anyhow::Result<String> {
+    tokens_to_seq_for_action_with_mode(tokens, KeyAction::Down, mode)
+}
+
+/// Translate a single key-down token using legacy terminal input encoding.
 pub fn token_to_seq(token: &str) -> anyhow::Result<String> {
     token_to_seq_with_mode(token, KeyboardMode::empty())
 }
 
-/// Translate `press` tokens using legacy terminal input encoding.
+/// Translate key-down tokens using legacy terminal input encoding.
 pub fn tokens_to_seq(tokens: &[String]) -> anyhow::Result<String> {
     tokens_to_seq_with_mode(tokens, KeyboardMode::empty())
 }
@@ -556,6 +581,10 @@ mod tests {
 
     fn default_seq(token: &str) -> anyhow::Result<String> {
         token_to_seq(token)
+    }
+
+    fn action_seq(token: &str, action: KeyAction, mode: KeyboardMode) -> anyhow::Result<String> {
+        token_to_seq_for_action_with_mode(token, action, mode)
     }
 
     #[test]
@@ -573,14 +602,13 @@ mod tests {
     }
 
     #[test]
-    fn preserves_existing_aliases_and_literal_tokens() {
+    fn preserves_aliases_and_distinguishes_alt_from_meta() {
         assert_eq!(default_seq("Control+a").unwrap(), "\u{1}");
         assert_eq!(default_seq("Option+a").unwrap(), "\u{1b}a");
-        assert_eq!(default_seq("Meta+a").unwrap(), "\u{1b}a");
+        assert_eq!(default_seq("Meta+a").unwrap(), "\u{1b}[97;33u");
         assert_eq!(default_seq("Return").unwrap(), "\r");
         assert_eq!(default_seq("Esc").unwrap(), "\u{1b}");
         assert_eq!(default_seq("hello").unwrap(), "hello");
-        assert_eq!(default_seq("KittyMeta+a").unwrap(), "\u{1b}[97;33u");
     }
 
     #[test]
@@ -641,8 +669,14 @@ mod tests {
             ("Ctrl+Shift+Space", "\0"),
         ] {
             assert_eq!(default_seq(token).unwrap(), expected, "{token}");
-            assert_eq!(default_seq(&format!("Repeat+{token}")).unwrap(), expected);
-            assert_eq!(default_seq(&format!("Release+{token}")).unwrap(), "");
+            assert_eq!(
+                action_seq(token, KeyAction::Repeat, KeyboardMode::empty()).unwrap(),
+                expected
+            );
+            assert_eq!(
+                action_seq(token, KeyAction::Up, KeyboardMode::empty()).unwrap(),
+                ""
+            );
         }
     }
 
@@ -655,14 +689,8 @@ mod tests {
         ] {
             for (key, legacy) in [("Enter", "\r"), ("Tab", "\t"), ("Backspace", "\u{7f}")] {
                 assert_eq!(token_to_seq_with_mode(key, mode).unwrap(), legacy);
-                assert_eq!(
-                    token_to_seq_with_mode(&format!("Repeat+{key}"), mode).unwrap(),
-                    legacy
-                );
-                assert_eq!(
-                    token_to_seq_with_mode(&format!("Release+{key}"), mode).unwrap(),
-                    ""
-                );
+                assert_eq!(action_seq(key, KeyAction::Repeat, mode).unwrap(), legacy);
+                assert_eq!(action_seq(key, KeyAction::Up, mode).unwrap(), "");
             }
         }
 
@@ -671,13 +699,10 @@ mod tests {
             let expected = format!("{CSI}{codepoint}u");
             assert_eq!(token_to_seq_with_mode(key, report_all).unwrap(), expected);
             assert_eq!(
-                token_to_seq_with_mode(&format!("Repeat+{key}"), report_all).unwrap(),
+                action_seq(key, KeyAction::Repeat, report_all).unwrap(),
                 expected
             );
-            assert_eq!(
-                token_to_seq_with_mode(&format!("Release+{key}"), report_all).unwrap(),
-                ""
-            );
+            assert_eq!(action_seq(key, KeyAction::Up, report_all).unwrap(), "");
         }
 
         let disambiguate = KeyboardMode::DISAMBIGUATE_ESC_CODES;
@@ -702,11 +727,11 @@ mod tests {
             "\u{1b}[13;5u"
         );
         assert_eq!(
-            token_to_seq_with_mode("Release+Ctrl+Enter", enhanced_events).unwrap(),
+            action_seq("Ctrl+Enter", KeyAction::Up, enhanced_events).unwrap(),
             "\u{1b}[13;5:3u"
         );
         assert_eq!(
-            token_to_seq_with_mode("Repeat+Ctrl+Enter", enhanced_events).unwrap(),
+            action_seq("Ctrl+Enter", KeyAction::Repeat, enhanced_events).unwrap(),
             "\u{1b}[13;5:2u"
         );
     }
@@ -755,14 +780,14 @@ mod tests {
     fn assert_events(mode: KeyboardMode, key: &str, press: &str, repeat: &str, release: &str) {
         assert_eq!(token_to_seq_with_mode(key, mode).unwrap(), press, "{key}");
         assert_eq!(
-            token_to_seq_with_mode(&format!("Repeat+{key}"), mode).unwrap(),
+            action_seq(key, KeyAction::Repeat, mode).unwrap(),
             repeat,
-            "Repeat+{key}"
+            "repeat {key}"
         );
         assert_eq!(
-            token_to_seq_with_mode(&format!("Release+{key}"), mode).unwrap(),
+            action_seq(key, KeyAction::Up, mode).unwrap(),
             release,
-            "Release+{key}"
+            "release {key}"
         );
     }
 
@@ -866,13 +891,12 @@ mod tests {
     fn unrepresentable_legacy_modifiers_fall_back_to_csi_u() {
         assert_eq!(default_seq("Super+a").unwrap(), "\u{1b}[97;9u");
         assert_eq!(default_seq("Hyper+a").unwrap(), "\u{1b}[97;17u");
-        assert_eq!(default_seq("KittyMeta+a").unwrap(), "\u{1b}[97;33u");
+        assert_eq!(default_seq("Meta+a").unwrap(), "\u{1b}[97;33u");
         assert_eq!(default_seq("Ctrl+Shift+a").unwrap(), "\u{1b}[97;6u");
         assert_eq!(default_seq("Ctrl+Shift+1").unwrap(), "\u{1b}[49;6u");
 
         assert_eq!(default_seq("Alt+Shift+a").unwrap(), "\u{1b}A");
         assert_eq!(default_seq("Ctrl+Alt+a").unwrap(), "\u{1b}\u{1}");
-        assert_eq!(default_seq("Meta+a").unwrap(), "\u{1b}a");
     }
 
     #[test]
@@ -888,8 +912,27 @@ mod tests {
 
     #[test]
     fn legacy_repeat_is_another_press_and_release_is_silent() {
-        assert_eq!(default_seq("Repeat+Ctrl+C").unwrap(), "\u{3}");
-        assert_eq!(default_seq("Release+Ctrl+C").unwrap(), "");
+        assert_eq!(
+            action_seq("Ctrl+C", KeyAction::Repeat, KeyboardMode::empty()).unwrap(),
+            "\u{3}"
+        );
+        assert_eq!(
+            action_seq("Ctrl+C", KeyAction::Up, KeyboardMode::empty()).unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn press_pairs_each_keydown_with_a_keyup() {
+        let mode = KeyboardMode::REPORT_EVENT_TYPES;
+        assert_eq!(
+            action_seq("a", KeyAction::Press, mode).unwrap(),
+            "a\u{1b}[97;1:3u"
+        );
+        assert_eq!(
+            action_seq("ab", KeyAction::Press, mode).unwrap(),
+            "a\u{1b}[97;1:3ub\u{1b}[98;1:3u"
+        );
     }
 
     #[test]
@@ -900,8 +943,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_conflicting_event_types() {
-        let error = default_seq("Repeat+Release+a").unwrap_err();
-        assert!(error.to_string().contains("multiple key event types"));
+    fn rejects_event_prefixes_in_key_tokens() {
+        let error = default_seq("Release+a").unwrap_err();
+        assert!(error.to_string().contains("unknown modifier: release"));
     }
 }

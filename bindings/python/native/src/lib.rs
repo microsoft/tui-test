@@ -8,7 +8,7 @@ use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
-    Cell, CellColor, Cursor, ErrorKind, MouseAction, OpenOptions, OpenResult, Operation,
+    Cell, CellColor, Cursor, ErrorKind, KeyAction, MouseAction, OpenOptions, OpenResult, Operation,
     OperationResult, PackedScreen, RunOptions, ScreenshotResult, Size, SnapshotResult, State,
     Timeouts, TuiTestError,
 };
@@ -354,16 +354,66 @@ impl NativeSession {
         let name = self.name.clone();
         future_blocking(
             py,
-            move || execute_unit(&name, Operation::Press { keys }),
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::Key {
+                        keys,
+                        action: KeyAction::Press,
+                    },
+                )
+            },
             unit_to_py,
         )
     }
 
-    fn keys<'py>(&self, py: Python<'py>, combo: String) -> PyResult<Bound<'py, PyAny>> {
+    fn key_down<'py>(&self, py: Python<'py>, keys: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
         let name = self.name.clone();
         future_blocking(
             py,
-            move || execute_unit(&name, Operation::Press { keys: vec![combo] }),
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::Key {
+                        keys,
+                        action: KeyAction::Down,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    fn repeat<'py>(&self, py: Python<'py>, keys: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::Key {
+                        keys,
+                        action: KeyAction::Repeat,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    fn key_up<'py>(&self, py: Python<'py>, keys: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::Key {
+                        keys,
+                        action: KeyAction::Up,
+                    },
+                )
+            },
             unit_to_py,
         )
     }

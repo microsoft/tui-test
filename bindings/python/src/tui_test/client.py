@@ -88,6 +88,23 @@ def _extract_terminal_text(message: Optional[str]) -> Optional[str]:
     return message[index + len(_TERMINAL_MARKER):].rstrip("\n") or None
 
 
+class _Keyboard:
+    def __init__(self, client: "TuiTest") -> None:
+        self._c = client
+
+    async def press(self, *keys: str) -> None:
+        await self._c._await(self._c._native.press(list(keys)))
+
+    async def down(self, *keys: str) -> None:
+        await self._c._await(self._c._native.key_down(list(keys)))
+
+    async def repeat(self, *keys: str) -> None:
+        await self._c._await(self._c._native.repeat(list(keys)))
+
+    async def up(self, *keys: str) -> None:
+        await self._c._await(self._c._native.key_up(list(keys)))
+
+
 class _Mouse:
     def __init__(self, client: "TuiTest") -> None:
         self._c = client
@@ -140,6 +157,7 @@ class TuiTest:
         self._profile = cfg.normalize_profile(profile)
         self._artifacts = artifacts
         self._artifact_counter = 0
+        self.keyboard = _Keyboard(self)
         self.mouse = _Mouse(self)
 
     @classmethod
@@ -306,10 +324,7 @@ class TuiTest:
         await self._await(self._native.submit(text))
 
     async def press(self, *keys: str) -> None:
-        await self._await(self._native.press(list(keys)))
-
-    async def keys(self, combo: str) -> None:
-        await self._await(self._native.keys(combo))
+        await self.keyboard.press(*keys)
 
     async def resize(self, cols: int, rows: int) -> None:
         await self._await(self._native.resize(cols, rows))

@@ -51,11 +51,11 @@ test("echo roundtrip drives a real session", async () => {
     assert.match(await su.screenshot(), /hello-sdk/);
 
     await su.write("echo typed-write");
-    await su.keys("Enter");
+    await su.keyboard.press("Enter");
     await su.waitText("typed-write");
     await su.waitCommand();
     await su.type("echo typed-type");
-    await su.press("Enter");
+    await su.keyboard.press("Enter");
     await su.waitText("typed-type");
     await su.waitCommand();
   });

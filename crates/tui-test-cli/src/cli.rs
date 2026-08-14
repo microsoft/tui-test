@@ -233,16 +233,17 @@ pub enum Command {
         /// Text to type before the return key (optional).
         text: Option<String>,
     },
-    /// Send named keys and Kitty events, e.g. `press Ctrl+C` or `press Release+a`.
+    /// Keyboard input.
+    Key {
+        #[command(subcommand)]
+        action: KeyCmd,
+    },
+    /// Compatibility alias for `key press`.
+    #[command(hide = true)]
     Press {
-        /// Key names to send; prefix with Repeat+ or Release+ for Kitty events.
+        /// Key names or combos to press in sequence.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         keys: Vec<String>,
-    },
-    /// Send a single key combo or Kitty event, e.g. `keys Release+a`.
-    Keys {
-        /// Key combo or event to send, e.g. Ctrl+a or Release+a.
-        combo: String,
     },
     /// Mouse control.
     Mouse {
@@ -340,6 +341,31 @@ impl SignalArg {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_action_commands_parse() {
+        for action in ["press", "down", "repeat", "up"] {
+            let cli = Cli::try_parse_from(["tui-test", "key", action, "Ctrl+a"])
+                .expect("parse key action");
+            let Some(Command::Key { action: parsed }) = cli.command else {
+                panic!("expected key command for {action}");
+            };
+            let keys = match parsed {
+                KeyCmd::Press { keys }
+                | KeyCmd::Down { keys }
+                | KeyCmd::Repeat { keys }
+                | KeyCmd::Up { keys } => keys,
+            };
+            assert_eq!(keys, ["Ctrl+a"]);
+        }
+
+        let cli = Cli::try_parse_from(["tui-test", "press", "Ctrl+a"]).expect("parse press alias");
+        match cli.command {
+            Some(Command::Press { keys }) => assert_eq!(keys, ["Ctrl+a"]),
+            _ => panic!("unexpected press alias command"),
+        }
+        assert!(Cli::try_parse_from(["tui-test", "keys", "Ctrl+a"]).is_err());
+    }
 
     #[test]
     fn skill_accepts_the_add_flag() {
@@ -570,6 +596,34 @@ pub enum GetArg {
     Size,
     /// Window title, as set with OSC 0/2.
     Title,
+}
+
+#[derive(Subcommand)]
+pub enum KeyCmd {
+    /// Press keys by sending a down event followed by an up event.
+    Press {
+        /// Key names or combos to press in sequence.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        keys: Vec<String>,
+    },
+    /// Send down events without releasing the keys.
+    Down {
+        /// Key names or combos to send down events for.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        keys: Vec<String>,
+    },
+    /// Send repeat events for keys that are currently down.
+    Repeat {
+        /// Key names or combos to send repeat events for.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        keys: Vec<String>,
+    },
+    /// Send up events for keys that were previously pressed.
+    Up {
+        /// Key names or combos to send up events for.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        keys: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]

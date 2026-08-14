@@ -54,9 +54,11 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 ## API
 
-`TuiTest(session="default", *, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title`, `screenshot`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
+`TuiTest(session="default", *, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title`, `screenshot`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
 
-`press()` and `keys()` follow the Kitty keyboard protocol negotiated by the child, including `"Repeat+Up"` and `"Release+a"` events.
+`keyboard.press()` sends down then up. Use `keyboard.down()`,
+`keyboard.repeat()`, and `keyboard.up()` for explicit events. Top-level
+`press()` remains a compatibility alias.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 

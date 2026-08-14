@@ -131,9 +131,9 @@ Drive a full-screen TUI the same way:
 ```sh
 tui-test run vim file.txt
 tui-test wait idle             # let the screen settle
-tui-test press i
+tui-test key press i
 tui-test type "some text"
-tui-test press Escape : w q Enter
+tui-test key press Escape : w q Enter
 tui-test wait exit
 ```
 
@@ -219,14 +219,17 @@ print the screen bare.
 
 | Command                                                       | Description                                                  |
 | ------------------------------------------------------------- | ------------------------------------------------------------ |
-| `type "text"`                                                 | Type literal text.                                           |
-| `submit ["text"]`                                             | Type then press the shell return key.                        |
-| `press <Key...>`                                              | Named keys and events, e.g. `press Ctrl+C`, `press Repeat+Up`, `press Release+a`. |
-| `keys "Ctrl+a"`                                               | A single key combo or event.                                 |
-| `mouse click X Y` / `mouse click --on-text "OK" [--clicks N]` | Click by coords or label.                                    |
-| `mouse move\|down\|up\|drag\|scroll ...`                      | Full mouse control.                                          |
+| `type "text"`                                                 | Type literal text.                                         |
+| `submit ["text"]`                                             | Type then press the shell return key.                      |
+| `key press <Key...>`                                          | Send down then up, e.g. `key press Ctrl+C`.                |
+| `key down <Key...>` / `key up <Key...>`                       | Send explicit down and up events.                          |
+| `key repeat <Key...>`                                         | Send repeat events for keys that are currently down.       |
+| `mouse click X Y` / `mouse click --on-text "OK" [--clicks N]` | Click by coords or label.                                  |
+| `mouse move\|down\|up\|drag\|scroll ...`                      | Full mouse control.                                        |
 
-Key input from `press` and `keys` follows the Kitty keyboard protocol negotiated by the child, including `Repeat+` and `Release+` events.
+Key input follows the Kitty keyboard protocol negotiated by the child.
+Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`, and `Meta`;
+the top-level `press` command remains a compatibility alias for `key press`.
 
 ### PTY
 
