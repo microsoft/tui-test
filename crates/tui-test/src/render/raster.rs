@@ -257,6 +257,7 @@ impl FrameRenderer for GridRenderer {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_cursor(
     pixmap: &mut Pixmap,
     fonts: &mut FontSystem,
