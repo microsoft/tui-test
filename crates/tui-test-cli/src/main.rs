@@ -83,6 +83,13 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
     // Closing must remain available when the running daemon is from an older
     // client; every other command requires matching protocol behavior.
     let allow_incompatible = matches!(&request, Request::Close);
+    let socket = config::socket_name(session);
+    if allow_incompatible && !ipc::is_running(&socket) {
+        if json {
+            println!("{}", serde_json::json!({ "ok": true }));
+        }
+        return 0;
+    }
     let conn = match connect_to_daemon(session, verbose, allow_incompatible) {
         Ok(c) => c,
         Err(e) => {
@@ -92,6 +99,12 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
     };
     match ipc::exchange(conn, &request) {
         Ok(resp) => print_response(&resp, json),
+        Err(_) if allow_incompatible && !ipc::is_running(&socket) => {
+            if json {
+                println!("{}", serde_json::json!({ "ok": true }));
+            }
+            0
+        }
         Err(e) => {
             eprintln!("request failed: {e}");
             4
