@@ -51,7 +51,11 @@ done
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 static_dir="$repo_root/static"
-temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/tui-test-static-media.XXXXXX")
+temp_root="$repo_root/target/static-media-tmp"
+temp_dir="$temp_root/run-$$"
+mkdir -p -- "$temp_root"
+rm -rf -- "$temp_dir"
+mkdir -p -- "$temp_dir"
 session_prefix="static-media-$$"
 sessions=()
 
