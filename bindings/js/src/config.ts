@@ -1,4 +1,4 @@
-import type { Timeouts } from "./types.js";
+import type { Profile, Timeouts } from "./types.js";
 
 export const DEFAULT_COLS = 80;
 export const DEFAULT_ROWS = 30;
@@ -19,6 +19,28 @@ const TIMEOUT_CLASSES: readonly TimeoutClass[] = [
   "exit",
   "ready",
 ];
+const PROFILE_FIELDS = new Set(["scrollback", "colors"]);
+const COLOR_FIELDS = new Map([
+  ["foreground", "foreground"],
+  ["background", "background"],
+  ["cursor", "cursor"],
+  ["black", "black"],
+  ["red", "red"],
+  ["green", "green"],
+  ["yellow", "yellow"],
+  ["blue", "blue"],
+  ["magenta", "magenta"],
+  ["cyan", "cyan"],
+  ["white", "white"],
+  ["brightBlack", "bright_black"],
+  ["brightRed", "bright_red"],
+  ["brightGreen", "bright_green"],
+  ["brightYellow", "bright_yellow"],
+  ["brightBlue", "bright_blue"],
+  ["brightMagenta", "bright_magenta"],
+  ["brightCyan", "bright_cyan"],
+  ["brightWhite", "bright_white"],
+]);
 
 export function resolveTimeout(
   cls: TimeoutClass,
@@ -64,6 +86,53 @@ export function assertTimeoutClasses(timeouts: Timeouts): void {
         `expected one of ${TIMEOUT_CLASSES.join(", ")}`,
     );
   }
+}
+
+function profileObject(value: unknown, name: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${name} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+export interface ProfilePayload {
+  scrollback?: number;
+  colors: [string, string][];
+}
+
+export function profilePayload(profile?: Profile): ProfilePayload | undefined {
+  if (profile === undefined) {
+    return undefined;
+  }
+  const raw = profileObject(profile, "profile");
+  const unknown = Object.keys(raw).filter((key) => !PROFILE_FIELDS.has(key));
+  if (unknown.length > 0) {
+    throw new TypeError(`unknown profile field ${unknown.join(", ")}`);
+  }
+  if (raw.colors !== undefined) {
+    const colors = profileObject(raw.colors, "profile.colors");
+    const unknownColors = Object.keys(colors).filter((key) => !COLOR_FIELDS.has(key));
+    if (unknownColors.length > 0) {
+      throw new TypeError(`unknown profile color ${unknownColors.join(", ")}`);
+    }
+    const payloadColors: [string, string][] = [];
+    for (const [name, value] of Object.entries(colors)) {
+      if (value !== undefined && typeof value !== "string") {
+        throw new TypeError(`profile.colors.${name} must be a string`);
+      }
+      if (typeof value === "string") {
+        payloadColors.push([COLOR_FIELDS.get(name) as string, value]);
+      }
+    }
+    return {
+      scrollback: raw.scrollback as number | undefined,
+      colors: payloadColors,
+    };
+  }
+  return {
+    scrollback: raw.scrollback as number | undefined,
+    colors: [],
+  };
 }
 
 export function envPairs(

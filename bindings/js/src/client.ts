@@ -6,6 +6,7 @@ import {
   DEFAULT_ROWS,
   assertTimeoutClasses,
   envPairs,
+  profilePayload,
   resolveSession,
   resolveTimeout,
   timeoutsPayload,
@@ -141,6 +142,7 @@ export class TuiTest {
     if (opts.timeouts) {
       assertTimeoutClasses(opts.timeouts);
     }
+    profilePayload(opts.profile);
     this.#options = opts;
     this.#runtime = new NativeRuntime(this.session);
     this.mouse = new Mouse(this.#runtime);
@@ -212,6 +214,7 @@ export class TuiTest {
     if (opts.timeouts) {
       assertTimeoutClasses(opts.timeouts);
     }
+    const profile = profilePayload(opts.profile ?? this.#options.profile);
     const options = {
       shell: opts.shell,
       cols: opts.cols ?? DEFAULT_COLS,
@@ -219,6 +222,8 @@ export class TuiTest {
       cwd: opts.cwd,
       env: envPairs(opts.env),
       waitReady: opts.waitReady,
+      profileScrollback: profile?.scrollback,
+      profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
     };
     return this.#spawn(() => this.#runtime.open(options), opts.retries ?? 0);
@@ -228,6 +233,7 @@ export class TuiTest {
     if (opts.timeouts) {
       assertTimeoutClasses(opts.timeouts);
     }
+    const profile = profilePayload(opts.profile ?? this.#options.profile);
     const options = {
       program,
       args,
@@ -236,6 +242,8 @@ export class TuiTest {
       cwd: opts.cwd,
       env: envPairs(opts.env),
       waitReady: opts.waitReady,
+      profileScrollback: profile?.scrollback,
+      profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
     };
     return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0);

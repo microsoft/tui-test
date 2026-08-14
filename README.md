@@ -188,8 +188,8 @@ prints a session's effective timeouts.
 
 | Command                                                      | Description                                 |
 | ------------------------------------------------------------ | ------------------------------------------- |
-| `open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V] [--timeout-<class> MS]` | Spawn a shell session.                      |
-| `run <program> [args...]`                                    | Spawn a session running a program directly. |
+| `open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V] [--config F] [--profile P] [--timeout-<class> MS]` | Spawn a shell session.                      |
+| `run [--config F] [--profile P] <program> [args...]`         | Spawn a session running a program directly. |
 | `sessions`                                                   | List active sessions.                       |
 | `close [--all]`                                              | Close the current session (or all).         |
 | `daemon start` / `daemon status` / `daemon stop --session N \| --all` | Start, inspect, or stop a session's daemon. |
@@ -327,6 +327,53 @@ Every command returns a stable exit code so an agent can branch on the failure c
 | `5`  | internal error                                        |
 
 With `--json`, failures also carry a `"kind"` field (`assertion`/`usage`/`no_session`/`internal`).
+
+## Configuration
+
+Settings live in a `tui-test.toml` with named profiles. Everything is
+optional, so a file only states what it changes:
+
+```toml
+[profiles.default]
+scrollback = 10000            # rows kept beyond the visible screen
+
+[profiles.default.colors]
+background = "#000000"
+foreground = "#c0c0c0"
+cursor     = "#c0c0c0"
+red        = "#800000"        # any of the 16 ANSI slots, by name
+
+[profiles.ci]
+scrollback = 500              # other fields use built-in defaults
+```
+
+```bash
+tui-test open                         # profile "default"
+tui-test open --profile ci
+tui-test open --config ./other.toml --profile ci
+```
+
+Looked up nearest first: `./tui-test.toml`, then
+`~/.tui-test/tui-test.toml`. `--config` or `TUI_TEST_CONFIG` replaces the
+search.
+
+Named profiles do not inherit from `[profiles.default]`; every omitted field
+uses tui-test's built-in default.  `tui-test.toml` affect the cLI only, the libraries
+accept profile configurations when starting a new session.
+
+### Colors
+
+A terminal grid stores colour *indices*, not colours. What index 1 looks like
+is the profile's choice, and tui-test needs that choice twice: to draw a
+screenshot, and to answer `expect --fg "#rrggbb"`. **Both read the same table**,
+so a colour an assertion matches is the colour a screenshot paints.
+
+Only the 16 ANSI slots and the three defaults are configurable. Indices 16-255
+are the xterm colour cube and grey ramp, fixed by the spec, so `--fg 196` means
+the same thing in every profile.
+
+The shipped palette is the classic VGA/xterm one that `TERM=xterm-256color`
+promises.
 
 ## Supported shells
 

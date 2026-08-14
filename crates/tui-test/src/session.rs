@@ -8,6 +8,7 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crate::logger::Logger;
+use crate::profile::Profile;
 use crate::shell::{self, Shell};
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::emu::Emulator;
@@ -51,6 +52,7 @@ impl Session {
     pub fn open(
         shell: Option<Shell>,
         program: Option<Vec<String>>,
+        profile: Profile,
         cols: u16,
         rows: u16,
         cwd: Option<String>,
@@ -78,7 +80,7 @@ impl Session {
         };
 
         let state = Arc::new(Mutex::new(TermState {
-            emu: Box::new(AlacrittyEmu::new(cols, rows, 5_000)),
+            emu: Box::new(AlacrittyEmu::new(cols, rows, &profile)),
             tracker: CommandTracker::new(),
             last_change: Instant::now(),
             awaiting_start: None,

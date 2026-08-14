@@ -60,8 +60,8 @@ without parsing text:
 
 | Command                                                                  | Description                                                            |
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| `open [--shell S] [--cols N] [--rows N] [--cwd D] [--env K=V]...`        | Spawn a shell session (auto-starts the daemon). `--env` is repeatable. |
-| `run <program> [args...] [--cols N] [--rows N] [--cwd D] [--env K=V]...` | Spawn a session running a program directly (no shell).                 |
+| `open [--shell S] [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P]` | Spawn a shell session (auto-starts the daemon). `--env` is repeatable. |
+| `run [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P] <program> [args...]` | Spawn a session running a program directly (no shell). |
 | `sessions`                                                               | List active sessions.                                                  |
 | `close [--all]`                                                          | Close the current session (or every session with `--all`).             |
 | `daemon start`                                                           | Start this session's daemon. Most commands start one on demand.        |
@@ -337,16 +337,52 @@ Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
 and `getRecording`. The JavaScript client otherwise uses the same names in
 camelCase (`waitCommand`, `expectText`, `getExitCode`, etc.).
 
-The constructors accept a session name plus timeout and artifact options:
-`TuiTest(session="default", *, timeouts=None, artifacts=None)` in Python and
-`new TuiTest(session?, { timeouts?, artifacts? })` in JavaScript. `run` takes
-the program then its arguments (`await su.run("vim", "file.txt")` in Python,
-`await su.run("vim", ["file.txt"])` in JavaScript).
+The constructors accept a session name plus profile, timeout, and artifact
+options: `TuiTest(session="default", *, timeouts=None, profile=None,
+artifacts=None)` in Python and `new TuiTest(session?, { profile?, timeouts?,
+artifacts? })` in JavaScript. `run` takes the program then its arguments
+(`await su.run("vim", "file.txt")` in Python, `await su.run("vim",
+["file.txt"])` in JavaScript).
 
 Python and JavaScript failures raise typed errors instead of returning exit
 codes, one class per row of the applicable [exit-code table](#exit-codes):
 `ExpectationError` (1), `UsageError` (2), `NoSessionError` (3), and
 `InternalError` (5), all subclasses of `TuiTestError`.
+
+## Configuration
+
+`tui-test.toml` holds named profiles; `--profile NAME` selects one and
+`--config PATH` picks the file. Looked up nearest first: `./tui-test.toml`
+then `~/.tui-test/tui-test.toml`. No discovered file is fine; `--config` and
+`TUI_TEST_CONFIG` are explicit and error when their path is missing.
+
+```toml
+[profiles.ci]
+scrollback = 500
+
+[profiles.ci.colors]
+red = "#ff0000"
+```
+
+A profile sets `scrollback` (default 10000) and colors: `foreground`,
+`background`, `cursor`, and the 16 ANSI slots by name (`red`, `bright_red`,
+...). Indices 16-255 are spec-defined and not configurable, so `--fg 196` is
+stable across profiles.
+
+Named profiles do not inherit from `[profiles.default]`; omitted fields use
+tui-test's built-in defaults. The in-process APIs accept profile objects:
+Rust passes `Profile` directly, Python uses `Profile` / `Colors`, and
+JavaScript uses `{ scrollback, colors }`. A profile can be a client default or
+a per-`open` / per-`run` override. The bindings do not load `tui-test.toml`.
+
+The palette is what a screenshot paints **and** what `expect --fg/--bg` matches
+a `#rrggbb` against, so the two always agree.
+
+Programs can also set and query colours at runtime with `OSC 4/10/11/12` and
+reset them with `OSC 104/110/111/112`. A query is answered with the colour
+currently showing; a reset restores the profile's colour, which no escape
+sequence can change. Note that a program setting a colour also changes what a
+screenshot of that session looks like.
 
 ## Supported shells & integration
 
