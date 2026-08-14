@@ -1446,9 +1446,9 @@ fn screenshot(
     path: Option<String>,
     zoom: Option<f64>,
 ) -> Result<ScreenshotResult, TuiTestError> {
-    let zoom = crate::api::resolve_zoom(zoom)?;
     match path {
         Some(path) => {
+            let zoom = crate::api::resolve_zoom(zoom)?;
             let snapshot = svg_snapshot(session, full);
             let svg = crate::render::svg::render_svg_with_zoom(
                 &snapshot.rows,
@@ -1462,6 +1462,9 @@ fn screenshot(
                 .map_err(|error| TuiTestError::internal(error.to_string()))?;
             Ok(ScreenshotResult::Path(path))
         }
+        None if zoom.is_some() => Err(TuiTestError::usage(
+            "screenshot zoom requires an output path",
+        )),
         None => Ok(ScreenshotResult::Text(text_of(&grid(session, full)))),
     }
 }

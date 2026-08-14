@@ -351,6 +351,9 @@ export class TuiTest {
   }
 
   async screenshot(path: string | null = null, opts: ScreenshotOptions = {}): Promise<string> {
+    if (opts.zoom !== undefined && path === null) {
+      throw new TypeError("screenshot zoom requires a path");
+    }
     return this.#runtime.screenshot({
       full: opts.full ?? false,
       path: optional(path),

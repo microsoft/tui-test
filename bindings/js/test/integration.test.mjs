@@ -51,6 +51,7 @@ test("echo roundtrip drives a real session", async () => {
     assert.deepEqual(await su.getSize(), { cols: 92, rows: 26 });
     assert.ok((await su.cells(0, 0, 92, 26)).length > 0);
     assert.match(await su.screenshot(), /hello-sdk/);
+    await assert.rejects(() => su.screenshot(null, { zoom: 0.5 }), /requires a path/);
 
     await su.write("echo typed-write");
     await su.keys("Enter");

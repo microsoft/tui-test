@@ -256,6 +256,11 @@ class TypedCallTests(unittest.TestCase):
             [("screenshot", ("screen.svg", True, 0.5))],
         )
 
+    def test_screenshot_rejects_zoom_without_path(self):
+        terminal = _CapturingClient("s")
+        with self.assertRaisesRegex(ValueError, "requires a path"):
+            run(terminal.screenshot(zoom=0.5))
+
 
 class ClientTimeoutTests(unittest.TestCase):
     def test_unconfigured_waits_pass_none(self):

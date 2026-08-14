@@ -324,6 +324,7 @@ impl Session {
             rows,
             env,
             initial_output,
+            #[cfg(feature = "recording-raster")]
             zoom,
             #[cfg(feature = "recording-raster")]
             timeline: record::frames::TimelineOptions {
@@ -362,8 +363,7 @@ impl Session {
                 let cast = record::cast::read(&stopped.capture_path)?;
                 let frames = record::frames::from_cast(cast, &stopped.timeline)?;
                 let (max_cols, max_rows) = record::frames::max_dimensions(&frames)?;
-                let mut renderer =
-                    GridRenderer::with_zoom(max_cols, max_rows, 2.0 * stopped.zoom)?;
+                let mut renderer = GridRenderer::with_zoom(max_cols, max_rows, 2.0 * stopped.zoom)?;
                 crate::render::encode::encode(
                     &temporary_path,
                     stopped.format,

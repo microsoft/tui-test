@@ -374,6 +374,8 @@ class TuiTest:
         full: bool = False,
         zoom: Optional[float] = None,
     ) -> str:
+        if zoom is not None and path is None:
+            raise ValueError("screenshot zoom requires a path")
         return await self._await(self._native.screenshot(path, full, zoom))
 
     async def start_recording(

@@ -212,11 +212,13 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             out,
             full,
             zoom,
-        } => Request::Screenshot {
-            full,
-            path: out.or(path),
-            zoom,
-        },
+        } => {
+            let path = out.or(path);
+            if zoom.is_some() && path.is_none() {
+                anyhow::bail!("screenshot --zoom requires --out or a path");
+            }
+            Request::Screenshot { full, path, zoom }
+        }
         Command::Record {
             cmd:
                 RecordCmd::Start {
@@ -836,6 +838,16 @@ mod tests {
             format_data(&json!({ "text": "hello\nworld" })),
             "hello\nworld"
         );
+    }
+
+    #[test]
+    fn screenshot_zoom_without_output_is_rejected() {
+        let cli = Cli::try_parse_from(["tui-test", "screenshot", "--zoom", "0.5"]).unwrap();
+        let command = cli.command.unwrap();
+        assert!(build_request(command)
+            .unwrap_err()
+            .to_string()
+            .contains("requires --out"));
     }
 
     #[test]
