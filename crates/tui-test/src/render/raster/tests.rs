@@ -138,3 +138,28 @@ fn frame_palette_and_cursor_state_change_the_pixels() {
     let cursor = (y * width + x) * 4;
     assert_eq!(&first_pixels[cursor..cursor + 3], &[255, 0, 255]);
 }
+
+#[test]
+fn block_cursor_does_not_reveal_invisible_text() {
+    let emulator = AlacrittyEmu::new(1, 1, &Profile::default());
+    let render_state = RenderState::capture(&emulator);
+    let hidden = Frame {
+        grid: vec![vec![cell("M", Attrs::INVISIBLE)]],
+        title: None,
+        duration: Duration::ZERO,
+        render_state: render_state.clone(),
+        cursor: Some((0, 0)),
+    };
+    let blank = Frame {
+        grid: vec![vec![EmuCell::blank()]],
+        title: None,
+        duration: Duration::ZERO,
+        render_state,
+        cursor: Some((0, 0)),
+    };
+
+    let mut renderer = GridRenderer::new(1, 1);
+    let hidden_pixels = renderer.render(&hidden).unwrap().into_raw();
+    let blank_pixels = renderer.render(&blank).unwrap().into_raw();
+    assert_eq!(hidden_pixels, blank_pixels);
+}

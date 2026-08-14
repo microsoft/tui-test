@@ -311,11 +311,14 @@ fn draw_cursor(
     if cell.ch.as_str() == CONTINUATION || cell.ch.chars().all(char::is_whitespace) {
         return;
     }
+    let style = svg::style_of(cell, colors);
+    if style.invisible {
+        return;
+    }
     if unsupported_grapheme(cell.ch.as_str()) {
         missing.insert(format_glyph_sequence(cell.ch.as_str()));
         return;
     }
-    let style = svg::style_of(cell, colors);
     let baseline = (svg::HEADER_H + cy as f32 * svg::CELL_H + svg::FONT_BASELINE) * scale;
     for character in cell.ch.chars() {
         if is_default_ignorable(character) {
