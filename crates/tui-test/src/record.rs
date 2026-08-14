@@ -180,6 +180,7 @@ pub(crate) fn sidecar_path(target: &std::path::Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
     fn flush_acknowledges_all_prior_capture_messages() {
@@ -202,5 +203,69 @@ mod tests {
             .contains("flush-marker"));
         drop(recorder);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn stopped_recording_finishes_pending_decoder_bytes() {
+        let primary = temp_path("primary");
+        let target = temp_path("selected");
+        let recorder = Recorder::create(
+            primary.clone(),
+            80,
+            30,
+            &[],
+            Arc::new(crate::logger::Logger::disabled()),
+        );
+        recorder
+            .start(StartRecording {
+                target_path: target.clone(),
+                capture_path: target.clone(),
+                format: RecordingFormat::Cast,
+                cols: 80,
+                rows: 30,
+                env: Vec::new(),
+                initial_output: String::new(),
+                #[cfg(feature = "recording-raster")]
+                timeline: frames::TimelineOptions::default(),
+            })
+            .unwrap();
+        recorder.capture().on_data(b"tail\x1b[?");
+        recorder.stop().unwrap();
+
+        let cast = std::fs::read_to_string(&target).unwrap();
+        assert!(cast.contains("tail"));
+        assert!(cast.contains(r#"\u001b[?"#));
+
+        drop(recorder);
+        std::fs::remove_file(primary).unwrap();
+        std::fs::remove_file(target).unwrap();
+    }
+
+    #[test]
+    fn shutdown_finishes_pending_primary_decoder_bytes() {
+        let path = temp_path("shutdown");
+        let recorder = Recorder::create(
+            path.clone(),
+            80,
+            30,
+            &[],
+            Arc::new(crate::logger::Logger::disabled()),
+        );
+        recorder.capture().on_data(b"tail\x1b[?");
+        drop(recorder);
+
+        let cast = std::fs::read_to_string(&path).unwrap();
+        assert!(cast.contains("tail"));
+        assert!(cast.contains(r#"\u001b[?"#));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    fn temp_path(label: &str) -> PathBuf {
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "tui-test-recorder-{label}-{}-{}.cast",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ))
     }
 }
