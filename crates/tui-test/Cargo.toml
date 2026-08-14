@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [features]
 default = []
 ghostty = ["dep:ghostty-vt"]
+recording-raster = ["dep:fontdb", "dep:tiny-skia"]
 
 [dependencies]
 alacritty_terminal.workspace = true
