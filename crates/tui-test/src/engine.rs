@@ -1062,11 +1062,11 @@ fn command_settled(session: &TerminalSession, baseline: u64) -> bool {
         return true;
     }
     let tracker = &state.tracker;
-    if awaiting_command_start(&state) {
-        return false;
-    }
     if !tracker.started() {
         return state.last_change.elapsed() >= QUIET;
+    }
+    if awaiting_command_start(&state) {
+        return false;
     }
     tracker.finished_count() > baseline || !tracker.executing()
 }

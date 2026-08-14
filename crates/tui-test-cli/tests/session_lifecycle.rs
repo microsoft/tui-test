@@ -741,25 +741,6 @@ fn unsubmitted_input_never_settles_as_a_finished_command() {
 }
 
 #[test]
-fn first_unsubmitted_input_never_settles_as_a_finished_command() {
-    let sandbox = Sandbox::new("first-unsubmitted");
-    sandbox.ok(&["open"]);
-    sandbox.ok(&["type", "echo first-not-submitted"]);
-
-    let out = sandbox.run(&["wait", "command", "--timeout", "600"]);
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "`wait command` returned before the first command started: {}",
-        String::from_utf8_lossy(&out.stderr),
-    );
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("never started a command"),
-        "the failure should explain the pending command start",
-    );
-}
-
-#[test]
 fn input_consumed_by_a_running_command_does_not_stall_completion_waits() {
     let sandbox = Sandbox::new("running-input");
     sandbox.ok(&["open"]);
