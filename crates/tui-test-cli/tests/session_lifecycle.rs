@@ -261,11 +261,10 @@ fn a_session_timeout_default_applies_to_later_commands() {
 fn a_screenshot_and_an_assertion_agree_on_a_color() {
     let sandbox = Sandbox::new("palette-agree");
     // Printed lowercase so the match is the output, not the echoed command.
-    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)""#;
-    sandbox.ok(&["run", "--cols", "44", "--", "bash", "--norc"]);
-    sandbox.ok(&["wait", "text", "bash-", "--timeout", "30000"]);
-    sandbox.ok(&["submit", print_red]);
-    sandbox.ok(&["wait", "command"]);
+    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)"; sleep 30"#;
+    sandbox.ok(&[
+        "run", "--cols", "44", "--", "bash", "--norc", "-c", print_red,
+    ]);
 
     // The default profile is the VGA palette, so slot 1 is #800000.
     sandbox.ok(&["expect", "text", "qrsx", "--fg", "#800000"]);
@@ -289,7 +288,7 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
     std::fs::write(&config, "[profiles.neon.colors]\nred = \"#ff00ff\"\n").expect("write config");
     let config_path = config.to_str().expect("utf-8 path");
 
-    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)""#;
+    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)"; sleep 30"#;
     sandbox.ok(&[
         "run",
         "--config",
@@ -301,10 +300,9 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
         "--",
         "bash",
         "--norc",
+        "-c",
+        print_red,
     ]);
-    sandbox.ok(&["wait", "text", "bash-", "--timeout", "30000"]);
-    sandbox.ok(&["submit", print_red]);
-    sandbox.ok(&["wait", "command"]);
 
     sandbox.ok(&["expect", "text", "qrsx", "--fg", "#ff00ff"]);
     let out = sandbox.run(&["expect", "text", "qrsx", "--fg", "#800000"]);
@@ -1132,11 +1130,9 @@ fn a_snapshot_records_the_title_only_when_asked() {
     let sandbox = Sandbox::new("snap-title");
     // Wide enough that the title is not truncated, so the assertion is about
     // whether it was recorded at all rather than about how it was shortened.
-    sandbox.ok(&["run", "--cols", "40", "--", "bash", "--norc"]);
-    sandbox.ok(&["wait", "text", "bash-", "--timeout", "30000"]);
+    let set_title = r#"clear; printf '\033]2;ayman@host: /some/path\007'; sleep 30"#;
     sandbox.ok(&[
-        "submit",
-        r#"clear; printf '\033]2;ayman@host: /some/path\007'"#,
+        "run", "--cols", "40", "--", "bash", "--norc", "-c", set_title,
     ]);
     sandbox.ok(&["expect", "title", "ayman@host", "--timeout", "5000"]);
 
