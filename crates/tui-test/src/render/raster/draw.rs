@@ -1,6 +1,5 @@
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 
-use super::super::svg;
 use super::font::GlyphOutline;
 use crate::profile::Rgb;
 
@@ -14,6 +13,7 @@ pub(super) fn draw_glyph(
     cell_height: f32,
     baseline: f32,
     color: Rgb,
+    font_size: f32,
     output_scale: f32,
 ) {
     let bounds_width = f32::from(glyph.bounds.x_max - glyph.bounds.x_min).max(1.0);
@@ -30,7 +30,7 @@ pub(super) fn draw_glyph(
             origin_y + f32::from(glyph.bounds.y_max) * scale_y,
         )
     } else {
-        let scale_y = svg::FONT_SIZE * output_scale / f32::from(glyph.units_per_em);
+        let scale_y = font_size * output_scale / f32::from(glyph.units_per_em);
         let (scale_x, x) = if glyph.advance == 0 {
             let rendered_width = bounds_width * scale_y;
             (

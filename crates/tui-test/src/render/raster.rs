@@ -162,6 +162,20 @@ impl FrameRenderer for GridRenderer {
             svg::RED_DOT_COLOR,
         );
 
+        let mut missing = BTreeSet::new();
+        draw_title(
+            &mut self.pixmap,
+            &mut self.fonts,
+            frame.title.as_deref(),
+            cols,
+            rows,
+            base_width as f32,
+            origin_x,
+            origin_y,
+            scale,
+            &mut missing,
+        );
+
         let blank = EmuCell::blank();
         for (y, row) in grid.iter().enumerate() {
             for x in 0..usize::from(cols) {
@@ -182,7 +196,6 @@ impl FrameRenderer for GridRenderer {
             }
         }
 
-        let mut missing = BTreeSet::new();
         let (pixmap, fonts) = (&mut self.pixmap, &mut self.fonts);
         for (y, row) in grid.iter().enumerate() {
             for x in 0..usize::from(cols) {
@@ -237,6 +250,7 @@ impl FrameRenderer for GridRenderer {
                             cell_height,
                             baseline,
                             style.fg,
+                            svg::FONT_SIZE,
                             scale,
                         ),
                         None => {
@@ -393,12 +407,65 @@ fn draw_cursor(
                 cell_height,
                 baseline,
                 svg::bg_of(cell, colors),
+                svg::FONT_SIZE,
                 scale,
             ),
             None => {
                 missing.insert(format!("{character:?} (U+{:04X})", character as u32));
             }
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_title(
+    pixmap: &mut Pixmap,
+    fonts: &mut FontSystem,
+    title: Option<&str>,
+    cols: u16,
+    rows: usize,
+    panel_width: f32,
+    origin_x: f32,
+    origin_y: f32,
+    scale: f32,
+    missing: &mut BTreeSet<String>,
+) {
+    let Some(title) = svg::visible_title(title, cols, rows, panel_width) else {
+        return;
+    };
+    let advance = svg::title_advance();
+    let title_width = crate::terminal::cell::display_width(&title) as f32 * advance * scale;
+    let mut x = origin_x + (panel_width * scale - title_width) / 2.0;
+    let baseline = origin_y + (svg::HEADER_H / 2.0 + svg::TITLE_FONT_SIZE * 0.35) * scale;
+
+    for character in title.chars() {
+        let columns = crate::terminal::cell::display_width(&character.to_string()).max(1);
+        let width = columns as f32 * advance * scale;
+        if !character.is_whitespace() && !is_default_ignorable(character) {
+            let key = GlyphKey {
+                character,
+                bold: true,
+                italic: false,
+            };
+            match fonts.resolve(key) {
+                Some(glyph) => draw_glyph(
+                    pixmap,
+                    glyph,
+                    x,
+                    origin_y,
+                    width,
+                    svg::HEADER_H * scale,
+                    baseline,
+                    svg::TITLE_FG,
+                    svg::TITLE_FONT_SIZE,
+                    scale,
+                ),
+                None => {
+                    missing.insert(format!("{character:?} (U+{:04X})", character as u32));
+                }
+            }
+        }
+        x += width;
     }
 }
 
