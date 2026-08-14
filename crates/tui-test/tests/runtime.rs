@@ -46,7 +46,12 @@ fn named_handles_share_a_process_local_terminal() {
     let first = registry.session(name.clone());
     let second = registry.session(name.clone());
 
-    first.open(OpenOptions::default()).expect("open terminal");
+    first
+        .open(OpenOptions {
+            wait_ready: Some(true),
+            ..OpenOptions::default()
+        })
+        .expect("open terminal");
     second
         .execute(Operation::Submit {
             data: Some("echo native-runtime".to_string()),

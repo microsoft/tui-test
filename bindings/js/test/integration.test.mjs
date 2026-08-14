@@ -29,7 +29,7 @@ const nonzeroExitArgs =
     : ["eval", "Deno.exit(7)"];
 
 test("echo roundtrip drives a real session", async () => {
-  await withTerminal({ shell }, async (su) => {
+  await withTerminal({ shell, waitReady: true }, async (su) => {
     await su.submit("echo hello-sdk");
     await su.waitCommand();
     await su.expectText("hello-sdk", { strict: false });
