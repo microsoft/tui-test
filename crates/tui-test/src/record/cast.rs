@@ -81,7 +81,7 @@ impl CastWriter {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct IncrementalDecoder {
     filter_pending: Vec<u8>,
     utf8_pending: Vec<u8>,
@@ -134,6 +134,14 @@ impl IncrementalDecoder {
         }
         output
     }
+
+    #[allow(dead_code)] // The capture worker finalizes independent decoders in a later stack layer.
+    pub fn finish(&mut self) -> String {
+        self.utf8_pending.append(&mut self.filter_pending);
+        let output = String::from_utf8_lossy(&self.utf8_pending).into_owned();
+        self.utf8_pending.clear();
+        output
+    }
 }
 
 fn json_error(error: serde_json::Error) -> io::Error {
@@ -175,5 +183,16 @@ mod tests {
             second.push(b'b');
             assert_eq!(decoder.push(&second), "b", "split at {split}");
         }
+    }
+
+    #[test]
+    fn incremental_decode_finishes_trailing_prefixes_and_utf8() {
+        let mut decoder = IncrementalDecoder::default();
+        assert_eq!(decoder.push(b"a\x1b[?"), "a");
+        assert_eq!(decoder.finish(), "\x1b[?");
+        assert_eq!(decoder.finish(), "");
+
+        assert_eq!(decoder.push(&[0xe2]), "");
+        assert_eq!(decoder.finish(), "\u{fffd}");
     }
 }
