@@ -230,6 +230,8 @@ mod tests {
                 initial_output: String::new(),
                 #[cfg(feature = "recording-raster")]
                 timeline: frames::TimelineOptions::default(),
+                #[cfg(feature = "recording-raster")]
+                ffmpeg_path: None,
             })
             .unwrap();
         recorder.capture().on_data(b"tail\x1b[?");

@@ -274,36 +274,36 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
+#[cfg(all(test, unix))]
+mod executable_tests {
+    use super::is_executable;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn non_executable_path_candidate_is_rejected() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("executable-tests");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(format!("ffmpeg-{}", std::process::id()));
+        std::fs::write(&path, b"not executable").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(!is_executable(&path));
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(is_executable(&path));
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
 fn git_bash_path() -> anyhow::Result<String> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     if let Some(git) = which("git") {
         if let Some(bin) = Path::new(&git).parent().and_then(|p| p.parent()) {
             dirs.push(bin.to_path_buf());
-        }
-
-        #[cfg(all(test, unix))]
-        mod executable_tests {
-            use super::is_executable;
-            use std::os::unix::fs::PermissionsExt;
-
-            #[test]
-            fn non_executable_path_candidate_is_rejected() {
-                let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("..")
-                    .join("..")
-                    .join("target")
-                    .join("executable-tests");
-                std::fs::create_dir_all(&root).unwrap();
-                let path = root.join(format!("ffmpeg-{}", std::process::id()));
-                std::fs::write(&path, b"not executable").unwrap();
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-
-                assert!(!is_executable(&path));
-
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-                assert!(is_executable(&path));
-                std::fs::remove_file(path).unwrap();
-            }
         }
     }
     for var in ["ProgramW6432", "ProgramFiles", "ProgramFiles(X86)"] {
