@@ -9,9 +9,11 @@ from pathlib import Path
 
 import tui_test
 from tui_test import (
+    Colors,
     ExpectationError,
     InternalError,
     NoSessionError,
+    Profile,
     TuiTest,
     Timeouts,
     UsageError,
@@ -98,6 +100,26 @@ class IntegrationTests(unittest.TestCase):
             async with self._client() as su:
                 await su.open(shell=SHELL, timeouts=expected)
                 self.assertEqual((await su.state()).timeouts, expected)
+
+        run(scenario())
+
+    def test_profile_object_recolors_the_terminal(self):
+        async def scenario():
+            marker = "python-profile-color"
+            script = (
+                "import sys; "
+                "sys.stdout.write('\\x1b[31m{}\\x1b[0m'); "
+                "sys.stdout.flush()"
+            ).format(marker)
+            async with self._client() as su:
+                await su.run(
+                    sys.executable,
+                    "-c",
+                    script,
+                    profile=Profile(colors=Colors(red="#010203")),
+                )
+                await su.wait_text(marker, timeout=5000)
+                await su.expect_text(marker, fg="#010203")
 
         run(scenario())
 

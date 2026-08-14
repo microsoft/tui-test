@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use crate::event::BellTracker;
 use crate::logger::Logger;
+use crate::profile::Profile;
 use crate::shell::{self, Shell};
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::emu::Emulator;
@@ -53,6 +54,7 @@ impl Session {
     pub fn open(
         shell: Option<Shell>,
         program: Option<Vec<String>>,
+        profile: Profile,
         cols: u16,
         rows: u16,
         cwd: Option<String>,
@@ -84,7 +86,7 @@ impl Session {
             emu: Box::new(AlacrittyEmu::with_bell_tracker(
                 cols,
                 rows,
-                5_000,
+                &profile,
                 bells.clone(),
             )),
             tracker: CommandTracker::new(),

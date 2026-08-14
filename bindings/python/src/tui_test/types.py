@@ -9,6 +9,35 @@ UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"
 
 
 @dataclass
+class Colors:
+    foreground: Optional[str] = None
+    background: Optional[str] = None
+    cursor: Optional[str] = None
+    black: Optional[str] = None
+    red: Optional[str] = None
+    green: Optional[str] = None
+    yellow: Optional[str] = None
+    blue: Optional[str] = None
+    magenta: Optional[str] = None
+    cyan: Optional[str] = None
+    white: Optional[str] = None
+    bright_black: Optional[str] = None
+    bright_red: Optional[str] = None
+    bright_green: Optional[str] = None
+    bright_yellow: Optional[str] = None
+    bright_blue: Optional[str] = None
+    bright_magenta: Optional[str] = None
+    bright_cyan: Optional[str] = None
+    bright_white: Optional[str] = None
+
+
+@dataclass
+class Profile:
+    scrollback: Optional[int] = None
+    colors: Optional[Colors] = None
+
+
+@dataclass
 class Timeouts:
     text: Optional[int] = None
     idle: Optional[int] = None

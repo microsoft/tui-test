@@ -16,6 +16,7 @@ use crate::input::{keys, mouse};
 use crate::logger::Logger;
 use crate::session::{Session as TerminalSession, TermState};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
+use crate::terminal::emu::Emulator;
 use crate::terminal::locator::{self, Pattern};
 
 pub struct Engine {
@@ -47,11 +48,14 @@ pub struct LiveFrame {
     pub shell: Option<&'static str>,
 }
 
+/// One-line operation description for the verbose log. Open and Run redact env
+/// values (they may contain secrets) and report only the variable count.
 fn operation_summary(operation: &Operation) -> String {
     match operation {
         Operation::Open(options) => format!(
-            "Open {{ shell: {:?}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            "Open {{ shell: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
             options.shell,
+            options.profile.scrollback,
             options.cols,
             options.rows,
             options.cwd,
@@ -60,9 +64,10 @@ fn operation_summary(operation: &Operation) -> String {
             options.env.len()
         ),
         Operation::Run(options) => format!(
-            "Run {{ program: {:?}, args: {:?}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            "Run {{ program: {:?}, args: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
             options.program,
             options.args,
+            options.profile.scrollback,
             options.cols,
             options.rows,
             options.cwd,
@@ -133,6 +138,7 @@ impl Engine {
         self.spawn(
             options.shell,
             None,
+            options.profile,
             options.cols,
             options.rows,
             options.cwd,
@@ -149,6 +155,7 @@ impl Engine {
         self.spawn(
             None,
             Some(program),
+            options.profile,
             options.cols,
             options.rows,
             options.cwd,
@@ -163,6 +170,7 @@ impl Engine {
         &self,
         shell: Option<crate::shell::Shell>,
         program: Option<Vec<String>>,
+        profile: crate::profile::Profile,
         cols: u16,
         rows: u16,
         cwd: Option<String>,
@@ -184,6 +192,7 @@ impl Engine {
         let session = TerminalSession::open(
             shell,
             program.clone(),
+            profile,
             cols,
             rows,
             cwd,
@@ -1208,7 +1217,18 @@ fn expect_text(
         || {
             matched = match locator::find(&grid(session, full), &pattern, strict) {
                 Ok(Some(cells)) if !cells.is_empty() => {
-                    if let Some(error) = check_colors(&cells, &fg, &bg, not) {
+                    if let Some(error) = check_colors(
+                        &cells,
+                        &fg,
+                        &bg,
+                        not,
+                        session
+                            .state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .emu
+                            .as_ref(),
+                    ) {
                         last_error = Some(error);
                         false
                     } else {
@@ -1249,17 +1269,18 @@ fn check_colors(
     fg: &Option<String>,
     bg: &Option<String>,
     not: bool,
+    colors: &dyn crate::terminal::emu::Emulator,
 ) -> Option<String> {
     let want = !not;
     if let Some(spec) = fg {
         let expected = Expected::parse(spec).ok()?;
         for cell in cells {
-            if color::matches(cell.cell.fg, &expected) != want {
+            if color::matches(cell.cell.fg, &expected, colors, true) != want {
                 return Some(format!(
                     "expected fg {} {}, found {} in cell '{}' at {},{}",
                     if not { "absent" } else { "present" },
                     expected.describe(),
-                    color::describe_cell(cell.cell.fg, &expected),
+                    color::describe_cell(cell.cell.fg, &expected, colors, true),
                     cell.cell.ch,
                     cell.x,
                     cell.y
@@ -1270,12 +1291,12 @@ fn check_colors(
     if let Some(spec) = bg {
         let expected = Expected::parse(spec).ok()?;
         for cell in cells {
-            if color::matches(cell.cell.bg, &expected) != want {
+            if color::matches(cell.cell.bg, &expected, colors, false) != want {
                 return Some(format!(
                     "expected bg {} {}, found {} in cell '{}' at {},{}",
                     if not { "absent" } else { "present" },
                     expected.describe(),
-                    color::describe_cell(cell.cell.bg, &expected),
+                    color::describe_cell(cell.cell.bg, &expected, colors, false),
                     cell.cell.ch,
                     cell.x,
                     cell.y
@@ -1397,20 +1418,80 @@ fn do_snapshot(
     }
 }
 
+/// Where to draw the cursor within `rows`, or `None` when the terminal is not
+/// showing one.
+///
+/// `Emulator::cursor` is relative to the visible screen, so a full screenshot
+/// has to push it down past the scrollback that precedes it.
+fn cursor_in(
+    rows: &[Vec<EmuCell>],
+    emu: &dyn crate::terminal::emu::Emulator,
+) -> Option<(u16, usize)> {
+    if !emu.cursor_visible() {
+        return None;
+    }
+    let (x, y) = emu.cursor();
+    let (_, screen) = emu.size();
+    // Counted in `usize`: a full render is as long as the scrollback, which a
+    // profile can set past what a `u16` row would hold, and a wrapped offset
+    // draws the cursor on a plausible but wrong line.
+    let history = rows.len().saturating_sub(screen as usize);
+    Some((x, history + y as usize))
+}
+
+struct SvgSnapshot {
+    rows: Vec<Vec<EmuCell>>,
+    cols: u16,
+    title: Option<String>,
+    cursor: Option<(u16, usize)>,
+    render_state: crate::render::svg::RenderState,
+}
+
+fn svg_snapshot_from(emu: &dyn Emulator, full: bool) -> SvgSnapshot {
+    let rows = if full {
+        emu.full_rows()
+    } else {
+        emu.viewable_rows()
+    };
+    SvgSnapshot {
+        cols: emu.size().0,
+        title: emu.title(),
+        cursor: cursor_in(&rows, emu),
+        render_state: crate::render::svg::RenderState::capture(emu),
+        rows,
+    }
+}
+
+/// Capture everything the SVG renderer can observe while the emulator is
+/// locked, then release the reader before doing the expensive string work.
+fn svg_snapshot(session: &TerminalSession, full: bool) -> SvgSnapshot {
+    let state = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    svg_snapshot_from(state.emu.as_ref(), full)
+}
+
 fn screenshot(
     session: &TerminalSession,
     full: bool,
     path: Option<String>,
 ) -> Result<ScreenshotResult, TuiTestError> {
-    let (rows, title) = grid_with_title(session, full, true);
     match path {
         Some(path) => {
-            let svg = crate::render::svg::render_svg(&rows, session.cols, title.as_deref());
+            let snapshot = svg_snapshot(session, full);
+            let svg = crate::render::svg::render_svg(
+                &snapshot.rows,
+                snapshot.cols,
+                &snapshot.render_state,
+                snapshot.cursor,
+                snapshot.title.as_deref(),
+            );
             std::fs::write(&path, svg)
                 .map_err(|error| TuiTestError::internal(error.to_string()))?;
             Ok(ScreenshotResult::Path(path))
         }
-        None => Ok(ScreenshotResult::Text(text_of(&rows))),
+        None => Ok(ScreenshotResult::Text(text_of(&grid(session, full)))),
     }
 }
 
@@ -1449,7 +1530,40 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profile::Profile;
+    use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::cell::{NamedColor, UnderlineStyle};
+    use crate::terminal::emu::Emulator;
+
+    #[test]
+    fn an_svg_snapshot_freezes_grid_palette_and_cursor_together() {
+        let mut emu = AlacrittyEmu::new(2, 2, &Profile::default());
+        emu.process(b"X\x1b[1G\x1b]12;#010203\x07");
+        let snapshot = svg_snapshot_from(&emu, false);
+
+        // Change every piece that used to be read after the grid lock was
+        // released. Rendering the captured value must still show the old
+        // character, visible cursor position, shape, and color.
+        emu.process(b"Y\x1b[2;2H\x1b[?25l\x1b[6 q\x1b]12;#ff00ff\x07");
+        let svg = crate::render::svg::render_svg(
+            &snapshot.rows,
+            snapshot.cols,
+            &snapshot.render_state,
+            snapshot.cursor,
+            snapshot.title.as_deref(),
+        );
+
+        assert_eq!(svg.matches('X').count(), 2, "text plus block redraw: {svg}");
+        assert!(!svg.contains('Y'), "later grid contents leaked in: {svg}");
+        assert!(
+            svg.contains("#010203"),
+            "captured cursor color is used: {svg}"
+        );
+        assert!(
+            !svg.contains("#ff00ff"),
+            "later cursor state must not leak in: {svg}"
+        );
+    }
 
     #[test]
     fn cell_model_reports_the_whole_vocabulary() {

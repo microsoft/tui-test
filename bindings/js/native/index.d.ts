@@ -110,6 +110,8 @@ export interface OpenOptions {
   cwd?: string
   env?: Array<[string, string]>
   waitReady?: boolean
+  profileScrollback?: number
+  profileColors?: Array<[string, string]>
   timeouts?: Timeouts
 }
 
@@ -146,6 +148,8 @@ export interface RunOptions {
   cwd?: string
   env?: Array<[string, string]>
   waitReady?: boolean
+  profileScrollback?: number
+  profileColors?: Array<[string, string]>
   timeouts?: Timeouts
 }
 

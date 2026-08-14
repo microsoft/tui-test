@@ -6,7 +6,7 @@ from tui_test import _config as cfg
 from tui_test import _ephemeral as ephemeral
 from tui_test import client
 from tui_test.errors import ExpectationError, TerminalArtifact
-from tui_test.types import Timeouts
+from tui_test.types import Colors, Profile, Timeouts
 
 
 def run(coro):
@@ -80,6 +80,27 @@ class TimeoutResolutionTests(unittest.TestCase):
         )
 
 
+class ProfileResolutionTests(unittest.TestCase):
+    def test_normalize_accepts_dataclass_and_mapping(self):
+        self.assertIsNone(cfg.normalize_profile(None))
+        self.assertEqual(
+            cfg.normalize_profile(
+                Profile(scrollback=50, colors=Colors(red="#010203"))
+            ),
+            {"scrollback": 50, "colors": {"red": "#010203"}},
+        )
+        self.assertEqual(
+            cfg.normalize_profile({"colors": {"bright_blue": "#abc"}}),
+            {"colors": {"bright_blue": "#abc"}},
+        )
+
+    def test_unknown_profile_fields_are_rejected(self):
+        with self.assertRaises(ValueError):
+            cfg.normalize_profile({"scrollbacks": 10})
+        with self.assertRaises(ValueError):
+            cfg.normalize_profile({"colors": {"chartreuse": "#123456"}})
+
+
 class TypedCallTests(unittest.TestCase):
     def test_open_uses_typed_arguments(self):
         terminal = _CapturingClient("s")
@@ -88,13 +109,19 @@ class TypedCallTests(unittest.TestCase):
                 cols=120,
                 rows=40,
                 env={"K": "V"},
+                profile=Profile(
+                    scrollback=321,
+                    colors=Colors(red="#010203"),
+                ),
                 timeouts=Timeouts(text=100, ready=200),
             )
         )
         name, args = terminal.fake.calls[0]
         self.assertEqual(name, "open")
         self.assertEqual(args[:6], (None, 120, 40, None, [("K", "V")], None))
-        self.assertEqual(args[6:], (100, None, None, None, 200))
+        self.assertEqual(args[6], 321)
+        self.assertEqual(args[7], [("red", "#010203")])
+        self.assertEqual(args[8:], (100, None, None, None, 200))
 
     def test_run_uses_program_and_argv(self):
         terminal = _CapturingClient("s")
@@ -103,6 +130,15 @@ class TypedCallTests(unittest.TestCase):
         self.assertEqual(name, "run")
         self.assertEqual(args[0], "vim")
         self.assertEqual(args[1], ["file.txt"])
+
+    def test_constructor_profile_is_forwarded_to_run(self):
+        terminal = _CapturingClient(
+            "s", profile=Profile(colors=Colors(background="#112233"))
+        )
+        run(terminal.run("vim"))
+        args = terminal.fake.calls[0][1]
+        self.assertIsNone(args[7])
+        self.assertEqual(args[8], [("background", "#112233")])
 
     def test_input_helpers_use_distinct_typed_methods(self):
         terminal = _CapturingClient("s")

@@ -279,6 +279,226 @@ fn a_session_timeout_default_applies_to_later_commands() {
     );
 }
 
+/// The color a screenshot paints is the color an assertion matches.
+///
+/// These came from two separate hardcoded tables that disagreed on every ANSI
+/// slot, so `expect --fg "#800000"` passed on a cell the screenshot painted
+/// `#e88388`. Both now resolve through the session profile, and this drives the
+/// whole path — daemon, renderer, assertion — rather than the resolver alone.
+#[test]
+fn a_screenshot_and_an_assertion_agree_on_a_color() {
+    let sandbox = Sandbox::new("palette-agree");
+    // Printed lowercase so the match is the output, not the echoed command.
+    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)""#;
+    sandbox.ok(&["run", "--cols", "44", "--", "bash", "--norc"]);
+    sandbox.ok(&["submit", print_red]);
+    sandbox.ok(&["wait", "command"]);
+
+    // The default profile is the VGA palette, so slot 1 is #800000.
+    sandbox.ok(&["expect", "text", "qrsx", "--fg", "#800000"]);
+
+    let svg = sandbox.home.join("shot.svg");
+    let path = svg.to_str().expect("utf-8 path");
+    sandbox.ok(&["screenshot", "--out", path]);
+    let drawing = std::fs::read_to_string(&svg).expect("read screenshot");
+    assert!(
+        drawing.contains("fill=\"#800000\""),
+        "the screenshot must paint the color the assertion matched"
+    );
+}
+
+/// A profile's palette drives both, so recoloring a slot moves the screenshot
+/// and the assertion together.
+#[test]
+fn a_custom_profile_recolors_screenshots_and_assertions_together() {
+    let sandbox = Sandbox::new("palette-profile");
+    let config = sandbox.home.join("custom.toml");
+    std::fs::write(&config, "[profiles.neon.colors]\nred = \"#ff00ff\"\n").expect("write config");
+    let config_path = config.to_str().expect("utf-8 path");
+
+    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)""#;
+    sandbox.ok(&[
+        "run",
+        "--config",
+        config_path,
+        "--profile",
+        "neon",
+        "--cols",
+        "44",
+        "--",
+        "bash",
+        "--norc",
+    ]);
+    sandbox.ok(&["submit", print_red]);
+    sandbox.ok(&["wait", "command"]);
+
+    sandbox.ok(&["expect", "text", "qrsx", "--fg", "#ff00ff"]);
+    let out = sandbox.run(&["expect", "text", "qrsx", "--fg", "#800000"]);
+    assert!(
+        !out.status.success(),
+        "the profile replaced the default red, so the default must no longer match"
+    );
+
+    let svg = sandbox.home.join("neon.svg");
+    let path = svg.to_str().expect("utf-8 path");
+    sandbox.ok(&["screenshot", "--out", path]);
+    let drawing = std::fs::read_to_string(&svg).expect("read screenshot");
+    assert!(
+        drawing.contains("fill=\"#ff00ff\""),
+        "the screenshot follows the profile too"
+    );
+}
+
+/// A profile that does not exist is an error naming the ones that do, rather
+/// than a session that silently ran with the defaults.
+#[test]
+fn an_unknown_profile_is_rejected() {
+    let sandbox = Sandbox::new("palette-unknown");
+    let config = sandbox.home.join("c.toml");
+    std::fs::write(&config, "[profiles.ci]\n").expect("write config");
+    let out = sandbox.run(&[
+        "open",
+        "--config",
+        config.to_str().expect("utf-8 path"),
+        "--profile",
+        "nope",
+    ]);
+    assert!(!out.status.success(), "an unknown profile must not open");
+    let msg = String::from_utf8_lossy(&out.stderr) + String::from_utf8_lossy(&out.stdout);
+    assert!(
+        msg.contains("ci"),
+        "the error should name the real profile: {msg}"
+    );
+}
+
+#[test]
+fn a_missing_environment_config_is_rejected() {
+    let sandbox = Sandbox::new("palette-env-missing");
+    let missing = sandbox.home.join("missing.toml");
+    let out = Command::new(BIN)
+        .args(["--session", &sandbox.session, "open"])
+        .env("TUI_TEST_HOME", &sandbox.home)
+        .env("TUI_TEST_CONFIG", &missing)
+        .output()
+        .expect("spawn tui-test");
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "explicit config is a usage error"
+    );
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("missing.toml"),
+        "the missing override should be named: {message}"
+    );
+}
+
+/// A program that asks the terminal what color it is gets an answer.
+///
+/// This is how tools decide whether they are on a light or a dark background.
+/// A terminal that stays silent leaves them blocked until they time out and
+/// guess, so this drives the whole path: daemon, emulator, and the reply on
+/// its way back up the PTY.
+///
+/// Unix only, because the probe has to put its own terminal in raw mode to
+/// read a reply that arrives without a newline and must not be echoed, and
+/// `termios` does not exist on Windows CPython. The reply itself is not
+/// platform specific: how it is formatted is covered by conformance cases
+/// that run against every backend, and the write that carries it to the child
+/// is the same `pty.write` every `type` and `submit` on Windows already uses.
+#[cfg(unix)]
+#[test]
+fn a_color_query_is_answered_over_the_pty() {
+    let sandbox = Sandbox::new("osc-query");
+    let probe = sandbox.home.join("probe.py");
+    std::fs::write(
+        &probe,
+        r#"
+import os, sys, termios, tty, select
+
+# Unbuffered reads: a buffered reader would take bytes off the fd that
+# select() then cannot see, and the reply would look truncated.
+def ask(fd, query):
+    os.write(1, query)
+    buf = b""
+    while select.select([fd], [], [], 2.0)[0]:
+        buf += os.read(fd, 64)
+        if buf.endswith(b"\x07"):
+            break
+    return buf.decode("utf8", "replace")
+
+fd = sys.stdin.fileno()
+old = termios.tcgetattr(fd)
+try:
+    tty.setraw(fd)
+    configured = ask(fd, b"\x1b]11;?\x07")
+    # Every dynamic colour, not just the background: a program that sets the
+    # foreground and cursor has to be answered about those too.
+    os.write(1, b"\x1b]10;#abcdef\x07\x1b]11;#654321\x07\x1b]12;#fedcba\x07")
+    fg = ask(fd, b"\x1b]10;?\x07")
+    overridden = ask(fd, b"\x1b]11;?\x07")
+    cursor = ask(fd, b"\x1b]12;?\x07")
+    os.write(1, b"\x1b]111\x07")
+    restored = ask(fd, b"\x1b]11;?\x07")
+finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+strip = lambda s: s.replace("\x1b", "").replace("\x07", "")
+print("\r\nRESULT %s %s %s %s %s\r" % (
+    strip(configured), strip(fg), strip(overridden), strip(cursor), strip(restored)))
+"#,
+    )
+    .expect("write probe");
+
+    // Wide enough that the report is one unwrapped line: `text` returns the
+    // grid, so a wrapped reply would be split across rows.
+    sandbox.ok(&["run", "--cols", "200", "--", "bash", "--norc"]);
+    sandbox.ok(&[
+        "submit",
+        &format!("python3 {}", probe.to_str().expect("utf-8 path")),
+    ]);
+    // Wait for the line this test reads, not for the command.
+    //
+    // The probe prints nothing until it is done: its queries go to the
+    // terminal, which answers them rather than echoing them, so the screen
+    // stays unchanged for as long as python takes to start. `bash --norc` has
+    // no shell integration, so `wait command` falls back to "the prompt came
+    // back and the screen is idle", and on a loaded machine an idle screen
+    // arrives long before the report does.
+    sandbox.ok(&["wait", "text", "RESULT", "--timeout", "30000"]);
+    let text = sandbox.ok(&["text", "--full"]);
+
+    let line = text
+        .lines()
+        .find(|l| l.contains("RESULT"))
+        .unwrap_or_else(|| panic!("the probe never reported: {text}"));
+
+    // The default profile's background is black, so the terminal reports it,
+    // then the color the program set, then the configured one again.
+    assert!(
+        line.contains("]11;rgb:0000/0000/0000"),
+        "the configured background should be reported: {line}"
+    );
+    assert!(
+        line.contains("]11;rgb:6565/4343/2121"),
+        "a set background should be reported back: {line}"
+    );
+    assert!(
+        line.contains("]10;rgb:abab/cdcd/efef"),
+        "a set foreground should be reported back: {line}"
+    );
+    assert!(
+        line.contains("]12;rgb:fefe/dcdc/baba"),
+        "a set cursor color should be reported back: {line}"
+    );
+    assert_eq!(
+        line.matches("]11;rgb:0000/0000/0000").count(),
+        2,
+        "a reset should restore the configured background: {line}"
+    );
+}
+
 #[test]
 fn state_reports_effective_timeouts() {
     let sandbox = Sandbox::new("state-timeouts");

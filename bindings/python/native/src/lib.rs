@@ -4,6 +4,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyMemoryView, PyModule, PyTuple};
+use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
@@ -57,6 +58,8 @@ impl NativeSession {
         cwd,
         env,
         wait_ready,
+        profile_scrollback,
+        profile_colors,
         text_timeout,
         idle_timeout,
         command_timeout,
@@ -73,6 +76,8 @@ impl NativeSession {
         cwd: Option<String>,
         env: Vec<(String, String)>,
         wait_ready: Option<bool>,
+        profile_scrollback: Option<Bound<'py, PyAny>>,
+        profile_colors: Vec<(String, String)>,
         text_timeout: Option<Bound<'py, PyAny>>,
         idle_timeout: Option<Bound<'py, PyAny>>,
         command_timeout: Option<Bound<'py, PyAny>>,
@@ -81,6 +86,7 @@ impl NativeSession {
     ) -> PyResult<Bound<'py, PyAny>> {
         let cols = capture_integer(&cols);
         let rows = capture_integer(&rows);
+        let profile_scrollback = capture_optional_integer(profile_scrollback);
         let text_timeout = capture_optional_integer(text_timeout);
         let idle_timeout = capture_optional_integer(idle_timeout);
         let command_timeout = capture_optional_integer(command_timeout);
@@ -93,6 +99,7 @@ impl NativeSession {
                 execute_open(
                     &name,
                     Operation::Open(OpenOptions {
+                        profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
                         shell: parse_shell(shell.as_deref())?,
                         cols: integer_u16(&cols, "cols")?,
                         rows: integer_u16(&rows, "rows")?,
@@ -121,6 +128,8 @@ impl NativeSession {
         cwd,
         env,
         wait_ready,
+        profile_scrollback,
+        profile_colors,
         text_timeout,
         idle_timeout,
         command_timeout,
@@ -138,6 +147,8 @@ impl NativeSession {
         cwd: Option<String>,
         env: Vec<(String, String)>,
         wait_ready: Option<bool>,
+        profile_scrollback: Option<Bound<'py, PyAny>>,
+        profile_colors: Vec<(String, String)>,
         text_timeout: Option<Bound<'py, PyAny>>,
         idle_timeout: Option<Bound<'py, PyAny>>,
         command_timeout: Option<Bound<'py, PyAny>>,
@@ -146,6 +157,7 @@ impl NativeSession {
     ) -> PyResult<Bound<'py, PyAny>> {
         let cols = capture_integer(&cols);
         let rows = capture_integer(&rows);
+        let profile_scrollback = capture_optional_integer(profile_scrollback);
         let text_timeout = capture_optional_integer(text_timeout);
         let idle_timeout = capture_optional_integer(idle_timeout);
         let command_timeout = capture_optional_integer(command_timeout);
@@ -158,6 +170,7 @@ impl NativeSession {
                 execute_open(
                     &name,
                     Operation::Run(RunOptions {
+                        profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
                         program,
                         args,
                         cols: integer_u16(&cols, "cols")?,
@@ -1105,6 +1118,27 @@ fn integer_u64(value: &IntegerInput, name: &str) -> Result<u64, TuiTestError> {
 
 fn optional_u64(value: Option<&IntegerInput>, name: &str) -> Result<Option<u64>, TuiTestError> {
     value.map(|value| integer_u64(value, name)).transpose()
+}
+
+fn profile_from_parts(
+    scrollback: Option<&IntegerInput>,
+    colors: &[(String, String)],
+) -> Result<CoreProfile, TuiTestError> {
+    let mut profile = CoreProfile::default();
+    if let Some(scrollback) = scrollback {
+        profile.scrollback =
+            integer_unsigned(scrollback, "profile.scrollback", usize::MAX as u128)? as usize;
+    }
+    for (name, raw) in colors {
+        let color = Rgb::parse(raw)
+            .map_err(|error| TuiTestError::usage(format!("profile.colors.{name}: {error}")))?;
+        if !profile.colors.set_named(name, color) {
+            return Err(TuiTestError::usage(format!(
+                "unknown profile color {name:?}"
+            )));
+        }
+    }
+    Ok(profile)
 }
 
 fn integer_unsigned(value: &IntegerInput, name: &str, maximum: u128) -> Result<u128, TuiTestError> {

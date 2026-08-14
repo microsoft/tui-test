@@ -27,7 +27,7 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Cell, State, Timeouts
+from .types import Cell, Profile, State, Timeouts
 
 _TERMINAL_MARKER = "Terminal content:\n"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
@@ -69,6 +69,14 @@ def _env_pairs(env: EnvLike) -> List[Tuple[str, str]]:
 def _session_timeout_values(timeouts: object) -> Tuple[Optional[int], ...]:
     normalized = cfg.session_timeouts_payload(timeouts) or {}
     return tuple(normalized.get(class_name) for class_name in _TIMEOUT_CLASSES)
+
+
+def _profile_values(
+    profile: object,
+) -> Tuple[Optional[int], List[Tuple[str, str]]]:
+    normalized = cfg.normalize_profile(profile) or {}
+    colors = normalized.get("colors") or {}
+    return normalized.get("scrollback"), list(colors.items())
 
 
 def _extract_terminal_text(message: Optional[str]) -> Optional[str]:
@@ -123,11 +131,13 @@ class TuiTest:
         session: Optional[str] = None,
         *,
         timeouts: Optional[Timeouts] = None,
+        profile: Optional[Profile] = None,
         artifacts: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._session = cfg.resolve_session(session)
         self._native = native.NativeSession(self._session)
         self._timeouts = cfg.normalize_timeouts(timeouts)
+        self._profile = cfg.normalize_profile(profile)
         self._artifacts = artifacts
         self._artifact_counter = 0
         self.mouse = _Mouse(self)
@@ -221,10 +231,14 @@ class TuiTest:
         cwd: Optional[str] = None,
         env: EnvLike = None,
         wait_ready: Optional[bool] = None,
+        profile: Optional[Profile] = None,
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
     ) -> Dict[str, Any]:
         env_values = _env_pairs(env)
+        profile_values = _profile_values(
+            profile if profile is not None else self._profile
+        )
         timeout_values = _session_timeout_values(timeouts)
         return await self._spawn(
             lambda: self._native.open(
@@ -234,6 +248,7 @@ class TuiTest:
                 cwd,
                 env_values,
                 wait_ready,
+                *profile_values,
                 *timeout_values,
             ),
             retries,
@@ -248,10 +263,14 @@ class TuiTest:
         cwd: Optional[str] = None,
         env: EnvLike = None,
         wait_ready: Optional[bool] = None,
+        profile: Optional[Profile] = None,
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
     ) -> Dict[str, Any]:
         env_values = _env_pairs(env)
+        profile_values = _profile_values(
+            profile if profile is not None else self._profile
+        )
         timeout_values = _session_timeout_values(timeouts)
         return await self._spawn(
             lambda: self._native.run(
@@ -262,6 +281,7 @@ class TuiTest:
                 cwd,
                 env_values,
                 wait_ready,
+                *profile_values,
                 *timeout_values,
             ),
             retries,

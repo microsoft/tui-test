@@ -80,7 +80,10 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
         }
     };
 
-    let conn = match connect_to_daemon(session, verbose) {
+    // Closing must remain available when the running daemon is from an older
+    // client; every other command requires matching protocol behavior.
+    let allow_incompatible = matches!(&request, Request::Close);
+    let conn = match connect_to_daemon(session, verbose, allow_incompatible) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{e}");
@@ -96,13 +99,19 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
     }
 }
 
-fn connect_to_daemon(session: &str, verbose: bool) -> anyhow::Result<ipc::Stream> {
+fn connect_to_daemon(
+    session: &str,
+    verbose: bool,
+    allow_incompatible: bool,
+) -> anyhow::Result<ipc::Stream> {
     const ATTEMPTS: u32 = 3;
     let socket = config::socket_name(session);
     let mut last = None;
     for attempt in 0..ATTEMPTS {
-        ensure_daemon(session, verbose)
-            .map_err(|e| anyhow::anyhow!("failed to start daemon: {e}"))?;
+        if !(allow_incompatible && ipc::is_running(&socket)) {
+            ensure_daemon(session, verbose)
+                .map_err(|e| anyhow::anyhow!("failed to start daemon: {e}"))?;
+        }
         match ipc::connect(&socket) {
             Ok(conn) => return Ok(conn),
             Err(e) => last = Some(e),
@@ -133,10 +142,12 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             env,
             wait_ready,
             no_wait_ready,
+            profile,
             timeouts,
         } => Request::Open {
             shell: shell.map(Into::into),
             program: None,
+            profile: profile.resolve()?,
             cols,
             rows,
             cwd,
@@ -153,6 +164,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             env,
             wait_ready,
             no_wait_ready,
+            profile,
             timeouts,
         } => {
             let mut prog = vec![program];
@@ -160,6 +172,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             Request::Open {
                 shell: None,
                 program: Some(prog),
+                profile: profile.resolve()?,
                 cols,
                 rows,
                 cwd,
@@ -374,15 +387,23 @@ fn parse_env(pairs: &[String]) -> anyhow::Result<Vec<(String, String)>> {
 /// Spawn the daemon for this session if it is not already running.
 fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<()> {
     let socket = config::socket_name(session);
-    if ipc::is_running(&socket) {
-        if verbose {
-            eprintln!(
-                "note: daemon for session '{session}' is already running; verbose logging only \
-                 applies to a freshly started daemon. Run `tui-test --session {session} close` \
-                 first, then retry with --verbose."
-            );
+    match ipc::send(&socket, &Request::Status) {
+        Ok(status) => {
+            check_daemon_version(session, &status)?;
+            if verbose {
+                eprintln!(
+                    "note: daemon for session '{session}' is already running; verbose logging only \
+                     applies to a freshly started daemon. Run `tui-test --session {session} close` \
+                     first, then retry with --verbose."
+                );
+            }
+            return Ok(());
         }
-        return Ok(());
+        Err(error) if ipc::is_running(&socket) => anyhow::bail!(
+            "could not verify the daemon for session '{session}': {error}; run \
+             `tui-test --session {session} close`, then retry"
+        ),
+        Err(_) => {}
     }
     config::ensure_home()?;
     let exe = std::env::current_exe()?;
@@ -399,6 +420,24 @@ fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<()> {
         std::thread::sleep(Duration::from_millis(50));
     }
     anyhow::bail!("daemon did not become ready")
+}
+
+fn check_daemon_version(session: &str, status: &Response) -> anyhow::Result<()> {
+    let current = env!("CARGO_PKG_VERSION");
+    let running = status
+        .data
+        .as_ref()
+        .and_then(|data| data.get("version"))
+        .and_then(serde_json::Value::as_str);
+    if running == Some(current) {
+        return Ok(());
+    }
+
+    let running = running.unwrap_or("unknown");
+    anyhow::bail!(
+        "daemon for session '{session}' is version {running}, but this client is {current}; \
+         run `tui-test --session {session} close` with this client, then retry"
+    )
 }
 
 #[cfg(windows)]
@@ -678,7 +717,8 @@ fn usage_text() -> &'static str {
     "tui-test: headless terminal cli + daemon\n\
 \n\
 SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
-          run <program> [args...]\n\
+                  [--config F] [--profile P]\n\
+          run [--config F] [--profile P] <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full]\n\
           cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title|bells\n\
@@ -749,5 +789,24 @@ mod tests {
         assert_eq!(ready_flag(false, false), None);
         assert_eq!(ready_flag(true, false), Some(true));
         assert_eq!(ready_flag(false, true), Some(false));
+    }
+
+    #[test]
+    fn daemon_version_check_rejects_stale_or_unversioned_daemons() {
+        let current = Response::with(json!({ "version": env!("CARGO_PKG_VERSION") }));
+        assert!(check_daemon_version("work", &current).is_ok());
+
+        for status in [
+            Response::with(json!({ "version": "0.0.0-old" })),
+            Response::with(json!({})),
+        ] {
+            let error = check_daemon_version("work", &status)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("tui-test --session work close"),
+                "the recovery instruction is actionable: {error}"
+            );
+        }
     }
 }

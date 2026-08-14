@@ -139,3 +139,30 @@ test(
     assert.equal(trackedCount(), 0);
   },
 );
+
+test(
+  "createTerminal forwards a profile object",
+  async () => {
+    await closeAllTracked();
+    const marker = "helper-profile-color";
+    const args =
+      typeof globalThis.Deno === "undefined"
+        ? ["-e", `process.stdout.write("\\u001b[31m${marker}\\u001b[0m")`]
+        : [
+            "eval",
+            `Deno.stdout.writeSync(new TextEncoder().encode("\\u001b[31m${marker}\\u001b[0m"))`,
+          ];
+    await withTerminal(
+      {
+        prefix: "helpers-profile",
+        program: [process.execPath, ...args],
+        profile: { colors: { red: "#010203" } },
+      },
+      async (terminal) => {
+        await terminal.waitText(marker, { timeout: 5000 });
+        await terminal.expectText(marker, { fg: "#010203" });
+      },
+    );
+    assert.equal(trackedCount(), 0);
+  },
+);
