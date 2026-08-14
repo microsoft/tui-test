@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::profile::Profile;
+use crate::render::svg::RenderState;
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::Emulator;
@@ -12,7 +13,19 @@ use super::cast::{CastEventKind, CastReader};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
     pub grid: Vec<Vec<EmuCell>>,
+    pub title: Option<String>,
     pub duration: Duration,
+    pub(crate) render_state: RenderState,
+    pub(crate) cursor: Option<(u16, usize)>,
+}
+
+impl Frame {
+    fn same_visual_state(&self, other: &Self) -> bool {
+        self.grid == other.grid
+            && self.title == other.title
+            && self.render_state == other.render_state
+            && self.cursor == other.cursor
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -52,7 +65,10 @@ pub(crate) fn from_cast<R: BufRead>(
         if let Some(snapshot) = pending.take() {
             collector.push(Frame {
                 grid: snapshot.grid,
+                title: snapshot.title,
                 duration: at.saturating_sub(snapshot.at),
+                render_state: snapshot.render_state,
+                cursor: snapshot.cursor,
             });
         }
         match event.kind {
@@ -62,18 +78,33 @@ pub(crate) fn from_cast<R: BufRead>(
         pending = Some(TimedGrid {
             at,
             grid: normalize_grid(emulator.viewable_rows(), cols, rows),
+            title: emulator.title(),
+            render_state: RenderState::capture(&emulator),
+            cursor: emulator.cursor_visible().then(|| {
+                let (x, y) = emulator.cursor();
+                (x, usize::from(y))
+            }),
         });
     }
 
     match pending {
         Some(snapshot) => collector.push(Frame {
             grid: snapshot.grid,
+            title: snapshot.title,
             duration: options.last_frame_duration,
+            render_state: snapshot.render_state,
+            cursor: snapshot.cursor,
         }),
-        None => collector.push(Frame {
-            grid: vec![vec![EmuCell::blank(); usize::from(cols)]; usize::from(rows)],
-            duration: options.last_frame_duration,
-        }),
+        None => {
+            let (x, y) = emulator.cursor();
+            collector.push(Frame {
+                grid: vec![vec![EmuCell::blank(); usize::from(cols)]; usize::from(rows)],
+                title: emulator.title(),
+                duration: options.last_frame_duration,
+                render_state: RenderState::capture(&emulator),
+                cursor: emulator.cursor_visible().then_some((x, usize::from(y))),
+            });
+        }
     }
     Ok(collector.finish())
 }
@@ -123,6 +154,9 @@ fn normalize_grid(source: Vec<Vec<EmuCell>>, cols: u16, rows: u16) -> Vec<Vec<Em
 struct TimedGrid {
     at: Duration,
     grid: Vec<Vec<EmuCell>>,
+    title: Option<String>,
+    render_state: RenderState,
+    cursor: Option<(u16, usize)>,
 }
 
 struct FrameCollector {
@@ -144,7 +178,7 @@ impl FrameCollector {
         if let Some(previous) = self
             .merged
             .as_mut()
-            .filter(|previous| previous.grid == frame.grid)
+            .filter(|previous| previous.same_visual_state(&frame))
         {
             previous.duration = previous.duration.saturating_add(frame.duration);
         } else {
@@ -161,10 +195,7 @@ impl FrameCollector {
             .filter(|previous| previous.duration < self.minimum)
         {
             let duration = previous.duration.saturating_add(frame.duration);
-            *previous = Frame {
-                grid: frame.grid,
-                duration,
-            };
+            *previous = Frame { duration, ..frame };
         } else {
             self.output.push(frame);
         }
@@ -193,6 +224,17 @@ mod tests {
         }]]
     }
 
+    fn frame(ch: &str, duration: Duration) -> Frame {
+        let emulator = AlacrittyEmu::new(1, 1, &Profile::default());
+        Frame {
+            grid: grid(ch),
+            title: None,
+            duration,
+            render_state: RenderState::capture(&emulator),
+            cursor: Some((0, 0)),
+        }
+    }
+
     #[test]
     fn idle_gaps_are_clamped_before_speed_scaling() {
         let options = TimelineOptions {
@@ -211,14 +253,8 @@ mod tests {
     #[test]
     fn identical_frames_extend_the_previous_duration() {
         let frames = vec![
-            Frame {
-                grid: grid("a"),
-                duration: Duration::from_millis(20),
-            },
-            Frame {
-                grid: grid("a"),
-                duration: Duration::from_millis(30),
-            },
+            frame("a", Duration::from_millis(20)),
+            frame("a", Duration::from_millis(30)),
         ];
         let mut collector = FrameCollector::new(Duration::ZERO);
         for frame in frames {
@@ -232,18 +268,9 @@ mod tests {
     #[test]
     fn fps_cap_coalesces_short_frames_into_the_latest_grid() {
         let frames = vec![
-            Frame {
-                grid: grid("a"),
-                duration: Duration::from_millis(10),
-            },
-            Frame {
-                grid: grid("b"),
-                duration: Duration::from_millis(10),
-            },
-            Frame {
-                grid: grid("c"),
-                duration: Duration::from_millis(100),
-            },
+            frame("a", Duration::from_millis(10)),
+            frame("b", Duration::from_millis(10)),
+            frame("c", Duration::from_millis(100)),
         ];
         let mut collector = FrameCollector::new(Duration::from_millis(34));
         for frame in frames {
@@ -281,6 +308,59 @@ mod tests {
             frames.iter().map(|frame| frame.duration).sum::<Duration>(),
             Duration::from_millis(3_999)
         );
+
+        std::fs::remove_file(cast_path).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "recording-raster")]
+    fn replay_preserves_title_palette_and_cursor_changes() {
+        use crate::profile::ColorSlot;
+        use crate::render::svg::RenderColors;
+        use crate::terminal::emu::CursorShape;
+
+        let cast_path = temp_path("cast");
+        let started = std::time::Instant::now();
+        let mut writer = CastWriter::create(&cast_path, 2, 1, &[], started).unwrap();
+        writer
+            .write_output(
+                started,
+                "\x1b]2;before\x07\x1b]11;#010203\x07\x1b]12;#040506\x07\
+                 \x1b[1;2H\x1b[6 q",
+            )
+            .unwrap();
+        writer
+            .write_output(
+                started + Duration::from_millis(100),
+                "\x1b]2;after\x07\x1b]11;#070809\x07\x1b[1;1H\x1b[?25l",
+            )
+            .unwrap();
+        writer.flush().unwrap();
+
+        let frames = from_cast(
+            crate::record::cast::read(&cast_path).unwrap(),
+            &TimelineOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].title.as_deref(), Some("before"));
+        assert_eq!(frames[1].title.as_deref(), Some("after"));
+        assert_eq!(
+            frames[0].render_state.color(ColorSlot::Background),
+            crate::profile::Rgb::new(1, 2, 3)
+        );
+        assert_eq!(
+            frames[1].render_state.color(ColorSlot::Background),
+            crate::profile::Rgb::new(7, 8, 9)
+        );
+        assert_eq!(
+            frames[0].render_state.color(ColorSlot::Cursor),
+            crate::profile::Rgb::new(4, 5, 6)
+        );
+        assert_eq!(frames[0].render_state.cursor_shape(), CursorShape::Bar);
+        assert_eq!(frames[0].cursor, Some((1, 0)));
+        assert_eq!(frames[1].cursor, None);
 
         std::fs::remove_file(cast_path).unwrap();
     }
