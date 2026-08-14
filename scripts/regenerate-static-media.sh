@@ -51,11 +51,7 @@ done
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 static_dir="$repo_root/static"
-temp_root="$repo_root/target/static-media-tmp"
-temp_dir="$temp_root/run-$$"
-mkdir -p -- "$temp_root"
-rm -rf -- "$temp_dir"
-mkdir -p -- "$temp_dir"
+temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/tui-test-static-media.XXXXXX")
 session_prefix="static-media-$$"
 sessions=()
 
@@ -104,6 +100,13 @@ shell_command() {
     printf 'bash %q' "$script_path"
 }
 
+prepare_recording_session() {
+    local session=$1
+
+    tui "$session" submit "stty -echo; clear" >/dev/null
+    tui "$session" wait command --timeout 10000 >/dev/null
+}
+
 record_set() {
     local session_suffix=$1
     local cols=$2
@@ -120,11 +123,11 @@ record_set() {
     tui "$session" open --shell bash --cols "$cols" --rows "$rows" >/dev/null
 
     for output in "${outputs[@]}"; do
-        tui "$session" submit "$command" >/dev/null
-        sleep 0.25
+        prepare_recording_session "$session"
         tui "$session" record start "$static_dir/$output" --fps 20 >/dev/null
-        sleep 3
-        tui "$session" wait idle --timeout 5000 >/dev/null
+        tui "$session" submit "$command" >/dev/null
+        tui "$session" wait text "done" --timeout 10000 >/dev/null
+        tui "$session" wait command --timeout 10000 >/dev/null
         tui "$session" record stop >/dev/null
     done
 
@@ -148,11 +151,11 @@ record_zoom_set() {
         "recording-zoom-25.png:0.25"; do
         output=${spec%%:*}
         zoom=${spec##*:}
-        tui "$session" submit "$command" >/dev/null
-        sleep 0.25
+        prepare_recording_session "$session"
         tui "$session" record start "$static_dir/$output" --fps 20 --zoom "$zoom" >/dev/null
-        sleep 3
-        tui "$session" wait idle --timeout 5000 >/dev/null
+        tui "$session" submit "$command" >/dev/null
+        tui "$session" wait text "done" --timeout 10000 >/dev/null
+        tui "$session" wait command --timeout 10000 >/dev/null
         tui "$session" record stop >/dev/null
     done
 
@@ -292,10 +295,11 @@ echo "Regenerating resize demo..."
 resize_session="$session_prefix-resize"
 register_session "$resize_session"
 tui "$resize_session" open --shell bash --cols 60 --rows 16 >/dev/null
-tui "$resize_session" submit "$(shell_command "$resize_script")" >/dev/null
-sleep 0.25
+prepare_recording_session "$resize_session"
 tui "$resize_session" record start "$static_dir/resize-demo.gif" --fps 20 >/dev/null
-sleep 0.9
+tui "$resize_session" submit "$(shell_command "$resize_script")" >/dev/null
+tui "$resize_session" wait text "Watch the same words" --timeout 10000 >/dev/null
+sleep 0.3
 tui "$resize_session" resize 42 10 >/dev/null
 sleep 0.9
 tui "$resize_session" resize 30 7 >/dev/null
@@ -303,8 +307,7 @@ sleep 0.9
 tui "$resize_session" resize 50 12 >/dev/null
 sleep 0.9
 tui "$resize_session" resize 60 16 >/dev/null
-sleep 2
-tui "$resize_session" wait idle --timeout 5000 >/dev/null
+tui "$resize_session" wait command --timeout 10000 >/dev/null
 tui "$resize_session" record stop >/dev/null
 close_session "$resize_session"
 
