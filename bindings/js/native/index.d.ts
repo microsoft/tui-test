@@ -146,6 +146,7 @@ export interface PackedScreen {
 export declare function recording(name: string): Promise<string>
 
 export declare const enum RecordingFormat {
+  Gif = 'gif',
   Cast = 'cast'
 }
 
