@@ -14,8 +14,9 @@ mod draw;
 mod font;
 
 use draw::{
-    draw_glyph, fill_circle, fill_rect, fill_rounded_rect, fill_top_rounded_rect,
-    format_glyph_sequence, is_default_ignorable, unpremultiply, unsupported_grapheme,
+    draw_glyph, fill_circle, fill_rect, fill_rounded_rect, fill_rounded_rect_alpha,
+    fill_top_rounded_rect, format_glyph_sequence, is_default_ignorable, unpremultiply,
+    unsupported_grapheme,
 };
 use font::{FontSystem, GlyphKey};
 
@@ -123,6 +124,14 @@ impl FrameRenderer for GridRenderer {
             CANVAS_BACKGROUND.b,
             255,
         ));
+        draw_shadow(
+            &mut self.pixmap,
+            origin_x,
+            origin_y,
+            panel_width as f32,
+            panel_height as f32,
+            scale,
+        );
         fill_rounded_rect(
             &mut self.pixmap,
             origin_x,
@@ -414,6 +423,28 @@ fn draw_cursor(
                 missing.insert(format!("{character:?} (U+{:04X})", character as u32));
             }
         }
+    }
+}
+
+fn draw_shadow(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, scale: f32) {
+    const SHADOW: Rgb = Rgb::new(8, 8, 18);
+    for (spread, offset_y, alpha) in [
+        (7.0, 5.0, 18),
+        (5.0, 4.0, 20),
+        (3.0, 3.0, 22),
+        (1.0, 2.0, 24),
+    ] {
+        let spread = spread * scale;
+        fill_rounded_rect_alpha(
+            pixmap,
+            x - spread,
+            y - spread + offset_y * scale,
+            width + spread * 2.0,
+            height + spread * 2.0,
+            svg::WINDOW_RADIUS * scale + spread,
+            SHADOW,
+            alpha,
+        );
     }
 }
 

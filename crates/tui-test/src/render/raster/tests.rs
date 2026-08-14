@@ -119,14 +119,19 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
         ),
         [1, 2, 3, 255]
     );
-    assert_eq!(
+    let canvas = pixel_at(&image, 0, 0);
+    for shadow in [
         pixel_at(&image, origin_x - 1, origin_y + panel_height / 2),
-        pixel_at(&image, 0, 0)
-    );
-    assert_eq!(
         pixel_at(&image, origin_x + panel_width, origin_y + panel_height / 2),
-        pixel_at(&image, 0, 0)
-    );
+    ] {
+        assert!(
+            shadow[..3]
+                .iter()
+                .zip(&canvas[..3])
+                .all(|(shadow, canvas)| shadow < canvas),
+            "the shadow darkens the canvas: {shadow:?} vs {canvas:?}"
+        );
+    }
 }
 
 #[test]
