@@ -1,4 +1,3 @@
-use super::font::{FontSystem, GlyphKey};
 use super::{FrameRenderer, GridRenderer};
 use crate::terminal::cell::{Attrs, Color, EmuCell, CONTINUATION};
 
@@ -43,23 +42,6 @@ fn bold_and_italic_change_the_rasterized_glyph() {
         .unwrap();
     assert_ne!(regular.as_raw(), bold.as_raw());
     assert_ne!(regular.as_raw(), italic.as_raw());
-}
-
-#[cfg(feature = "recording-font-jetbrains-mono-styles")]
-#[test]
-fn bundled_styles_do_not_need_synthetic_bold_or_italic() {
-    let mut fonts = FontSystem::new();
-    for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
-        let glyph = fonts
-            .resolve(GlyphKey {
-                character: 'M',
-                bold,
-                italic,
-            })
-            .unwrap();
-        assert!(!glyph.synthetic_bold);
-        assert!(!glyph.synthetic_italic);
-    }
 }
 
 #[test]

@@ -424,7 +424,6 @@ pub(crate) fn render_svg_with_font(
 }
 
 #[cfg(feature = "recording-raster")]
-#[allow(dead_code)] // The raster renderer consumes this geometry next in the stack.
 pub(crate) fn pixel_size(cols: u16, rows: usize) -> (u32, u32) {
     let width = (MARGIN_X * 2.0 + f32::from(cols) * CELL_W).ceil() as u32;
     let height = (HEADER_H + MARGIN_BOTTOM + rows.max(1) as f32 * CELL_H).ceil() as u32;
