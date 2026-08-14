@@ -20,6 +20,22 @@ pub struct Frame {
 }
 
 impl Frame {
+    pub(crate) fn dimensions(&self) -> anyhow::Result<(u16, usize)> {
+        let rows = self.grid.len();
+        let cols = self.grid.first().map_or(0, Vec::len);
+        if rows == 0 || cols == 0 {
+            anyhow::bail!("recording frame dimensions must be non-zero");
+        }
+        if self.grid.iter().any(|row| row.len() != cols) {
+            anyhow::bail!("recording frame rows have inconsistent widths");
+        }
+        Ok((
+            cols.try_into()
+                .map_err(|_| anyhow::anyhow!("recording frame width exceeds u16"))?,
+            rows,
+        ))
+    }
+
     fn same_visual_state(&self, other: &Self) -> bool {
         self.grid == other.grid
             && self.title == other.title
@@ -28,6 +44,19 @@ impl Frame {
     }
 }
 
+pub(crate) fn max_dimensions(frames: &[Frame]) -> anyhow::Result<(u16, usize)> {
+    if frames.is_empty() {
+        anyhow::bail!("recording timeline contains no frames");
+    }
+    let mut max_cols = 0;
+    let mut max_rows = 0;
+    for frame in frames {
+        let (cols, rows) = frame.dimensions()?;
+        max_cols = max_cols.max(cols);
+        max_rows = max_rows.max(rows);
+    }
+    Ok((max_cols, max_rows))
+}
 #[derive(Debug, Clone)]
 pub(crate) struct TimelineOptions {
     pub fps: u8,

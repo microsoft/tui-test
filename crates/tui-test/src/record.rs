@@ -42,10 +42,6 @@ pub(crate) struct StoppedRecording {
     pub capture_path: PathBuf,
     pub format: RecordingFormat,
     #[cfg(feature = "recording-raster")]
-    pub cols: u16,
-    #[cfg(feature = "recording-raster")]
-    pub rows: u16,
-    #[cfg(feature = "recording-raster")]
     pub timeline: frames::TimelineOptions,
 }
 

@@ -117,10 +117,6 @@ pub(super) fn worker_loop(
                     capture_path: request.capture_path,
                     format: request.format,
                     #[cfg(feature = "recording-raster")]
-                    cols: request.cols,
-                    #[cfg(feature = "recording-raster")]
-                    rows: request.rows,
-                    #[cfg(feature = "recording-raster")]
                     timeline: request.timeline,
                 }));
             }
