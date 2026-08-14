@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -284,7 +285,12 @@ fn assert_snapshot(name: &str, extension: &str, actual: &[u8]) {
             expected_path.display()
         )
     });
-    if expected != actual {
+    let matches = if extension == "gif" {
+        decode_gif(&expected) == decode_gif(actual)
+    } else {
+        expected == actual
+    };
+    if !matches {
         let actual_path = failure_dir().join(format!("{name}.actual.{extension}"));
         std::fs::create_dir_all(failure_dir()).unwrap();
         std::fs::write(&actual_path, actual).unwrap();
@@ -297,6 +303,41 @@ fn assert_snapshot(name: &str, extension: &str, actual: &[u8]) {
             actual_path.display()
         );
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DecodedGif {
+    dimensions: (u16, u16),
+    frames: Vec<DecodedGifFrame>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct DecodedGifFrame {
+    left: u16,
+    top: u16,
+    width: u16,
+    height: u16,
+    delay: u16,
+    pixels: Vec<u8>,
+}
+
+fn decode_gif(bytes: &[u8]) -> DecodedGif {
+    let mut options = gif::DecodeOptions::new();
+    options.set_color_output(gif::ColorOutput::RGBA);
+    let mut decoder = options.read_info(Cursor::new(bytes)).unwrap();
+    let dimensions = (decoder.width(), decoder.height());
+    let mut frames = Vec::new();
+    while let Some(frame) = decoder.read_next_frame().unwrap() {
+        frames.push(DecodedGifFrame {
+            left: frame.left,
+            top: frame.top,
+            width: frame.width,
+            height: frame.height,
+            delay: frame.delay,
+            pixels: frame.buffer.to_vec(),
+        });
+    }
+    DecodedGif { dimensions, frames }
 }
 
 fn snapshot_dir() -> PathBuf {
