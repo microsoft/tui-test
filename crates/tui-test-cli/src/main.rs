@@ -244,6 +244,9 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
 }
 
 fn resolve_client_path(path: String) -> anyhow::Result<String> {
+    if path.trim().is_empty() {
+        anyhow::bail!("recording path must not be empty");
+    }
     let path = std::path::PathBuf::from(path);
     let path = if path.is_absolute() {
         path
@@ -840,6 +843,12 @@ mod tests {
         assert_eq!(ready_flag(false, false), None);
         assert_eq!(ready_flag(true, false), Some(true));
         assert_eq!(ready_flag(false, true), Some(false));
+    }
+
+    #[test]
+    fn empty_recording_paths_are_rejected_before_resolution() {
+        let error = resolve_client_path("  ".to_string()).unwrap_err();
+        assert!(error.to_string().contains("must not be empty"));
     }
 
     #[test]
