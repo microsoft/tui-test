@@ -108,7 +108,7 @@ Cancelling a promise does not cancel the underlying Rust operation. Operations f
 Closing a session removes it from `sessions()`, but keeps its recording. `getRecording()` can read that recording for the rest of the process. The 1024 most recently closed sessions have their recordings retained.
 
 ```js
-await su.startRecording("demo.png", { fps: 30, speed: 1 });
+await su.startRecording("demo.png", { fps: 30, speed: 1, zoom: 0.5 });
 await su.submit("echo hello");
 await su.waitCommand();
 const path = await su.stopRecording();
@@ -116,7 +116,9 @@ const path = await su.stopRecording();
 
 `.png`/`.apng` selects lossless APNG, `.gif` selects GIF, `.mp4` selects MP4,
 and `.cast` selects asciicast v2. The `format` option can override extension
-inference. MP4 recording requires `ffmpeg` to be available on `PATH`.
+inference. `zoom` scales SVG screenshots and image/video recordings without
+changing terminal rows or columns. MP4 recording requires `ffmpeg` to be
+available on `PATH`.
 
 ## Configuration
 
