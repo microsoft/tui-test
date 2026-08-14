@@ -308,8 +308,7 @@ fn draw_cursor(
     } else {
         1
     };
-    let origin_x =
-        panel_origin_x + (svg::MARGIN_X + f32::from(cx) * svg::CELL_W) * scale;
+    let origin_x = panel_origin_x + (svg::MARGIN_X + f32::from(cx) * svg::CELL_W) * scale;
     let origin_y = panel_origin_y + (svg::HEADER_H + cy as f32 * svg::CELL_H) * scale;
     let cell_width = svg::CELL_W * span as f32 * scale;
     let cell_height = svg::CELL_H * scale;
@@ -347,8 +346,8 @@ fn draw_cursor(
         missing.insert(format_glyph_sequence(cell.ch.as_str()));
         return;
     }
-    let baseline = panel_origin_y
-        + (svg::HEADER_H + cy as f32 * svg::CELL_H + svg::FONT_BASELINE) * scale;
+    let baseline =
+        panel_origin_y + (svg::HEADER_H + cy as f32 * svg::CELL_H + svg::FONT_BASELINE) * scale;
     for character in cell.ch.chars() {
         if is_default_ignorable(character) {
             continue;

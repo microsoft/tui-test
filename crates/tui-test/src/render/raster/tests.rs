@@ -125,23 +125,6 @@ fn bundled_styles_do_not_need_synthetic_bold_or_italic() {
     }
 }
 
-#[cfg(feature = "recording-font-jetbrains-mono-styles")]
-#[test]
-fn bundled_styles_do_not_need_synthetic_bold_or_italic() {
-    let mut fonts = FontSystem::new();
-    for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
-        let glyph = fonts
-            .resolve(GlyphKey {
-                character: 'M',
-                bold,
-                italic,
-            })
-            .unwrap();
-        assert!(!glyph.synthetic_bold);
-        assert!(!glyph.synthetic_italic);
-    }
-}
-
 #[test]
 fn supported_unicode_renders_and_missing_unicode_is_reported_when_absent() {
     let mut renderer = GridRenderer::new(1, 1);
