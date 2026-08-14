@@ -9,6 +9,7 @@ const WIN32_INPUT_MODE: &[u8] = b"\x1b[?9001h";
 #[allow(dead_code)] // The frame playback layer consumes the reader next in the stack.
 mod reader;
 #[cfg(feature = "recording-raster")]
+#[allow(unused_imports)] // `read` is consumed with session export later in the stack.
 pub(crate) use reader::{read, CastEventKind, CastReader};
 
 pub(crate) struct CastWriter {
