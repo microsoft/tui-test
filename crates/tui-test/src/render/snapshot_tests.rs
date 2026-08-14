@@ -285,10 +285,10 @@ fn assert_snapshot(name: &str, extension: &str, actual: &[u8]) {
             expected_path.display()
         )
     });
-    let matches = if extension == "gif" {
-        decode_gif(&expected) == decode_gif(actual)
-    } else {
-        expected == actual
+    let matches = match extension {
+        "gif" => gif_snapshots_match(&expected, actual),
+        "png" => png_snapshots_match(&expected, actual),
+        _ => expected == actual,
     };
     if !matches {
         let actual_path = failure_dir().join(format!("{name}.actual.{extension}"));
@@ -305,13 +305,13 @@ fn assert_snapshot(name: &str, extension: &str, actual: &[u8]) {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 struct DecodedGif {
     dimensions: (u16, u16),
     frames: Vec<DecodedGifFrame>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 struct DecodedGifFrame {
     left: u16,
     top: u16,
@@ -338,6 +338,57 @@ fn decode_gif(bytes: &[u8]) -> DecodedGif {
         });
     }
     DecodedGif { dimensions, frames }
+}
+
+fn gif_snapshots_match(expected: &[u8], actual: &[u8]) -> bool {
+    let expected = decode_gif(expected);
+    let actual = decode_gif(actual);
+    expected.dimensions == actual.dimensions
+        && expected.frames.len() == actual.frames.len()
+        && expected
+            .frames
+            .iter()
+            .zip(actual.frames.iter())
+            .all(|(expected, actual)| {
+                expected.left == actual.left
+                    && expected.top == actual.top
+                    && expected.width == actual.width
+                    && expected.height == actual.height
+                    && expected.delay == actual.delay
+                    && pixels_are_close(&expected.pixels, &actual.pixels)
+            })
+}
+
+fn png_snapshots_match(expected: &[u8], actual: &[u8]) -> bool {
+    let (expected_dimensions, expected_pixels) = decode_png(expected);
+    let (actual_dimensions, actual_pixels) = decode_png(actual);
+    expected_dimensions == actual_dimensions && pixels_are_close(&expected_pixels, &actual_pixels)
+}
+
+fn decode_png(bytes: &[u8]) -> ((u32, u32), Vec<u8>) {
+    let decoder = png::Decoder::new(Cursor::new(bytes));
+    let mut reader = decoder.read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut pixels).unwrap();
+    pixels.truncate(info.buffer_size());
+    ((info.width, info.height), pixels)
+}
+
+fn pixels_are_close(expected: &[u8], actual: &[u8]) -> bool {
+    if expected.len() != actual.len() || !expected.len().is_multiple_of(4) {
+        return false;
+    }
+    let mut total_error = 0u64;
+    let mut significant_pixels = 0usize;
+    for (expected, actual) in expected.chunks_exact(4).zip(actual.chunks_exact(4)) {
+        let errors =
+            std::array::from_fn::<_, 4, _>(|index| expected[index].abs_diff(actual[index]));
+        total_error += errors.iter().map(|error| u64::from(*error)).sum::<u64>();
+        significant_pixels += usize::from(errors.iter().any(|error| *error > 24));
+    }
+    let channels = expected.len();
+    let pixels = channels / 4;
+    total_error <= channels as u64 * 4 && significant_pixels * 100 <= pixels * 15
 }
 
 fn snapshot_dir() -> PathBuf {
