@@ -99,13 +99,7 @@ impl Session {
         if let Some(sh) = shell {
             rec_env.push(("SHELL".to_string(), sh.as_str().to_string()));
         }
-        let recorder = Recorder::create(
-            recording_path,
-            cols,
-            rows,
-            &rec_env,
-            logger.clone(),
-        );
+        let recorder = Recorder::create(recording_path, cols, rows, &rec_env, logger.clone());
 
         let reader_state = state.clone();
         let reader_pty = pty.clone();
