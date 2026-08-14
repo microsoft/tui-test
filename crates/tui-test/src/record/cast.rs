@@ -1,17 +1,9 @@
-use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-
 const WIN32_INPUT_MODE: &[u8] = b"\x1b[?9001h";
-
-#[cfg(feature = "recording-raster")]
-mod reader;
-#[cfg(feature = "recording-raster")]
-pub(crate) use reader::{read, CastEventKind, CastReader};
 
 pub(crate) struct CastWriter {
     start: Instant,
@@ -89,131 +81,51 @@ impl CastWriter {
     }
 }
 
-pub(crate) fn snapshot_to_ansi(rows: &[Vec<EmuCell>], cols: u16, cursor: (u16, u16)) -> String {
-    let blank = EmuCell::blank();
-    let mut output = String::from("\x1b[0m\x1b[?7l\x1b[2J\x1b[H");
-    for (y, row) in rows.iter().enumerate() {
-        for x in 0..usize::from(cols) {
-            let cell = row.get(x).unwrap_or(&blank);
-            if cell == &blank || cell.ch.as_str() == CONTINUATION {
-                continue;
-            }
-            let _ = write!(output, "\x1b[{};{}H", y + 1, x + 1);
-            write_style(&mut output, cell);
-            output.push_str(&cell.ch);
-        }
-    }
-    let _ = write!(
-        output,
-        "\x1b[0m\x1b[{};{}H\x1b[?7h",
-        cursor.1 + 1,
-        cursor.0 + 1
-    );
-    output
-}
-
-fn write_style(output: &mut String, cell: &EmuCell) {
-    let mut codes = vec!["0".to_string()];
-    for (attr, code) in [
-        (Attrs::BOLD, "1"),
-        (Attrs::DIM, "2"),
-        (Attrs::ITALIC, "3"),
-        (Attrs::BLINK, "5"),
-        (Attrs::INVERSE, "7"),
-        (Attrs::INVISIBLE, "8"),
-        (Attrs::STRIKE, "9"),
-    ] {
-        if cell.has(attr) {
-            codes.push(code.to_string());
-        }
-    }
-    let underline = match cell.underline {
-        UnderlineStyle::None => None,
-        UnderlineStyle::Single => Some("4"),
-        UnderlineStyle::Double => Some("4:2"),
-        UnderlineStyle::Curly => Some("4:3"),
-        UnderlineStyle::Dotted => Some("4:4"),
-        UnderlineStyle::Dashed => Some("4:5"),
-    };
-    if let Some(underline) = underline {
-        codes.push(underline.to_string());
-    }
-    push_color(&mut codes, cell.fg, true, "");
-    push_color(&mut codes, cell.bg, false, "");
-    if cell.underline.is_underlined() {
-        push_color(&mut codes, cell.underline_color, true, "5");
-    }
-    let _ = write!(output, "\x1b[{}m", codes.join(";"));
-}
-
-fn push_color(codes: &mut Vec<String>, color: Option<Color>, foreground: bool, prefix: &str) {
-    let Some(color) = color else {
-        return;
-    };
-    let base = if prefix.is_empty() {
-        if foreground {
-            "38"
-        } else {
-            "48"
-        }
-    } else {
-        "58"
-    };
-    match color {
-        Color::Named(named) if prefix.is_empty() => {
-            let index = named.index();
-            let value = if foreground {
-                if index < 8 {
-                    30 + index
-                } else {
-                    90 + index - 8
-                }
-            } else if index < 8 {
-                40 + index
-            } else {
-                100 + index - 8
-            };
-            codes.push(value.to_string());
-        }
-        Color::Named(named) => codes.push(format!("{base};5;{}", named.index())),
-        Color::Idx(index) => codes.push(format!("{base};5;{index}")),
-        Color::Rgb(red, green, blue) => {
-            codes.push(format!("{base};2;{red};{green};{blue}"));
-        }
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct IncrementalDecoder {
-    pending: Vec<u8>,
+    filter_pending: Vec<u8>,
+    utf8_pending: Vec<u8>,
 }
 
 impl IncrementalDecoder {
     pub fn push(&mut self, data: &[u8]) -> String {
         let mut cleaned = Vec::with_capacity(data.len());
-        strip_subsequence(data, WIN32_INPUT_MODE, &mut cleaned);
-        self.pending.extend_from_slice(&cleaned);
+        self.filter_pending.extend_from_slice(data);
+        let mut consumed = 0;
+        while consumed < self.filter_pending.len() {
+            let remaining = &self.filter_pending[consumed..];
+            if remaining.starts_with(WIN32_INPUT_MODE) {
+                consumed += WIN32_INPUT_MODE.len();
+            } else if WIN32_INPUT_MODE.starts_with(remaining) {
+                break;
+            } else {
+                cleaned.push(self.filter_pending[consumed]);
+                consumed += 1;
+            }
+        }
+        self.filter_pending.drain(..consumed);
+        self.utf8_pending.extend_from_slice(&cleaned);
 
         let mut output = String::new();
         loop {
-            match std::str::from_utf8(&self.pending) {
+            match std::str::from_utf8(&self.utf8_pending) {
                 Ok(text) => {
                     output.push_str(text);
-                    self.pending.clear();
+                    self.utf8_pending.clear();
                     break;
                 }
                 Err(error) => {
                     let valid = error.valid_up_to();
-                    if let Ok(text) = std::str::from_utf8(&self.pending[..valid]) {
+                    if let Ok(text) = std::str::from_utf8(&self.utf8_pending[..valid]) {
                         output.push_str(text);
                     }
                     match error.error_len() {
                         Some(length) => {
                             output.push('\u{FFFD}');
-                            self.pending.drain(..valid + length);
+                            self.utf8_pending.drain(..valid + length);
                         }
                         None => {
-                            self.pending.drain(..valid);
+                            self.utf8_pending.drain(..valid);
                             break;
                         }
                     }
@@ -221,18 +133,6 @@ impl IncrementalDecoder {
             }
         }
         output
-    }
-}
-
-fn strip_subsequence(data: &[u8], needle: &[u8], output: &mut Vec<u8>) {
-    let mut index = 0;
-    while index < data.len() {
-        if data[index..].starts_with(needle) {
-            index += needle.len();
-        } else {
-            output.push(data[index]);
-            index += 1;
-        }
     }
 }
 
@@ -264,27 +164,16 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_is_standard_ansi_output() {
-        let grid = vec![vec![EmuCell {
-            ch: "x".into(),
-            fg: Some(Color::Rgb(1, 2, 3)),
-            ..EmuCell::blank()
-        }]];
-        let ansi = snapshot_to_ansi(&grid, 1, (0, 0));
-        assert!(ansi.contains("\x1b[1;1H"));
-        assert!(ansi.contains("38;2;1;2;3"));
-        assert!(ansi.contains('x'));
-    }
+    fn incremental_decode_removes_split_win32_input_mode() {
+        for split in 1..WIN32_INPUT_MODE.len() {
+            let mut decoder = IncrementalDecoder::default();
+            let mut first = b"a".to_vec();
+            first.extend_from_slice(&WIN32_INPUT_MODE[..split]);
+            assert_eq!(decoder.push(&first), "a", "split at {split}");
 
-    #[test]
-    fn snapshot_restores_the_live_cursor_before_future_output() {
-        use crate::terminal::alacritty::AlacrittyEmu;
-        use crate::terminal::emu::Emulator;
-
-        let grid = vec![vec![EmuCell::blank(); 4]; 2];
-        let mut emulator = AlacrittyEmu::new(4, 2, 0);
-        emulator.process(snapshot_to_ansi(&grid, 4, (2, 1)).as_bytes());
-        emulator.process(b"X");
-        assert_eq!(emulator.viewable_rows()[1][2].ch, "X");
+            let mut second = WIN32_INPUT_MODE[split..].to_vec();
+            second.push(b'b');
+            assert_eq!(decoder.push(&second), "b", "split at {split}");
+        }
     }
 }
