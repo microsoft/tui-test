@@ -105,7 +105,7 @@ test("recording API exports styled Unicode to APNG and GIF", async () => {
           await su.screenshot(screenshotPath, { zoom: 0.5 });
           assert.match(
             await readFile(screenshotPath, "utf8"),
-            /width="115" height="68" viewBox="0 0 230 136"/,
+            /width="139" height="92" viewBox="0 0 278 184"/,
           );
         }
         await su.startRecording(path, { format, fps: 30, zoom: 0.5 });

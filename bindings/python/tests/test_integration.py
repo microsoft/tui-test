@@ -88,8 +88,8 @@ class IntegrationTests(unittest.TestCase):
                                     str(screenshot), zoom=0.5
                                 )
                                 self.assertIn(
-                                    'width="115" height="68" '
-                                    'viewBox="0 0 230 136"',
+                                    'width="139" height="92" '
+                                    'viewBox="0 0 278 184"',
                                     screenshot.read_text(encoding="utf-8"),
                                 )
                             await su.start_recording(
