@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crate::api::{
     Cell, CellColor, Cursor, EffectiveTimeouts, ErrorKind, OpenOptions, OpenResult, Operation,
     OperationResult, PackedScreen, RunOptions, RuntimeStatus, ScreenshotResult, Size,
-    SnapshotResult, TextAnchor, TextMatch, TextSelector, TuiTestError,
+    SnapshotResult, TextAnchor, TextMatch, TextSelector, TextStyle, TuiTestError,
 };
 use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
@@ -636,6 +636,21 @@ fn dispatch(
             )?;
             Ok(OperationResult::Unit)
         }
+        Operation::ExpectTextSelector {
+            selector,
+            not,
+            style,
+            timeout_ms,
+        } => {
+            expect_selected_text(
+                session,
+                &selector,
+                not,
+                &style,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
         Operation::ExpectTitle {
             text,
             regex,
@@ -1256,6 +1271,192 @@ fn validate_selector(selector: &TextSelector) -> Result<(), TuiTestError> {
     Ok(())
 }
 
+fn validate_style(style: &TextStyle) -> Result<(), TuiTestError> {
+    for spec in [&style.foreground, &style.background, &style.underline_color]
+        .into_iter()
+        .flatten()
+    {
+        Expected::parse(spec).map_err(|error| TuiTestError::usage(error.to_string()))?;
+    }
+    if let Some(style) = &style.underline_style {
+        if !matches!(
+            style.as_str(),
+            "none" | "single" | "double" | "curly" | "dotted" | "dashed"
+        ) {
+            return Err(TuiTestError::usage(format!(
+                "invalid underline style '{style}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn expect_selected_text(
+    session: &TerminalSession,
+    selector: &TextSelector,
+    not: bool,
+    style: &TextStyle,
+    timeout_ms: u64,
+) -> Result<(), TuiTestError> {
+    validate_selector(selector)?;
+    validate_style(style)?;
+    let mut last_error = None;
+    let mut matched = false;
+    poll_until(
+        || {
+            match locator::locate(&grid(session, selector.full), selector) {
+                Ok(candidates) if not => {
+                    let unexpected = if style.is_empty() {
+                        candidates.first()
+                    } else {
+                        candidates
+                            .iter()
+                            .find(|candidate| check_style(session, candidate, style).is_none())
+                    };
+                    matched = unexpected.is_none();
+                    if let Some(candidate) = unexpected {
+                        last_error = Some(format!(
+                            "unexpected '{}' match at row {}, column {}",
+                            selector.text, candidate.value.start.row, candidate.value.start.column
+                        ));
+                    }
+                }
+                Ok(candidates) => {
+                    last_error = None;
+                    matched = candidates.iter().any(|candidate| {
+                        if let Some(error) = check_style(session, candidate, style) {
+                            if last_error.is_none() {
+                                last_error = Some(error);
+                            }
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
+                Err(error) => {
+                    matched = false;
+                    last_error = Some(error.to_string());
+                }
+            }
+            matched || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if matched {
+        Ok(())
+    } else if let Some(error) = last_error {
+        Err(TuiTestError::assertion(error))
+    } else if session_stopped(session) {
+        Err(TuiTestError::assertion(format!(
+            "session exited before '{}' matched",
+            selector.text
+        )))
+    } else {
+        Err(TuiTestError::assertion(timeout_message(
+            &selector.text,
+            timeout_ms,
+            not,
+        )))
+    }
+}
+
+fn check_style(
+    session: &TerminalSession,
+    matched: &locator::LocatedMatch,
+    style: &TextStyle,
+) -> Option<String> {
+    let state = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    check_style_with_emulator(matched, style, state.emu.as_ref())
+}
+
+fn check_style_with_emulator(
+    matched: &locator::LocatedMatch,
+    style: &TextStyle,
+    colors: &dyn Emulator,
+) -> Option<String> {
+    let visible: Vec<_> = matched
+        .cells
+        .iter()
+        .filter(|cell| !cell.cell.ch.is_empty() && !cell.cell.ch.chars().all(char::is_whitespace))
+        .collect();
+    let cells: Vec<_> = if visible.is_empty() {
+        matched.cells.iter().collect()
+    } else {
+        visible
+    };
+    let fail = |cell: &locator::MatchedCell, expected: &str, actual: String| {
+        format!(
+            "'{}' matched at row {}, column {}, but expected {expected}; found {actual} at row {}, column {}",
+            matched.value.text,
+            matched.value.start.row,
+            matched.value.start.column,
+            cell.y,
+            cell.x
+        )
+    };
+    for cell in cells {
+        for (name, expected, actual) in [
+            ("bold", style.bold, cell.cell.has(Attrs::BOLD)),
+            ("dim", style.dim, cell.cell.has(Attrs::DIM)),
+            ("italic", style.italic, cell.cell.has(Attrs::ITALIC)),
+            ("inverse", style.inverse, cell.cell.has(Attrs::INVERSE)),
+            ("hidden", style.hidden, cell.cell.has(Attrs::INVISIBLE)),
+            (
+                "strikethrough",
+                style.strikethrough,
+                cell.cell.has(Attrs::STRIKE),
+            ),
+            ("blink", style.blink, cell.cell.has(Attrs::BLINK)),
+        ] {
+            if let Some(expected) = expected {
+                if expected != actual {
+                    return Some(fail(
+                        cell,
+                        &format!("{name}={expected}"),
+                        actual.to_string(),
+                    ));
+                }
+            }
+        }
+        if let Some(expected) = &style.underline_style {
+            let actual = cell.cell.underline.name();
+            if expected != actual {
+                return Some(fail(
+                    cell,
+                    &format!("underline_style={expected}"),
+                    actual.to_string(),
+                ));
+            }
+        }
+        for (name, spec, actual, foreground) in [
+            ("foreground", &style.foreground, cell.cell.fg, true),
+            ("background", &style.background, cell.cell.bg, false),
+            (
+                "underline_color",
+                &style.underline_color,
+                cell.cell.underline_color,
+                true,
+            ),
+        ] {
+            if let Some(spec) = spec {
+                let expected = Expected::parse(spec).ok()?;
+                if !color::matches(actual, &expected, colors, foreground) {
+                    return Some(fail(
+                        cell,
+                        &format!("{name}={}", expected.describe()),
+                        color::describe_cell(actual, &expected, colors, foreground),
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
 fn check_colors(
     cells: &[locator::MatchedCell],
     fg: &Option<String>,
@@ -1496,6 +1697,7 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::{TextPosition, TextSpan};
     use crate::profile::Profile;
     use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::cell::{NamedColor, UnderlineStyle};
@@ -1575,6 +1777,49 @@ mod tests {
         assert!(value.underline);
         assert_eq!(value.underline_style, "single");
         assert_eq!(value.underline_color, CellColor::Default);
+    }
+
+    #[test]
+    fn styled_text_failures_report_the_match_and_cell_location() {
+        let emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        let cell = EmuCell {
+            ch: "x".into(),
+            attrs: Attrs::BOLD,
+            ..EmuCell::blank()
+        };
+        let matched = locator::LocatedMatch {
+            value: TextMatch {
+                text: "x".into(),
+                start: TextPosition { row: 1, column: 3 },
+                end: TextPosition { row: 1, column: 4 },
+                spans: vec![TextSpan {
+                    row: 1,
+                    start: 3,
+                    end: 4,
+                }],
+            },
+            cells: vec![locator::MatchedCell { x: 3, y: 1, cell }],
+        };
+        assert!(check_style_with_emulator(
+            &matched,
+            &TextStyle {
+                bold: Some(true),
+                ..TextStyle::default()
+            },
+            &emu
+        )
+        .is_none());
+        let error = check_style_with_emulator(
+            &matched,
+            &TextStyle {
+                bold: Some(false),
+                ..TextStyle::default()
+            },
+            &emu,
+        )
+        .unwrap();
+        assert!(error.contains("row 1, column 3"));
+        assert!(error.contains("expected bold=false"));
     }
 
     #[test]

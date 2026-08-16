@@ -130,6 +130,28 @@ impl TextSelector {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextStyle {
+    pub foreground: Option<String>,
+    pub background: Option<String>,
+    pub bold: Option<bool>,
+    pub dim: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline_style: Option<String>,
+    pub underline_color: Option<String>,
+    pub inverse: Option<bool>,
+    pub hidden: Option<bool>,
+    pub strikethrough: Option<bool>,
+    pub blink: Option<bool>,
+}
+
+impl TextStyle {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Operation {
     Open(OpenOptions),
@@ -210,6 +232,12 @@ pub enum Operation {
         not: bool,
         fg: Option<String>,
         bg: Option<String>,
+        timeout_ms: Option<u64>,
+    },
+    ExpectTextSelector {
+        selector: TextSelector,
+        not: bool,
+        style: TextStyle,
         timeout_ms: Option<u64>,
     },
     ExpectTitle {
