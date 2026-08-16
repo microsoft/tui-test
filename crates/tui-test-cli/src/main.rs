@@ -12,8 +12,12 @@ use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
 
-use cli::{Cli, Command, DaemonCmd, ExpectCmd, GetArg, MouseCmd, WaitCmd};
+use cli::{
+    Cli, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, MatchArg, MouseCmd, TextSelectorArgs,
+    TextStyleArgs, WaitCmd, WhitespaceArg,
+};
 use protocol::{GetField, MouseAction, Request, Response};
+use tui_test::{MatchOccurrence, TextAnchor, TextScope, TextSelector, TextStyle, WhitespaceMode};
 /// Long-form agent skill manifest, printed by `tui-test skill`.
 const SKILL_MD: &str = include_str!("../../../SKILL.md");
 
@@ -214,6 +218,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             name: "KILL".to_string(),
         },
         Command::Wait { what } => map_wait(what),
+        Command::Find { what } => map_find(what),
         Command::Expect { what } => map_expect(what),
         _ => anyhow::bail!("unsupported command"),
     };
@@ -311,25 +316,108 @@ fn map_wait(what: WaitCmd) -> Request {
     }
 }
 
+fn map_occurrence(
+    mode: Option<MatchArg>,
+    nth: Option<usize>,
+    default: MatchOccurrence,
+) -> MatchOccurrence {
+    if let Some(index) = nth {
+        return MatchOccurrence::Nth(index);
+    }
+    match mode {
+        Some(MatchArg::Any) => MatchOccurrence::Any,
+        Some(MatchArg::Unique) => MatchOccurrence::Unique,
+        Some(MatchArg::First) => MatchOccurrence::First,
+        Some(MatchArg::Last) => MatchOccurrence::Last,
+        None => default,
+    }
+}
+
+fn map_anchor(
+    text: Option<String>,
+    regex: bool,
+    mode: Option<MatchArg>,
+    nth: Option<usize>,
+) -> Option<TextAnchor> {
+    text.map(|text| TextAnchor {
+        text,
+        regex,
+        occurrence: map_occurrence(mode, nth, MatchOccurrence::Unique),
+    })
+}
+
+fn map_selector(text: String, args: TextSelectorArgs, default: MatchOccurrence) -> TextSelector {
+    TextSelector {
+        text,
+        regex: args.regex,
+        full: args.full,
+        whitespace: match args.whitespace {
+            WhitespaceArg::Exact => WhitespaceMode::Exact,
+            WhitespaceArg::Normalize => WhitespaceMode::Normalize,
+        },
+        scope: TextScope {
+            after: map_anchor(
+                args.after_text,
+                args.after_regex,
+                args.after_match,
+                args.after_nth,
+            ),
+            before: map_anchor(
+                args.before_text,
+                args.before_regex,
+                args.before_match,
+                args.before_nth,
+            ),
+        },
+        occurrence: map_occurrence(args.match_mode, args.nth, default),
+    }
+}
+
+fn map_style(args: TextStyleArgs) -> TextStyle {
+    TextStyle {
+        foreground: args.fg,
+        background: args.bg,
+        bold: args.bold,
+        dim: args.dim,
+        italic: args.italic,
+        underline_style: args.underline_style,
+        underline_color: args.underline_color,
+        inverse: args.inverse,
+        hidden: args.hidden,
+        strikethrough: args.strikethrough,
+        blink: args.blink,
+    }
+}
+
+fn map_find(what: FindCmd) -> Request {
+    match what {
+        FindCmd::Text { text, selector } => Request::FindText {
+            selector: map_selector(text, selector, MatchOccurrence::Any),
+        },
+    }
+}
+
 fn map_expect(what: ExpectCmd) -> Request {
     match what {
         ExpectCmd::Text {
             text,
-            regex,
-            full,
+            selector,
             no_strict,
             not,
-            fg,
-            bg,
+            style,
             timeout,
-        } => Request::ExpectText {
-            text,
-            regex,
-            full,
-            strict: !no_strict,
+        } => Request::ExpectTextSelector {
+            selector: map_selector(
+                text,
+                selector,
+                if no_strict {
+                    MatchOccurrence::First
+                } else {
+                    MatchOccurrence::Unique
+                },
+            ),
             not,
-            fg,
-            bg,
+            style: map_style(style),
             timeout_ms: timeout,
         },
         ExpectCmd::Title {
@@ -713,14 +801,15 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           run [--config F] [--profile P] <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full]\n\
-          cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title\n\
+          find text \"T\" [selector options] | cells X Y [W H]\n\
+          get command|output|exit-code|cwd|cursor|size|title\n\
 INPUT     type \"text\" | submit [\"text\"] | press <Key...> | keys \"Ctrl+a\"\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
 WAIT      wait text \"T\" [--regex --full --not --timeout MS]\n\
           wait title \"T\" [--regex --not --timeout MS]\n\
           wait idle | wait command | wait exit | wait ready\n\
-EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
+EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex]\n\
           expect snapshot NAME [-u] [--include-colors --include-title]\n\
@@ -781,6 +870,55 @@ mod tests {
         assert_eq!(ready_flag(false, false), None);
         assert_eq!(ready_flag(true, false), Some(true));
         assert_eq!(ready_flag(false, true), Some(false));
+    }
+
+    #[test]
+    fn find_text_maps_selector_options_to_the_protocol() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "find",
+            "text",
+            "Save",
+            "--after-text",
+            "Settings",
+            "--whitespace",
+            "normalize",
+            "--nth",
+            "1",
+        ])
+        .unwrap();
+        let Request::FindText { selector } = build_request(cli.command.expect("command")).unwrap()
+        else {
+            panic!("expected find text request");
+        };
+        assert_eq!(selector.scope.after.unwrap().text, "Settings");
+        assert_eq!(selector.whitespace, WhitespaceMode::Normalize);
+        assert_eq!(selector.occurrence, MatchOccurrence::Nth(1));
+    }
+
+    #[test]
+    fn expect_text_maps_style_options_to_the_protocol() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "expect",
+            "text",
+            "Warning",
+            "--match",
+            "first",
+            "--bold",
+            "--underline-style",
+            "curly",
+        ])
+        .unwrap();
+        let Request::ExpectTextSelector {
+            selector, style, ..
+        } = build_request(cli.command.expect("command")).unwrap()
+        else {
+            panic!("expected styled text request");
+        };
+        assert_eq!(selector.occurrence, MatchOccurrence::First);
+        assert_eq!(style.bold, Some(true));
+        assert_eq!(style.underline_style.as_deref(), Some("curly"));
     }
 
     #[test]
