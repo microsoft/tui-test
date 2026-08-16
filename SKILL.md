@@ -80,6 +80,7 @@ without parsing text:
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, timeouts, and a text snapshot. |
 | `text [--full]`                                     | Rendered viewport text, or full scrollback with `--full`.                                                           |
+| `find text "T" [selector options]`                  | Selected matches with zero-based row/column spans.                                                                  |
 | `screenshot [PATH] [-o FILE] [--full] [--zoom N]`   | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.                           |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags) for a region.                                                             |
 | `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | One structured field.                                                                                        |
@@ -128,7 +129,7 @@ and `Meta`. Top-level `press` remains a compatibility alias for `key press`.
 
 | Command                                                                         | Description                                                                   |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility plus optional color. `--no-strict` relaxes a strict single-match.  |
+| `expect text "T" [selector/style options]`                                      | Visibility plus optional color and cell styles. `--no-strict` selects the first match. |
 | `expect title "T" [--regex --not --timeout MS]`                                 | The window title set with `OSC 0`/`OSC 2`. An unset title matches nothing.    |
 | `expect exit-code N [--timeout MS]`                                             | The last command's exit code. Waits for the command to finish first.          |
 | `expect output "T" [--regex]`                                                   | The last command's captured output.                                           |
@@ -136,6 +137,12 @@ and `Meta`. Top-level `press` remains a compatibility alias for `key press`.
 | `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. `--include-title` records the window title in the frame; off by default because a prompt often sets it to a host and path. |
 
 Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
+
+Selector options include `--after-text`, `--before-text`, `--whitespace
+normalize`, `--match any|unique|first|last`, and zero-based `--nth`. Anchors
+also accept `--after-match` / `--before-match` and `--after-nth` /
+`--before-nth`. Styles include `--fg`, `--bg`, boolean SGR attributes such as
+`--bold[=false]`, and underline style/color.
 
 ### Recording, monitor & self-docs
 

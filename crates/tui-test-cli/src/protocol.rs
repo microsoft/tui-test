@@ -3,7 +3,7 @@ use serde_json::json;
 
 use tui_test::{
     Backend, Engine, KeyAction, OpenOptions, Operation, OperationResult, RecordingFormat,
-    RunOptions, ScreenshotResult, TuiTestError,
+    RunOptions, ScreenshotResult, TextSelector, TextStyle, TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
@@ -116,6 +116,17 @@ pub enum Request {
         not: bool,
         fg: Option<String>,
         bg: Option<String>,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    FindText {
+        selector: TextSelector,
+    },
+    ExpectTextSelector {
+        selector: TextSelector,
+        not: bool,
+        #[serde(default)]
+        style: TextStyle,
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
@@ -283,6 +294,7 @@ impl Request {
             Request::WaitExit { timeout_ms } => Ok(Operation::WaitExit { timeout_ms }),
             Request::WaitReady { timeout_ms } => Ok(Operation::WaitReady { timeout_ms }),
             Request::WaitBell { timeout_ms } => Ok(Operation::WaitBell { timeout_ms }),
+            Request::FindText { selector } => Ok(Operation::FindText { selector }),
             Request::ExpectText {
                 text,
                 regex,
@@ -300,6 +312,17 @@ impl Request {
                 not,
                 fg,
                 bg,
+                timeout_ms,
+            }),
+            Request::ExpectTextSelector {
+                selector,
+                not,
+                style,
+                timeout_ms,
+            } => Ok(Operation::ExpectTextSelector {
+                selector,
+                not,
+                style,
                 timeout_ms,
             }),
             Request::ExpectTitle {

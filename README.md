@@ -268,6 +268,7 @@ continues to build only the Alacritty backend and does not require Zig.
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, effective timeouts, text snapshot. |
 | `text [--full]`                                     | Plain text of the viewport (or scrollback).                                                 |
+| `find text "T" [selector options]`                  | Return selected matches with zero-based row/column spans.                                   |
 | `screenshot [-o file.svg] [--full] [--zoom N]`      | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.   |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags).                                                  |
 | `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | Structured getters.                                                                   |
@@ -318,7 +319,7 @@ the top-level `press` command remains a compatibility alias for `key press`.
 
 | Command                                                                         | Description                                |
 | ------------------------------------------------------------------------------- | ------------------------------------------ |
-| `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility + optional color.               |
+| `expect text "T" [selector/style options]`                                      | Visibility plus optional color and cell styles. |
 | `expect title "T" [--regex --not --timeout MS]`                                 | Window title set with OSC 0/2.             |
 | `expect exit-code N [--timeout MS]`                                             | Last command's exit code.                  |
 | `expect output "T" [--regex]`                                                   | Last command's captured output.            |
@@ -326,6 +327,14 @@ the top-level `press` command remains a compatibility alias for `key press`.
 | `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare against `__snapshots__/NAME.snap`. `--include-title` adds the window title to the frame. |
 
 Colors accept ANSI-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
+
+Text selectors support `--after-text`, `--before-text`, `--whitespace
+normalize`, `--match any|unique|first|last`, and zero-based `--nth N`.
+Anchors can select their own occurrence with `--after-match` /
+`--before-match` or `--after-nth` / `--before-nth`. Style assertions use
+`--fg`, `--bg`, `--bold[=false]`, `--italic[=false]`, `--underline-style`,
+`--underline-color`, `--inverse[=false]`, `--hidden[=false]`,
+`--strikethrough[=false]`, and `--blink[=false]`.
 
 ### Screenshots
 
