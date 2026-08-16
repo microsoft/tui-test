@@ -6,6 +6,7 @@ import type {
   OpenResult as NativeOpenResult,
   Size as NativeSize,
   State as NativeState,
+  TextMatch as NativeTextMatch,
   Timeouts as NativeTimeouts,
 } from "../native/index.js";
 
@@ -56,6 +57,8 @@ export type EffectiveTimeouts = NativeEffectiveTimeouts;
 export type BellEvent = NativeBellEvent;
 
 export type State = NativeState;
+
+export type TextMatch = NativeTextMatch;
 
 export type OpenResult = NativeOpenResult;
 

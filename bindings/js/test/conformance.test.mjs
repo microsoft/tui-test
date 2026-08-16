@@ -51,6 +51,7 @@ const MAPPING = {
   kill: [["client", "kill"]],
   wait: [["client", "waitTitle"], ["client", "waitText"], ["client", "waitIdle"], ["client", "waitCommand"], ["client", "waitExit"], ["client", "waitBell"]],
   expect: [["client", "expectTitle"], ["client", "expectText"], ["client", "expectExitCode"], ["client", "expectOutput"], ["client", "expectBellCount"], ["client", "expectSnapshot"]],
+  find: [["client", "findText"]],
   "get-recording": [["module", "getRecording"]],
 };
 
