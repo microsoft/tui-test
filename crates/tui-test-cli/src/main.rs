@@ -498,7 +498,7 @@ fn map_expect(what: ExpectCmd) -> Request {
                 },
             ),
             not,
-            style: map_style(style),
+            style: map_style(*style),
             timeout_ms: timeout,
         },
         ExpectCmd::Title {

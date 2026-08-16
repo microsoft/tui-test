@@ -1181,7 +1181,7 @@ pub enum ExpectCmd {
         #[arg(long)]
         not: bool,
         #[command(flatten)]
-        style: TextStyleArgs,
+        style: Box<TextStyleArgs>,
         /// Timeout in milliseconds.
         #[arg(long, value_name = "MS")]
         timeout: Option<u64>,
