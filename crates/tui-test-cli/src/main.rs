@@ -142,6 +142,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             env,
             wait_ready,
             no_wait_ready,
+            restart,
             profile,
             timeouts,
         } => Request::Open {
@@ -153,6 +154,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             cwd,
             env: parse_env(&env)?,
             wait_ready: ready_flag(wait_ready, no_wait_ready),
+            restart,
             timeouts: timeouts.into(),
         },
         Command::Run {
@@ -164,6 +166,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             env,
             wait_ready,
             no_wait_ready,
+            restart,
             profile,
             timeouts,
         } => {
@@ -178,6 +181,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 cwd,
                 env: parse_env(&env)?,
                 wait_ready: ready_flag(wait_ready, no_wait_ready),
+                restart,
                 timeouts: timeouts.into(),
             }
         }
@@ -709,8 +713,8 @@ fn usage_text() -> &'static str {
     "tui-test: headless terminal cli + daemon\n\
 \n\
 SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
-                  [--config F] [--profile P]\n\
-          run [--config F] [--profile P] <program> [args...]\n\
+                  [--config F] [--profile P] [--restart]\n\
+          run [--config F] [--profile P] [--restart] <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full]\n\
           cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title\n\

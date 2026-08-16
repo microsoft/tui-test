@@ -40,6 +40,7 @@ pub struct OpenOptions {
     pub cwd: Option<String>,
     pub env: Vec<(String, String)>,
     pub wait_ready: Option<bool>,
+    pub restart: bool,
     pub timeouts: Timeouts,
 }
 
@@ -53,6 +54,7 @@ impl Default for OpenOptions {
             cwd: None,
             env: Vec::new(),
             wait_ready: None,
+            restart: false,
             timeouts: Timeouts::default(),
         }
     }
@@ -72,6 +74,7 @@ pub struct RunOptions {
     pub cwd: Option<String>,
     pub env: Vec<(String, String)>,
     pub wait_ready: Option<bool>,
+    pub restart: bool,
     pub timeouts: Timeouts,
 }
 

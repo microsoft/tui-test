@@ -88,6 +88,7 @@ export interface SpawnOptions {
   cwd?: string;
   env?: Record<string, string | number | boolean> | [string, string][];
   waitReady?: boolean;
+  restart?: boolean;
   retries?: number;
   profile?: Profile;
   timeouts?: Timeouts;

@@ -157,6 +157,7 @@ test("constructor and per-run profile objects recolor the terminal", async () =>
     await su.expectText("constructor-profile", { fg: "#010203" });
 
     await su.run(process.execPath, argsFor("call-profile"), {
+      restart: true,
       profile: { colors: { red: "#040506" } },
     });
     await su.waitText("call-profile", { timeout: 5000 });

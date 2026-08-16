@@ -58,9 +58,10 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 
-`open()` and `run()` accept `wait_ready=`, `retries=`, `profile=`, and
-`timeouts=`. The constructor also accepts `profile=` as the default for later
-opens and runs. Profiles are partial; omitted fields use the built-in defaults:
+`open()` and `run()` accept `wait_ready=`, `restart=`, `retries=`, `profile=`,
+and `timeouts=`. They reuse a live named session unless `restart=True` is
+passed. The constructor also accepts `profile=` as the default for later opens
+and runs. Profiles are partial; omitted fields use the built-in defaults:
 
 ```python
 from tui_test import Colors, Profile, TuiTest

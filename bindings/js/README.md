@@ -54,7 +54,8 @@ All derive from `TuiTestError` and carry `kind` and `exitCode`. `waitX` and `exp
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 
 `open` and `run` accept
-`{ cols, rows, cwd, env, waitReady, retries, profile, timeouts }`. The
+`{ cols, rows, cwd, env, waitReady, restart, retries, profile, timeouts }`.
+They reuse a live named session unless `restart: true` is passed. The
 constructor also accepts `profile` as the default for later opens and runs.
 Profiles are partial; omitted fields use the built-in defaults:
 
