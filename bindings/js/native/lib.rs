@@ -102,6 +102,7 @@ pub struct OpenOptions {
     pub cwd: Option<String>,
     pub env: Option<Vec<(String, String)>>,
     pub wait_ready: Option<bool>,
+    pub restart: Option<bool>,
     pub profile_scrollback: Option<f64>,
     pub profile_colors: Option<Vec<(String, String)>>,
     pub timeouts: Option<Timeouts>,
@@ -117,6 +118,7 @@ pub struct RunOptions {
     pub cwd: Option<String>,
     pub env: Option<Vec<(String, String)>>,
     pub wait_ready: Option<bool>,
+    pub restart: Option<bool>,
     pub profile_scrollback: Option<f64>,
     pub profile_colors: Option<Vec<(String, String)>>,
     pub timeouts: Option<Timeouts>,
@@ -564,6 +566,7 @@ fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptio
         cwd: value.cwd,
         env: value.env.unwrap_or_default(),
         wait_ready: value.wait_ready,
+        restart: value.restart.unwrap_or(false),
         timeouts: core_timeouts(value.timeouts)?,
     })
 }
@@ -592,6 +595,7 @@ fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, TuiTest
         cwd: value.cwd,
         env: value.env.unwrap_or_default(),
         wait_ready: value.wait_ready,
+        restart: value.restart.unwrap_or(false),
         timeouts: core_timeouts(value.timeouts)?,
     })
 }

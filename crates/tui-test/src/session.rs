@@ -408,6 +408,42 @@ impl Session {
             .pid()
     }
 
+    pub fn is_alive(&self) -> bool {
+        if self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .exited
+            .is_some()
+        {
+            return false;
+        }
+
+        let exit_code = self
+            .pty
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .try_wait();
+        let Some(exit_code) = exit_code else {
+            return true;
+        };
+
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.exited.get_or_insert(exit_code);
+        false
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tracker
+            .is_ready()
+    }
+
     pub fn flush_recording(&self) -> Result<(), crate::api::TuiTestError> {
         self.recorder.flush().map_err(capture_error)
     }

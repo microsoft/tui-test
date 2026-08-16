@@ -54,9 +54,10 @@ All derive from `TuiTestError` and carry `kind` and `exitCode`. `waitX` and `exp
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 
 `open` and `run` accept
-`{ backend, cols, rows, cwd, env, waitReady, retries, profile, timeouts }`.
-The constructor also accepts `backend` and `profile` as defaults for later
-opens and runs. Backend values are `"alacritty"` (default) and `"ghostty"`:
+`{ backend, cols, rows, cwd, env, waitReady, restart, retries, profile, timeouts }`.
+They reuse a live named session unless `restart: true` is passed. The
+constructor also accepts `backend` and `profile` as defaults for later opens
+and runs. Backend values are `"alacritty"` (default) and `"ghostty"`:
 
 ```js
 const terminal = new TuiTest("work", { backend: "ghostty" });

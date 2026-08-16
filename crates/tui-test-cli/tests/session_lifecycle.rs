@@ -238,6 +238,33 @@ fn close_is_idempotent() {
 }
 
 #[test]
+fn open_reuses_a_live_child_unless_restart_is_requested() {
+    let sandbox = Sandbox::new("open-reuse");
+    let first = sandbox.ok(&["--json", "open"]);
+    let first: serde_json::Value = serde_json::from_str(&first).expect("first open json");
+    let first_pid = first["data"]["shell_pid"]
+        .as_u64()
+        .expect("first open reports a child pid");
+
+    let reused = sandbox.ok(&["--json", "open"]);
+    let reused: serde_json::Value = serde_json::from_str(&reused).expect("reused open json");
+    assert_eq!(
+        reused["data"]["shell_pid"].as_u64(),
+        Some(first_pid),
+        "a second open should attach to the live child"
+    );
+
+    let restarted = sandbox.ok(&["--json", "open", "--restart"]);
+    let restarted: serde_json::Value =
+        serde_json::from_str(&restarted).expect("restarted open json");
+    assert_ne!(
+        restarted["data"]["shell_pid"].as_u64(),
+        Some(first_pid),
+        "--restart should replace the live child"
+    );
+}
+
+#[test]
 fn wait_ready_succeeds_on_an_open_shell() {
     let sandbox = Sandbox::new("ready");
     sandbox.ok(&["open"]);

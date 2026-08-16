@@ -174,6 +174,9 @@ pub enum Command {
         /// Return as soon as the shell is spawned, without waiting for a prompt.
         #[arg(long, conflicts_with = "wait_ready")]
         no_wait_ready: bool,
+        /// Replace a live session instead of reusing it.
+        #[arg(long, visible_alias = "force")]
+        restart: bool,
         #[command(flatten)]
         profile: ProfileArgs,
         #[command(flatten)]
@@ -208,6 +211,9 @@ pub enum Command {
         /// Return as soon as the program is spawned (the default).
         #[arg(long, conflicts_with = "wait_ready")]
         no_wait_ready: bool,
+        /// Replace a live session instead of reusing it.
+        #[arg(long, visible_alias = "force")]
+        restart: bool,
         #[command(flatten)]
         profile: ProfileArgs,
         #[command(flatten)]
@@ -475,6 +481,31 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn open_and_run_accept_restart_and_force() {
+        for args in [
+            vec!["tui-test", "open", "--restart"],
+            vec!["tui-test", "open", "--force"],
+        ] {
+            let cli = Cli::try_parse_from(args).expect("parse open restart");
+            assert!(matches!(
+                cli.command,
+                Some(Command::Open { restart: true, .. })
+            ));
+        }
+
+        for args in [
+            vec!["tui-test", "run", "--restart", "vim"],
+            vec!["tui-test", "run", "--force", "vim"],
+        ] {
+            let cli = Cli::try_parse_from(args).expect("parse run restart");
+            assert!(matches!(
+                cli.command,
+                Some(Command::Run { restart: true, .. })
+            ));
+        }
     }
 
     #[test]

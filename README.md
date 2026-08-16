@@ -202,8 +202,8 @@ prints a session's effective timeouts.
 
 | Command                                                      | Description                                 |
 | ------------------------------------------------------------ | ------------------------------------------- |
-| `open [--shell S] [--backend B] [--cols N --rows N] [--cwd D] [--env K=V] [--config F] [--profile P] [--timeout-<class> MS]` | Spawn a shell session.                      |
-| `run [--backend B] [--config F] [--profile P] <program> [args...]` | Spawn a session running a program directly. |
+| `open [--shell S] [--backend B] [--cols N --rows N] [--cwd D] [--env K=V] [--config F] [--profile P] [--timeout-<class> MS] [--restart]` | Spawn or reuse a shell session.             |
+| `run [--backend B] [--config F] [--profile P] [--restart] <program> [args...]` | Spawn or reuse a session running a program. |
 | `sessions`                                                   | List active sessions.                       |
 | `close [--all]`                                              | Close the current session (or all).         |
 | `daemon start` / `daemon status` / `daemon stop --session N \| --all` | Start, inspect, or stop a session's daemon. |
@@ -215,6 +215,9 @@ Each session has its own daemon, so `daemon stop` needs `--session <name>` or
 `--wait-ready` / `--no-wait-ready`. An explicit `--wait-ready` fails (exit 1) if
 no prompt appears; `open`'s implicit wait reports `ready` in its payload either
 way.
+
+Calling `open` or `run` for a session that already has a live child reuses that
+child. Pass `--restart` (or its `--force` alias) to replace it explicitly.
 
 ### Terminal backends
 

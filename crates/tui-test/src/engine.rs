@@ -53,7 +53,7 @@ pub struct LiveFrame {
 fn operation_summary(operation: &Operation) -> String {
     match operation {
         Operation::Open(options) => format!(
-            "Open {{ backend: {}, shell: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            "Open {{ backend: {}, shell: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, restart: {}, timeouts: {:?}, env: <{} vars> }}",
             options.backend.as_str(),
             options.shell,
             options.profile.scrollback,
@@ -61,11 +61,12 @@ fn operation_summary(operation: &Operation) -> String {
             options.rows,
             options.cwd,
             options.wait_ready,
+            options.restart,
             options.timeouts,
             options.env.len()
         ),
         Operation::Run(options) => format!(
-            "Run {{ backend: {}, program: {:?}, args: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            "Run {{ backend: {}, program: {:?}, args: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, restart: {}, timeouts: {:?}, env: <{} vars> }}",
             options.backend.as_str(),
             options.program,
             options.args,
@@ -74,6 +75,7 @@ fn operation_summary(operation: &Operation) -> String {
             options.rows,
             options.cwd,
             options.wait_ready,
+            options.restart,
             options.timeouts,
             options.env.len()
         ),
@@ -147,6 +149,7 @@ impl Engine {
             options.cwd,
             options.env,
             options.wait_ready,
+            options.restart,
             options.timeouts,
         )
     }
@@ -165,6 +168,7 @@ impl Engine {
             options.cwd,
             options.env,
             options.wait_ready,
+            options.restart,
             options.timeouts,
         )
     }
@@ -181,8 +185,21 @@ impl Engine {
         cwd: Option<String>,
         env: Vec<(String, String)>,
         wait_ready: Option<bool>,
+        restart: bool,
         timeouts: crate::api::Timeouts,
     ) -> Result<OpenResult, TuiTestError> {
+        let mut current = self.lock_session();
+        if let Some(previous) = current.as_ref() {
+            if previous.is_alive() && !restart {
+                return Ok(OpenResult {
+                    shell_pid: previous.pid(),
+                    session: self.name.clone(),
+                    ready: previous.is_ready(),
+                    recording: self.recording_path.to_string_lossy().into_owned(),
+                });
+            }
+        }
+
         *self
             .live
             .lock()
@@ -191,9 +208,10 @@ impl Engine {
             .interrupt
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        if let Some(previous) = self.lock_session().take() {
+        if let Some(previous) = current.take() {
             previous.kill();
         }
+        drop(current);
         let session = TerminalSession::open(
             shell,
             program.clone(),
