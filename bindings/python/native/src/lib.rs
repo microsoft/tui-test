@@ -10,7 +10,8 @@ use tui_test::shell::Shell;
 use tui_test::{
     Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, KeyAction, MouseAction, OpenOptions,
     OpenResult, Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions,
-    ScreenshotResult, Size, SnapshotResult, State, Timeouts, TuiTestError,
+    ScreenshotResult, Size, SnapshotResult, State, TextMatch, TextSelector, TextStyle, Timeouts,
+    TuiTestError,
 };
 
 pyo3::create_exception!(
@@ -228,6 +229,23 @@ impl NativeSession {
             py,
             move || execute_text(&name, Operation::Text { full }),
             string_to_py,
+        )
+    }
+
+    fn find_text<'py>(
+        &self,
+        py: Python<'py>,
+        selector_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let selector: TextSelector = serde_json::from_str(&selector_json)
+                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                execute_matches(&name, Operation::FindText { selector })
+            },
+            matches_to_py,
         )
     }
 
@@ -909,6 +927,35 @@ impl NativeSession {
         )
     }
 
+    #[pyo3(signature = (request_json, timeout_ms))]
+    fn expect_text_selector<'py>(
+        &self,
+        py: Python<'py>,
+        request_json: String,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let (selector, style, not): (TextSelector, TextStyle, bool) =
+                    serde_json::from_str(&request_json)
+                        .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                execute_unit(
+                    &name,
+                    Operation::ExpectTextSelector {
+                        selector,
+                        not,
+                        style,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
     #[pyo3(signature = (code, timeout_ms))]
     fn expect_exit_code<'py>(
         &self,
@@ -1381,6 +1428,13 @@ fn execute_cells(name: &str, operation: Operation) -> Result<Vec<Cell>, TuiTestE
     }
 }
 
+fn execute_matches(name: &str, operation: Operation) -> Result<Vec<TextMatch>, TuiTestError> {
+    match global_registry().execute(name, operation)? {
+        OperationResult::Matches(value) => Ok(value),
+        _ => Err(unexpected_result("text matches")),
+    }
+}
+
 fn execute_command(name: &str, operation: Operation) -> Result<Option<String>, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Command(value) => Ok(value),
@@ -1585,6 +1639,33 @@ fn cells_to_py(py: Python<'_>, cells: Vec<Cell>) -> PyResult<Py<PyAny>> {
     let values = PyList::empty(py);
     for cell in cells {
         values.append(cell_to_py(py, cell)?)?;
+    }
+    Ok(values.into_any().unbind())
+}
+
+fn matches_to_py(py: Python<'_>, matches: Vec<TextMatch>) -> PyResult<Py<PyAny>> {
+    let values = PyList::empty(py);
+    for matched in matches {
+        let value = PyDict::new(py);
+        value.set_item("text", matched.text)?;
+        let start = PyDict::new(py);
+        start.set_item("row", matched.start.row)?;
+        start.set_item("column", matched.start.column)?;
+        value.set_item("start", start)?;
+        let end = PyDict::new(py);
+        end.set_item("row", matched.end.row)?;
+        end.set_item("column", matched.end.column)?;
+        value.set_item("end", end)?;
+        let spans = PyList::empty(py);
+        for span in matched.spans {
+            let item = PyDict::new(py);
+            item.set_item("row", span.row)?;
+            item.set_item("start", span.start)?;
+            item.set_item("end", span.end)?;
+            spans.append(item)?;
+        }
+        value.set_item("spans", spans)?;
+        values.append(value)?;
     }
     Ok(values.into_any().unbind())
 }

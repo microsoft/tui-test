@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import time
+from dataclasses import asdict
 from typing import (
     Any,
     Awaitable,
@@ -27,7 +29,19 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Backend, BellEvent, Cell, Profile, RecordingFormat, State, Timeouts
+from .types import (
+    Backend,
+    BellEvent,
+    Cell,
+    Profile,
+    RecordingFormat,
+    State,
+    TextAnchor,
+    TextMatch,
+    TextOccurrence,
+    TextStyle,
+    Timeouts,
+)
 
 _TERMINAL_MARKER = "Terminal content:\n"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
@@ -77,6 +91,45 @@ def _profile_values(
     normalized = cfg.normalize_profile(profile) or {}
     colors = normalized.get("colors") or {}
     return normalized.get("scrollback"), list(colors.items())
+
+
+def _occurrence_value(value: TextOccurrence) -> object:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return {"nth": value}
+    return value
+
+
+def _anchor_value(anchor: Optional[TextAnchor]) -> Optional[Dict[str, object]]:
+    if anchor is None:
+        return None
+    return {
+        "text": anchor.text,
+        "regex": anchor.regex,
+        "occurrence": _occurrence_value(anchor.occurrence),
+    }
+
+
+def _selector_value(
+    text: str,
+    *,
+    regex: bool,
+    full: bool,
+    whitespace: str,
+    after: Optional[TextAnchor],
+    before: Optional[TextAnchor],
+    occurrence: TextOccurrence,
+) -> Dict[str, object]:
+    return {
+        "text": text,
+        "regex": regex,
+        "full": full,
+        "whitespace": whitespace,
+        "scope": {
+            "after": _anchor_value(after),
+            "before": _anchor_value(before),
+        },
+        "occurrence": _occurrence_value(occurrence),
+    }
 
 
 def _extract_terminal_text(message: Optional[str]) -> Optional[str]:
@@ -355,6 +408,31 @@ class TuiTest:
     async def text(self, *, full: bool = False) -> str:
         return await self._await(self._native.text(full))
 
+    async def find_text(
+        self,
+        text: str,
+        *,
+        regex: bool = False,
+        full: bool = False,
+        whitespace: str = "exact",
+        after: Optional[TextAnchor] = None,
+        before: Optional[TextAnchor] = None,
+        occurrence: TextOccurrence = "any",
+    ) -> List[TextMatch]:
+        selector = _selector_value(
+            text,
+            regex=regex,
+            full=full,
+            whitespace=whitespace,
+            after=after,
+            before=before,
+            occurrence=occurrence,
+        )
+        values = await self._guarded(
+            "find_text", self._native.find_text(json.dumps(selector))
+        )
+        return [TextMatch.from_dict(value) for value in values]
+
     async def _packed_screen(
         self, *, full: bool = False
     ) -> Tuple[memoryview, int, int]:
@@ -512,21 +590,38 @@ class TuiTest:
         regex: bool = False,
         full: bool = False,
         strict: bool = True,
+        whitespace: str = "exact",
+        after: Optional[TextAnchor] = None,
+        before: Optional[TextAnchor] = None,
+        occurrence: Optional[TextOccurrence] = None,
         not_: bool = False,
         fg: Optional[str] = None,
         bg: Optional[str] = None,
+        style: Optional[TextStyle] = None,
         timeout: Optional[int] = None,
     ) -> None:
+        selector = _selector_value(
+            text,
+            regex=regex,
+            full=full,
+            whitespace=whitespace,
+            after=after,
+            before=before,
+            occurrence=(
+                occurrence
+                if occurrence is not None
+                else ("unique" if strict else "first")
+            ),
+        )
+        style_value = asdict(style or TextStyle())
+        if style_value["foreground"] is None:
+            style_value["foreground"] = fg
+        if style_value["background"] is None:
+            style_value["background"] = bg
         await self._guarded(
             "expect_text",
-            self._native.expect_text(
-                text,
-                regex,
-                full,
-                strict,
-                not_,
-                fg,
-                bg,
+            self._native.expect_text_selector(
+                json.dumps([selector, style_value, not_]),
                 self._timeout("text", timeout),
             ),
         )
