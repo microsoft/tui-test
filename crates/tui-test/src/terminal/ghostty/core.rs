@@ -1,8 +1,4 @@
 //! Single-threaded Ghostty terminal and neutral-grid translation.
-#![allow(
-    dead_code,
-    reason = "used by the thread-safe Emulator adapter in the next stack layer"
-)]
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -345,11 +341,6 @@ impl GhosttyCore {
 
     pub(super) fn size(&self) -> Result<(u16, u16)> {
         Ok((self.terminal.cols()?, self.terminal.rows()?))
-    }
-
-    pub(super) fn title(&self) -> Result<Option<String>> {
-        let title = self.terminal.title()?.to_string();
-        Ok((!title.is_empty()).then_some(title))
     }
 
     pub(super) fn color(&self, slot: ColorSlot) -> Result<Rgb> {
