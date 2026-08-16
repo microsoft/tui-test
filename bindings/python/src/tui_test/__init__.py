@@ -11,7 +11,19 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Cell, Colors, Profile, State, Timeouts
+from .types import (
+    Cell,
+    Colors,
+    Profile,
+    State,
+    TextAnchor,
+    TextMatch,
+    TextOccurrence,
+    TextPosition,
+    TextSpan,
+    TextStyle,
+    Timeouts,
+)
 
 __all__ = [
     "TuiTest",
@@ -29,6 +41,12 @@ __all__ = [
     "Colors",
     "Profile",
     "State",
+    "TextAnchor",
+    "TextMatch",
+    "TextOccurrence",
+    "TextPosition",
+    "TextSpan",
+    "TextStyle",
     "Timeouts",
     "__version__",
 ]

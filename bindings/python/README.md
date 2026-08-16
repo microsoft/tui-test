@@ -54,7 +54,13 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 ## API
 
-`TuiTest(session="default", *, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title`, `screenshot`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
+`TuiTest(session="default", *, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `find_text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title`, `screenshot`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_snapshot`, `close`, and `close_quiet`.
+
+`find_text()` returns typed zero-based row/column spans and supports normalized
+whitespace, `after` / `before` anchors, and any/unique/first/last/nth
+occurrences. `expect_text()` accepts the same selector options plus `TextStyle`
+checks for colors, bold, dim, italic, underline, inverse, hidden,
+strikethrough, and blink.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 

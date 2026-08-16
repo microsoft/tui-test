@@ -15,6 +15,8 @@ from tui_test import (
     NoSessionError,
     Profile,
     TuiTest,
+    TextAnchor,
+    TextStyle,
     Timeouts,
     UsageError,
     get_recording,
@@ -55,6 +57,35 @@ class IntegrationTests(unittest.TestCase):
                     await su.open(shell="not-a-real-shell")
             finally:
                 await su.close_quiet()
+
+        run(scenario())
+
+    def test_text_locators_scope_matches_and_assert_styles(self):
+        async def scenario():
+            script = (
+                "import sys,time; "
+                "sys.stdout.write('Settings\\n  Save\\n\\x1b[1mWarning\\x1b[0m\\n'); "
+                "sys.stdout.flush(); time.sleep(30)"
+            )
+            async with self._client() as su:
+                await su.run(sys.executable, "-c", script)
+                await su.wait_text("Warning", timeout=2000)
+                matches = await su.find_text(
+                    "Save",
+                    whitespace="normalize",
+                    after=TextAnchor("Settings"),
+                )
+                self.assertEqual(len(matches), 1)
+                self.assertEqual(matches[0].start.row, 1)
+                self.assertEqual(matches[0].start.column, 2)
+                await su.expect_text("Warning", style=TextStyle(bold=True))
+                with self.assertRaises(ExpectationError) as raised:
+                    await su.expect_text(
+                        "Warning",
+                        style=TextStyle(bold=False),
+                        timeout=20,
+                    )
+                self.assertIn("expected bold=false", str(raised.exception))
 
         run(scenario())
 

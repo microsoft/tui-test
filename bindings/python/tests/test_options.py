@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 import unittest
 
@@ -6,7 +7,7 @@ from tui_test import _config as cfg
 from tui_test import _ephemeral as ephemeral
 from tui_test import client
 from tui_test.errors import ExpectationError, TerminalArtifact
-from tui_test.types import Colors, Profile, Timeouts
+from tui_test.types import Colors, Profile, TextAnchor, TextStyle, Timeouts
 
 
 def run(coro):
@@ -301,6 +302,40 @@ class MessagePrefixTests(unittest.TestCase):
             self.assertTrue(
                 self._prefix_for(name, *args).startswith(name + ": ")
             )
+
+
+class TextLocatorTests(unittest.TestCase):
+    def test_selector_and_style_options_use_typed_native_methods(self):
+        terminal = _CapturingClient("s")
+        terminal.fake.reply = []
+        run(
+            terminal.find_text(
+                "Save",
+                whitespace="normalize",
+                after=TextAnchor("Settings", occurrence="last"),
+                occurrence=1,
+            )
+        )
+        name, args = terminal.fake.calls[0]
+        self.assertEqual(name, "find_text")
+        selector = json.loads(args[0])
+        self.assertEqual(selector["scope"]["after"]["text"], "Settings")
+        self.assertEqual(selector["occurrence"], {"nth": 1})
+
+        run(
+            terminal.expect_text(
+                "Warning",
+                occurrence="first",
+                style=TextStyle(bold=True, underline_style="curly"),
+            )
+        )
+        name, args = terminal.fake.calls[1]
+        self.assertEqual(name, "expect_text_selector")
+        selector, style, not_ = json.loads(args[0])
+        self.assertEqual(selector["occurrence"], "first")
+        self.assertTrue(style["bold"])
+        self.assertEqual(style["underline_style"], "curly")
+        self.assertFalse(not_)
 
 
 class ArtifactCaptureTests(unittest.TestCase):
