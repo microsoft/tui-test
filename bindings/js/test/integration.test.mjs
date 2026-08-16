@@ -23,6 +23,10 @@ const evalArgs =
   typeof globalThis.Deno === "undefined"
     ? ["-e", "console.log('ready'); setInterval(() => {}, 1000)"]
     : ["eval", "console.log('ready'); setInterval(() => {}, 1000)"];
+const nonzeroExitArgs =
+  typeof globalThis.Deno === "undefined"
+    ? ["-e", "process.exit(7)"]
+    : ["eval", "Deno.exit(7)"];
 
 test("echo roundtrip drives a real session", async () => {
   await withTerminal({ shell }, async (su) => {
@@ -130,6 +134,19 @@ test("a blocking native wait runs off the JS event loop", async () => {
         `blocking wait, got ${ticks}; the event loop appears to have stalled`,
     );
   });
+});
+
+test("repeated direct runtime exits retain their nonzero status", async () => {
+  for (let index = 0; index < 20; index += 1) {
+    const su = TuiTest.ephemeral(`direct-nonzero-${index}`);
+    try {
+      await su.run(process.execPath, nonzeroExitArgs);
+      await su.waitExit({ timeout: 5000 });
+      assert.equal((await su.state()).exited, 7);
+    } finally {
+      await su.closeQuiet();
+    }
+  }
 });
 
 test("concurrent waits do not starve filesystem work", async () => {

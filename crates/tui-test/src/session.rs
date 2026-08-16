@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::logger::Logger;
 use crate::profile::Profile;
@@ -24,6 +24,7 @@ pub struct TermState {
     pub last_change: Instant,
     pub awaiting_start: Option<u64>,
     pub exited: Option<i32>,
+    pub exit_error: Option<String>,
 }
 
 pub struct Session {
@@ -38,6 +39,7 @@ pub struct Session {
     recorder: Arc<Mutex<Recorder>>,
     logger: Arc<Logger>,
     _reader: JoinHandle<()>,
+    _process_watcher: JoinHandle<()>,
 }
 
 impl Session {
@@ -85,6 +87,7 @@ impl Session {
             last_change: Instant::now(),
             awaiting_start: None,
             exited: None,
+            exit_error: None,
         }));
         let pty = Arc::new(Mutex::new(pty));
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -105,12 +108,19 @@ impl Session {
         let reader_logger = logger.clone();
         let reader_recorder = recorder.clone();
         let mut reader = reader;
-        let handle = std::thread::spawn(move || {
+        let reader_handle = std::thread::spawn(move || {
             use std::io::Read;
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
+                    Ok(0) => {
+                        reader_logger.event("pty stream reached EOF");
+                        break;
+                    }
+                    Err(error) => {
+                        reader_logger.event(&format!("pty read failed error={error}"));
+                        break;
+                    }
                     Ok(n) => {
                         reader_logger.read(&buf[..n]);
                         reader_recorder
@@ -135,13 +145,42 @@ impl Session {
                     }
                 }
             }
-            let code = reader_pty.lock().ok().and_then(|mut p| p.try_wait());
-            reader_logger.event(&format!("pty exited code={:?}", code));
-            let mut st = reader_state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            st.exited = Some(code.unwrap_or(0));
-            st.last_change = Instant::now();
+        });
+
+        let watcher_state = state.clone();
+        let watcher_pty = pty.clone();
+        let watcher_logger = logger.clone();
+        let process_watcher = std::thread::spawn(move || loop {
+            let status = {
+                let mut pty = watcher_pty
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                pty.try_wait()
+            };
+            match status {
+                Ok(Some(code)) => {
+                    watcher_logger.event(&format!("process exited code={code}"));
+                    let mut st = watcher_state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    st.exited = Some(code);
+                    st.last_change = Instant::now();
+                    break;
+                }
+                Ok(None) => {
+                    std::thread::sleep(Duration::from_millis(crate::config::POLL_DELAY_MS));
+                }
+                Err(error) => {
+                    let error = error.to_string();
+                    watcher_logger.event(&format!("process wait failed error={error}"));
+                    let mut st = watcher_state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    st.exit_error = Some(error);
+                    st.last_change = Instant::now();
+                    break;
+                }
+            }
         });
 
         logger.event(&format!(
@@ -159,7 +198,8 @@ impl Session {
             cancelled,
             recorder,
             logger,
-            _reader: handle,
+            _reader: reader_handle,
+            _process_watcher: process_watcher,
         })
     }
 

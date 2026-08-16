@@ -1097,23 +1097,29 @@ fn stall_reason(session: &TerminalSession) -> String {
 }
 
 fn wait_exit(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
-    if poll_until(
-        || {
-            session
+    let start = Instant::now();
+    loop {
+        let (exited, exit_error) = {
+            let state = session
                 .state
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .exited
-                .is_some()
-                || session.cancelled.load(std::sync::atomic::Ordering::Acquire)
-        },
-        timeout_ms,
-    ) {
-        Ok(())
-    } else {
-        Err(TuiTestError::assertion(
-            "wait exit: session still running at timeout",
-        ))
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (state.exited.is_some(), state.exit_error.clone())
+        };
+        if exited || session.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(());
+        }
+        if let Some(error) = exit_error {
+            return Err(TuiTestError::internal(format!(
+                "wait exit: failed to query process status: {error}"
+            )));
+        }
+        if start.elapsed() >= Duration::from_millis(timeout_ms) {
+            return Err(TuiTestError::assertion(
+                "wait exit: session still running at timeout",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
     }
 }
 
