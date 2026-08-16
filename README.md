@@ -188,8 +188,8 @@ prints a session's effective timeouts.
 
 | Command                                                      | Description                                 |
 | ------------------------------------------------------------ | ------------------------------------------- |
-| `open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V] [--config F] [--profile P] [--timeout-<class> MS]` | Spawn a shell session.                      |
-| `run [--config F] [--profile P] <program> [args...]`         | Spawn a session running a program directly. |
+| `open [--shell S] [--backend B] [--cols N --rows N] [--cwd D] [--env K=V] [--config F] [--profile P] [--timeout-<class> MS]` | Spawn a shell session.                      |
+| `run [--backend B] [--config F] [--profile P] <program> [args...]` | Spawn a session running a program directly. |
 | `sessions`                                                   | List active sessions.                       |
 | `close [--all]`                                              | Close the current session (or all).         |
 | `daemon start` / `daemon status` / `daemon stop --session N \| --all` | Start, inspect, or stop a session's daemon. |
@@ -201,6 +201,45 @@ Each session has its own daemon, so `daemon stop` needs `--session <name>` or
 `--wait-ready` / `--no-wait-ready`. An explicit `--wait-ready` fails (exit 1) if
 no prompt appears; `open`'s implicit wait reports `ready` in its payload either
 way.
+
+### Terminal backends
+
+Choose an emulator per session with `--backend alacritty|ghostty`. Alacritty
+remains the default; `ghostty` uses
+[`libghostty-vt`](https://github.com/Uzaaft/libghostty-rs).
+
+```sh
+tui-test open --backend ghostty
+tui-test run --backend ghostty vim file.txt
+```
+
+Both backends run the same conformance suite and feed the same renderer,
+assertions, and snapshots. Shell semantic-prompt tracking stays on the raw PTY
+byte stream, so command, exit-code, and cwd behavior is backend-independent.
+Ghostty also preserves SGR blink; Alacritty parses blink but cannot report it.
+
+The CLI and published Python/Node native packages include both backends.
+Windows ARM64 artifacts are not currently published because libghostty's
+upstream Zig build does not support that target.
+
+Rust users opt in explicitly:
+
+```sh
+cargo add tui-test-rs --features libghostty
+```
+
+```rust
+use tui_test::{Backend, OpenOptions};
+
+let options = OpenOptions {
+    backend: Backend::Ghostty,
+    ..OpenOptions::default()
+};
+```
+
+Building the `libghostty` feature from source requires Zig 0.16 on `PATH`;
+the dependency builds a pinned Ghostty revision. The default Rust feature set
+continues to build only the Alacritty backend and does not require Zig.
 
 ### Inspection
 
@@ -389,7 +428,7 @@ promises.
 |                                      | tui-test                                        | [tui-use](https://github.com/onesuper/tui-use) | [terminal-use](https://github.com/flipbit03/terminal-use) |
 | ------------------------------------ | ------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------------- |
 | Language                             | Rust                                             | TypeScript/Node                                | Rust                                                      |
-| Emulator                             | alacritty                                        | xterm (headless)                               | alacritty                                                 |
+| Emulator                             | alacritty or Ghostty, per session                | xterm (headless)                               | alacritty                                                 |
 | Shell command tracking               | ✅ command boundaries, exit codes, cwd           | ❌                                             | ❌                                                        |
 | Testing / snapshots                  | ✅ `expect` text / output / exit-code / snapshot | ❌                                             | ❌                                                        |
 | Color & per-cell attributes          | ✅ fg/bg, ANSI-256/hex/rgb, `cells`              | ❌ plain text (+ highlights)                   | via PNG                                                   |
