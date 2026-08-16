@@ -29,6 +29,7 @@ impl Timeouts {
 
 #[derive(Debug, Clone)]
 pub struct OpenOptions {
+    pub backend: crate::terminal::backend::Backend,
     pub shell: Option<Shell>,
     /// Terminal settings, already resolved from the config file by the
     /// client. The daemon never reads that file: it is long-lived and shared,
@@ -46,6 +47,7 @@ pub struct OpenOptions {
 impl Default for OpenOptions {
     fn default() -> Self {
         Self {
+            backend: crate::terminal::backend::Backend::default(),
             shell: None,
             profile: crate::profile::Profile::default(),
             cols: crate::config::DEFAULT_COLS,
@@ -60,6 +62,7 @@ impl Default for OpenOptions {
 
 #[derive(Debug, Clone)]
 pub struct RunOptions {
+    pub backend: crate::terminal::backend::Backend,
     pub program: String,
     pub args: Vec<String>,
     /// Terminal settings, already resolved from the config file by the

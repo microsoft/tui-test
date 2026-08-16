@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use tui_test::{
-    Engine, OpenOptions, Operation, OperationResult, RunOptions, ScreenshotResult, TuiTestError,
+    Backend, Engine, OpenOptions, Operation, OperationResult, RunOptions, ScreenshotResult,
+    TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
@@ -14,6 +15,8 @@ pub enum Request {
     Open {
         shell: Option<tui_test::shell::Shell>,
         program: Option<Vec<String>>,
+        #[serde(default)]
+        backend: Backend,
         /// Terminal settings, already resolved from the config file by the
         /// client. The daemon never reads that file: it is long-lived and
         /// shared, so it has no single working directory to resolve a
@@ -154,6 +157,7 @@ impl Request {
             Request::Open {
                 shell,
                 program,
+                backend,
                 profile,
                 cols,
                 rows,
@@ -168,6 +172,7 @@ impl Request {
                         .next()
                         .ok_or_else(|| TuiTestError::usage("empty program"))?;
                     Ok(Operation::Run(RunOptions {
+                        backend,
                         profile,
                         program: executable,
                         args: parts.collect(),
@@ -180,6 +185,7 @@ impl Request {
                     }))
                 } else {
                     Ok(Operation::Open(OpenOptions {
+                        backend,
                         profile,
                         shell,
                         cols,
@@ -393,6 +399,7 @@ mod tests {
         Request::Open {
             shell: None,
             program: None,
+            backend: Backend::default(),
             profile: Default::default(),
             cols: 80,
             rows: 30,
@@ -411,14 +418,26 @@ mod tests {
         match request {
             Request::Open {
                 wait_ready,
+                backend,
                 cols,
                 timeouts,
                 ..
             } => {
                 assert_eq!(wait_ready, None);
+                assert_eq!(backend, Backend::Alacritty);
                 assert_eq!(cols, 80);
                 assert_eq!(timeouts, Timeouts::default());
             }
+            other => panic!("expected Open, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_round_trips_a_requested_backend() {
+        let raw = r#"{"kind":"open","shell":null,"program":null,"backend":"ghostty",
+                      "cols":80,"rows":30,"cwd":null,"env":[]}"#;
+        match serde_json::from_str::<Request>(raw).expect("deserialize open") {
+            Request::Open { backend, .. } => assert_eq!(backend, Backend::Ghostty),
             other => panic!("expected Open, got {other:?}"),
         }
     }

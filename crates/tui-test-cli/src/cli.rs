@@ -2,7 +2,24 @@ use clap::{Args, Parser, Subcommand};
 
 use tui_test::config::{DEFAULT_COLS, DEFAULT_ROWS};
 use tui_test::shell::Shell;
-use tui_test::Timeouts;
+use tui_test::{Backend, Timeouts};
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub enum BackendArg {
+    Alacritty,
+    #[clap(alias = "libghostty")]
+    Ghostty,
+}
+
+impl From<BackendArg> for Backend {
+    fn from(backend: BackendArg) -> Self {
+        match backend {
+            BackendArg::Alacritty => Backend::Alacritty,
+            BackendArg::Ghostty => Backend::Ghostty,
+        }
+    }
+}
 
 #[derive(Clone, Copy, clap::ValueEnum)]
 #[clap(rename_all = "lowercase")]
@@ -116,6 +133,9 @@ pub enum Command {
         /// Shell to launch (defaults to the platform shell).
         #[arg(long, value_enum)]
         shell: Option<ShellArg>,
+        /// Terminal emulator to use (defaults to alacritty).
+        #[arg(long, value_enum)]
+        backend: Option<BackendArg>,
         /// Terminal width in columns.
         #[arg(long, default_value_t = DEFAULT_COLS)]
         cols: u16,
@@ -147,6 +167,9 @@ pub enum Command {
         /// Arguments passed to the program.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+        /// Terminal emulator to use (defaults to alacritty).
+        #[arg(long, value_enum)]
+        backend: Option<BackendArg>,
         /// Terminal width in columns.
         #[arg(long, default_value_t = DEFAULT_COLS)]
         cols: u16,
@@ -397,6 +420,22 @@ mod tests {
                 panic!("expected Open with a shell");
             };
             assert_eq!(Shell::from(shell), expected);
+        }
+    }
+
+    #[test]
+    fn open_backend_values_map_to_library_backends() {
+        for value in ["ghostty", "libghostty"] {
+            let cli = Cli::try_parse_from(["tui-test", "open", "--backend", value])
+                .expect("parse backend");
+            let Some(Command::Open {
+                backend: Some(backend),
+                ..
+            }) = cli.command
+            else {
+                panic!("expected Open with a backend");
+            };
+            assert_eq!(Backend::from(backend), Backend::Ghostty);
         }
     }
 
