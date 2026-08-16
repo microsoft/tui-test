@@ -75,6 +75,61 @@ pub struct RunOptions {
     pub timeouts: Timeouts,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WhitespaceMode {
+    #[default]
+    Exact,
+    Normalize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchOccurrence {
+    Any,
+    #[default]
+    Unique,
+    First,
+    Last,
+    Nth(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextAnchor {
+    pub text: String,
+    #[serde(default)]
+    pub regex: bool,
+    #[serde(default)]
+    pub occurrence: MatchOccurrence,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextScope {
+    pub after: Option<TextAnchor>,
+    pub before: Option<TextAnchor>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextSelector {
+    pub text: String,
+    pub regex: bool,
+    pub full: bool,
+    pub whitespace: WhitespaceMode,
+    pub scope: TextScope,
+    pub occurrence: MatchOccurrence,
+}
+
+impl TextSelector {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Operation {
     Open(OpenOptions),
@@ -144,6 +199,9 @@ pub enum Operation {
     WaitReady {
         timeout_ms: Option<u64>,
     },
+    FindText {
+        selector: TextSelector,
+    },
     ExpectText {
         text: String,
         regex: bool,
@@ -189,6 +247,7 @@ pub enum OperationResult {
     Text(String),
     PackedScreen(PackedScreen),
     Cells(Vec<Cell>),
+    Matches(Vec<TextMatch>),
     Command(Option<String>),
     Output(Option<String>),
     ExitCode(Option<i32>),
@@ -289,6 +348,29 @@ pub struct Cursor {
 pub struct Size {
     pub cols: u16,
     pub rows: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TextPosition {
+    pub row: u16,
+    pub column: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TextSpan {
+    pub row: u16,
+    pub start: u16,
+    pub end: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TextMatch {
+    pub text: String,
+    pub start: TextPosition,
+    /// Exclusive end position.
+    pub end: TextPosition,
+    /// Per-row column ranges with exclusive ends.
+    pub spans: Vec<TextSpan>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crate::api::{
     Cell, CellColor, Cursor, EffectiveTimeouts, ErrorKind, OpenOptions, OpenResult, Operation,
     OperationResult, PackedScreen, RunOptions, RuntimeStatus, ScreenshotResult, Size,
-    SnapshotResult, TuiTestError,
+    SnapshotResult, TextAnchor, TextMatch, TextSelector, TuiTestError,
 };
 use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
@@ -609,6 +609,9 @@ fn dispatch(
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Ready)),
             )?;
             Ok(OperationResult::Unit)
+        }
+        Operation::FindText { selector } => {
+            Ok(OperationResult::Matches(find_text(session, &selector)?))
         }
         Operation::ExpectText {
             text,
@@ -1222,6 +1225,35 @@ fn expect_text(
             false,
         )))
     }
+}
+
+fn find_text(
+    session: &TerminalSession,
+    selector: &TextSelector,
+) -> Result<Vec<TextMatch>, TuiTestError> {
+    validate_selector(selector)?;
+    locator::locate(&grid(session, selector.full), selector)
+        .map(|matches| matches.into_iter().map(|matched| matched.value).collect())
+        .map_err(|error| TuiTestError::assertion(error.to_string()))
+}
+
+fn validate_selector(selector: &TextSelector) -> Result<(), TuiTestError> {
+    let validate = |text: &str, regex: bool| {
+        Pattern::new(text, regex)
+            .map(|_| ())
+            .map_err(|error| TuiTestError::usage(format!("invalid regex: {error}")))
+    };
+    validate(&selector.text, selector.regex)?;
+    for TextAnchor { text, regex, .. } in [
+        selector.scope.after.as_ref(),
+        selector.scope.before.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        validate(text, *regex)?;
+    }
+    Ok(())
 }
 
 fn check_colors(
