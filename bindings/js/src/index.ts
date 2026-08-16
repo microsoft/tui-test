@@ -2,6 +2,10 @@ export { TuiTest } from "./client.js";
 export type {
   ExpectTextOptions,
   MouseButtonOptions,
+  TextAnchor,
+  TextOccurrence,
+  TextSelectorOptions,
+  TextStyleExpectation,
   TitleOptions,
   WaitTextOptions,
 } from "./client.js";
@@ -30,6 +34,7 @@ export type {
   Size,
   SpawnOptions,
   State,
+  TextMatch,
   TerminalArtifact,
   Timeouts,
 } from "./types.js";

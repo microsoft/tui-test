@@ -8,6 +8,7 @@ export declare class NativeSession {
   close(): Promise<void>
   state(): Promise<State>
   text(full?: boolean | undefined | null): Promise<string>
+  findText(text: string, options?: TextSelectorOptions | undefined | null): Promise<Array<TextMatch>>
   packedScreen(full?: boolean | undefined | null): Promise<PackedScreen>
   cells(x: number, y: number, w?: number | undefined | null, h?: number | undefined | null): Promise<Array<Cell>>
   getCommand(): Promise<string | null>
@@ -86,9 +87,29 @@ export interface ExpectTextOptions {
   regex?: boolean
   full?: boolean
   strict?: boolean
+  whitespace?: string
+  occurrence?: string
+  nth?: number
+  afterText?: string
+  afterRegex?: boolean
+  afterOccurrence?: string
+  afterNth?: number
+  beforeText?: string
+  beforeRegex?: boolean
+  beforeOccurrence?: string
+  beforeNth?: number
   not?: boolean
   fg?: string
   bg?: string
+  bold?: boolean
+  dim?: boolean
+  italic?: boolean
+  underlineStyle?: string
+  underlineColor?: string
+  inverse?: boolean
+  hidden?: boolean
+  strikethrough?: boolean
+  blink?: boolean
   timeoutMs?: number
 }
 
@@ -200,6 +221,40 @@ export interface State {
   ready: boolean
   timeouts: EffectiveTimeouts
   text: string
+}
+
+export interface TextMatch {
+  text: string
+  start: TextPosition
+  end: TextPosition
+  spans: Array<TextSpan>
+}
+
+export interface TextPosition {
+  row: number
+  column: number
+}
+
+export interface TextSelectorOptions {
+  regex?: boolean
+  full?: boolean
+  whitespace?: string
+  occurrence?: string
+  nth?: number
+  afterText?: string
+  afterRegex?: boolean
+  afterOccurrence?: string
+  afterNth?: number
+  beforeText?: string
+  beforeRegex?: boolean
+  beforeOccurrence?: string
+  beforeNth?: number
+}
+
+export interface TextSpan {
+  row: number
+  start: number
+  end: number
 }
 
 export interface Timeouts {

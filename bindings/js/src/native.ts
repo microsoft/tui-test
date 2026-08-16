@@ -13,6 +13,8 @@ import type {
   Size,
   SnapshotOptions,
   State,
+  TextMatch,
+  TextSelectorOptions,
   Timeouts,
   TitleOptions,
   WaitTextOptions,
@@ -160,6 +162,10 @@ export class NativeRuntime {
 
   text(full = false): Promise<string> {
     return this.#call((session) => session.text(full));
+  }
+
+  findText(text: string, options?: TextSelectorOptions): Promise<TextMatch[]> {
+    return this.#call((session) => session.findText(text, options));
   }
 
   /**
@@ -340,6 +346,8 @@ export type {
   Size as NativeSize,
   SnapshotOptions as NativeSnapshotOptions,
   State as NativeState,
+  TextMatch as NativeTextMatch,
+  TextSelectorOptions as NativeTextSelectorOptions,
   Timeouts as NativeTimeouts,
   WaitTextOptions as NativeWaitTextOptions,
 };

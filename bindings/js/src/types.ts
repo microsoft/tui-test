@@ -5,6 +5,7 @@ import type {
   OpenResult as NativeOpenResult,
   Size as NativeSize,
   State as NativeState,
+  TextMatch as NativeTextMatch,
   Timeouts as NativeTimeouts,
 } from "../native/index.js";
 
@@ -52,6 +53,8 @@ export interface Cell extends Omit<NativeCell, "fg" | "bg" | "underline_style" |
 export type EffectiveTimeouts = NativeEffectiveTimeouts;
 
 export type State = NativeState;
+
+export type TextMatch = NativeTextMatch;
 
 export type OpenResult = NativeOpenResult;
 

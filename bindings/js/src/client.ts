@@ -15,6 +15,7 @@ import type { TimeoutClass } from "./config.js";
 import { uniqueSession } from "./ephemeral.js";
 import { ExpectationError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
+import type { NativeTextSelectorOptions } from "./native.js";
 import type {
   Cell,
   ClientOptions,
@@ -24,6 +25,7 @@ import type {
   Size,
   SpawnOptions,
   State,
+  TextMatch,
 } from "./types.js";
 
 export interface WaitTextOptions {
@@ -39,13 +41,50 @@ export interface TitleOptions {
   timeout?: number;
 }
 
-export interface ExpectTextOptions {
+export type TextOccurrence =
+  | "any"
+  | "unique"
+  | "first"
+  | "last"
+  | { nth: number };
+
+export interface TextAnchor {
+  text: string;
+  regex?: boolean;
+  occurrence?: TextOccurrence;
+}
+
+export interface TextSelectorOptions {
   regex?: boolean;
   full?: boolean;
+  whitespace?: "exact" | "normalize";
+  scope?: {
+    after?: TextAnchor;
+    before?: TextAnchor;
+  };
+  occurrence?: TextOccurrence;
+}
+
+export interface TextStyleExpectation {
+  foreground?: string;
+  background?: string;
+  bold?: boolean;
+  dim?: boolean;
+  italic?: boolean;
+  underlineStyle?: "none" | "single" | "double" | "curly" | "dotted" | "dashed";
+  underlineColor?: string;
+  inverse?: boolean;
+  hidden?: boolean;
+  strikethrough?: boolean;
+  blink?: boolean;
+}
+
+export interface ExpectTextOptions extends TextSelectorOptions {
   strict?: boolean;
   not?: boolean;
   fg?: string;
   bg?: string;
+  style?: TextStyleExpectation;
   timeout?: number;
 }
 
@@ -80,6 +119,36 @@ function withOperation(error: unknown, operation: string): unknown {
 
 function optional<T>(value: T | null | undefined): T | undefined {
   return value ?? undefined;
+}
+
+function occurrenceOptions(occurrence?: TextOccurrence): {
+  occurrence?: string;
+  nth?: number;
+} {
+  return typeof occurrence === "object"
+    ? { occurrence: "nth", nth: occurrence.nth }
+    : { occurrence };
+}
+
+function selectorOptions(opts: TextSelectorOptions): NativeTextSelectorOptions {
+  const after = opts.scope?.after;
+  const before = opts.scope?.before;
+  const afterOccurrence = occurrenceOptions(after?.occurrence);
+  const beforeOccurrence = occurrenceOptions(before?.occurrence);
+  return {
+    regex: opts.regex ?? false,
+    full: opts.full ?? false,
+    whitespace: opts.whitespace ?? "exact",
+    ...occurrenceOptions(opts.occurrence),
+    afterText: after?.text,
+    afterRegex: after?.regex,
+    afterOccurrence: afterOccurrence.occurrence,
+    afterNth: afterOccurrence.nth,
+    beforeText: before?.text,
+    beforeRegex: before?.regex,
+    beforeOccurrence: beforeOccurrence.occurrence,
+    beforeNth: beforeOccurrence.nth,
+  };
 }
 
 class Mouse {
@@ -359,6 +428,14 @@ export class TuiTest {
     );
   }
 
+  async findText(text: string, opts: TextSelectorOptions = {}): Promise<TextMatch[]> {
+    return this.#guard("findText", () =>
+      this.#runtime.findText(text, {
+        ...selectorOptions({ ...opts, occurrence: opts.occurrence ?? "any" }),
+      }),
+    );
+  }
+
   async waitIdle(opts: { timeout?: number } = {}): Promise<void> {
     await this.#guard("waitIdle", () =>
       this.#runtime.waitIdle(this.#timeout("idle", opts.timeout)),
@@ -394,14 +471,23 @@ export class TuiTest {
   }
 
   async expectText(text: string, opts: ExpectTextOptions = {}): Promise<void> {
+    const style = opts.style ?? {};
     await this.#guard("expectText", () =>
       this.#runtime.expectText(text, {
-        regex: opts.regex ?? false,
-        full: opts.full ?? false,
+        ...selectorOptions(opts),
         strict: opts.strict ?? true,
         not: opts.not ?? false,
-        fg: opts.fg,
-        bg: opts.bg,
+        fg: style.foreground ?? opts.fg,
+        bg: style.background ?? opts.bg,
+        bold: style.bold,
+        dim: style.dim,
+        italic: style.italic,
+        underlineStyle: style.underlineStyle,
+        underlineColor: style.underlineColor,
+        inverse: style.inverse,
+        hidden: style.hidden,
+        strikethrough: style.strikethrough,
+        blink: style.blink,
         timeoutMs: this.#timeout("text", opts.timeout),
       }),
     );

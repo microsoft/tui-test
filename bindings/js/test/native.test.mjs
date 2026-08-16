@@ -17,6 +17,7 @@ test("generated native declarations expose typed operations", async () => {
     "Timeouts",
     "Cell",
     "PackedScreen",
+    "TextMatch",
   ]) {
     assert.match(declarations, new RegExp(`export (?:interface|type) ${type}\\b`));
   }
@@ -26,6 +27,7 @@ test("generated native declarations expose typed operations", async () => {
     "close",
     "state",
     "text",
+    "findText",
     "cells",
     "getCommand",
     "write",

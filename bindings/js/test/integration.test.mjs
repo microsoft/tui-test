@@ -266,6 +266,33 @@ test("private packed screens retain full UTF-8 logical rows and own their bytes"
   }
 });
 
+test("text locators scope matches and assert styles", async () => {
+  const su = new TuiTest(uniqueSession("text-locators"));
+  const script =
+    "process.stdout.write('Settings\\n  Save\\n\\x1b[1mWarning\\x1b[0m\\n');" +
+    "setInterval(() => {}, 1000)";
+  try {
+    await su.run(process.execPath, ["-e", script]);
+    await su.waitText("Warning", { timeout: 2000 });
+    const matches = await su.findText("Save", {
+      whitespace: "normalize",
+      scope: { after: { text: "Settings" } },
+    });
+    assert.equal(matches.length, 1);
+    assert.equal(matches[0].start.row, 1);
+    assert.equal(matches[0].start.column, 2);
+    await su.expectText("Warning", { style: { bold: true } });
+    await assert.rejects(
+      su.expectText("Warning", { style: { bold: false }, timeout: 20 }),
+      (error) =>
+        error instanceof ExpectationError &&
+        error.message.includes("expected bold=false"),
+    );
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
 test("panic containment rejects as InternalError and Node keeps running", async () => {
   const runtime = new NativeRuntime(uniqueSession("panic-probe"));
   await assert.rejects(
