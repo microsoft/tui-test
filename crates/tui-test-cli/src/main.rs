@@ -122,7 +122,7 @@ fn connect_to_daemon(
     let mut last = None;
     for attempt in 0..ATTEMPTS {
         if !(allow_incompatible && ipc::is_running(&socket)) {
-            ensure_daemon(session, verbose)
+            let _ = ensure_daemon(session, verbose)
                 .map_err(|e| anyhow::anyhow!("failed to start daemon: {e}"))?;
         }
         match ipc::connect(&socket) {
@@ -448,60 +448,233 @@ fn parse_env(pairs: &[String]) -> anyhow::Result<Vec<(String, String)>> {
         .collect()
 }
 
-/// Spawn the daemon for this session if it is not already running.
-fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<()> {
-    let socket = config::socket_name(session);
-    match ipc::send(&socket, &Request::Status) {
-        Ok(status) => {
-            check_daemon_version(session, &status)?;
-            if verbose {
-                eprintln!(
-                    "note: daemon for session '{session}' is already running; verbose logging only \
-                     applies to a freshly started daemon. Run `tui-test --session {session} close` \
-                     first, then retry with --verbose."
-                );
+const DAEMON_STATE_TIMEOUT: Duration = Duration::from_secs(5);
+const DAEMON_LOCK_TIMEOUT: Duration = Duration::from_secs(35);
+const DAEMON_LOCK_STALE_AFTER: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DaemonStart {
+    AlreadyRunning,
+    Started,
+    Restarted,
+}
+
+struct DaemonLock {
+    path: std::path::PathBuf,
+}
+
+impl DaemonLock {
+    fn acquire(session: &str) -> anyhow::Result<Self> {
+        Self::acquire_path(
+            config::daemon_lock_file(session),
+            DAEMON_LOCK_TIMEOUT,
+            DAEMON_LOCK_STALE_AFTER,
+        )
+    }
+
+    fn acquire_path(
+        path: std::path::PathBuf,
+        timeout: Duration,
+        stale_after: Duration,
+    ) -> anyhow::Result<Self> {
+        let start = Instant::now();
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if daemon_lock_is_stale(&path, stale_after) {
+                        match std::fs::remove_file(&path) {
+                            Ok(()) => continue,
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                            Err(_) => {}
+                        }
+                    }
+                    if start.elapsed() >= timeout {
+                        anyhow::bail!(
+                            "timed out waiting for daemon lifecycle lock {}",
+                            path.display()
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => {
+                    anyhow::bail!(
+                        "failed to acquire daemon lifecycle lock {}: {error}",
+                        path.display()
+                    );
+                }
             }
-            return Ok(());
         }
-        Err(error) if ipc::is_running(&socket) => anyhow::bail!(
+    }
+}
+
+impl Drop for DaemonLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn daemon_lock_is_stale(path: &Path, stale_after: Duration) -> bool {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age >= stale_after)
+}
+
+/// Spawn or replace the daemon for this session when necessary.
+fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
+    let socket = config::socket_name(session);
+    if let Some(version) = running_daemon_version(session, &socket)? {
+        if version == env!("CARGO_PKG_VERSION") {
+            report_existing_daemon(session, verbose);
+            return Ok(DaemonStart::AlreadyRunning);
+        }
+    }
+
+    config::ensure_home()?;
+    let _lock = DaemonLock::acquire(session)?;
+
+    match running_daemon_version(session, &socket)? {
+        Some(version) if version == env!("CARGO_PKG_VERSION") => {
+            report_existing_daemon(session, verbose);
+            Ok(DaemonStart::AlreadyRunning)
+        }
+        Some(version) => {
+            restart_daemon(session, &socket, &version, verbose)?;
+            Ok(DaemonStart::Restarted)
+        }
+        None => {
+            start_daemon(session, &socket, verbose)?;
+            Ok(DaemonStart::Started)
+        }
+    }
+}
+
+fn running_daemon_version(session: &str, socket: &str) -> anyhow::Result<Option<String>> {
+    match ipc::send(socket, &Request::Status) {
+        Ok(status) => Ok(Some(daemon_version(&status).to_string())),
+        Err(error) if ipc::is_running(socket) => anyhow::bail!(
             "could not verify the daemon for session '{session}': {error}; run \
              `tui-test --session {session} close`, then retry"
         ),
-        Err(_) => {}
+        Err(_) => Ok(None),
     }
-    config::ensure_home()?;
+}
+
+fn daemon_version(status: &Response) -> &str {
+    status
+        .data
+        .as_ref()
+        .and_then(|data| data.get("version"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown")
+}
+
+fn report_existing_daemon(session: &str, verbose: bool) {
+    if verbose {
+        eprintln!(
+            "note: daemon for session '{session}' is already running; verbose logging only \
+             applies to a freshly started daemon. Run `tui-test --session {session} close` \
+             first, then retry with --verbose."
+        );
+    }
+}
+
+fn restart_daemon(
+    session: &str,
+    socket: &str,
+    running_version: &str,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    restart_daemon_with(
+        session,
+        running_version,
+        verbose,
+        || shutdown_daemon(socket),
+        |expected| wait_for_daemon_state(socket, expected, DAEMON_STATE_TIMEOUT),
+        || {
+            let exe = std::env::current_exe()?;
+            spawn_detached(&exe, session, verbose)
+        },
+    )
+}
+
+fn restart_daemon_with<Stop, Wait, Spawn>(
+    session: &str,
+    running_version: &str,
+    verbose: bool,
+    stop: Stop,
+    mut wait: Wait,
+    spawn: Spawn,
+) -> anyhow::Result<()>
+where
+    Stop: FnOnce() -> anyhow::Result<()>,
+    Wait: FnMut(bool) -> anyhow::Result<()>,
+    Spawn: FnOnce() -> anyhow::Result<()>,
+{
+    stop().map_err(|error| {
+        anyhow::anyhow!(
+            "failed to stop daemon version {running_version} for session '{session}': {error}"
+        )
+    })?;
+    wait(false)
+        .map_err(|error| anyhow::anyhow!("daemon for session '{session}' did not stop: {error}"))?;
+
+    if verbose {
+        eprintln!(
+            "restarting daemon for session '{session}' from version {running_version} to {}",
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+    spawn()?;
+    wait(true).map_err(|error| anyhow::anyhow!("daemon did not become ready: {error}"))
+}
+
+fn shutdown_daemon(socket: &str) -> anyhow::Result<()> {
+    let response = ipc::send(socket, &Request::Shutdown)?;
+    if response.ok {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "{}",
+            response
+                .message
+                .as_deref()
+                .unwrap_or("daemon refused to stop without an error message")
+        )
+    }
+}
+
+fn start_daemon(session: &str, socket: &str, verbose: bool) -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
     spawn_detached(&exe, session, verbose)?;
+    wait_for_daemon_state(socket, true, DAEMON_STATE_TIMEOUT)
+        .map_err(|error| anyhow::anyhow!("daemon did not become ready: {error}"))?;
 
+    if verbose {
+        eprintln!("daemon logging to {}", config::log_file(session).display());
+    }
+    Ok(())
+}
+
+fn wait_for_daemon_state(socket: &str, expected: bool, timeout: Duration) -> anyhow::Result<()> {
     let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(5) {
-        if ipc::is_running(&socket) {
-            if verbose {
-                eprintln!("daemon logging to {}", config::log_file(session).display());
-            }
+    while start.elapsed() < timeout {
+        if ipc::is_running(socket) == expected {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    anyhow::bail!("daemon did not become ready")
-}
-
-fn check_daemon_version(session: &str, status: &Response) -> anyhow::Result<()> {
-    let current = env!("CARGO_PKG_VERSION");
-    let running = status
-        .data
-        .as_ref()
-        .and_then(|data| data.get("version"))
-        .and_then(serde_json::Value::as_str);
-    if running == Some(current) {
-        return Ok(());
+    if expected {
+        anyhow::bail!("socket never started accepting connections")
+    } else {
+        anyhow::bail!("socket kept accepting connections")
     }
-
-    let running = running.unwrap_or("unknown");
-    anyhow::bail!(
-        "daemon for session '{session}' is version {running}, but this client is {current}; \
-         run `tui-test --session {session} close` with this client, then retry"
-    )
 }
 
 #[cfg(windows)]
@@ -659,20 +832,31 @@ fn close_all(json: bool) -> i32 {
 
 /// Start a session's daemon, returning only after the socket accepts connections.
 fn daemon_start(session: &str, verbose: bool, json: bool) -> i32 {
-    let running = ipc::is_running(&config::socket_name(session));
-    if let Err(e) = ensure_daemon(session, verbose) {
-        eprintln!("failed to start daemon: {e}");
-        return 4;
-    }
+    let outcome = match ensure_daemon(session, verbose) {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            eprintln!("failed to start daemon: {e}");
+            return 4;
+        }
+    };
     if json {
         println!(
             "{}",
-            serde_json::json!({ "ok": true, "session": session, "started": !running })
+            serde_json::json!({
+                "ok": true,
+                "session": session,
+                "started": outcome != DaemonStart::AlreadyRunning,
+                "restarted": outcome == DaemonStart::Restarted,
+            })
         );
-    } else if running {
-        println!("daemon already running for session '{session}'");
     } else {
-        println!("started daemon for session '{session}'");
+        match outcome {
+            DaemonStart::AlreadyRunning => {
+                println!("daemon already running for session '{session}'");
+            }
+            DaemonStart::Started => println!("started daemon for session '{session}'"),
+            DaemonStart::Restarted => println!("restarted daemon for session '{session}'"),
+        }
     }
     0
 }
@@ -844,6 +1028,15 @@ fn exit_code(resp: &Response) -> i32 {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::cell::RefCell;
+
+    fn unique_test_path(label: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("tui-test-{label}-{}-{nonce}", std::process::id()))
+    }
 
     #[test]
     fn a_text_only_payload_prints_the_bare_screen() {
@@ -898,21 +1091,79 @@ mod tests {
     }
 
     #[test]
-    fn daemon_version_check_rejects_stale_or_unversioned_daemons() {
+    fn daemon_version_identifies_stale_or_unversioned_daemons() {
         let current = Response::with(json!({ "version": env!("CARGO_PKG_VERSION") }));
-        assert!(check_daemon_version("work", &current).is_ok());
+        assert_eq!(daemon_version(&current), env!("CARGO_PKG_VERSION"));
 
-        for status in [
-            Response::with(json!({ "version": "0.0.0-old" })),
-            Response::with(json!({})),
-        ] {
-            let error = check_daemon_version("work", &status)
-                .unwrap_err()
-                .to_string();
-            assert!(
-                error.contains("tui-test --session work close"),
-                "the recovery instruction is actionable: {error}"
-            );
-        }
+        let stale = Response::with(json!({ "version": "0.0.0-old" }));
+        assert_eq!(daemon_version(&stale), "0.0.0-old");
+
+        let unversioned = Response::with(json!({}));
+        assert_eq!(daemon_version(&unversioned), "unknown");
+    }
+
+    #[test]
+    fn daemon_lifecycle_lock_serializes_and_recovers_stale_files() {
+        let root = unique_test_path("daemon-lock");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("work.pid.lock");
+        let first = DaemonLock::acquire_path(
+            path.clone(),
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        )
+        .unwrap();
+
+        let blocked_path = path.clone();
+        let blocked = std::thread::spawn(move || {
+            let start = Instant::now();
+            let lock = DaemonLock::acquire_path(
+                blocked_path,
+                Duration::from_secs(1),
+                Duration::from_secs(30),
+            )
+            .unwrap();
+            (start.elapsed(), lock)
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        drop(first);
+        let (waited, second) = blocked.join().unwrap();
+        assert!(waited >= Duration::from_millis(75));
+        drop(second);
+
+        std::fs::write(&path, b"stale").unwrap();
+        let recovered =
+            DaemonLock::acquire_path(path.clone(), Duration::from_secs(1), Duration::ZERO).unwrap();
+        drop(recovered);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn daemon_restart_waits_for_shutdown_before_spawning() {
+        let events = RefCell::new(Vec::new());
+        restart_daemon_with(
+            "work",
+            "0.0.0-old",
+            false,
+            || {
+                events.borrow_mut().push("shutdown");
+                Ok(())
+            },
+            |expected| {
+                events
+                    .borrow_mut()
+                    .push(if expected { "started" } else { "stopped" });
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("spawn");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            events.into_inner(),
+            ["shutdown", "stopped", "spawn", "started"]
+        );
     }
 }
