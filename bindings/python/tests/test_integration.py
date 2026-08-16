@@ -31,8 +31,8 @@ def run(coro):
 
 
 class IntegrationTests(unittest.TestCase):
-    def _client(self):
-        return TuiTest.ephemeral("pytest")
+    def _client(self, **kwargs):
+        return TuiTest.ephemeral("pytest", **kwargs)
 
     def test_echo_roundtrip(self):
         async def scenario():
@@ -342,6 +342,23 @@ class IntegrationTests(unittest.TestCase):
             if len(view):
                 with self.assertRaises(TypeError):
                     view[0] = 0
+
+        run(scenario())
+
+    def test_ghostty_backend_preserves_blink(self):
+        async def scenario():
+            async with self._client(backend="ghostty") as su:
+                await su.run(
+                    sys.executable,
+                    "-c",
+                    "import sys,time; "
+                    "sys.stdout.write('\\x1b[5mX\\x1b[0m'); "
+                    "sys.stdout.flush(); time.sleep(30)",
+                    cols=10,
+                    rows=2,
+                )
+                await su.wait_text("X", timeout=5000)
+                self.assertTrue((await su.cells(0, 0))[0].blink)
 
         run(scenario())
 

@@ -9,7 +9,7 @@ use napi_derive::napi;
 use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::shell::Shell as CoreShell;
 use tui_test::{
-    global_registry, Cell as CoreCell, CellColor, Cursor as CoreCursor,
+    global_registry, Backend as CoreBackend, Cell as CoreCell, CellColor, Cursor as CoreCursor,
     EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, MouseAction,
     OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation, OperationResult,
     RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
@@ -19,6 +19,21 @@ use tui_test::{
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+#[napi(string_enum = "lowercase")]
+pub enum Backend {
+    Alacritty,
+    Ghostty,
+}
+
+impl From<Backend> for CoreBackend {
+    fn from(value: Backend) -> Self {
+        match value {
+            Backend::Alacritty => Self::Alacritty,
+            Backend::Ghostty => Self::Ghostty,
+        }
+    }
+}
 
 #[napi(string_enum = "lowercase")]
 pub enum Shell {
@@ -60,6 +75,7 @@ pub struct Timeouts {
 
 #[napi(object)]
 pub struct OpenOptions {
+    pub backend: Option<Backend>,
     pub shell: Option<Shell>,
     pub cols: Option<f64>,
     pub rows: Option<f64>,
@@ -73,6 +89,7 @@ pub struct OpenOptions {
 
 #[napi(object)]
 pub struct RunOptions {
+    pub backend: Option<Backend>,
     pub program: String,
     pub args: Option<Vec<String>>,
     pub cols: Option<f64>,
@@ -483,7 +500,7 @@ fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptio
         value.profile_colors.as_deref().unwrap_or_default(),
     )?;
     Ok(CoreOpenOptions {
-        backend: Default::default(),
+        backend: value.backend.map(Into::into).unwrap_or_default(),
         profile,
         shell: value.shell.map(Into::into),
         cols: match value.cols {
@@ -510,7 +527,7 @@ fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, TuiTest
         value.profile_colors.as_deref().unwrap_or_default(),
     )?;
     Ok(CoreRunOptions {
-        backend: Default::default(),
+        backend: value.backend.map(Into::into).unwrap_or_default(),
         profile,
         program: value.program,
         args: value.args.unwrap_or_default(),

@@ -3,6 +3,7 @@ import { IS_MACOS, IS_WINDOWS } from "../config.js";
 import { uniqueSession } from "../ephemeral.js";
 import type {
   ArtifactOptions,
+  Backend,
   ClientOptions,
   Profile,
   Shell,
@@ -14,6 +15,7 @@ export type { Profile, Shell } from "../types.js";
 export { TuiTest } from "../client.js";
 
 export interface CreateTerminalOptions {
+  backend?: Backend;
   shell?: Shell;
   program?: string[];
   cols?: number;
@@ -75,7 +77,7 @@ export function trackedCount(): number {
 
 function clientOptions(opts: CreateTerminalOptions): ClientOptions {
   const client: ClientOptions = {};
-  for (const key of ["timeouts", "profile", "artifacts"] as const) {
+  for (const key of ["backend", "timeouts", "profile", "artifacts"] as const) {
     const value = opts[key];
     if (value !== undefined) {
       Object.assign(client, { [key]: value });

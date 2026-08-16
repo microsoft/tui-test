@@ -8,7 +8,7 @@ use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
-    Cell, CellColor, Cursor, ErrorKind, MouseAction, OpenOptions, OpenResult, Operation,
+    Backend, Cell, CellColor, Cursor, ErrorKind, MouseAction, OpenOptions, OpenResult, Operation,
     OperationResult, PackedScreen, RunOptions, ScreenshotResult, Size, SnapshotResult, State,
     Timeouts, TuiTestError,
 };
@@ -53,6 +53,7 @@ impl NativeSession {
 
     #[pyo3(signature = (
         shell,
+        backend,
         cols,
         rows,
         cwd,
@@ -71,6 +72,7 @@ impl NativeSession {
         &self,
         py: Python<'py>,
         shell: Option<String>,
+        backend: Option<String>,
         cols: Bound<'py, PyAny>,
         rows: Bound<'py, PyAny>,
         cwd: Option<String>,
@@ -99,7 +101,7 @@ impl NativeSession {
                 execute_open(
                     &name,
                     Operation::Open(OpenOptions {
-                        backend: Default::default(),
+                        backend: parse_backend(backend.as_deref())?,
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
                         shell: parse_shell(shell.as_deref())?,
                         cols: integer_u16(&cols, "cols")?,
@@ -124,6 +126,7 @@ impl NativeSession {
     #[pyo3(signature = (
         program,
         args,
+        backend,
         cols,
         rows,
         cwd,
@@ -143,6 +146,7 @@ impl NativeSession {
         py: Python<'py>,
         program: String,
         args: Vec<String>,
+        backend: Option<String>,
         cols: Bound<'py, PyAny>,
         rows: Bound<'py, PyAny>,
         cwd: Option<String>,
@@ -171,7 +175,7 @@ impl NativeSession {
                 execute_open(
                     &name,
                     Operation::Run(RunOptions {
-                        backend: Default::default(),
+                        backend: parse_backend(backend.as_deref())?,
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
                         program,
                         args,
@@ -1139,6 +1143,13 @@ fn parse_shell(value: Option<&str>) -> Result<Option<Shell>, TuiTestError> {
             Ok(shell)
         })
         .transpose()
+}
+
+fn parse_backend(value: Option<&str>) -> Result<Backend, TuiTestError> {
+    value
+        .unwrap_or("alacritty")
+        .parse()
+        .map_err(TuiTestError::usage)
 }
 
 fn unexpected_result(expected: &str) -> TuiTestError {

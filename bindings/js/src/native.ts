@@ -20,7 +20,11 @@ import type {
 
 type NativeBinding = typeof import("../native/index.js");
 type NativeSessionHandle = InstanceType<NativeBinding["NativeSession"]>;
-type RuntimeOpenOptions = Omit<OpenOptions, "shell"> & { shell?: string };
+type RuntimeOpenOptions = Omit<OpenOptions, "shell" | "backend"> & {
+  shell?: string;
+  backend?: string;
+};
+type RuntimeRunOptions = Omit<RunOptions, "backend"> & { backend?: string };
 
 const ERROR_PREFIX = "__tui_test_native_error__:";
 const USAGE_NAPI_CODES = new Set([
@@ -146,8 +150,8 @@ export class NativeRuntime {
     return this.#call((session) => session.open(options as OpenOptions | undefined));
   }
 
-  run(options: RunOptions): Promise<OpenResult> {
-    return this.#call((session) => session.run(options));
+  run(options: RuntimeRunOptions): Promise<OpenResult> {
+    return this.#call((session) => session.run(options as RunOptions));
   }
 
   close(): Promise<void> {

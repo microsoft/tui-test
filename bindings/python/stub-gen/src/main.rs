@@ -94,6 +94,7 @@ mod stubs {
                 def open(
                     self,
                     shell: typing.Optional[str],
+                    backend: typing.Optional[str],
                     cols: int,
                     rows: int,
                     cwd: typing.Optional[str],
@@ -112,6 +113,7 @@ mod stubs {
                     self,
                     program: str,
                     args: typing.List[str],
+                    backend: typing.Optional[str],
                     cols: int,
                     rows: int,
                     cwd: typing.Optional[str],

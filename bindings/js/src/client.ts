@@ -5,6 +5,7 @@ import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
   assertTimeoutClasses,
+  backendPayload,
   envPairs,
   profilePayload,
   resolveSession,
@@ -142,6 +143,7 @@ export class TuiTest {
     if (opts.timeouts) {
       assertTimeoutClasses(opts.timeouts);
     }
+    backendPayload(opts.backend);
     profilePayload(opts.profile);
     this.#options = opts;
     this.#runtime = new NativeRuntime(this.session);
@@ -216,6 +218,7 @@ export class TuiTest {
     }
     const profile = profilePayload(opts.profile ?? this.#options.profile);
     const options = {
+      backend: backendPayload(opts.backend ?? this.#options.backend),
       shell: opts.shell,
       cols: opts.cols ?? DEFAULT_COLS,
       rows: opts.rows ?? DEFAULT_ROWS,
@@ -235,6 +238,7 @@ export class TuiTest {
     }
     const profile = profilePayload(opts.profile ?? this.#options.profile);
     const options = {
+      backend: backendPayload(opts.backend ?? this.#options.backend),
       program,
       args,
       cols: opts.cols ?? DEFAULT_COLS,

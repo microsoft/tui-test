@@ -101,6 +101,17 @@ class ProfileResolutionTests(unittest.TestCase):
             cfg.normalize_profile({"colors": {"chartreuse": "#123456"}})
 
 
+class BackendResolutionTests(unittest.TestCase):
+    def test_normalizes_names_and_alias(self):
+        self.assertIsNone(cfg.normalize_backend(None))
+        self.assertEqual(cfg.normalize_backend("alacritty"), "alacritty")
+        self.assertEqual(cfg.normalize_backend("libghostty"), "ghostty")
+
+    def test_rejects_unknown_backend(self):
+        with self.assertRaises(ValueError):
+            cfg.normalize_backend("xterm")
+
+
 class TypedCallTests(unittest.TestCase):
     def test_open_uses_typed_arguments(self):
         terminal = _CapturingClient("s")
@@ -118,10 +129,12 @@ class TypedCallTests(unittest.TestCase):
         )
         name, args = terminal.fake.calls[0]
         self.assertEqual(name, "open")
-        self.assertEqual(args[:6], (None, 120, 40, None, [("K", "V")], None))
-        self.assertEqual(args[6], 321)
-        self.assertEqual(args[7], [("red", "#010203")])
-        self.assertEqual(args[8:], (100, None, None, None, 200))
+        self.assertEqual(
+            args[:7], (None, None, 120, 40, None, [("K", "V")], None)
+        )
+        self.assertEqual(args[7], 321)
+        self.assertEqual(args[8], [("red", "#010203")])
+        self.assertEqual(args[9:], (100, None, None, None, 200))
 
     def test_run_uses_program_and_argv(self):
         terminal = _CapturingClient("s")
@@ -137,8 +150,15 @@ class TypedCallTests(unittest.TestCase):
         )
         run(terminal.run("vim"))
         args = terminal.fake.calls[0][1]
-        self.assertIsNone(args[7])
-        self.assertEqual(args[8], [("background", "#112233")])
+        self.assertIsNone(args[8])
+        self.assertEqual(args[9], [("background", "#112233")])
+
+    def test_constructor_and_call_backends_are_forwarded(self):
+        terminal = _CapturingClient("s", backend="ghostty")
+        run(terminal.open())
+        run(terminal.run("vim", backend="alacritty"))
+        self.assertEqual(terminal.fake.calls[0][1][1], "ghostty")
+        self.assertEqual(terminal.fake.calls[1][1][2], "alacritty")
 
     def test_input_helpers_use_distinct_typed_methods(self):
         terminal = _CapturingClient("s")

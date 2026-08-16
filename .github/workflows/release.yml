@@ -84,8 +84,6 @@ jobs:
             os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-          - target: aarch64-pc-windows-msvc
-            os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -96,6 +94,11 @@ jobs:
           rustup toolchain install stable --profile default
           rustup default stable
           rustup target add ${{ matrix.target }}
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+          cache-key: ${{ matrix.target }}
 
       - if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
@@ -150,11 +153,11 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             args: --target x86_64-unknown-linux-musl -x
-            zig: true
+            zigbuild: true
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             args: --target aarch64-unknown-linux-musl -x
-            zig: true
+            zigbuild: true
           - target: x86_64-apple-darwin
             os: macos-latest
             args: --target x86_64-apple-darwin
@@ -164,9 +167,6 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             args: --target x86_64-pc-windows-msvc
-          - target: aarch64-pc-windows-msvc
-            os: windows-latest
-            args: --target aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -185,12 +185,12 @@ jobs:
           rustup target add ${{ matrix.target }}
 
       - uses: mlugg/setup-zig@v2
-        if: matrix.zig
         with:
-          version: "0.14.1"
+          version: "0.16.0"
+          cache-key: ${{ matrix.target }}
 
       - uses: taiki-e/install-action@v2
-        if: matrix.zig
+        if: matrix.zigbuild
         with:
           tool: cargo-zigbuild
 
@@ -294,8 +294,6 @@ jobs:
             os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-          - target: aarch64-pc-windows-msvc
-            os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -305,6 +303,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - uses: mlugg/setup-zig@v2
+        if: runner.os != 'Linux'
+        with:
+          version: "0.16.0"
+          cache-key: ${{ matrix.target }}
 
       - uses: docker/setup-qemu-action@v3
         if: runner.os == 'Linux' && contains(matrix.target, 'aarch64')
@@ -319,6 +323,36 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.compatibility || 'auto' }}
           args: --release --locked --out dist --compatibility pypi
+          before-script-linux: |
+            set -euo pipefail
+            version=0.16.0
+            case "$(uname -m)" in
+              x86_64|amd64)
+                arch=x86_64
+                sha256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+                ;;
+              aarch64|arm64)
+                arch=aarch64
+                sha256=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+                ;;
+              *)
+                echo "unsupported Zig host architecture: $(uname -m)" >&2
+                exit 1
+                ;;
+            esac
+            if command -v yum >/dev/null 2>&1; then
+              yum install -y curl xz
+            elif command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              apt-get install -y --no-install-recommends curl xz-utils
+            fi
+            archive="zig-${arch}-linux-${version}.tar.xz"
+            curl -fsSLo "/tmp/${archive}" \
+              "https://ziglang.org/download/${version}/${archive}"
+            echo "${sha256}  /tmp/${archive}" | sha256sum -c -
+            tar -xJf "/tmp/${archive}" -C /opt
+            ln -s "/opt/zig-${arch}-linux-${version}/zig" /usr/local/bin/zig
+            zig version
 
       - name: Build Python sdist
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -402,7 +436,6 @@ jobs:
             tui-test-linux-arm64-musl
             tui-test-linux-x64-gnu
             tui-test-linux-x64-musl
-            tui-test-win32-arm64-msvc
             tui-test-win32-x64-msvc
             tui-test
           )
