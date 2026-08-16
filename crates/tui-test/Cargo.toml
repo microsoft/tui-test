@@ -12,6 +12,10 @@ readme = "../../README.md"
 name = "tui_test"
 path = "src/lib.rs"
 
+[features]
+default = []
+libghostty = ["dep:libghostty-vt"]
+
 [dependencies]
 alacritty_terminal.workspace = true
 anyhow.workspace = true
@@ -19,6 +23,7 @@ bitflags.workspace = true
 compact_str.workspace = true
 dirs.workspace = true
 flate2.workspace = true
+libghostty-vt = { workspace = true, optional = true }
 portable-pty.workspace = true
 regex.workspace = true
 serde.workspace = true
