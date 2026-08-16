@@ -197,6 +197,10 @@ prints a session's effective timeouts.
 Each session has its own daemon, so `daemon stop` needs `--session <name>` or
 `--all`. `close` stops it too.
 
+When a client finds a daemon from another `tui-test` version, it shuts that
+daemon down and starts the current version before sending the command. The
+restart is serialized per session so concurrent clients cannot race.
+
 `open` waits for a prompt before returning, `run` does not. Override with
 `--wait-ready` / `--no-wait-ready`. An explicit `--wait-ready` fails (exit 1) if
 no prompt appears; `open`'s implicit wait reports `ready` in its payload either

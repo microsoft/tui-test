@@ -35,6 +35,9 @@ Three commands let an agent look up the rest of the surface instead of guessing:
   (`assertion` / `usage` / `no_session` / `internal`).
 - **Verbose.** `--verbose` / `-v` starts the daemon with a full PTY traffic log
   (see [Debugging](#debugging)). Only takes effect when the daemon starts.
+- **Daemon upgrades.** A client automatically replaces a daemon from another
+  `tui-test` version. Per-session locking prevents concurrent clients from
+  racing the restart.
 - **Defaults.** New sessions are `80x30`. Timeouts come in five classes: `text`
   and `idle` default to 5s; `command`, `exit`, and `ready` to 30s. Set a session
   default with `open --timeout-<class> <ms>`, or override one call with
