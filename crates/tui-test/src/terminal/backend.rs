@@ -87,6 +87,13 @@ mod tests {
         assert_eq!(Backend::default(), Backend::Alacritty);
     }
 
+    #[cfg(feature = "ghostty")]
+    #[test]
+    fn legacy_backend_spelling_is_rejected() {
+        assert!("libghostty".parse::<Backend>().is_err());
+        assert!(serde_json::from_str::<Backend>("\"libghostty\"").is_err());
+    }
+
     #[test]
     fn every_enabled_backend_constructs() {
         for backend in Backend::ALL {

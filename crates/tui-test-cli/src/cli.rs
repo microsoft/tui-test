@@ -423,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn open_backend_values_map_to_library_backends() {
+    fn open_backend_values_map_to_terminal_backends() {
         let cli = Cli::try_parse_from(["tui-test", "open", "--backend", "ghostty"])
             .expect("parse backend");
         let Some(Command::Open {
@@ -434,6 +434,7 @@ mod tests {
             panic!("expected Open with a backend");
         };
         assert_eq!(Backend::from(backend), Backend::Ghostty);
+        assert!(Cli::try_parse_from(["tui-test", "open", "--backend", "libghostty"]).is_err());
     }
 
     #[test]
