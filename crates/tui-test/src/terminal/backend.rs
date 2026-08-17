@@ -6,7 +6,7 @@ use crate::profile::Profile;
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::emu::Emulator;
 
-#[cfg(feature = "libghostty")]
+#[cfg(feature = "ghostty")]
 use crate::terminal::ghostty::GhosttyEmu;
 
 /// The terminal emulator a session uses.
@@ -15,21 +15,20 @@ use crate::terminal::ghostty::GhosttyEmu;
 pub enum Backend {
     #[default]
     Alacritty,
-    #[cfg(feature = "libghostty")]
-    #[serde(alias = "libghostty")]
+    #[cfg(feature = "ghostty")]
     Ghostty,
 }
 
 impl Backend {
-    #[cfg(not(feature = "libghostty"))]
+    #[cfg(not(feature = "ghostty"))]
     pub const ALL: [Self; 1] = [Self::Alacritty];
-    #[cfg(feature = "libghostty")]
+    #[cfg(feature = "ghostty")]
     pub const ALL: [Self; 2] = [Self::Alacritty, Self::Ghostty];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Alacritty => "alacritty",
-            #[cfg(feature = "libghostty")]
+            #[cfg(feature = "ghostty")]
             Self::Ghostty => "ghostty",
         }
     }
@@ -42,13 +41,13 @@ impl Backend {
     ) -> anyhow::Result<Box<dyn Emulator>> {
         match self {
             Self::Alacritty => Ok(Box::new(AlacrittyEmu::new(cols, rows, profile))),
-            #[cfg(feature = "libghostty")]
+            #[cfg(feature = "ghostty")]
             Self::Ghostty => Ok(Box::new(GhosttyEmu::new(cols, rows, profile)?)),
         }
     }
 
     const fn expected() -> &'static str {
-        if cfg!(feature = "libghostty") {
+        if cfg!(feature = "ghostty") {
             "alacritty, ghostty"
         } else {
             "alacritty"
@@ -62,8 +61,8 @@ impl std::str::FromStr for Backend {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_lowercase().as_str() {
             "alacritty" => Ok(Self::Alacritty),
-            #[cfg(feature = "libghostty")]
-            "ghostty" | "libghostty" => Ok(Self::Ghostty),
+            #[cfg(feature = "ghostty")]
+            "ghostty" => Ok(Self::Ghostty),
             other => Err(format!(
                 "unknown terminal backend {other:?}; expected one of: {}",
                 Self::expected()
@@ -86,16 +85,6 @@ mod tests {
     #[test]
     fn alacritty_remains_the_default() {
         assert_eq!(Backend::default(), Backend::Alacritty);
-    }
-
-    #[cfg(feature = "libghostty")]
-    #[test]
-    fn ghostty_accepts_the_library_name_as_an_alias() {
-        assert_eq!("libghostty".parse(), Ok(Backend::Ghostty));
-        assert_eq!(
-            serde_json::from_str::<Backend>("\"libghostty\"").unwrap(),
-            Backend::Ghostty
-        );
     }
 
     #[test]

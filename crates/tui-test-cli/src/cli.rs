@@ -8,7 +8,6 @@ use tui_test::{Backend, Timeouts};
 #[clap(rename_all = "lowercase")]
 pub enum BackendArg {
     Alacritty,
-    #[clap(alias = "libghostty")]
     Ghostty,
 }
 
@@ -425,18 +424,16 @@ mod tests {
 
     #[test]
     fn open_backend_values_map_to_library_backends() {
-        for value in ["ghostty", "libghostty"] {
-            let cli = Cli::try_parse_from(["tui-test", "open", "--backend", value])
-                .expect("parse backend");
-            let Some(Command::Open {
-                backend: Some(backend),
-                ..
-            }) = cli.command
-            else {
-                panic!("expected Open with a backend");
-            };
-            assert_eq!(Backend::from(backend), Backend::Ghostty);
-        }
+        let cli = Cli::try_parse_from(["tui-test", "open", "--backend", "ghostty"])
+            .expect("parse backend");
+        let Some(Command::Open {
+            backend: Some(backend),
+            ..
+        }) = cli.command
+        else {
+            panic!("expected Open with a backend");
+        };
+        assert_eq!(Backend::from(backend), Backend::Ghostty);
     }
 
     #[test]
