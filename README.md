@@ -206,7 +206,7 @@ way.
 
 Choose an emulator per session with `--backend alacritty|ghostty`. Alacritty
 remains the default; `ghostty` uses
-[`libghostty-vt`](https://github.com/Uzaaft/libghostty-rs).
+[Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs).
 
 ```sh
 tui-test open --backend ghostty
@@ -219,13 +219,13 @@ byte stream, so command, exit-code, and cwd behavior is backend-independent.
 Ghostty also preserves SGR blink; Alacritty parses blink but cannot report it.
 
 The CLI and published Python/Node native packages include both backends.
-Windows ARM64 artifacts are not currently published because libghostty's
+Windows ARM64 artifacts are not currently published because Ghostty's
 upstream Zig build does not support that target.
 
 Rust users opt in explicitly:
 
 ```sh
-cargo add tui-test-rs --features libghostty
+cargo add tui-test-rs --features ghostty
 ```
 
 ```rust
@@ -237,7 +237,7 @@ let options = OpenOptions {
 };
 ```
 
-Building the `libghostty` feature from source requires Zig 0.16 on `PATH`;
+Building the `ghostty` feature from source requires Zig 0.16 on `PATH`;
 the dependency builds a pinned Ghostty revision. The default Rust feature set
 continues to build only the Alacritty backend and does not require Zig.
 
