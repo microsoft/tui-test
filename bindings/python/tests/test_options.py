@@ -102,10 +102,10 @@ class ProfileResolutionTests(unittest.TestCase):
 
 
 class BackendResolutionTests(unittest.TestCase):
-    def test_normalizes_names_and_alias(self):
+    def test_normalizes_backend_names(self):
         self.assertIsNone(cfg.normalize_backend(None))
         self.assertEqual(cfg.normalize_backend("alacritty"), "alacritty")
-        self.assertEqual(cfg.normalize_backend("libghostty"), "ghostty")
+        self.assertEqual(cfg.normalize_backend("ghostty"), "ghostty")
 
     def test_rejects_unknown_backend(self):
         with self.assertRaises(ValueError):

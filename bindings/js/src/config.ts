@@ -66,9 +66,6 @@ export function backendPayload(backend?: unknown): Backend | undefined {
     throw new TypeError("backend must be a string");
   }
   const normalized = backend.trim().toLowerCase();
-  if (normalized === "libghostty") {
-    return "ghostty";
-  }
   if ((BACKENDS as readonly string[]).includes(normalized)) {
     return normalized as Backend;
   }

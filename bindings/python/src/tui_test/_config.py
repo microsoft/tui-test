@@ -66,8 +66,6 @@ def normalize_backend(backend: object) -> Optional[str]:
     if not isinstance(backend, str):
         raise TypeError("backend must be a string or None")
     normalized = backend.strip().lower()
-    if normalized == "libghostty":
-        normalized = "ghostty"
     if normalized not in _BACKENDS:
         raise ValueError(
             "unknown backend {!r}; expected one of {}".format(

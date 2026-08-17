@@ -101,10 +101,10 @@ test("envPairs coerces records and preserves pair arrays", () => {
   assert.deepEqual(envPairs(), []);
 });
 
-test("backendPayload normalizes aliases and rejects unknown values", () => {
+test("backendPayload validates backend names", () => {
   assert.equal(backendPayload(), undefined);
   assert.equal(backendPayload("alacritty"), "alacritty");
-  assert.equal(backendPayload("libghostty"), "ghostty");
+  assert.equal(backendPayload("ghostty"), "ghostty");
   assert.throws(() => backendPayload("xterm"), /unknown backend/);
 });
 
