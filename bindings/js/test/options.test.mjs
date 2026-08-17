@@ -106,6 +106,7 @@ test("backendPayload validates backend names", () => {
   assert.equal(backendPayload("alacritty"), "alacritty");
   assert.equal(backendPayload("ghostty"), "ghostty");
   assert.throws(() => backendPayload("xterm"), /unknown backend/);
+  assert.throws(() => backendPayload("libghostty"), /unknown backend/);
 });
 
 test("profilePayload validates profile and color fields", () => {

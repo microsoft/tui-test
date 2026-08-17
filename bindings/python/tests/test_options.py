@@ -108,8 +108,9 @@ class BackendResolutionTests(unittest.TestCase):
         self.assertEqual(cfg.normalize_backend("ghostty"), "ghostty")
 
     def test_rejects_unknown_backend(self):
-        with self.assertRaises(ValueError):
-            cfg.normalize_backend("xterm")
+        for backend in ("xterm", "libghostty"):
+            with self.assertRaises(ValueError):
+                cfg.normalize_backend(backend)
 
 
 class TypedCallTests(unittest.TestCase):
