@@ -1,4 +1,4 @@
-//! [`Emulator`] backend built on `libghostty-vt`.
+//! [`Emulator`] backend built on the `ghostty-vt` dependency.
 //!
 //! Ghostty handles are deliberately `!Send`, so the native terminal lives
 //! on one worker thread. [`GhosttyEmu`] is the `Send` channel handle used by
