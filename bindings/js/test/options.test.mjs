@@ -152,21 +152,6 @@ test("constructor and per-run profile objects recolor the terminal", async () =>
   const su = new TuiTest(uniqueSession("typed-profile"), {
     profile: { colors: { red: "#010203" } },
   });
-
-  test("constructor and per-call backends reach native sessions", async () => {
-    const su = new TuiTest(uniqueSession("typed-backend"), {
-      backend: "ghostty",
-    });
-    try {
-      await su.run(process.execPath, evalArgs);
-      await su.waitText("ready", { timeout: 2000 });
-
-      await su.run(process.execPath, evalArgs, { backend: "alacritty" });
-      await su.waitText("ready", { timeout: 2000 });
-    } finally {
-      await su.closeQuiet();
-    }
-  });
   const argsFor = (marker) =>
     typeof globalThis.Deno === "undefined"
       ? ["-e", `process.stdout.write("\\u001b[31m${marker}\\u001b[0m")`]
@@ -184,6 +169,21 @@ test("constructor and per-run profile objects recolor the terminal", async () =>
     });
     await su.waitText("call-profile", { timeout: 5000 });
     await su.expectText("call-profile", { fg: "#040506" });
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("constructor and per-call backends reach native sessions", async () => {
+  const su = new TuiTest(uniqueSession("typed-backend"), {
+    backend: "ghostty",
+  });
+  try {
+    await su.run(process.execPath, evalArgs);
+    await su.waitText("ready", { timeout: 2000 });
+
+    await su.run(process.execPath, evalArgs, { backend: "alacritty" });
+    await su.waitText("ready", { timeout: 2000 });
   } finally {
     await su.closeQuiet();
   }

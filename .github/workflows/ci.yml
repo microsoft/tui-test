@@ -123,6 +123,10 @@ jobs:
           rustup toolchain install stable --profile default
           rustup default stable
 
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
       - uses: actions/setup-python@v5
         if: matrix.runtime == 'python'
         with:
