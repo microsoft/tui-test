@@ -1,4 +1,4 @@
-//! Single-threaded libghostty terminal and neutral-grid translation.
+//! Single-threaded Ghostty terminal and neutral-grid translation.
 #![allow(
     dead_code,
     reason = "used by the thread-safe Emulator adapter in the next stack layer"
@@ -9,15 +9,15 @@ use std::rc::Rc;
 
 use anyhow::{anyhow, Context, Result};
 use compact_str::CompactString;
-use libghostty_vt::error::Error as GhosttyError;
-use libghostty_vt::render::{CellIterator, CursorVisualStyle, RowIterator};
-use libghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef};
-use libghostty_vt::style::{Palette, PaletteIndex, RgbColor, Style, StyleColor, Underline};
-use libghostty_vt::terminal::{
+use ghostty_vt::error::Error as GhosttyError;
+use ghostty_vt::render::{CellIterator, CursorVisualStyle, RowIterator};
+use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef};
+use ghostty_vt::style::{Palette, PaletteIndex, RgbColor, Style, StyleColor, Underline};
+use ghostty_vt::terminal::{
     ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Point, PointCoordinate,
     PrimaryDeviceAttributes, SecondaryDeviceAttributes, TertiaryDeviceAttributes,
 };
-use libghostty_vt::{RenderState, Terminal};
+use ghostty_vt::{RenderState, Terminal};
 
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
@@ -291,7 +291,7 @@ impl GhosttyCore {
             }
             if output_row.len() != cols as usize {
                 return Err(anyhow!(
-                    "libghostty returned {} cells for a {cols}-column row",
+                    "Ghostty returned {} cells for a {cols}-column row",
                     output_row.len()
                 ));
             }
@@ -299,7 +299,7 @@ impl GhosttyCore {
         }
         if output.len() != rows as usize {
             return Err(anyhow!(
-                "libghostty returned {} rows for a {rows}-row viewport",
+                "Ghostty returned {} rows for a {rows}-row viewport",
                 output.len()
             ));
         }
@@ -376,7 +376,7 @@ impl GhosttyCore {
         current
             .map(from_ghostty_rgb)
             .or(configured)
-            .ok_or_else(|| anyhow!("libghostty returned no color for {slot:?}"))
+            .ok_or_else(|| anyhow!("Ghostty returned no color for {slot:?}"))
     }
 }
 

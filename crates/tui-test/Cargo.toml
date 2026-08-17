@@ -14,7 +14,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
-libghostty = ["dep:libghostty-vt"]
+ghostty = ["dep:ghostty-vt"]
 
 [dependencies]
 alacritty_terminal.workspace = true
@@ -23,7 +23,7 @@ bitflags.workspace = true
 compact_str.workspace = true
 dirs.workspace = true
 flate2.workspace = true
-libghostty-vt = { workspace = true, optional = true }
+ghostty-vt = { workspace = true, optional = true }
 portable-pty.workspace = true
 regex.workspace = true
 serde.workspace = true
