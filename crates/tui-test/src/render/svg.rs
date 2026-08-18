@@ -58,6 +58,17 @@ fn hex(c: Rgb) -> String {
     c.to_hex()
 }
 
+fn svg_dimension(value: f64) -> String {
+    let mut output = format!("{value:.4}");
+    while output.contains('.') && output.ends_with('0') {
+        output.pop();
+    }
+    if output.ends_with('.') {
+        output.pop();
+    }
+    output
+}
+
 fn dim(c: Rgb) -> Rgb {
     let s = |v: u8| (v as f32 * 0.6) as u8;
     Rgb::new(s(c.r), s(c.g), s(c.b))
@@ -396,6 +407,7 @@ fn write_cursor(
 ///
 /// Its row is a `usize` because it indexes `rows`, which for a full-history
 /// render is as long as the scrollback and so is not bounded by the screen.
+#[cfg(test)]
 pub(crate) fn render_svg(
     rows: &[Vec<EmuCell>],
     cols: u16,
@@ -403,7 +415,18 @@ pub(crate) fn render_svg(
     cursor: Option<(u16, usize)>,
     title: Option<&str>,
 ) -> String {
-    render_svg_with_font(rows, cols, colors, cursor, title, FONT_STACK)
+    render_svg_with_zoom(rows, cols, colors, cursor, title, 1.0)
+}
+
+pub(crate) fn render_svg_with_zoom(
+    rows: &[Vec<EmuCell>],
+    cols: u16,
+    colors: &dyn RenderColors,
+    cursor: Option<(u16, usize)>,
+    title: Option<&str>,
+    zoom: f64,
+) -> String {
+    render_svg_with_font(rows, cols, colors, cursor, title, FONT_STACK, zoom)
 }
 
 pub(crate) fn render_svg_with_font(
@@ -413,6 +436,7 @@ pub(crate) fn render_svg_with_font(
     cursor: Option<(u16, usize)>,
     title: Option<&str>,
     font_family: &str,
+    zoom: f64,
 ) -> String {
     let nerd_font = NerdFont::new(rows, FONT_SIZE);
     let cols = cols as usize;
@@ -424,11 +448,13 @@ pub(crate) fn render_svg_with_font(
     let padding = CANVAS_PADDING as f32;
     let width = panel_width + padding * 2.0;
     let height = panel_height + padding * 2.0;
+    let output_width = svg_dimension(f64::from(width) * zoom);
+    let output_height = svg_dimension(f64::from(height) * zoom);
 
     let mut out = String::new();
     let _ = write!(
         out,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{FONT_SIZE}px">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{FONT_SIZE}px">"#
     );
     nerd_font.write_defs(&mut out);
     let _ = write!(
@@ -821,6 +847,13 @@ mod tests {
         assert!(svg.contains(">hi</text>"));
         assert!(!svg.contains("<defs>"));
         assert!(!svg.contains("<use"));
+    }
+
+    #[test]
+    fn zoom_changes_output_size_without_changing_the_view_box() {
+        let rows = vec![vec![cell("x", None, None)]];
+        let svg = render_svg_with_zoom(&rows, 1, &colors(), None, None, 0.5);
+        assert!(svg.contains(r#"width="44" height="60.5" viewBox="0 0 88 121""#));
     }
 
     #[test]

@@ -51,6 +51,7 @@ test("echo roundtrip drives a real session", async () => {
     assert.deepEqual(await su.getSize(), { cols: 92, rows: 26 });
     assert.ok((await su.cells(0, 0, 92, 26)).length > 0);
     assert.match(await su.screenshot(), /hello-sdk/);
+    await assert.rejects(() => su.screenshot(null, { zoom: 0.5 }), /requires a path/);
 
     await su.write("echo typed-write");
     await su.keys("Enter");
@@ -99,7 +100,15 @@ test("recording API exports styled Unicode to APNG and GIF", async () => {
     ]) {
       const path = join(root, `styled.${extension}`);
       await withTerminal({ shell, cols: 20, rows: 4 }, async (su) => {
-        await su.startRecording(path, { format, fps: 30 });
+        if (format === "apng") {
+          const screenshotPath = join(root, "zoomed.svg");
+          await su.screenshot(screenshotPath, { zoom: 0.5 });
+          assert.match(
+            await readFile(screenshotPath, "utf8"),
+            /width="139" height="92" viewBox="0 0 278 184"/,
+          );
+        }
+        await su.startRecording(path, { format, fps: 30, zoom: 0.5 });
         await su.submit(command);
         await su.waitCommand();
         assert.equal(await su.stopRecording(), path);
@@ -108,8 +117,12 @@ test("recording API exports styled Unicode to APNG and GIF", async () => {
       if (format === "apng") {
         assert.deepEqual(bytes.subarray(0, 8), Buffer.from("\x89PNG\r\n\x1a\n", "latin1"));
         assert.ok(bytes.includes(Buffer.from("acTL")));
+        assert.equal(bytes.readUInt32BE(16), 278);
+        assert.equal(bytes.readUInt32BE(20), 184);
       } else {
         assert.equal(bytes.subarray(0, 6).toString("ascii"), "GIF89a");
+        assert.equal(bytes.readUInt16LE(6), 278);
+        assert.equal(bytes.readUInt16LE(8), 184);
       }
     }
   } finally {

@@ -1163,12 +1163,22 @@ fn a_window_title_is_tracked_asserted_and_drawn() {
 
     // The title is drawn in the window chrome, not in the grid.
     let svg = sandbox.home.join("titled.svg");
-    sandbox.ok(&["screenshot", "--out", svg.to_str().expect("utf-8 path")]);
+    sandbox.ok(&[
+        "screenshot",
+        "--out",
+        svg.to_str().expect("utf-8 path"),
+        "--zoom",
+        "0.5",
+    ]);
     let image = std::fs::read_to_string(&svg).expect("read svg");
     assert!(
         image.contains(">vim: notes.md - 40x30</text>")
             && image.contains(r#"text-anchor="middle""#),
         "the title is drawn centred in the title bar: {image}"
+    );
+    assert!(
+        image.contains(r#"width="239" height="365" viewBox="0 0 478 730""#),
+        "zoom changes only the displayed dimensions: {image}"
     );
 
     // An empty title clears it, which is how programs tidy up on exit.

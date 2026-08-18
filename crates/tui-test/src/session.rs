@@ -249,6 +249,7 @@ impl Session {
         fps: Option<u8>,
         speed: Option<f64>,
         idle_time_limit: Option<f64>,
+        zoom: Option<f64>,
     ) -> Result<(), crate::api::TuiTestError> {
         if path.trim().is_empty() {
             return Err(crate::api::TuiTestError::usage(
@@ -262,6 +263,12 @@ impl Session {
                     "cannot infer recording format; use .png, .apng, .gif, .mp4, or .cast",
                 )
             })?;
+        let zoom = crate::api::resolve_zoom(zoom)?;
+        if format == crate::api::RecordingFormat::Cast && zoom != 1.0 {
+            return Err(crate::api::TuiTestError::usage(
+                "zoom is only supported for image and video recordings",
+            ));
+        }
         #[cfg(not(feature = "recording-raster"))]
         if format != crate::api::RecordingFormat::Cast {
             return Err(crate::api::TuiTestError::usage(
@@ -318,6 +325,8 @@ impl Session {
             env,
             initial_output,
             #[cfg(feature = "recording-raster")]
+            zoom,
+            #[cfg(feature = "recording-raster")]
             timeline: record::frames::TimelineOptions {
                 fps,
                 speed,
@@ -354,7 +363,7 @@ impl Session {
                 let cast = record::cast::read(&stopped.capture_path)?;
                 let frames = record::frames::from_cast(cast, &stopped.timeline)?;
                 let (max_cols, max_rows) = record::frames::max_dimensions(&frames)?;
-                let mut renderer = GridRenderer::with_scale(max_cols, max_rows, 2);
+                let mut renderer = GridRenderer::with_zoom(max_cols, max_rows, 2.0 * stopped.zoom)?;
                 crate::render::encode::encode(
                     &temporary_path,
                     stopped.format,

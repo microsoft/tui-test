@@ -228,11 +228,12 @@ class TypedCallTests(unittest.TestCase):
         terminal = _CapturingClient("s")
         run(
             terminal.start_recording(
-                "demo.cast",
-                format="cast",
+                "demo.png",
+                format="apng",
                 fps=24,
                 speed=2.0,
                 idle_time_limit=3.0,
+                zoom=0.5,
             )
         )
         run(terminal.stop_recording())
@@ -241,11 +242,24 @@ class TypedCallTests(unittest.TestCase):
             [
                 (
                     "start_recording",
-                    ("demo.cast", "cast", 24, 2.0, 3.0),
+                    ("demo.png", "apng", 24, 2.0, 3.0, 0.5),
                 ),
                 ("stop_recording", ()),
             ],
         )
+
+    def test_screenshot_forwards_zoom(self):
+        terminal = _CapturingClient("s")
+        run(terminal.screenshot("screen.svg", full=True, zoom=0.5))
+        self.assertEqual(
+            terminal.fake.calls,
+            [("screenshot", ("screen.svg", True, 0.5))],
+        )
+
+    def test_screenshot_rejects_zoom_without_path(self):
+        terminal = _CapturingClient("s")
+        with self.assertRaisesRegex(ValueError, "requires a path"):
+            run(terminal.screenshot(zoom=0.5))
 
 
 class ClientTimeoutTests(unittest.TestCase):

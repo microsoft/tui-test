@@ -51,7 +51,7 @@ pub trait FrameRenderer {
 pub struct GridRenderer {
     max_cols: u16,
     max_rows: usize,
-    scale: u32,
+    scale: f32,
     width: u32,
     height: u32,
     pixmap: Pixmap,
@@ -64,30 +64,37 @@ impl GridRenderer {
     }
 
     pub fn with_scale(cols: u16, rows: usize, scale: u32) -> Self {
-        assert!(scale > 0, "recording raster scale must be non-zero");
+        Self::with_zoom(cols, rows, f64::from(scale))
+            .expect("recording raster scale must fit output dimensions")
+    }
+
+    pub fn with_zoom(cols: u16, rows: usize, zoom: f64) -> anyhow::Result<Self> {
+        if !zoom.is_finite() || zoom <= 0.0 || zoom > f64::from(f32::MAX) {
+            anyhow::bail!("recording zoom must be finite and greater than zero");
+        }
         let (base_width, base_height) = svg::pixel_size(cols, rows);
         let padding = CANVAS_PADDING
-            .checked_mul(scale)
-            .and_then(|padding| padding.checked_mul(2))
+            .checked_mul(2)
             .expect("recording canvas padding must fit in u32");
         let width = base_width
-            .checked_mul(scale)
-            .and_then(|width| width.checked_add(padding))
-            .expect("recording width must fit in u32");
+            .checked_add(padding)
+            .ok_or_else(|| anyhow::anyhow!("recording width must fit in u32"))?;
         let height = base_height
-            .checked_mul(scale)
-            .and_then(|height| height.checked_add(padding))
-            .expect("recording height must fit in u32");
-        Self {
+            .checked_add(padding)
+            .ok_or_else(|| anyhow::anyhow!("recording height must fit in u32"))?;
+        let width = scaled_dimension(width, zoom, "width")?;
+        let height = scaled_dimension(height, zoom, "height")?;
+        Ok(Self {
             max_cols: cols,
             max_rows: rows,
-            scale,
+            scale: zoom as f32,
             width,
             height,
-            pixmap: Pixmap::new(width, height)
-                .expect("terminal recording dimensions must fit a pixmap"),
+            pixmap: Pixmap::new(width, height).ok_or_else(|| {
+                anyhow::anyhow!("terminal recording dimensions must fit a pixmap")
+            })?,
             fonts: FontSystem::new(),
-        }
+        })
     }
 }
 
@@ -106,15 +113,11 @@ impl FrameRenderer for GridRenderer {
             anyhow::bail!("recording frame row exceeds its declared width");
         }
 
-        let scale = self.scale as f32;
+        let scale = self.scale;
         let colors = &frame.render_state;
         let (base_width, base_height) = svg::pixel_size(cols, rows);
-        let panel_width = base_width
-            .checked_mul(self.scale)
-            .expect("recording frame width must fit in u32");
-        let panel_height = base_height
-            .checked_mul(self.scale)
-            .expect("recording frame height must fit in u32");
+        let panel_width = scaled_dimension(base_width, f64::from(self.scale), "frame width")?;
+        let panel_height = scaled_dimension(base_height, f64::from(self.scale), "frame height")?;
         let origin_x = (self.width - panel_width) as f32 / 2.0;
         let origin_y = (self.height - panel_height) as f32 / 2.0;
         self.pixmap.fill(tiny_skia::Color::from_rgba8(
@@ -491,6 +494,14 @@ fn draw_title(
         }
         x += width;
     }
+}
+
+fn scaled_dimension(base: u32, zoom: f64, name: &str) -> anyhow::Result<u32> {
+    let scaled = f64::from(base) * zoom;
+    if !scaled.is_finite() || scaled > f64::from(u32::MAX) {
+        anyhow::bail!("recording {name} is too large");
+    }
+    Ok(scaled.ceil().max(1.0) as u32)
 }
 
 #[cfg(test)]

@@ -158,6 +158,7 @@ export interface RecordingOptions {
   fps?: number
   speed?: number
   idleTimeLimit?: number
+  zoom?: number
 }
 
 export interface RunOptions {
@@ -177,6 +178,7 @@ export interface RunOptions {
 export interface ScreenshotOptions {
   full?: boolean
   path?: string
+  zoom?: number
 }
 
 export declare function sessions(): Promise<Array<string>>

@@ -117,6 +117,8 @@ pub(super) fn worker_loop(
                     capture_path: request.capture_path,
                     format: request.format,
                     #[cfg(feature = "recording-raster")]
+                    zoom: request.zoom,
+                    #[cfg(feature = "recording-raster")]
                     timeline: request.timeline,
                     #[cfg(feature = "recording-raster")]
                     ffmpeg_path: request.ffmpeg_path,

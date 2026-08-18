@@ -181,6 +181,7 @@ pub enum Operation {
     Screenshot {
         full: bool,
         path: Option<String>,
+        zoom: Option<f64>,
     },
     StartRecording {
         path: String,
@@ -188,6 +189,7 @@ pub enum Operation {
         fps: Option<u8>,
         speed: Option<f64>,
         idle_time_limit: Option<f64>,
+        zoom: Option<f64>,
     },
     StopRecording,
 }
@@ -416,6 +418,19 @@ impl RecordingFormat {
     }
 }
 
+pub(crate) fn resolve_zoom(zoom: Option<f64>) -> Result<f64, TuiTestError> {
+    let zoom = zoom.unwrap_or(1.0);
+    if !zoom.is_finite() || zoom <= 0.0 {
+        return Err(TuiTestError::usage(
+            "zoom must be finite and greater than zero",
+        ));
+    }
+    if zoom > f64::from(f32::MAX) / 2.0 {
+        return Err(TuiTestError::usage("zoom is too large"));
+    }
+    Ok(zoom)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeStatus {
     pub session: String,
@@ -496,5 +511,14 @@ mod tests {
             Some(RecordingFormat::Cast)
         );
         assert_eq!(RecordingFormat::infer("demo.webm"), None);
+    }
+
+    #[test]
+    fn zoom_defaults_to_one_and_rejects_invalid_values() {
+        assert_eq!(resolve_zoom(None).unwrap(), 1.0);
+        assert_eq!(resolve_zoom(Some(0.5)).unwrap(), 0.5);
+        for zoom in [0.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert!(resolve_zoom(Some(zoom)).is_err());
+        }
     }
 }

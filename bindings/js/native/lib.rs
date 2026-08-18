@@ -376,6 +376,7 @@ pub struct SnapshotOptions {
 pub struct ScreenshotOptions {
     pub full: Option<bool>,
     pub path: Option<String>,
+    pub zoom: Option<f64>,
 }
 
 #[napi(object)]
@@ -385,6 +386,7 @@ pub struct RecordingOptions {
     pub fps: Option<f64>,
     pub speed: Option<f64>,
     pub idle_time_limit: Option<f64>,
+    pub zoom: Option<f64>,
 }
 
 #[napi(string_enum = "lowercase")]
@@ -1180,6 +1182,7 @@ impl NativeSession {
         let options = options.unwrap_or(ScreenshotOptions {
             full: None,
             path: None,
+            zoom: None,
         });
         execute(
             self.handle.clone(),
@@ -1187,6 +1190,7 @@ impl NativeSession {
             Operation::Screenshot {
                 full: options.full.unwrap_or(false),
                 path: options.path,
+                zoom: options.zoom,
             },
             |result| match result {
                 OperationResult::Screenshot(CoreScreenshotResult::Path(value))
@@ -1212,6 +1216,7 @@ impl NativeSession {
                 fps,
                 speed: options.speed,
                 idle_time_limit: options.idle_time_limit,
+                zoom: options.zoom,
             },
         )
         .await

@@ -207,10 +207,18 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         }
         Command::State => Request::State,
         Command::Text { full } => Request::Text { full },
-        Command::Screenshot { path, out, full } => Request::Screenshot {
+        Command::Screenshot {
+            path,
+            out,
             full,
-            path: out.or(path),
-        },
+            zoom,
+        } => {
+            let path = out.or(path);
+            if zoom.is_some() && path.is_none() {
+                anyhow::bail!("screenshot --zoom requires --out or a path");
+            }
+            Request::Screenshot { full, path, zoom }
+        }
         Command::Record {
             cmd:
                 RecordCmd::Start {
@@ -219,6 +227,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                     fps,
                     speed,
                     idle_time_limit,
+                    zoom,
                 },
         } => Request::StartRecording {
             path: resolve_client_path(path)?,
@@ -226,6 +235,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             fps,
             speed,
             idle_time_limit,
+            zoom,
         },
         Command::Record {
             cmd: RecordCmd::Stop,
@@ -787,7 +797,7 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
                   [--config F] [--profile P]\n\
           run [--config F] [--profile P] <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
-INSPECT   state | text [--full] | screenshot [-o file.svg] [--full]\n\
+INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
           cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title\n\
 INPUT     type \"text\" | submit [\"text\"] | press <Key...> | keys \"Ctrl+a\"\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
@@ -799,7 +809,7 @@ EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex]\n\
           expect snapshot NAME [-u] [--include-colors --include-title]\n\
-RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N]\n\
+RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
 WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
@@ -828,6 +838,16 @@ mod tests {
             format_data(&json!({ "text": "hello\nworld" })),
             "hello\nworld"
         );
+    }
+
+    #[test]
+    fn screenshot_zoom_without_output_is_rejected() {
+        let cli = Cli::try_parse_from(["tui-test", "screenshot", "--zoom", "0.5"]).unwrap();
+        let command = cli.command.unwrap();
+        assert!(build_request(command)
+            .unwrap_err()
+            .to_string()
+            .contains("requires --out"));
     }
 
     #[test]

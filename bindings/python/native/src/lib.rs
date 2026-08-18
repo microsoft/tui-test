@@ -881,22 +881,24 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (path, full))]
+    #[pyo3(signature = (path, full, zoom=None))]
     fn screenshot<'py>(
         &self,
         py: Python<'py>,
         path: Option<String>,
         full: bool,
+        zoom: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let name = self.name.clone();
         future_blocking(
             py,
-            move || execute_screenshot(&name, Operation::Screenshot { full, path }),
+            move || execute_screenshot(&name, Operation::Screenshot { full, path, zoom }),
             screenshot_to_py,
         )
     }
 
-    #[pyo3(signature = (path, format, fps, speed, idle_time_limit))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (path, format, fps, speed, idle_time_limit, zoom=None))]
     fn start_recording<'py>(
         &self,
         py: Python<'py>,
@@ -905,6 +907,7 @@ impl NativeSession {
         fps: Option<Bound<'py, PyAny>>,
         speed: Option<f64>,
         idle_time_limit: Option<f64>,
+        zoom: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let fps = capture_optional_integer(fps);
         let name = self.name.clone();
@@ -922,6 +925,7 @@ impl NativeSession {
                             .transpose()?,
                         speed,
                         idle_time_limit,
+                        zoom,
                     },
                 )
             },
