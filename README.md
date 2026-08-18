@@ -310,11 +310,6 @@ print the screen bare.
 | `expect bell N [--timeout MS]`                                                  | Cumulative bell count reaches at least N.  |
 | `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare against `__snapshots__/NAME.snap`. `--include-title` adds the window title to the frame. |
 
-`state`'s `bell_count` is a running cumulative total. Use `get bell-events` to
-retrieve the recorded events themselves, each with a 1-based `sequence` and
-monotonic `elapsed_ms` since recording began; exact timings aren't reproducible
-across runs, so they aren't part of `state`.
-
 Colors accept ANSI-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 
 ### Screenshots
