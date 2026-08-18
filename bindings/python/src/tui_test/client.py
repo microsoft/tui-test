@@ -27,7 +27,7 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Backend, Cell, Profile, RecordingFormat, State, Timeouts
+from .types import Backend, BellEvent, Cell, Profile, RecordingFormat, State, Timeouts
 
 _TERMINAL_MARKER = "Terminal content:\n"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
@@ -367,6 +367,19 @@ class TuiTest:
     async def get_size(self) -> Dict[str, int]:
         return await self._await(self._native.get_size())
 
+    async def get_bell_count(self) -> int:
+        return await self._await(self._native.get_bell_count())
+
+    async def get_bell_events(self) -> List[BellEvent]:
+        events = await self._await(self._native.get_bell_events())
+        return [
+            BellEvent(
+                sequence=event.get("sequence", 0),
+                elapsed_ms=event.get("elapsed_ms", 0),
+            )
+            for event in events
+        ]
+
     async def screenshot(
         self,
         path: Optional[str] = None,
@@ -452,6 +465,12 @@ class TuiTest:
             self._native.wait_ready(self._timeout("ready", timeout)),
         )
 
+    async def wait_bell(self, *, timeout: Optional[int] = None) -> None:
+        await self._guarded(
+            "wait_bell",
+            self._native.wait_bell(self._timeout("text", timeout)),
+        )
+
     async def expect_title(
         self,
         text: str,
@@ -506,6 +525,16 @@ class TuiTest:
     async def expect_output(self, text: str, *, regex: bool = False) -> None:
         await self._guarded(
             "expect_output", self._native.expect_output(text, regex)
+        )
+
+    async def expect_bell_count(
+        self, count: int, *, timeout: Optional[int] = None
+    ) -> None:
+        await self._guarded(
+            "expect_bell_count",
+            self._native.expect_bell_count(
+                count, self._timeout("text", timeout)
+            ),
         )
 
     async def expect_snapshot(

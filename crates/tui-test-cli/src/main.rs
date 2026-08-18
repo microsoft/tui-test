@@ -288,6 +288,8 @@ fn map_field(f: GetArg) -> GetField {
         GetArg::Cursor => GetField::Cursor,
         GetArg::Size => GetField::Size,
         GetArg::Title => GetField::Title,
+        GetArg::Bells => GetField::BellCount,
+        GetArg::BellEvents => GetField::BellEvents,
     }
 }
 
@@ -367,6 +369,9 @@ fn map_wait(what: WaitCmd) -> Request {
         WaitCmd::Ready { timeout } => Request::WaitReady {
             timeout_ms: timeout,
         },
+        WaitCmd::Bell { timeout } => Request::WaitBell {
+            timeout_ms: timeout,
+        },
     }
 }
 
@@ -407,6 +412,10 @@ fn map_expect(what: ExpectCmd) -> Request {
             timeout_ms: timeout,
         },
         ExpectCmd::Output { text, regex } => Request::ExpectOutput { text, regex },
+        ExpectCmd::Bell { count, timeout } => Request::ExpectBellCount {
+            count,
+            timeout_ms: timeout,
+        },
         ExpectCmd::Snapshot {
             name,
             update,
@@ -798,16 +807,16 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           run [--config F] [--profile P] <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
-          cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title\n\
+          cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title|bells|bell-events\n\
 INPUT     type \"text\" | submit [\"text\"] | press <Key...> | keys \"Ctrl+a\"\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
 WAIT      wait text \"T\" [--regex --full --not --timeout MS]\n\
           wait title \"T\" [--regex --not --timeout MS]\n\
-          wait idle | wait command | wait exit | wait ready\n\
+          wait idle | wait command | wait exit | wait ready | wait bell\n\
 EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
-          expect exit-code N | expect output \"T\" [--regex]\n\
+          expect exit-code N | expect output \"T\" [--regex] | expect bell N\n\
           expect snapshot NAME [-u] [--include-colors --include-title]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\

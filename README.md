@@ -179,7 +179,7 @@ Waits and assertions fall into five timeout classes:
 
 | Class | Applies to | Default |
 | --- | --- | --- |
-| `text` | `expect text`, `wait text` | 5000 ms |
+| `text` | `expect text`, `wait text`, `expect title`, `wait title`, `wait bell`, `expect bell` | 5000 ms |
 | `idle` | `wait idle` | 5000 ms |
 | `command` | `wait command`, `expect exit-code` | 30000 ms |
 | `exit` | `wait exit` | 30000 ms |
@@ -259,11 +259,11 @@ continues to build only the Alacritty backend and does not require Zig.
 
 | Command                                             | Description                                                                                 |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `state`                                             | cwd, size, cursor, window title, last command + exit code, effective timeouts, text snapshot. |
+| `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, effective timeouts, text snapshot. |
 | `text [--full]`                                     | Plain text of the viewport (or scrollback).                                                 |
 | `screenshot [-o file.svg] [--full] [--zoom N]`      | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.   |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags).                                                  |
-| `get command\|output\|exit-code\|cwd\|cursor\|size\|title` | Structured getters.                                                                         |
+| `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | Structured getters.                                                                   |
 
 `state` prints `key: value` lines then the screen; `text` and `screenshot`
 print the screen bare.
@@ -297,6 +297,7 @@ print the screen bare.
 | `wait command`                                      | Until the current command finishes. |
 | `wait exit`                                         | Until the session exits.            |
 | `wait ready`                                        | Until the shell reports a prompt.   |
+| `wait bell`                                         | Until the next terminal bell event. |
 
 ### Expect (exit 0 = pass, 1 = fail)
 
@@ -306,6 +307,7 @@ print the screen bare.
 | `expect title "T" [--regex --not --timeout MS]`                                 | Window title set with OSC 0/2.             |
 | `expect exit-code N [--timeout MS]`                                             | Last command's exit code.                  |
 | `expect output "T" [--regex]`                                                   | Last command's captured output.            |
+| `expect bell N [--timeout MS]`                                                  | Cumulative bell count reaches at least N.  |
 | `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare against `__snapshots__/NAME.snap`. `--include-title` adds the window title to the frame. |
 
 Colors accept ANSI-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).

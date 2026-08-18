@@ -10,6 +10,7 @@ test("generated native declarations expose typed operations", async () => {
     "utf8",
   );
   for (const type of [
+    "BellEvent",
     "OpenResult",
     "State",
     "Cursor",
@@ -29,6 +30,8 @@ test("generated native declarations expose typed operations", async () => {
     "text",
     "cells",
     "getCommand",
+    "getBellCount",
+    "getBellEvents",
     "write",
     "type",
     "submit",
@@ -37,7 +40,9 @@ test("generated native declarations expose typed operations", async () => {
     "resize",
     "signal",
     "waitText",
+    "waitBell",
     "expectText",
+    "expectBellCount",
     "snapshot",
     "screenshot",
     "startRecording",

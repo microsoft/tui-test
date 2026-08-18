@@ -17,6 +17,7 @@ import { uniqueSession } from "./ephemeral.js";
 import { ExpectationError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
 import type {
+  BellEvent,
   Cell,
   ClientOptions,
   Cursor,
@@ -350,6 +351,14 @@ export class TuiTest {
     return this.#runtime.getSize();
   }
 
+  async getBellCount(): Promise<number> {
+    return this.#runtime.getBellCount();
+  }
+
+  async getBellEvents(): Promise<BellEvent[]> {
+    return this.#runtime.getBellEvents();
+  }
+
   async screenshot(path: string | null = null, opts: ScreenshotOptions = {}): Promise<string> {
     if (opts.zoom !== undefined && path === null) {
       throw new TypeError("screenshot zoom requires a path");
@@ -421,6 +430,12 @@ export class TuiTest {
     );
   }
 
+  async waitBell(opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("waitBell", () =>
+      this.#runtime.waitBell(this.#timeout("text", opts.timeout)),
+    );
+  }
+
   async expectTitle(text: string, opts: TitleOptions = {}): Promise<void> {
     await this.#guard("expectTitle", () =>
       this.#runtime.expectTitle(text, {
@@ -454,6 +469,12 @@ export class TuiTest {
   async expectOutput(text: string, opts: { regex?: boolean } = {}): Promise<void> {
     await this.#guard("expectOutput", () =>
       this.#runtime.expectOutput(text, opts.regex ?? false),
+    );
+  }
+
+  async expectBellCount(count: number, opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("expectBellCount", () =>
+      this.#runtime.expectBellCount(count, this.#timeout("text", opts.timeout)),
     );
   }
 

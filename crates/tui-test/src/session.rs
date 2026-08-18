@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::event::BellTracker;
 use crate::logger::Logger;
 use crate::profile::Profile;
 use crate::record::{self, CaptureError, Recorder, StartRecording};
@@ -38,6 +39,7 @@ pub struct Session {
     pub pty: Arc<Mutex<Pty>>,
     pub state: Arc<Mutex<TermState>>,
     pub cancelled: Arc<AtomicBool>,
+    pub(crate) bells: BellTracker,
     recorder: Recorder,
     logger: Arc<Logger>,
     reader: Option<JoinHandle<()>>,
@@ -66,8 +68,6 @@ impl Session {
         logger: Arc<Logger>,
         recording_path: PathBuf,
     ) -> anyhow::Result<Self> {
-        let emu = backend.build(cols, rows, &profile)?;
-
         let (pty, reader) = if let Some(program) = &program {
             let (target, args) = program
                 .split_first()
@@ -86,8 +86,10 @@ impl Session {
             Pty::spawn_launch(&launch, cols, rows, cwd)?
         };
 
+        let started_at = Instant::now();
+        let bells = BellTracker::new(started_at);
         let state = Arc::new(Mutex::new(TermState {
-            emu,
+            emu: backend.build_with_bells(cols, rows, &profile, bells.clone())?,
             tracker: CommandTracker::new(),
             last_change: Instant::now(),
             awaiting_start: None,
@@ -197,6 +199,7 @@ impl Session {
             pty,
             state,
             cancelled,
+            bells,
             recorder,
             logger,
             reader: Some(reader_handle),

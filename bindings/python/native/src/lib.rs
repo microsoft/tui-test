@@ -8,8 +8,8 @@ use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
-    Backend, Cell, CellColor, Cursor, ErrorKind, MouseAction, OpenOptions, OpenResult, Operation,
-    OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
+    Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, MouseAction, OpenOptions, OpenResult,
+    Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
     SnapshotResult, State, Timeouts, TuiTestError,
 };
 
@@ -324,6 +324,24 @@ impl NativeSession {
             py,
             move || execute_size(&name, Operation::GetSize),
             size_to_py,
+        )
+    }
+
+    fn get_bell_count<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || execute_bell_count(&name, Operation::GetBellCount),
+            u64_to_py,
+        )
+    }
+
+    fn get_bell_events<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || execute_bell_events(&name, Operation::GetBellEvents),
+            bell_events_to_py_object,
         )
     }
 
@@ -748,6 +766,28 @@ impl NativeSession {
         )
     }
 
+    #[pyo3(signature = (timeout_ms))]
+    fn wait_bell<'py>(
+        &self,
+        py: Python<'py>,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::WaitBell {
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
     #[pyo3(signature = (text, regex, not_, timeout_ms))]
     fn expect_title<'py>(
         &self,
@@ -848,6 +888,31 @@ impl NativeSession {
         future_blocking(
             py,
             move || execute_unit(&name, Operation::ExpectOutput { text, regex }),
+            unit_to_py,
+        )
+    }
+
+    #[pyo3(signature = (count, timeout_ms))]
+    fn expect_bell_count<'py>(
+        &self,
+        py: Python<'py>,
+        count: Bound<'py, PyAny>,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let count = capture_integer(&count);
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::ExpectBellCount {
+                        count: integer_u64(&count, "count")?,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
             unit_to_py,
         )
     }
@@ -1309,6 +1374,20 @@ fn execute_size(name: &str, operation: Operation) -> Result<Size, TuiTestError> 
     }
 }
 
+fn execute_bell_count(name: &str, operation: Operation) -> Result<u64, TuiTestError> {
+    match global_registry().execute(name, operation)? {
+        OperationResult::BellCount(value) => Ok(value),
+        _ => Err(unexpected_result("the terminal bell count")),
+    }
+}
+
+fn execute_bell_events(name: &str, operation: Operation) -> Result<Vec<BellEvent>, TuiTestError> {
+    match global_registry().execute(name, operation)? {
+        OperationResult::BellEvents(value) => Ok(value),
+        _ => Err(unexpected_result("the terminal bell events")),
+    }
+}
+
 fn execute_snapshot(name: &str, operation: Operation) -> Result<SnapshotResult, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Snapshot(value) => Ok(value),
@@ -1346,6 +1425,10 @@ fn optional_i32_to_py(py: Python<'_>, value: Option<i32>) -> PyResult<Py<PyAny>>
     Ok(value.into_pyobject(py)?.into_any().unbind())
 }
 
+fn u64_to_py(py: Python<'_>, value: u64) -> PyResult<Py<PyAny>> {
+    Ok(value.into_pyobject(py)?.into_any().unbind())
+}
+
 fn string_list_to_py(py: Python<'_>, value: Vec<String>) -> PyResult<Py<PyAny>> {
     Ok(PyList::new(py, value)?.into_any().unbind())
 }
@@ -1373,6 +1456,21 @@ fn size_dict(py: Python<'_>, size: Size) -> PyResult<Bound<'_, PyDict>> {
     Ok(value)
 }
 
+fn bell_events_to_py<'py>(py: Python<'py>, events: Vec<BellEvent>) -> PyResult<Bound<'py, PyList>> {
+    let values = PyList::empty(py);
+    for event in events {
+        let value = PyDict::new(py);
+        value.set_item("sequence", event.sequence)?;
+        value.set_item("elapsed_ms", event.elapsed_ms)?;
+        values.append(value)?;
+    }
+    Ok(values)
+}
+
+fn bell_events_to_py_object(py: Python<'_>, events: Vec<BellEvent>) -> PyResult<Py<PyAny>> {
+    Ok(bell_events_to_py(py, events)?.into_any().unbind())
+}
+
 fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     let result = PyDict::new(py);
     result.set_item("session_shell", value.session_shell)?;
@@ -1385,6 +1483,7 @@ fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     result.set_item("last_exit", value.last_exit)?;
     result.set_item("exited", value.exited)?;
     result.set_item("ready", value.ready)?;
+    result.set_item("bell_count", value.bell_count)?;
     let timeouts = PyDict::new(py);
     timeouts.set_item("text", value.timeouts.text)?;
     timeouts.set_item("idle", value.timeouts.idle)?;

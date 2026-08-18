@@ -187,6 +187,115 @@ fn close_all_interrupts_in_flight_waits() {
     assert_eq!(wait.join().unwrap().unwrap_err().kind, ErrorKind::Assertion);
 }
 
+#[test]
+fn bell_counts_waits_and_expectations_are_cumulative() {
+    let registry = SessionRegistry::default();
+    let session = registry.session("bells");
+    session.open(OpenOptions::default()).expect("open terminal");
+    session
+        .execute(Operation::Submit {
+            data: Some(two_bells_command()),
+        })
+        .expect("submit bell command");
+    session
+        .execute(Operation::ExpectBellCount {
+            count: 2,
+            timeout_ms: Some(5_000),
+        })
+        .expect("wait for two bells");
+    session
+        .execute(Operation::WaitCommand {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for bell command");
+
+    let OperationResult::State(state) = session.execute(Operation::State).expect("read state")
+    else {
+        panic!("unexpected state result");
+    };
+    assert_eq!(state.bell_count, 2);
+
+    let OperationResult::BellEvents(events) = session
+        .execute(Operation::GetBellEvents)
+        .expect("read bell events")
+    else {
+        panic!("unexpected bell events result");
+    };
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    assert!(events[1].elapsed_ms >= events[0].elapsed_ms);
+    for _ in 0..2 {
+        assert!(matches!(
+            session
+                .execute(Operation::GetBellCount)
+                .expect("read bell count"),
+            OperationResult::BellCount(2)
+        ));
+    }
+
+    session
+        .execute(Operation::Submit {
+            data: Some(delayed_bell_command()),
+        })
+        .expect("submit delayed bell");
+    session
+        .execute(Operation::WaitBell {
+            timeout_ms: Some(5_000),
+        })
+        .expect("wait for the next bell");
+    assert!(matches!(
+        session
+            .execute(Operation::GetBellCount)
+            .expect("read final bell count"),
+        OperationResult::BellCount(3)
+    ));
+
+    let OperationResult::State(state) =
+        session.execute(Operation::State).expect("read final state")
+    else {
+        panic!("unexpected final state result");
+    };
+    assert_eq!(state.bell_count, 3);
+
+    let OperationResult::BellEvents(events) = session
+        .execute(Operation::GetBellEvents)
+        .expect("read final bell events")
+    else {
+        panic!("unexpected final bell events result");
+    };
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert!(events[2].elapsed_ms >= events[1].elapsed_ms);
+
+    session.close().expect("close terminal");
+}
+
+fn two_bells_command() -> String {
+    if cfg!(windows) {
+        "[Console]::Out.Write([char]7); [Console]::Out.Write([char]7)".to_string()
+    } else {
+        "printf '\\a\\a'".to_string()
+    }
+}
+
+fn delayed_bell_command() -> String {
+    if cfg!(windows) {
+        "Start-Sleep -Milliseconds 300; [Console]::Out.Write([char]7)".to_string()
+    } else {
+        "sleep 0.3; printf '\\a'".to_string()
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn pty_eof_waits_for_the_real_delayed_exit_status() {

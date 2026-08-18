@@ -22,6 +22,7 @@ export { VERSION } from "./version.js";
 export type {
   ArtifactOptions,
   Backend,
+  BellEvent,
   Cell,
   ClientOptions,
   Color,

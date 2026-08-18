@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::event::BellTracker;
 use crate::profile::Profile;
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::emu::Emulator;
@@ -43,6 +44,25 @@ impl Backend {
             Self::Alacritty => Ok(Box::new(AlacrittyEmu::new(cols, rows, profile))),
             #[cfg(feature = "ghostty")]
             Self::Ghostty => Ok(Box::new(GhosttyEmu::new(cols, rows, profile)?)),
+        }
+    }
+
+    /// Like [`Self::build`], but wires up bell tracking where the backend
+    /// supports it. Backends without native bell support simply won't
+    /// report bell events.
+    pub(crate) fn build_with_bells(
+        self,
+        cols: u16,
+        rows: u16,
+        profile: &Profile,
+        bells: BellTracker,
+    ) -> anyhow::Result<Box<dyn Emulator>> {
+        match self {
+            Self::Alacritty => Ok(Box::new(AlacrittyEmu::with_bell_tracker(
+                cols, rows, profile, bells,
+            ))),
+            #[cfg(feature = "ghostty")]
+            Self::Ghostty => self.build(cols, rows, profile),
         }
     }
 

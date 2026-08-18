@@ -16,6 +16,8 @@ export declare class NativeSession {
   getCwd(): Promise<string | null>
   getCursor(): Promise<Cursor>
   getSize(): Promise<Size>
+  getBellCount(): Promise<number>
+  getBellEvents(): Promise<Array<BellEvent>>
   write(data: string): Promise<void>
   type(text: string): Promise<void>
   submit(data?: string | undefined | null): Promise<void>
@@ -36,9 +38,11 @@ export declare class NativeSession {
   waitCommand(timeoutMs?: number | undefined | null): Promise<void>
   waitExit(timeoutMs?: number | undefined | null): Promise<void>
   waitReady(timeoutMs?: number | undefined | null): Promise<void>
+  waitBell(timeoutMs?: number | undefined | null): Promise<void>
   expectText(text: string, options?: ExpectTextOptions | undefined | null): Promise<void>
   expectExitCode(code: number, timeoutMs?: number | undefined | null): Promise<void>
   expectOutput(text: string, regex?: boolean | undefined | null): Promise<void>
+  expectBellCount(count: number, timeoutMs?: number | undefined | null): Promise<void>
   snapshot(name: string, options?: SnapshotOptions | undefined | null): Promise<SnapshotResult>
   screenshot(options?: ScreenshotOptions | undefined | null): Promise<string>
   startRecording(options: RecordingOptions): Promise<void>
@@ -49,6 +53,11 @@ export declare class NativeSession {
 export declare const enum Backend {
   Alacritty = 'alacritty',
   Ghostty = 'ghostty'
+}
+
+export interface BellEvent {
+  sequence: number
+  elapsed_ms: number
 }
 
 export interface Cell {
@@ -224,6 +233,7 @@ export interface State {
   last_exit: number | null
   exited: number | null
   ready: boolean
+  bell_count: number
   timeouts: EffectiveTimeouts
   text: string
 }

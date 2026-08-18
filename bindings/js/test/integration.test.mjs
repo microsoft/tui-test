@@ -23,6 +23,14 @@ const evalArgs =
   typeof globalThis.Deno === "undefined"
     ? ["-e", "console.log('ready'); setInterval(() => {}, 1000)"]
     : ["eval", "console.log('ready'); setInterval(() => {}, 1000)"];
+const twoBellsCommand =
+  process.platform === "win32"
+    ? "[Console]::Out.Write([char]7); [Console]::Out.Write([char]7)"
+    : "printf '\\a\\a'";
+const delayedBellCommand =
+  process.platform === "win32"
+    ? "Start-Sleep -Seconds 1; [Console]::Out.Write([char]7)"
+    : "sleep 1; printf '\\a'";
 const nonzeroExitArgs =
   typeof globalThis.Deno === "undefined"
     ? ["-e", "process.exit(7)"]
@@ -62,6 +70,43 @@ test("echo roundtrip drives a real session", async () => {
     await su.waitText("typed-type");
     await su.waitCommand();
   });
+});
+
+test("bell state, waits, and expectations stay consistent", async () => {
+  const su = TuiTest.ephemeral("bell-events");
+
+  try {
+    await su.open({ shell });
+    await su.submit(twoBellsCommand);
+    await su.expectBellCount(2, { timeout: 5000 });
+    await su.waitCommand();
+
+    const initialState = await su.state();
+    assert.equal(initialState.bell_count, 2);
+    const initialEvents = await su.getBellEvents();
+    assert.deepEqual(
+      initialEvents.map((event) => event.sequence),
+      [1, 2],
+    );
+    assert.ok(initialEvents[1].elapsed_ms >= initialEvents[0].elapsed_ms);
+    assert.equal(await su.getBellCount(), 2);
+    assert.equal(await su.getBellCount(), 2);
+
+    await su.submit(delayedBellCommand);
+    await su.waitBell({ timeout: 5000 });
+    await su.expectBellCount(3);
+    assert.equal(await su.getBellCount(), 3);
+    const finalState = await su.state();
+    assert.equal(finalState.bell_count, 3);
+    const finalEvents = await su.getBellEvents();
+    assert.deepEqual(
+      finalEvents.map((event) => event.sequence),
+      [1, 2, 3],
+    );
+    assert.ok(finalEvents[2].elapsed_ms >= finalEvents[1].elapsed_ms);
+  } finally {
+    await su.closeQuiet();
+  }
 });
 
 test("recording API writes an asciicast file", async () => {
