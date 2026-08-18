@@ -122,6 +122,45 @@ pub(super) fn fill_rounded_rect(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(super) fn fill_rounded_rect_alpha(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+    color: Rgb,
+    alpha: u8,
+) {
+    let right = x + width;
+    let bottom = y + height;
+    let radius = radius.min(width / 2.0).min(height / 2.0);
+    let mut path = PathBuilder::new();
+    path.move_to(x + radius, y);
+    path.line_to(right - radius, y);
+    path.quad_to(right, y, right, y + radius);
+    path.line_to(right, bottom - radius);
+    path.quad_to(right, bottom, right - radius, bottom);
+    path.line_to(x + radius, bottom);
+    path.quad_to(x, bottom, x, bottom - radius);
+    path.line_to(x, y + radius);
+    path.quad_to(x, y, x + radius, y);
+    path.close();
+    let Some(path) = path.finish() else {
+        return;
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, alpha);
+    pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn fill_top_rounded_rect(
     pixmap: &mut Pixmap,
     x: f32,

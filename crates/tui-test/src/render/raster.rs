@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use tiny_skia::Pixmap;
 
-use crate::profile::{ColorSlot, Rgb};
+use crate::profile::ColorSlot;
 use crate::record::frames::Frame;
 use crate::terminal::cell::{EmuCell, CONTINUATION};
 use crate::terminal::emu::CursorShape;
@@ -14,13 +14,13 @@ mod draw;
 mod font;
 
 use draw::{
-    draw_glyph, fill_circle, fill_rect, fill_rounded_rect, fill_top_rounded_rect,
-    format_glyph_sequence, is_default_ignorable, unpremultiply, unsupported_grapheme,
+    draw_glyph, fill_circle, fill_rect, fill_rounded_rect, fill_rounded_rect_alpha,
+    fill_top_rounded_rect, format_glyph_sequence, is_default_ignorable, unpremultiply,
+    unsupported_grapheme,
 };
 use font::{FontSystem, GlyphKey};
 
-pub(crate) const CANVAS_PADDING: u32 = 24;
-pub(crate) const CANVAS_BACKGROUND: Rgb = Rgb::new(104, 103, 170);
+pub(crate) use svg::{CANVAS_BACKGROUND, CANVAS_PADDING};
 
 #[derive(Debug)]
 pub struct RgbaFrame {
@@ -123,6 +123,14 @@ impl FrameRenderer for GridRenderer {
             CANVAS_BACKGROUND.b,
             255,
         ));
+        draw_shadow(
+            &mut self.pixmap,
+            origin_x,
+            origin_y,
+            panel_width as f32,
+            panel_height as f32,
+            scale,
+        );
         fill_rounded_rect(
             &mut self.pixmap,
             origin_x,
@@ -414,6 +422,22 @@ fn draw_cursor(
                 missing.insert(format!("{character:?} (U+{:04X})", character as u32));
             }
         }
+    }
+}
+
+fn draw_shadow(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, scale: f32) {
+    for (spread, offset_y, alpha) in svg::SHADOW_LAYERS {
+        let spread = spread * scale;
+        fill_rounded_rect_alpha(
+            pixmap,
+            x - spread,
+            y - spread + offset_y * scale,
+            width + spread * 2.0,
+            height + spread * 2.0,
+            svg::WINDOW_RADIUS * scale + spread,
+            svg::SHADOW_COLOR,
+            alpha,
+        );
     }
 }
 
