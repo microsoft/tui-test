@@ -44,6 +44,11 @@ export declare class NativeSession {
   panicProbe(): Promise<void>
 }
 
+export declare const enum Backend {
+  Alacritty = 'alacritty',
+  Ghostty = 'ghostty'
+}
+
 export interface Cell {
   x: number
   y: number
@@ -101,6 +106,7 @@ export interface MouseClickOptions {
 }
 
 export interface OpenOptions {
+  backend?: Backend
   shell?: Shell
   cols?: number
   rows?: number
@@ -138,6 +144,7 @@ export interface PackedScreen {
 export declare function recording(name: string): Promise<string>
 
 export interface RunOptions {
+  backend?: Backend
   program: string
   args?: Array<string>
   cols?: number

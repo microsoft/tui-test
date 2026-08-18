@@ -8,6 +8,7 @@ import {
   uniqueSession,
 } from "../dist/index.js";
 import {
+  backendPayload,
   envPairs,
   profilePayload,
   resolveTimeout,
@@ -100,6 +101,14 @@ test("envPairs coerces records and preserves pair arrays", () => {
   assert.deepEqual(envPairs(), []);
 });
 
+test("backendPayload validates backend names", () => {
+  assert.equal(backendPayload(), undefined);
+  assert.equal(backendPayload("alacritty"), "alacritty");
+  assert.equal(backendPayload("ghostty"), "ghostty");
+  assert.throws(() => backendPayload("xterm"), /unknown backend/);
+  assert.throws(() => backendPayload("libghostty"), /unknown backend/);
+});
+
 test("profilePayload validates profile and color fields", () => {
   assert.deepEqual(profilePayload({ scrollback: 50, colors: { red: "#010203" } }), {
     scrollback: 50,
@@ -161,6 +170,21 @@ test("constructor and per-run profile objects recolor the terminal", async () =>
     });
     await su.waitText("call-profile", { timeout: 5000 });
     await su.expectText("call-profile", { fg: "#040506" });
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("constructor and per-call backends reach native sessions", async () => {
+  const su = new TuiTest(uniqueSession("typed-backend"), {
+    backend: "ghostty",
+  });
+  try {
+    await su.run(process.execPath, evalArgs);
+    await su.waitText("ready", { timeout: 2000 });
+
+    await su.run(process.execPath, evalArgs, { backend: "alacritty" });
+    await su.waitText("ready", { timeout: 2000 });
   } finally {
     await su.closeQuiet();
   }

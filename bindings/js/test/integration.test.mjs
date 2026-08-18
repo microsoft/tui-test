@@ -304,6 +304,23 @@ test("typed mouse and signal operations execute against a real program", async (
   }
 });
 
+test("ghostty backend preserves blink", async () => {
+  const su = new TuiTest(uniqueSession("ghostty-blink"), {
+    backend: "ghostty",
+  });
+  try {
+    await su.run(
+      process.execPath,
+      ["-e", "process.stdout.write('\\u001b[5mX\\u001b[0m'); setInterval(() => {}, 1000)"],
+      { cols: 10, rows: 2 },
+    );
+    await su.waitText("X", { timeout: 5000 });
+    assert.equal((await su.cells(0, 0))[0].blink, true);
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
 test("closeAll interrupts in-flight waits and closes every process-local session", async () => {
   const terminals = [
     new TuiTest(uniqueSession("close-all-a")),
