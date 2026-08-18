@@ -2,6 +2,7 @@ use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 
 use super::super::svg;
 use super::font::GlyphOutline;
+use crate::profile::Rgb;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_glyph(
@@ -12,7 +13,7 @@ pub(super) fn draw_glyph(
     cell_width: f32,
     cell_height: f32,
     baseline: f32,
-    color: (u8, u8, u8),
+    color: Rgb,
     output_scale: f32,
 ) {
     let bounds_width = f32::from(glyph.bounds.x_max - glyph.bounds.x_min).max(1.0);
@@ -49,7 +50,7 @@ pub(super) fn draw_glyph(
     };
 
     let mut paint = Paint::default();
-    paint.set_color_rgba8(color.0, color.1, color.2, 255);
+    paint.set_color_rgba8(color.r, color.g, color.b, 255);
     pixmap.fill_path(&glyph.path, &paint, FillRule::Winding, transform, None);
     if glyph.synthetic_bold {
         let mut bold = transform;
@@ -58,28 +59,21 @@ pub(super) fn draw_glyph(
     }
 }
 
-pub(super) fn fill_rect(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    color: (u8, u8, u8),
-) {
+pub(super) fn fill_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color: Rgb) {
     let Some(rect) = Rect::from_xywh(x, y, width, height) else {
         return;
     };
     let mut paint = Paint::default();
-    paint.set_color_rgba8(color.0, color.1, color.2, 255);
+    paint.set_color_rgba8(color.r, color.g, color.b, 255);
     pixmap.fill_rect(rect, &paint, Transform::identity(), None);
 }
 
-pub(super) fn fill_circle(pixmap: &mut Pixmap, x: f32, y: f32, radius: f32, color: (u8, u8, u8)) {
+pub(super) fn fill_circle(pixmap: &mut Pixmap, x: f32, y: f32, radius: f32, color: Rgb) {
     let Some(path) = PathBuilder::from_circle(x, y, radius) else {
         return;
     };
     let mut paint = Paint::default();
-    paint.set_color_rgba8(color.0, color.1, color.2, 255);
+    paint.set_color_rgba8(color.r, color.g, color.b, 255);
     pixmap.fill_path(
         &path,
         &paint,
@@ -97,7 +91,7 @@ pub(super) fn fill_rounded_rect(
     width: f32,
     height: f32,
     radius: f32,
-    color: (u8, u8, u8),
+    color: Rgb,
 ) {
     let right = x + width;
     let bottom = y + height;
@@ -117,7 +111,7 @@ pub(super) fn fill_rounded_rect(
         return;
     };
     let mut paint = Paint::default();
-    paint.set_color_rgba8(color.0, color.1, color.2, 255);
+    paint.set_color_rgba8(color.r, color.g, color.b, 255);
     pixmap.fill_path(
         &path,
         &paint,
