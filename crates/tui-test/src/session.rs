@@ -387,6 +387,7 @@ fn capture_error(error: CaptureError) -> crate::api::TuiTestError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::alacritty::AlacrittyEmu;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
@@ -400,6 +401,7 @@ mod tests {
             last_change: Instant::now(),
             awaiting_start: None,
             exited: None,
+            exit_error: None,
         }));
         let capture = recorder.capture();
         let output_state = Arc::clone(&state);
