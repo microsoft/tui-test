@@ -11,6 +11,7 @@ use tui_test::{
 fn run_options(program: &str, args: &[&str]) -> RunOptions {
     let defaults = OpenOptions::default();
     RunOptions {
+        backend: defaults.backend,
         program: program.to_string(),
         args: args.iter().map(|arg| (*arg).to_string()).collect(),
         profile: defaults.profile,
