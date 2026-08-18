@@ -142,7 +142,6 @@ impl IncrementalDecoder {
         output
     }
 
-    #[allow(dead_code)] // The capture worker finalizes independent decoders in a later stack layer.
     pub fn finish(&mut self) -> String {
         self.utf8_pending.append(&mut self.filter_pending);
         let output = String::from_utf8_lossy(&self.utf8_pending).into_owned();
