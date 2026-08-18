@@ -120,10 +120,9 @@ impl Pty {
     }
 
     /// Return the exit code if the child has exited.
-    pub fn try_wait(&mut self) -> Option<i32> {
-        match self.child.try_wait() {
-            Ok(Some(status)) => Some(status.exit_code() as i32),
-            _ => None,
-        }
+    pub fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+        self.child
+            .try_wait()
+            .map(|status| status.map(|status| status.exit_code() as i32))
     }
 }
