@@ -60,8 +60,8 @@ without parsing text:
 
 | Command                                                                  | Description                                                            |
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| `open [--shell S] [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P]` | Spawn a shell session (auto-starts the daemon). `--env` is repeatable. |
-| `run [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P] <program> [args...]` | Spawn a session running a program directly (no shell). |
+| `open [--shell S] [--backend B] [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P]` | Spawn a shell session (auto-starts the daemon). `--env` is repeatable. |
+| `run [--backend B] [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P] <program> [args...]` | Spawn a session running a program directly (no shell). |
 | `sessions`                                                               | List active sessions.                                                  |
 | `close [--all]`                                                          | Close the current session (or every session with `--all`).             |
 | `daemon start`                                                           | Start this session's daemon. Most commands start one on demand.        |
@@ -332,10 +332,11 @@ Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
 and `getRecording`. The JavaScript client otherwise uses the same names in
 camelCase (`waitCommand`, `expectText`, `getExitCode`, etc.).
 
-The constructors accept a session name plus profile, timeout, and artifact
-options: `TuiTest(session="default", *, timeouts=None, profile=None,
-artifacts=None)` in Python and `new TuiTest(session?, { profile?, timeouts?,
-artifacts? })` in JavaScript. `run` takes the program then its arguments
+The constructors accept a session name plus backend, profile, timeout, and
+artifact options: `TuiTest(session="default", *, backend=None, timeouts=None,
+profile=None, artifacts=None)` in Python and `new TuiTest(session?, {
+backend?, profile?, timeouts?, artifacts? })` in JavaScript. `run` takes the
+program then its arguments
 (`await su.run("vim", "file.txt")` in Python, `await su.run("vim",
 ["file.txt"])` in JavaScript).
 
@@ -343,6 +344,22 @@ Python and JavaScript failures raise typed errors instead of returning exit
 codes, one class per row of the applicable [exit-code table](#exit-codes):
 `ExpectationError` (1), `UsageError` (2), `NoSessionError` (3), and
 `InternalError` (5), all subclasses of `TuiTestError`.
+
+## Terminal backends
+
+`open` and `run` accept `--backend alacritty|ghostty`; Alacritty is the
+default. The Python and JavaScript constructors accept the same canonical
+strings as a client default, and each `open`/`run` can override it.
+
+```sh
+tui-test open --backend ghostty
+tui-test run --backend ghostty -- vim file.txt
+```
+
+Both backends satisfy the same cell-grid contract. Ghostty preserves the blink
+attribute, while Alacritty cannot report it. Command boundaries, exit codes,
+cwd, and captured command output are parsed separately from the raw PTY stream,
+so switching emulators does not change shell integration behavior.
 
 ## Configuration
 
