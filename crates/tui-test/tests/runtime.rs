@@ -70,6 +70,10 @@ fn named_handles_share_a_process_local_terminal() {
             timeout_ms: Some(5_000),
         })
         .expect("find command output");
+    assert!(second
+        .recording()
+        .expect("read active recording")
+        .contains("native-runtime"));
 
     assert!(registry.sessions().contains(&name));
     first.close().expect("close terminal");
@@ -291,4 +295,49 @@ fn closing_after_pty_eof_does_not_deadlock() {
             panic!("close deadlocked after PTY EOF: {error}");
         }
     }
+}
+
+#[test]
+#[cfg(feature = "recording-raster")]
+fn session_records_and_exports_a_gif() {
+    let registry = SessionRegistry::default();
+    let session = registry.session(format!("recording-export-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "tui-test-recording-export-{}.gif",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+
+    session.open(OpenOptions::default()).expect("open terminal");
+    session
+        .execute(Operation::StartRecording {
+            path: path.to_string_lossy().into_owned(),
+            format: None,
+            fps: Some(30),
+            speed: Some(1.0),
+            idle_time_limit: Some(5.0),
+        })
+        .expect("start recording");
+    session
+        .execute(Operation::Submit {
+            data: Some("echo animated-recording".to_string()),
+        })
+        .expect("submit command");
+    session
+        .execute(Operation::WaitCommand {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for command");
+    let OperationResult::Recording(recorded) = session
+        .execute(Operation::StopRecording)
+        .expect("stop recording")
+    else {
+        panic!("unexpected recording result");
+    };
+    assert_eq!(recorded, path.to_string_lossy());
+    let bytes = std::fs::read(&path).expect("read gif");
+    assert_eq!(&bytes[..6], b"GIF89a");
+
+    session.close().expect("close terminal");
+    std::fs::remove_file(path).expect("remove apng");
 }

@@ -7,7 +7,7 @@ Color = Union[str, int]
 Backend = Literal["alacritty", "ghostty"]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
-RecordingFormat = Literal["cast"]
+RecordingFormat = Literal["gif", "cast"]
 
 
 @dataclass
