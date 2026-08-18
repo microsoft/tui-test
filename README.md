@@ -261,7 +261,7 @@ continues to build only the Alacritty backend and does not require Zig.
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `state`                                             | cwd, size, cursor, window title, last command + exit code, effective timeouts, text snapshot. |
 | `text [--full]`                                     | Plain text of the viewport (or scrollback).                                                 |
-| `screenshot [-o file.svg] [--full]`                 | Terminal text to stdout, or a crisp full-color SVG image (svg-term-style window) to a file. |
+| `screenshot [-o file.svg] [--full] [--zoom N]`      | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.   |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags).                                                  |
 | `get command\|output\|exit-code\|cwd\|cursor\|size\|title` | Structured getters.                                                                         |
 
@@ -312,7 +312,13 @@ Colors accept ANSI-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 
 ### Screenshots
 
-Screenshots render a snapshot of the session in the current terminal by default, but can render an SVG using the `-o` output flag. Nerd Font icons are embedded as vector paths, so SVGs remain self-contained without changing the font stack for regular text.
+Screenshots render a snapshot of the session in the current terminal by
+default, but can render an SVG using the `-o` output flag. `--zoom 0.5`
+halves the image dimensions while preserving the same rows and columns. Nerd
+Font icons are embedded as vector paths, so SVGs remain self-contained without
+changing the font stack for regular text.
+Rendered screenshots and recordings append `COLSxROWS` to the program title;
+when the terminal has no title they use `tui-test capture - COLSxROWS`.
 
 <p align="center">
   <img alt="full-color SVG screenshot of a TUI rendered by tui-test" src="static/screen.svg" width="400">
@@ -326,25 +332,27 @@ Record a selected part of a session directly to animated APNG (primary), GIF
 
 | Command | Description |
 | --- | --- |
-| `record start OUT [--format apng\|gif\|mp4\|cast] [--fps N] [--speed N] [--idle-time-limit SEC]` | Start recording. Format is inferred from `.png`/`.apng`, `.gif`, `.mp4`, or `.cast`. |
+| `record start OUT [--format apng\|gif\|mp4\|cast] [--fps N] [--speed N] [--idle-time-limit SEC] [--zoom N]` | Start recording. Format is inferred from `.png`/`.apng`, `.gif`, `.mp4`, or `.cast`. |
 | `record stop` | Stop recording and finish the output file. |
 | `get-recording [session]` | Print the separate, always-on session cast to stdout. |
 
 ```sh
 tui-test open
-tui-test record start demo.png       # lossless animated PNG
+tui-test record start demo.png --zoom 0.5
 tui-test submit "echo hello"
 tui-test wait command
 tui-test record stop
 ```
 
 APNG keeps full 24/32-bit color. APNG, GIF, and MP4 render at 2x pixel density
-for sharper text; GIF additionally uses palette quantization for viewers that
-cannot display APNG. MP4 export streams rendered frames to `ffmpeg` using H.264,
-and starting an MP4 recording fails immediately unless `ffmpeg` is available on
-`PATH`. Defaults are 30 fps, 1x speed, a 5-second idle-gap limit, and a 3-second
-final hold. If a process exits before `record stop`, APNG/GIF/MP4 capture remains
-beside the target as `OUT.tui-test.cast`.
+for sharper text; `--zoom` multiplies those dimensions, so `--zoom 0.5`
+produces a 1x-size export with the same terminal cells. GIF additionally uses
+palette quantization for viewers that cannot display APNG. MP4 export streams
+rendered frames to `ffmpeg` using H.264, and starting an MP4 recording fails
+immediately unless `ffmpeg` is available on `PATH`. Defaults are 30 fps, 1x
+speed, 1x zoom, a 5-second idle-gap limit, and a 3-second final hold. Zoom does
+not apply to cast output. If a process exits before `record stop`, APNG/GIF/MP4
+capture remains beside the target as `OUT.tui-test.cast`.
 
 Raster export uses the selected JetBrains Mono bundle tier, when enabled, plus
 installed system fonts for Unicode fallbacks. The CLI and language bindings
@@ -356,6 +364,38 @@ silently substituting unsupported glyphs.
 <p align="center">
   <img alt="animated APNG terminal recording produced by tui-test" src="static/recording.png" width="400">
 </p>
+
+The same 48x10-cell recording rendered at native 100%, 50%, and 25% zoom:
+
+<p align="center">
+  <strong>100%</strong><br>
+  <img alt="terminal recording rendered at 100 percent zoom" src="static/recording-zoom-100.png">
+</p>
+
+<p align="center">
+  <strong>50%</strong><br>
+  <img alt="terminal recording rendered at 50 percent zoom" src="static/recording-zoom-50.png">
+</p>
+
+<p align="center">
+  <strong>25%</strong><br>
+  <img alt="terminal recording rendered at 25 percent zoom" src="static/recording-zoom-25.png">
+</p>
+
+Resize events keep the encoded canvas stable while existing terminal content
+reflows as the window grows and shrinks in place:
+
+<p align="center">
+  <img alt="animated GIF showing a centered terminal window resizing" src="static/resize-demo.gif" width="600">
+</p>
+
+Regenerate the checked-in SVG, APNG, GIF, Nerd Font, and resize examples with:
+
+```sh
+bash scripts/regenerate-static-media.sh
+```
+
+The manually captured `static/tui-test-demo.mp4` is intentionally left unchanged.
 
 Every session also records automatically from open in `.cast` format. Export it
 with `tui-test get-recording > demo.cast` for the wider asciicast ecosystem.

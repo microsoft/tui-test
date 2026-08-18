@@ -113,7 +113,7 @@ Cancelling a task does not cancel the underlying Rust operation. Operations for 
 Closing a session removes it from `sessions()`, but keeps its recording. `get_recording()` can read that recording for the rest of the process. The 1024 most recently closed sessions have their recordings retained.
 
 ```python
-await su.start_recording("demo.png", fps=30, speed=1.0)
+await su.start_recording("demo.png", fps=30, speed=1.0, zoom=0.5)
 await su.submit("echo hello")
 await su.wait_command()
 path = await su.stop_recording()
@@ -121,7 +121,9 @@ path = await su.stop_recording()
 
 `.png`/`.apng` selects lossless APNG, `.gif` selects GIF, `.mp4` selects MP4,
 and `.cast` selects asciicast v2. Pass `format=` to override extension
-inference. MP4 recording requires `ffmpeg` to be available on `PATH`.
+inference. `zoom=` scales SVG screenshots and image/video recordings without
+changing terminal rows or columns. MP4 recording requires `ffmpeg` to be
+available on `PATH`.
 
 ## Configuration
 

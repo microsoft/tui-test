@@ -74,7 +74,7 @@ without parsing text:
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `state`                                             | cwd, size, cursor, last command + exit code, timeouts, and a text snapshot.                                         |
 | `text [--full]`                                     | Rendered viewport text, or full scrollback with `--full`.                                                           |
-| `screenshot [PATH] [-o FILE] [--full]`              | Terminal text to stdout, or a full-color SVG image (crisp at any zoom, svg-term-style window) when a path is given. |
+| `screenshot [PATH] [-o FILE] [--full] [--zoom N]`   | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.                           |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags) for a region.                                                             |
 | `get command\|output\|exit-code\|cwd\|cursor\|size\|title` | One structured field.                                                                                               |
 
@@ -125,7 +125,7 @@ Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 
 | Command                             | Description                                                                  |
 | ----------------------------------- | ---------------------------------------------------------------------------- |
-| `record start OUT [options]`        | Start APNG, GIF, or asciicast recording (format inferred from extension).    |
+| `record start OUT [options]`        | Start APNG, GIF, MP4, or asciicast recording; `--zoom N` scales image/video output. |
 | `record stop`                       | Finish the active recording.                                                 |
 | `get-recording [session]`           | Print the always-on asciinema v2 cast (works even after the session stopped).|
 | `monitor`                           | Watch the session live, full-color, in another terminal.                     |
@@ -213,20 +213,23 @@ tui-test get-recording > demo.cast    # current session's recording to stdout
 tui-test get-recording work > w.cast  # a specific session by name (even if stopped)
 ```
 
-Record a selected span directly to APNG (primary), GIF (fallback), or cast:
+Record a selected span directly to APNG, GIF, MP4, or cast:
 
 ```sh
-tui-test record start demo.png
+tui-test record start demo.png --zoom 0.5
 tui-test submit "echo hello"
 tui-test wait command
 tui-test record stop
 ```
 
-APNG and GIF render at 2x pixel density. Use `--fps`, `--speed`, and
-`--idle-time-limit` to tune playback. `.cast` output interoperates with the
-asciicast ecosystem without adding any GPL dependency to tui-test. If a
-process exits before `record stop`, an APNG/GIF capture remains beside the
-target as `OUT.tui-test.cast`.
+APNG, GIF, and MP4 render at 2x pixel density. `--zoom` multiplies the output
+dimensions without changing the rows or columns; `--zoom 0.5` produces a 1x
+export. Resize events change the terminal window size inside a centered,
+opaque canvas sized for the recording's largest frame. Use `--fps`, `--speed`,
+and `--idle-time-limit` to tune playback. `.cast` output does not use zoom and
+interoperates with the asciicast ecosystem without adding any GPL dependency
+to tui-test. If a process exits before `record stop`, an APNG/GIF/MP4 capture
+remains beside the target as `OUT.tui-test.cast`.
 
 ## Live monitor
 
