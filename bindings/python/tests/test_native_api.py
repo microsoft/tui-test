@@ -57,6 +57,8 @@ class NativeSurfaceTests(unittest.TestCase):
             "expect_output",
             "snapshot",
             "screenshot",
+            "start_recording",
+            "stop_recording",
             "recording",
         ):
             self.assertTrue(hasattr(session, name), name)

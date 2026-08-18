@@ -27,7 +27,7 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Backend, Cell, Profile, State, Timeouts
+from .types import Backend, Cell, Profile, RecordingFormat, State, Timeouts
 
 _TERMINAL_MARKER = "Terminal content:\n"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
@@ -371,6 +371,24 @@ class TuiTest:
         self, path: Optional[str] = None, *, full: bool = False
     ) -> str:
         return await self._await(self._native.screenshot(path, full))
+
+    async def start_recording(
+        self,
+        path: str,
+        *,
+        format: Optional[RecordingFormat] = None,
+        fps: Optional[int] = None,
+        speed: Optional[float] = None,
+        idle_time_limit: Optional[float] = None,
+    ) -> None:
+        await self._await(
+            self._native.start_recording(
+                path, format, fps, speed, idle_time_limit
+            )
+        )
+
+    async def stop_recording(self) -> str:
+        return await self._await(self._native.stop_recording())
 
     async def wait_text(
         self,

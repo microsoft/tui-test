@@ -16,6 +16,7 @@ MAPPING = {
     "state": [("client", "state")],
     "text": [("client", "text")],
     "screenshot": [("client", "screenshot")],
+    "record": [("client", "start_recording"), ("client", "stop_recording")],
     "cells": [("client", "cells")],
     "get": [
         ("client", "get_command"),
@@ -40,7 +41,7 @@ MAPPING = {
     "get-recording": [("module", "get_recording")],
 }
 
-EXCLUDED = {"monitor", "usage", "agent-context", "skill", "daemon", "record"}
+EXCLUDED = {"monitor", "usage", "agent-context", "skill", "daemon"}
 
 
 def _have_binary():

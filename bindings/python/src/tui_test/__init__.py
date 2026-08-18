@@ -11,7 +11,7 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Backend, Cell, Colors, Profile, State, Timeouts
+from .types import Backend, Cell, Colors, Profile, RecordingFormat, State, Timeouts
 
 __all__ = [
     "TuiTest",
@@ -29,6 +29,7 @@ __all__ = [
     "Backend",
     "Colors",
     "Profile",
+    "RecordingFormat",
     "State",
     "Timeouts",
     "__version__",

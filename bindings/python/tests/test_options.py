@@ -224,6 +224,29 @@ class TypedCallTests(unittest.TestCase):
         self.assertFalse(hasattr(client.TuiTest, "send"))
         self.assertFalse(hasattr(client.TuiTest, "get"))
 
+    def test_recording_helpers_use_typed_methods(self):
+        terminal = _CapturingClient("s")
+        run(
+            terminal.start_recording(
+                "demo.cast",
+                format="cast",
+                fps=24,
+                speed=2.0,
+                idle_time_limit=3.0,
+            )
+        )
+        run(terminal.stop_recording())
+        self.assertEqual(
+            terminal.fake.calls,
+            [
+                (
+                    "start_recording",
+                    ("demo.cast", "cast", 24, 2.0, 3.0),
+                ),
+                ("stop_recording", ()),
+            ],
+        )
+
 
 class ClientTimeoutTests(unittest.TestCase):
     def test_unconfigured_waits_pass_none(self):

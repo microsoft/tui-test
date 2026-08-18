@@ -8,6 +8,7 @@ import type {
   OpenOptions,
   OpenResult,
   PackedScreen,
+  RecordingOptions,
   RunOptions,
   ScreenshotOptions,
   Size,
@@ -25,6 +26,9 @@ type RuntimeOpenOptions = Omit<OpenOptions, "shell" | "backend"> & {
   backend?: string;
 };
 type RuntimeRunOptions = Omit<RunOptions, "backend"> & { backend?: string };
+type RuntimeRecordingOptions = Omit<RecordingOptions, "format"> & {
+  format?: "cast";
+};
 
 const ERROR_PREFIX = "__tui_test_native_error__:";
 const USAGE_NAPI_CODES = new Set([
@@ -310,6 +314,14 @@ export class NativeRuntime {
     return this.#call((session) => session.screenshot(options));
   }
 
+  startRecording(options: RuntimeRecordingOptions): Promise<void> {
+    return this.#call((session) => session.startRecording(options as RecordingOptions));
+  }
+
+  stopRecording(): Promise<string> {
+    return this.#call((session) => session.stopRecording());
+  }
+
   panicProbe(): Promise<void> {
     return this.#call((session) => session.panicProbe());
   }
@@ -339,6 +351,7 @@ export type {
   OpenOptions as NativeOpenOptions,
   OpenResult as NativeOpenResult,
   PackedScreen as NativePackedScreen,
+  RecordingOptions as NativeRecordingOptions,
   RunOptions as NativeRunOptions,
   ScreenshotOptions as NativeScreenshotOptions,
   Size as NativeSize,

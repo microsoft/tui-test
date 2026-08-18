@@ -3,6 +3,8 @@ export type {
   ExpectTextOptions,
   MouseButtonOptions,
   TitleOptions,
+  RecordingFormat,
+  RecordingOptions,
   WaitTextOptions,
 } from "./client.js";
 export { uniqueSession } from "./ephemeral.js";
