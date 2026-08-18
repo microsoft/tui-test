@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
@@ -61,6 +61,60 @@ test("echo roundtrip drives a real session", async () => {
     await su.waitText("typed-type");
     await su.waitCommand();
   });
+});
+
+test("recording API writes an asciicast file", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-test-recording-"));
+  const path = join(root, "demo.cast");
+  try {
+    await withTerminal({ shell }, async (su) => {
+      await su.startRecording(path, {
+        format: "cast",
+        fps: 24,
+        speed: 1,
+        idleTimeLimit: 2,
+      });
+      await su.submit("echo sdk-recording");
+      await su.waitCommand();
+      assert.equal(await su.stopRecording(), path);
+    });
+    const cast = await readFile(path, "utf8");
+    assert.match(cast, /"version":2/);
+    assert.match(cast, /sdk-recording/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recording API exports styled Unicode to APNG and GIF", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-test-raster-recording-"));
+  const command =
+    process.platform === "win32"
+      ? 'Write-Host "`e[1;3mstyled-é`e[0m"'
+      : "printf '\\033[1;3mstyled-é\\033[0m\\n'";
+  try {
+    for (const [format, extension] of [
+      ["apng", "png"],
+      ["gif", "gif"],
+    ]) {
+      const path = join(root, `styled.${extension}`);
+      await withTerminal({ shell, cols: 20, rows: 4 }, async (su) => {
+        await su.startRecording(path, { format, fps: 30 });
+        await su.submit(command);
+        await su.waitCommand();
+        assert.equal(await su.stopRecording(), path);
+      });
+      const bytes = await readFile(path);
+      if (format === "apng") {
+        assert.deepEqual(bytes.subarray(0, 8), Buffer.from("\x89PNG\r\n\x1a\n", "latin1"));
+        assert.ok(bytes.includes(Buffer.from("acTL")));
+      } else {
+        assert.equal(bytes.subarray(0, 6).toString("ascii"), "GIF89a");
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test(

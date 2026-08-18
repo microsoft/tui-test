@@ -47,6 +47,58 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
+    def test_recording_api_writes_an_asciicast_file(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as root:
+                path = Path(root) / "demo.cast"
+                async with self._client() as su:
+                    await su.open(shell=SHELL)
+                    await su.start_recording(
+                        str(path),
+                        format="cast",
+                        fps=24,
+                        speed=1.0,
+                        idle_time_limit=2.0,
+                    )
+                    await su.submit("echo sdk-recording")
+                    await su.wait_command()
+                    self.assertEqual(await su.stop_recording(), str(path))
+                cast = path.read_text(encoding="utf-8")
+                self.assertIn('"version":2', cast)
+                self.assertIn("sdk-recording", cast)
+
+        run(scenario())
+
+    def test_recording_api_exports_styled_unicode_to_apng_and_gif(self):
+        async def scenario():
+            command = (
+                'Write-Host "`e[1;3mstyled-é`e[0m"'
+                if sys.platform == "win32"
+                else "printf '\\033[1;3mstyled-é\\033[0m\\n'"
+            )
+            with tempfile.TemporaryDirectory() as root:
+                for format, extension in (("apng", "png"), ("gif", "gif")):
+                    with self.subTest(format=format):
+                        path = Path(root) / f"styled.{extension}"
+                        async with self._client() as su:
+                            await su.open(shell=SHELL, cols=20, rows=4)
+                            await su.start_recording(
+                                str(path), format=format, fps=30
+                            )
+                            await su.submit(command)
+                            await su.wait_command()
+                            self.assertEqual(
+                                await su.stop_recording(), str(path)
+                            )
+                        data = path.read_bytes()
+                        if format == "apng":
+                            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+                            self.assertIn(b"acTL", data)
+                        else:
+                            self.assertEqual(data[:6], b"GIF89a")
+
+        run(scenario())
+
     def test_invalid_shell_is_a_typed_usage_error(self):
         async def scenario():
             su = self._client()
