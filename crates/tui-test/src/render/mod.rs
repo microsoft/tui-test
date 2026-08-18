@@ -8,3 +8,6 @@ mod font;
 #[cfg(feature = "recording-raster")]
 #[allow(dead_code)] // The full raster renderer consumes these primitives next in the stack.
 pub mod raster;
+
+#[cfg(all(test, windows, feature = "recording-font-jetbrains-mono-styles"))]
+mod snapshot_tests;
