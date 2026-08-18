@@ -453,11 +453,19 @@ mod tests {
                         png_total_delay(&chunks).abs_diff(Duration::from_millis(400))
                             <= Duration::from_micros(100)
                     );
-                    let pixel = decode_first_png_pixel(&path, 20 * scale, 48 * scale);
+                    let pixel = decode_first_png_pixel(
+                        &path,
+                        (crate::render::raster::CANVAS_PADDING + 20) * scale,
+                        (crate::render::raster::CANVAS_PADDING + 48) * scale,
+                    );
                     assert_eq!(&pixel[..3], &[200, 10, 20]);
                 }
                 RecordingFormat::Gif => {
-                    let decoded = decode_gif(&path, 20 * scale, 48 * scale);
+                    let decoded = decode_gif(
+                        &path,
+                        (crate::render::raster::CANVAS_PADDING + 20) * scale,
+                        (crate::render::raster::CANVAS_PADDING + 48) * scale,
+                    );
                     assert_eq!(decoded.frames, 2);
                     assert_eq!(decoded.dimensions, renderer.pixel_size());
                     assert_eq!(decoded.delay, Duration::from_millis(400));
