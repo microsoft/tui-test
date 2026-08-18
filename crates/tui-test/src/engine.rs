@@ -683,6 +683,9 @@ fn dispatch(
         Operation::Screenshot { full, path } => Ok(OperationResult::Screenshot(screenshot(
             session, full, path,
         )?)),
+        Operation::StartRecording { .. } | Operation::StopRecording => Err(TuiTestError::internal(
+            "recording session support is not available",
+        )),
         Operation::Open(_) | Operation::Run(_) | Operation::Close => {
             Err(TuiTestError::internal("unsupported nested operation"))
         }

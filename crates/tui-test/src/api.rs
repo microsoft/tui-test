@@ -182,6 +182,14 @@ pub enum Operation {
         full: bool,
         path: Option<String>,
     },
+    StartRecording {
+        path: String,
+        format: Option<RecordingFormat>,
+        fps: Option<u8>,
+        speed: Option<f64>,
+        idle_time_limit: Option<f64>,
+    },
+    StopRecording,
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +209,7 @@ pub enum OperationResult {
     Size(Size),
     Snapshot(SnapshotResult),
     Screenshot(ScreenshotResult),
+    Recording(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -382,6 +391,25 @@ pub enum ScreenshotResult {
     Text(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordingFormat {
+    Cast,
+}
+
+impl RecordingFormat {
+    pub fn infer(path: &str) -> Option<Self> {
+        let extension = std::path::Path::new(path)
+            .extension()?
+            .to_str()?
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "cast" => Some(Self::Cast),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeStatus {
     pub session: String,
@@ -433,4 +461,20 @@ pub enum MouseAction {
         direction: String,
         amount: u16,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recording_format_is_inferred_from_supported_extensions() {
+        assert_eq!(
+            RecordingFormat::infer("demo.cast"),
+            Some(RecordingFormat::Cast)
+        );
+        assert_eq!(RecordingFormat::infer("demo.png"), None);
+        assert_eq!(RecordingFormat::infer("demo.gif"), None);
+        assert_eq!(RecordingFormat::infer("demo.mp4"), None);
+    }
 }
