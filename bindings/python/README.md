@@ -54,10 +54,12 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 ## API
 
-`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count`, `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
+`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count` / `get_bell_events`, `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
 
-`state()` includes `bell_count` plus the latest 1024 `bell_events`, each with
-a 1-based `sequence` and monotonic `elapsed_ms` since recording began.
+`state()` includes `bell_count` (a running total). Use `get_bell_events()` to
+retrieve the recorded events themselves — each with a 1-based `sequence` and
+monotonic `elapsed_ms` since recording began — since exact timings aren't
+reproducible across runs and don't belong in a stable state snapshot.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 

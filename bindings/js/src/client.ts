@@ -17,6 +17,7 @@ import { uniqueSession } from "./ephemeral.js";
 import { ExpectationError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
 import type {
+  BellEvent,
   Cell,
   ClientOptions,
   Cursor,
@@ -352,6 +353,10 @@ export class TuiTest {
 
   async getBellCount(): Promise<number> {
     return this.#runtime.getBellCount();
+  }
+
+  async getBellEvents(): Promise<BellEvent[]> {
+    return this.#runtime.getBellEvents();
   }
 
   async screenshot(path: string | null = null, opts: ScreenshotOptions = {}): Promise<string> {

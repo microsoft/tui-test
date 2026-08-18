@@ -286,12 +286,12 @@ fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
 
     let state = sandbox.ok(&["state"]);
     assert!(state.contains("bell_count: 2"), "{state}");
-    assert!(state.contains("\"sequence\":1"), "{state}");
-    assert!(state.contains("\"elapsed_ms\":"), "{state}");
+    assert!(!state.contains("bell_events"), "{state}");
 
     let response: serde_json::Value =
-        serde_json::from_str(&sandbox.ok(&["--json", "state"])).expect("parse state response");
-    let events = response["data"]["bell_events"]
+        serde_json::from_str(&sandbox.ok(&["--json", "get", "bell-events"]))
+            .expect("parse bell events response");
+    let events = response["data"]["value"]
         .as_array()
         .expect("bell events array");
     assert_eq!(events.len(), 2);

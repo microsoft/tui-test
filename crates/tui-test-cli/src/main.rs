@@ -289,6 +289,7 @@ fn map_field(f: GetArg) -> GetField {
         GetArg::Size => GetField::Size,
         GetArg::Title => GetField::Title,
         GetArg::Bells => GetField::BellCount,
+        GetArg::BellEvents => GetField::BellEvents,
     }
 }
 
@@ -806,7 +807,7 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           run [--config F] [--profile P] <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
-          cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title|bells\n\
+          cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title|bells|bell-events\n\
 INPUT     type \"text\" | submit [\"text\"] | press <Key...> | keys \"Ctrl+a\"\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\

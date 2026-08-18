@@ -259,11 +259,11 @@ continues to build only the Alacritty backend and does not require Zig.
 
 | Command                                             | Description                                                                                 |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count and recent timestamped bell events, effective timeouts, text snapshot. |
+| `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, effective timeouts, text snapshot. |
 | `text [--full]`                                     | Plain text of the viewport (or scrollback).                                                 |
 | `screenshot [-o file.svg] [--full] [--zoom N]`      | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.   |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags).                                                  |
-| `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells` | Structured getters.                                                                   |
+| `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | Structured getters.                                                                   |
 
 `state` prints `key: value` lines then the screen; `text` and `screenshot`
 print the screen bare.
@@ -310,9 +310,10 @@ print the screen bare.
 | `expect bell N [--timeout MS]`                                                  | Cumulative bell count reaches at least N.  |
 | `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare against `__snapshots__/NAME.snap`. `--include-title` adds the window title to the frame. |
 
-Bell events in `state` include a 1-based `sequence` and monotonic `elapsed_ms`
-since the session recording began. The latest 1024 events are retained; the
-cumulative `bell_count` is not truncated.
+`state`'s `bell_count` is a running cumulative total. Use `get bell-events` to
+retrieve the recorded events themselves, each with a 1-based `sequence` and
+monotonic `elapsed_ms` since recording began; exact timings aren't reproducible
+across runs, so they aren't part of `state`.
 
 Colors accept ANSI-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 

@@ -104,6 +104,7 @@ pub enum Operation {
     GetSize,
     GetTitle,
     GetBellCount,
+    GetBellEvents,
     Write {
         data: String,
     },
@@ -218,6 +219,7 @@ pub enum OperationResult {
     Cursor(Cursor),
     Size(Size),
     BellCount(u64),
+    BellEvents(Vec<BellEvent>),
     Snapshot(SnapshotResult),
     Screenshot(ScreenshotResult),
     Recording(String),
@@ -342,7 +344,6 @@ pub struct State {
     pub exited: Option<i32>,
     pub ready: bool,
     pub bell_count: u64,
-    pub bell_events: Vec<BellEvent>,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }

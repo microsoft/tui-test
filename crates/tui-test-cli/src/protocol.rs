@@ -232,6 +232,7 @@ impl Request {
                 GetField::Size => Operation::GetSize,
                 GetField::Title => Operation::GetTitle,
                 GetField::BellCount => Operation::GetBellCount,
+                GetField::BellEvents => Operation::GetBellEvents,
             }),
             Request::Write { data } => Ok(Operation::Write { data }),
             Request::Submit { data } => Ok(Operation::Submit { data }),
@@ -359,6 +360,7 @@ pub enum GetField {
     Size,
     Title,
     BellCount,
+    BellEvents,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -432,6 +434,7 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
         OperationResult::Cursor(value) => Ok(json!({ "value": value })),
         OperationResult::Size(value) => Ok(json!({ "value": value })),
         OperationResult::BellCount(value) => Ok(json!({ "value": value })),
+        OperationResult::BellEvents(value) => Ok(json!({ "value": value })),
         OperationResult::Snapshot(status) => Ok(json!({ "status": status })),
         OperationResult::Screenshot(ScreenshotResult::Path(path)) => Ok(json!({ "path": path })),
         OperationResult::Screenshot(ScreenshotResult::Text(text)) => Ok(json!({ "text": text })),

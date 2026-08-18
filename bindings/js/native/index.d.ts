@@ -17,6 +17,7 @@ export declare class NativeSession {
   getCursor(): Promise<Cursor>
   getSize(): Promise<Size>
   getBellCount(): Promise<number>
+  getBellEvents(): Promise<Array<BellEvent>>
   write(data: string): Promise<void>
   type(text: string): Promise<void>
   submit(data?: string | undefined | null): Promise<void>
@@ -49,14 +50,14 @@ export declare class NativeSession {
   panicProbe(): Promise<void>
 }
 
-export interface BellEvent {
-  sequence: number
-  elapsed_ms: number
-}
-
 export declare const enum Backend {
   Alacritty = 'alacritty',
   Ghostty = 'ghostty'
+}
+
+export interface BellEvent {
+  sequence: number
+  elapsed_ms: number
 }
 
 export interface Cell {
@@ -233,7 +234,6 @@ export interface State {
   exited: number | null
   ready: boolean
   bell_count: number
-  bell_events: Array<BellEvent>
   timeouts: EffectiveTimeouts
   text: string
 }

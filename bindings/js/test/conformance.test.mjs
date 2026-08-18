@@ -38,6 +38,7 @@ const MAPPING = {
     ["client", "getSize"],
     ["client", "getTitle"],
     ["client", "getBellCount"],
+    ["client", "getBellEvents"],
   ],
   type: [["client", "type"]],
   submit: [["client", "submit"]],

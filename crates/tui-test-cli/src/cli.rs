@@ -744,6 +744,8 @@ pub enum GetArg {
     Title,
     /// Cumulative terminal bell count.
     Bells,
+    /// Recorded terminal bell events (sequence + elapsed time).
+    BellEvents,
 }
 
 #[derive(Subcommand)]

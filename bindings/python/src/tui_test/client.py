@@ -27,7 +27,7 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Backend, Cell, Profile, RecordingFormat, State, Timeouts
+from .types import Backend, BellEvent, Cell, Profile, RecordingFormat, State, Timeouts
 
 _TERMINAL_MARKER = "Terminal content:\n"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
@@ -369,6 +369,16 @@ class TuiTest:
 
     async def get_bell_count(self) -> int:
         return await self._await(self._native.get_bell_count())
+
+    async def get_bell_events(self) -> List[BellEvent]:
+        events = await self._await(self._native.get_bell_events())
+        return [
+            BellEvent(
+                sequence=event.get("sequence", 0),
+                elapsed_ms=event.get("elapsed_ms", 0),
+            )
+            for event in events
+        ]
 
     async def screenshot(
         self,

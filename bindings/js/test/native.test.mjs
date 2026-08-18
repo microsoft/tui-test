@@ -31,6 +31,7 @@ test("generated native declarations expose typed operations", async () => {
     "cells",
     "getCommand",
     "getBellCount",
+    "getBellEvents",
     "write",
     "type",
     "submit",

@@ -72,11 +72,11 @@ without parsing text:
 
 | Command                                             | Description                                                                                                         |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count and recent timestamped bell events, timeouts, and a text snapshot. |
+| `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, timeouts, and a text snapshot. |
 | `text [--full]`                                     | Rendered viewport text, or full scrollback with `--full`.                                                           |
 | `screenshot [PATH] [-o FILE] [--full] [--zoom N]`   | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.                           |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags) for a region.                                                             |
-| `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells` | One structured field.                                                                                        |
+| `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | One structured field.                                                                                        |
 
 ### Input
 
@@ -121,9 +121,10 @@ without parsing text:
 | `expect bell N [--timeout MS]`                                                  | The cumulative bell count reaches at least N.                                 |
 | `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. `--include-title` records the window title in the frame; off by default because a prompt often sets it to a host and path. |
 
-Bell events in `state` include a 1-based `sequence` and monotonic `elapsed_ms`
-since the session recording began. The latest 1024 events are retained; the
-cumulative `bell_count` is not truncated.
+`state`'s `bell_count` is a running cumulative total. Use `get bell-events` to
+retrieve the recorded events themselves, each with a 1-based `sequence` and
+monotonic `elapsed_ms` since recording began; exact timings aren't reproducible
+across runs, so they aren't part of `state`.
 
 Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 
@@ -347,7 +348,7 @@ Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
 / `type` / `write`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`,
 `resize`, `signal` / `kill`, `state`, `text`, `cells`, the dedicated
 `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` /
-`get_size` / `get_title` / `get_bell_count` methods,
+`get_size` / `get_title` / `get_bell_count` / `get_bell_events` methods,
 `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` /
 `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` /
 `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`,

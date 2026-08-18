@@ -1,5 +1,6 @@
 import { InternalError, UsageError, makeError } from "./errors.js";
 import type {
+  BellEvent,
   Cell,
   Cursor,
   EffectiveTimeouts,
@@ -214,6 +215,10 @@ export class NativeRuntime {
 
   getBellCount(): Promise<number> {
     return this.#call((session) => session.getBellCount());
+  }
+
+  getBellEvents(): Promise<BellEvent[]> {
+    return this.#call((session) => session.getBellEvents());
   }
 
   write(data: string): Promise<void> {

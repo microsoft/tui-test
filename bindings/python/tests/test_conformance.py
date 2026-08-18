@@ -27,6 +27,7 @@ MAPPING = {
         ("client", "get_size"),
         ("client", "get_title"),
         ("client", "get_bell_count"),
+        ("client", "get_bell_events"),
     ],
     "type": [("client", "type")],
     "submit": [("client", "submit")],

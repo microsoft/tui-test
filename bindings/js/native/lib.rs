@@ -226,8 +226,6 @@ pub struct State {
     pub ready: bool,
     #[napi(js_name = "bell_count")]
     pub bell_count: f64,
-    #[napi(js_name = "bell_events")]
-    pub bell_events: Vec<BellEvent>,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }
@@ -246,7 +244,6 @@ impl From<CoreState> for State {
             exited: value.exited,
             ready: value.ready,
             bell_count: value.bell_count as f64,
-            bell_events: value.bell_events.into_iter().map(Into::into).collect(),
             timeouts: value.timeouts.into(),
             text: value.text,
         }
@@ -839,6 +836,22 @@ impl NativeSession {
             |result| match result {
                 OperationResult::BellCount(value) => Ok(value as f64),
                 _ => Err(unexpected("getBellCount")),
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn get_bell_events(&self) -> Result<Vec<BellEvent>> {
+        execute(
+            self.handle.clone(),
+            "getBellEvents",
+            Operation::GetBellEvents,
+            |result| match result {
+                OperationResult::BellEvents(events) => {
+                    Ok(events.into_iter().map(Into::into).collect())
+                }
+                _ => Err(unexpected("getBellEvents")),
             },
         )
         .await

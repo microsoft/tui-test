@@ -336,6 +336,15 @@ impl NativeSession {
         )
     }
 
+    fn get_bell_events<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || execute_bell_events(&name, Operation::GetBellEvents),
+            bell_events_to_py_object,
+        )
+    }
+
     fn write<'py>(&self, py: Python<'py>, data: String) -> PyResult<Bound<'py, PyAny>> {
         let name = self.name.clone();
         future_blocking(
@@ -1372,6 +1381,13 @@ fn execute_bell_count(name: &str, operation: Operation) -> Result<u64, TuiTestEr
     }
 }
 
+fn execute_bell_events(name: &str, operation: Operation) -> Result<Vec<BellEvent>, TuiTestError> {
+    match global_registry().execute(name, operation)? {
+        OperationResult::BellEvents(value) => Ok(value),
+        _ => Err(unexpected_result("the terminal bell events")),
+    }
+}
+
 fn execute_snapshot(name: &str, operation: Operation) -> Result<SnapshotResult, TuiTestError> {
     match global_registry().execute(name, operation)? {
         OperationResult::Snapshot(value) => Ok(value),
@@ -1451,6 +1467,10 @@ fn bell_events_to_py<'py>(py: Python<'py>, events: Vec<BellEvent>) -> PyResult<B
     Ok(values)
 }
 
+fn bell_events_to_py_object(py: Python<'_>, events: Vec<BellEvent>) -> PyResult<Py<PyAny>> {
+    Ok(bell_events_to_py(py, events)?.into_any().unbind())
+}
+
 fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     let result = PyDict::new(py);
     result.set_item("session_shell", value.session_shell)?;
@@ -1464,7 +1484,6 @@ fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     result.set_item("exited", value.exited)?;
     result.set_item("ready", value.ready)?;
     result.set_item("bell_count", value.bell_count)?;
-    result.set_item("bell_events", bell_events_to_py(py, value.bell_events)?)?;
     let timeouts = PyDict::new(py);
     timeouts.set_item("text", value.timeouts.text)?;
     timeouts.set_item("idle", value.timeouts.idle)?;

@@ -539,6 +539,9 @@ fn dispatch(
             Ok(OperationResult::Size(Size { cols, rows }))
         }
         Operation::GetBellCount => Ok(OperationResult::BellCount(session.bells.count())),
+        Operation::GetBellEvents => {
+            Ok(OperationResult::BellEvents(session.bells.snapshot().events))
+        }
         Operation::Write { data } => {
             act(session.write(data.as_bytes()))?;
             Ok(OperationResult::Unit)
@@ -751,7 +754,6 @@ fn state(session: &TerminalSession) -> crate::api::State {
         exited: state.exited,
         ready: state.tracker.is_ready(),
         bell_count: bells.count,
-        bell_events: bells.events,
         timeouts: effective_timeouts(session),
         text: text_of(&state.emu.viewable_rows()),
     }

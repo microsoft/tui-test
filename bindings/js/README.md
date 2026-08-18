@@ -49,10 +49,12 @@ All derive from `TuiTestError` and carry `kind` and `exitCode`. `waitX` and `exp
 
 ## API
 
-`new TuiTest(session?, { backend?, profile?, timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle` / `getBellCount`, `screenshot`, `startRecording` / `stopRecording`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady` / `waitBell`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectBellCount` / `expectSnapshot`, `close`, and `closeQuiet`.
+`new TuiTest(session?, { backend?, profile?, timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle` / `getBellCount` / `getBellEvents`, `screenshot`, `startRecording` / `stopRecording`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady` / `waitBell`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectBellCount` / `expectSnapshot`, `close`, and `closeQuiet`.
 
-`state()` includes `bell_count` plus the latest 1024 `bell_events`, each with
-a 1-based `sequence` and monotonic `elapsed_ms` since recording began.
+`state()` includes `bell_count` (a running total). Use `getBellEvents()` to
+retrieve the recorded events themselves — each with a 1-based `sequence` and
+monotonic `elapsed_ms` since recording began — since exact timings aren't
+reproducible across runs and don't belong in a stable state snapshot.
 
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 

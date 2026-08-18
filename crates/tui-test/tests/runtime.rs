@@ -214,15 +214,21 @@ fn bell_counts_waits_and_expectations_are_cumulative() {
         panic!("unexpected state result");
     };
     assert_eq!(state.bell_count, 2);
+
+    let OperationResult::BellEvents(events) = session
+        .execute(Operation::GetBellEvents)
+        .expect("read bell events")
+    else {
+        panic!("unexpected bell events result");
+    };
     assert_eq!(
-        state
-            .bell_events
+        events
             .iter()
             .map(|event| event.sequence)
             .collect::<Vec<_>>(),
         vec![1, 2]
     );
-    assert!(state.bell_events[1].elapsed_ms >= state.bell_events[0].elapsed_ms);
+    assert!(events[1].elapsed_ms >= events[0].elapsed_ms);
     for _ in 0..2 {
         assert!(matches!(
             session
@@ -255,15 +261,21 @@ fn bell_counts_waits_and_expectations_are_cumulative() {
         panic!("unexpected final state result");
     };
     assert_eq!(state.bell_count, 3);
+
+    let OperationResult::BellEvents(events) = session
+        .execute(Operation::GetBellEvents)
+        .expect("read final bell events")
+    else {
+        panic!("unexpected final bell events result");
+    };
     assert_eq!(
-        state
-            .bell_events
+        events
             .iter()
             .map(|event| event.sequence)
             .collect::<Vec<_>>(),
         vec![1, 2, 3]
     );
-    assert!(state.bell_events[2].elapsed_ms >= state.bell_events[1].elapsed_ms);
+    assert!(events[2].elapsed_ms >= events[1].elapsed_ms);
 
     session.close().expect("close terminal");
 }

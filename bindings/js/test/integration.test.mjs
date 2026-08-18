@@ -83,14 +83,12 @@ test("bell state, waits, and expectations stay consistent", async () => {
 
     const initialState = await su.state();
     assert.equal(initialState.bell_count, 2);
+    const initialEvents = await su.getBellEvents();
     assert.deepEqual(
-      initialState.bell_events.map((event) => event.sequence),
+      initialEvents.map((event) => event.sequence),
       [1, 2],
     );
-    assert.ok(
-      initialState.bell_events[1].elapsed_ms >=
-        initialState.bell_events[0].elapsed_ms,
-    );
+    assert.ok(initialEvents[1].elapsed_ms >= initialEvents[0].elapsed_ms);
     assert.equal(await su.getBellCount(), 2);
     assert.equal(await su.getBellCount(), 2);
 
@@ -99,14 +97,13 @@ test("bell state, waits, and expectations stay consistent", async () => {
     await su.expectBellCount(3);
     assert.equal(await su.getBellCount(), 3);
     const finalState = await su.state();
+    assert.equal(finalState.bell_count, 3);
+    const finalEvents = await su.getBellEvents();
     assert.deepEqual(
-      finalState.bell_events.map((event) => event.sequence),
+      finalEvents.map((event) => event.sequence),
       [1, 2, 3],
     );
-    assert.ok(
-      finalState.bell_events[2].elapsed_ms >=
-        finalState.bell_events[1].elapsed_ms,
-    );
+    assert.ok(finalEvents[2].elapsed_ms >= finalEvents[1].elapsed_ms);
   } finally {
     await su.closeQuiet();
   }
