@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 use crate::logger::Logger;
 use crate::profile::Profile;
 use crate::record::{self, CaptureError, Recorder, StartRecording};
+#[cfg(feature = "recording-raster")]
+use crate::render::raster::GridRenderer;
 use crate::shell::{self, Shell};
 use crate::terminal::backend::Backend;
 use crate::terminal::emu::Emulator;
@@ -256,8 +258,14 @@ impl Session {
         let format = format
             .or_else(|| crate::api::RecordingFormat::infer(&path))
             .ok_or_else(|| {
-                crate::api::TuiTestError::usage("cannot infer recording format; use .cast")
+                crate::api::TuiTestError::usage("cannot infer recording format; use .gif or .cast")
             })?;
+        #[cfg(not(feature = "recording-raster"))]
+        if format != crate::api::RecordingFormat::Cast {
+            return Err(crate::api::TuiTestError::usage(
+                "GIF recording requires the tui-test 'recording-raster' feature",
+            ));
+        }
         let fps = fps.unwrap_or(30);
         if fps == 0 {
             return Err(crate::api::TuiTestError::usage(
@@ -282,7 +290,11 @@ impl Session {
             .map_err(|_| crate::api::TuiTestError::usage("recording speed is too small"))?;
 
         let target_path = PathBuf::from(path);
-        let capture_path = target_path.clone();
+        let capture_path = if format == crate::api::RecordingFormat::Cast {
+            target_path.clone()
+        } else {
+            record::sidecar_path(&target_path)
+        };
         let mut env = vec![("TERM".to_string(), "xterm-256color".to_string())];
         if let Some(shell) = self.shell {
             env.push(("SHELL".to_string(), shell.as_str().to_string()));
@@ -320,7 +332,45 @@ impl Session {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let stopped = self.recorder.stop().map_err(capture_error)?;
         drop(state);
-        Ok(stopped.target_path.to_string_lossy().into_owned())
+        if stopped.format == crate::api::RecordingFormat::Cast {
+            return Ok(stopped.target_path.to_string_lossy().into_owned());
+        }
+
+        #[cfg(not(feature = "recording-raster"))]
+        return Err(crate::api::TuiTestError::internal(
+            "raster recording was started without the 'recording-raster' feature",
+        ));
+
+        #[cfg(feature = "recording-raster")]
+        {
+            let temporary_path = temporary_output_path(&stopped.target_path);
+            let result = (|| -> anyhow::Result<()> {
+                let cast = record::cast::read(&stopped.capture_path)?;
+                let frames = record::frames::from_cast(cast, &stopped.timeline)?;
+                let (max_cols, max_rows) = record::frames::max_dimensions(&frames)?;
+                let mut renderer = GridRenderer::with_scale(max_cols, max_rows, 2);
+                crate::render::encode::encode(
+                    &temporary_path,
+                    stopped.format,
+                    &frames,
+                    &mut renderer,
+                )?;
+                replace_output(&temporary_path, &stopped.target_path)?;
+                cleanup_sidecar(&stopped.capture_path, |message| self.logger.event(message));
+                Ok(())
+            })();
+
+            match result {
+                Ok(()) => Ok(stopped.target_path.to_string_lossy().into_owned()),
+                Err(error) => {
+                    let _ = std::fs::remove_file(&temporary_path);
+                    Err(crate::api::TuiTestError::internal(format!(
+                        "failed to export recording; captured cast retained at {}: {error}",
+                        stopped.capture_path.display()
+                    )))
+                }
+            }
+        }
     }
 
     pub fn kill(&self) {
@@ -381,6 +431,70 @@ fn capture_error(error: CaptureError) -> crate::api::TuiTestError {
         CaptureError::Io(message) => {
             crate::api::TuiTestError::internal(format!("recording capture failed: {message}"))
         }
+    }
+}
+
+#[cfg(feature = "recording-raster")]
+fn cleanup_sidecar(path: &std::path::Path, log: impl FnOnce(&str)) {
+    if let Err(error) = std::fs::remove_file(path) {
+        log(&format!(
+            "recording exported but failed to remove sidecar {}: {error}",
+            path.display()
+        ));
+    }
+}
+
+#[cfg(feature = "recording-raster")]
+fn temporary_output_path(target: &std::path::Path) -> PathBuf {
+    let mut name = target
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("recording"))
+        .to_os_string();
+    name.push(".tui-test.tmp");
+    target.with_file_name(name)
+}
+
+#[cfg(all(feature = "recording-raster", not(windows)))]
+fn replace_output(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    std::fs::rename(source, target)
+}
+
+#[cfg(all(feature = "recording-raster", windows))]
+fn replace_output(source: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
+
+    extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let target = target
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let replaced = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            target.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 
@@ -452,6 +566,17 @@ mod tests {
             .unwrap()
             .contains("reader-tail-marker"));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "recording-raster")]
+    #[test]
+    fn sidecar_cleanup_failure_does_not_fail_export() {
+        let missing = test_path("missing-sidecar");
+        let mut logged = None;
+        cleanup_sidecar(&missing, |message| logged = Some(message.to_string()));
+        assert!(logged
+            .as_deref()
+            .is_some_and(|message| message.contains("failed to remove sidecar")));
     }
 
     fn test_path(label: &str) -> PathBuf {

@@ -7,7 +7,6 @@ use crate::api::RecordingFormat;
 
 pub(crate) mod cast;
 #[cfg(feature = "recording-raster")]
-#[allow(dead_code)] // Session export consumes frame playback later in the stack.
 pub mod frames;
 mod worker;
 
@@ -35,16 +34,11 @@ pub(crate) struct StartRecording {
     pub timeline: frames::TimelineOptions,
 }
 
-#[allow(dead_code)] // Raster export consumes the capture metadata later in the stack.
 pub(crate) struct StoppedRecording {
     pub target_path: PathBuf,
     #[cfg(feature = "recording-raster")]
     pub capture_path: PathBuf,
     pub format: RecordingFormat,
-    #[cfg(feature = "recording-raster")]
-    pub cols: u16,
-    #[cfg(feature = "recording-raster")]
-    pub rows: u16,
     #[cfg(feature = "recording-raster")]
     pub timeline: frames::TimelineOptions,
 }
@@ -173,7 +167,6 @@ enum Message {
     Shutdown,
 }
 
-#[allow(dead_code)] // Raster export uses sidecar casts later in the stack.
 pub(crate) fn sidecar_path(target: &std::path::Path) -> PathBuf {
     let mut name = target
         .file_name()
