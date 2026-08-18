@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 
 use tiny_skia::Pixmap;
 
-use crate::profile::{ColorSlot, Profile, Rgb};
+use crate::profile::{ColorSlot, Rgb};
+use crate::record::frames::Frame;
 use crate::terminal::cell::{EmuCell, CONTINUATION};
 use crate::terminal::emu::CursorShape;
 
@@ -17,24 +18,6 @@ use draw::{
     is_default_ignorable, unpremultiply, unsupported_grapheme,
 };
 use font::{FontSystem, GlyphKey};
-
-#[derive(Default)]
-struct RecordingColors(Profile);
-
-impl RenderColors for RecordingColors {
-    fn color(&self, slot: ColorSlot) -> Rgb {
-        match slot {
-            ColorSlot::Indexed(index) => self.0.colors.rgb(index),
-            ColorSlot::Foreground => self.0.colors.foreground,
-            ColorSlot::Background => self.0.colors.background,
-            ColorSlot::Cursor => self.0.colors.cursor,
-        }
-    }
-
-    fn cursor_shape(&self) -> CursorShape {
-        CursorShape::Block
-    }
-}
 
 #[derive(Debug)]
 pub struct RgbaFrame {
@@ -58,7 +41,7 @@ impl RgbaFrame {
 }
 
 pub trait FrameRenderer {
-    fn render(&mut self, grid: &[Vec<EmuCell>], cols: u16) -> anyhow::Result<RgbaFrame>;
+    fn render(&mut self, frame: &Frame) -> anyhow::Result<RgbaFrame>;
     fn pixel_size(&self) -> (u32, u32);
 }
 
@@ -100,13 +83,22 @@ impl GridRenderer {
 }
 
 impl FrameRenderer for GridRenderer {
-    fn render(&mut self, grid: &[Vec<EmuCell>], cols: u16) -> anyhow::Result<RgbaFrame> {
+    fn render(&mut self, frame: &Frame) -> anyhow::Result<RgbaFrame> {
+        let grid = &frame.grid;
+        let cols: u16 = grid
+            .first()
+            .map_or(0, Vec::len)
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("recording frame width exceeds u16"))?;
         if cols != self.cols || grid.len() != self.rows {
             anyhow::bail!("recording frame dimensions changed during export");
         }
+        if grid.iter().any(|row| row.len() != usize::from(cols)) {
+            anyhow::bail!("recording frame rows have inconsistent widths");
+        }
 
         let scale = self.scale as f32;
-        let colors = RecordingColors::default();
+        let colors = &frame.render_state;
         self.pixmap.fill(tiny_skia::Color::from_rgba8(0, 0, 0, 0));
         fill_rounded_rect(
             &mut self.pixmap,
@@ -134,7 +126,7 @@ impl FrameRenderer for GridRenderer {
         for (y, row) in grid.iter().enumerate() {
             for x in 0..usize::from(cols) {
                 let cell = row.get(x).unwrap_or(&blank);
-                let background = svg::bg_of(cell, &colors);
+                let background = svg::bg_of(cell, colors);
                 if background != colors.resolve(None, false) {
                     fill_rect(
                         &mut self.pixmap,
@@ -156,7 +148,7 @@ impl FrameRenderer for GridRenderer {
                 if cell.ch.as_str() == CONTINUATION {
                     continue;
                 }
-                let style = svg::style_of(cell, &colors);
+                let style = svg::style_of(cell, colors);
                 if style.invisible {
                     continue;
                 }
@@ -229,6 +221,18 @@ impl FrameRenderer for GridRenderer {
             }
         }
 
+        if let Some(cursor) = frame.cursor {
+            draw_cursor(
+                &mut self.pixmap,
+                &mut self.fonts,
+                grid,
+                cursor,
+                colors,
+                scale,
+                &mut missing,
+            );
+        }
+
         if !missing.is_empty() {
             let glyphs = missing.into_iter().collect::<Vec<_>>().join(", ");
             anyhow::bail!(
@@ -250,6 +254,97 @@ impl FrameRenderer for GridRenderer {
 
     fn pixel_size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_cursor(
+    pixmap: &mut Pixmap,
+    fonts: &mut FontSystem,
+    grid: &[Vec<EmuCell>],
+    (cx, cy): (u16, usize),
+    colors: &dyn RenderColors,
+    scale: f32,
+    missing: &mut BTreeSet<String>,
+) {
+    let Some(row) = grid.get(cy) else {
+        return;
+    };
+    let Some(cell) = row.get(usize::from(cx)) else {
+        return;
+    };
+    let span = if row
+        .get(usize::from(cx) + 1)
+        .is_some_and(|next| next.ch.as_str() == CONTINUATION)
+    {
+        2
+    } else {
+        1
+    };
+    let origin_x = (svg::MARGIN_X + f32::from(cx) * svg::CELL_W) * scale;
+    let origin_y = (svg::HEADER_H + cy as f32 * svg::CELL_H) * scale;
+    let cell_width = svg::CELL_W * span as f32 * scale;
+    let cell_height = svg::CELL_H * scale;
+    let thickness = 2.0 * scale;
+    let color = colors.color(ColorSlot::Cursor);
+    match colors.cursor_shape() {
+        CursorShape::Block => {
+            fill_rect(pixmap, origin_x, origin_y, cell_width, cell_height, color);
+        }
+        CursorShape::Underline => {
+            fill_rect(
+                pixmap,
+                origin_x,
+                origin_y + cell_height - thickness,
+                cell_width,
+                thickness,
+                color,
+            );
+            return;
+        }
+        CursorShape::Bar => {
+            fill_rect(pixmap, origin_x, origin_y, thickness, cell_height, color);
+            return;
+        }
+    }
+
+    if cell.ch.as_str() == CONTINUATION || cell.ch.chars().all(char::is_whitespace) {
+        return;
+    }
+    let style = svg::style_of(cell, colors);
+    if style.invisible {
+        return;
+    }
+    if unsupported_grapheme(cell.ch.as_str()) {
+        missing.insert(format_glyph_sequence(cell.ch.as_str()));
+        return;
+    }
+    let baseline = (svg::HEADER_H + cy as f32 * svg::CELL_H + svg::FONT_BASELINE) * scale;
+    for character in cell.ch.chars() {
+        if is_default_ignorable(character) {
+            continue;
+        }
+        let key = GlyphKey {
+            character,
+            bold: style.bold,
+            italic: style.italic,
+        };
+        match fonts.resolve(key) {
+            Some(glyph) => draw_glyph(
+                pixmap,
+                glyph,
+                origin_x,
+                origin_y,
+                cell_width,
+                cell_height,
+                baseline,
+                svg::bg_of(cell, colors),
+                scale,
+            ),
+            None => {
+                missing.insert(format!("{character:?} (U+{:04X})", character as u32));
+            }
+        }
     }
 }
 
