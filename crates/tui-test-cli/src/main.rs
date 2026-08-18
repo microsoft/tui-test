@@ -136,6 +136,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
     let req = match command {
         Command::Open {
             shell,
+            backend,
             cols,
             rows,
             cwd,
@@ -147,6 +148,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         } => Request::Open {
             shell: shell.map(Into::into),
             program: None,
+            backend: backend.map(Into::into).unwrap_or_default(),
             profile: profile.resolve()?,
             cols,
             rows,
@@ -158,6 +160,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         Command::Run {
             program,
             args,
+            backend,
             cols,
             rows,
             cwd,
@@ -172,6 +175,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             Request::Open {
                 shell: None,
                 program: Some(prog),
+                backend: backend.map(Into::into).unwrap_or_default(),
                 profile: profile.resolve()?,
                 cols,
                 rows,

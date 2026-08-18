@@ -615,6 +615,46 @@ fn sleeper() -> Vec<&'static str> {
     }
 }
 
+fn blinking_program() -> Vec<&'static str> {
+    if cfg!(windows) {
+        vec![
+            "pwsh",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            "[Console]::Write(\"`e[5mX`e[0m\"); Start-Sleep -Seconds 30",
+        ]
+    } else {
+        vec!["sh", "-c", "printf '\\033[5mX\\033[0m'; sleep 30"]
+    }
+}
+
+#[test]
+fn ghostty_backend_is_used_end_to_end() {
+    let sandbox = Sandbox::new("ghostty-backend");
+    let mut args = vec![
+        "run",
+        "--backend",
+        "ghostty",
+        "--cols",
+        "10",
+        "--rows",
+        "2",
+        "--",
+    ];
+    args.extend(blinking_program());
+    sandbox.ok(&args);
+    sandbox.ok(&["wait", "text", "X"]);
+
+    let raw = sandbox.ok(&["--json", "cells", "0", "0"]);
+    let payload: serde_json::Value = serde_json::from_str(&raw).expect("cells json");
+    assert_eq!(
+        payload["data"]["cells"][0]["blink"],
+        serde_json::Value::Bool(true),
+        "Ghostty preserves SGR blink: {payload}"
+    );
+}
+
 fn interactive_reader() -> &'static str {
     if cfg!(windows) {
         "Write-Output ('reader-'+'ready'); $null = Read-Host"

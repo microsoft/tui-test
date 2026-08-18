@@ -483,6 +483,7 @@ fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptio
         value.profile_colors.as_deref().unwrap_or_default(),
     )?;
     Ok(CoreOpenOptions {
+        backend: Default::default(),
         profile,
         shell: value.shell.map(Into::into),
         cols: match value.cols {
@@ -509,6 +510,7 @@ fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, TuiTest
         value.profile_colors.as_deref().unwrap_or_default(),
     )?;
     Ok(CoreRunOptions {
+        backend: Default::default(),
         profile,
         program: value.program,
         args: value.args.unwrap_or_default(),

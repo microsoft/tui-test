@@ -53,7 +53,8 @@ pub struct LiveFrame {
 fn operation_summary(operation: &Operation) -> String {
     match operation {
         Operation::Open(options) => format!(
-            "Open {{ shell: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            "Open {{ backend: {}, shell: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            options.backend.as_str(),
             options.shell,
             options.profile.scrollback,
             options.cols,
@@ -64,7 +65,8 @@ fn operation_summary(operation: &Operation) -> String {
             options.env.len()
         ),
         Operation::Run(options) => format!(
-            "Run {{ program: {:?}, args: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            "Run {{ backend: {}, program: {:?}, args: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            options.backend.as_str(),
             options.program,
             options.args,
             options.profile.scrollback,
@@ -138,6 +140,7 @@ impl Engine {
         self.spawn(
             options.shell,
             None,
+            options.backend,
             options.profile,
             options.cols,
             options.rows,
@@ -155,6 +158,7 @@ impl Engine {
         self.spawn(
             None,
             Some(program),
+            options.backend,
             options.profile,
             options.cols,
             options.rows,
@@ -170,6 +174,7 @@ impl Engine {
         &self,
         shell: Option<crate::shell::Shell>,
         program: Option<Vec<String>>,
+        backend: crate::terminal::backend::Backend,
         profile: crate::profile::Profile,
         cols: u16,
         rows: u16,
@@ -192,6 +197,7 @@ impl Engine {
         let session = TerminalSession::open(
             shell,
             program.clone(),
+            backend,
             profile,
             cols,
             rows,

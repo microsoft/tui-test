@@ -99,6 +99,7 @@ impl NativeSession {
                 execute_open(
                     &name,
                     Operation::Open(OpenOptions {
+                        backend: Default::default(),
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
                         shell: parse_shell(shell.as_deref())?,
                         cols: integer_u16(&cols, "cols")?,
@@ -170,6 +171,7 @@ impl NativeSession {
                 execute_open(
                     &name,
                     Operation::Run(RunOptions {
+                        backend: Default::default(),
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
                         program,
                         args,

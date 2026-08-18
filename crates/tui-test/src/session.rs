@@ -10,7 +10,7 @@ use std::time::Instant;
 use crate::logger::Logger;
 use crate::profile::Profile;
 use crate::shell::{self, Shell};
-use crate::terminal::alacritty::AlacrittyEmu;
+use crate::terminal::backend::Backend;
 use crate::terminal::emu::Emulator;
 use crate::terminal::integration::CommandTracker;
 use crate::terminal::pty::{Pty, SpawnOptions};
@@ -52,6 +52,7 @@ impl Session {
     pub fn open(
         shell: Option<Shell>,
         program: Option<Vec<String>>,
+        backend: Backend,
         profile: Profile,
         cols: u16,
         rows: u16,
@@ -61,6 +62,8 @@ impl Session {
         logger: Arc<Logger>,
         recording_path: PathBuf,
     ) -> anyhow::Result<Self> {
+        let emu = backend.build(cols, rows, &profile)?;
+
         let (pty, reader) = if let Some(program) = &program {
             let (target, args) = program
                 .split_first()
@@ -80,7 +83,7 @@ impl Session {
         };
 
         let state = Arc::new(Mutex::new(TermState {
-            emu: Box::new(AlacrittyEmu::new(cols, rows, &profile)),
+            emu,
             tracker: CommandTracker::new(),
             last_change: Instant::now(),
             awaiting_start: None,
@@ -145,8 +148,12 @@ impl Session {
         });
 
         logger.event(&format!(
-            "session open shell={:?} program={:?} {}x{}",
-            shell, program, cols, rows
+            "session open shell={:?} program={:?} backend={} {}x{}",
+            shell,
+            program,
+            backend.as_str(),
+            cols,
+            rows
         ));
 
         Ok(Session {
