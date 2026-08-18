@@ -7,8 +7,8 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use crate::shell::Launch;
 
 pub struct Pty {
-    master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    master: Option<Box<dyn MasterPty + Send>>,
+    writer: Option<Box<dyn Write + Send>>,
     child: Box<dyn Child + Send + Sync>,
 }
 
@@ -60,8 +60,8 @@ impl Pty {
 
         Ok((
             Pty {
-                master: pair.master,
-                writer,
+                master: Some(pair.master),
+                writer: Some(writer),
                 child,
             },
             reader,
@@ -85,12 +85,20 @@ impl Pty {
     }
 
     pub fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
-        self.writer.write_all(data)?;
-        self.writer.flush()
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "PTY is closed"))?;
+        writer.write_all(data)?;
+        writer.flush()
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        self.master.resize(PtySize {
+        let master = self
+            .master
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("PTY is closed"))?;
+        master.resize(PtySize {
             rows,
             cols,
             pixel_width: 0,
@@ -105,6 +113,12 @@ impl Pty {
 
     pub fn kill(&mut self) {
         let _ = self.child.kill();
+    }
+
+    pub fn close(&mut self) {
+        self.kill();
+        self.writer.take();
+        self.master.take();
     }
 
     /// Send a named signal. Cross-platform support is limited: INT delivers a

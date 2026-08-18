@@ -5,7 +5,6 @@ pub mod engine;
 pub mod input;
 pub mod logger;
 pub mod profile;
-#[allow(dead_code)] // The session lifecycle consumes the capture API next in the stack.
 pub mod record;
 pub mod render;
 pub mod runtime;

@@ -1,7 +1,12 @@
+use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use crate::profile::ColorSlot;
+use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
+use crate::terminal::emu::{CursorShape, Emulator};
 
 const WIN32_INPUT_MODE: &[u8] = b"\x1b[?9001h";
 
@@ -85,6 +90,136 @@ impl CastWriter {
         serde_json::to_writer(&mut self.sink, &(elapsed, code, data)).map_err(json_error)?;
         self.sink.write_all(b"\n")?;
         self.sink.flush()
+    }
+}
+
+pub(crate) fn snapshot_to_ansi(emulator: &dyn Emulator) -> String {
+    let rows = emulator.viewable_rows();
+    let (cols, _) = emulator.size();
+    let cursor = emulator.cursor();
+    let blank = EmuCell::blank();
+    let mut output = String::from("\x1b[0m\x1b[?7l\x1b[2J\x1b[H");
+    for index in 0..=u8::MAX {
+        write_osc_color(
+            &mut output,
+            &format!("4;{index}"),
+            emulator.color(ColorSlot::Indexed(index)),
+        );
+    }
+    write_osc_color(&mut output, "10", emulator.color(ColorSlot::Foreground));
+    write_osc_color(&mut output, "11", emulator.color(ColorSlot::Background));
+    write_osc_color(&mut output, "12", emulator.color(ColorSlot::Cursor));
+    let _ = write!(
+        output,
+        "\x1b]2;{}\x1b\\",
+        emulator.title().unwrap_or_default()
+    );
+    for (y, row) in rows.iter().enumerate() {
+        for x in 0..usize::from(cols) {
+            let cell = row.get(x).unwrap_or(&blank);
+            if cell == &blank || cell.ch.as_str() == CONTINUATION {
+                continue;
+            }
+            let _ = write!(output, "\x1b[{};{}H", y + 1, x + 1);
+            write_style(&mut output, cell);
+            output.push_str(&cell.ch);
+        }
+    }
+    let _ = write!(
+        output,
+        "\x1b[0m\x1b[{};{}H\x1b[{} q\x1b[?7h{}",
+        cursor.1 + 1,
+        cursor.0 + 1,
+        match emulator.cursor_shape() {
+            CursorShape::Block => 2,
+            CursorShape::Underline => 4,
+            CursorShape::Bar => 6,
+        },
+        if emulator.cursor_visible() {
+            "\x1b[?25h"
+        } else {
+            "\x1b[?25l"
+        }
+    );
+    output
+}
+
+fn write_osc_color(output: &mut String, selector: &str, color: crate::profile::Rgb) {
+    let _ = write!(
+        output,
+        "\x1b]{selector};#{:02x}{:02x}{:02x}\x1b\\",
+        color.r, color.g, color.b
+    );
+}
+
+fn write_style(output: &mut String, cell: &EmuCell) {
+    let mut codes = vec!["0".to_string()];
+    for (attr, code) in [
+        (Attrs::BOLD, "1"),
+        (Attrs::DIM, "2"),
+        (Attrs::ITALIC, "3"),
+        (Attrs::BLINK, "5"),
+        (Attrs::INVERSE, "7"),
+        (Attrs::INVISIBLE, "8"),
+        (Attrs::STRIKE, "9"),
+    ] {
+        if cell.has(attr) {
+            codes.push(code.to_string());
+        }
+    }
+    let underline = match cell.underline {
+        UnderlineStyle::None => None,
+        UnderlineStyle::Single => Some("4"),
+        UnderlineStyle::Double => Some("4:2"),
+        UnderlineStyle::Curly => Some("4:3"),
+        UnderlineStyle::Dotted => Some("4:4"),
+        UnderlineStyle::Dashed => Some("4:5"),
+    };
+    if let Some(underline) = underline {
+        codes.push(underline.to_string());
+    }
+    push_color(&mut codes, cell.fg, true, "");
+    push_color(&mut codes, cell.bg, false, "");
+    if cell.underline.is_underlined() {
+        push_color(&mut codes, cell.underline_color, true, "5");
+    }
+    let _ = write!(output, "\x1b[{}m", codes.join(";"));
+}
+
+fn push_color(codes: &mut Vec<String>, color: Option<Color>, foreground: bool, prefix: &str) {
+    let Some(color) = color else {
+        return;
+    };
+    let base = if prefix.is_empty() {
+        if foreground {
+            "38"
+        } else {
+            "48"
+        }
+    } else {
+        "58"
+    };
+    match color {
+        Color::Named(named) if prefix.is_empty() => {
+            let index = named.index();
+            let value = if foreground {
+                if index < 8 {
+                    30 + index
+                } else {
+                    90 + index - 8
+                }
+            } else if index < 8 {
+                40 + index
+            } else {
+                100 + index - 8
+            };
+            codes.push(value.to_string());
+        }
+        Color::Named(named) => codes.push(format!("{base};5;{}", named.index())),
+        Color::Idx(index) => codes.push(format!("{base};5;{index}")),
+        Color::Rgb(red, green, blue) => {
+            codes.push(format!("{base};2;{red};{green};{blue}"));
+        }
     }
 }
 
@@ -200,5 +335,31 @@ mod tests {
 
         assert_eq!(decoder.push(&[0xe2]), "");
         assert_eq!(decoder.finish(), "\u{fffd}");
+    }
+
+    #[test]
+    fn snapshot_captures_existing_visual_state() {
+        use crate::profile::{ColorSlot, Profile, Rgb};
+        use crate::terminal::alacritty::AlacrittyEmu;
+        use crate::terminal::emu::{CursorShape, Emulator};
+
+        let mut source = AlacrittyEmu::new(2, 1, &Profile::default());
+        source.process(
+            b"\x1b]2;before recording\x07\x1b]4;1;#010203\x07\
+              \x1b]10;#040506\x07\x1b]11;#070809\x07\x1b]12;#0a0b0c\x07\
+              \x1b[1;2H\x1b[6 q\x1b[?25l",
+        );
+
+        let mut replay = AlacrittyEmu::new(2, 1, &Profile::default());
+        replay.process(snapshot_to_ansi(&source).as_bytes());
+
+        assert_eq!(replay.title().as_deref(), Some("before recording"));
+        assert_eq!(replay.color(ColorSlot::Indexed(1)), Rgb::new(1, 2, 3));
+        assert_eq!(replay.color(ColorSlot::Foreground), Rgb::new(4, 5, 6));
+        assert_eq!(replay.color(ColorSlot::Background), Rgb::new(7, 8, 9));
+        assert_eq!(replay.color(ColorSlot::Cursor), Rgb::new(10, 11, 12));
+        assert_eq!(replay.cursor(), (1, 0));
+        assert_eq!(replay.cursor_shape(), CursorShape::Bar);
+        assert!(!replay.cursor_visible());
     }
 }
