@@ -244,7 +244,11 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[cfg(feature = "recording-raster")]
+    use crate::api::RecordingFormat;
+    #[cfg(feature = "recording-raster")]
     use crate::record::cast::CastWriter;
+    #[cfg(feature = "recording-raster")]
+    use crate::render::raster::{FrameRenderer, GridRenderer};
 
     fn grid(ch: &str) -> Vec<Vec<EmuCell>> {
         vec![vec![EmuCell {
@@ -392,6 +396,46 @@ mod tests {
         assert_eq!(frames[1].cursor, None);
 
         std::fs::remove_file(cast_path).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "recording-raster")]
+    fn scripted_cast_round_trips_to_apng() {
+        let cast_path = temp_path("cast");
+        let apng_path = temp_path("png");
+        let started = std::time::Instant::now();
+        let mut writer = CastWriter::create(&cast_path, 2, 1, &[], started).unwrap();
+        writer
+            .write_output(started, "\x1b[2J\x1b[H\x1b[48;2;200;10;20mA")
+            .unwrap();
+        writer
+            .write_output(
+                started + Duration::from_millis(100),
+                "\x1b[48;2;10;20;200mB",
+            )
+            .unwrap();
+        writer.flush().unwrap();
+
+        let frames = from_cast(
+            crate::record::cast::read(&cast_path).unwrap(),
+            &TimelineOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(
+            frames.iter().map(|frame| frame.duration).sum::<Duration>(),
+            Duration::from_millis(3100)
+        );
+
+        let mut renderer = GridRenderer::with_scale(2, 1, 2);
+        crate::render::encode::encode(&apng_path, RecordingFormat::Apng, &frames, &mut renderer)
+            .unwrap();
+        let encoded = std::fs::read(&apng_path).unwrap();
+        assert_eq!(&encoded[..8], b"\x89PNG\r\n\x1a\n");
+        assert!(encoded.windows(4).any(|window| window == b"acTL"));
+        assert_eq!(renderer.pixel_size(), (100, 148));
+        std::fs::remove_file(cast_path).unwrap();
+        std::fs::remove_file(apng_path).unwrap();
     }
 
     #[cfg(feature = "recording-raster")]

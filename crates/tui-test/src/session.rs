@@ -258,12 +258,14 @@ impl Session {
         let format = format
             .or_else(|| crate::api::RecordingFormat::infer(&path))
             .ok_or_else(|| {
-                crate::api::TuiTestError::usage("cannot infer recording format; use .gif or .cast")
+                crate::api::TuiTestError::usage(
+                    "cannot infer recording format; use .png, .apng, .gif, or .cast",
+                )
             })?;
         #[cfg(not(feature = "recording-raster"))]
         if format != crate::api::RecordingFormat::Cast {
             return Err(crate::api::TuiTestError::usage(
-                "GIF recording requires the tui-test 'recording-raster' feature",
+                "APNG and GIF recording require the tui-test 'recording-raster' feature",
             ));
         }
         let fps = fps.unwrap_or(30);
