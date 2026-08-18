@@ -396,6 +396,7 @@ pub enum ScreenshotResult {
 pub enum RecordingFormat {
     Apng,
     Gif,
+    Mp4,
     Cast,
 }
 
@@ -408,6 +409,7 @@ impl RecordingFormat {
         match extension.as_str() {
             "png" | "apng" => Some(Self::Apng),
             "gif" => Some(Self::Gif),
+            "mp4" => Some(Self::Mp4),
             "cast" => Some(Self::Cast),
             _ => None,
         }
@@ -474,10 +476,6 @@ mod tests {
     #[test]
     fn recording_format_is_inferred_from_supported_extensions() {
         assert_eq!(
-            RecordingFormat::infer("demo.cast"),
-            Some(RecordingFormat::Cast)
-        );
-        assert_eq!(
             RecordingFormat::infer("demo.png"),
             Some(RecordingFormat::Apng)
         );
@@ -489,6 +487,14 @@ mod tests {
             RecordingFormat::infer("demo.gif"),
             Some(RecordingFormat::Gif)
         );
-        assert_eq!(RecordingFormat::infer("demo.mp4"), None);
+        assert_eq!(
+            RecordingFormat::infer("demo.MP4"),
+            Some(RecordingFormat::Mp4)
+        );
+        assert_eq!(
+            RecordingFormat::infer("demo.cast"),
+            Some(RecordingFormat::Cast)
+        );
+        assert_eq!(RecordingFormat::infer("demo.webm"), None);
     }
 }

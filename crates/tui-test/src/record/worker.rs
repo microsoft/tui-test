@@ -118,6 +118,8 @@ pub(super) fn worker_loop(
                     format: request.format,
                     #[cfg(feature = "recording-raster")]
                     timeline: request.timeline,
+                    #[cfg(feature = "recording-raster")]
+                    ffmpeg_path: request.ffmpeg_path,
                 }));
             }
             Message::Flush { reply } => {

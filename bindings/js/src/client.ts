@@ -54,7 +54,7 @@ export interface MouseButtonOptions {
   button?: number;
 }
 
-export type RecordingFormat = "apng" | "gif" | "cast";
+export type RecordingFormat = "apng" | "gif" | "mp4" | "cast";
 
 export interface RecordingOptions {
   format?: RecordingFormat;

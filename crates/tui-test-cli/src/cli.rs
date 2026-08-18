@@ -77,6 +77,7 @@ impl ProfileArgs {
 pub enum RecordingFormatArg {
     Apng,
     Gif,
+    Mp4,
     Cast,
 }
 
@@ -85,6 +86,7 @@ impl From<RecordingFormatArg> for RecordingFormat {
         match format {
             RecordingFormatArg::Apng => RecordingFormat::Apng,
             RecordingFormatArg::Gif => RecordingFormat::Gif,
+            RecordingFormatArg::Mp4 => RecordingFormat::Mp4,
             RecordingFormatArg::Cast => RecordingFormat::Cast,
         }
     }
@@ -358,9 +360,9 @@ pub enum Command {
 
 #[derive(Subcommand)]
 pub enum RecordCmd {
-    /// Start recording terminal output to APNG, GIF, or asciicast v2.
+    /// Start recording terminal output to APNG, GIF, MP4, or asciicast v2.
     Start {
-        /// Output path. The extension selects APNG (.png/.apng), GIF, or cast.
+        /// Output path. The extension selects APNG (.png/.apng), GIF, MP4, or cast.
         path: String,
         /// Override the format inferred from the output extension.
         #[arg(long, value_enum)]
@@ -541,7 +543,9 @@ mod tests {
             "tui-test",
             "record",
             "start",
-            "demo.cast",
+            "demo.mp4",
+            "--format",
+            "mp4",
             "--fps",
             "24",
             "--speed",
@@ -554,6 +558,7 @@ mod tests {
             cli.command,
             Some(Command::Record {
                 cmd: RecordCmd::Start {
+                    format: Some(RecordingFormatArg::Mp4),
                     fps: Some(24),
                     speed: Some(2.0),
                     idle_time_limit: Some(3.0),

@@ -35,7 +35,7 @@ fn single_frame_gif_and_png_renders_match_snapshots() {
                 cursor: None,
             };
             let mut renderer = GridRenderer::new(COLS, ROWS);
-            encode::encode(&output, format, &[frame], &mut renderer).unwrap();
+            encode::encode(&output, format, &[frame], &mut renderer, 30, None).unwrap();
             let actual = std::fs::read(&output).unwrap();
             std::fs::remove_file(output).unwrap();
             assert_snapshot(case.name, extension, &actual);

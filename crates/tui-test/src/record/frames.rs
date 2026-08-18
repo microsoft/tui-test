@@ -428,8 +428,15 @@ mod tests {
         );
 
         let mut renderer = GridRenderer::with_scale(2, 1, 2);
-        crate::render::encode::encode(&apng_path, RecordingFormat::Apng, &frames, &mut renderer)
-            .unwrap();
+        crate::render::encode::encode(
+            &apng_path,
+            RecordingFormat::Apng,
+            &frames,
+            &mut renderer,
+            30,
+            None,
+        )
+        .unwrap();
         let encoded = std::fs::read(&apng_path).unwrap();
         assert_eq!(&encoded[..8], b"\x89PNG\r\n\x1a\n");
         assert!(encoded.windows(4).any(|window| window == b"acTL"));
