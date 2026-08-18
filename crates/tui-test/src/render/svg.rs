@@ -15,14 +15,14 @@ use crate::profile::{ColorSlot, Rgb};
 use crate::terminal::cell::{truncate_to_columns, Attrs, Color, EmuCell, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator};
 
-const CELL_W: f32 = 10.0;
-const CELL_H: f32 = 21.0;
-const FONT_SIZE: f32 = 17.0;
-const FONT_BASELINE: f32 = (CELL_H - FONT_SIZE) / 2.0 + FONT_SIZE * 0.78;
-const MARGIN_X: f32 = 15.0;
-const HEADER_H: f32 = 38.0;
+pub(crate) const CELL_W: f32 = 10.0;
+pub(crate) const CELL_H: f32 = 21.0;
+pub(crate) const FONT_SIZE: f32 = 17.0;
+pub(crate) const FONT_BASELINE: f32 = (CELL_H - FONT_SIZE) / 2.0 + FONT_SIZE * 0.78;
+pub(crate) const MARGIN_X: f32 = 15.0;
+pub(crate) const HEADER_H: f32 = 38.0;
 const MARGIN_BOTTOM: f32 = 14.0;
-const DOT_R: f32 = 7.0;
+pub(crate) const DOT_R: f32 = 7.0;
 /// Title bar text, smaller than the grid font so the chrome does not compete
 /// with the terminal content itself.
 const TITLE_FONT_SIZE: f32 = 13.0;
@@ -113,7 +113,7 @@ impl RenderColors for RenderState {
 }
 
 /// Resolved background color for a cell (honoring inverse).
-fn bg_of(cell: &EmuCell, colors: &dyn RenderColors) -> Rgb {
+pub(crate) fn bg_of(cell: &EmuCell, colors: &dyn RenderColors) -> Rgb {
     let bg = colors.resolve(cell.bg, false);
     let fg = colors.resolve(cell.fg, true);
     if cell.has(Attrs::INVERSE) {
@@ -124,16 +124,16 @@ fn bg_of(cell: &EmuCell, colors: &dyn RenderColors) -> Rgb {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct Style {
-    fg: Rgb,
-    bold: bool,
-    italic: bool,
-    underline: bool,
-    strike: bool,
-    invisible: bool,
+pub(crate) struct Style {
+    pub fg: Rgb,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strike: bool,
+    pub invisible: bool,
 }
 
-fn style_of(cell: &EmuCell, colors: &dyn RenderColors) -> Style {
+pub(crate) fn style_of(cell: &EmuCell, colors: &dyn RenderColors) -> Style {
     let mut fg = colors.resolve(cell.fg, true);
     let bg = colors.resolve(cell.bg, false);
     if cell.has(Attrs::INVERSE) {
@@ -339,6 +339,17 @@ pub(crate) fn render_svg(
     cursor: Option<(u16, usize)>,
     title: Option<&str>,
 ) -> String {
+    render_svg_with_font(rows, cols, colors, cursor, title, FONT_STACK)
+}
+
+pub(crate) fn render_svg_with_font(
+    rows: &[Vec<EmuCell>],
+    cols: u16,
+    colors: &dyn RenderColors,
+    cursor: Option<(u16, usize)>,
+    title: Option<&str>,
+    font_family: &str,
+) -> String {
     let nerd_font = NerdFont::new(rows, FONT_SIZE);
     let cols = cols as usize;
     let x0 = MARGIN_X;
@@ -349,7 +360,7 @@ pub(crate) fn render_svg(
     let mut out = String::new();
     let _ = write!(
         out,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" font-family="{FONT_STACK}" font-size="{FONT_SIZE}px">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{FONT_SIZE}px">"#
     );
     nerd_font.write_defs(&mut out);
     let _ = write!(
@@ -410,6 +421,14 @@ pub(crate) fn render_svg(
 
     out.push_str("</svg>");
     out
+}
+
+#[cfg(feature = "recording-raster")]
+#[allow(dead_code)] // The raster renderer consumes this geometry next in the stack.
+pub(crate) fn pixel_size(cols: u16, rows: usize) -> (u32, u32) {
+    let width = (MARGIN_X * 2.0 + f32::from(cols) * CELL_W).ceil() as u32;
+    let height = (HEADER_H + MARGIN_BOTTOM + rows.max(1) as f32 * CELL_H).ceil() as u32;
+    (width + width % 2, height + height % 2)
 }
 
 #[cfg(test)]
