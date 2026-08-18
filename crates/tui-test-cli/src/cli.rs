@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand};
 
 use tui_test::config::{DEFAULT_COLS, DEFAULT_ROWS};
 use tui_test::shell::Shell;
-use tui_test::{Backend, Timeouts};
+use tui_test::{Backend, RecordingFormat, Timeouts};
 
 #[derive(Clone, Copy, clap::ValueEnum)]
 #[clap(rename_all = "lowercase")]
@@ -69,6 +69,20 @@ impl ProfileArgs {
     pub fn resolve(&self) -> anyhow::Result<tui_test::profile::Profile> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         tui_test::profile::resolve(self.config.as_deref(), self.profile.as_deref(), &cwd)
+    }
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub enum RecordingFormatArg {
+    Cast,
+}
+
+impl From<RecordingFormatArg> for RecordingFormat {
+    fn from(format: RecordingFormatArg) -> Self {
+        match format {
+            RecordingFormatArg::Cast => RecordingFormat::Cast,
+        }
     }
 }
 
@@ -226,6 +240,11 @@ pub enum Command {
         #[arg(long)]
         full: bool,
     },
+    /// Start or stop an animated terminal recording.
+    Record {
+        #[command(subcommand)]
+        cmd: RecordCmd,
+    },
     /// Dump cell attributes for a region.
     Cells {
         /// Left column, 0-based.
@@ -305,8 +324,7 @@ pub enum Command {
     },
     /// Print the session's recording (asciinema v2 cast) to stdout.
     ///
-    /// Redirect to a `.cast` file, then `asciinema play` it or render a GIF
-    /// with `agg`.
+    /// Redirect to a `.cast` file for playback in the asciicast ecosystem.
     GetRecording {
         /// Session to read (defaults to --session / the default session).
         session: Option<String>,
@@ -332,6 +350,29 @@ pub enum Command {
     /// Internal: run the session daemon.
     #[command(name = "__daemon", hide = true)]
     InternalDaemon,
+}
+
+#[derive(Subcommand)]
+pub enum RecordCmd {
+    /// Start recording terminal output to asciicast v2.
+    Start {
+        /// Output path. Use the .cast extension.
+        path: String,
+        /// Override the format inferred from the output extension.
+        #[arg(long, value_enum)]
+        format: Option<RecordingFormatArg>,
+        /// Maximum animation frame rate.
+        #[arg(long)]
+        fps: Option<u8>,
+        /// Playback speed multiplier.
+        #[arg(long)]
+        speed: Option<f64>,
+        /// Clamp idle gaps to this many seconds.
+        #[arg(long)]
+        idle_time_limit: Option<f64>,
+    },
+    /// Stop the active recording and finish its output file.
+    Stop,
 }
 
 /// Signals deliverable to a session's child process.
@@ -488,6 +529,34 @@ mod tests {
         assert_eq!(defaults.ready, Some(20_000));
         assert_eq!(defaults.command, None, "unset classes stay unset");
         assert_eq!(defaults.exit, None);
+    }
+
+    #[test]
+    fn recording_start_accepts_timeline_options() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "record",
+            "start",
+            "demo.cast",
+            "--fps",
+            "24",
+            "--speed",
+            "2",
+            "--idle-time-limit",
+            "3",
+        ])
+        .expect("parse recording start");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Record {
+                cmd: RecordCmd::Start {
+                    fps: Some(24),
+                    speed: Some(2.0),
+                    idle_time_limit: Some(3.0),
+                    ..
+                }
+            })
+        ));
     }
 
     #[test]
