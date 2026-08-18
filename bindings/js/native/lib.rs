@@ -10,10 +10,9 @@ use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::shell::Shell as CoreShell;
 use tui_test::{
     global_registry, Backend as CoreBackend, BellEvent as CoreBellEvent, Cell as CoreCell,
-    CellColor, Cursor as CoreCursor,
-    EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, MouseAction,
-    OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation, OperationResult,
-    RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
+    CellColor, Cursor as CoreCursor, EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind,
+    MouseAction, OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation,
+    OperationResult, RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
     ScreenshotResult as CoreScreenshotResult, SessionHandle, Size as CoreSize,
     SnapshotResult as CoreSnapshotResult, State as CoreState, Timeouts as CoreTimeouts,
     TuiTestError,
