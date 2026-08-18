@@ -1166,7 +1166,8 @@ fn a_window_title_is_tracked_asserted_and_drawn() {
     sandbox.ok(&["screenshot", "--out", svg.to_str().expect("utf-8 path")]);
     let image = std::fs::read_to_string(&svg).expect("read svg");
     assert!(
-        image.contains(">vim: notes.md</text>") && image.contains(r#"text-anchor="middle""#),
+        image.contains(">vim: notes.md - 40x30</text>")
+            && image.contains(r#"text-anchor="middle""#),
         "the title is drawn centred in the title bar: {image}"
     );
 

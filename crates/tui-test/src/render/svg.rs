@@ -29,7 +29,6 @@ pub(crate) const RED_DOT_COLOR: Rgb = Rgb::new(105, 17, 10);
 pub(crate) const WINDOW_RADIUS: f32 = 8.0;
 pub(crate) const TITLE_DIVIDER_H: f32 = 1.0;
 pub(crate) const TITLE_BG: Rgb = Rgb::new(217, 217, 232);
-const TITLE_FG: Rgb = Rgb::new(65, 65, 69);
 pub(crate) const TITLE_DIVIDER: Rgb = Rgb::new(0, 0, 0);
 pub(crate) const TRAFFIC_LIGHTS: [Rgb; 3] = [
     Rgb::new(236, 106, 94),
@@ -38,7 +37,8 @@ pub(crate) const TRAFFIC_LIGHTS: [Rgb; 3] = [
 ];
 /// Title bar text, smaller than the grid font so the chrome does not compete
 /// with the terminal content itself.
-const TITLE_FONT_SIZE: f32 = 13.0;
+pub(crate) const TITLE_FONT_SIZE: f32 = 13.0;
+pub(crate) const TITLE_FG: Rgb = Rgb::new(65, 65, 69);
 /// Where the rightmost traffic light ends. A centred title is kept clear of
 /// this on both sides, so it can never be drawn over the controls.
 const DOTS_RIGHT: f32 = MARGIN_X + 5.0 + 2.0 * 20.0 + DOT_R;
@@ -268,21 +268,47 @@ fn write_text_run(
 /// computed width would distort it. It is instead truncated to what fits, and
 /// kept clear of the traffic lights by reserving the same margin on both
 /// sides, which also keeps it centred on the space that remains.
-fn write_title(out: &mut String, title: &str, width: f32) {
-    const GAP: f32 = 8.0;
-    let available = width - 2.0 * (DOTS_RIGHT + GAP);
-    // A monospace advance, scaled from the grid font's known cell width.
-    let advance = TITLE_FONT_SIZE * (CELL_W / FONT_SIZE);
-    let fits = (available / advance).floor().max(0.0) as usize;
-    if fits == 0 {
-        return;
+pub(crate) fn title_advance() -> f32 {
+    TITLE_FONT_SIZE * (CELL_W / FONT_SIZE)
+}
+
+pub(crate) fn media_title(title: Option<&str>, cols: u16, rows: usize, fits: usize) -> String {
+    let base = title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .unwrap_or("tui-test capture");
+    let suffix = format!(" - {cols}x{rows}");
+    let full = format!("{base}{suffix}");
+    if crate::terminal::cell::display_width(&full) <= fits {
+        return full;
     }
 
-    // Budgeted in columns, not characters: the title bar inherits the
-    // monospace stack, so a CJK glyph takes two advances and a title sized by
-    // character count would be twice as wide as measured and, being centred,
-    // would spill over the window controls at both ends.
-    let shown = truncate_to_columns(title, fits);
+    let suffix_width = crate::terminal::cell::display_width(&suffix);
+    if suffix_width >= fits {
+        return truncate_to_columns(&full, fits);
+    }
+    format!("{}{suffix}", truncate_to_columns(base, fits - suffix_width))
+}
+
+pub(crate) fn visible_title(
+    title: Option<&str>,
+    cols: u16,
+    rows: usize,
+    width: f32,
+) -> Option<String> {
+    const GAP: f32 = 8.0;
+    let available = width - 2.0 * (DOTS_RIGHT + GAP);
+    let fits = (available / title_advance()).floor().max(0.0) as usize;
+    if fits == 0 {
+        return None;
+    }
+    Some(media_title(title, cols, rows, fits))
+}
+
+fn write_title(out: &mut String, title: Option<&str>, cols: u16, rows: usize, width: f32) {
+    let Some(shown) = visible_title(title, cols, rows, width) else {
+        return;
+    };
     let _ = write!(
         out,
         r#"<text x="{cx:.2}" y="{baseline:.2}" fill="{fill}" font-size="{TITLE_FONT_SIZE}px" font-weight="bold" text-anchor="middle" xml:space="preserve">{esc}</text>"#,
@@ -425,9 +451,7 @@ pub(crate) fn render_svg_with_font(
         cx = MARGIN_X + 5.0,
         cy = HEADER_H / 2.0,
     );
-    if let Some(title) = title {
-        write_title(&mut out, title, width);
-    }
+    write_title(&mut out, title, cols as u16, rows.len().max(1), width);
 
     for (y, row) in rows.iter().enumerate() {
         let mut x = 0;
@@ -849,9 +873,8 @@ mod tests {
         assert!(!svg.contains(r#"<use href="#));
     }
 
-    /// A window title is drawn centred in the title bar, and no title leaves
-    /// the bar exactly as it was, so every screenshot taken without one is
-    /// unchanged by this feature.
+    /// A window title is drawn centred with the rendered cell dimensions, and
+    /// media without a program title gets a useful default.
     #[test]
     fn draws_the_window_title_centred_in_the_bar() {
         let rows = vec![vec![cell("x", None, None); 40]];
@@ -859,11 +882,12 @@ mod tests {
         let titled = render_svg(&rows, 40, &colors(), None, Some("vim: notes.md"));
 
         assert!(
-            !bare.contains("text-anchor=\"middle\""),
-            "no title means nothing extra is drawn: {bare}"
+            bare.contains(">tui-test capture - 40x1</text>"),
+            "untitled media gets the capture default: {bare}"
         );
         assert!(
-            titled.contains(">vim: notes.md</text>") && titled.contains("text-anchor=\"middle\""),
+            titled.contains(">vim: notes.md - 40x1</text>")
+                && titled.contains("text-anchor=\"middle\""),
             "the title is drawn, centred: {titled}"
         );
         assert!(
@@ -891,7 +915,11 @@ mod tests {
             .nth(1)
             .and_then(|rest| rest.split("</text>").next())
             .expect("a title element");
-        assert!(drawn.ends_with('…'), "truncation is marked: {drawn}");
+        assert!(drawn.contains('…'), "truncation is marked: {drawn}");
+        assert!(
+            drawn.ends_with(" - 20x1"),
+            "the dimensions survive truncation: {drawn}"
+        );
         assert_fits_clear_of_the_controls(drawn, 20.0);
     }
 
@@ -917,8 +945,7 @@ mod tests {
     /// and the mirrored margin on the right.
     fn assert_fits_clear_of_the_controls(drawn: &str, cols: f32) {
         let panel = MARGIN_X * 2.0 + cols * CELL_W;
-        let advance = TITLE_FONT_SIZE * (CELL_W / FONT_SIZE);
-        let drawn_width = crate::terminal::cell::display_width(drawn) as f32 * advance;
+        let drawn_width = crate::terminal::cell::display_width(drawn) as f32 * title_advance();
         assert!(
             drawn_width <= panel - 2.0 * DOTS_RIGHT,
             "title {drawn:?} is {drawn_width} wide, past the {} available",
