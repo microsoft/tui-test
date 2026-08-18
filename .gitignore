@@ -1,5 +1,4 @@
 /target
-*.gif
 *.pyc
 *.trace
 __pycache__/

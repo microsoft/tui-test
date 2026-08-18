@@ -394,6 +394,7 @@ pub enum ScreenshotResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RecordingFormat {
+    Gif,
     Cast,
 }
 
@@ -404,6 +405,7 @@ impl RecordingFormat {
             .to_str()?
             .to_ascii_lowercase();
         match extension.as_str() {
+            "gif" => Some(Self::Gif),
             "cast" => Some(Self::Cast),
             _ => None,
         }
@@ -474,7 +476,10 @@ mod tests {
             Some(RecordingFormat::Cast)
         );
         assert_eq!(RecordingFormat::infer("demo.png"), None);
-        assert_eq!(RecordingFormat::infer("demo.gif"), None);
+        assert_eq!(
+            RecordingFormat::infer("demo.gif"),
+            Some(RecordingFormat::Gif)
+        );
         assert_eq!(RecordingFormat::infer("demo.mp4"), None);
     }
 }

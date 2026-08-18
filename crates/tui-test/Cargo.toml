@@ -15,7 +15,7 @@ path = "src/lib.rs"
 [features]
 default = []
 ghostty = ["dep:ghostty-vt"]
-recording-raster = ["dep:fontdb", "dep:tiny-skia"]
+recording-raster = ["dep:fontdb", "dep:gif", "dep:tiny-skia"]
 recording-font-jetbrains-mono = ["recording-raster"]
 recording-font-jetbrains-mono-styles = ["recording-font-jetbrains-mono"]
 recording-font-jetbrains-mono-full = ["recording-font-jetbrains-mono-styles"]
@@ -28,6 +28,7 @@ compact_str.workspace = true
 dirs.workspace = true
 flate2.workspace = true
 fontdb = { workspace = true, optional = true }
+gif = { workspace = true, optional = true }
 ghostty-vt = { workspace = true, optional = true }
 portable-pty.workspace = true
 regex.workspace = true
