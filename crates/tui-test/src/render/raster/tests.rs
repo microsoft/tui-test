@@ -3,7 +3,7 @@ use super::font::{FontSystem, GlyphKey};
 use super::{FrameRenderer, GridRenderer, RgbaFrame, CANVAS_BACKGROUND, CANVAS_PADDING};
 use crate::profile::Profile;
 use crate::record::frames::Frame;
-use crate::render::svg::RenderState;
+use crate::render::svg::{RenderColors, RenderState};
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::cell::{Attrs, Color, EmuCell, CONTINUATION};
 use crate::terminal::emu::Emulator;
@@ -56,14 +56,17 @@ fn scaled_renderers_multiply_output_dimensions() {
 #[test]
 fn smaller_terminal_is_centered_on_the_recording_canvas() {
     let mut renderer = GridRenderer::new(4, 3);
-    let content = frame(vec![vec![cell(" ", Attrs::empty()); 2]]);
+    let mut content_cell = cell(" ", Attrs::empty());
+    content_cell.bg = Some(Color::Rgb(1, 2, 3));
+    let content = frame(vec![vec![content_cell; 2]]);
+    let expected_background = content.render_state.resolve(None, false);
     let image = renderer.render(&content).unwrap();
     let (width, height) = image.dimensions();
     let (panel_width, panel_height) = crate::render::svg::pixel_size(2, 1);
     let origin_x = (width - panel_width) / 2;
     let origin_y = (height - panel_height) / 2;
-    let profile = Profile::default();
 
+    assert_eq!(CANVAS_BACKGROUND, crate::profile::Rgb::new(104, 103, 170));
     assert_eq!(
         pixel_at(&image, 0, 0),
         [
@@ -75,12 +78,46 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
     );
     assert_eq!(
         pixel_at(&image, origin_x + panel_width / 2, origin_y + 10),
+        [217, 217, 232, 255]
+    );
+    assert_eq!(
+        pixel_at(
+            &image,
+            origin_x + panel_width / 2,
+            origin_y + crate::render::svg::HEADER_H as u32 - 1
+        ),
+        [0, 0, 0, 255]
+    );
+    assert_eq!(
+        pixel_at(
+            &image,
+            origin_x + (crate::render::svg::MARGIN_X + 5.0) as u32,
+            origin_y + (crate::render::svg::HEADER_H / 2.0) as u32
+        ),
+        [105, 17, 10, 255]
+    );
+    assert_eq!(
+        pixel_at(
+            &image,
+            origin_x + panel_width / 2,
+            origin_y + crate::render::svg::HEADER_H as u32 + 1
+        ),
         [
-            profile.colors.background.r,
-            profile.colors.background.g,
-            profile.colors.background.b,
+            expected_background.r,
+            expected_background.g,
+            expected_background.b,
             255
         ]
+    );
+    assert_eq!(
+        pixel_at(
+            &image,
+            origin_x + panel_width / 2,
+            origin_y
+                + (crate::render::svg::HEADER_H + crate::render::svg::CONTENT_PADDING_TOP) as u32
+                + 1
+        ),
+        [1, 2, 3, 255]
     );
     assert_eq!(
         pixel_at(&image, origin_x - 1, origin_y + panel_height / 2),
@@ -192,7 +229,9 @@ fn frame_palette_and_cursor_state_change_the_pixels() {
 
     let width = renderer.pixel_size().0 as usize;
     let x = (CANVAS_PADDING + super::super::svg::MARGIN_X as u32) as usize;
-    let y = (CANVAS_PADDING + super::super::svg::HEADER_H as u32) as usize;
+    let y = (CANVAS_PADDING
+        + super::super::svg::HEADER_H as u32
+        + super::super::svg::CONTENT_PADDING_TOP as u32) as usize;
     let cursor = (y * width + x) * 4;
     assert_eq!(&first_pixels[cursor..cursor + 3], &[255, 0, 255]);
 }

@@ -14,13 +14,13 @@ mod draw;
 mod font;
 
 use draw::{
-    draw_glyph, fill_circle, fill_rect, fill_rounded_rect, format_glyph_sequence,
-    is_default_ignorable, unpremultiply, unsupported_grapheme,
+    draw_glyph, fill_circle, fill_rect, fill_rounded_rect, fill_top_rounded_rect,
+    format_glyph_sequence, is_default_ignorable, unpremultiply, unsupported_grapheme,
 };
 use font::{FontSystem, GlyphKey};
 
 pub(crate) const CANVAS_PADDING: u32 = 24;
-pub(crate) const CANVAS_BACKGROUND: Rgb = Rgb::new(22, 25, 30);
+pub(crate) const CANVAS_BACKGROUND: Rgb = Rgb::new(104, 103, 170);
 
 #[derive(Debug)]
 pub struct RgbaFrame {
@@ -129,21 +129,38 @@ impl FrameRenderer for GridRenderer {
             origin_y,
             panel_width as f32,
             panel_height as f32,
-            8.0 * scale,
+            svg::WINDOW_RADIUS * scale,
             colors.resolve(None, false),
         );
-        for (index, color) in [
-            Rgb::new(255, 95, 86),
-            Rgb::new(255, 189, 46),
-            Rgb::new(39, 201, 63),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        fill_top_rounded_rect(
+            &mut self.pixmap,
+            origin_x,
+            origin_y,
+            panel_width as f32,
+            (svg::HEADER_H - svg::TITLE_DIVIDER_H) * scale,
+            svg::WINDOW_RADIUS * scale,
+            svg::TITLE_BG,
+        );
+        fill_rect(
+            &mut self.pixmap,
+            origin_x,
+            origin_y + (svg::HEADER_H - svg::TITLE_DIVIDER_H) * scale,
+            panel_width as f32,
+            svg::TITLE_DIVIDER_H * scale,
+            svg::TITLE_DIVIDER,
+        );
+        for (index, color) in svg::TRAFFIC_LIGHTS.iter().copied().enumerate() {
             let cx = origin_x + (svg::MARGIN_X + 5.0 + index as f32 * 20.0) * scale;
             let cy = origin_y + svg::HEADER_H / 2.0 * scale;
             fill_circle(&mut self.pixmap, cx, cy, svg::DOT_R * scale, color);
         }
+        fill_circle(
+            &mut self.pixmap,
+            origin_x + (svg::MARGIN_X + 5.0) * scale,
+            origin_y + svg::HEADER_H / 2.0 * scale,
+            svg::RED_DOT_R * scale,
+            svg::RED_DOT_COLOR,
+        );
 
         let blank = EmuCell::blank();
         for (y, row) in grid.iter().enumerate() {
@@ -154,7 +171,9 @@ impl FrameRenderer for GridRenderer {
                     fill_rect(
                         &mut self.pixmap,
                         origin_x + (svg::MARGIN_X + x as f32 * svg::CELL_W) * scale,
-                        origin_y + (svg::HEADER_H + y as f32 * svg::CELL_H) * scale,
+                        origin_y
+                            + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + y as f32 * svg::CELL_H)
+                                * scale,
                         svg::CELL_W * scale,
                         svg::CELL_H * scale,
                         background,
@@ -184,11 +203,16 @@ impl FrameRenderer for GridRenderer {
                     1
                 };
                 let cell_origin_x = origin_x + (svg::MARGIN_X + x as f32 * svg::CELL_W) * scale;
-                let cell_origin_y = origin_y + (svg::HEADER_H + y as f32 * svg::CELL_H) * scale;
+                let cell_origin_y = origin_y
+                    + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + y as f32 * svg::CELL_H) * scale;
                 let cell_width = svg::CELL_W * span as f32 * scale;
                 let cell_height = svg::CELL_H * scale;
                 let baseline = origin_y
-                    + (svg::HEADER_H + y as f32 * svg::CELL_H + svg::FONT_BASELINE) * scale;
+                    + (svg::HEADER_H
+                        + svg::CONTENT_PADDING_TOP
+                        + y as f32 * svg::CELL_H
+                        + svg::FONT_BASELINE)
+                        * scale;
 
                 if unsupported_grapheme(cell.ch.as_str()) {
                     missing.insert(format_glyph_sequence(cell.ch.as_str()));
@@ -309,7 +333,8 @@ fn draw_cursor(
         1
     };
     let origin_x = panel_origin_x + (svg::MARGIN_X + f32::from(cx) * svg::CELL_W) * scale;
-    let origin_y = panel_origin_y + (svg::HEADER_H + cy as f32 * svg::CELL_H) * scale;
+    let origin_y = panel_origin_y
+        + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + cy as f32 * svg::CELL_H) * scale;
     let cell_width = svg::CELL_W * span as f32 * scale;
     let cell_height = svg::CELL_H * scale;
     let thickness = 2.0 * scale;
@@ -346,8 +371,9 @@ fn draw_cursor(
         missing.insert(format_glyph_sequence(cell.ch.as_str()));
         return;
     }
-    let baseline =
-        panel_origin_y + (svg::HEADER_H + cy as f32 * svg::CELL_H + svg::FONT_BASELINE) * scale;
+    let baseline = panel_origin_y
+        + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + cy as f32 * svg::CELL_H + svg::FONT_BASELINE)
+            * scale;
     for character in cell.ch.chars() {
         if is_default_ignorable(character) {
             continue;
