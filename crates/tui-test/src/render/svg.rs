@@ -11,21 +11,43 @@
 use std::fmt::Write;
 
 use super::nerd_font::NerdFont;
-use crate::profile::{ColorSlot, Rgb};
+use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{truncate_to_columns, Attrs, Color, EmuCell, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator};
 
-const CELL_W: f32 = 10.0;
-const CELL_H: f32 = 21.0;
-const FONT_SIZE: f32 = 17.0;
-const FONT_BASELINE: f32 = (CELL_H - FONT_SIZE) / 2.0 + FONT_SIZE * 0.78;
-const MARGIN_X: f32 = 15.0;
-const HEADER_H: f32 = 38.0;
+pub(crate) const CELL_W: f32 = 10.0;
+pub(crate) const CELL_H: f32 = 21.0;
+pub(crate) const FONT_SIZE: f32 = 17.0;
+pub(crate) const FONT_BASELINE: f32 = (CELL_H - FONT_SIZE) / 2.0 + FONT_SIZE * 0.78;
+pub(crate) const MARGIN_X: f32 = 15.0;
+pub(crate) const HEADER_H: f32 = 34.0;
+pub(crate) const CONTENT_PADDING_TOP: f32 = 4.0;
 const MARGIN_BOTTOM: f32 = 14.0;
-const DOT_R: f32 = 7.0;
+pub(crate) const DOT_R: f32 = 7.0;
+pub(crate) const RED_DOT_R: f32 = 2.5;
+pub(crate) const RED_DOT_COLOR: Rgb = Rgb::new(105, 17, 10);
+pub(crate) const WINDOW_RADIUS: f32 = 8.0;
+pub(crate) const TITLE_DIVIDER_H: f32 = 1.0;
+pub(crate) const TITLE_BG: Rgb = Rgb::new(217, 217, 232);
+pub(crate) const TITLE_DIVIDER: Rgb = Rgb::new(0, 0, 0);
+pub(crate) const CANVAS_PADDING: u32 = 24;
+pub(crate) const CANVAS_BACKGROUND: Rgb = Rgb::new(104, 103, 170);
+pub(crate) const SHADOW_COLOR: Rgb = Rgb::new(8, 8, 18);
+pub(crate) const SHADOW_LAYERS: [(f32, f32, u8); 4] = [
+    (7.0, 5.0, 18),
+    (5.0, 4.0, 20),
+    (3.0, 3.0, 22),
+    (1.0, 2.0, 24),
+];
+pub(crate) const TRAFFIC_LIGHTS: [Rgb; 3] = [
+    Rgb::new(236, 106, 94),
+    Rgb::new(244, 191, 79),
+    Rgb::new(97, 197, 84),
+];
 /// Title bar text, smaller than the grid font so the chrome does not compete
 /// with the terminal content itself.
-const TITLE_FONT_SIZE: f32 = 13.0;
+pub(crate) const TITLE_FONT_SIZE: f32 = 13.0;
+pub(crate) const TITLE_FG: Rgb = Rgb::new(65, 65, 69);
 /// Where the rightmost traffic light ends. A centred title is kept clear of
 /// this on both sides, so it can never be drawn over the controls.
 const DOTS_RIGHT: f32 = MARGIN_X + 5.0 + 2.0 * 20.0 + DOT_R;
@@ -34,6 +56,17 @@ const FONT_STACK: &str =
 
 fn hex(c: Rgb) -> String {
     c.to_hex()
+}
+
+fn svg_dimension(value: f64) -> String {
+    let mut output = format!("{value:.4}");
+    while output.contains('.') && output.ends_with('0') {
+        output.pop();
+    }
+    if output.ends_with('.') {
+        output.pop();
+    }
+    output
 }
 
 fn dim(c: Rgb) -> Rgb {
@@ -75,6 +108,21 @@ impl<T: Emulator + ?Sized> RenderColors for T {
     }
 }
 
+impl RenderColors for Profile {
+    fn color(&self, slot: ColorSlot) -> Rgb {
+        match slot {
+            ColorSlot::Indexed(index) => self.colors.rgb(index),
+            ColorSlot::Foreground => self.colors.foreground,
+            ColorSlot::Background => self.colors.background,
+            ColorSlot::Cursor => self.colors.cursor,
+        }
+    }
+
+    fn cursor_shape(&self) -> CursorShape {
+        CursorShape::Block
+    }
+}
+
 /// The renderer-owned terminal state captured together with the grid.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RenderState {
@@ -113,7 +161,7 @@ impl RenderColors for RenderState {
 }
 
 /// Resolved background color for a cell (honoring inverse).
-fn bg_of(cell: &EmuCell, colors: &dyn RenderColors) -> Rgb {
+pub(crate) fn bg_of(cell: &EmuCell, colors: &dyn RenderColors) -> Rgb {
     let bg = colors.resolve(cell.bg, false);
     let fg = colors.resolve(cell.fg, true);
     if cell.has(Attrs::INVERSE) {
@@ -124,16 +172,16 @@ fn bg_of(cell: &EmuCell, colors: &dyn RenderColors) -> Rgb {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct Style {
-    fg: Rgb,
-    bold: bool,
-    italic: bool,
-    underline: bool,
-    strike: bool,
-    invisible: bool,
+pub(crate) struct Style {
+    pub fg: Rgb,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strike: bool,
+    pub invisible: bool,
 }
 
-fn style_of(cell: &EmuCell, colors: &dyn RenderColors) -> Style {
+pub(crate) fn style_of(cell: &EmuCell, colors: &dyn RenderColors) -> Style {
     let mut fg = colors.resolve(cell.fg, true);
     let bg = colors.resolve(cell.bg, false);
     if cell.has(Attrs::INVERSE) {
@@ -187,7 +235,7 @@ fn write_text_run(
     }
     let fg = hex(style.fg);
     let tx = MARGIN_X + start as f32 * CELL_W;
-    let baseline = HEADER_H + y as f32 * CELL_H + FONT_BASELINE;
+    let baseline = HEADER_H + CONTENT_PADDING_TOP + y as f32 * CELL_H + FONT_BASELINE;
     let width = (end - start) as f32 * CELL_W;
     let original_text = run_text(row, start, end);
     let (text, run_x_adjust) = nerd_font.prepare_run(&original_text, width, CELL_W);
@@ -221,7 +269,10 @@ fn write_text_run(
             nerd_font.write_use(
                 out,
                 c,
-                (MARGIN_X + i as f32 * CELL_W, HEADER_H + y as f32 * CELL_H),
+                (
+                    MARGIN_X + i as f32 * CELL_W,
+                    HEADER_H + CONTENT_PADDING_TOP + y as f32 * CELL_H,
+                ),
                 (CELL_W, CELL_H),
                 run_x_adjust,
                 &fg,
@@ -237,29 +288,53 @@ fn write_text_run(
 /// computed width would distort it. It is instead truncated to what fits, and
 /// kept clear of the traffic lights by reserving the same margin on both
 /// sides, which also keeps it centred on the space that remains.
-fn write_title(out: &mut String, title: &str, width: f32, colors: &dyn RenderColors) {
-    const GAP: f32 = 8.0;
-    let available = width - 2.0 * (DOTS_RIGHT + GAP);
-    // A monospace advance, scaled from the grid font's known cell width.
-    let advance = TITLE_FONT_SIZE * (CELL_W / FONT_SIZE);
-    let fits = (available / advance).floor().max(0.0) as usize;
-    if fits == 0 {
-        return;
+pub(crate) fn title_advance() -> f32 {
+    TITLE_FONT_SIZE * (CELL_W / FONT_SIZE)
+}
+
+pub(crate) fn media_title(title: Option<&str>, cols: u16, rows: usize, fits: usize) -> String {
+    let base = title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .unwrap_or("tui-test capture");
+    let suffix = format!(" - {cols}x{rows}");
+    let full = format!("{base}{suffix}");
+    if crate::terminal::cell::display_width(&full) <= fits {
+        return full;
     }
 
-    // Budgeted in columns, not characters: the title bar inherits the
-    // monospace stack, so a CJK glyph takes two advances and a title sized by
-    // character count would be twice as wide as measured and, being centred,
-    // would spill over the window controls at both ends.
-    let shown = truncate_to_columns(title, fits);
+    let suffix_width = crate::terminal::cell::display_width(&suffix);
+    if suffix_width >= fits {
+        return truncate_to_columns(&full, fits);
+    }
+    format!("{}{suffix}", truncate_to_columns(base, fits - suffix_width))
+}
+
+pub(crate) fn visible_title(
+    title: Option<&str>,
+    cols: u16,
+    rows: usize,
+    width: f32,
+) -> Option<String> {
+    const GAP: f32 = 8.0;
+    let available = width - 2.0 * (DOTS_RIGHT + GAP);
+    let fits = (available / title_advance()).floor().max(0.0) as usize;
+    if fits == 0 {
+        return None;
+    }
+    Some(media_title(title, cols, rows, fits))
+}
+
+fn write_title(out: &mut String, title: Option<&str>, cols: u16, rows: usize, width: f32) {
+    let Some(shown) = visible_title(title, cols, rows, width) else {
+        return;
+    };
     let _ = write!(
         out,
-        r#"<text x="{cx:.2}" y="{baseline:.2}" fill="{fill}" font-size="{TITLE_FONT_SIZE}px" text-anchor="middle" xml:space="preserve">{esc}</text>"#,
+        r#"<text x="{cx:.2}" y="{baseline:.2}" fill="{fill}" font-size="{TITLE_FONT_SIZE}px" font-weight="bold" text-anchor="middle" xml:space="preserve">{esc}</text>"#,
         cx = width / 2.0,
         baseline = HEADER_H / 2.0 + TITLE_FONT_SIZE * 0.35,
-        // The dim grey of the palette, so the title reads as chrome next to
-        // the terminal's own foreground.
-        fill = hex(colors.color(ColorSlot::Indexed(8))),
+        fill = hex(TITLE_FG),
         esc = escape(&shown),
     );
 }
@@ -296,7 +371,7 @@ fn write_cursor(
     };
     let w = span * CELL_W;
     let x = MARGIN_X + cx as f32 * CELL_W;
-    let y = HEADER_H + cy as f32 * CELL_H;
+    let y = HEADER_H + CONTENT_PADDING_TOP + cy as f32 * CELL_H;
     let fill = hex(colors.color(ColorSlot::Cursor));
 
     let (rx, ry, rw, rh) = match colors.cursor_shape() {
@@ -332,6 +407,7 @@ fn write_cursor(
 ///
 /// Its row is a `usize` because it indexes `rows`, which for a full-history
 /// render is as long as the scrollback and so is not bounded by the screen.
+#[cfg(test)]
 pub(crate) fn render_svg(
     rows: &[Vec<EmuCell>],
     cols: u16,
@@ -339,35 +415,100 @@ pub(crate) fn render_svg(
     cursor: Option<(u16, usize)>,
     title: Option<&str>,
 ) -> String {
+    render_svg_with_zoom(rows, cols, colors, cursor, title, 1.0)
+}
+
+pub(crate) fn render_svg_with_zoom(
+    rows: &[Vec<EmuCell>],
+    cols: u16,
+    colors: &dyn RenderColors,
+    cursor: Option<(u16, usize)>,
+    title: Option<&str>,
+    zoom: f64,
+) -> String {
+    render_svg_with_font(rows, cols, colors, cursor, title, FONT_STACK, zoom)
+}
+
+pub(crate) fn render_svg_with_font(
+    rows: &[Vec<EmuCell>],
+    cols: u16,
+    colors: &dyn RenderColors,
+    cursor: Option<(u16, usize)>,
+    title: Option<&str>,
+    font_family: &str,
+    zoom: f64,
+) -> String {
     let nerd_font = NerdFont::new(rows, FONT_SIZE);
     let cols = cols as usize;
     let x0 = MARGIN_X;
-    let y0 = HEADER_H;
-    let width = MARGIN_X * 2.0 + cols as f32 * CELL_W;
-    let height = HEADER_H + MARGIN_BOTTOM + rows.len().max(1) as f32 * CELL_H;
+    let y0 = HEADER_H + CONTENT_PADDING_TOP;
+    let panel_width = MARGIN_X * 2.0 + cols as f32 * CELL_W;
+    let panel_height =
+        HEADER_H + CONTENT_PADDING_TOP + MARGIN_BOTTOM + rows.len().max(1) as f32 * CELL_H;
+    let padding = CANVAS_PADDING as f32;
+    let width = panel_width + padding * 2.0;
+    let height = panel_height + padding * 2.0;
+    let output_width = svg_dimension(f64::from(width) * zoom);
+    let output_height = svg_dimension(f64::from(height) * zoom);
 
     let mut out = String::new();
     let _ = write!(
         out,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" font-family="{FONT_STACK}" font-size="{FONT_SIZE}px">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{FONT_SIZE}px">"#
     );
     nerd_font.write_defs(&mut out);
     let _ = write!(
         out,
-        r#"<rect width="{width:.0}" height="{height:.0}" rx="8" fill="{}"/>"#,
+        r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
+        hex(CANVAS_BACKGROUND)
+    );
+    for (spread, offset_y, alpha) in SHADOW_LAYERS {
+        let shadow_x = padding - spread;
+        let shadow_y = padding - spread + offset_y;
+        let shadow_width = panel_width + spread * 2.0;
+        let shadow_height = panel_height + spread * 2.0;
+        let shadow_radius = WINDOW_RADIUS + spread;
+        let opacity = f32::from(alpha) / 255.0;
+        let _ = write!(
+            out,
+            r#"<rect x="{shadow_x:.1}" y="{shadow_y:.1}" width="{shadow_width:.1}" height="{shadow_height:.1}" rx="{shadow_radius:.1}" fill="{}" fill-opacity="{opacity:.6}"/>"#,
+            hex(SHADOW_COLOR)
+        );
+    }
+    let _ = write!(
+        out,
+        r#"<g transform="translate({padding:.0} {padding:.0})"><rect width="{panel_width:.0}" height="{panel_height:.0}" rx="{WINDOW_RADIUS:.0}" fill="{}"/>"#,
         hex(colors.resolve(None, false))
     );
-    for (i, dot) in ["#ff5f56", "#ffbd2e", "#27c93f"].iter().enumerate() {
+    let title_bottom = HEADER_H - TITLE_DIVIDER_H;
+    let right_curve = panel_width - WINDOW_RADIUS;
+    let _ = write!(
+        out,
+        r#"<path d="M0 {WINDOW_RADIUS:.1} Q0 0 {WINDOW_RADIUS:.1} 0 H{right_curve:.1} Q{panel_width:.1} 0 {panel_width:.1} {WINDOW_RADIUS:.1} V{title_bottom:.1} H0 Z" fill="{}"/>"#,
+        hex(TITLE_BG)
+    );
+    let _ = write!(
+        out,
+        r#"<rect y="{title_bottom:.1}" width="{panel_width:.0}" height="{TITLE_DIVIDER_H:.1}" fill="{}"/>"#,
+        hex(TITLE_DIVIDER)
+    );
+    for (i, dot) in TRAFFIC_LIGHTS.iter().copied().enumerate() {
         let cx = MARGIN_X + 5.0 + i as f32 * 20.0;
         let _ = write!(
             out,
-            r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{DOT_R:.1}" fill="{dot}"/>"#,
+            r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{DOT_R:.1}" fill="{}"/>"#,
+            hex(dot),
             cy = HEADER_H / 2.0,
         );
     }
-    if let Some(title) = title {
-        write_title(&mut out, title, width, colors);
-    }
+    let _ = write!(
+        out,
+        r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{RED_DOT_R:.1}" fill="{}"/>"#,
+        hex(RED_DOT_COLOR),
+        cx = MARGIN_X + 5.0,
+        cy = HEADER_H / 2.0,
+    );
+    write_title(&mut out, title, cols as u16, rows.len().max(1), panel_width);
 
     for (y, row) in rows.iter().enumerate() {
         let mut x = 0;
@@ -408,8 +549,16 @@ pub(crate) fn render_svg(
         write_cursor(&mut out, rows, at, colors, &nerd_font);
     }
 
-    out.push_str("</svg>");
+    out.push_str("</g></svg>");
     out
+}
+
+#[cfg(feature = "recording-raster")]
+pub(crate) fn pixel_size(cols: u16, rows: usize) -> (u32, u32) {
+    let width = (MARGIN_X * 2.0 + f32::from(cols) * CELL_W).ceil() as u32;
+    let height = (HEADER_H + CONTENT_PADDING_TOP + MARGIN_BOTTOM + rows.max(1) as f32 * CELL_H)
+        .ceil() as u32;
+    (width + width % 2, height + height % 2)
 }
 
 #[cfg(test)]
@@ -586,7 +735,7 @@ mod tests {
         let row = 70_000usize;
         let rows = vec![vec![cell("x", None, None)]; row + 1];
         let svg = render_svg(&rows, 1, &colors(), Some((0, row)), None);
-        let expected = HEADER_H + row as f32 * CELL_H;
+        let expected = HEADER_H + CONTENT_PADDING_TOP + row as f32 * CELL_H;
         assert!(
             svg.contains(&format!(r#"<rect x="15.00" y="{expected:.2}""#)),
             "the cursor sits on row {row}, not on a wrapped one"
@@ -701,18 +850,33 @@ mod tests {
     }
 
     #[test]
+    fn zoom_changes_output_size_without_changing_the_view_box() {
+        let rows = vec![vec![cell("x", None, None)]];
+        let svg = render_svg_with_zoom(&rows, 1, &colors(), None, None, 0.5);
+        assert!(svg.contains(r#"width="44" height="60.5" viewBox="0 0 88 121""#));
+    }
+
+    #[test]
     fn emits_window_chrome() {
         let svg = render_svg(&[vec![cell(" ", None, None)]], 1, &colors(), None, None);
         assert!(svg.contains("<circle"));
-        assert!(svg.contains("#ff5f56"));
-        assert!(svg.contains("#ffbd2e"));
-        assert!(svg.contains("#27c93f"));
+        assert!(svg.contains(r##"<rect width="88" height="121" fill="#6867aa"/>"##));
+        assert!(svg.contains(r#"<g transform="translate(24 24)">"#));
+        assert!(svg.contains(r##"fill="#080812" fill-opacity="0.070588""##));
+        assert!(svg.contains(&hex(Profile::default().colors.background)));
+        assert!(svg.contains("#d9d9e8"));
+        assert!(svg.contains("#000000"));
+        assert!(svg.contains("#ec6a5e"));
+        assert!(svg.contains("#f4bf4f"));
+        assert!(svg.contains("#61c554"));
+        assert!(svg.contains("#69110a"));
+        assert!(svg.contains(r#"r="2.5""#));
     }
 
     #[test]
     fn centers_the_text_font_box_in_each_cell() {
         let svg = render_svg(&[vec![cell("x", None, None)]], 1, &colors(), None, None);
-        let expected_baseline = HEADER_H + FONT_BASELINE;
+        let expected_baseline = HEADER_H + CONTENT_PADDING_TOP + FONT_BASELINE;
         assert!(svg.contains(&format!(r#"y="{expected_baseline:.2}""#)));
     }
 
@@ -776,9 +940,8 @@ mod tests {
         assert!(!svg.contains(r#"<use href="#));
     }
 
-    /// A window title is drawn centred in the title bar, and no title leaves
-    /// the bar exactly as it was, so every screenshot taken without one is
-    /// unchanged by this feature.
+    /// A window title is drawn centred with the rendered cell dimensions, and
+    /// media without a program title gets a useful default.
     #[test]
     fn draws_the_window_title_centred_in_the_bar() {
         let rows = vec![vec![cell("x", None, None); 40]];
@@ -786,12 +949,17 @@ mod tests {
         let titled = render_svg(&rows, 40, &colors(), None, Some("vim: notes.md"));
 
         assert!(
-            !bare.contains("text-anchor=\"middle\""),
-            "no title means nothing extra is drawn: {bare}"
+            bare.contains(">tui-test capture - 40x1</text>"),
+            "untitled media gets the capture default: {bare}"
         );
         assert!(
-            titled.contains(">vim: notes.md</text>") && titled.contains("text-anchor=\"middle\""),
+            titled.contains(">vim: notes.md - 40x1</text>")
+                && titled.contains("text-anchor=\"middle\""),
             "the title is drawn, centred: {titled}"
+        );
+        assert!(
+            titled.contains(r##"fill="#414145" font-size="13px" font-weight="bold""##),
+            "the title uses the dark title-bar foreground: {titled}"
         );
         // The panel is 2*15 margin + 40 cells of 10, so its middle is 215.
         assert!(
@@ -814,7 +982,11 @@ mod tests {
             .nth(1)
             .and_then(|rest| rest.split("</text>").next())
             .expect("a title element");
-        assert!(drawn.ends_with('…'), "truncation is marked: {drawn}");
+        assert!(drawn.contains('…'), "truncation is marked: {drawn}");
+        assert!(
+            drawn.ends_with(" - 20x1"),
+            "the dimensions survive truncation: {drawn}"
+        );
         assert_fits_clear_of_the_controls(drawn, 20.0);
     }
 
@@ -840,8 +1012,7 @@ mod tests {
     /// and the mirrored margin on the right.
     fn assert_fits_clear_of_the_controls(drawn: &str, cols: f32) {
         let panel = MARGIN_X * 2.0 + cols * CELL_W;
-        let advance = TITLE_FONT_SIZE * (CELL_W / FONT_SIZE);
-        let drawn_width = crate::terminal::cell::display_width(drawn) as f32 * advance;
+        let drawn_width = crate::terminal::cell::display_width(drawn) as f32 * title_advance();
         assert!(
             drawn_width <= panel - 2.0 * DOTS_RIGHT,
             "title {drawn:?} is {drawn_width} wide, past the {} available",

@@ -1,0 +1,10 @@
+JetBrains Mono static TTF family
+commit: 19371302b95d218af43299bce79ddbddd0bc364d
+source: https://github.com/JetBrains/JetBrainsMono
+path: fonts/ttf
+files: official full-glyph static faces, not unicode subsets
+
+Feature tiers:
+- recording-font-jetbrains-mono: Regular
+- recording-font-jetbrains-mono-styles: Regular, Bold, Italic, Bold Italic
+- recording-font-jetbrains-mono-full: all 16 non-NL static family faces

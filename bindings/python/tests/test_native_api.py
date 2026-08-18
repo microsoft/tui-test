@@ -60,6 +60,8 @@ class NativeSurfaceTests(unittest.TestCase):
             "expect_bell_count",
             "snapshot",
             "screenshot",
+            "start_recording",
+            "stop_recording",
             "recording",
         ):
             self.assertTrue(hasattr(session, name), name)

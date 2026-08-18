@@ -12,6 +12,14 @@ readme = "../../README.md"
 name = "tui_test"
 path = "src/lib.rs"
 
+[features]
+default = []
+ghostty = ["dep:ghostty-vt"]
+recording-raster = ["dep:fontdb", "dep:gif", "dep:png", "dep:tiny-skia"]
+recording-font-jetbrains-mono = ["recording-raster"]
+recording-font-jetbrains-mono-styles = ["recording-font-jetbrains-mono"]
+recording-font-jetbrains-mono-full = ["recording-font-jetbrains-mono-styles"]
+
 [dependencies]
 alacritty_terminal.workspace = true
 anyhow.workspace = true
@@ -19,11 +27,16 @@ bitflags.workspace = true
 compact_str.workspace = true
 dirs.workspace = true
 flate2.workspace = true
+fontdb = { workspace = true, optional = true }
+gif = { workspace = true, optional = true }
+ghostty-vt = { workspace = true, optional = true }
+png = { workspace = true, optional = true }
 portable-pty.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 toml.workspace = true
+tiny-skia = { workspace = true, optional = true }
 ttf-parser.workspace = true
 unicode-width.workspace = true

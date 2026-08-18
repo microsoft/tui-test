@@ -16,6 +16,7 @@ MAPPING = {
     "state": [("client", "state")],
     "text": [("client", "text")],
     "screenshot": [("client", "screenshot")],
+    "record": [("client", "start_recording"), ("client", "stop_recording")],
     "cells": [("client", "cells")],
     "get": [
         ("client", "get_command"),

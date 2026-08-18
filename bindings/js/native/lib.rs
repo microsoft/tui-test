@@ -9,16 +9,33 @@ use napi_derive::napi;
 use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::shell::Shell as CoreShell;
 use tui_test::{
-    global_registry, BellEvent as CoreBellEvent, Cell as CoreCell, CellColor, Cursor as CoreCursor,
+    global_registry, Backend as CoreBackend, BellEvent as CoreBellEvent, Cell as CoreCell,
+    CellColor, Cursor as CoreCursor,
     EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, MouseAction,
     OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation, OperationResult,
-    RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
-    Size as CoreSize, SnapshotResult as CoreSnapshotResult, State as CoreState,
-    Timeouts as CoreTimeouts, TuiTestError,
+    RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
+    ScreenshotResult as CoreScreenshotResult, SessionHandle, Size as CoreSize,
+    SnapshotResult as CoreSnapshotResult, State as CoreState, Timeouts as CoreTimeouts,
+    TuiTestError,
 };
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+#[napi(string_enum = "lowercase")]
+pub enum Backend {
+    Alacritty,
+    Ghostty,
+}
+
+impl From<Backend> for CoreBackend {
+    fn from(value: Backend) -> Self {
+        match value {
+            Backend::Alacritty => Self::Alacritty,
+            Backend::Ghostty => Self::Ghostty,
+        }
+    }
+}
 
 #[napi(string_enum = "lowercase")]
 pub enum Shell {
@@ -49,6 +66,25 @@ impl From<Shell> for CoreShell {
     }
 }
 
+#[napi(string_enum = "lowercase")]
+pub enum RecordingFormat {
+    Apng,
+    Gif,
+    Mp4,
+    Cast,
+}
+
+impl From<RecordingFormat> for CoreRecordingFormat {
+    fn from(value: RecordingFormat) -> Self {
+        match value {
+            RecordingFormat::Apng => Self::Apng,
+            RecordingFormat::Gif => Self::Gif,
+            RecordingFormat::Mp4 => Self::Mp4,
+            RecordingFormat::Cast => Self::Cast,
+        }
+    }
+}
+
 #[napi(object)]
 pub struct Timeouts {
     pub text: Option<f64>,
@@ -60,6 +96,7 @@ pub struct Timeouts {
 
 #[napi(object)]
 pub struct OpenOptions {
+    pub backend: Option<Backend>,
     pub shell: Option<Shell>,
     pub cols: Option<f64>,
     pub rows: Option<f64>,
@@ -73,6 +110,7 @@ pub struct OpenOptions {
 
 #[napi(object)]
 pub struct RunOptions {
+    pub backend: Option<Backend>,
     pub program: String,
     pub args: Option<Vec<String>>,
     pub cols: Option<f64>,
@@ -361,6 +399,17 @@ pub struct SnapshotOptions {
 pub struct ScreenshotOptions {
     pub full: Option<bool>,
     pub path: Option<String>,
+    pub zoom: Option<f64>,
+}
+
+#[napi(object)]
+pub struct RecordingOptions {
+    pub path: String,
+    pub format: Option<RecordingFormat>,
+    pub fps: Option<f64>,
+    pub speed: Option<f64>,
+    pub idle_time_limit: Option<f64>,
+    pub zoom: Option<f64>,
 }
 
 #[napi(string_enum = "lowercase")]
@@ -505,6 +554,7 @@ fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptio
         value.profile_colors.as_deref().unwrap_or_default(),
     )?;
     Ok(CoreOpenOptions {
+        backend: value.backend.map(Into::into).unwrap_or_default(),
         profile,
         shell: value.shell.map(Into::into),
         cols: match value.cols {
@@ -531,6 +581,7 @@ fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, TuiTest
         value.profile_colors.as_deref().unwrap_or_default(),
     )?;
     Ok(CoreRunOptions {
+        backend: value.backend.map(Into::into).unwrap_or_default(),
         profile,
         program: value.program,
         args: value.args.unwrap_or_default(),
@@ -1192,6 +1243,7 @@ impl NativeSession {
         let options = options.unwrap_or(ScreenshotOptions {
             full: None,
             path: None,
+            zoom: None,
         });
         execute(
             self.handle.clone(),
@@ -1199,11 +1251,47 @@ impl NativeSession {
             Operation::Screenshot {
                 full: options.full.unwrap_or(false),
                 path: options.path,
+                zoom: options.zoom,
             },
             |result| match result {
                 OperationResult::Screenshot(CoreScreenshotResult::Path(value))
                 | OperationResult::Screenshot(CoreScreenshotResult::Text(value)) => Ok(value),
                 _ => Err(unexpected("screenshot")),
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn start_recording(&self, options: RecordingOptions) -> Result<()> {
+        let fps = options
+            .fps
+            .map(|value| u8_value(value, "fps"))
+            .transpose()
+            .map_err(native_error)?;
+        self.unit(
+            "startRecording",
+            Operation::StartRecording {
+                path: options.path,
+                format: options.format.map(Into::into),
+                fps,
+                speed: options.speed,
+                idle_time_limit: options.idle_time_limit,
+                zoom: options.zoom,
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn stop_recording(&self) -> Result<String> {
+        execute(
+            self.handle.clone(),
+            "stopRecording",
+            Operation::StopRecording,
+            |result| match result {
+                OperationResult::Recording(path) => Ok(path),
+                _ => Err(unexpected("stopRecording")),
             },
         )
         .await

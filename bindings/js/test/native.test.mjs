@@ -18,6 +18,7 @@ test("generated native declarations expose typed operations", async () => {
     "Timeouts",
     "Cell",
     "PackedScreen",
+    "RecordingOptions",
   ]) {
     assert.match(declarations, new RegExp(`export (?:interface|type) ${type}\\b`));
   }
@@ -43,6 +44,8 @@ test("generated native declarations expose typed operations", async () => {
     "expectBellCount",
     "snapshot",
     "screenshot",
+    "startRecording",
+    "stopRecording",
     "packedScreen",
     "panicProbe",
   ]) {

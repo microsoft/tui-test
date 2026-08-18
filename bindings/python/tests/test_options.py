@@ -101,6 +101,18 @@ class ProfileResolutionTests(unittest.TestCase):
             cfg.normalize_profile({"colors": {"chartreuse": "#123456"}})
 
 
+class BackendResolutionTests(unittest.TestCase):
+    def test_normalizes_backend_names(self):
+        self.assertIsNone(cfg.normalize_backend(None))
+        self.assertEqual(cfg.normalize_backend("alacritty"), "alacritty")
+        self.assertEqual(cfg.normalize_backend("ghostty"), "ghostty")
+
+    def test_rejects_unknown_backend(self):
+        for backend in ("xterm", "libghostty"):
+            with self.assertRaises(ValueError):
+                cfg.normalize_backend(backend)
+
+
 class TypedCallTests(unittest.TestCase):
     def test_open_uses_typed_arguments(self):
         terminal = _CapturingClient("s")
@@ -118,10 +130,12 @@ class TypedCallTests(unittest.TestCase):
         )
         name, args = terminal.fake.calls[0]
         self.assertEqual(name, "open")
-        self.assertEqual(args[:6], (None, 120, 40, None, [("K", "V")], None))
-        self.assertEqual(args[6], 321)
-        self.assertEqual(args[7], [("red", "#010203")])
-        self.assertEqual(args[8:], (100, None, None, None, 200))
+        self.assertEqual(
+            args[:7], (None, None, 120, 40, None, [("K", "V")], None)
+        )
+        self.assertEqual(args[7], 321)
+        self.assertEqual(args[8], [("red", "#010203")])
+        self.assertEqual(args[9:], (100, None, None, None, 200))
 
     def test_run_uses_program_and_argv(self):
         terminal = _CapturingClient("s")
@@ -137,8 +151,15 @@ class TypedCallTests(unittest.TestCase):
         )
         run(terminal.run("vim"))
         args = terminal.fake.calls[0][1]
-        self.assertIsNone(args[7])
-        self.assertEqual(args[8], [("background", "#112233")])
+        self.assertIsNone(args[8])
+        self.assertEqual(args[9], [("background", "#112233")])
+
+    def test_constructor_and_call_backends_are_forwarded(self):
+        terminal = _CapturingClient("s", backend="ghostty")
+        run(terminal.open())
+        run(terminal.run("vim", backend="alacritty"))
+        self.assertEqual(terminal.fake.calls[0][1][1], "ghostty")
+        self.assertEqual(terminal.fake.calls[1][1][2], "alacritty")
 
     def test_input_helpers_use_distinct_typed_methods(self):
         terminal = _CapturingClient("s")
@@ -202,6 +223,43 @@ class TypedCallTests(unittest.TestCase):
         )
         self.assertFalse(hasattr(client.TuiTest, "send"))
         self.assertFalse(hasattr(client.TuiTest, "get"))
+
+    def test_recording_helpers_use_typed_methods(self):
+        terminal = _CapturingClient("s")
+        run(
+            terminal.start_recording(
+                "demo.png",
+                format="apng",
+                fps=24,
+                speed=2.0,
+                idle_time_limit=3.0,
+                zoom=0.5,
+            )
+        )
+        run(terminal.stop_recording())
+        self.assertEqual(
+            terminal.fake.calls,
+            [
+                (
+                    "start_recording",
+                    ("demo.png", "apng", 24, 2.0, 3.0, 0.5),
+                ),
+                ("stop_recording", ()),
+            ],
+        )
+
+    def test_screenshot_forwards_zoom(self):
+        terminal = _CapturingClient("s")
+        run(terminal.screenshot("screen.svg", full=True, zoom=0.5))
+        self.assertEqual(
+            terminal.fake.calls,
+            [("screenshot", ("screen.svg", True, 0.5))],
+        )
+
+    def test_screenshot_rejects_zoom_without_path(self):
+        terminal = _CapturingClient("s")
+        with self.assertRaisesRegex(ValueError, "requires a path"):
+            run(terminal.screenshot(zoom=0.5))
 
 
 class ClientTimeoutTests(unittest.TestCase):

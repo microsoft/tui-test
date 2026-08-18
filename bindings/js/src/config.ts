@@ -1,4 +1,4 @@
-import type { Profile, Timeouts } from "./types.js";
+import type { Backend, Profile, Timeouts } from "./types.js";
 
 export const DEFAULT_COLS = 80;
 export const DEFAULT_ROWS = 30;
@@ -19,6 +19,7 @@ const TIMEOUT_CLASSES: readonly TimeoutClass[] = [
   "exit",
   "ready",
 ];
+const BACKENDS: readonly Backend[] = ["alacritty", "ghostty"];
 const PROFILE_FIELDS = new Set(["scrollback", "colors"]);
 const COLOR_FIELDS = new Map([
   ["foreground", "foreground"],
@@ -55,6 +56,22 @@ export function resolveTimeout(
     return scoped;
   }
   return undefined;
+}
+
+export function backendPayload(backend?: unknown): Backend | undefined {
+  if (backend === undefined || backend === null) {
+    return undefined;
+  }
+  if (typeof backend !== "string") {
+    throw new TypeError("backend must be a string");
+  }
+  const normalized = backend.trim().toLowerCase();
+  if ((BACKENDS as readonly string[]).includes(normalized)) {
+    return normalized as Backend;
+  }
+  throw new TypeError(
+    `unknown backend "${backend}"; expected one of ${BACKENDS.join(", ")}`,
+  );
 }
 
 export function timeoutsPayload(

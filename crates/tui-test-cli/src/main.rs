@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
 
-use cli::{Cli, Command, DaemonCmd, ExpectCmd, GetArg, MouseCmd, WaitCmd};
+use cli::{Cli, Command, DaemonCmd, ExpectCmd, GetArg, MouseCmd, RecordCmd, WaitCmd};
 use protocol::{GetField, MouseAction, Request, Response};
 /// Long-form agent skill manifest, printed by `tui-test skill`.
 const SKILL_MD: &str = include_str!("../../../SKILL.md");
@@ -83,6 +83,13 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
     // Closing must remain available when the running daemon is from an older
     // client; every other command requires matching protocol behavior.
     let allow_incompatible = matches!(&request, Request::Close);
+    let socket = config::socket_name(session);
+    if allow_incompatible && !ipc::is_running(&socket) {
+        if json {
+            println!("{}", serde_json::json!({ "ok": true }));
+        }
+        return 0;
+    }
     let conn = match connect_to_daemon(session, verbose, allow_incompatible) {
         Ok(c) => c,
         Err(e) => {
@@ -92,6 +99,12 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
     };
     match ipc::exchange(conn, &request) {
         Ok(resp) => print_response(&resp, json),
+        Err(_) if allow_incompatible && !ipc::is_running(&socket) => {
+            if json {
+                println!("{}", serde_json::json!({ "ok": true }));
+            }
+            0
+        }
         Err(e) => {
             eprintln!("request failed: {e}");
             4
@@ -136,6 +149,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
     let req = match command {
         Command::Open {
             shell,
+            backend,
             cols,
             rows,
             cwd,
@@ -147,6 +161,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         } => Request::Open {
             shell: shell.map(Into::into),
             program: None,
+            backend: backend.map(Into::into).unwrap_or_default(),
             profile: profile.resolve()?,
             cols,
             rows,
@@ -158,6 +173,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         Command::Run {
             program,
             args,
+            backend,
             cols,
             rows,
             cwd,
@@ -172,6 +188,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             Request::Open {
                 shell: None,
                 program: Some(prog),
+                backend: backend.map(Into::into).unwrap_or_default(),
                 profile: profile.resolve()?,
                 cols,
                 rows,
@@ -190,10 +207,39 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         }
         Command::State => Request::State,
         Command::Text { full } => Request::Text { full },
-        Command::Screenshot { path, out, full } => Request::Screenshot {
+        Command::Screenshot {
+            path,
+            out,
             full,
-            path: out.or(path),
+            zoom,
+        } => {
+            let path = out.or(path);
+            if zoom.is_some() && path.is_none() {
+                anyhow::bail!("screenshot --zoom requires --out or a path");
+            }
+            Request::Screenshot { full, path, zoom }
+        }
+        Command::Record {
+            cmd:
+                RecordCmd::Start {
+                    path,
+                    format,
+                    fps,
+                    speed,
+                    idle_time_limit,
+                    zoom,
+                },
+        } => Request::StartRecording {
+            path: resolve_client_path(path)?,
+            format: format.map(Into::into),
+            fps,
+            speed,
+            idle_time_limit,
+            zoom,
         },
+        Command::Record {
+            cmd: RecordCmd::Stop,
+        } => Request::StopRecording,
         Command::Cells { x, y, w, h } => Request::Cells { x, y, w, h },
         Command::Get { field } => Request::Get {
             field: map_field(field),
@@ -218,6 +264,19 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         _ => anyhow::bail!("unsupported command"),
     };
     Ok(req)
+}
+
+fn resolve_client_path(path: String) -> anyhow::Result<String> {
+    if path.trim().is_empty() {
+        anyhow::bail!("recording path must not be empty");
+    }
+    let path = std::path::PathBuf::from(path);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    Ok(path.to_string_lossy().into_owned())
 }
 
 fn map_field(f: GetArg) -> GetField {
@@ -505,6 +564,32 @@ fn spawn_detached(exe: &Path, session: &str, verbose: bool) -> anyhow::Result<()
 
 /// Stream a session's recording (asciinema v2 cast) to stdout.
 fn get_recording(session: String) -> i32 {
+    let socket = config::socket_name(&session);
+    if ipc::is_running(&socket) {
+        let response = match ipc::connect(&socket) {
+            Ok(connection) => match ipc::exchange(connection, &Request::FlushRecording) {
+                Ok(response) => response,
+                Err(error) => {
+                    eprintln!("failed to flush recording: {error}");
+                    return 4;
+                }
+            },
+            Err(error) => {
+                eprintln!("failed to flush recording: {error}");
+                return 4;
+            }
+        };
+        if !response.ok {
+            eprintln!(
+                "{}",
+                response
+                    .message
+                    .as_deref()
+                    .unwrap_or("failed to flush recording")
+            );
+            return response.kind.map_or(5, tui_test::ErrorKind::exit_code);
+        }
+    }
     let path = config::recording_file(&session);
     match std::fs::read(&path) {
         Ok(bytes) => {
@@ -720,7 +805,7 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
                   [--config F] [--profile P]\n\
           run [--config F] [--profile P] <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
-INSPECT   state | text [--full] | screenshot [-o file.svg] [--full]\n\
+INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
           cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title|bells\n\
 INPUT     type \"text\" | submit [\"text\"] | press <Key...> | keys \"Ctrl+a\"\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
@@ -732,8 +817,8 @@ EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex] | expect bell N\n\
           expect snapshot NAME [-u] [--include-colors --include-title]\n\
-RECORD    sessions auto-record; get-recording [session] > out.cast (asciinema v2)\n\
-          play with `asciinema play out.cast`, render GIF with `agg out.cast out.gif`\n\
+RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
+          record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
 WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
 GLOBAL    --session NAME | --json | --verbose (log PTY traffic to ~/.tui-test/<session>.log)\n\
@@ -764,6 +849,16 @@ mod tests {
     }
 
     #[test]
+    fn screenshot_zoom_without_output_is_rejected() {
+        let cli = Cli::try_parse_from(["tui-test", "screenshot", "--zoom", "0.5"]).unwrap();
+        let command = cli.command.unwrap();
+        assert!(build_request(command)
+            .unwrap_err()
+            .to_string()
+            .contains("requires --out"));
+    }
+
+    #[test]
     fn a_rich_payload_prints_its_fields_before_the_screen() {
         let rendered = format_data(&json!({
             "cwd": "/tmp",
@@ -789,6 +884,12 @@ mod tests {
         assert_eq!(ready_flag(false, false), None);
         assert_eq!(ready_flag(true, false), Some(true));
         assert_eq!(ready_flag(false, true), Some(false));
+    }
+
+    #[test]
+    fn empty_recording_paths_are_rejected_before_resolution() {
+        let error = resolve_client_path("  ".to_string()).unwrap_err();
+        assert!(error.to_string().contains("must not be empty"));
     }
 
     #[test]

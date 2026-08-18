@@ -10,6 +10,7 @@ import type {
 } from "../native/index.js";
 
 export type Color = "default" | number | string;
+export type Backend = "alacritty" | "ghostty";
 
 /** `"none"` is a value, not an absence: an un-underlined cell reports it. */
 export type UnderlineStyle =
@@ -86,6 +87,7 @@ export interface Profile {
 }
 
 export interface SpawnOptions {
+  backend?: Backend;
   cols?: number;
   rows?: number;
   cwd?: string;
@@ -109,6 +111,7 @@ export interface ArtifactOptions {
 }
 
 export interface ClientOptions {
+  backend?: Backend;
   profile?: Profile;
   timeouts?: Timeouts;
   artifacts?: ArtifactOptions;

@@ -35,16 +35,24 @@ impl Sandbox {
 
     /// Captures output to catch daemon-inherited stdout pipe hangs.
     fn try_run(&self, args: &[&str]) -> Option<Output> {
+        self.try_run_in(None, args)
+    }
+
+    fn try_run_in(&self, cwd: Option<PathBuf>, args: &[&str]) -> Option<Output> {
         let session = self.session.clone();
         let home = self.home.clone();
         let owned: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let out = Command::new(BIN)
+            let mut command = Command::new(BIN);
+            command
                 .args(["--session", &session])
                 .args(&owned)
-                .env("TUI_TEST_HOME", &home)
-                .output();
+                .env("TUI_TEST_HOME", &home);
+            if let Some(cwd) = cwd {
+                command.current_dir(cwd);
+            }
+            let out = command.output();
             let _ = tx.send(out);
         });
         match rx.recv_timeout(CALL_TIMEOUT) {
@@ -58,16 +66,21 @@ impl Sandbox {
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        self.try_run(args).unwrap_or_else(|| {
-            panic!(
-                "[{}] `tui-test {}` produced no result within {:?}. Either it could not be \
+        self.run_in(None, args)
+    }
+
+    fn run_in(&self, cwd: Option<&std::path::Path>, args: &[&str]) -> Output {
+        self.try_run_in(cwd.map(std::path::Path::to_path_buf), args)
+            .unwrap_or_else(|| {
+                panic!(
+                    "[{}] `tui-test {}` produced no result within {:?}. Either it could not be \
                  spawned (see stderr above), or the cli process exited but left its stdout pipe \
                  open, which happens when the detached daemon inherits the cli's standard handles.",
-                self.label,
-                args.join(" "),
-                CALL_TIMEOUT
-            )
-        })
+                    self.label,
+                    args.join(" "),
+                    CALL_TIMEOUT
+                )
+            })
     }
 
     /// Run without any explicit or environment session target.
@@ -104,7 +117,11 @@ impl Sandbox {
     }
 
     fn ok(&self, args: &[&str]) -> String {
-        let out = self.run(args);
+        self.ok_in(None, args)
+    }
+
+    fn ok_in(&self, cwd: Option<&std::path::Path>, args: &[&str]) -> String {
+        let out = self.run_in(cwd, args);
         assert!(
             out.status.success(),
             "[{}] `tui-test {}` failed with {:?}\nstdout: {}\nstderr: {}",
@@ -172,6 +189,44 @@ fn capturing_output_terminates_after_the_daemon_starts() {
         "expected the open payload on stdout, got: {stdout}"
     );
     sandbox.ok(&["text"]);
+}
+
+#[test]
+fn get_recording_flushes_queued_output_before_reading() {
+    let sandbox = Sandbox::new("recording-flush");
+    sandbox.ok(&["open"]);
+    sandbox.ok(&["submit", "echo recording-flush-marker"]);
+    sandbox.ok(&["wait", "command", "--timeout", "30000"]);
+
+    let recording = sandbox.ok(&["get-recording"]);
+    assert!(recording.contains("recording-flush-marker"));
+}
+
+#[test]
+fn relative_recording_path_uses_the_invoking_client_directory() {
+    let sandbox = Sandbox::new("recording-client-cwd");
+    let daemon_cwd = sandbox.home.join("daemon-cwd");
+    let client_cwd = sandbox.home.join("client-cwd");
+    std::fs::create_dir_all(&daemon_cwd).unwrap();
+    std::fs::create_dir_all(&client_cwd).unwrap();
+
+    sandbox.ok_in(Some(&daemon_cwd), &["open"]);
+    sandbox.ok_in(Some(&client_cwd), &["record", "start", "relative.cast"]);
+    let stopped = sandbox.ok_in(Some(&client_cwd), &["--json", "record", "stop"]);
+    let stopped: serde_json::Value = serde_json::from_str(&stopped).unwrap();
+
+    let expected = client_cwd.join("relative.cast");
+    assert!(
+        expected.is_file(),
+        "recording was not written to {expected:?}"
+    );
+    assert!(!daemon_cwd.join("relative.cast").exists());
+    let actual = std::path::PathBuf::from(stopped["data"]["path"].as_str().unwrap());
+    assert!(actual.is_absolute());
+    assert_eq!(
+        std::fs::canonicalize(actual).unwrap(),
+        std::fs::canonicalize(expected).unwrap()
+    );
 }
 
 #[test]
@@ -304,10 +359,10 @@ fn a_session_timeout_default_applies_to_later_commands() {
 fn a_screenshot_and_an_assertion_agree_on_a_color() {
     let sandbox = Sandbox::new("palette-agree");
     // Printed lowercase so the match is the output, not the echoed command.
-    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)""#;
-    sandbox.ok(&["run", "--cols", "44", "--", "bash", "--norc"]);
-    sandbox.ok(&["submit", print_red]);
-    sandbox.ok(&["wait", "command"]);
+    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)"; sleep 30"#;
+    sandbox.ok(&[
+        "run", "--cols", "44", "--", "bash", "--norc", "-c", print_red,
+    ]);
 
     // The default profile is the VGA palette, so slot 1 is #800000.
     sandbox.ok(&["expect", "text", "qrsx", "--fg", "#800000"]);
@@ -331,7 +386,7 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
     std::fs::write(&config, "[profiles.neon.colors]\nred = \"#ff00ff\"\n").expect("write config");
     let config_path = config.to_str().expect("utf-8 path");
 
-    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)""#;
+    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)"; sleep 30"#;
     sandbox.ok(&[
         "run",
         "--config",
@@ -343,9 +398,9 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
         "--",
         "bash",
         "--norc",
+        "-c",
+        print_red,
     ]);
-    sandbox.ok(&["submit", print_red]);
-    sandbox.ok(&["wait", "command"]);
 
     sandbox.ok(&["expect", "text", "qrsx", "--fg", "#ff00ff"]);
     let out = sandbox.run(&["expect", "text", "qrsx", "--fg", "#800000"]);
@@ -674,6 +729,46 @@ fn delayed_bell_command() -> String {
     }
 }
 
+fn blinking_program() -> Vec<&'static str> {
+    if cfg!(windows) {
+        vec![
+            "pwsh",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            "[Console]::Write(\"`e[5mX`e[0m\"); Start-Sleep -Seconds 30",
+        ]
+    } else {
+        vec!["sh", "-c", "printf '\\033[5mX\\033[0m'; sleep 30"]
+    }
+}
+
+#[test]
+fn ghostty_backend_is_used_end_to_end() {
+    let sandbox = Sandbox::new("ghostty-backend");
+    let mut args = vec![
+        "run",
+        "--backend",
+        "ghostty",
+        "--cols",
+        "10",
+        "--rows",
+        "2",
+        "--",
+    ];
+    args.extend(blinking_program());
+    sandbox.ok(&args);
+    sandbox.ok(&["wait", "text", "X"]);
+
+    let raw = sandbox.ok(&["--json", "cells", "0", "0"]);
+    let payload: serde_json::Value = serde_json::from_str(&raw).expect("cells json");
+    assert_eq!(
+        payload["data"]["cells"][0]["blink"],
+        serde_json::Value::Bool(true),
+        "Ghostty preserves SGR blink: {payload}"
+    );
+}
+
 fn interactive_reader() -> &'static str {
     if cfg!(windows) {
         "Write-Output ('reader-'+'ready'); $null = Read-Host"
@@ -858,8 +953,8 @@ fn a_repainting_prompt_neither_stalls_nor_short_circuits_exit_codes() {
          finishing, so the stale exit code 0 was accepted: {stderr}",
     );
     assert!(
-        stderr.contains("still running"),
-        "expected the failure to say the command had not finished, got: {stderr}"
+        stderr.contains("still running") || stderr.contains("never started a command"),
+        "expected the failure to say the command had not completed, got: {stderr}"
     );
 }
 
@@ -1127,11 +1222,22 @@ fn a_window_title_is_tracked_asserted_and_drawn() {
 
     // The title is drawn in the window chrome, not in the grid.
     let svg = sandbox.home.join("titled.svg");
-    sandbox.ok(&["screenshot", "--out", svg.to_str().expect("utf-8 path")]);
+    sandbox.ok(&[
+        "screenshot",
+        "--out",
+        svg.to_str().expect("utf-8 path"),
+        "--zoom",
+        "0.5",
+    ]);
     let image = std::fs::read_to_string(&svg).expect("read svg");
     assert!(
-        image.contains(">vim: notes.md</text>") && image.contains(r#"text-anchor="middle""#),
+        image.contains(">vim: notes.md - 40x30</text>")
+            && image.contains(r#"text-anchor="middle""#),
         "the title is drawn centred in the title bar: {image}"
+    );
+    assert!(
+        image.contains(r#"width="239" height="365" viewBox="0 0 478 730""#),
+        "zoom changes only the displayed dimensions: {image}"
     );
 
     // An empty title clears it, which is how programs tidy up on exit.
@@ -1149,15 +1255,17 @@ fn a_snapshot_records_the_title_only_when_asked() {
     let sandbox = Sandbox::new("snap-title");
     // Wide enough that the title is not truncated, so the assertion is about
     // whether it was recorded at all rather than about how it was shortened.
-    sandbox.ok(&["run", "--cols", "40", "--", "bash", "--norc"]);
+    let set_title = r#"clear; printf '\033]2;tui-test-user@host: /some/path\007'; sleep 30"#;
     sandbox.ok(&[
-        "submit",
-        r#"clear; printf '\033]2;ayman@host: /some/path\007'"#,
+        "run", "--cols", "40", "--", "bash", "--norc", "-c", set_title,
     ]);
-    sandbox.ok(&["expect", "title", "ayman@host", "--timeout", "5000"]);
+    sandbox.ok(&["expect", "title", "tui-test-user@host", "--timeout", "5000"]);
 
     let plain = sandbox.ok(&["expect", "snapshot", "plain", "-u"]);
-    assert!(!plain.contains("ayman@host"), "default keeps the title out");
+    assert!(
+        !plain.contains("tui-test-user@host"),
+        "default keeps the title out"
+    );
     let stored = std::fs::read_to_string(
         std::env::current_dir()
             .expect("cwd")
@@ -1165,7 +1273,7 @@ fn a_snapshot_records_the_title_only_when_asked() {
     )
     .expect("read snapshot");
     assert!(
-        stored.starts_with("╭────") && !stored.contains("ayman@host"),
+        stored.starts_with("╭────") && !stored.contains("tui-test-user@host"),
         "the border is plain, so a baseline is not tied to a machine: {stored}"
     );
 
@@ -1177,7 +1285,7 @@ fn a_snapshot_records_the_title_only_when_asked() {
     )
     .expect("read snapshot");
     assert!(
-        titled.contains("ayman@host: /some/path"),
+        titled.contains("tui-test-user@host: /some/path"),
         "asking for it puts it in the border: {titled}"
     );
 

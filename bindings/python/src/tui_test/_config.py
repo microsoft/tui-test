@@ -20,6 +20,7 @@ def resolve_session(session: Optional[str]) -> str:
 
 
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
+_BACKENDS = ("alacritty", "ghostty")
 _PROFILE_FIELDS = frozenset(("scrollback", "colors"))
 _COLOR_FIELDS = frozenset(
     (
@@ -57,6 +58,21 @@ def resolve_timeout(
     if timeouts is not None:
         return timeouts.get(class_name)
     return None
+
+
+def normalize_backend(backend: object) -> Optional[str]:
+    if backend is None:
+        return None
+    if not isinstance(backend, str):
+        raise TypeError("backend must be a string or None")
+    normalized = backend.strip().lower()
+    if normalized not in _BACKENDS:
+        raise ValueError(
+            "unknown backend {!r}; expected one of {}".format(
+                backend, ", ".join(_BACKENDS)
+            )
+        )
+    return normalized
 
 
 def normalize_timeouts(timeouts: object) -> Optional[Dict[str, Optional[int]]]:

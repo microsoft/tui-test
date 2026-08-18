@@ -2,7 +2,23 @@ use clap::{Args, Parser, Subcommand};
 
 use tui_test::config::{DEFAULT_COLS, DEFAULT_ROWS};
 use tui_test::shell::Shell;
-use tui_test::Timeouts;
+use tui_test::{Backend, RecordingFormat, Timeouts};
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub enum BackendArg {
+    Alacritty,
+    Ghostty,
+}
+
+impl From<BackendArg> for Backend {
+    fn from(backend: BackendArg) -> Self {
+        match backend {
+            BackendArg::Alacritty => Backend::Alacritty,
+            BackendArg::Ghostty => Backend::Ghostty,
+        }
+    }
+}
 
 #[derive(Clone, Copy, clap::ValueEnum)]
 #[clap(rename_all = "lowercase")]
@@ -53,6 +69,26 @@ impl ProfileArgs {
     pub fn resolve(&self) -> anyhow::Result<tui_test::profile::Profile> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         tui_test::profile::resolve(self.config.as_deref(), self.profile.as_deref(), &cwd)
+    }
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub enum RecordingFormatArg {
+    Apng,
+    Gif,
+    Mp4,
+    Cast,
+}
+
+impl From<RecordingFormatArg> for RecordingFormat {
+    fn from(format: RecordingFormatArg) -> Self {
+        match format {
+            RecordingFormatArg::Apng => RecordingFormat::Apng,
+            RecordingFormatArg::Gif => RecordingFormat::Gif,
+            RecordingFormatArg::Mp4 => RecordingFormat::Mp4,
+            RecordingFormatArg::Cast => RecordingFormat::Cast,
+        }
     }
 }
 
@@ -116,6 +152,9 @@ pub enum Command {
         /// Shell to launch (defaults to the platform shell).
         #[arg(long, value_enum)]
         shell: Option<ShellArg>,
+        /// Terminal emulator to use (defaults to alacritty).
+        #[arg(long, value_enum)]
+        backend: Option<BackendArg>,
         /// Terminal width in columns.
         #[arg(long, default_value_t = DEFAULT_COLS)]
         cols: u16,
@@ -147,6 +186,9 @@ pub enum Command {
         /// Arguments passed to the program.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+        /// Terminal emulator to use (defaults to alacritty).
+        #[arg(long, value_enum)]
+        backend: Option<BackendArg>,
         /// Terminal width in columns.
         #[arg(long, default_value_t = DEFAULT_COLS)]
         cols: u16,
@@ -203,6 +245,14 @@ pub enum Command {
         /// Include scrollback, not just the visible viewport.
         #[arg(long)]
         full: bool,
+        /// Scale the SVG dimensions while keeping the same terminal cells.
+        #[arg(long)]
+        zoom: Option<f64>,
+    },
+    /// Start or stop an animated terminal recording.
+    Record {
+        #[command(subcommand)]
+        cmd: RecordCmd,
     },
     /// Dump cell attributes for a region.
     Cells {
@@ -283,8 +333,7 @@ pub enum Command {
     },
     /// Print the session's recording (asciinema v2 cast) to stdout.
     ///
-    /// Redirect to a `.cast` file, then `asciinema play` it or render a GIF
-    /// with `agg`.
+    /// Redirect to a `.cast` file for playback in the asciicast ecosystem.
     GetRecording {
         /// Session to read (defaults to --session / the default session).
         session: Option<String>,
@@ -310,6 +359,32 @@ pub enum Command {
     /// Internal: run the session daemon.
     #[command(name = "__daemon", hide = true)]
     InternalDaemon,
+}
+
+#[derive(Subcommand)]
+pub enum RecordCmd {
+    /// Start recording terminal output to APNG, GIF, MP4, or asciicast v2.
+    Start {
+        /// Output path. The extension selects APNG (.png/.apng), GIF, MP4, or cast.
+        path: String,
+        /// Override the format inferred from the output extension.
+        #[arg(long, value_enum)]
+        format: Option<RecordingFormatArg>,
+        /// Maximum animation frame rate.
+        #[arg(long)]
+        fps: Option<u8>,
+        /// Playback speed multiplier.
+        #[arg(long)]
+        speed: Option<f64>,
+        /// Clamp idle gaps to this many seconds.
+        #[arg(long)]
+        idle_time_limit: Option<f64>,
+        /// Scale image/video dimensions while keeping the same terminal cells.
+        #[arg(long)]
+        zoom: Option<f64>,
+    },
+    /// Stop the active recording and finish its output file.
+    Stop,
 }
 
 /// Signals deliverable to a session's child process.
@@ -429,6 +504,21 @@ mod tests {
     }
 
     #[test]
+    fn open_backend_values_map_to_terminal_backends() {
+        let cli = Cli::try_parse_from(["tui-test", "open", "--backend", "ghostty"])
+            .expect("parse backend");
+        let Some(Command::Open {
+            backend: Some(backend),
+            ..
+        }) = cli.command
+        else {
+            panic!("expected Open with a backend");
+        };
+        assert_eq!(Backend::from(backend), Backend::Ghostty);
+        assert!(Cli::try_parse_from(["tui-test", "open", "--backend", "libghostty"]).is_err());
+    }
+
+    #[test]
     fn run_accepts_readiness_flags() {
         let cli =
             Cli::try_parse_from(["tui-test", "run", "--wait-ready", "vim"]).expect("parse run");
@@ -479,6 +569,60 @@ mod tests {
         assert_eq!(defaults.ready, Some(20_000));
         assert_eq!(defaults.command, None, "unset classes stay unset");
         assert_eq!(defaults.exit, None);
+    }
+
+    #[test]
+    fn recording_start_accepts_timeline_options() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "record",
+            "start",
+            "demo.mp4",
+            "--format",
+            "mp4",
+            "--fps",
+            "24",
+            "--speed",
+            "2",
+            "--idle-time-limit",
+            "3",
+            "--zoom",
+            "0.5",
+        ])
+        .expect("parse recording start");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Record {
+                cmd: RecordCmd::Start {
+                    format: Some(RecordingFormatArg::Mp4),
+                    fps: Some(24),
+                    speed: Some(2.0),
+                    idle_time_limit: Some(3.0),
+                    zoom: Some(0.5),
+                    ..
+                }
+            })
+        ));
+    }
+
+    #[test]
+    fn screenshot_accepts_zoom() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "screenshot",
+            "--out",
+            "screen.svg",
+            "--zoom",
+            "0.5",
+        ])
+        .expect("parse screenshot zoom");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Screenshot {
+                zoom: Some(0.5),
+                ..
+            })
+        ));
     }
 
     #[test]

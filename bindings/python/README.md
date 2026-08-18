@@ -54,16 +54,26 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 ## API
 
-`TuiTest(session="default", *, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count`, `screenshot`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
+`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count`, `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
 
 `state()` includes `bell_count` plus the latest 1024 `bell_events`, each with
 a 1-based `sequence` and monotonic `elapsed_ms` since recording began.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 
-`open()` and `run()` accept `wait_ready=`, `retries=`, `profile=`, and
-`timeouts=`. The constructor also accepts `profile=` as the default for later
-opens and runs. Profiles are partial; omitted fields use the built-in defaults:
+`open()` and `run()` accept `backend=`, `wait_ready=`, `retries=`, `profile=`,
+and `timeouts=`. The constructor also accepts `backend=` and `profile=` as
+defaults for later opens and runs. Backend values are `"alacritty"` (default)
+and `"ghostty"`:
+
+```python
+terminal = TuiTest(backend="ghostty")
+await terminal.open()
+await terminal.run("vim", "file.txt", backend="alacritty")
+```
+
+The native package includes both emulators. Profiles are partial; omitted
+fields use the built-in defaults:
 
 ```python
 from tui_test import Colors, Profile, TuiTest
@@ -104,6 +114,19 @@ Each terminal is uniquely named, so parallel workers don't collide. `set_termina
 Cancelling a task does not cancel the underlying Rust operation. Operations for single sessoins wait for completion (ex: `close()`, `close_all()`).
 
 Closing a session removes it from `sessions()`, but keeps its recording. `get_recording()` can read that recording for the rest of the process. The 1024 most recently closed sessions have their recordings retained.
+
+```python
+await su.start_recording("demo.png", fps=30, speed=1.0, zoom=0.5)
+await su.submit("echo hello")
+await su.wait_command()
+path = await su.stop_recording()
+```
+
+`.png`/`.apng` selects lossless APNG, `.gif` selects GIF, `.mp4` selects MP4,
+and `.cast` selects asciicast v2. Pass `format=` to override extension
+inference. `zoom=` scales SVG screenshots and image/video recordings without
+changing terminal rows or columns. MP4 recording requires `ffmpeg` to be
+available on `PATH`.
 
 ## Configuration
 

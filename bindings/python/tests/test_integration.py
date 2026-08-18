@@ -41,8 +41,8 @@ def run(coro):
 
 
 class IntegrationTests(unittest.TestCase):
-    def _client(self):
-        return TuiTest.ephemeral("pytest")
+    def _client(self, **kwargs):
+        return TuiTest.ephemeral("pytest", **kwargs)
 
     def test_echo_roundtrip(self):
         async def scenario():
@@ -54,6 +54,80 @@ class IntegrationTests(unittest.TestCase):
                 await su.expect_exit_code(0)
                 st = await su.state()
                 self.assertGreater(st.cols, 0)
+
+        run(scenario())
+
+    def test_recording_api_writes_an_asciicast_file(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as root:
+                path = Path(root) / "demo.cast"
+                async with self._client() as su:
+                    await su.open(shell=SHELL)
+                    await su.start_recording(
+                        str(path),
+                        format="cast",
+                        fps=24,
+                        speed=1.0,
+                        idle_time_limit=2.0,
+                    )
+                    await su.submit("echo sdk-recording")
+                    await su.wait_command()
+                    self.assertEqual(await su.stop_recording(), str(path))
+                cast = path.read_text(encoding="utf-8")
+                self.assertIn('"version":2', cast)
+                self.assertIn("sdk-recording", cast)
+
+        run(scenario())
+
+    def test_recording_api_exports_styled_unicode_to_apng_and_gif(self):
+        async def scenario():
+            command = (
+                'Write-Host "`e[1;3mstyled-é`e[0m"'
+                if sys.platform == "win32"
+                else "printf '\\033[1;3mstyled-é\\033[0m\\n'"
+            )
+            with tempfile.TemporaryDirectory() as root:
+                for format, extension in (("apng", "png"), ("gif", "gif")):
+                    with self.subTest(format=format):
+                        path = Path(root) / f"styled.{extension}"
+                        async with self._client() as su:
+                            await su.open(shell=SHELL, cols=20, rows=4)
+                            if format == "apng":
+                                screenshot = Path(root) / "zoomed.svg"
+                                await su.screenshot(
+                                    str(screenshot), zoom=0.5
+                                )
+                                self.assertIn(
+                                    'width="139" height="92" '
+                                    'viewBox="0 0 278 184"',
+                                    screenshot.read_text(encoding="utf-8"),
+                                )
+                            await su.start_recording(
+                                str(path), format=format, fps=30, zoom=0.5
+                            )
+                            await su.submit(command)
+                            await su.wait_command()
+                            self.assertEqual(
+                                await su.stop_recording(), str(path)
+                            )
+                        data = path.read_bytes()
+                        if format == "apng":
+                            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+                            self.assertIn(b"acTL", data)
+                            self.assertEqual(
+                                int.from_bytes(data[16:20], "big"), 278
+                            )
+                            self.assertEqual(
+                                int.from_bytes(data[20:24], "big"), 184
+                            )
+                        else:
+                            self.assertEqual(data[:6], b"GIF89a")
+                            self.assertEqual(
+                                int.from_bytes(data[6:8], "little"), 278
+                            )
+                            self.assertEqual(
+                                int.from_bytes(data[8:10], "little"), 184
+                            )
 
         run(scenario())
 
@@ -390,6 +464,23 @@ class IntegrationTests(unittest.TestCase):
             if len(view):
                 with self.assertRaises(TypeError):
                     view[0] = 0
+
+        run(scenario())
+
+    def test_ghostty_backend_preserves_blink(self):
+        async def scenario():
+            async with self._client(backend="ghostty") as su:
+                await su.run(
+                    sys.executable,
+                    "-c",
+                    "import sys,time; "
+                    "sys.stdout.write('\\x1b[5mX\\x1b[0m'); "
+                    "sys.stdout.flush(); time.sleep(30)",
+                    cols=10,
+                    rows=2,
+                )
+                await su.wait_text("X", timeout=5000)
+                self.assertTrue((await su.cells(0, 0))[0].blink)
 
         run(scenario())
 

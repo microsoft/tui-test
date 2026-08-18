@@ -8,9 +8,9 @@ use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
-    BellEvent, Cell, CellColor, Cursor, ErrorKind, MouseAction, OpenOptions, OpenResult, Operation,
-    OperationResult, PackedScreen, RunOptions, ScreenshotResult, Size, SnapshotResult, State,
-    Timeouts, TuiTestError,
+    Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, MouseAction, OpenOptions, OpenResult,
+    Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
+    SnapshotResult, State, Timeouts, TuiTestError,
 };
 
 pyo3::create_exception!(
@@ -53,6 +53,7 @@ impl NativeSession {
 
     #[pyo3(signature = (
         shell,
+        backend,
         cols,
         rows,
         cwd,
@@ -71,6 +72,7 @@ impl NativeSession {
         &self,
         py: Python<'py>,
         shell: Option<String>,
+        backend: Option<String>,
         cols: Bound<'py, PyAny>,
         rows: Bound<'py, PyAny>,
         cwd: Option<String>,
@@ -99,6 +101,7 @@ impl NativeSession {
                 execute_open(
                     &name,
                     Operation::Open(OpenOptions {
+                        backend: parse_backend(backend.as_deref())?,
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
                         shell: parse_shell(shell.as_deref())?,
                         cols: integer_u16(&cols, "cols")?,
@@ -123,6 +126,7 @@ impl NativeSession {
     #[pyo3(signature = (
         program,
         args,
+        backend,
         cols,
         rows,
         cwd,
@@ -142,6 +146,7 @@ impl NativeSession {
         py: Python<'py>,
         program: String,
         args: Vec<String>,
+        backend: Option<String>,
         cols: Bound<'py, PyAny>,
         rows: Bound<'py, PyAny>,
         cwd: Option<String>,
@@ -170,6 +175,7 @@ impl NativeSession {
                 execute_open(
                     &name,
                     Operation::Run(RunOptions {
+                        backend: parse_backend(backend.as_deref())?,
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
                         program,
                         args,
@@ -931,18 +937,64 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (path, full))]
+    #[pyo3(signature = (path, full, zoom=None))]
     fn screenshot<'py>(
         &self,
         py: Python<'py>,
         path: Option<String>,
         full: bool,
+        zoom: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let name = self.name.clone();
         future_blocking(
             py,
-            move || execute_screenshot(&name, Operation::Screenshot { full, path }),
+            move || execute_screenshot(&name, Operation::Screenshot { full, path, zoom }),
             screenshot_to_py,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (path, format, fps, speed, idle_time_limit, zoom=None))]
+    fn start_recording<'py>(
+        &self,
+        py: Python<'py>,
+        path: String,
+        format: Option<String>,
+        fps: Option<Bound<'py, PyAny>>,
+        speed: Option<f64>,
+        idle_time_limit: Option<f64>,
+        zoom: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let fps = capture_optional_integer(fps);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::StartRecording {
+                        path,
+                        format: parse_recording_format(format.as_deref())?,
+                        fps: fps
+                            .as_ref()
+                            .map(|value| integer_u8(value, "fps"))
+                            .transpose()?,
+                        speed,
+                        idle_time_limit,
+                        zoom,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    fn stop_recording<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || execute_recording(&name, Operation::StopRecording),
+            string_to_py,
         )
     }
 
@@ -1195,6 +1247,27 @@ fn parse_shell(value: Option<&str>) -> Result<Option<Shell>, TuiTestError> {
         .transpose()
 }
 
+fn parse_backend(value: Option<&str>) -> Result<Backend, TuiTestError> {
+    value
+        .unwrap_or("alacritty")
+        .parse()
+        .map_err(TuiTestError::usage)
+}
+
+fn parse_recording_format(value: Option<&str>) -> Result<Option<RecordingFormat>, TuiTestError> {
+    value
+        .map(|value| match value {
+            "apng" => Ok(RecordingFormat::Apng),
+            "gif" => Ok(RecordingFormat::Gif),
+            "mp4" => Ok(RecordingFormat::Mp4),
+            "cast" => Ok(RecordingFormat::Cast),
+            other => Err(TuiTestError::usage(format!(
+                "unknown recording format '{other}'; expected apng, gif, mp4, or cast"
+            ))),
+        })
+        .transpose()
+}
+
 fn unexpected_result(expected: &str) -> TuiTestError {
     TuiTestError::internal(format!(
         "native Python binding expected {expected}, but the engine returned another result type"
@@ -1310,6 +1383,13 @@ fn execute_screenshot(name: &str, operation: Operation) -> Result<ScreenshotResu
     match global_registry().execute(name, operation)? {
         OperationResult::Screenshot(value) => Ok(value),
         _ => Err(unexpected_result("a screenshot")),
+    }
+}
+
+fn execute_recording(name: &str, operation: Operation) -> Result<String, TuiTestError> {
+    match global_registry().execute(name, operation)? {
+        OperationResult::Recording(path) => Ok(path),
+        _ => Err(unexpected_result("a recording path")),
     }
 }
 

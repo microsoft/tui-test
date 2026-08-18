@@ -94,6 +94,7 @@ mod stubs {
                 def open(
                     self,
                     shell: typing.Optional[str],
+                    backend: typing.Optional[str],
                     cols: int,
                     rows: int,
                     cwd: typing.Optional[str],
@@ -112,6 +113,7 @@ mod stubs {
                     self,
                     program: str,
                     args: typing.List[str],
+                    backend: typing.Optional[str],
                     cols: int,
                     rows: int,
                     cwd: typing.Optional[str],
@@ -210,7 +212,22 @@ mod stubs {
                     include_title: bool,
                     cwd: typing.Optional[str],
                 ) -> typing.Awaitable[str]: ...
-                def screenshot(self, path: typing.Optional[str], full: bool) -> typing.Awaitable[str]: ...
+                def screenshot(
+                    self,
+                    path: typing.Optional[str],
+                    full: bool,
+                    zoom: typing.Optional[float],
+                ) -> typing.Awaitable[str]: ...
+                def start_recording(
+                    self,
+                    path: str,
+                    format: typing.Optional[str],
+                    fps: typing.Optional[int],
+                    speed: typing.Optional[float],
+                    idle_time_limit: typing.Optional[float],
+                    zoom: typing.Optional[float],
+                ) -> typing.Awaitable[None]: ...
+                def stop_recording(self) -> typing.Awaitable[str]: ...
                 def recording(self) -> typing.Awaitable[str]: ...
             "#
         }
