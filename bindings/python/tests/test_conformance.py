@@ -16,6 +16,7 @@ MAPPING = {
     "state": [("client", "state")],
     "text": [("client", "text")],
     "screenshot": [("client", "screenshot")],
+    "record": [("client", "start_recording"), ("client", "stop_recording")],
     "cells": [("client", "cells")],
     "get": [
         ("client", "get_command"),
@@ -25,6 +26,8 @@ MAPPING = {
         ("client", "get_cursor"),
         ("client", "get_size"),
         ("client", "get_title"),
+        ("client", "get_bell_count"),
+        ("client", "get_bell_events"),
     ],
     "type": [("client", "type")],
     "submit": [("client", "submit")],
@@ -35,8 +38,8 @@ MAPPING = {
     "write": [("client", "write")],
     "signal": [("client", "signal")],
     "kill": [("client", "kill")],
-    "wait": [("client", "wait_title"), ("client", "wait_text"), ("client", "wait_idle"), ("client", "wait_command"), ("client", "wait_exit")],
-    "expect": [("client", "expect_title"), ("client", "expect_text"), ("client", "expect_exit_code"), ("client", "expect_output"), ("client", "expect_snapshot")],
+    "wait": [("client", "wait_title"), ("client", "wait_text"), ("client", "wait_idle"), ("client", "wait_command"), ("client", "wait_exit"), ("client", "wait_bell")],
+    "expect": [("client", "expect_title"), ("client", "expect_text"), ("client", "expect_exit_code"), ("client", "expect_output"), ("client", "expect_bell_count"), ("client", "expect_snapshot")],
     "get-recording": [("module", "get_recording")],
 }
 

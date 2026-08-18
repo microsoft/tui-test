@@ -53,7 +53,8 @@ pub struct LiveFrame {
 fn operation_summary(operation: &Operation) -> String {
     match operation {
         Operation::Open(options) => format!(
-            "Open {{ shell: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            "Open {{ backend: {}, shell: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            options.backend.as_str(),
             options.shell,
             options.profile.scrollback,
             options.cols,
@@ -64,7 +65,8 @@ fn operation_summary(operation: &Operation) -> String {
             options.env.len()
         ),
         Operation::Run(options) => format!(
-            "Run {{ program: {:?}, args: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            "Run {{ backend: {}, program: {:?}, args: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, timeouts: {:?}, env: <{} vars> }}",
+            options.backend.as_str(),
             options.program,
             options.args,
             options.profile.scrollback,
@@ -138,6 +140,7 @@ impl Engine {
         self.spawn(
             options.shell,
             None,
+            options.backend,
             options.profile,
             options.cols,
             options.rows,
@@ -155,6 +158,7 @@ impl Engine {
         self.spawn(
             None,
             Some(program),
+            options.backend,
             options.profile,
             options.cols,
             options.rows,
@@ -170,6 +174,7 @@ impl Engine {
         &self,
         shell: Option<crate::shell::Shell>,
         program: Option<Vec<String>>,
+        backend: crate::terminal::backend::Backend,
         profile: crate::profile::Profile,
         cols: u16,
         rows: u16,
@@ -192,6 +197,7 @@ impl Engine {
         let session = TerminalSession::open(
             shell,
             program.clone(),
+            backend,
             profile,
             cols,
             rows,
@@ -344,6 +350,16 @@ impl Engine {
 
     pub fn recording_path(&self) -> &PathBuf {
         &self.recording_path
+    }
+
+    pub fn flush_recording(&self) -> Result<(), TuiTestError> {
+        let _operation = self
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let guard = self.lock_session();
+        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
+        session.flush_recording()
     }
 
     fn lock_session(&self) -> MutexGuard<'_, Option<TerminalSession>> {
@@ -522,6 +538,10 @@ fn dispatch(
                 .size();
             Ok(OperationResult::Size(Size { cols, rows }))
         }
+        Operation::GetBellCount => Ok(OperationResult::BellCount(session.bells.count())),
+        Operation::GetBellEvents => {
+            Ok(OperationResult::BellEvents(session.bells.snapshot().events))
+        }
         Operation::Write { data } => {
             act(session.write(data.as_bytes()))?;
             Ok(OperationResult::Unit)
@@ -610,6 +630,13 @@ fn dispatch(
             )?;
             Ok(OperationResult::Unit)
         }
+        Operation::WaitBell { timeout_ms } => {
+            wait_bell(
+                session,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
         Operation::ExpectText {
             text,
             regex,
@@ -660,6 +687,14 @@ fn dispatch(
             expect_output(session, &text, regex)?;
             Ok(OperationResult::Unit)
         }
+        Operation::ExpectBellCount { count, timeout_ms } => {
+            expect_bell_count(
+                session,
+                count,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
         Operation::Snapshot {
             name,
             update,
@@ -674,9 +709,21 @@ fn dispatch(
             include_title,
             cwd,
         )?)),
-        Operation::Screenshot { full, path } => Ok(OperationResult::Screenshot(screenshot(
-            session, full, path,
+        Operation::Screenshot { full, path, zoom } => Ok(OperationResult::Screenshot(screenshot(
+            session, full, path, zoom,
         )?)),
+        Operation::StartRecording {
+            path,
+            format,
+            fps,
+            speed,
+            idle_time_limit,
+            zoom,
+        } => {
+            session.start_recording(path, format, fps, speed, idle_time_limit, zoom)?;
+            Ok(OperationResult::Unit)
+        }
+        Operation::StopRecording => Ok(OperationResult::Recording(session.stop_recording()?)),
         Operation::Open(_) | Operation::Run(_) | Operation::Close => {
             Err(TuiTestError::internal("unsupported nested operation"))
         }
@@ -694,6 +741,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (x, y) = state.emu.cursor();
     let (cols, rows) = state.emu.size();
+    let bells = session.bells.snapshot();
     crate::api::State {
         session_shell: session.shell.map(|value| value.as_str().to_string()),
         cols,
@@ -705,6 +753,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
         last_exit: state.tracker.last_exit(),
         exited: state.exited,
         ready: state.tracker.is_ready(),
+        bell_count: bells.count,
         timeouts: effective_timeouts(session),
         text: text_of(&state.emu.viewable_rows()),
     }
@@ -1111,23 +1160,29 @@ fn stall_reason(session: &TerminalSession) -> String {
 }
 
 fn wait_exit(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
-    if poll_until(
-        || {
-            session
+    let start = Instant::now();
+    loop {
+        let (exited, exit_error) = {
+            let state = session
                 .state
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .exited
-                .is_some()
-                || session.cancelled.load(std::sync::atomic::Ordering::Acquire)
-        },
-        timeout_ms,
-    ) {
-        Ok(())
-    } else {
-        Err(TuiTestError::assertion(
-            "wait exit: session still running at timeout",
-        ))
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (state.exited.is_some(), state.exit_error.clone())
+        };
+        if exited || session.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Ok(());
+        }
+        if let Some(error) = exit_error {
+            return Err(TuiTestError::internal(format!(
+                "wait exit: failed to query process status: {error}"
+            )));
+        }
+        if start.elapsed() >= Duration::from_millis(timeout_ms) {
+            return Err(TuiTestError::assertion(
+                "wait exit: session still running at timeout",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
     }
 }
 
@@ -1138,6 +1193,29 @@ fn wait_ready(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestE
         Err(TuiTestError::assertion(
             "wait ready: no prompt was reported within timeout",
         ))
+    }
+}
+
+fn wait_bell(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+    let baseline = session.bells.sequence();
+    let mut rang = false;
+    poll_until(
+        || {
+            rang = session.bells.sequence() != baseline;
+            rang || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if rang {
+        Ok(())
+    } else if session_stopped(session) {
+        Err(TuiTestError::assertion(
+            "session exited before a bell was received",
+        ))
+    } else {
+        Err(TuiTestError::assertion(format!(
+            "wait bell: timed out after {timeout_ms}ms without receiving a bell"
+        )))
     }
 }
 
@@ -1338,6 +1416,32 @@ fn expect_output(session: &TerminalSession, text: &str, regex: bool) -> Result<(
     }
 }
 
+fn expect_bell_count(
+    session: &TerminalSession,
+    expected: u64,
+    timeout_ms: u64,
+) -> Result<(), TuiTestError> {
+    let mut actual = session.bells.count();
+    poll_until(
+        || {
+            actual = session.bells.count();
+            actual >= expected || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if actual >= expected {
+        Ok(())
+    } else if session_stopped(session) {
+        Err(TuiTestError::assertion(format!(
+            "session exited at bell count {actual} before reaching {expected}"
+        )))
+    } else {
+        Err(TuiTestError::assertion(format!(
+            "expected bell count {expected}: timed out after {timeout_ms}ms; current count is {actual}"
+        )))
+    }
+}
+
 fn do_snapshot(
     session: &TerminalSession,
     name: &str,
@@ -1424,21 +1528,27 @@ fn screenshot(
     session: &TerminalSession,
     full: bool,
     path: Option<String>,
+    zoom: Option<f64>,
 ) -> Result<ScreenshotResult, TuiTestError> {
     match path {
         Some(path) => {
+            let zoom = crate::api::resolve_zoom(zoom)?;
             let snapshot = svg_snapshot(session, full);
-            let svg = crate::render::svg::render_svg(
+            let svg = crate::render::svg::render_svg_with_zoom(
                 &snapshot.rows,
                 snapshot.cols,
                 &snapshot.render_state,
                 snapshot.cursor,
                 snapshot.title.as_deref(),
+                zoom,
             );
             std::fs::write(&path, svg)
                 .map_err(|error| TuiTestError::internal(error.to_string()))?;
             Ok(ScreenshotResult::Path(path))
         }
+        None if zoom.is_some() => Err(TuiTestError::usage(
+            "screenshot zoom requires an output path",
+        )),
         None => Ok(ScreenshotResult::Text(text_of(&grid(session, full)))),
     }
 }

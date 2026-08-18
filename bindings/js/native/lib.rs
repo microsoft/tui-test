@@ -9,9 +9,10 @@ use napi_derive::napi;
 use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::shell::Shell as CoreShell;
 use tui_test::{
-    global_registry, Cell as CoreCell, CellColor, Cursor as CoreCursor,
-    EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, KeyAction, MouseAction,
-    OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation, OperationResult,
+    global_registry, Backend as CoreBackend, BellEvent as CoreBellEvent, Cell as CoreCell,
+    CellColor, Cursor as CoreCursor, EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind,
+    KeyAction, MouseAction, OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult,
+    Operation, OperationResult, RecordingFormat as CoreRecordingFormat,
     RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
     Size as CoreSize, SnapshotResult as CoreSnapshotResult, State as CoreState,
     Timeouts as CoreTimeouts, TuiTestError,
@@ -19,6 +20,21 @@ use tui_test::{
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+#[napi(string_enum = "lowercase")]
+pub enum Backend {
+    Alacritty,
+    Ghostty,
+}
+
+impl From<Backend> for CoreBackend {
+    fn from(value: Backend) -> Self {
+        match value {
+            Backend::Alacritty => Self::Alacritty,
+            Backend::Ghostty => Self::Ghostty,
+        }
+    }
+}
 
 #[napi(string_enum = "lowercase")]
 pub enum Shell {
@@ -49,6 +65,25 @@ impl From<Shell> for CoreShell {
     }
 }
 
+#[napi(string_enum = "lowercase")]
+pub enum RecordingFormat {
+    Apng,
+    Gif,
+    Mp4,
+    Cast,
+}
+
+impl From<RecordingFormat> for CoreRecordingFormat {
+    fn from(value: RecordingFormat) -> Self {
+        match value {
+            RecordingFormat::Apng => Self::Apng,
+            RecordingFormat::Gif => Self::Gif,
+            RecordingFormat::Mp4 => Self::Mp4,
+            RecordingFormat::Cast => Self::Cast,
+        }
+    }
+}
+
 #[napi(object)]
 pub struct Timeouts {
     pub text: Option<f64>,
@@ -60,6 +95,7 @@ pub struct Timeouts {
 
 #[napi(object)]
 pub struct OpenOptions {
+    pub backend: Option<Backend>,
     pub shell: Option<Shell>,
     pub cols: Option<f64>,
     pub rows: Option<f64>,
@@ -73,6 +109,7 @@ pub struct OpenOptions {
 
 #[napi(object)]
 pub struct RunOptions {
+    pub backend: Option<Backend>,
     pub program: String,
     pub args: Option<Vec<String>>,
     pub cols: Option<f64>,
@@ -156,6 +193,22 @@ impl From<CoreEffectiveTimeouts> for EffectiveTimeouts {
     }
 }
 
+#[napi(object)]
+pub struct BellEvent {
+    pub sequence: f64,
+    #[napi(js_name = "elapsed_ms")]
+    pub elapsed_ms: f64,
+}
+
+impl From<CoreBellEvent> for BellEvent {
+    fn from(value: CoreBellEvent) -> Self {
+        Self {
+            sequence: value.sequence as f64,
+            elapsed_ms: value.elapsed_ms as f64,
+        }
+    }
+}
+
 #[napi(object, use_nullable = true)]
 pub struct State {
     #[napi(js_name = "session_shell")]
@@ -171,6 +224,8 @@ pub struct State {
     pub last_exit: Option<i32>,
     pub exited: Option<i32>,
     pub ready: bool,
+    #[napi(js_name = "bell_count")]
+    pub bell_count: f64,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }
@@ -188,6 +243,7 @@ impl From<CoreState> for State {
             last_exit: value.last_exit,
             exited: value.exited,
             ready: value.ready,
+            bell_count: value.bell_count as f64,
             timeouts: value.timeouts.into(),
             text: value.text,
         }
@@ -339,6 +395,17 @@ pub struct SnapshotOptions {
 pub struct ScreenshotOptions {
     pub full: Option<bool>,
     pub path: Option<String>,
+    pub zoom: Option<f64>,
+}
+
+#[napi(object)]
+pub struct RecordingOptions {
+    pub path: String,
+    pub format: Option<RecordingFormat>,
+    pub fps: Option<f64>,
+    pub speed: Option<f64>,
+    pub idle_time_limit: Option<f64>,
+    pub zoom: Option<f64>,
 }
 
 #[napi(string_enum = "lowercase")]
@@ -483,6 +550,7 @@ fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptio
         value.profile_colors.as_deref().unwrap_or_default(),
     )?;
     Ok(CoreOpenOptions {
+        backend: value.backend.map(Into::into).unwrap_or_default(),
         profile,
         shell: value.shell.map(Into::into),
         cols: match value.cols {
@@ -509,6 +577,7 @@ fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, TuiTest
         value.profile_colors.as_deref().unwrap_or_default(),
     )?;
     Ok(CoreRunOptions {
+        backend: value.backend.map(Into::into).unwrap_or_default(),
         profile,
         program: value.program,
         args: value.args.unwrap_or_default(),
@@ -753,6 +822,36 @@ impl NativeSession {
             |result| match result {
                 OperationResult::Size(value) => Ok(value.into()),
                 _ => Err(unexpected("getSize")),
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn get_bell_count(&self) -> Result<f64> {
+        execute(
+            self.handle.clone(),
+            "getBellCount",
+            Operation::GetBellCount,
+            |result| match result {
+                OperationResult::BellCount(value) => Ok(value as f64),
+                _ => Err(unexpected("getBellCount")),
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn get_bell_events(&self) -> Result<Vec<BellEvent>> {
+        execute(
+            self.handle.clone(),
+            "getBellEvents",
+            Operation::GetBellEvents,
+            |result| match result {
+                OperationResult::BellEvents(events) => {
+                    Ok(events.into_iter().map(Into::into).collect())
+                }
+                _ => Err(unexpected("getBellEvents")),
             },
         )
         .await
@@ -1078,6 +1177,14 @@ impl NativeSession {
     }
 
     #[napi]
+    pub async fn wait_bell(&self, timeout_ms: Option<f64>) -> Result<()> {
+        self.timeout_unit("waitBell", timeout_ms, |timeout_ms| Operation::WaitBell {
+            timeout_ms,
+        })
+        .await
+    }
+
+    #[napi]
     pub async fn expect_text(
         &self,
         text: String,
@@ -1141,6 +1248,22 @@ impl NativeSession {
     }
 
     #[napi]
+    pub async fn expect_bell_count(&self, count: f64, timeout_ms: Option<f64>) -> Result<()> {
+        let handle = self.handle.clone();
+        blocking("expectBellCount", move || {
+            let operation = Operation::ExpectBellCount {
+                count: integer(count, "count", u64::MAX)?,
+                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+            };
+            match handle.execute(operation)? {
+                OperationResult::Unit => Ok(()),
+                _ => Err(unexpected("expectBellCount")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
     pub async fn snapshot(
         &self,
         name: String,
@@ -1175,6 +1298,7 @@ impl NativeSession {
         let options = options.unwrap_or(ScreenshotOptions {
             full: None,
             path: None,
+            zoom: None,
         });
         execute(
             self.handle.clone(),
@@ -1182,11 +1306,47 @@ impl NativeSession {
             Operation::Screenshot {
                 full: options.full.unwrap_or(false),
                 path: options.path,
+                zoom: options.zoom,
             },
             |result| match result {
                 OperationResult::Screenshot(CoreScreenshotResult::Path(value))
                 | OperationResult::Screenshot(CoreScreenshotResult::Text(value)) => Ok(value),
                 _ => Err(unexpected("screenshot")),
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn start_recording(&self, options: RecordingOptions) -> Result<()> {
+        let fps = options
+            .fps
+            .map(|value| u8_value(value, "fps"))
+            .transpose()
+            .map_err(native_error)?;
+        self.unit(
+            "startRecording",
+            Operation::StartRecording {
+                path: options.path,
+                format: options.format.map(Into::into),
+                fps,
+                speed: options.speed,
+                idle_time_limit: options.idle_time_limit,
+                zoom: options.zoom,
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn stop_recording(&self) -> Result<String> {
+        execute(
+            self.handle.clone(),
+            "stopRecording",
+            Operation::StopRecording,
+            |result| match result {
+                OperationResult::Recording(path) => Ok(path),
+                _ => Err(unexpected("stopRecording")),
             },
         )
         .await

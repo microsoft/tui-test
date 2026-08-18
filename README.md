@@ -13,7 +13,21 @@
 
 ```sh
 cargo add tui-test-rs@0.1.0-beta.1
+# Add APNG/GIF/MP4 export support when the Rust application needs raster recording:
+cargo add tui-test-rs@0.1.0-beta.1 --features recording-raster
 ```
+
+Raster recording uses installed system fonts unless a JetBrains Mono bundle
+feature is enabled:
+
+| Feature | Bundled JetBrains Mono faces |
+| --- | --- |
+| `recording-raster` | None; use installed system fonts |
+| `recording-font-jetbrains-mono` | Full-glyph Regular |
+| `recording-font-jetbrains-mono-styles` | Regular, Bold, Italic, and Bold Italic |
+| `recording-font-jetbrains-mono-full` | All 16 static family faces |
+
+Each font feature enables `recording-raster`; the tiers are cumulative.
 
 ```rust
 use tui_test::{OpenOptions, Operation, Session};
@@ -165,7 +179,7 @@ Waits and assertions fall into five timeout classes:
 
 | Class | Applies to | Default |
 | --- | --- | --- |
-| `text` | `expect text`, `wait text` | 5000 ms |
+| `text` | `expect text`, `wait text`, `expect title`, `wait title`, `wait bell`, `expect bell` | 5000 ms |
 | `idle` | `wait idle` | 5000 ms |
 | `command` | `wait command`, `expect exit-code` | 30000 ms |
 | `exit` | `wait exit` | 30000 ms |
@@ -188,8 +202,8 @@ prints a session's effective timeouts.
 
 | Command                                                      | Description                                 |
 | ------------------------------------------------------------ | ------------------------------------------- |
-| `open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V] [--config F] [--profile P] [--timeout-<class> MS]` | Spawn a shell session.                      |
-| `run [--config F] [--profile P] <program> [args...]`         | Spawn a session running a program directly. |
+| `open [--shell S] [--backend B] [--cols N --rows N] [--cwd D] [--env K=V] [--config F] [--profile P] [--timeout-<class> MS]` | Spawn a shell session.                      |
+| `run [--backend B] [--config F] [--profile P] <program> [args...]` | Spawn a session running a program directly. |
 | `sessions`                                                   | List active sessions.                       |
 | `close [--all]`                                              | Close the current session (or all).         |
 | `daemon start` / `daemon status` / `daemon stop --session N \| --all` | Start, inspect, or stop a session's daemon. |
@@ -202,15 +216,54 @@ Each session has its own daemon, so `daemon stop` needs `--session <name>` or
 no prompt appears; `open`'s implicit wait reports `ready` in its payload either
 way.
 
+### Terminal backends
+
+Choose an emulator per session with `--backend alacritty|ghostty`. Alacritty
+remains the default; `ghostty` uses
+[Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs).
+
+```sh
+tui-test open --backend ghostty
+tui-test run --backend ghostty vim file.txt
+```
+
+Both backends run the same conformance suite and feed the same renderer,
+assertions, and snapshots. Shell semantic-prompt tracking stays on the raw PTY
+byte stream, so command, exit-code, and cwd behavior is backend-independent.
+Ghostty also preserves SGR blink; Alacritty parses blink but cannot report it.
+
+The CLI and published Python/Node native packages include both backends.
+Windows ARM64 artifacts are not currently published because Ghostty's
+upstream Zig build does not support that target.
+
+Rust users opt in explicitly:
+
+```sh
+cargo add tui-test-rs --features ghostty
+```
+
+```rust
+use tui_test::{Backend, OpenOptions};
+
+let options = OpenOptions {
+    backend: Backend::Ghostty,
+    ..OpenOptions::default()
+};
+```
+
+Building the `ghostty` feature from source requires Zig 0.16 on `PATH`;
+the dependency builds a pinned Ghostty revision. The default Rust feature set
+continues to build only the Alacritty backend and does not require Zig.
+
 ### Inspection
 
 | Command                                             | Description                                                                                 |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `state`                                             | cwd, size, cursor, window title, last command + exit code, effective timeouts, text snapshot. |
+| `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, effective timeouts, text snapshot. |
 | `text [--full]`                                     | Plain text of the viewport (or scrollback).                                                 |
-| `screenshot [-o file.svg] [--full]`                 | Terminal text to stdout, or a crisp full-color SVG image (svg-term-style window) to a file. |
+| `screenshot [-o file.svg] [--full] [--zoom N]`      | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.   |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags).                                                  |
-| `get command\|output\|exit-code\|cwd\|cursor\|size\|title` | Structured getters.                                                                         |
+| `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | Structured getters.                                                                   |
 
 `state` prints `key: value` lines then the screen; `text` and `screenshot`
 print the screen bare.
@@ -249,6 +302,7 @@ the top-level `press` command remains a compatibility alias for `key press`.
 | `wait command`                                      | Until the current command finishes. |
 | `wait exit`                                         | Until the session exits.            |
 | `wait ready`                                        | Until the shell reports a prompt.   |
+| `wait bell`                                         | Until the next terminal bell event. |
 
 ### Expect (exit 0 = pass, 1 = fail)
 
@@ -258,13 +312,20 @@ the top-level `press` command remains a compatibility alias for `key press`.
 | `expect title "T" [--regex --not --timeout MS]`                                 | Window title set with OSC 0/2.             |
 | `expect exit-code N [--timeout MS]`                                             | Last command's exit code.                  |
 | `expect output "T" [--regex]`                                                   | Last command's captured output.            |
+| `expect bell N [--timeout MS]`                                                  | Cumulative bell count reaches at least N.  |
 | `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare against `__snapshots__/NAME.snap`. `--include-title` adds the window title to the frame. |
 
 Colors accept ANSI-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 
 ### Screenshots
 
-Screenshots render a snapshot of the session in the current terminal by default, but can render an SVG using the `-o` output flag. Nerd Font icons are embedded as vector paths, so SVGs remain self-contained without changing the font stack for regular text.
+Screenshots render a snapshot of the session in the current terminal by
+default, but can render an SVG using the `-o` output flag. `--zoom 0.5`
+halves the image dimensions while preserving the same rows and columns. Nerd
+Font icons are embedded as vector paths, so SVGs remain self-contained without
+changing the font stack for regular text.
+Rendered screenshots and recordings append `COLSxROWS` to the program title;
+when the terminal has no title they use `tui-test capture - COLSxROWS`.
 
 <p align="center">
   <img alt="full-color SVG screenshot of a TUI rendered by tui-test" src="static/screen.svg" width="400">
@@ -272,18 +333,81 @@ Screenshots render a snapshot of the session in the current terminal by default,
 
 ### Recording
 
-Every session records automatically from the moment it opens, in the standard
-[asciinema v2](https://docs.asciinema.org/manual/asciicast/v2/) cast format.
+Record a selected part of a session directly to animated APNG (primary), GIF
+(fallback), MP4 video, or standard
+[asciinema v2](https://docs.asciinema.org/manual/asciicast/v2/) cast:
 
-| Command                   | Description                                     |
-| ------------------------- | ----------------------------------------------- |
-| `get-recording [session]` | Print the session's recording (cast) to stdout. |
+| Command | Description |
+| --- | --- |
+| `record start OUT [--format apng\|gif\|mp4\|cast] [--fps N] [--speed N] [--idle-time-limit SEC] [--zoom N]` | Start recording. Format is inferred from `.png`/`.apng`, `.gif`, `.mp4`, or `.cast`. |
+| `record stop` | Stop recording and finish the output file. |
+| `get-recording [session]` | Print the separate, always-on session cast to stdout. |
 
 ```sh
-tui-test get-recording > demo.cast   # capture the current session's recording
-asciinema play demo.cast              # replay it
-agg demo.cast demo.gif                # render a GIF
+tui-test open
+tui-test record start demo.png --zoom 0.5
+tui-test submit "echo hello"
+tui-test wait command
+tui-test record stop
 ```
+
+APNG keeps full 24/32-bit color. APNG, GIF, and MP4 render at 2x pixel density
+for sharper text; `--zoom` multiplies those dimensions, so `--zoom 0.5`
+produces a 1x-size export with the same terminal cells. GIF additionally uses
+palette quantization for viewers that cannot display APNG. MP4 export streams
+rendered frames to `ffmpeg` using H.264, and starting an MP4 recording fails
+immediately unless `ffmpeg` is available on `PATH`. Defaults are 30 fps, 1x
+speed, 1x zoom, a 5-second idle-gap limit, and a 3-second final hold. Zoom does
+not apply to cast output. If a process exits before `record stop`, APNG/GIF/MP4
+capture remains beside the target as `OUT.tui-test.cast`.
+
+Raster export uses the selected JetBrains Mono bundle tier, when enabled, plus
+installed system fonts for Unicode fallbacks. The CLI and language bindings
+enable the styled tier; `recording-raster` alone stays system-font-only. Set
+`TUI_TEST_RECORDING_FONT_FAMILIES=Family One,Family Two` to prioritize specific
+installed families. Export fails with the missing code points instead of
+silently substituting unsupported glyphs.
+
+<p align="center">
+  <img alt="animated APNG terminal recording produced by tui-test" src="static/recording.png" width="400">
+</p>
+
+The same 48x10-cell recording rendered at native 100%, 50%, and 25% zoom:
+
+<p align="center">
+  <strong>100%</strong><br>
+  <img alt="terminal recording rendered at 100 percent zoom" src="static/recording-zoom-100.png">
+</p>
+
+<p align="center">
+  <strong>50%</strong><br>
+  <img alt="terminal recording rendered at 50 percent zoom" src="static/recording-zoom-50.png">
+</p>
+
+<p align="center">
+  <strong>25%</strong><br>
+  <img alt="terminal recording rendered at 25 percent zoom" src="static/recording-zoom-25.png">
+</p>
+
+Resize events keep the encoded canvas stable while existing terminal content
+reflows as the window grows and shrinks in place:
+
+<p align="center">
+  <img alt="animated GIF showing a centered terminal window resizing" src="static/resize-demo.gif" width="600">
+</p>
+
+Regenerate the checked-in SVG, APNG, GIF, Nerd Font, and resize examples with:
+
+```sh
+bash scripts/regenerate-static-media.sh
+```
+
+The manually captured `static/tui-test-demo.mp4` is intentionally left unchanged.
+
+Every session also records automatically from open in `.cast` format. Export it
+with `tui-test get-recording > demo.cast` for the wider asciicast ecosystem.
+This interoperability is implemented directly from the public asciicast v2
+format and does not add or depend on GPL tooling.
 
 ### Live monitor
 
@@ -394,12 +518,12 @@ promises.
 |                                      | tui-test                                        | [tui-use](https://github.com/onesuper/tui-use) | [terminal-use](https://github.com/flipbit03/terminal-use) |
 | ------------------------------------ | ------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------------- |
 | Language                             | Rust                                             | TypeScript/Node                                | Rust                                                      |
-| Emulator                             | alacritty                                        | xterm (headless)                               | alacritty                                                 |
+| Emulator                             | alacritty or Ghostty, per session                | xterm (headless)                               | alacritty                                                 |
 | Shell command tracking               | ✅ command boundaries, exit codes, cwd           | ❌                                             | ❌                                                        |
 | Testing / snapshots                  | ✅ `expect` text / output / exit-code / snapshot | ❌                                             | ❌                                                        |
 | Color & per-cell attributes          | ✅ fg/bg, ANSI-256/hex/rgb, `cells`              | ❌ plain text (+ highlights)                   | via PNG                                                   |
 | Image screenshots                    | ✅ SVG                                           | ❌                                             | ✅ PNG                                                    |
-| Built-in recording                   | ✅ always-on asciinema cast                | ❌                                             | ❌                                                        |
+| Built-in recording                   | ✅ APNG/GIF/MP4 export + always-on asciinema cast | ❌                                             | ❌                                                        |
 | Live monitor view                    | ✅                                               | ❌                                             | ✅                                                        |
 | Stable exit-code taxonomy for agents | ✅                                               | ❌                                             | ❌                                                        |
 | Python & JavaScript bindings         | ✅                                               | ❌                                             | ❌                                                        |

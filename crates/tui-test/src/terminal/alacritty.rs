@@ -19,6 +19,7 @@ use alacritty_terminal::vte::ansi::Rgb as AlacRgb;
 
 use compact_str::{CompactString, ToCompactString};
 
+use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator, KeyboardMode};
@@ -145,6 +146,7 @@ enum Reply {
 struct CaptureProxy {
     pending: Arc<Mutex<Vec<Reply>>>,
     title: Arc<Mutex<Option<String>>>,
+    bells: BellTracker,
     color_query_pending: Arc<AtomicBool>,
 }
 
@@ -161,6 +163,7 @@ impl EventListener for CaptureProxy {
             // the program is asking for no title rather than for a blank one.
             Event::Title(title) => self.set_title((!title.is_empty()).then_some(title)),
             Event::ResetTitle => self.set_title(None),
+            Event::Bell => self.bells.ring(),
             _ => {}
         }
     }
@@ -199,6 +202,15 @@ pub struct AlacrittyEmu {
 
 impl AlacrittyEmu {
     pub fn new(cols: u16, rows: u16, profile: &Profile) -> Self {
+        Self::with_bell_tracker(cols, rows, profile, BellTracker::default())
+    }
+
+    pub(crate) fn with_bell_tracker(
+        cols: u16,
+        rows: u16,
+        profile: &Profile,
+        bells: BellTracker,
+    ) -> Self {
         let size = TermSize::new(cols as usize, rows as usize);
         let alac_config = AlacConfig {
             scrolling_history: profile.scrollback,
@@ -211,6 +223,7 @@ impl AlacrittyEmu {
         let proxy = CaptureProxy {
             pending: pending.clone(),
             title: title.clone(),
+            bells,
             color_query_pending: color_query_pending.clone(),
         };
         AlacrittyEmu {
@@ -442,6 +455,29 @@ mod tests {
     use super::*;
 
     crate::emulator_conformance_tests!(|c, r, p| Box::new(AlacrittyEmu::new(c, r, p)));
+
+    #[test]
+    fn multiple_bells_in_one_chunk_are_counted_individually() {
+        let bells = BellTracker::default();
+        let mut emulator =
+            AlacrittyEmu::with_bell_tracker(80, 24, &Profile::default(), bells.clone());
+
+        emulator.process(b"\x07\x07");
+
+        assert_eq!(bells.count(), 2);
+        assert_eq!(bells.sequence(), 2);
+    }
+
+    #[test]
+    fn an_osc_bell_terminator_does_not_ring_the_terminal_bell() {
+        let bells = BellTracker::default();
+        let mut emulator =
+            AlacrittyEmu::with_bell_tracker(80, 24, &Profile::default(), bells.clone());
+
+        emulator.process(b"\x1b]0;window title\x07");
+
+        assert_eq!(bells.count(), 0);
+    }
 
     /// Every slot a program can address resolves, so a query always has an
     /// answer and a reset always has something to restore. The profile names

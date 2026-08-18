@@ -29,6 +29,7 @@ impl Timeouts {
 
 #[derive(Debug, Clone)]
 pub struct OpenOptions {
+    pub backend: crate::terminal::backend::Backend,
     pub shell: Option<Shell>,
     /// Terminal settings, already resolved from the config file by the
     /// client. The daemon never reads that file: it is long-lived and shared,
@@ -46,6 +47,7 @@ pub struct OpenOptions {
 impl Default for OpenOptions {
     fn default() -> Self {
         Self {
+            backend: crate::terminal::backend::Backend::default(),
             shell: None,
             profile: crate::profile::Profile::default(),
             cols: crate::config::DEFAULT_COLS,
@@ -60,6 +62,7 @@ impl Default for OpenOptions {
 
 #[derive(Debug, Clone)]
 pub struct RunOptions {
+    pub backend: crate::terminal::backend::Backend,
     pub program: String,
     pub args: Vec<String>,
     /// Terminal settings, already resolved from the config file by the
@@ -110,6 +113,8 @@ pub enum Operation {
     GetCursor,
     GetSize,
     GetTitle,
+    GetBellCount,
+    GetBellEvents,
     Write {
         data: String,
     },
@@ -155,6 +160,9 @@ pub enum Operation {
     WaitReady {
         timeout_ms: Option<u64>,
     },
+    WaitBell {
+        timeout_ms: Option<u64>,
+    },
     ExpectText {
         text: String,
         regex: bool,
@@ -179,6 +187,10 @@ pub enum Operation {
         text: String,
         regex: bool,
     },
+    ExpectBellCount {
+        count: u64,
+        timeout_ms: Option<u64>,
+    },
     Snapshot {
         name: String,
         update: bool,
@@ -189,7 +201,17 @@ pub enum Operation {
     Screenshot {
         full: bool,
         path: Option<String>,
+        zoom: Option<f64>,
     },
+    StartRecording {
+        path: String,
+        format: Option<RecordingFormat>,
+        fps: Option<u8>,
+        speed: Option<f64>,
+        idle_time_limit: Option<f64>,
+        zoom: Option<f64>,
+    },
+    StopRecording,
 }
 
 #[derive(Debug, Clone)]
@@ -207,8 +229,11 @@ pub enum OperationResult {
     Title(Option<String>),
     Cursor(Cursor),
     Size(Size),
+    BellCount(u64),
+    BellEvents(Vec<BellEvent>),
     Snapshot(SnapshotResult),
     Screenshot(ScreenshotResult),
+    Recording(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,6 +327,12 @@ pub struct Size {
     pub rows: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct BellEvent {
+    pub sequence: u64,
+    pub elapsed_ms: u64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct EffectiveTimeouts {
     pub text: u64,
@@ -323,6 +354,7 @@ pub struct State {
     pub last_exit: Option<i32>,
     pub exited: Option<i32>,
     pub ready: bool,
+    pub bell_count: u64,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }
@@ -390,6 +422,44 @@ pub enum ScreenshotResult {
     Text(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordingFormat {
+    Apng,
+    Gif,
+    Mp4,
+    Cast,
+}
+
+impl RecordingFormat {
+    pub fn infer(path: &str) -> Option<Self> {
+        let extension = std::path::Path::new(path)
+            .extension()?
+            .to_str()?
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "png" | "apng" => Some(Self::Apng),
+            "gif" => Some(Self::Gif),
+            "mp4" => Some(Self::Mp4),
+            "cast" => Some(Self::Cast),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) fn resolve_zoom(zoom: Option<f64>) -> Result<f64, TuiTestError> {
+    let zoom = zoom.unwrap_or(1.0);
+    if !zoom.is_finite() || zoom <= 0.0 {
+        return Err(TuiTestError::usage(
+            "zoom must be finite and greater than zero",
+        ));
+    }
+    if zoom > f64::from(f32::MAX) / 2.0 {
+        return Err(TuiTestError::usage("zoom is too large"));
+    }
+    Ok(zoom)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeStatus {
     pub session: String,
@@ -441,4 +511,43 @@ pub enum MouseAction {
         direction: String,
         amount: u16,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recording_format_is_inferred_from_supported_extensions() {
+        assert_eq!(
+            RecordingFormat::infer("demo.png"),
+            Some(RecordingFormat::Apng)
+        );
+        assert_eq!(
+            RecordingFormat::infer("demo.APNG"),
+            Some(RecordingFormat::Apng)
+        );
+        assert_eq!(
+            RecordingFormat::infer("demo.gif"),
+            Some(RecordingFormat::Gif)
+        );
+        assert_eq!(
+            RecordingFormat::infer("demo.MP4"),
+            Some(RecordingFormat::Mp4)
+        );
+        assert_eq!(
+            RecordingFormat::infer("demo.cast"),
+            Some(RecordingFormat::Cast)
+        );
+        assert_eq!(RecordingFormat::infer("demo.webm"), None);
+    }
+
+    #[test]
+    fn zoom_defaults_to_one_and_rejects_invalid_values() {
+        assert_eq!(resolve_zoom(None).unwrap(), 1.0);
+        assert_eq!(resolve_zoom(Some(0.5)).unwrap(), 0.5);
+        for zoom in [0.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert!(resolve_zoom(Some(zoom)).is_err());
+        }
+    }
 }

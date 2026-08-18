@@ -27,7 +27,7 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Cell, Profile, State, Timeouts
+from .types import Backend, BellEvent, Cell, Profile, RecordingFormat, State, Timeouts
 
 _TERMINAL_MARKER = "Terminal content:\n"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
@@ -147,12 +147,14 @@ class TuiTest:
         self,
         session: Optional[str] = None,
         *,
+        backend: Optional[Backend] = None,
         timeouts: Optional[Timeouts] = None,
         profile: Optional[Profile] = None,
         artifacts: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._session = cfg.resolve_session(session)
         self._native = native.NativeSession(self._session)
+        self._backend = cfg.normalize_backend(backend)
         self._timeouts = cfg.normalize_timeouts(timeouts)
         self._profile = cfg.normalize_profile(profile)
         self._artifacts = artifacts
@@ -244,6 +246,7 @@ class TuiTest:
         self,
         *,
         shell: Optional[str] = None,
+        backend: Optional[Backend] = None,
         cols: int = cfg.DEFAULT_COLS,
         rows: int = cfg.DEFAULT_ROWS,
         cwd: Optional[str] = None,
@@ -261,6 +264,9 @@ class TuiTest:
         return await self._spawn(
             lambda: self._native.open(
                 shell,
+                cfg.normalize_backend(
+                    backend if backend is not None else self._backend
+                ),
                 cols,
                 rows,
                 cwd,
@@ -276,6 +282,7 @@ class TuiTest:
         self,
         program: str,
         *args: str,
+        backend: Optional[Backend] = None,
         cols: int = cfg.DEFAULT_COLS,
         rows: int = cfg.DEFAULT_ROWS,
         cwd: Optional[str] = None,
@@ -294,6 +301,9 @@ class TuiTest:
             lambda: self._native.run(
                 program,
                 list(args),
+                cfg.normalize_backend(
+                    backend if backend is not None else self._backend
+                ),
                 cols,
                 rows,
                 cwd,
@@ -372,10 +382,48 @@ class TuiTest:
     async def get_size(self) -> Dict[str, int]:
         return await self._await(self._native.get_size())
 
+    async def get_bell_count(self) -> int:
+        return await self._await(self._native.get_bell_count())
+
+    async def get_bell_events(self) -> List[BellEvent]:
+        events = await self._await(self._native.get_bell_events())
+        return [
+            BellEvent(
+                sequence=event.get("sequence", 0),
+                elapsed_ms=event.get("elapsed_ms", 0),
+            )
+            for event in events
+        ]
+
     async def screenshot(
-        self, path: Optional[str] = None, *, full: bool = False
+        self,
+        path: Optional[str] = None,
+        *,
+        full: bool = False,
+        zoom: Optional[float] = None,
     ) -> str:
-        return await self._await(self._native.screenshot(path, full))
+        if zoom is not None and path is None:
+            raise ValueError("screenshot zoom requires a path")
+        return await self._await(self._native.screenshot(path, full, zoom))
+
+    async def start_recording(
+        self,
+        path: str,
+        *,
+        format: Optional[RecordingFormat] = None,
+        fps: Optional[int] = None,
+        speed: Optional[float] = None,
+        idle_time_limit: Optional[float] = None,
+        zoom: Optional[float] = None,
+    ) -> None:
+        await self._await(
+            self._native.start_recording(
+                path, format, fps, speed, idle_time_limit, zoom
+            )
+        )
+
+    async def stop_recording(self) -> str:
+        return await self._await(self._native.stop_recording())
 
     async def wait_text(
         self,
@@ -432,6 +480,12 @@ class TuiTest:
             self._native.wait_ready(self._timeout("ready", timeout)),
         )
 
+    async def wait_bell(self, *, timeout: Optional[int] = None) -> None:
+        await self._guarded(
+            "wait_bell",
+            self._native.wait_bell(self._timeout("text", timeout)),
+        )
+
     async def expect_title(
         self,
         text: str,
@@ -486,6 +540,16 @@ class TuiTest:
     async def expect_output(self, text: str, *, regex: bool = False) -> None:
         await self._guarded(
             "expect_output", self._native.expect_output(text, regex)
+        )
+
+    async def expect_bell_count(
+        self, count: int, *, timeout: Optional[int] = None
+    ) -> None:
+        await self._guarded(
+            "expect_bell_count",
+            self._native.expect_bell_count(
+                count, self._timeout("text", timeout)
+            ),
         )
 
     async def expect_snapshot(

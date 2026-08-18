@@ -5,6 +5,7 @@ import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
   assertTimeoutClasses,
+  backendPayload,
   envPairs,
   profilePayload,
   resolveSession,
@@ -16,6 +17,7 @@ import { uniqueSession } from "./ephemeral.js";
 import { ExpectationError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
 import type {
+  BellEvent,
   Cell,
   ClientOptions,
   Cursor,
@@ -51,6 +53,21 @@ export interface ExpectTextOptions {
 
 export interface MouseButtonOptions {
   button?: number;
+}
+
+export type RecordingFormat = "apng" | "gif" | "mp4" | "cast";
+
+export interface RecordingOptions {
+  format?: RecordingFormat;
+  fps?: number;
+  speed?: number;
+  idleTimeLimit?: number;
+  zoom?: number;
+}
+
+export interface ScreenshotOptions {
+  full?: boolean;
+  zoom?: number;
 }
 
 const TERMINAL_MARKER = "Terminal content:\n";
@@ -167,6 +184,7 @@ export class TuiTest {
     if (opts.timeouts) {
       assertTimeoutClasses(opts.timeouts);
     }
+    backendPayload(opts.backend);
     profilePayload(opts.profile);
     this.#options = opts;
     this.#runtime = new NativeRuntime(this.session);
@@ -242,6 +260,7 @@ export class TuiTest {
     }
     const profile = profilePayload(opts.profile ?? this.#options.profile);
     const options = {
+      backend: backendPayload(opts.backend ?? this.#options.backend),
       shell: opts.shell,
       cols: opts.cols ?? DEFAULT_COLS,
       rows: opts.rows ?? DEFAULT_ROWS,
@@ -261,6 +280,7 @@ export class TuiTest {
     }
     const profile = profilePayload(opts.profile ?? this.#options.profile);
     const options = {
+      backend: backendPayload(opts.backend ?? this.#options.backend),
       program,
       args,
       cols: opts.cols ?? DEFAULT_COLS,
@@ -353,11 +373,38 @@ export class TuiTest {
     return this.#runtime.getSize();
   }
 
-  async screenshot(path: string | null = null, opts: { full?: boolean } = {}): Promise<string> {
+  async getBellCount(): Promise<number> {
+    return this.#runtime.getBellCount();
+  }
+
+  async getBellEvents(): Promise<BellEvent[]> {
+    return this.#runtime.getBellEvents();
+  }
+
+  async screenshot(path: string | null = null, opts: ScreenshotOptions = {}): Promise<string> {
+    if (opts.zoom !== undefined && path === null) {
+      throw new TypeError("screenshot zoom requires a path");
+    }
     return this.#runtime.screenshot({
       full: opts.full ?? false,
       path: optional(path),
+      zoom: opts.zoom,
     });
+  }
+
+  async startRecording(path: string, opts: RecordingOptions = {}): Promise<void> {
+    await this.#runtime.startRecording({
+      path,
+      format: opts.format,
+      fps: opts.fps,
+      speed: opts.speed,
+      idleTimeLimit: opts.idleTimeLimit,
+      zoom: opts.zoom,
+    });
+  }
+
+  async stopRecording(): Promise<string> {
+    return this.#runtime.stopRecording();
   }
 
   async waitText(text: string, opts: WaitTextOptions = {}): Promise<void> {
@@ -405,6 +452,12 @@ export class TuiTest {
     );
   }
 
+  async waitBell(opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("waitBell", () =>
+      this.#runtime.waitBell(this.#timeout("text", opts.timeout)),
+    );
+  }
+
   async expectTitle(text: string, opts: TitleOptions = {}): Promise<void> {
     await this.#guard("expectTitle", () =>
       this.#runtime.expectTitle(text, {
@@ -438,6 +491,12 @@ export class TuiTest {
   async expectOutput(text: string, opts: { regex?: boolean } = {}): Promise<void> {
     await this.#guard("expectOutput", () =>
       this.#runtime.expectOutput(text, opts.regex ?? false),
+    );
+  }
+
+  async expectBellCount(count: number, opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("expectBellCount", () =>
+      this.#runtime.expectBellCount(count, this.#timeout("text", opts.timeout)),
     );
   }
 

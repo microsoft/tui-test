@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use tui_test::{
-    Engine, KeyAction, OpenOptions, Operation, OperationResult, RunOptions, ScreenshotResult,
-    TuiTestError,
+    Backend, Engine, KeyAction, OpenOptions, Operation, OperationResult, RecordingFormat,
+    RunOptions, ScreenshotResult, TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
@@ -15,6 +15,8 @@ pub enum Request {
     Open {
         shell: Option<tui_test::shell::Shell>,
         program: Option<Vec<String>>,
+        #[serde(default)]
+        backend: Backend,
         /// Terminal settings, already resolved from the config file by the
         /// client. The daemon never reads that file: it is long-lived and
         /// shared, so it has no single working directory to resolve a
@@ -100,6 +102,10 @@ pub enum Request {
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
+    WaitBell {
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
     ExpectText {
         text: String,
         regex: bool,
@@ -127,6 +133,11 @@ pub enum Request {
         text: String,
         regex: bool,
     },
+    ExpectBellCount {
+        count: u64,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
     Snapshot {
         name: String,
         update: bool,
@@ -139,7 +150,20 @@ pub enum Request {
     Screenshot {
         full: bool,
         path: Option<String>,
+        #[serde(default)]
+        zoom: Option<f64>,
     },
+    StartRecording {
+        path: String,
+        format: Option<RecordingFormat>,
+        fps: Option<u8>,
+        speed: Option<f64>,
+        idle_time_limit: Option<f64>,
+        #[serde(default)]
+        zoom: Option<f64>,
+    },
+    StopRecording,
+    FlushRecording,
     Monitor {
         cols: u16,
         rows: u16,
@@ -160,6 +184,7 @@ impl Request {
             Request::Open {
                 shell,
                 program,
+                backend,
                 profile,
                 cols,
                 rows,
@@ -174,6 +199,7 @@ impl Request {
                         .next()
                         .ok_or_else(|| TuiTestError::usage("empty program"))?;
                     Ok(Operation::Run(RunOptions {
+                        backend,
                         profile,
                         program: executable,
                         args: parts.collect(),
@@ -186,6 +212,7 @@ impl Request {
                     }))
                 } else {
                     Ok(Operation::Open(OpenOptions {
+                        backend,
                         profile,
                         shell,
                         cols,
@@ -209,6 +236,8 @@ impl Request {
                 GetField::Cursor => Operation::GetCursor,
                 GetField::Size => Operation::GetSize,
                 GetField::Title => Operation::GetTitle,
+                GetField::BellCount => Operation::GetBellCount,
+                GetField::BellEvents => Operation::GetBellEvents,
             }),
             Request::Write { data } => Ok(Operation::Write { data }),
             Request::Submit { data } => Ok(Operation::Submit { data }),
@@ -248,6 +277,7 @@ impl Request {
             Request::WaitCommand { timeout_ms } => Ok(Operation::WaitCommand { timeout_ms }),
             Request::WaitExit { timeout_ms } => Ok(Operation::WaitExit { timeout_ms }),
             Request::WaitReady { timeout_ms } => Ok(Operation::WaitReady { timeout_ms }),
+            Request::WaitBell { timeout_ms } => Ok(Operation::WaitBell { timeout_ms }),
             Request::ExpectText {
                 text,
                 regex,
@@ -282,6 +312,9 @@ impl Request {
                 Ok(Operation::ExpectExitCode { code, timeout_ms })
             }
             Request::ExpectOutput { text, regex } => Ok(Operation::ExpectOutput { text, regex }),
+            Request::ExpectBellCount { count, timeout_ms } => {
+                Ok(Operation::ExpectBellCount { count, timeout_ms })
+            }
             Request::Snapshot {
                 name,
                 update,
@@ -295,12 +328,32 @@ impl Request {
                 include_title,
                 cwd,
             }),
-            Request::Screenshot { full, path } => Ok(Operation::Screenshot { full, path }),
-            Request::Ping | Request::Status | Request::Monitor { .. } | Request::Shutdown => {
-                Err(TuiTestError::usage(
-                    "daemon control request cannot execute as a terminal operation",
-                ))
+            Request::Screenshot { full, path, zoom } => {
+                Ok(Operation::Screenshot { full, path, zoom })
             }
+            Request::StartRecording {
+                path,
+                format,
+                fps,
+                speed,
+                idle_time_limit,
+                zoom,
+            } => Ok(Operation::StartRecording {
+                path,
+                format,
+                fps,
+                speed,
+                idle_time_limit,
+                zoom,
+            }),
+            Request::StopRecording => Ok(Operation::StopRecording),
+            Request::Ping
+            | Request::Status
+            | Request::FlushRecording
+            | Request::Monitor { .. }
+            | Request::Shutdown => Err(TuiTestError::usage(
+                "daemon control request cannot execute as a terminal operation",
+            )),
         }
     }
 }
@@ -315,6 +368,8 @@ pub enum GetField {
     Cursor,
     Size,
     Title,
+    BellCount,
+    BellEvents,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -387,9 +442,12 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
         OperationResult::Title(value) => Ok(json!({ "value": value })),
         OperationResult::Cursor(value) => Ok(json!({ "value": value })),
         OperationResult::Size(value) => Ok(json!({ "value": value })),
+        OperationResult::BellCount(value) => Ok(json!({ "value": value })),
+        OperationResult::BellEvents(value) => Ok(json!({ "value": value })),
         OperationResult::Snapshot(status) => Ok(json!({ "status": status })),
         OperationResult::Screenshot(ScreenshotResult::Path(path)) => Ok(json!({ "path": path })),
         OperationResult::Screenshot(ScreenshotResult::Text(text)) => Ok(json!({ "text": text })),
+        OperationResult::Recording(path) => Ok(json!({ "path": path })),
     }
     .map_err(|error| TuiTestError::internal(format!("failed to encode cli response: {error}")))?;
     Ok(Some(value))
@@ -403,6 +461,7 @@ mod tests {
         Request::Open {
             shell: None,
             program: None,
+            backend: Backend::default(),
             profile: Default::default(),
             cols: 80,
             rows: 30,
@@ -459,14 +518,26 @@ mod tests {
         match request {
             Request::Open {
                 wait_ready,
+                backend,
                 cols,
                 timeouts,
                 ..
             } => {
                 assert_eq!(wait_ready, None);
+                assert_eq!(backend, Backend::Alacritty);
                 assert_eq!(cols, 80);
                 assert_eq!(timeouts, Timeouts::default());
             }
+            other => panic!("expected Open, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn open_round_trips_a_requested_backend() {
+        let raw = r#"{"kind":"open","shell":null,"program":null,"backend":"ghostty",
+                      "cols":80,"rows":30,"cwd":null,"env":[]}"#;
+        match serde_json::from_str::<Request>(raw).expect("deserialize open") {
+            Request::Open { backend, .. } => assert_eq!(backend, Backend::Ghostty),
             other => panic!("expected Open, got {other:?}"),
         }
     }
@@ -487,16 +558,30 @@ mod tests {
             r#"{"kind":"wait_command"}"#,
             r#"{"kind":"wait_exit"}"#,
             r#"{"kind":"wait_ready"}"#,
+            r#"{"kind":"wait_bell"}"#,
         ] {
             let request: Request = serde_json::from_str(raw).expect("deserialize wait");
             let timeout = match request {
                 Request::WaitIdle { timeout_ms }
                 | Request::WaitCommand { timeout_ms }
                 | Request::WaitExit { timeout_ms }
-                | Request::WaitReady { timeout_ms } => timeout_ms,
+                | Request::WaitReady { timeout_ms }
+                | Request::WaitBell { timeout_ms } => timeout_ms,
                 other => panic!("expected a wait, got {other:?}"),
             };
             assert_eq!(timeout, None);
+        }
+    }
+
+    #[test]
+    fn bell_expectation_timeout_is_optional() {
+        let raw = r#"{"kind":"expect_bell_count","count":2}"#;
+        match serde_json::from_str::<Request>(raw).expect("deserialize expect_bell_count") {
+            Request::ExpectBellCount { count, timeout_ms } => {
+                assert_eq!(count, 2);
+                assert_eq!(timeout_ms, None);
+            }
+            other => panic!("expected ExpectBellCount, got {other:?}"),
         }
     }
 
@@ -510,6 +595,24 @@ mod tests {
             }
             other => panic!("expected ExpectExitCode, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn image_zoom_is_optional_for_older_clients() {
+        let screenshot: Request =
+            serde_json::from_str(r#"{"kind":"screenshot","full":false,"path":"screen.svg"}"#)
+                .expect("deserialize legacy screenshot");
+        assert!(matches!(screenshot, Request::Screenshot { zoom: None, .. }));
+
+        let recording: Request = serde_json::from_str(
+            r#"{"kind":"start_recording","path":"demo.png","format":null,
+                "fps":null,"speed":null,"idle_time_limit":null}"#,
+        )
+        .expect("deserialize legacy recording");
+        assert!(matches!(
+            recording,
+            Request::StartRecording { zoom: None, .. }
+        ));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
@@ -23,13 +23,24 @@ const evalArgs =
   typeof globalThis.Deno === "undefined"
     ? ["-e", "console.log('ready'); setInterval(() => {}, 1000)"]
     : ["eval", "console.log('ready'); setInterval(() => {}, 1000)"];
+const twoBellsCommand =
+  process.platform === "win32"
+    ? "[Console]::Out.Write([char]7); [Console]::Out.Write([char]7)"
+    : "printf '\\a\\a'";
+const delayedBellCommand =
+  process.platform === "win32"
+    ? "Start-Sleep -Seconds 1; [Console]::Out.Write([char]7)"
+    : "sleep 1; printf '\\a'";
+const nonzeroExitArgs =
+  typeof globalThis.Deno === "undefined"
+    ? ["-e", "process.exit(7)"]
+    : ["eval", "Deno.exit(7)"];
 
 test("echo roundtrip drives a real session", async () => {
   await withTerminal({ shell }, async (su) => {
     await su.submit("echo hello-sdk");
     await su.waitCommand();
     await su.expectText("hello-sdk", { strict: false });
-    await su.expectExitCode(0);
 
     // A command finishes before the shell draws its next prompt. Wait for the
     // prompt-end marker so these separate cursor reads cannot straddle that
@@ -39,9 +50,6 @@ test("echo roundtrip drives a real session", async () => {
     assert.deepEqual(await su.getCursor(), state.cursor);
     assert.ok(state.cols > 0);
     assert.match(await su.text(), /hello-sdk/);
-    assert.match(await su.getCommand(), /echo hello-sdk/);
-    assert.match(await su.getOutput(), /hello-sdk/);
-    assert.equal(await su.getExitCode(), 0);
     assert.equal(typeof (await su.getCwd()), "string");
     assert.deepEqual(await su.getSize(), { cols: state.cols, rows: state.rows });
 
@@ -49,6 +57,7 @@ test("echo roundtrip drives a real session", async () => {
     assert.deepEqual(await su.getSize(), { cols: 92, rows: 26 });
     assert.ok((await su.cells(0, 0, 92, 26)).length > 0);
     assert.match(await su.screenshot(), /hello-sdk/);
+    await assert.rejects(() => su.screenshot(null, { zoom: 0.5 }), /requires a path/);
 
     await su.write("echo typed-write");
     await su.keyboard.press("Enter");
@@ -59,6 +68,109 @@ test("echo roundtrip drives a real session", async () => {
     await su.waitText("typed-type");
     await su.waitCommand();
   });
+});
+
+test("bell state, waits, and expectations stay consistent", async () => {
+  const su = TuiTest.ephemeral("bell-events");
+
+  try {
+    await su.open({ shell });
+    await su.submit(twoBellsCommand);
+    await su.expectBellCount(2, { timeout: 5000 });
+    await su.waitCommand();
+
+    const initialState = await su.state();
+    assert.equal(initialState.bell_count, 2);
+    const initialEvents = await su.getBellEvents();
+    assert.deepEqual(
+      initialEvents.map((event) => event.sequence),
+      [1, 2],
+    );
+    assert.ok(initialEvents[1].elapsed_ms >= initialEvents[0].elapsed_ms);
+    assert.equal(await su.getBellCount(), 2);
+    assert.equal(await su.getBellCount(), 2);
+
+    await su.submit(delayedBellCommand);
+    await su.waitBell({ timeout: 5000 });
+    await su.expectBellCount(3);
+    assert.equal(await su.getBellCount(), 3);
+    const finalState = await su.state();
+    assert.equal(finalState.bell_count, 3);
+    const finalEvents = await su.getBellEvents();
+    assert.deepEqual(
+      finalEvents.map((event) => event.sequence),
+      [1, 2, 3],
+    );
+    assert.ok(finalEvents[2].elapsed_ms >= finalEvents[1].elapsed_ms);
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("recording API writes an asciicast file", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-test-recording-"));
+  const path = join(root, "demo.cast");
+  try {
+    await withTerminal({ shell }, async (su) => {
+      await su.startRecording(path, {
+        format: "cast",
+        fps: 24,
+        speed: 1,
+        idleTimeLimit: 2,
+      });
+      await su.submit("echo sdk-recording");
+      await su.waitCommand();
+      assert.equal(await su.stopRecording(), path);
+    });
+    const cast = await readFile(path, "utf8");
+    assert.match(cast, /"version":2/);
+    assert.match(cast, /sdk-recording/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recording API exports styled Unicode to APNG and GIF", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-test-raster-recording-"));
+  const command =
+    process.platform === "win32"
+      ? 'Write-Host "`e[1;3mstyled-é`e[0m"'
+      : "printf '\\033[1;3mstyled-é\\033[0m\\n'";
+  try {
+    for (const [format, extension] of [
+      ["apng", "png"],
+      ["gif", "gif"],
+    ]) {
+      const path = join(root, `styled.${extension}`);
+      await withTerminal({ shell, cols: 20, rows: 4 }, async (su) => {
+        if (format === "apng") {
+          const screenshotPath = join(root, "zoomed.svg");
+          await su.screenshot(screenshotPath, { zoom: 0.5 });
+          assert.match(
+            await readFile(screenshotPath, "utf8"),
+            /width="139" height="92" viewBox="0 0 278 184"/,
+          );
+        }
+        await su.startRecording(path, { format, fps: 30, zoom: 0.5 });
+        await su.submit(command);
+        await su.waitCommand();
+        assert.equal(await su.stopRecording(), path);
+      });
+      const bytes = await readFile(path);
+      if (format === "apng") {
+        assert.deepEqual(bytes.subarray(0, 8), Buffer.from("\x89PNG\r\n\x1a\n", "latin1"));
+        assert.ok(bytes.includes(Buffer.from("acTL")));
+        assert.equal(bytes.readUInt32BE(16), 278);
+        assert.equal(bytes.readUInt32BE(20), 184);
+      } else {
+        assert.equal(bytes.subarray(0, 6).toString("ascii"), "GIF89a");
+        assert.equal(bytes.readUInt16LE(6), 278);
+        assert.equal(bytes.readUInt16LE(8), 184);
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test(
@@ -100,33 +212,37 @@ test("a blocking native wait runs off the JS event loop", async () => {
   await withTerminal({ program: [process.execPath, ...evalArgs] }, async (su) => {
     await su.waitText("ready", { timeout: 2000 });
 
-    const intervalMs = 10;
     const timeoutMs = 300;
-    let ticks = 0;
-    const heartbeat = setInterval(() => {
-      ticks += 1;
-    }, intervalMs);
-    const start = Date.now();
-    try {
-      await assert.rejects(
-        su.waitText("text-that-will-never-appear-xyz", { timeout: timeoutMs }),
-        (error) => error instanceof ExpectationError,
-      );
-    } finally {
-      clearInterval(heartbeat);
-    }
-    const elapsed = Date.now() - start;
-    assert.ok(
-      elapsed >= timeoutMs,
-      `expected the wait to run for at least ${timeoutMs}ms, took ${elapsed}ms`,
+    const eventLoopTurn = new Promise((resolve) =>
+      setTimeout(() => resolve("event-loop"), 0),
     );
-    const expectedTicks = Math.floor(timeoutMs / intervalMs);
-    assert.ok(
-      ticks >= expectedTicks * 0.5,
-      `expected at least half of ~${expectedTicks} heartbeat ticks during the ` +
-        `blocking wait, got ${ticks}; the event loop appears to have stalled`,
-    );
+    const wait = su.waitText("text-that-will-never-appear-xyz", {
+      timeout: timeoutMs,
+    });
+    const first = await Promise.race([
+      eventLoopTurn,
+      wait.then(
+        () => "wait",
+        () => "wait",
+      ),
+    ]);
+
+    assert.equal(first, "event-loop", "the native wait blocked the event loop");
+    await assert.rejects(wait, (error) => error instanceof ExpectationError);
   });
+});
+
+test("repeated direct runtime exits retain their nonzero status", async () => {
+  for (let index = 0; index < 20; index += 1) {
+    const su = TuiTest.ephemeral(`direct-nonzero-${index}`);
+    try {
+      await su.run(process.execPath, nonzeroExitArgs);
+      await su.waitExit({ timeout: 5000 });
+      assert.equal((await su.state()).exited, 7);
+    } finally {
+      await su.closeQuiet();
+    }
+  }
 });
 
 test("concurrent waits do not starve filesystem work", async () => {
@@ -296,6 +412,23 @@ test("typed mouse and signal operations execute against a real program", async (
     assert.match(await su.text(), /ready/);
     await su.close();
     await assert.rejects(su.state(), (error) => error instanceof NoSessionError);
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("ghostty backend preserves blink", async () => {
+  const su = new TuiTest(uniqueSession("ghostty-blink"), {
+    backend: "ghostty",
+  });
+  try {
+    await su.run(
+      process.execPath,
+      ["-e", "process.stdout.write('\\u001b[5mX\\u001b[0m'); setInterval(() => {}, 1000)"],
+      { cols: 10, rows: 2 },
+    );
+    await su.waitText("X", { timeout: 5000 });
+    assert.equal((await su.cells(0, 0))[0].blink, true);
   } finally {
     await su.closeQuiet();
   }

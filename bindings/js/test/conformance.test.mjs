@@ -27,6 +27,7 @@ const MAPPING = {
   state: [["client", "state"]],
   text: [["client", "text"]],
   screenshot: [["client", "screenshot"]],
+  record: [["client", "startRecording"], ["client", "stopRecording"]],
   cells: [["client", "cells"]],
   get: [
     ["client", "getCommand"],
@@ -36,6 +37,8 @@ const MAPPING = {
     ["client", "getCursor"],
     ["client", "getSize"],
     ["client", "getTitle"],
+    ["client", "getBellCount"],
+    ["client", "getBellEvents"],
   ],
   type: [["client", "type"]],
   submit: [["client", "submit"]],
@@ -46,8 +49,8 @@ const MAPPING = {
   write: [["client", "write"]],
   signal: [["client", "signal"]],
   kill: [["client", "kill"]],
-  wait: [["client", "waitTitle"], ["client", "waitText"], ["client", "waitIdle"], ["client", "waitCommand"], ["client", "waitExit"]],
-  expect: [["client", "expectTitle"], ["client", "expectText"], ["client", "expectExitCode"], ["client", "expectOutput"], ["client", "expectSnapshot"]],
+  wait: [["client", "waitTitle"], ["client", "waitText"], ["client", "waitIdle"], ["client", "waitCommand"], ["client", "waitExit"], ["client", "waitBell"]],
+  expect: [["client", "expectTitle"], ["client", "expectText"], ["client", "expectExitCode"], ["client", "expectOutput"], ["client", "expectBellCount"], ["client", "expectSnapshot"]],
   "get-recording": [["module", "getRecording"]],
 };
 

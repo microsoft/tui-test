@@ -16,6 +16,8 @@ export declare class NativeSession {
   getCwd(): Promise<string | null>
   getCursor(): Promise<Cursor>
   getSize(): Promise<Size>
+  getBellCount(): Promise<number>
+  getBellEvents(): Promise<Array<BellEvent>>
   write(data: string): Promise<void>
   type(text: string): Promise<void>
   submit(data?: string | undefined | null): Promise<void>
@@ -39,12 +41,26 @@ export declare class NativeSession {
   waitCommand(timeoutMs?: number | undefined | null): Promise<void>
   waitExit(timeoutMs?: number | undefined | null): Promise<void>
   waitReady(timeoutMs?: number | undefined | null): Promise<void>
+  waitBell(timeoutMs?: number | undefined | null): Promise<void>
   expectText(text: string, options?: ExpectTextOptions | undefined | null): Promise<void>
   expectExitCode(code: number, timeoutMs?: number | undefined | null): Promise<void>
   expectOutput(text: string, regex?: boolean | undefined | null): Promise<void>
+  expectBellCount(count: number, timeoutMs?: number | undefined | null): Promise<void>
   snapshot(name: string, options?: SnapshotOptions | undefined | null): Promise<SnapshotResult>
   screenshot(options?: ScreenshotOptions | undefined | null): Promise<string>
+  startRecording(options: RecordingOptions): Promise<void>
+  stopRecording(): Promise<string>
   panicProbe(): Promise<void>
+}
+
+export declare const enum Backend {
+  Alacritty = 'alacritty',
+  Ghostty = 'ghostty'
+}
+
+export interface BellEvent {
+  sequence: number
+  elapsed_ms: number
 }
 
 export interface Cell {
@@ -104,6 +120,7 @@ export interface MouseClickOptions {
 }
 
 export interface OpenOptions {
+  backend?: Backend
   shell?: Shell
   cols?: number
   rows?: number
@@ -140,7 +157,24 @@ export interface PackedScreen {
 
 export declare function recording(name: string): Promise<string>
 
+export declare const enum RecordingFormat {
+  Apng = 'apng',
+  Gif = 'gif',
+  Mp4 = 'mp4',
+  Cast = 'cast'
+}
+
+export interface RecordingOptions {
+  path: string
+  format?: RecordingFormat
+  fps?: number
+  speed?: number
+  idleTimeLimit?: number
+  zoom?: number
+}
+
 export interface RunOptions {
+  backend?: Backend
   program: string
   args?: Array<string>
   cols?: number
@@ -156,6 +190,7 @@ export interface RunOptions {
 export interface ScreenshotOptions {
   full?: boolean
   path?: string
+  zoom?: number
 }
 
 export declare function sessions(): Promise<Array<string>>
@@ -201,6 +236,7 @@ export interface State {
   last_exit: number | null
   exited: number | null
   ready: boolean
+  bell_count: number
   timeouts: EffectiveTimeouts
   text: string
 }

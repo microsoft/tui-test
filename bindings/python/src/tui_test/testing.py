@@ -19,7 +19,7 @@ from typing import (
 from ._config import IS_MACOS, IS_WINDOWS
 from ._ephemeral import unique_session
 from .client import TuiTest
-from .types import Profile, Timeouts
+from .types import Backend, Profile, Timeouts
 
 __all__ = [
     "TerminalOptions",
@@ -40,6 +40,7 @@ DEFAULT_SHELL = "powershell" if IS_WINDOWS else "zsh" if IS_MACOS else "bash"
 
 @dataclass
 class TerminalOptions:
+    backend: Optional[Backend] = None
     shell: Optional[str] = None
     program: Optional[Sequence[str]] = None
     cols: Optional[int] = None
@@ -142,6 +143,8 @@ async def close_all_tracked() -> None:
 
 def _client_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
     kwargs = {}  # type: Dict[str, Any]
+    if opts.backend is not None:
+        kwargs["backend"] = opts.backend
     if opts.timeouts is not None:
         kwargs["timeouts"] = opts.timeouts
     if opts.profile is not None:

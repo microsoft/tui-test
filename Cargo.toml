@@ -14,7 +14,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0-beta.1"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.90"
 license = "MIT"
 repository = "https://github.com/microsoft/tui-test"
 
@@ -28,7 +28,11 @@ crossterm = "0.28"
 dialoguer = { version = "0.11", default-features = false }
 dirs = "6.0.0"
 flate2 = "1.1.9"
+fontdb = { version = "0.23.0", default-features = false, features = ["fs", "std"] }
+gif = "0.14.0"
 interprocess = "2.4.2"
+ghostty-vt = { package = "libghostty-vt", version = "0.2.1", git = "https://github.com/Uzaaft/libghostty-rs.git", rev = "a28e4ad00d6ba79b98b8cac651ed8976d8500903", default-features = false }
+png = "0.17.16"
 portable-pty = "0.9.0"
 regex = "1.12.4"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -37,6 +41,7 @@ sha2 = "0.10.9"
 toml = "0.9"
 tui-test = { package = "tui-test-rs", path = "crates/tui-test" }
 unicode-width = "0.2.2"
+tiny-skia = { version = "0.11.4", default-features = false, features = ["std"] }
 ttf-parser = { version = "0.25.1", default-features = false, features = ["std"] }
 
 [profile.release]

@@ -60,8 +60,8 @@ without parsing text:
 
 | Command                                                                  | Description                                                            |
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| `open [--shell S] [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P]` | Spawn a shell session (auto-starts the daemon). `--env` is repeatable. |
-| `run [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P] <program> [args...]` | Spawn a session running a program directly (no shell). |
+| `open [--shell S] [--backend B] [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P]` | Spawn a shell session (auto-starts the daemon). `--env` is repeatable. |
+| `run [--backend B] [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P] <program> [args...]` | Spawn a session running a program directly (no shell). |
 | `sessions`                                                               | List active sessions.                                                  |
 | `close [--all]`                                                          | Close the current session (or every session with `--all`).             |
 | `daemon start`                                                           | Start this session's daemon. Most commands start one on demand.        |
@@ -72,11 +72,11 @@ without parsing text:
 
 | Command                                             | Description                                                                                                         |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `state`                                             | cwd, size, cursor, last command + exit code, timeouts, and a text snapshot.                                         |
+| `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, timeouts, and a text snapshot. |
 | `text [--full]`                                     | Rendered viewport text, or full scrollback with `--full`.                                                           |
-| `screenshot [PATH] [-o FILE] [--full]`              | Terminal text to stdout, or a full-color SVG image (crisp at any zoom, svg-term-style window) when a path is given. |
+| `screenshot [PATH] [-o FILE] [--full] [--zoom N]`   | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.                           |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags) for a region.                                                             |
-| `get command\|output\|exit-code\|cwd\|cursor\|size\|title` | One structured field.                                                                                               |
+| `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | One structured field.                                                                                        |
 
 ### Input
 
@@ -114,6 +114,7 @@ the child application. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`,
 | `wait command [--timeout MS]`                       | Until the current foreground command finishes (needs shell integration).                   |
 | `wait exit [--timeout MS]`                          | Until the session's program/shell itself exits.                                            |
 | `wait ready [--timeout MS]`                         | Until the shell reports a ready prompt (needs shell integration). `open` waits by default. |
+| `wait bell [--timeout MS]`                          | Until the next terminal bell event.                                                        |
 
 ### Expect (exit 0 = pass, 1 = fail)
 
@@ -123,6 +124,7 @@ the child application. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`,
 | `expect title "T" [--regex --not --timeout MS]`                                 | The window title set with `OSC 0`/`OSC 2`. An unset title matches nothing.    |
 | `expect exit-code N [--timeout MS]`                                             | The last command's exit code. Waits for the command to finish first.          |
 | `expect output "T" [--regex]`                                                   | The last command's captured output.                                           |
+| `expect bell N [--timeout MS]`                                                  | The cumulative bell count reaches at least N.                                 |
 | `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. `--include-title` records the window title in the frame; off by default because a prompt often sets it to a host and path. |
 
 Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
@@ -131,7 +133,9 @@ Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 
 | Command                             | Description                                                                  |
 | ----------------------------------- | ---------------------------------------------------------------------------- |
-| `get-recording [session]`           | Print a session's asciinema v2 cast to stdout (works even after it stopped). |
+| `record start OUT [options]`        | Start APNG, GIF, MP4, or asciicast recording; `--zoom N` scales image/video output. |
+| `record stop`                       | Finish the active recording.                                                 |
+| `get-recording [session]`           | Print the always-on asciinema v2 cast (works even after the session stopped).|
 | `monitor`                           | Watch the session live, full-color, in another terminal.                     |
 | `usage` / `agent-context` / `skill` | Self-documentation (see top of guide).                                       |
 
@@ -217,8 +221,23 @@ tui-test get-recording > demo.cast    # current session's recording to stdout
 tui-test get-recording work > w.cast  # a specific session by name (even if stopped)
 ```
 
-Play it with `asciinema play demo.cast`, or render a GIF with
-`agg demo.cast demo.gif`.
+Record a selected span directly to APNG, GIF, MP4, or cast:
+
+```sh
+tui-test record start demo.png --zoom 0.5
+tui-test submit "echo hello"
+tui-test wait command
+tui-test record stop
+```
+
+APNG, GIF, and MP4 render at 2x pixel density. `--zoom` multiplies the output
+dimensions without changing the rows or columns; `--zoom 0.5` produces a 1x
+export. Resize events change the terminal window size inside a centered,
+opaque canvas sized for the recording's largest frame. Use `--fps`, `--speed`,
+and `--idle-time-limit` to tune playback. `.cast` output does not use zoom and
+interoperates with the asciicast ecosystem without adding any GPL dependency
+to tui-test. If a process exits before `record stop`, an APNG/GIF/MP4 capture
+remains beside the target as `OUT.tui-test.cast`.
 
 ## Live monitor
 
@@ -332,18 +351,21 @@ Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
 `mouse.click|move|down|up|drag|scroll`,
 `resize`, `signal` / `kill`, `state`, `text`, `cells`, the dedicated
 `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` /
-`get_size` / `get_title` methods,
-`screenshot`, `wait_text` / `wait_idle` / `wait_command` / `wait_exit` /
-`wait_ready`, `expect_text` / `expect_exit_code` / `expect_output` /
-`expect_snapshot`, and `close`. Python module-level helpers are `sessions`,
+`get_size` / `get_title` / `get_bell_count` / `get_bell_events` methods,
+`screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` /
+`wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` /
+`expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`,
+and `close`. Python module-level helpers are `sessions`,
 `close_all`, and `get_recording`; JavaScript exports `sessions`, `closeAll`,
 and `getRecording`. The JavaScript client otherwise uses the same names in
-camelCase (`waitCommand`, `expectText`, `getExitCode`, etc.).
+camelCase (`startRecording`, `stopRecording`, `waitCommand`, `expectText`,
+`getExitCode`, etc.).
 
-The constructors accept a session name plus profile, timeout, and artifact
-options: `TuiTest(session="default", *, timeouts=None, profile=None,
-artifacts=None)` in Python and `new TuiTest(session?, { profile?, timeouts?,
-artifacts? })` in JavaScript. `run` takes the program then its arguments
+The constructors accept a session name plus backend, profile, timeout, and
+artifact options: `TuiTest(session="default", *, backend=None, timeouts=None,
+profile=None, artifacts=None)` in Python and `new TuiTest(session?, {
+backend?, profile?, timeouts?, artifacts? })` in JavaScript. `run` takes the
+program then its arguments
 (`await su.run("vim", "file.txt")` in Python, `await su.run("vim",
 ["file.txt"])` in JavaScript).
 
@@ -351,6 +373,22 @@ Python and JavaScript failures raise typed errors instead of returning exit
 codes, one class per row of the applicable [exit-code table](#exit-codes):
 `ExpectationError` (1), `UsageError` (2), `NoSessionError` (3), and
 `InternalError` (5), all subclasses of `TuiTestError`.
+
+## Terminal backends
+
+`open` and `run` accept `--backend alacritty|ghostty`; Alacritty is the
+default. The Python and JavaScript constructors accept the same canonical
+strings as a client default, and each `open`/`run` can override it.
+
+```sh
+tui-test open --backend ghostty
+tui-test run --backend ghostty -- vim file.txt
+```
+
+Both backends satisfy the same cell-grid contract. Ghostty preserves the blink
+attribute, while Alacritty cannot report it. Command boundaries, exit codes,
+cwd, and captured command output are parsed separately from the raw PTY stream,
+so switching emulators does not change shell integration behavior.
 
 ## Configuration
 

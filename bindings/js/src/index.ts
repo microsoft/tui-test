@@ -3,6 +3,9 @@ export type {
   ExpectTextOptions,
   MouseButtonOptions,
   TitleOptions,
+  RecordingFormat,
+  RecordingOptions,
+  ScreenshotOptions,
   WaitTextOptions,
 } from "./client.js";
 export { uniqueSession } from "./ephemeral.js";
@@ -18,6 +21,8 @@ export type { ErrorKind } from "./errors.js";
 export { VERSION } from "./version.js";
 export type {
   ArtifactOptions,
+  Backend,
+  BellEvent,
   Cell,
   ClientOptions,
   Color,
