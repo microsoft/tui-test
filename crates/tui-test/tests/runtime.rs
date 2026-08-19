@@ -20,6 +20,7 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
         cwd: defaults.cwd,
         env: defaults.env,
         wait_ready: Some(false),
+        restart: defaults.restart,
         timeouts: defaults.timeouts,
     }
 }

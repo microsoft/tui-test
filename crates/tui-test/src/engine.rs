@@ -190,7 +190,7 @@ impl Engine {
     ) -> Result<OpenResult, TuiTestError> {
         let mut current = self.lock_session();
         if let Some(previous) = current.as_ref() {
-            if previous.is_alive() && !restart {
+            if !restart && previous.is_alive()? {
                 return Ok(OpenResult {
                     shell_pid: previous.pid(),
                     session: self.name.clone(),

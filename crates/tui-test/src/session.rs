@@ -408,7 +408,7 @@ impl Session {
             .pid()
     }
 
-    pub fn is_alive(&self) -> bool {
+    pub fn is_alive(&self) -> Result<bool, crate::api::TuiTestError> {
         if self
             .state
             .lock()
@@ -416,16 +416,21 @@ impl Session {
             .exited
             .is_some()
         {
-            return false;
+            return Ok(false);
         }
 
         let exit_code = self
             .pty
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .try_wait();
+            .try_wait()
+            .map_err(|error| {
+                crate::api::TuiTestError::internal(format!(
+                    "failed to query process status: {error}"
+                ))
+            })?;
         let Some(exit_code) = exit_code else {
-            return true;
+            return Ok(true);
         };
 
         let mut state = self
@@ -433,7 +438,7 @@ impl Session {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.exited.get_or_insert(exit_code);
-        false
+        Ok(false)
     }
 
     pub fn is_ready(&self) -> bool {
