@@ -4,3 +4,8 @@ build/
 dist/
 *.egg-info/
 .pytest_cache/
+.venv/
+src/tui_test/_native*.pyd
+src/tui_test/_native*.pdb
+src/tui_test/_native*.so
+src/tui_test/_native*.dylib

@@ -1,19 +1,29 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+
 import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
-  resolveBinary,
-  resolveHome,
+  assertTimeoutClasses,
+  backendPayload,
+  envPairs,
+  profilePayload,
   resolveSession,
+  resolveTimeout,
+  timeoutsPayload,
 } from "./config.js";
+import type { TimeoutClass } from "./config.js";
+import { uniqueSession } from "./ephemeral.js";
 import { ExpectationError } from "./errors.js";
-import { envPairs, unwrap } from "./protocol.js";
-import * as transport from "./transport.js";
-import { checkVersion } from "./version.js";
+import { NativeRuntime } from "./native.js";
 import type {
+  BellEvent,
   Cell,
   ClientOptions,
+  Cursor,
   OpenResult,
   Shell,
+  Size,
   SpawnOptions,
   State,
 } from "./types.js";
@@ -21,6 +31,12 @@ import type {
 export interface WaitTextOptions {
   regex?: boolean;
   full?: boolean;
+  not?: boolean;
+  timeout?: number;
+}
+
+export interface TitleOptions {
+  regex?: boolean;
   not?: boolean;
   timeout?: number;
 }
@@ -39,6 +55,31 @@ export interface MouseButtonOptions {
   button?: number;
 }
 
+export type RecordingFormat = "apng" | "gif" | "mp4" | "cast";
+
+export interface RecordingOptions {
+  format?: RecordingFormat;
+  fps?: number;
+  speed?: number;
+  idleTimeLimit?: number;
+  zoom?: number;
+}
+
+export interface ScreenshotOptions {
+  full?: boolean;
+  zoom?: number;
+}
+
+const TERMINAL_MARKER = "Terminal content:\n";
+
+function extractTerminalContent(message: string): string | undefined {
+  const idx = message.indexOf(TERMINAL_MARKER);
+  if (idx < 0) {
+    return undefined;
+  }
+  return message.slice(idx + TERMINAL_MARKER.length).replace(/\n+$/, "") || undefined;
+}
+
 function withOperation(error: unknown, operation: string): unknown {
   if (!(error instanceof ExpectationError)) {
     return error;
@@ -54,11 +95,39 @@ function withOperation(error: unknown, operation: string): unknown {
   return error;
 }
 
-class Mouse {
-  #client: ShellUse;
+function optional<T>(value: T | null | undefined): T | undefined {
+  return value ?? undefined;
+}
 
-  constructor(client: ShellUse) {
-    this.#client = client;
+class Keyboard {
+  #runtime: NativeRuntime;
+
+  constructor(runtime: NativeRuntime) {
+    this.#runtime = runtime;
+  }
+
+  async press(...keys: string[]): Promise<void> {
+    await this.#runtime.press(keys);
+  }
+
+  async down(...keys: string[]): Promise<void> {
+    await this.#runtime.keyDown(keys);
+  }
+
+  async repeat(...keys: string[]): Promise<void> {
+    await this.#runtime.repeat(keys);
+  }
+
+  async up(...keys: string[]): Promise<void> {
+    await this.#runtime.keyUp(keys);
+  }
+}
+
+class Mouse {
+  #runtime: NativeRuntime;
+
+  constructor(runtime: NativeRuntime) {
+    this.#runtime = runtime;
   }
 
   async click(
@@ -66,35 +135,25 @@ class Mouse {
     y: number | null = null,
     opts: { onText?: string; button?: number; clicks?: number } = {},
   ): Promise<void> {
-    await this.#client.send({
-      kind: "mouse",
-      action: {
-        op: "click",
-        x,
-        y,
-        on_text: opts.onText ?? null,
-        button: opts.button ?? 0,
-        clicks: opts.clicks ?? 1,
-      },
+    await this.#runtime.mouseClick({
+      x: optional(x),
+      y: optional(y),
+      onText: opts.onText,
+      button: opts.button ?? 0,
+      clicks: opts.clicks ?? 1,
     });
   }
 
   async move(x: number, y: number): Promise<void> {
-    await this.#client.send({ kind: "mouse", action: { op: "move", x, y } });
+    await this.#runtime.mouseMove(x, y);
   }
 
   async down(x: number, y: number, opts: MouseButtonOptions = {}): Promise<void> {
-    await this.#client.send({
-      kind: "mouse",
-      action: { op: "down", x, y, button: opts.button ?? 0 },
-    });
+    await this.#runtime.mouseDown(x, y, opts.button ?? 0);
   }
 
   async up(x: number, y: number, opts: MouseButtonOptions = {}): Promise<void> {
-    await this.#client.send({
-      kind: "mouse",
-      action: { op: "up", x, y, button: opts.button ?? 0 },
-    });
+    await this.#runtime.mouseUp(x, y, opts.button ?? 0);
   }
 
   async drag(
@@ -104,239 +163,360 @@ class Mouse {
     y2: number,
     opts: MouseButtonOptions = {},
   ): Promise<void> {
-    await this.#client.send({
-      kind: "mouse",
-      action: { op: "drag", x1, y1, x2, y2, button: opts.button ?? 0 },
-    });
+    await this.#runtime.mouseDrag(x1, y1, x2, y2, opts.button ?? 0);
   }
 
   async scroll(direction: "up" | "down", opts: { amount?: number } = {}): Promise<void> {
-    await this.#client.send({
-      kind: "mouse",
-      action: { op: "scroll", direction, amount: opts.amount ?? 3 },
-    });
+    await this.#runtime.mouseScroll(direction, opts.amount ?? 3);
   }
 }
 
-export class ShellUse {
+export class TuiTest {
   readonly session: string;
+  readonly keyboard: Keyboard;
   readonly mouse: Mouse;
-  #binary: string;
-  #home?: string;
-  #versionChecked = false;
+  #runtime: NativeRuntime;
+  #options: ClientOptions;
+  #artifactCounter = 0;
 
   constructor(session?: string, opts: ClientOptions = {}) {
     this.session = resolveSession(session);
-    this.#binary = resolveBinary(opts.binary);
-    this.#home = resolveHome(opts.home);
-    this.mouse = new Mouse(this);
+    if (opts.timeouts) {
+      assertTimeoutClasses(opts.timeouts);
+    }
+    backendPayload(opts.backend);
+    profilePayload(opts.profile);
+    this.#options = opts;
+    this.#runtime = new NativeRuntime(this.session);
+    this.keyboard = new Keyboard(this.#runtime);
+    this.mouse = new Mouse(this.#runtime);
   }
 
-  async send(payload: unknown): Promise<unknown> {
-    await this.#checkVersion();
-    const resp = await transport.request(this.session, this.#home, this.#binary, payload);
-    return unwrap(resp);
+  static ephemeral(prefix?: string, opts: ClientOptions = {}): TuiTest {
+    return new TuiTest(uniqueSession(prefix), opts);
   }
 
-  async #checkVersion(): Promise<void> {
-    if (this.#versionChecked) {
+  #timeout(cls: TimeoutClass, callTimeout?: number): number | undefined {
+    return resolveTimeout(cls, callTimeout, this.#options);
+  }
+
+  async #guard<T>(operation: string, action: () => Promise<T>): Promise<T> {
+    try {
+      return await action();
+    } catch (error) {
+      const mapped = withOperation(error, operation);
+      await this.#captureArtifact(mapped);
+      throw mapped;
+    }
+  }
+
+  async #captureArtifact(error: unknown): Promise<void> {
+    const artifacts = this.#options.artifacts;
+    if (!artifacts || !(error instanceof ExpectationError)) {
       return;
     }
-    const resp = await transport.request(this.session, this.#home, this.#binary, {
-      kind: "status",
-    });
-    const data = unwrap(resp) as { version?: string } | undefined;
-    checkVersion(data?.version);
-    this.#versionChecked = true;
+    const mode = artifacts.onFailure ?? "svg";
+    if (mode === "none") {
+      return;
+    }
+    try {
+      const terminal = error.terminal ?? {};
+      const text = extractTerminalContent(error.message);
+      if (text !== undefined) {
+        terminal.text = text;
+      }
+      if (mode === "svg") {
+        await mkdir(artifacts.dir, { recursive: true });
+        const file = path.join(
+          artifacts.dir,
+          `${this.session}-${Date.now()}-${this.#artifactCounter++}.svg`,
+        );
+        terminal.screenshot = await this.screenshot(file);
+      }
+      if (terminal.text !== undefined || terminal.screenshot !== undefined) {
+        error.terminal = terminal;
+      }
+    } catch {}
+  }
+
+  async #spawn(action: () => Promise<OpenResult>, retries: number): Promise<OpenResult> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await action();
+      } catch (error) {
+        lastError = error;
+        if (attempt < retries) {
+          await this.closeQuiet();
+        }
+      }
+    }
+    throw lastError;
   }
 
   async open(opts: SpawnOptions & { shell?: Shell } = {}): Promise<OpenResult> {
-    return (await this.send({
-      kind: "open",
-      shell: opts.shell ?? null,
-      program: null,
+    if (opts.timeouts) {
+      assertTimeoutClasses(opts.timeouts);
+    }
+    const profile = profilePayload(opts.profile ?? this.#options.profile);
+    const options = {
+      backend: backendPayload(opts.backend ?? this.#options.backend),
+      shell: opts.shell,
       cols: opts.cols ?? DEFAULT_COLS,
       rows: opts.rows ?? DEFAULT_ROWS,
-      cwd: opts.cwd ?? null,
+      cwd: opts.cwd,
       env: envPairs(opts.env),
-    })) as OpenResult;
+      waitReady: opts.waitReady,
+      restart: opts.restart,
+      profileScrollback: profile?.scrollback,
+      profileColors: profile?.colors,
+      timeouts: timeoutsPayload(opts.timeouts),
+    };
+    return this.#spawn(() => this.#runtime.open(options), opts.retries ?? 0);
   }
 
   async run(program: string, args: string[] = [], opts: SpawnOptions = {}): Promise<OpenResult> {
-    return (await this.send({
-      kind: "open",
-      shell: null,
-      program: [program, ...args],
+    if (opts.timeouts) {
+      assertTimeoutClasses(opts.timeouts);
+    }
+    const profile = profilePayload(opts.profile ?? this.#options.profile);
+    const options = {
+      backend: backendPayload(opts.backend ?? this.#options.backend),
+      program,
+      args,
       cols: opts.cols ?? DEFAULT_COLS,
       rows: opts.rows ?? DEFAULT_ROWS,
-      cwd: opts.cwd ?? null,
+      cwd: opts.cwd,
       env: envPairs(opts.env),
-    })) as OpenResult;
+      waitReady: opts.waitReady,
+      restart: opts.restart,
+      profileScrollback: profile?.scrollback,
+      profileColors: profile?.colors,
+      timeouts: timeoutsPayload(opts.timeouts),
+    };
+    return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0);
   }
 
   async close(): Promise<void> {
-    if (!(await transport.canConnect(this.session, this.#home))) {
-      return;
-    }
-    const resp = await transport.request(
-      this.session,
-      this.#home,
-      this.#binary,
-      { kind: "close" },
-      false,
-    );
-    unwrap(resp);
+    await this.#runtime.close();
+  }
+
+  async closeQuiet(): Promise<void> {
+    try {
+      await this.close();
+    } catch {}
   }
 
   async type(text: string): Promise<void> {
-    await this.send({ kind: "write", data: text });
+    await this.#runtime.type(text);
   }
 
   async write(data: string): Promise<void> {
-    await this.send({ kind: "write", data });
+    await this.#runtime.write(data);
   }
 
   async submit(text: string | null = null): Promise<void> {
-    await this.send({ kind: "submit", data: text });
+    await this.#runtime.submit(optional(text));
   }
 
   async press(...keys: string[]): Promise<void> {
-    await this.send({ kind: "press", keys });
-  }
-
-  async keys(combo: string): Promise<void> {
-    await this.send({ kind: "press", keys: [combo] });
+    await this.keyboard.press(...keys);
   }
 
   async resize(cols: number, rows: number): Promise<void> {
-    await this.send({ kind: "resize", cols, rows });
+    await this.#runtime.resize(cols, rows);
   }
 
   async signal(name: string): Promise<void> {
-    await this.send({ kind: "signal", name });
+    await this.#runtime.signal(name);
   }
 
   async kill(): Promise<void> {
-    await this.send({ kind: "signal", name: "KILL" });
+    await this.#runtime.signal("KILL");
   }
 
   async state(): Promise<State> {
-    return (await this.send({ kind: "state" })) as State;
+    return this.#runtime.state();
   }
 
   async text(opts: { full?: boolean } = {}): Promise<string> {
-    const data = (await this.send({ kind: "text", full: opts.full ?? false })) as {
-      text: string;
-    };
-    return data.text;
+    return this.#runtime.text(opts.full ?? false);
   }
 
   async cells(x: number, y: number, w = 1, h = 1): Promise<Cell[]> {
-    const data = (await this.send({ kind: "cells", x, y, w, h })) as { cells: Cell[] };
-    return data.cells;
-  }
-
-  async get(field: string): Promise<unknown> {
-    const data = (await this.send({ kind: "get", field })) as { value: unknown };
-    return data.value;
+    return this.#runtime.cells(x, y, w, h);
   }
 
   async getCommand(): Promise<string | null> {
-    return (await this.get("command")) as string | null;
+    return this.#runtime.getCommand();
   }
 
   async getOutput(): Promise<string | null> {
-    return (await this.get("output")) as string | null;
+    return this.#runtime.getOutput();
   }
 
   async getExitCode(): Promise<number | null> {
-    return (await this.get("exit-code")) as number | null;
+    return this.#runtime.getExitCode();
   }
 
   async getCwd(): Promise<string | null> {
-    return (await this.get("cwd")) as string | null;
+    return this.#runtime.getCwd();
   }
 
-  async getCursor(): Promise<{ x: number; y: number }> {
-    return (await this.get("cursor")) as { x: number; y: number };
+  async getTitle(): Promise<string | null> {
+    return this.#runtime.getTitle();
   }
 
-  async getSize(): Promise<{ cols: number; rows: number }> {
-    return (await this.get("size")) as { cols: number; rows: number };
+  async getCursor(): Promise<Cursor> {
+    return this.#runtime.getCursor();
   }
 
-  async screenshot(path: string | null = null, opts: { full?: boolean } = {}): Promise<string> {
-    const data = (await this.send({ kind: "screenshot", full: opts.full ?? false, path })) as {
-      path?: string;
-      text?: string;
-    };
-    return (data.path ?? data.text) as string;
+  async getSize(): Promise<Size> {
+    return this.#runtime.getSize();
   }
 
-  async waitText(text: string, opts: WaitTextOptions = {}): Promise<void> {
-    await this.send({
-      kind: "wait_text",
-      text,
-      regex: opts.regex ?? false,
+  async getBellCount(): Promise<number> {
+    return this.#runtime.getBellCount();
+  }
+
+  async getBellEvents(): Promise<BellEvent[]> {
+    return this.#runtime.getBellEvents();
+  }
+
+  async screenshot(path: string | null = null, opts: ScreenshotOptions = {}): Promise<string> {
+    if (opts.zoom !== undefined && path === null) {
+      throw new TypeError("screenshot zoom requires a path");
+    }
+    return this.#runtime.screenshot({
       full: opts.full ?? false,
-      timeout_ms: opts.timeout ?? 5000,
-      not: opts.not ?? false,
+      path: optional(path),
+      zoom: opts.zoom,
     });
   }
 
+  async startRecording(path: string, opts: RecordingOptions = {}): Promise<void> {
+    await this.#runtime.startRecording({
+      path,
+      format: opts.format,
+      fps: opts.fps,
+      speed: opts.speed,
+      idleTimeLimit: opts.idleTimeLimit,
+      zoom: opts.zoom,
+    });
+  }
+
+  async stopRecording(): Promise<string> {
+    return this.#runtime.stopRecording();
+  }
+
+  async waitText(text: string, opts: WaitTextOptions = {}): Promise<void> {
+    await this.#guard("waitText", () =>
+      this.#runtime.waitText(text, {
+        regex: opts.regex ?? false,
+        full: opts.full ?? false,
+        not: opts.not ?? false,
+        timeoutMs: this.#timeout("text", opts.timeout),
+      }),
+    );
+  }
+
+  async waitTitle(text: string, opts: TitleOptions = {}): Promise<void> {
+    await this.#guard("waitTitle", () =>
+      this.#runtime.waitTitle(text, {
+        regex: opts.regex ?? false,
+        not: opts.not ?? false,
+        timeoutMs: this.#timeout("text", opts.timeout),
+      }),
+    );
+  }
+
   async waitIdle(opts: { timeout?: number } = {}): Promise<void> {
-    await this.send({ kind: "wait_idle", timeout_ms: opts.timeout ?? 5000 });
+    await this.#guard("waitIdle", () =>
+      this.#runtime.waitIdle(this.#timeout("idle", opts.timeout)),
+    );
   }
 
   async waitCommand(opts: { timeout?: number } = {}): Promise<void> {
-    await this.send({ kind: "wait_command", timeout_ms: opts.timeout ?? 30000 });
+    await this.#guard("waitCommand", () =>
+      this.#runtime.waitCommand(this.#timeout("command", opts.timeout)),
+    );
   }
 
   async waitExit(opts: { timeout?: number } = {}): Promise<void> {
-    await this.send({ kind: "wait_exit", timeout_ms: opts.timeout ?? 30000 });
+    await this.#guard("waitExit", () =>
+      this.#runtime.waitExit(this.#timeout("exit", opts.timeout)),
+    );
+  }
+
+  async waitReady(opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("waitReady", () =>
+      this.#runtime.waitReady(this.#timeout("ready", opts.timeout)),
+    );
+  }
+
+  async waitBell(opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("waitBell", () =>
+      this.#runtime.waitBell(this.#timeout("text", opts.timeout)),
+    );
+  }
+
+  async expectTitle(text: string, opts: TitleOptions = {}): Promise<void> {
+    await this.#guard("expectTitle", () =>
+      this.#runtime.expectTitle(text, {
+        regex: opts.regex ?? false,
+        not: opts.not ?? false,
+        timeoutMs: this.#timeout("text", opts.timeout),
+      }),
+    );
   }
 
   async expectText(text: string, opts: ExpectTextOptions = {}): Promise<void> {
-    try {
-      await this.send({
-        kind: "expect_text",
-        text,
+    await this.#guard("expectText", () =>
+      this.#runtime.expectText(text, {
         regex: opts.regex ?? false,
         full: opts.full ?? false,
         strict: opts.strict ?? true,
         not: opts.not ?? false,
-        fg: opts.fg ?? null,
-        bg: opts.bg ?? null,
-        timeout_ms: opts.timeout ?? 5000,
-      });
-    } catch (error) {
-      throw withOperation(error, "expectText");
-    }
+        fg: opts.fg,
+        bg: opts.bg,
+        timeoutMs: this.#timeout("text", opts.timeout),
+      }),
+    );
   }
 
-  async expectExitCode(code: number): Promise<void> {
-    await this.send({ kind: "expect_exit_code", code });
+  async expectExitCode(code: number, opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("expectExitCode", () =>
+      this.#runtime.expectExitCode(code, this.#timeout("command", opts.timeout)),
+    );
   }
 
   async expectOutput(text: string, opts: { regex?: boolean } = {}): Promise<void> {
-    await this.send({ kind: "expect_output", text, regex: opts.regex ?? false });
+    await this.#guard("expectOutput", () =>
+      this.#runtime.expectOutput(text, opts.regex ?? false),
+    );
+  }
+
+  async expectBellCount(count: number, opts: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("expectBellCount", () =>
+      this.#runtime.expectBellCount(count, this.#timeout("text", opts.timeout)),
+    );
   }
 
   async expectSnapshot(
     name: string,
-    opts: { update?: boolean; includeColors?: boolean } = {},
+    opts: { update?: boolean; includeColors?: boolean; includeTitle?: boolean } = {},
   ): Promise<string> {
-    const data = (await this.send({
-      kind: "snapshot",
-      name,
-      update: opts.update ?? false,
-      include_colors: opts.includeColors ?? false,
-      cwd: process.cwd(),
-    })) as { status: string };
-    return data.status;
+    return this.#guard("expectSnapshot", () =>
+      this.#runtime.snapshot(name, {
+        update: opts.update ?? false,
+        includeColors: opts.includeColors ?? false,
+        includeTitle: opts.includeTitle ?? false,
+        cwd: process.cwd(),
+      }),
+    );
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
-    await this.close();
+    await this.closeQuiet();
   }
 }

@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - "v[0-9]+.*"
+      - "*-beta.*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to publish
+        description: Existing beta release tag to publish (for example, 0.1.0-beta.1)
         required: true
         type: string
 
@@ -22,26 +22,67 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - run: |
+          rustup toolchain install stable --profile default
+          rustup default stable
+
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Verify beta release tag
+        shell: bash
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            echo "Release tag must match <major>.<minor>.<patch>-beta.<number>." >&2
+            exit 1
+          fi
+
+      - name: Verify release versions
+        shell: bash
+        run: |
+          version="$RELEASE_TAG"
+          version_files=(
+            Cargo.toml
+            bindings/js/package.json
+            bindings/js/package-lock.json
+            bindings/js/src/version.ts
+            bindings/python/pyproject.toml
+            bindings/python/src/tui_test/_config.py
+            bindings/js/native/index.js
+          )
+          diff -u \
+            <(printf '%s\n' "${version_files[@]}" | sort) \
+            <(rg -l --path-separator / --fixed-strings "$version" \
+              "${version_files[@]}" | sort)
+
+      - name: Verify tui-test-rs crate package
+        run: cargo publish --locked --package tui-test-rs --dry-run
+
+  build-cli:
+    needs: verify
     if: github.event_name == 'push'
     strategy:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-22.04
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-22.04
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
-          - target: aarch64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
@@ -53,6 +94,11 @@ jobs:
           rustup toolchain install stable --profile default
           rustup default stable
           rustup target add ${{ matrix.target }}
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+          cache-key: ${{ matrix.target }}
 
       - if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
@@ -69,31 +115,101 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
 
-      - run: cargo build --release --target ${{ matrix.target }}
+      - run: cargo build --release --locked -p tui-test-cli --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-          RUSTFLAGS: ${{ contains(matrix.target, 'windows-msvc') && '-C target-feature=+crt-static' || '' }}
 
       - if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../shell-use-${{ matrix.target }}.tar.gz shell-use
+          tar czf ../../../tui-test-${{ matrix.target }}.tar.gz tui-test
           cd -
 
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/shell-use.exe" -DestinationPath "shell-use-${{ matrix.target }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/tui-test.exe" -DestinationPath "tui-test-${{ matrix.target }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: shell-use-${{ matrix.target }}
+          name: tui-test-${{ matrix.target }}
           path: |
-            shell-use-*.tar.gz
-            shell-use-*.zip
+            tui-test-*.tar.gz
+            tui-test-*.zip
 
-  build-bindings:
+  build-node:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            args: --target x86_64-unknown-linux-gnu --use-napi-cross
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            args: --target aarch64-unknown-linux-gnu --use-napi-cross
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            args: --target x86_64-unknown-linux-musl -x
+            zigbuild: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            args: --target aarch64-unknown-linux-musl -x
+            zigbuild: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            args: --target x86_64-apple-darwin
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            args: --target aarch64-apple-darwin
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            args: --target x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: bindings/js/package-lock.json
+
+      - run: |
+          rustup toolchain install stable --profile default
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+          cache-key: ${{ matrix.target }}
+
+      - uses: taiki-e/install-action@v2
+        if: matrix.zigbuild
+        with:
+          tool: cargo-zigbuild
+
+      - run: npm ci
+        working-directory: bindings/js
+
+      - name: Build Node addon
+        working-directory: bindings/js
+        shell: bash
+        run: npm run build:native -- ${{ matrix.args }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-${{ matrix.target }}
+          path: bindings/js/native/*.node
+          if-no-files-found: error
+
+  package-node:
+    needs: build-node
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -106,78 +222,47 @@ jobs:
           cache: npm
           cache-dependency-path: bindings/js/package-lock.json
 
-      - uses: actions/setup-python@v5
+      - run: npm ci
+        working-directory: bindings/js
+
+      - run: |
+          npm run build:ts
+          npm run create:npm-dirs
+        working-directory: bindings/js
+
+      - uses: actions/download-artifact@v4
         with:
-          python-version: "3.11"
+          pattern: node-*
+          path: bindings/js/artifacts
+          merge-multiple: true
 
-      - name: Verify release versions
+      - run: npm run artifacts
+        working-directory: bindings/js
+
+      - name: Pack Node packages
+        run: node .github/scripts/release/package-node.mjs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Test packed Node package with Node 20
         shell: bash
         run: |
-          node <<'NODE'
-          const fs = require("node:fs");
-
-          const expected = process.env.RELEASE_TAG.replace(/^v/, "");
-          const versions = {
-            "Cargo.toml": fs.readFileSync("Cargo.toml", "utf8").match(
-              /^\s*version\s*=\s*"([^"]+)"/m,
-            )?.[1],
-            "bindings/js/package.json": JSON.parse(
-              fs.readFileSync("bindings/js/package.json", "utf8"),
-            ).version,
-            "bindings/js/src/version.ts": fs.readFileSync(
-              "bindings/js/src/version.ts",
-              "utf8",
-            ).match(/VERSION\s*=\s*"([^"]+)"/)?.[1],
-            "bindings/python/pyproject.toml": fs.readFileSync(
-              "bindings/python/pyproject.toml",
-              "utf8",
-            ).match(/^\s*version\s*=\s*"([^"]+)"/m)?.[1],
-            "bindings/python/src/shell_use/_config.py": fs.readFileSync(
-              "bindings/python/src/shell_use/_config.py",
-              "utf8",
-            ).match(/VERSION\s*=\s*"([^"]+)"/)?.[1],
-          };
-
-          for (const [file, version] of Object.entries(versions)) {
-            if (version !== expected) {
-              throw new Error(`${file} has version ${version}; expected ${expected}`);
-            }
-          }
-          NODE
-
-      - name: Build npm packages
-        shell: bash
-        run: |
-          npm ci --prefix bindings/js
-          npm test --prefix bindings/js
-
-          mkdir -p package-artifacts/npm
-          npm pack ./bindings/js --pack-destination package-artifacts/npm
-          node -e '
-            const fs = require("node:fs");
-            const packagePath = "bindings/js/package.json";
-            const readmePath = "bindings/js/README.md";
-            const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-            pkg.name = "shell-use";
-            fs.writeFileSync(packagePath, JSON.stringify(pkg, null, 2) + "\n");
-            fs.writeFileSync(
-              readmePath,
-              fs.readFileSync(readmePath, "utf8").replaceAll(
-                "@microsoft/shell-use",
-                "shell-use",
-              ),
-            );
-          '
-          npm pack ./bindings/js --pack-destination package-artifacts/npm
-
-      - name: Build Python package
-        shell: bash
-        run: |
-          python -m unittest discover -s bindings/python/tests -v
-          python -m pip install --disable-pip-version-check build
-          python -m build bindings/python --outdir package-artifacts/pypi
-        env:
-          PYTHONPATH: bindings/python/src
+          node="$(command -v node)"
+          version="$RELEASE_TAG"
+          mkdir package-test
+          cd package-test
+          npm init -y >/dev/null
+          npm install --ignore-scripts \
+            "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-tui-test-linux-x64-gnu-${version}.tgz"
+          npm install --ignore-scripts --omit=optional \
+            "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-tui-test-${version}.tgz"
+          cd "$GITHUB_WORKSPACE"
+          PATH="/usr/bin:/bin" \
+          TUI_TEST_BIN="$GITHUB_WORKSPACE/package-test/missing-tui-test" \
+          TUI_TEST_TEST_PACKAGE_ROOT="$GITHUB_WORKSPACE/package-test" \
+            "$node" --test bindings/js/test/package.integration.test.mjs
 
       - uses: actions/upload-artifact@v4
         with:
@@ -185,31 +270,150 @@ jobs:
           path: package-artifacts/npm/*.tgz
           if-no-files-found: error
 
+  build-python:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            compatibility: "2_28"
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            compatibility: "2_28"
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            compatibility: "musllinux_1_2"
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            compatibility: "musllinux_1_2"
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: mlugg/setup-zig@v2
+        if: runner.os != 'Linux'
+        with:
+          version: "0.16.0"
+          cache-key: ${{ matrix.target }}
+
+      - uses: docker/setup-qemu-action@v3
+        if: runner.os == 'Linux' && contains(matrix.target, 'aarch64')
+        with:
+          platforms: arm64
+
+      - name: Build Python wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          working-directory: bindings/python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.compatibility || 'auto' }}
+          args: --release --locked --out dist --compatibility pypi
+          before-script-linux: |
+            set -euo pipefail
+            version=0.16.0
+            case "$(uname -m)" in
+              x86_64|amd64)
+                arch=x86_64
+                sha256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+                ;;
+              aarch64|arm64)
+                arch=aarch64
+                sha256=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+                ;;
+              *)
+                echo "unsupported Zig host architecture: $(uname -m)" >&2
+                exit 1
+                ;;
+            esac
+            if command -v yum >/dev/null 2>&1; then
+              yum install -y curl xz
+            elif command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              apt-get install -y --no-install-recommends curl xz-utils
+            fi
+            archive="zig-${arch}-linux-${version}.tar.xz"
+            curl -fsSLo "/tmp/${archive}" \
+              "https://ziglang.org/download/${version}/${archive}"
+            echo "${sha256}  /tmp/${archive}" | sha256sum -c -
+            tar -xJf "/tmp/${archive}" -C /opt
+            ln -s "/opt/zig-${arch}-linux-${version}/zig" /usr/local/bin/zig
+            zig version
+
+      - name: Build Python sdist
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: bindings/python
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" dist
+          python -m pip install --disable-pip-version-check "maturin>=1.5,<2"
+          maturin sdist --manifest-path native/Cargo.toml --out dist
+
+      - uses: actions/setup-python@v5
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          python-version: "3.8"
+
+      - name: Test Python wheel with Python 3.8
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          wheels=(bindings/python/dist/*.whl)
+          test "${#wheels[@]}" -eq 1
+          [[ "${wheels[0]}" == *abi3* ]]
+          python -m venv package-test-python-38
+          package-test-python-38/bin/python -m pip install \
+            --disable-pip-version-check bindings/python/dist/*.whl
+          ! PATH="$GITHUB_WORKSPACE/package-test-python-38/bin:/usr/bin:/bin" \
+            command -v tui-test
+          PATH="$GITHUB_WORKSPACE/package-test-python-38/bin:/usr/bin:/bin" \
+          TUI_TEST_BIN="$GITHUB_WORKSPACE/package-test-python-38/missing-tui-test" \
+            "$GITHUB_WORKSPACE/package-test-python-38/bin/python" \
+            bindings/python/tests/test_integration.py \
+            IntegrationTests.test_echo_roundtrip
+
       - uses: actions/upload-artifact@v4
         with:
-          name: python-distributions
-          path: package-artifacts/pypi/*
+          name: python-wheel-${{ matrix.target }}
+          path: bindings/python/dist/*.whl
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          name: python-sdist
+          path: bindings/python/dist/*.tar.gz
           if-no-files-found: error
 
   publish-npm:
     needs:
-      - build-bindings
+      - package-node
       - release
-    if: always() && needs.build-bindings.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.package-node.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: npm
     permissions:
       contents: read
       id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - package: shell-use
-            tarball-prefix: shell-use
-          - package: "@microsoft/shell-use"
-            tarball-prefix: microsoft-shell-use
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
       - uses: actions/download-artifact@v4
         with:
           name: npm-packages
@@ -218,68 +422,119 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: https://registry.npmjs.org
 
-      - name: Publish ${{ matrix.package }} to npm
+      - name: Publish native and root packages
         shell: bash
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
         run: |
-          version="${RELEASE_TAG#v}"
+          version="$RELEASE_TAG"
+          packages=(
+            tui-test-darwin-arm64
+            tui-test-darwin-x64
+            tui-test-linux-arm64-gnu
+            tui-test-linux-arm64-musl
+            tui-test-linux-x64-gnu
+            tui-test-linux-x64-musl
+            tui-test-win32-x64-msvc
+            tui-test
+          )
 
-          if npm view "${{ matrix.package }}@${version}" version >/dev/null 2>&1; then
-            echo "${{ matrix.package }}@${version} is already published"
-            exit 0
-          fi
-
-          npm publish \
-            "./npm-packages/${{ matrix.tarball-prefix }}-${version}.tgz" \
-            --access public \
-            --tag latest
+          for package in "${packages[@]}"; do
+            name="@microsoft/$package"
+            tarball="$GITHUB_WORKSPACE/npm-packages/microsoft-${package}-${version}.tgz"
+            if [[ ! -f "$tarball" ]]; then
+              echo "Missing npm package tarball: $tarball" >&2
+              exit 1
+            fi
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published"
+            else
+              npm publish "$tarball" --access public --provenance --tag beta
+            fi
+          done
 
   publish-pypi:
     needs:
-      - build-bindings
+      - build-python
       - release
-    if: always() && needs.build-bindings.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.build-python.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/shell-use
+      url: https://pypi.org/p/tui-test
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: python-distributions
+          pattern: python-wheel-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-sdist
           path: dist
 
-      - name: Publish shell-use to PyPI
+      - name: Publish tui-test to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
 
-  release:
+  publish-crates:
     needs:
-      - build
-      - build-bindings
-    if: github.event_name == 'push'
+      - verify
+      - release
+    if: always() && needs.verify.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    environment:
+      name: crates-io
+      url: https://crates.io/crates/tui-test-rs
     permissions:
-      contents: write
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_TAG }}
 
+      - run: |
+          rustup toolchain install stable --profile default
+          rustup default stable
+
+      # Match this workflow and environment in the crate's trusted publisher settings.
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish tui-test-rs to crates.io
+        run: cargo publish --locked --package tui-test-rs
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  release:
+    needs:
+      - build-cli
+      - package-node
+      - build-python
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: shell-use-*
+          pattern: tui-test-*
           merge-multiple: true
 
       - env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release create "$RELEASE_TAG" \
             --generate-notes \
+            --prerelease \
             artifacts/*

@@ -1,4 +1,25 @@
+import type {
+  BellEvent as NativeBellEvent,
+  Cell as NativeCell,
+  Cursor as NativeCursor,
+  EffectiveTimeouts as NativeEffectiveTimeouts,
+  OpenResult as NativeOpenResult,
+  Size as NativeSize,
+  State as NativeState,
+  Timeouts as NativeTimeouts,
+} from "../native/index.js";
+
 export type Color = "default" | number | string;
+export type Backend = "alacritty" | "ghostty" | "rio";
+
+/** `"none"` is a value, not an absence: an un-underlined cell reports it. */
+export type UnderlineStyle =
+  | "none"
+  | "single"
+  | "double"
+  | "curly"
+  | "dotted"
+  | "dashed";
 
 export type Shell =
   | "bash"
@@ -11,72 +32,88 @@ export type Shell =
   | "elvish"
   | "nushell";
 
-export interface Cursor {
-  x: number;
-  y: number;
-}
+export type Cursor = NativeCursor;
 
-export interface Size {
-  cols: number;
-  rows: number;
-}
+export type Size = NativeSize;
 
-export interface Cell {
-  x: number;
-  y: number;
-  char: string;
+export interface Cell extends Omit<NativeCell, "fg" | "bg" | "underline_style" | "underline_color"> {
+  /** The cell's grapheme; `" "` when blank, `""` for the second column of a double-width character. */
   fg: Color;
   bg: Color;
-  bold: boolean;
-  italic: boolean;
-  underline: boolean;
-  inverse: boolean;
+  /** Always `false` from the alacritty and rio backends, which cannot report blink. */
+  /** Shorthand for `underline_style !== "none"`. */
+  underline_style: UnderlineStyle;
+  /**
+   * `"default"` means the underline follows the text color. Tracked
+   * independently of `underline_style`, so a cell that set SGR 58 without an
+   * underline still reports the color it would use.
+   */
+  underline_color: Color;
 }
 
-export interface State {
-  session_shell: string | null;
-  cols: number;
-  rows: number;
-  cursor: Cursor;
-  cwd: string | null;
-  last_command: string | null;
-  last_exit: number | null;
-  exited: number | null;
-  ready: boolean;
-  text: string;
+export type EffectiveTimeouts = NativeEffectiveTimeouts;
+
+export type BellEvent = NativeBellEvent;
+
+export type State = NativeState;
+
+export type OpenResult = NativeOpenResult;
+
+export interface Colors {
+  foreground?: string;
+  background?: string;
+  cursor?: string;
+  black?: string;
+  red?: string;
+  green?: string;
+  yellow?: string;
+  blue?: string;
+  magenta?: string;
+  cyan?: string;
+  white?: string;
+  brightBlack?: string;
+  brightRed?: string;
+  brightGreen?: string;
+  brightYellow?: string;
+  brightBlue?: string;
+  brightMagenta?: string;
+  brightCyan?: string;
+  brightWhite?: string;
 }
 
-export interface OpenResult {
-  pid: number;
-  session: string;
-  recording: string;
-}
-
-export interface DaemonStatus {
-  session: string;
-  pid: number | null;
-  cols?: number;
-  rows?: number;
-  shell?: string | null;
-  exited?: number | null;
-  log: string | null;
-}
-
-export interface Response {
-  ok: boolean;
-  data?: unknown;
-  message?: string;
-  kind?: string;
+export interface Profile {
+  scrollback?: number;
+  colors?: Colors;
 }
 
 export interface SpawnOptions {
+  backend?: Backend;
   cols?: number;
   rows?: number;
   cwd?: string;
-  env?: Record<string, string> | [string, string][];
+  env?: Record<string, string | number | boolean> | [string, string][];
+  waitReady?: boolean;
+  restart?: boolean;
+  retries?: number;
+  profile?: Profile;
+  timeouts?: Timeouts;
+}
+
+export type Timeouts = NativeTimeouts;
+
+export interface TerminalArtifact {
+  text?: string;
+  screenshot?: string;
+}
+
+export interface ArtifactOptions {
+  dir: string;
+  onFailure?: "svg" | "text" | "none";
 }
 
 export interface ClientOptions {
-  binary?: string;
-  home?: string;
+  backend?: Backend;
+  profile?: Profile;
+  timeouts?: Timeouts;
+  artifacts?: ArtifactOptions;
 }

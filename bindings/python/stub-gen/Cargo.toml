@@ -1,0 +1,13 @@
+[package]
+name = "tui-test-python-stub-gen"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[workspace]
+resolver = "2"
+
+[dependencies]
+pyo3-stub-gen = { version = "0.23", default-features = false }
+pyo3-stub-gen-derive = "0.23"

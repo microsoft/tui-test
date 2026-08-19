@@ -1,30 +1,54 @@
 {
-  "name": "@microsoft/shell-use",
-  "version": "0.0.1-beta.5",
-  "description": "Node client for the shell-use terminal daemon",
+  "name": "@microsoft/tui-test",
+  "version": "0.1.0-beta.1",
+  "description": "Node bindings for the tui_test terminal engine",
   "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./test": {
+      "types": "./dist/test/index.d.ts",
+      "default": "./dist/test/index.js"
     }
   },
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "native/index.js",
+    "native/index.d.ts",
+    "native/*.node",
     "README.md"
   ],
   "engines": {
     "node": ">=20"
   },
   "sideEffects": false,
+  "napi": {
+    "binaryName": "tui-test",
+    "packageName": "@microsoft/tui-test",
+    "targets": [
+      "x86_64-pc-windows-msvc",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-musl"
+    ]
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build:native": "napi build --platform --esm --release --strip --output-dir native --js index.js --dts index.d.ts",
+    "build:native:debug": "napi build --platform --esm --output-dir native --js index.js --dts index.d.ts",
+    "build:ts": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run build:native && npm run build:ts",
+    "create:npm-dirs": "napi create-npm-dirs",
+    "artifacts": "napi artifacts --output-dir artifacts --npm-dir npm",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "prepublishOnly": "npm run clean && npm run build",
-    "test": "npm run build && node --test",
-    "test:node": "npm run build && node --test",
-    "test:bun": "npm run build && bun test ./test/conformance.test.mjs && bun test ./test/integration.test.mjs && bun test ./test/protocol.test.mjs",
+    "test": "npm run test:node",
+    "test:node": "npm run build && node --test ./test/conformance.test.mjs ./test/integration.test.mjs ./test/options.test.mjs ./test/native.test.mjs ./test/helpers.test.mjs",
+    "test:bun": "npm run build && bun test ./test/conformance.test.mjs && bun test ./test/integration.test.mjs && bun test ./test/options.test.mjs && bun test ./test/native.test.mjs && bun test ./test/helpers.test.mjs",
     "test:deno": "npm run build && deno test -A ./test",
     "test:all": "npm run test:node && npm run test:bun && npm run test:deno"
   },
@@ -34,19 +58,21 @@
     "automation",
     "testing",
     "tui",
-    "shell-use"
+    "tui-test"
   ],
   "license": "MIT",
   "author": "Microsoft",
   "repository": {
     "type": "git",
-    "url": "https://github.com/microsoft/shell-use"
+    "url": "https://github.com/microsoft/tui-test"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "tag": "beta"
   },
   "dependencies": {},
   "devDependencies": {
+    "@napi-rs/cli": "^3.7.4",
     "@types/node": "^20.14.0",
     "typescript": "^5.5.0"
   }

@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
@@ -15,14 +14,14 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            bin: target/debug/shell-use
+            bin: target/debug/tui-test
           - os: windows-latest
-            bin: target/debug/shell-use.exe
+            bin: target/debug/tui-test.exe
           - os: ubuntu-latest
-            bin: target/debug/shell-use
+            bin: target/debug/tui-test
     runs-on: ${{ matrix.os }}
     env:
-      SHELL_USE_BIN: ${{ github.workspace }}/${{ matrix.bin }}
+      TUI_TEST_BIN: ${{ github.workspace }}/${{ matrix.bin }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +29,10 @@ jobs:
           rustup toolchain install stable --profile default
           rustup default stable
           rustup component add clippy rustfmt
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
 
       - uses: actions/cache@v4
         with:
@@ -40,49 +43,110 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo build
-      - run: cargo test
-
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.11"
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: bindings/js/package-lock.json
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
+      - run: cargo build
+      - run: cargo test --workspace -- --test-threads=1
+
+      - name: Install Python binding
+        run: python -m pip install --disable-pip-version-check -e ./bindings/python
+
+      - name: Test Python binding
+        run: python -m unittest discover -s bindings/python/tests -v
+
+      - name: Verify generated Python stubs
+        run: python bindings/python/scripts/generate_stubs.py --check
+
+      - name: Install Node dependencies
+        run: npm ci --prefix bindings/js
+
+      - name: Test Node binding
+        run: npm run test:node --prefix bindings/js
+
+      - name: Verify generated Node loader
+        shell: bash
+        run: |
+          git diff --exit-code -- bindings/js/native/index.js bindings/js/native/index.d.ts
+          ! grep -Eq 'JsonValue|Promise<unknown>|\brequest\(|\bBuffer\b' bindings/js/native/index.d.ts
+
       - uses: oven-sh/setup-bun@v2
+        if: runner.os == 'Linux'
         with:
           bun-version: latest
+
       - uses: denoland/setup-deno@v2
+        if: runner.os == 'Linux'
         with:
           deno-version: v2.x
 
-      - name: Test Python bindings
-        working-directory: bindings/python
-        shell: bash
-        env:
-          PYTHONPATH: src
-        run: python -m unittest discover -s tests -v
+      - name: Test Node binding with Bun
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: npm run test:bun --prefix bindings/js
 
-      - name: Setup JS
-        working-directory: bindings/js
-        shell: bash
+      - name: Test Node binding with Deno
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: npm run test:deno --prefix bindings/js
+
+  compatibility:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Python 3.8
+            runtime: python
+            version: "3.8"
+          - name: Python current
+            runtime: python
+            version: "3.14"
+          - name: Node 20
+            runtime: node
+            version: "20"
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: |
+          rustup toolchain install stable --profile default
+          rustup default stable
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      - uses: actions/setup-python@v5
+        if: matrix.runtime == 'python'
+        with:
+          python-version: ${{ matrix.version }}
+
+      - uses: actions/setup-node@v4
+        if: matrix.runtime == 'node'
+        with:
+          node-version: ${{ matrix.version }}
+          cache: npm
+          cache-dependency-path: bindings/js/package-lock.json
+
+      - name: Test Python compatibility
+        if: matrix.runtime == 'python'
         run: |
-          npm ci
-          npm run build
+          python -m pip install --disable-pip-version-check -e ./bindings/python
+          python -m unittest discover -s bindings/python/tests -v
 
-      - name: Test JS bindings (Node)
-        working-directory: bindings/js
-        shell: bash
-        run: npm run test:node
-
-      - name: Test JS bindings (Bun)
-        working-directory: bindings/js
-        shell: bash
-        run: npm run test:bun
-
-      - name: Test JS bindings (Deno)
-        working-directory: bindings/js
-        shell: bash
-        run: npm run test:deno
+      - name: Test Node compatibility
+        if: matrix.runtime == 'node'
+        run: |
+          npm ci --prefix bindings/js
+          npm run test:node --prefix bindings/js

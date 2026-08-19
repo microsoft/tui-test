@@ -1,35 +1,31 @@
-# @microsoft/shell-use
+# @microsoft/tui-test
 
-A Node client for the [`shell-use`](https://github.com/microsoft/shell-use) terminal daemon.
-
-The `shell-use` binary must be on your `PATH` (or point to it with the `SHELL_USE_BIN` environment variable or the `binary` option). The client talks to the per-session daemon directly over its local socket (a named pipe on Windows, a Unix socket elsewhere) and starts the daemon automatically.
+Node bindings for [`tui-test`](https://github.com/microsoft/tui-test); a terminal engine for driving and asserting on real shells and TUI programs.
 
 ## Install
 
 ```sh
-npm install @microsoft/shell-use # Node 20+
+npm install @microsoft/tui-test@beta # Node 20+
 
-bun add @microsoft/shell-use # Bun
+bun add @microsoft/tui-test@beta # Bun (best effort)
 
-deno add npm:@microsoft/shell-use # Deno 2
+deno add npm:@microsoft/tui-test@beta # Deno 2 (best effort)
 ```
 
-The package is only ESM
+The package is ESM only.
 
 ## Runtime Requirements
 
 - Node: 20+
-- Deno: 2
-- Bun: *
-
-> Note: On Windows, Deno requires all permissions (`-A` / `--allow-all`) instead of just `--allow-read --allow-write` due to the use of named pipes for IPC with the daemon.
+- Bun: treated as best effort
+- Deno: 2, treated as best effort. Requires a local `node_modules` directory (`deno install` / `--node-modules-dir`) and `--allow-ffi` (in addition to `--allow-read --allow-write`)
 
 ## Quick start
 
 ```js
-import { ShellUse } from "@microsoft/shell-use";
+import { TuiTest } from "@microsoft/tui-test";
 
-const su = new ShellUse();
+const su = new TuiTest();
 await su.open();
 await su.submit("echo hello");
 await su.waitCommand();
@@ -40,34 +36,101 @@ await su.close();
 
 ## Errors
 
-Every failure maps to one of the daemon's exit codes:
+Every failure maps to one of the engine's error kinds:
 
-| Class | `exitCode` | Meaning |
-| --- | --- | --- |
-| `ExpectationError` | 1 | an `expect`/`wait` condition was not met |
-| `UsageError` | 2 | invalid argument (e.g. a bad regex) |
-| `NoSessionError` | 3 | no active session |
-| `DaemonError` | 4 | daemon could not be reached or started |
-| `VersionMismatchError` | 4 | the daemon's version differs from this package |
-| `InternalError` | 5 | internal daemon error |
+| Class              | `exitCode` | Meaning                                  |
+| ------------------ | ---------- | ---------------------------------------- |
+| `ExpectationError` | 1          | an `expect`/`wait` condition was not met |
+| `UsageError`       | 2          | invalid argument (e.g. a bad regex)      |
+| `NoSessionError`   | 3          | no active session                        |
+| `InternalError`    | 5          | internal engine error                    |
 
-All derive from `ShellUseError` and carry `kind` and `exitCode`. `waitX` and `expectX` reject with `ExpectationError` on failure. Assertion errors include the current visible terminal content.
-
-On its first call, a client checks that the running daemon's version matches the
-package version and throws `VersionMismatchError` if they differ. Stop the daemon
-(`daemonStop`) so it restarts with the current binary, or point `SHELL_USE_BIN`
-at a matching one.
+All derive from `TuiTestError` and carry `kind` and `exitCode`. `waitX` and `expectX` reject with `ExpectationError` on failure. Assertion errors include the current visible terminal content.
 
 ## API
 
-`new ShellUse(session?, { binary?, home? })` mirrors the CLI: `open` / `run`, `type` / `write`, `submit`, `press` / `keys`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get` (+ `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize`), `screenshot`, `waitText` / `waitIdle` / `waitCommand` / `waitExit`, `expectText` / `expectExitCode` / `expectOutput` / `expectSnapshot`, and `close`.
+`new TuiTest(session?, { backend?, profile?, timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle` / `getBellCount` / `getBellEvents`, `screenshot`, `startRecording` / `stopRecording`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady` / `waitBell`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectBellCount` / `expectSnapshot`, `close`, and `closeQuiet`.
 
-Module-level helpers: `sessions()`, `closeAll()`, `daemonStatus()`, `daemonStop()`, `getRecording()`.
+`keyboard.press()` simulates key presses: it sends the normal press input and
+adds a release only when the negotiated Kitty mode can represent it.
+`keyboard.down()` and `keyboard.up()` simulate explicit keydown and keyup
+events; `keyboard.repeat()` simulates repeats. Top-level `press()` remains a
+compatibility alias.
+
+Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
+
+`open` and `run` accept
+`{ backend, cols, rows, cwd, env, waitReady, restart, retries, profile, timeouts }`.
+They reuse a live named session unless `restart: true` is passed. The
+constructor also accepts `backend` and `profile` as defaults for later opens
+and runs. Backend values are `"alacritty"` (default), `"ghostty"`, and
+`"rio"`:
+
+```js
+const terminal = new TuiTest("work", { backend: "ghostty" });
+await terminal.open();
+await terminal.run("vim", ["file.txt"], { backend: "rio" });
+```
+
+The native package includes all three emulators. Profiles are partial; omitted
+fields use the built-in defaults:
+
+```js
+const terminal = new TuiTest("work", {
+  profile: {
+    scrollback: 500,
+    colors: { red: "#ff0000", brightBlue: "#3366ff" },
+  },
+});
+```
+
+The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`;
+`timeouts` sets session defaults, and the constructor sets client-wide ones.
+Unknown fields throw.
+
+`TuiTest.ephemeral(prefix?, opts?)` creates a client bound to a unique session
+name (via `uniqueSession()`), useful for parallel test workers that should not
+collide. All sessions are process-local. `artifacts: { dir, onFailure }`
+attaches the terminal contents to an `ExpectationError`.
+
+`@microsoft/tui-test/test` has helpers for terminal tests: `createTerminal`, `withTerminal`, `closeAllTracked`, `defaultShell`, and `terminalSnapshot`.
+
+```js
+import { withTerminal } from "@microsoft/tui-test/test";
+
+await withTerminal({}, async (t) => {
+  await t.submit("echo hi");
+  await t.waitCommand();
+  await t.expectText("hi");
+});
+```
+
+Each terminal has a unique name, so parallel workers do not collide.
+`setTerminalDefaults(...)` sets suite-wide options (`profile`, `artifacts`,
+`timeouts`, ...).
+
+## Cancellation and recordings
+
+Cancelling a promise does not cancel the underlying Rust operation. Operations for single sessions wait for completion (ex: `close()`, `closeAll()`).
+
+Closing a session removes it from `sessions()`, but keeps its recording. `getRecording()` can read that recording for the rest of the process. The 1024 most recently closed sessions have their recordings retained.
+
+```js
+await su.startRecording("demo.png", { fps: 30, speed: 1, zoom: 0.5 });
+await su.submit("echo hello");
+await su.waitCommand();
+const path = await su.stopRecording();
+```
+
+`.png`/`.apng` selects lossless APNG, `.gif` selects GIF, `.mp4` selects MP4,
+and `.cast` selects asciicast v2. The `format` option can override extension
+inference. `zoom` scales SVG screenshots and image/video recordings without
+changing terminal rows or columns. MP4 recording requires `ffmpeg` to be
+available on `PATH`.
 
 ## Configuration
 
-| Variable | Purpose |
-| --- | --- |
-| `SHELL_USE_BIN` | path to the `shell-use` binary |
-| `SHELL_USE_SESSION` | default session name |
-| `SHELL_USE_HOME` | daemon state directory (sockets, pids) |
+| Variable                       | Purpose                                                                     |
+| ------------------------------ | --------------------------------------------------------------------------- |
+| `TUI_TEST_SESSION`            | default session name                                                        |
+| `TUI_TEST_TIMEOUT_<CLASS>_MS` | fallback timeout for one class (`TEXT`, `IDLE`, `COMMAND`, `EXIT`, `READY`) |

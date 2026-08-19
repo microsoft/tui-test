@@ -1,36 +1,40 @@
-export { ShellUse } from "./client.js";
+export { TuiTest } from "./client.js";
 export type {
   ExpectTextOptions,
   MouseButtonOptions,
+  TitleOptions,
+  RecordingFormat,
+  RecordingOptions,
+  ScreenshotOptions,
   WaitTextOptions,
 } from "./client.js";
+export { uniqueSession } from "./ephemeral.js";
+export { closeAll, getRecording, sessions } from "./sessions.js";
 export {
-  closeAll,
-  daemonStatus,
-  daemonStop,
-  getRecording,
-  sessions,
-} from "./sessions.js";
-export {
-  DaemonError,
   ExpectationError,
   InternalError,
   NoSessionError,
-  ShellUseError,
+  TuiTestError,
   UsageError,
-  VersionMismatchError,
 } from "./errors.js";
 export type { ErrorKind } from "./errors.js";
 export { VERSION } from "./version.js";
 export type {
+  ArtifactOptions,
+  Backend,
+  BellEvent,
   Cell,
   ClientOptions,
   Color,
+  Colors,
   Cursor,
-  DaemonStatus,
+  EffectiveTimeouts,
   OpenResult,
+  Profile,
   Shell,
   Size,
   SpawnOptions,
   State,
+  TerminalArtifact,
+  Timeouts,
 } from "./types.js";
