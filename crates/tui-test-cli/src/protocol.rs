@@ -30,6 +30,8 @@ pub enum Request {
         #[serde(default)]
         wait_ready: Option<bool>,
         #[serde(default)]
+        restart: bool,
+        #[serde(default)]
         timeouts: Timeouts,
     },
     Close,
@@ -191,6 +193,7 @@ impl Request {
                 cwd,
                 env,
                 wait_ready,
+                restart,
                 timeouts,
             } => {
                 if let Some(program) = program {
@@ -208,6 +211,7 @@ impl Request {
                         cwd,
                         env,
                         wait_ready,
+                        restart,
                         timeouts,
                     }))
                 } else {
@@ -220,6 +224,7 @@ impl Request {
                         cwd,
                         env,
                         wait_ready,
+                        restart,
                         timeouts,
                     }))
                 }
@@ -468,6 +473,7 @@ mod tests {
             cwd: None,
             env: vec![],
             wait_ready,
+            restart: false,
             timeouts,
         }
     }
@@ -520,12 +526,14 @@ mod tests {
                 wait_ready,
                 backend,
                 cols,
+                restart,
                 timeouts,
                 ..
             } => {
                 assert_eq!(wait_ready, None);
                 assert_eq!(backend, Backend::Alacritty);
                 assert_eq!(cols, 80);
+                assert!(!restart);
                 assert_eq!(timeouts, Timeouts::default());
             }
             other => panic!("expected Open, got {other:?}"),

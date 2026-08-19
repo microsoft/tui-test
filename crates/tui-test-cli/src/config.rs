@@ -21,6 +21,10 @@ pub fn pid_file(session: &str) -> PathBuf {
     home_dir().join(format!("{session}.pid"))
 }
 
+pub fn daemon_lock_file(session: &str) -> PathBuf {
+    home_dir().join(format!("{session}.pid.lock"))
+}
+
 pub fn log_file(session: &str) -> PathBuf {
     home_dir().join(format!("{session}.log"))
 }

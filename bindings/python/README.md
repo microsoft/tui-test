@@ -64,10 +64,11 @@ compatibility alias.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 
-`open()` and `run()` accept `backend=`, `wait_ready=`, `retries=`, `profile=`,
-and `timeouts=`. The constructor also accepts `backend=` and `profile=` as
-defaults for later opens and runs. Backend values are `"alacritty"` (default)
-and `"ghostty"`:
+`open()` and `run()` accept `backend=`, `wait_ready=`, `restart=`, `retries=`,
+`profile=`, and `timeouts=`. They reuse a live named session unless
+`restart=True` is passed. The constructor also accepts `backend=` and
+`profile=` as defaults for later opens and runs. Backend values are
+`"alacritty"` (default) and `"ghostty"`:
 
 ```python
 terminal = TuiTest(backend="ghostty")

@@ -20,6 +20,7 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
         cwd: defaults.cwd,
         env: defaults.env,
         wait_ready: Some(false),
+        restart: defaults.restart,
         timeouts: defaults.timeouts,
     }
 }
@@ -92,6 +93,36 @@ fn named_handles_share_a_process_local_terminal() {
     first
         .close()
         .expect("close replacement through first handle");
+}
+
+#[test]
+fn opening_a_live_named_session_reuses_it_unless_restart_is_requested() {
+    let registry = SessionRegistry::default();
+    let session = registry.session("native-reuse");
+
+    let first = session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            ..OpenOptions::default()
+        })
+        .expect("open first terminal");
+    let reused = session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            ..OpenOptions::default()
+        })
+        .expect("reuse live terminal");
+    assert_eq!(reused.shell_pid, first.shell_pid);
+
+    let restarted = session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            restart: true,
+            ..OpenOptions::default()
+        })
+        .expect("restart live terminal");
+    assert_ne!(restarted.shell_pid, first.shell_pid);
+    session.close().expect("close restarted terminal");
 }
 
 #[test]

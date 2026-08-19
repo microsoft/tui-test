@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
@@ -235,6 +236,33 @@ fn close_is_idempotent() {
     sandbox.ok(&["open"]);
     sandbox.ok(&["close"]);
     sandbox.ok(&["close"]);
+}
+
+#[test]
+fn open_reuses_a_live_child_unless_restart_is_requested() {
+    let sandbox = Sandbox::new("open-reuse");
+    let first = sandbox.ok(&["--json", "open"]);
+    let first: serde_json::Value = serde_json::from_str(&first).expect("first open json");
+    let first_pid = first["data"]["shell_pid"]
+        .as_u64()
+        .expect("first open reports a child pid");
+
+    let reused = sandbox.ok(&["--json", "open"]);
+    let reused: serde_json::Value = serde_json::from_str(&reused).expect("reused open json");
+    assert_eq!(
+        reused["data"]["shell_pid"].as_u64(),
+        Some(first_pid),
+        "a second open should attach to the live child"
+    );
+
+    let restarted = sandbox.ok(&["--json", "open", "--restart"]);
+    let restarted: serde_json::Value =
+        serde_json::from_str(&restarted).expect("restarted open json");
+    assert_ne!(
+        restarted["data"]["shell_pid"].as_u64(),
+        Some(first_pid),
+        "--restart should replace the live child"
+    );
 }
 
 #[test]
@@ -1129,6 +1157,42 @@ fn daemon_start_is_idempotent_and_makes_status_answer() {
         "a second start should report the daemon was already up: {again}"
     );
     sandbox.ok(&["daemon", "stop"]);
+}
+
+#[test]
+fn concurrent_daemon_starts_are_serialized() {
+    let sandbox = Sandbox::new("start-race");
+    let barrier = Arc::new(Barrier::new(3));
+    let workers: Vec<_> = (0..2)
+        .map(|_| {
+            let barrier = Arc::clone(&barrier);
+            let home = sandbox.home.clone();
+            let session = sandbox.session.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                Command::new(BIN)
+                    .args(["--session", &session, "--json", "daemon", "start"])
+                    .env("TUI_TEST_HOME", home)
+                    .output()
+                    .expect("spawn concurrent daemon start")
+            })
+        })
+        .collect();
+    barrier.wait();
+
+    let mut started = 0;
+    for worker in workers {
+        let output = worker.join().unwrap();
+        assert!(
+            output.status.success(),
+            "concurrent start failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let payload: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("daemon start json");
+        started += usize::from(payload["started"].as_bool() == Some(true));
+    }
+    assert_eq!(started, 1, "exactly one client should spawn the daemon");
 }
 
 #[test]

@@ -35,6 +35,9 @@ Three commands let an agent look up the rest of the surface instead of guessing:
   (`assertion` / `usage` / `no_session` / `internal`).
 - **Verbose.** `--verbose` / `-v` starts the daemon with a full PTY traffic log
   (see [Debugging](#debugging)). Only takes effect when the daemon starts.
+- **Daemon upgrades.** A client automatically replaces a daemon from another
+  `tui-test` version. Per-session locking prevents concurrent clients from
+  racing the restart.
 - **Defaults.** New sessions are `80x30`. Timeouts come in five classes: `text`
   and `idle` default to 5s; `command`, `exit`, and `ready` to 30s. Set a session
   default with `open --timeout-<class> <ms>`, or override one call with
@@ -60,13 +63,16 @@ without parsing text:
 
 | Command                                                                  | Description                                                            |
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| `open [--shell S] [--backend B] [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P]` | Spawn a shell session (auto-starts the daemon). `--env` is repeatable. |
-| `run [--backend B] [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P] <program> [args...]` | Spawn a session running a program directly (no shell). |
+| `open [--shell S] [--backend B] [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P] [--restart]` | Spawn or reuse a shell session. `--env` is repeatable. |
+| `run [--backend B] [--cols N] [--rows N] [--cwd D] [--env K=V]... [--config F] [--profile P] [--restart] <program> [args...]` | Spawn or reuse a session running a program directly. |
 | `sessions`                                                               | List active sessions.                                                  |
 | `close [--all]`                                                          | Close the current session (or every session with `--all`).             |
 | `daemon start`                                                           | Start this session's daemon. Most commands start one on demand.        |
 | `daemon status`                                                          | Inspect a session's daemon (pid, log path). Exit 3 if none is running. |
 | `daemon stop --session N \| --all`                                       | Stop one session's daemon, or every daemon. Needs a target.            |
+
+`open` and `run` reuse an existing live child for the selected session. Pass
+`--restart` (or `--force`) to replace it.
 
 ### Inspection
 

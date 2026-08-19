@@ -121,6 +121,7 @@ class TypedCallTests(unittest.TestCase):
                 cols=120,
                 rows=40,
                 env={"K": "V"},
+                restart=True,
                 profile=Profile(
                     scrollback=321,
                     colors=Colors(red="#010203"),
@@ -133,9 +134,10 @@ class TypedCallTests(unittest.TestCase):
         self.assertEqual(
             args[:7], (None, None, 120, 40, None, [("K", "V")], None)
         )
-        self.assertEqual(args[7], 321)
-        self.assertEqual(args[8], [("red", "#010203")])
-        self.assertEqual(args[9:], (100, None, None, None, 200))
+        self.assertTrue(args[7])
+        self.assertEqual(args[8], 321)
+        self.assertEqual(args[9], [("red", "#010203")])
+        self.assertEqual(args[10:], (100, None, None, None, 200))
 
     def test_run_uses_program_and_argv(self):
         terminal = _CapturingClient("s")
@@ -151,8 +153,9 @@ class TypedCallTests(unittest.TestCase):
         )
         run(terminal.run("vim"))
         args = terminal.fake.calls[0][1]
-        self.assertIsNone(args[8])
-        self.assertEqual(args[9], [("background", "#112233")])
+        self.assertFalse(args[8])
+        self.assertIsNone(args[9])
+        self.assertEqual(args[10], [("background", "#112233")])
 
     def test_constructor_and_call_backends_are_forwarded(self):
         terminal = _CapturingClient("s", backend="ghostty")

@@ -408,6 +408,47 @@ impl Session {
             .pid()
     }
 
+    pub fn is_alive(&self) -> Result<bool, crate::api::TuiTestError> {
+        if self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .exited
+            .is_some()
+        {
+            return Ok(false);
+        }
+
+        let exit_code = self
+            .pty
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .try_wait()
+            .map_err(|error| {
+                crate::api::TuiTestError::internal(format!(
+                    "failed to query process status: {error}"
+                ))
+            })?;
+        let Some(exit_code) = exit_code else {
+            return Ok(true);
+        };
+
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.exited.get_or_insert(exit_code);
+        Ok(false)
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tracker
+            .is_ready()
+    }
+
     pub fn flush_recording(&self) -> Result<(), crate::api::TuiTestError> {
         self.recorder.flush().map_err(capture_error)
     }
