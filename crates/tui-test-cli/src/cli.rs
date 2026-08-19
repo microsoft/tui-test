@@ -53,8 +53,8 @@ impl From<ShellArg> for Shell {
 /// Which terminal profile a session runs with.
 #[derive(Args, Clone, Default)]
 pub struct ProfileArgs {
-    /// Config file to read (default: ./tui-test.toml, then
-    /// ~/.tui-test/tui-test.toml).
+    /// Config file to read (default: ./tui-test.toml, then the platform config
+    /// directory, then ~/.tui-test/tui-test.toml).
     #[arg(long, value_name = "PATH")]
     pub config: Option<std::path::PathBuf>,
     /// Named profile from the config file (default: `default`).
@@ -66,9 +66,9 @@ impl ProfileArgs {
     /// Resolve to concrete settings. Done here, in the client, because the
     /// daemon is long-lived and shared and so has no working directory to
     /// resolve a project-local config against.
-    pub fn resolve(&self) -> anyhow::Result<tui_test::profile::Profile> {
+    pub fn resolve(&self) -> anyhow::Result<tui_test::profile::ResolvedConfig> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        tui_test::profile::resolve(self.config.as_deref(), self.profile.as_deref(), &cwd)
+        tui_test::profile::resolve_settings(self.config.as_deref(), self.profile.as_deref(), &cwd)
     }
 }
 

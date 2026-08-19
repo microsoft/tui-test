@@ -55,15 +55,24 @@ impl Rgb {
     /// Parse `#rgb` or `#rrggbb`. The leading `#` is optional so a TOML value
     /// that lost it to a stray quote still reads sensibly.
     pub fn parse(s: &str) -> Result<Self, String> {
-        let hex = s.trim().trim_start_matches('#');
-        let read = |i: usize, n: usize| -> Result<u8, String> {
-            u8::from_str_radix(&hex[i..i + n], 16)
-                .map(|v| if n == 1 { v * 17 } else { v })
-                .map_err(|_| format!("invalid hex color {s:?}"))
+        let trimmed = s.trim();
+        let hex = trimmed.strip_prefix('#').unwrap_or(trimmed);
+        let digit = |byte: u8| -> Option<u8> {
+            match byte {
+                b'0'..=b'9' => Some(byte - b'0'),
+                b'a'..=b'f' => Some(byte - b'a' + 10),
+                b'A'..=b'F' => Some(byte - b'A' + 10),
+                _ => None,
+            }
         };
-        match hex.len() {
-            3 => Ok(Rgb::new(read(0, 1)?, read(1, 1)?, read(2, 1)?)),
-            6 => Ok(Rgb::new(read(0, 2)?, read(2, 2)?, read(4, 2)?)),
+        let digits = hex
+            .bytes()
+            .map(digit)
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| format!("invalid hex color {s:?}"))?;
+        match digits.as_slice() {
+            [r, g, b] => Ok(Rgb::new(r * 17, g * 17, b * 17)),
+            [r1, r2, g1, g2, b1, b2] => Ok(Rgb::new(r1 * 16 + r2, g1 * 16 + g2, b1 * 16 + b2)),
             _ => Err(format!("color must be #rgb or #rrggbb (got {s:?})")),
         }
     }
@@ -320,11 +329,49 @@ impl Default for Profile {
     }
 }
 
+/// A profile as represented in `tui-test.toml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ConfigProfile {
+    pub scrollback: usize,
+    pub colors: Colors,
+    pub timeouts: crate::api::Timeouts,
+}
+
+impl Default for ConfigProfile {
+    fn default() -> Self {
+        Self {
+            scrollback: DEFAULT_SCROLLBACK,
+            colors: Colors::default(),
+            timeouts: crate::api::Timeouts::default(),
+        }
+    }
+}
+
+/// Concrete session settings resolved from a config profile.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResolvedConfig {
+    pub profile: Profile,
+    pub timeouts: crate::api::Timeouts,
+}
+
+impl From<ConfigProfile> for ResolvedConfig {
+    fn from(value: ConfigProfile) -> Self {
+        Self {
+            profile: Profile {
+                scrollback: value.scrollback,
+                colors: value.colors,
+            },
+            timeouts: value.timeouts,
+        }
+    }
+}
+
 /// A parsed config file: named profiles, and nothing else.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ConfigFile {
-    pub profiles: BTreeMap<String, Profile>,
+    pub profiles: BTreeMap<String, ConfigProfile>,
 }
 
 impl ConfigFile {
@@ -341,7 +388,12 @@ impl ConfigFile {
     /// The named profile, or the built-in defaults when nothing is named and
     /// the file defines no `default`.
     pub fn profile(&self, name: Option<&str>) -> anyhow::Result<Profile> {
-        match name {
+        Ok(self.settings(name)?.profile)
+    }
+
+    /// The named profile and its session timeout defaults.
+    pub fn settings(&self, name: Option<&str>) -> anyhow::Result<ResolvedConfig> {
+        let profile = match name {
             Some(name) => self.profiles.get(name).copied().ok_or_else(|| {
                 let known: Vec<&str> = self.profiles.keys().map(String::as_str).collect();
                 if known.is_empty() {
@@ -355,27 +407,46 @@ impl ConfigFile {
                 .get(DEFAULT_PROFILE)
                 .copied()
                 .unwrap_or_default()),
-        }
+        }?;
+        Ok(profile.into())
     }
 }
 
 /// Where a config file is looked for, nearest first.
 ///
 /// A project-local file wins so a repository can pin the terminal its tests
-/// expect. `TUI_TEST_CONFIG` overrides both, which is also how a test suite
-/// pins a config without depending on the working directory.
+/// expect. `TUI_TEST_CONFIG` replaces discovery, which is also how a test
+/// suite pins a config without depending on the working directory.
 pub fn search_paths(cwd: &Path) -> Vec<PathBuf> {
-    if let Ok(explicit) = std::env::var("TUI_TEST_CONFIG") {
+    if let Some(explicit) = std::env::var_os("TUI_TEST_CONFIG") {
         return vec![PathBuf::from(explicit)];
     }
     default_search_paths(cwd)
 }
 
 fn default_search_paths(cwd: &Path) -> Vec<PathBuf> {
-    vec![
-        cwd.join(CONFIG_FILE),
-        crate::config::home_dir().join(CONFIG_FILE),
-    ]
+    let config_home = if std::env::var_os("TUI_TEST_HOME").is_none() {
+        dirs::config_dir()
+    } else {
+        None
+    };
+    config_search_paths(cwd, config_home.as_deref(), &crate::config::home_dir())
+}
+
+fn config_search_paths(
+    cwd: &Path,
+    platform_config_home: Option<&Path>,
+    legacy_home: &Path,
+) -> Vec<PathBuf> {
+    let mut paths = vec![cwd.join(CONFIG_FILE)];
+    if let Some(config_home) = platform_config_home {
+        paths.push(config_home.join("tui-test").join(CONFIG_FILE));
+    }
+    let legacy = legacy_home.join(CONFIG_FILE);
+    if !paths.contains(&legacy) {
+        paths.push(legacy);
+    }
+    paths
 }
 
 /// Resolve a profile: an explicit file if given, else the first file found on
@@ -390,20 +461,29 @@ pub fn resolve(
     profile_name: Option<&str>,
     cwd: &Path,
 ) -> anyhow::Result<Profile> {
+    Ok(resolve_settings(explicit_config, profile_name, cwd)?.profile)
+}
+
+/// Resolve terminal settings and session timeout defaults together.
+pub fn resolve_settings(
+    explicit_config: Option<&Path>,
+    profile_name: Option<&str>,
+    cwd: &Path,
+) -> anyhow::Result<ResolvedConfig> {
     if let Some(path) = explicit_config {
-        return ConfigFile::load(path)?.profile(profile_name);
+        return ConfigFile::load(path)?.settings(profile_name);
     }
     if let Some(path) = std::env::var_os("TUI_TEST_CONFIG").map(PathBuf::from) {
-        return ConfigFile::load(&path)?.profile(profile_name);
+        return ConfigFile::load(&path)?.settings(profile_name);
     }
     for path in default_search_paths(cwd) {
         if path.is_file() {
-            return ConfigFile::load(&path)?.profile(profile_name);
+            return ConfigFile::load(&path)?.settings(profile_name);
         }
     }
     match profile_name {
         Some(name) => anyhow::bail!("no profile {name:?}: no config file found"),
-        None => Ok(Profile::default()),
+        None => Ok(ResolvedConfig::default()),
     }
 }
 
@@ -424,7 +504,7 @@ mod tests {
 
     #[test]
     fn a_bad_color_says_what_it_wanted() {
-        for raw in ["", "#12", "#1234567", "nope", "#gggggg"] {
+        for raw in ["", "#12", "#1234567", "nope", "#gggggg", "éa", "##fff"] {
             let err = Rgb::parse(raw).unwrap_err();
             assert!(
                 err.contains("color") || err.contains("hex"),
@@ -469,6 +549,39 @@ mod tests {
             Colors::default().background,
             "an unset default color is untouched"
         );
+    }
+
+    #[test]
+    fn profile_timeouts_are_loaded_and_accept_cli_overrides() {
+        let cfg = ConfigFile::parse(
+            r#"
+            [profiles.ci.timeouts]
+            text = 1000
+            command = 30000
+            "#,
+        )
+        .unwrap();
+        let settings = cfg.settings(Some("ci")).unwrap();
+        assert_eq!(settings.timeouts.text, Some(1_000));
+        assert_eq!(settings.timeouts.command, Some(30_000));
+        assert_eq!(settings.timeouts.ready, None);
+
+        let merged = settings.timeouts.with_overrides(crate::api::Timeouts {
+            text: Some(2_000),
+            ready: Some(5_000),
+            ..Default::default()
+        });
+        assert_eq!(merged.text, Some(2_000));
+        assert_eq!(merged.command, Some(30_000));
+        assert_eq!(merged.ready, Some(5_000));
+    }
+
+    #[test]
+    fn an_unknown_timeout_class_is_rejected() {
+        let err = ConfigFile::parse("[profiles.ci.timeouts]\ncommands = 10\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("commands"), "{err}");
     }
 
     #[test]
@@ -622,29 +735,29 @@ mod tests {
     }
 
     /// A project-local file wins over the user's, so a repository can pin the
-    /// terminal its tests expect. `TUI_TEST_CONFIG` overrides both.
+    /// terminal its tests expect. `TUI_TEST_CONFIG` replaces discovery.
     #[test]
     fn the_search_order_puts_the_project_first() {
         let _guard = ENV_LOCK.lock().unwrap();
 
         let old = std::env::var_os("TUI_TEST_CONFIG");
         std::env::remove_var("TUI_TEST_CONFIG");
-        let cwd = Path::new("/tmp/some-project");
+        let cwd = std::env::temp_dir().join("some-project");
+        let pinned_path = std::env::temp_dir().join("pinned.toml");
         let result = std::panic::catch_unwind(|| {
-            let paths = search_paths(cwd);
-            assert_eq!(paths.len(), 2);
+            let paths = search_paths(&cwd);
+            assert!(paths.len() >= 2);
             assert_eq!(paths[0], cwd.join(CONFIG_FILE), "the project file is first");
             assert!(
-                paths[1].ends_with(CONFIG_FILE) && paths[1] != paths[0],
-                "the user file is second: {:?}",
-                paths[1]
+                paths[1..].iter().all(|path| path.ends_with(CONFIG_FILE)),
+                "every user candidate names the config file: {paths:?}"
             );
 
-            std::env::set_var("TUI_TEST_CONFIG", "/tmp/pinned.toml");
-            let pinned = search_paths(cwd);
+            std::env::set_var("TUI_TEST_CONFIG", &pinned_path);
+            let pinned = search_paths(&cwd);
             assert_eq!(
                 pinned,
-                vec![PathBuf::from("/tmp/pinned.toml")],
+                vec![pinned_path.clone()],
                 "an explicit config replaces the search entirely"
             );
         });
@@ -653,6 +766,21 @@ mod tests {
             std::env::set_var("TUI_TEST_CONFIG", value);
         }
         result.unwrap();
+    }
+
+    #[test]
+    fn the_platform_config_directory_precedes_the_legacy_home() {
+        let cwd = Path::new("project");
+        let config_home = Path::new("xdg-config");
+        let legacy_home = Path::new("legacy-home");
+        assert_eq!(
+            config_search_paths(cwd, Some(config_home), legacy_home),
+            vec![
+                cwd.join(CONFIG_FILE),
+                config_home.join("tui-test").join(CONFIG_FILE),
+                legacy_home.join(CONFIG_FILE),
+            ]
+        );
     }
 
     /// An environment override is an explicit request, just like `--config`,

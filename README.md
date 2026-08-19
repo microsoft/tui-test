@@ -194,9 +194,10 @@ tui-test open --timeout-text 30000 --timeout-idle 15000 --timeout-ready 20000
 tui-test wait text "done" --timeout 60000   # just this call
 ```
 
-Precedence: `--timeout`, then the session default from `open`/`run`, then
-`TUI_TEST_TIMEOUT_<CLASS>_MS` (read when the daemon starts). `tui-test state`
-prints a session's effective timeouts.
+Session defaults can also come from the selected config profile. Precedence:
+`--timeout`, then `open`/`run --timeout-<class>`, then the selected profile,
+then `TUI_TEST_TIMEOUT_<CLASS>_MS` (read when the daemon starts).
+`tui-test state` prints a session's effective timeouts.
 
 ### Session & lifecycle
 
@@ -474,6 +475,13 @@ optional, so a file only states what it changes:
 [profiles.default]
 scrollback = 10000            # rows kept beyond the visible screen
 
+[profiles.default.timeouts]
+text = 5000
+idle = 5000
+command = 30000
+exit = 30000
+ready = 30000
+
 [profiles.default.colors]
 background = "#000000"
 foreground = "#c0c0c0"
@@ -490,13 +498,15 @@ tui-test open --profile ci
 tui-test open --config ./other.toml --profile ci
 ```
 
-Looked up nearest first: `./tui-test.toml`, then
+Looked up nearest first: `./tui-test.toml`, then the platform config directory
+(`$XDG_CONFIG_HOME/tui-test/tui-test.toml` on Unix), then the legacy
 `~/.tui-test/tui-test.toml`. `--config` or `TUI_TEST_CONFIG` replaces the
 search.
 
 Named profiles do not inherit from `[profiles.default]`; every omitted field
-uses tui-test's built-in default.  `tui-test.toml` affect the cLI only, the libraries
-accept profile configurations when starting a new session.
+uses tui-test's built-in default. Unknown settings and invalid colors are
+rejected before a session starts. `tui-test.toml` affects the CLI only; the
+libraries accept profile and timeout settings when starting a new session.
 
 ### Colors
 
