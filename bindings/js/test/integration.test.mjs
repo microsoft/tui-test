@@ -42,14 +42,12 @@ test("echo roundtrip drives a real session", async () => {
     await su.waitCommand();
     await su.expectText("hello-sdk", { strict: false });
 
+    // A command finishes before the shell draws its next prompt. Wait for the
+    // prompt-end marker so these separate cursor reads cannot straddle that
+    // redraw and disagree by the prompt width.
+    await su.waitReady();
     const state = await su.state();
-    const cursor = await su.getCursor();
-    assert.ok(
-      Number.isInteger(cursor.x) && cursor.x >= 0 && cursor.x < state.cols,
-    );
-    assert.ok(
-      Number.isInteger(cursor.y) && cursor.y >= 0 && cursor.y < state.rows,
-    );
+    assert.deepEqual(await su.getCursor(), state.cursor);
     assert.ok(state.cols > 0);
     assert.match(await su.text(), /hello-sdk/);
     assert.equal(typeof (await su.getCwd()), "string");
@@ -62,11 +60,11 @@ test("echo roundtrip drives a real session", async () => {
     await assert.rejects(() => su.screenshot(null, { zoom: 0.5 }), /requires a path/);
 
     await su.write("echo typed-write");
-    await su.keys("Enter");
+    await su.keyboard.press("Enter");
     await su.waitText("typed-write");
     await su.waitCommand();
     await su.type("echo typed-type");
-    await su.press("Enter");
+    await su.keyboard.press("Enter");
     await su.waitText("typed-type");
     await su.waitCommand();
   });

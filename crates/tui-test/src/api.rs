@@ -78,6 +78,16 @@ pub struct RunOptions {
     pub timeouts: Timeouts,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyAction {
+    #[default]
+    Press,
+    Down,
+    Repeat,
+    Up,
+}
+
 #[derive(Debug, Clone)]
 pub enum Operation {
     Open(OpenOptions),
@@ -111,8 +121,9 @@ pub enum Operation {
     Submit {
         data: Option<String>,
     },
-    Press {
+    Key {
         keys: Vec<String>,
+        action: KeyAction,
     },
     Mouse {
         action: MouseAction,

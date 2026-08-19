@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
 
-use cli::{Cli, Command, DaemonCmd, ExpectCmd, GetArg, MouseCmd, RecordCmd, WaitCmd};
+use cli::{Cli, Command, DaemonCmd, ExpectCmd, GetArg, KeyCmd, MouseCmd, RecordCmd, WaitCmd};
 use protocol::{GetField, MouseAction, Request, Response};
 /// Long-form agent skill manifest, printed by `tui-test skill`.
 const SKILL_MD: &str = include_str!("../../../SKILL.md");
@@ -246,8 +246,11 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         },
         Command::Type { text } => Request::Write { data: text },
         Command::Submit { text } => Request::Submit { data: text },
-        Command::Press { keys } => Request::Press { keys },
-        Command::Keys { combo } => Request::Press { keys: vec![combo] },
+        Command::Key { action } => map_key(action),
+        Command::Press { keys } => Request::Key {
+            action: tui_test::KeyAction::Press,
+            keys,
+        },
         Command::Mouse { action } => Request::Mouse {
             action: map_mouse(action),
         },
@@ -291,6 +294,16 @@ fn map_field(f: GetArg) -> GetField {
         GetArg::Bells => GetField::BellCount,
         GetArg::BellEvents => GetField::BellEvents,
     }
+}
+
+fn map_key(action: KeyCmd) -> Request {
+    let (action, keys) = match action {
+        KeyCmd::Press { keys } => (tui_test::KeyAction::Press, keys),
+        KeyCmd::Down { keys } => (tui_test::KeyAction::Down, keys),
+        KeyCmd::Repeat { keys } => (tui_test::KeyAction::Repeat, keys),
+        KeyCmd::Up { keys } => (tui_test::KeyAction::Up, keys),
+    };
+    Request::Key { action, keys }
 }
 
 fn map_mouse(action: MouseCmd) -> MouseAction {
@@ -808,7 +821,8 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
           cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title|bells|bell-events\n\
-INPUT     type \"text\" | submit [\"text\"] | press <Key...> | keys \"Ctrl+a\"\n\
+INPUT     type \"text\" | submit [\"text\"]\n\
+          key press|down|repeat|up <Key...>\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
 WAIT      wait text \"T\" [--regex --full --not --timeout MS]\n\

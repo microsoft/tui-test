@@ -22,7 +22,7 @@ use compact_str::{CompactString, ToCompactString};
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{CursorShape, Emulator};
+use crate::terminal::emu::{CursorShape, Emulator, KeyboardMode};
 
 /// Alacritty's palette colors arrive either as a `Named` variant or an index;
 /// both funnel through [`Color::from_index`] so a given slot always yields the
@@ -214,6 +214,7 @@ impl AlacrittyEmu {
         let size = TermSize::new(cols as usize, rows as usize);
         let alac_config = AlacConfig {
             scrolling_history: profile.scrollback,
+            kitty_keyboard: true,
             ..Default::default()
         };
         let pending: Arc<Mutex<Vec<Reply>>> = Arc::default();
@@ -337,6 +338,36 @@ impl Emulator for AlacrittyEmu {
                 Reply::Color(..) => Vec::new(),
             })
             .collect()
+    }
+
+    fn keyboard_mode(&self) -> KeyboardMode {
+        let mode = self.term.mode();
+        let mut keyboard_mode = KeyboardMode::empty();
+        for (term_mode, keyboard_flag) in [
+            (
+                TermMode::DISAMBIGUATE_ESC_CODES,
+                KeyboardMode::DISAMBIGUATE_ESC_CODES,
+            ),
+            (
+                TermMode::REPORT_EVENT_TYPES,
+                KeyboardMode::REPORT_EVENT_TYPES,
+            ),
+            (
+                TermMode::REPORT_ALTERNATE_KEYS,
+                KeyboardMode::REPORT_ALTERNATE_KEYS,
+            ),
+            (
+                TermMode::REPORT_ALL_KEYS_AS_ESC,
+                KeyboardMode::REPORT_ALL_KEYS_AS_ESC,
+            ),
+            (
+                TermMode::REPORT_ASSOCIATED_TEXT,
+                KeyboardMode::REPORT_ASSOCIATED_TEXT,
+            ),
+        ] {
+            keyboard_mode.set(keyboard_flag, mode.contains(term_mode));
+        }
+        keyboard_mode
     }
 
     fn title(&self) -> Option<String> {
@@ -496,5 +527,100 @@ mod tests {
 
         emu.process(b"\x1b]111\x07");
         assert_eq!(emu.color(ColorSlot::Background), configured);
+    }
+
+    #[test]
+    fn queries_pushes_and_pops_kitty_keyboard_modes() {
+        let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
+
+        emu.process(b"\x1b[?u");
+        assert_eq!(emu.take_pending_writes(), b"\x1b[?0u");
+
+        emu.process(b"\x1b[>3u");
+        assert_eq!(
+            emu.keyboard_mode(),
+            KeyboardMode::DISAMBIGUATE_ESC_CODES | KeyboardMode::REPORT_EVENT_TYPES
+        );
+
+        emu.process(b"\x1b[?u");
+        assert_eq!(emu.take_pending_writes(), b"\x1b[?3u");
+
+        emu.process(b"\x1b[>8u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_ALL_KEYS_AS_ESC);
+        emu.process(b"\x1b[<u");
+        assert_eq!(
+            emu.keyboard_mode(),
+            KeyboardMode::DISAMBIGUATE_ESC_CODES | KeyboardMode::REPORT_EVENT_TYPES
+        );
+        emu.process(b"\x1b[<u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::empty());
+    }
+
+    #[test]
+    fn sets_kitty_keyboard_modes_with_each_apply_behavior() {
+        let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
+
+        emu.process(b"\x1b[=1u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::DISAMBIGUATE_ESC_CODES);
+
+        emu.process(b"\x1b[=2;2u");
+        assert_eq!(
+            emu.keyboard_mode(),
+            KeyboardMode::DISAMBIGUATE_ESC_CODES | KeyboardMode::REPORT_EVENT_TYPES
+        );
+
+        emu.process(b"\x1b[=1;3u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_EVENT_TYPES);
+
+        emu.process(b"\x1b[=8u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_ALL_KEYS_AS_ESC);
+    }
+
+    #[test]
+    fn main_and_alternate_screens_keep_independent_keyboard_modes() {
+        let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
+
+        emu.process(b"\x1b[>1u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::DISAMBIGUATE_ESC_CODES);
+
+        emu.process(b"\x1b[?1049h");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::empty());
+        emu.process(b"\x1b[>2u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_EVENT_TYPES);
+
+        emu.process(b"\x1b[?1049l");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::DISAMBIGUATE_ESC_CODES);
+        emu.process(b"\x1b[?1049h");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_EVENT_TYPES);
+
+        emu.process(b"\x1b[<u");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::empty());
+        emu.process(b"\x1b[?1049l");
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::DISAMBIGUATE_ESC_CODES);
+    }
+
+    #[test]
+    fn key_encoding_follows_the_active_negotiated_mode() {
+        use crate::input::keys::{token_to_seq_for_action_with_mode, token_to_seq_with_mode};
+        use crate::KeyAction;
+
+        let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        emu.process(b"\x1b[>1u");
+        assert_eq!(
+            token_to_seq_with_mode("Ctrl+i", emu.keyboard_mode()).unwrap(),
+            "\x1b[105;5u"
+        );
+
+        emu.process(b"\x1b[<u");
+        assert_eq!(
+            token_to_seq_with_mode("Ctrl+i", emu.keyboard_mode()).unwrap(),
+            "\t"
+        );
+
+        emu.process(b"\x1b[>10u");
+        assert_eq!(
+            token_to_seq_for_action_with_mode("a", KeyAction::Repeat, emu.keyboard_mode()).unwrap(),
+            "\x1b[97;1:2u"
+        );
     }
 }

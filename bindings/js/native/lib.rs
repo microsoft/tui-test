@@ -11,11 +11,11 @@ use tui_test::shell::Shell as CoreShell;
 use tui_test::{
     global_registry, Backend as CoreBackend, BellEvent as CoreBellEvent, Cell as CoreCell,
     CellColor, Cursor as CoreCursor, EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind,
-    MouseAction, OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation,
-    OperationResult, RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
-    ScreenshotResult as CoreScreenshotResult, SessionHandle, Size as CoreSize,
-    SnapshotResult as CoreSnapshotResult, State as CoreState, Timeouts as CoreTimeouts,
-    TuiTestError,
+    KeyAction, MouseAction, OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult,
+    Operation, OperationResult, RecordingFormat as CoreRecordingFormat,
+    RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
+    Size as CoreSize, SnapshotResult as CoreSnapshotResult, State as CoreState,
+    Timeouts as CoreTimeouts, TuiTestError,
 };
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
@@ -874,7 +874,50 @@ impl NativeSession {
 
     #[napi]
     pub async fn press(&self, keys: Vec<String>) -> Result<()> {
-        self.unit("press", Operation::Press { keys }).await
+        self.unit(
+            "press",
+            Operation::Key {
+                keys,
+                action: KeyAction::Press,
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn key_down(&self, keys: Vec<String>) -> Result<()> {
+        self.unit(
+            "keydown",
+            Operation::Key {
+                keys,
+                action: KeyAction::Down,
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn repeat(&self, keys: Vec<String>) -> Result<()> {
+        self.unit(
+            "repeat",
+            Operation::Key {
+                keys,
+                action: KeyAction::Repeat,
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn key_up(&self, keys: Vec<String>) -> Result<()> {
+        self.unit(
+            "keyup",
+            Operation::Key {
+                keys,
+                action: KeyAction::Up,
+            },
+        )
+        .await
     }
 
     #[napi]

@@ -42,8 +42,8 @@ const MAPPING = {
   ],
   type: [["client", "type"]],
   submit: [["client", "submit"]],
+  key: [["client", "keyboard"]],
   press: [["client", "press"]],
-  keys: [["client", "keys"]],
   mouse: [["client", "mouse"]],
   resize: [["client", "resize"]],
   write: [["client", "write"]],
@@ -70,6 +70,13 @@ test("every cli command is mapped or excluded", { skip: !schema }, () => {
         `missing SDK member for '${command}': ${scope}.${name}`,
       );
     }
+  }
+});
+
+test("keyboard exposes every key action", () => {
+  const keyboard = new TuiTest("keyboard-conformance").keyboard;
+  for (const method of ["press", "down", "repeat", "up"]) {
+    assert.equal(typeof keyboard[method], "function", method);
   }
 });
 

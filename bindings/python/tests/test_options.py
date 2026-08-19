@@ -166,16 +166,22 @@ class TypedCallTests(unittest.TestCase):
         run(terminal.type("typed"))
         run(terminal.write("written"))
         run(terminal.submit("echo hi"))
-        run(terminal.keys("Ctrl+a"))
-        run(terminal.press("Escape", "Enter"))
+        run(terminal.press("Enter"))
+        run(terminal.keyboard.press("Escape"))
+        run(terminal.keyboard.down("Escape", "Enter"))
+        run(terminal.keyboard.repeat("Enter"))
+        run(terminal.keyboard.up("Escape", "Enter"))
         self.assertEqual(
             terminal.fake.calls,
             [
                 ("type", ("typed",)),
                 ("write", ("written",)),
                 ("submit", ("echo hi",)),
-                ("keys", ("Ctrl+a",)),
-                ("press", (["Escape", "Enter"],)),
+                ("press", (["Enter"],)),
+                ("press", (["Escape"],)),
+                ("key_down", (["Escape", "Enter"],)),
+                ("repeat", (["Enter"],)),
+                ("key_up", (["Escape", "Enter"],)),
             ],
         )
 

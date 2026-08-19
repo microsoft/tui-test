@@ -26,6 +26,18 @@ pub enum CursorShape {
     Bar,
 }
 
+bitflags::bitflags! {
+    /// Kitty keyboard protocol flags currently requested by the child.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct KeyboardMode: u8 {
+        const DISAMBIGUATE_ESC_CODES = 1;
+        const REPORT_EVENT_TYPES = 1 << 1;
+        const REPORT_ALTERNATE_KEYS = 1 << 2;
+        const REPORT_ALL_KEYS_AS_ESC = 1 << 3;
+        const REPORT_ASSOCIATED_TEXT = 1 << 4;
+    }
+}
+
 /// A headless terminal emulator: bytes in, cell grid out.
 ///
 /// Implementations must be `Send`; the daemon shares the emulator across its
@@ -40,6 +52,11 @@ pub trait Emulator: Send {
     /// attribute replies, cursor position reports, and similar). The caller
     /// forwards these to the PTY.
     fn take_pending_writes(&mut self) -> Vec<u8>;
+
+    /// Active Kitty keyboard protocol flags negotiated by the child.
+    fn keyboard_mode(&self) -> KeyboardMode {
+        KeyboardMode::empty()
+    }
 
     fn resize(&mut self, cols: u16, rows: u16);
 

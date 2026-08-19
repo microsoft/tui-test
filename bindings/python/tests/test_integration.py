@@ -386,7 +386,7 @@ class IntegrationTests(unittest.TestCase):
                 self.assertIn("ready", opened)
                 await su.resize(90, 27)
                 await su.type("echo typed-input")
-                await su.press("Enter")
+                await su.keyboard.press("Enter")
                 await su.wait_command()
                 await su.expect_output("typed-input", regex=False)
                 await su.expect_text("typed-input", strict=False)

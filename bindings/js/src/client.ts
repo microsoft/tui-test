@@ -99,6 +99,30 @@ function optional<T>(value: T | null | undefined): T | undefined {
   return value ?? undefined;
 }
 
+class Keyboard {
+  #runtime: NativeRuntime;
+
+  constructor(runtime: NativeRuntime) {
+    this.#runtime = runtime;
+  }
+
+  async press(...keys: string[]): Promise<void> {
+    await this.#runtime.press(keys);
+  }
+
+  async down(...keys: string[]): Promise<void> {
+    await this.#runtime.keyDown(keys);
+  }
+
+  async repeat(...keys: string[]): Promise<void> {
+    await this.#runtime.repeat(keys);
+  }
+
+  async up(...keys: string[]): Promise<void> {
+    await this.#runtime.keyUp(keys);
+  }
+}
+
 class Mouse {
   #runtime: NativeRuntime;
 
@@ -149,6 +173,7 @@ class Mouse {
 
 export class TuiTest {
   readonly session: string;
+  readonly keyboard: Keyboard;
   readonly mouse: Mouse;
   #runtime: NativeRuntime;
   #options: ClientOptions;
@@ -163,6 +188,7 @@ export class TuiTest {
     profilePayload(opts.profile);
     this.#options = opts;
     this.#runtime = new NativeRuntime(this.session);
+    this.keyboard = new Keyboard(this.#runtime);
     this.mouse = new Mouse(this.#runtime);
   }
 
@@ -292,11 +318,7 @@ export class TuiTest {
   }
 
   async press(...keys: string[]): Promise<void> {
-    await this.#runtime.press(keys);
-  }
-
-  async keys(combo: string): Promise<void> {
-    await this.#runtime.press([combo]);
+    await this.keyboard.press(...keys);
   }
 
   async resize(cols: number, rows: number): Promise<void> {

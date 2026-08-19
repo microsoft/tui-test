@@ -237,6 +237,18 @@ export class NativeRuntime {
     return this.#call((session) => session.press(keys));
   }
 
+  keyDown(keys: string[]): Promise<void> {
+    return this.#call((session) => session.keyDown(keys));
+  }
+
+  repeat(keys: string[]): Promise<void> {
+    return this.#call((session) => session.repeat(keys));
+  }
+
+  keyUp(keys: string[]): Promise<void> {
+    return this.#call((session) => session.keyUp(keys));
+  }
+
   mouseClick(options?: MouseClickOptions): Promise<void> {
     return this.#call((session) => session.mouseClick(options));
   }

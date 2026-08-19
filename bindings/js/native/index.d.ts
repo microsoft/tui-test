@@ -22,6 +22,9 @@ export declare class NativeSession {
   type(text: string): Promise<void>
   submit(data?: string | undefined | null): Promise<void>
   press(keys: Array<string>): Promise<void>
+  keyDown(keys: Array<string>): Promise<void>
+  repeat(keys: Array<string>): Promise<void>
+  keyUp(keys: Array<string>): Promise<void>
   mouseClick(options?: MouseClickOptions | undefined | null): Promise<void>
   mouseMove(x: number, y: number): Promise<void>
   mouseDown(x: number, y: number, button?: number | undefined | null): Promise<void>
