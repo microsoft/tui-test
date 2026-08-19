@@ -56,9 +56,11 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 `TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count` / `get_bell_events`, `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
 
-`keyboard.press()` sends down then up. Use `keyboard.down()`,
-`keyboard.repeat()`, and `keyboard.up()` for explicit events. Top-level
-`press()` remains a compatibility alias.
+`keyboard.press()` simulates key presses: it sends the normal press input and
+adds a release only when the negotiated Kitty mode can represent it.
+`keyboard.down()` and `keyboard.up()` simulate explicit keydown and keyup
+events; `keyboard.repeat()` simulates repeats. Top-level `press()` remains a
+compatibility alias.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 

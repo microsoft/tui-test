@@ -274,13 +274,16 @@ print the screen bare.
 | ------------------------------------------------------------- | ------------------------------------------------------------ |
 | `type "text"`                                                 | Type literal text.                                         |
 | `submit ["text"]`                                             | Type then press the shell return key.                      |
-| `key press <Key...>`                                          | Send down then up, e.g. `key press Ctrl+C`.                |
-| `key down <Key...>` / `key up <Key...>`                       | Send explicit down and up events.                          |
-| `key repeat <Key...>`                                         | Send repeat events for keys that are currently down.       |
+| `key press <Key...>`                                          | Simulate key presses, e.g. `key press Ctrl+C`.             |
+| `key down <Key...>` / `key up <Key...>`                       | Simulate explicit keydown and keyup events.                |
+| `key repeat <Key...>`                                         | Send repeat events (press-equivalent in legacy mode).      |
 | `mouse click X Y` / `mouse click --on-text "OK" [--clicks N]` | Click by coords or label.                                  |
 | `mouse move\|down\|up\|drag\|scroll ...`                      | Full mouse control.                                        |
 
-Key input follows the Kitty keyboard protocol negotiated by the child.
+Key input follows the Kitty keyboard protocol negotiated by the child. A
+`key press` sends the normal press input and adds a release only when the child
+requests Kitty event-type reporting. Text-producing keys also require
+report-all-keys mode before repeat and release events can be represented.
 Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`, and `Meta`;
 the top-level `press` command remains a compatibility alias for `key press`.
 

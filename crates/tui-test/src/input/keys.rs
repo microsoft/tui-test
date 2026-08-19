@@ -206,7 +206,12 @@ fn control_key(key: ControlKey, mods: Mods, event: KeyEventKind, mode: KeyboardM
     }
 
     let disambiguate = mode.contains(KeyboardMode::DISAMBIGUATE_ESC_CODES);
-    if matches!(key, ControlKey::Escape) && !mods.any() && !disambiguate && !report_all {
+    if matches!(key, ControlKey::Escape)
+        && event == KeyEventKind::Press
+        && !mods.any()
+        && !disambiguate
+        && !report_all
+    {
         return ESC.to_string();
     }
 
@@ -416,8 +421,11 @@ fn character(ch: char, mods: Mods, event: KeyEventKind, mode: KeyboardMode) -> S
     }
 
     let legacy = legacy_character(ch, mods);
+    // Text-producing keys need report-all mode before repeat/release events
+    // can be represented separately from their UTF-8 text.
+    let produces_text = !mods.disambiguates_character();
     let escape_encoded = mode.contains(KeyboardMode::REPORT_ALL_KEYS_AS_ESC)
-        || (report_events && event != KeyEventKind::Press)
+        || (report_events && event != KeyEventKind::Press && !produces_text)
         || (mode.contains(KeyboardMode::DISAMBIGUATE_ESC_CODES) && mods.disambiguates_character())
         || legacy.is_none();
     if event == KeyEventKind::Release && !escape_encoded {
@@ -794,7 +802,7 @@ mod tests {
     #[test]
     fn explicit_events_use_csi_u_when_event_reporting_is_enabled() {
         let events = KeyboardMode::REPORT_EVENT_TYPES;
-        assert_events(events, "a", "a", "\u{1b}[97;1:2u", "\u{1b}[97;1:3u");
+        assert_events(events, "a", "a", "a", "");
         assert_events(
             events,
             "Ctrl+a",
@@ -806,13 +814,7 @@ mod tests {
         assert_events(events, "Enter", "\r", "\r", "");
 
         let disambiguated_events = events | KeyboardMode::DISAMBIGUATE_ESC_CODES;
-        assert_events(
-            disambiguated_events,
-            "a",
-            "a",
-            "\u{1b}[97;1:2u",
-            "\u{1b}[97;1:3u",
-        );
+        assert_events(disambiguated_events, "a", "a", "a", "");
         assert_events(
             disambiguated_events,
             "Ctrl+a",
@@ -870,7 +872,13 @@ mod tests {
             "\u{1b}[27u",
             "",
         );
-        assert_events(KeyboardMode::REPORT_EVENT_TYPES, "Escape", ESC, ESC, ESC);
+        assert_events(
+            KeyboardMode::REPORT_EVENT_TYPES,
+            "Escape",
+            ESC,
+            "\u{1b}[27;1:2u",
+            "\u{1b}[27;1:3u",
+        );
         assert_events(
             KeyboardMode::DISAMBIGUATE_ESC_CODES | KeyboardMode::REPORT_EVENT_TYPES,
             "Escape",
@@ -923,15 +931,27 @@ mod tests {
     }
 
     #[test]
-    fn press_pairs_each_keydown_with_a_keyup() {
-        let mode = KeyboardMode::REPORT_EVENT_TYPES;
+    fn press_reports_release_only_when_requested_and_representable() {
         assert_eq!(
-            action_seq("a", KeyAction::Press, mode).unwrap(),
-            "a\u{1b}[97;1:3u"
+            action_seq("Up", KeyAction::Press, KeyboardMode::empty()).unwrap(),
+            "\u{1b}[A"
+        );
+
+        let events = KeyboardMode::REPORT_EVENT_TYPES;
+        assert_eq!(
+            action_seq("Up", KeyAction::Press, events).unwrap(),
+            "\u{1b}[A\u{1b}[1;1:3A"
+        );
+        assert_eq!(action_seq("a", KeyAction::Press, events).unwrap(), "a");
+
+        let all_events = events | KeyboardMode::REPORT_ALL_KEYS_AS_ESC;
+        assert_eq!(
+            action_seq("a", KeyAction::Press, all_events).unwrap(),
+            "\u{1b}[97u\u{1b}[97;1:3u"
         );
         assert_eq!(
-            action_seq("ab", KeyAction::Press, mode).unwrap(),
-            "a\u{1b}[97;1:3ub\u{1b}[98;1:3u"
+            action_seq("ab", KeyAction::Press, all_events).unwrap(),
+            "\u{1b}[97u\u{1b}[97;1:3u\u{1b}[98u\u{1b}[98;1:3u"
         );
     }
 

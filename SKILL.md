@@ -84,16 +84,18 @@ without parsing text:
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | `type "text"`                                                              | Type literal text (no return key).                                           |
 | `submit ["text"]`                                                          | Type text then press the shell's return key. Omit text to just submit.       |
-| `key press <Key...>`                                                       | Send down then up, e.g. `key press Ctrl+C`.                                  |
-| `key down <Key...>` / `key up <Key...>`                                    | Send explicit down and up events.                                            |
-| `key repeat <Key...>`                                                      | Send repeat events for keys that are currently down.                         |
+| `key press <Key...>`                                                       | Simulate key presses, e.g. `key press Ctrl+C`.                               |
+| `key down <Key...>` / `key up <Key...>`                                    | Simulate explicit keydown and keyup events.                                  |
+| `key repeat <Key...>`                                                      | Send repeat events (press-equivalent in legacy mode).                        |
 | `mouse click X Y` / `mouse click --on-text "OK" [--button N] [--clicks N]` | Click by coordinates or by visible label.                                    |
 | `mouse move\|down\|up\|drag\|scroll ...`                                   | Full mouse control (`--button` default 0=left, `scroll --amount` default 3). |
 
 Key input automatically follows the Kitty keyboard protocol flags negotiated by
-the child application. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`,
-`Hyper`, and `Meta`. Top-level `press` remains a compatibility alias for
-`key press`.
+the child application. A `key press` sends the normal press input and adds a
+release only when the child requests event-type reporting. Text-producing keys
+also require report-all-keys mode before repeat and release events can be
+represented. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`,
+and `Meta`. Top-level `press` remains a compatibility alias for `key press`.
 
 ### PTY control
 
@@ -151,8 +153,9 @@ tui-test close
 ```
 
 `submit` types text then presses Enter; `type` types without Enter; `key press`
-sends complete key actions (`key press Escape : w q Enter`, `key press Ctrl+C`);
-`key down` and `key up` model held keys, and `key repeat` sends repeat events.
+simulates key presses (`key press Escape : w q Enter`, `key press Ctrl+C`);
+`key down` and `key up` simulate explicit keydown and keyup events, and
+`key repeat` sends repeat events.
 
 ## Workflow: drive a TUI program
 

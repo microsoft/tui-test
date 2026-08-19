@@ -776,25 +776,25 @@ pub enum GetArg {
 
 #[derive(Subcommand)]
 pub enum KeyCmd {
-    /// Press keys by sending a down event followed by an up event.
+    /// Simulate key presses, reporting releases when the negotiated mode supports them.
     Press {
         /// Key names or combos to press in sequence.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         keys: Vec<String>,
     },
-    /// Send down events without releasing the keys.
+    /// Simulate explicit keydown events.
     Down {
         /// Key names or combos to send down events for.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         keys: Vec<String>,
     },
-    /// Send repeat events for keys that are currently down.
+    /// Send repeat events, or press-equivalent input in legacy mode.
     Repeat {
         /// Key names or combos to send repeat events for.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         keys: Vec<String>,
     },
-    /// Send up events for keys that were previously pressed.
+    /// Simulate explicit keyup events when the negotiated mode supports them.
     Up {
         /// Key names or combos to send up events for.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
