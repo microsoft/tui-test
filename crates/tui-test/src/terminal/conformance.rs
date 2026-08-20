@@ -737,6 +737,45 @@ macro_rules! emulator_conformance_tests {
             );
         }
 
+        /// The terminator is recognised even when the read splits it.
+        ///
+        /// A PTY read ends wherever the kernel decides, which can be between
+        /// the two bytes of an `ST`. The terminator a reply echoes has to come
+        /// from the sequence, not from how the bytes happened to arrive.
+        #[test]
+        fn conformance_a_color_reply_echoes_a_terminator_split_across_reads() {
+            let mut e = conformance_emu(10, 4, 100);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]11;?\x1b");
+            e.process(b"\\");
+            let st = e.take_pending_writes();
+            assert!(
+                st.ends_with(b"\x1b\\"),
+                "a split ST query is answered with ST: {:?}",
+                String::from_utf8_lossy(&st)
+            );
+        }
+
+        /// A palette index that is not a number names no slot.
+        ///
+        /// `OSC 4` addresses a slot by number, and taking the leading digits
+        /// of one that is not would let a malformed sequence write to a slot
+        /// it never named.
+        #[test]
+        fn conformance_a_malformed_palette_index_sets_nothing() {
+            let mut e = conformance_emu(10, 4, 100);
+            let before = e.color(ColorSlot::Indexed(1));
+
+            e.process(b"\x1b]4;1x;#112233\x07");
+
+            assert_eq!(
+                e.color(ColorSlot::Indexed(1)),
+                before,
+                "a malformed index leaves the palette alone"
+            );
+        }
+
         /// Replies leave in the order the program asked for them.
         ///
         /// A batch of queries is commonly ended with a device attributes

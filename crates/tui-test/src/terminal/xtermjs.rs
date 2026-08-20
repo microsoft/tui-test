@@ -142,7 +142,10 @@ impl XtermJsEmu {
         base.push(rgb_to_i32(profile.colors.foreground));
         base.push(rgb_to_i32(profile.colors.background));
         base.push(rgb_to_i32(profile.colors.cursor));
-        let scrollback = profile.scrollback;
+        // A profile can ask for more scrollback than the count crossing into
+        // JS can hold. Saturating keeps a deep request deep; the cast alone
+        // would wrap it round to a shallow one.
+        let scrollback = u32::try_from(profile.scrollback).unwrap_or(u32::MAX);
         let runtime = Runtime::new()?;
         let ctx = Context::full(&runtime)?;
 
@@ -154,7 +157,7 @@ impl XtermJsEmu {
             ctx.eval::<(), _>(UNICODE11)?;
             ctx.eval::<(), _>(UNICODE11_CAPTURE)?;
             let boot: Function = ctx.globals().get("__boot")?;
-            let emu: Object = boot.call((cols, rows, scrollback as u32, base.clone()))?;
+            let emu: Object = boot.call((cols, rows, scrollback, base.clone()))?;
             ctx.globals().set("__emu", emu)?;
             Ok(())
         })?;

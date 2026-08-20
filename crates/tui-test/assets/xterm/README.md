@@ -7,9 +7,17 @@ so the xterm.js backend needs no Node.js at runtime.
 | ---- | ------ | ------- | ------- |
 | `xterm-headless.js` | [`@xterm/headless`](https://www.npmjs.com/package/@xterm/headless) | 6.0.0 | MIT |
 | `addon-unicode11.js` | [`@xterm/addon-unicode11`](https://www.npmjs.com/package/@xterm/addon-unicode11) | 0.9.0 | MIT |
-| `LICENSE` | xterm.js | — | MIT |
+| `LICENSE` | both of the above, reproduced per package | — | MIT |
 
 `shim.js` is tui-test's own code, not vendored.
+
+Both bundles are dropped in unchanged, so they are byte-for-byte what npm
+publishes:
+
+```
+17a90b650cf6b77cce2b98c4063884d43545e4ce177a54b76ccfc906f1aacaed  xterm-headless.js
+72353b5178e1a7382716df1cfedf8ab070eea655d38995bb9f4f284fe56e2f2b  addon-unicode11.js
+```
 
 ## Why the unicode11 addon
 
@@ -48,7 +56,11 @@ A query has to echo the terminator it was asked with, and an OSC handler is
 given its payload but not that terminator, so the shim scans the incoming bytes
 for it. The scan carries state between calls because a PTY read splits wherever
 it likes, and it keys what it finds by OSC code so that a title arriving between
-two colour queries cannot put the wrong terminator on a reply.
+two colour queries cannot put the wrong terminator on a reply. It records the
+terminator on the `ESC` of an `ST` rather than on the `\` that follows, because
+the parser ends an OSC as soon as it sees that `ESC` without waiting to learn
+what comes next, and only for the codes answered here, so that a sequence whose
+terminator nothing claims cannot accumulate.
 
 ## Known divergence
 
@@ -61,7 +73,17 @@ than silent.
 
 ## Updating
 
-Re-download the bundle and the addon at the pinned versions and drop them in
-unchanged. Then run `cargo test -p tui-test-rs --features xtermjs conformance`,
-which checks the backend against the same contract every other one meets, and
-re-measure the table above before changing a version.
+Re-fetch both packages at the versions in the table and copy the bundles in
+unchanged, which also re-checks the hashes above against what npm serves today:
+
+```sh
+npm pack @xterm/headless@6.0.0 @xterm/addon-unicode11@0.9.0
+tar xzOf xterm-headless-6.0.0.tgz package/lib-headless/xterm-headless.js > xterm-headless.js
+tar xzOf xterm-addon-unicode11-0.9.0.tgz package/lib/addon-unicode11.js > addon-unicode11.js
+shasum -a 256 xterm-headless.js addon-unicode11.js
+```
+
+Then run `cargo test -p tui-test-rs --features xtermjs conformance`, which
+checks the backend against the same contract every other one meets, and
+re-measure the table above before changing a version. A version bump also means
+re-checking each package's `LICENSE`, since they carry separate notices.

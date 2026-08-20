@@ -68,15 +68,15 @@ Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_se
 `profile=`, and `timeouts=`. They reuse a live named session unless
 `restart=True` is passed. The constructor also accepts `backend=` and
 `profile=` as defaults for later opens and runs. Backend values are
-`"alacritty"` (default) and `"ghostty"`:
+`"alacritty"` (default), `"ghostty"`, and `"xtermjs"`:
 
 ```python
 terminal = TuiTest(backend="ghostty")
 await terminal.open()
-await terminal.run("vim", "file.txt", backend="alacritty")
+await terminal.run("vim", "file.txt", backend="xtermjs")
 ```
 
-The native package includes both emulators. Profiles are partial; omitted
+The native package includes all three emulators. Profiles are partial; omitted
 fields use the built-in defaults:
 
 ```python

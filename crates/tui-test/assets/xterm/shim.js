@@ -96,8 +96,6 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
   // that never comes. The bytes are scanned on the way in and each terminator
   // queued for the handler that is about to run.
   //
-  // The scan carries its state between calls because a PTY read splits
-  // wherever it likes, including between the two bytes of an `ST`.
   // Each entry is the code of an OSC sequence and whether it ended in `BEL`.
   // Keyed by code because the scan sees every sequence while only the color
   // ones are answered here: a title arriving between two queries would
@@ -106,21 +104,28 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
   //
   // The scan carries its state between calls because a PTY read splits
   // wherever it likes, including between the two bytes of an `ST`.
+  //
+  // Only the codes answered here are recorded. The scan sees every sequence,
+  // and one whose terminator is never claimed would sit in this list for the
+  // life of the session: a shell that retitles the window on every prompt
+  // would leak an entry per prompt.
+  var ANSWERED = { 4: 1, 10: 1, 11: 1, 12: 1, 104: 1, 110: 1, 111: 1, 112: 1 };
   var terminators = [];
   var inOsc = false, sawEsc = false, code = -1, readingCode = false;
   function scanTerminators(bytes) {
     for (var i = 0; i < bytes.length; i++) {
       var b = bytes[i];
       if (inOsc) {
-        var done = false;
-        if (b === 0x07) { done = true; }
-        else if (sawEsc) { sawEsc = false; if (b === 0x5c) { done = true; } }
-        if (done) {
-          terminators.push({ code: code, bel: b === 0x07 });
+        // `BEL` ends the sequence, and so does a bare `ESC`: the parser these
+        // bytes are about to reach ends an OSC the moment it sees one, without
+        // waiting to learn whether the `\` of an `ST` follows. Recording the
+        // terminator on that `ESC` rather than on the `\` is what keeps this
+        // scan in step with the handler when a read splits between the two.
+        if (b === 0x07 || b === 0x1b) {
+          if (ANSWERED[code]) { terminators.push({ code: code, bel: b === 0x07 }); }
           inOsc = false; readingCode = false; code = -1; sawEsc = false;
           continue;
         }
-        if (b === 0x1b) { sawEsc = true; continue; }
         if (readingCode) {
           if (b >= 0x30 && b <= 0x39) { code = (code < 0 ? 0 : code) * 10 + (b - 0x30); }
           else { readingCode = false; }
@@ -143,6 +148,13 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
       if (terminators[i].code === wanted) { return terminators.splice(i, 1)[0].bel; }
     }
     return true;
+  }
+
+  // `parseInt` reads the leading digits of `1x` and calls it slot 1, which
+  // addresses a slot the sequence never named. A malformed index is not an
+  // index, so it names nothing.
+  function slotIndex(text) {
+    return /^[0-9]+$/.test(text) ? parseInt(text, 10) : -1;
   }
 
   // `rgb:RRRR/GGGG/BBBB`, the form xterm replies in: each component doubled
@@ -207,7 +219,7 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     var parts = String(data).split(';');
     var bel = tookBel(4);
     for (var i = 0; i + 1 < parts.length; i += 2) {
-      var slot = parseInt(parts[i], 10);
+      var slot = slotIndex(parts[i]);
       if (!(slot >= 0 && slot <= 255)) { continue; }
       if (parts[i + 1] === '?') {
         replies.push('\x1b]4;' + slot + ';' + spec(resolved(slot)) + (bel ? '\x07' : '\x1b\\'));
@@ -228,7 +240,10 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
       return true;
     }
     var parts = text.split(';');
-    for (var i = 0; i < parts.length; i++) { delete overrides[parseInt(parts[i], 10)]; }
+    for (var i = 0; i < parts.length; i++) {
+      var slot = slotIndex(parts[i]);
+      if (slot >= 0 && slot <= 255) { delete overrides[slot]; }
+    }
     return true;
   });
   [[110, FG], [111, BG], [112, CURSOR]].forEach(function (pair) {

@@ -225,21 +225,25 @@ child. Pass `--restart` (or its `--force` alias) to replace it explicitly.
 
 ### Terminal backends
 
-Choose an emulator per session with `--backend alacritty|ghostty`. Alacritty
-remains the default; `ghostty` uses
-[Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs).
+Choose an emulator per session with `--backend alacritty|ghostty|xtermjs`.
+Alacritty remains the default; `ghostty` uses
+[Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs), and
+`xtermjs` runs [xterm.js](https://xtermjs.org) — the emulator behind VS Code's
+terminal — inside an embedded QuickJS interpreter.
 
 ```sh
 tui-test open --backend ghostty
-tui-test run --backend ghostty vim file.txt
+tui-test run --backend xtermjs vim file.txt
 ```
 
-Both backends run the same conformance suite and feed the same renderer,
+All three backends run the same conformance suite and feed the same renderer,
 assertions, and snapshots. Shell semantic-prompt tracking stays on the raw PTY
 byte stream, so command, exit-code, and cwd behavior is backend-independent.
 Ghostty also preserves SGR blink; Alacritty parses blink but cannot report it.
+xterm.js records a cell's underline color only when that cell also has an
+underline style, which changes nothing about how a cell renders.
 
-The CLI and published Python/Node native packages include both backends.
+The CLI and published Python/Node native packages include all three backends.
 Windows ARM64 artifacts are not currently published because Ghostty's
 upstream Zig build does not support that target.
 
@@ -247,6 +251,7 @@ Rust users opt in explicitly:
 
 ```sh
 cargo add tui-test-rs --features ghostty
+cargo add tui-test-rs --features xtermjs
 ```
 
 ```rust
@@ -259,8 +264,11 @@ let options = OpenOptions {
 ```
 
 Building the `ghostty` feature from source requires Zig 0.16 on `PATH`;
-the dependency builds a pinned Ghostty revision. The default Rust feature set
-continues to build only the Alacritty backend and does not require Zig.
+the dependency builds a pinned Ghostty revision. The `xtermjs` feature needs
+no extra tooling — xterm.js is vendored and embedded, so it depends on nothing
+installed on the machine, at the cost of compiling QuickJS and carrying about
+230 KB of JavaScript in the binary. The default Rust feature set continues to
+build only the Alacritty backend and requires neither.
 
 ### Inspection
 
@@ -528,7 +536,7 @@ promises.
 |                                      | tui-test                                        | [tui-use](https://github.com/onesuper/tui-use) | [terminal-use](https://github.com/flipbit03/terminal-use) |
 | ------------------------------------ | ------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------------- |
 | Language                             | Rust                                             | TypeScript/Node                                | Rust                                                      |
-| Emulator                             | alacritty or Ghostty, per session                | xterm (headless)                               | alacritty                                                 |
+| Emulator                             | alacritty, Ghostty, or xterm.js, per session     | xterm (headless)                               | alacritty                                                 |
 | Shell command tracking               | ✅ command boundaries, exit codes, cwd           | ❌                                             | ❌                                                        |
 | Testing / snapshots                  | ✅ `expect` text / output / exit-code / snapshot | ❌                                             | ❌                                                        |
 | Color & per-cell attributes          | ✅ fg/bg, ANSI-256/hex/rgb, `cells`              | ❌ plain text (+ highlights)                   | via PNG                                                   |
