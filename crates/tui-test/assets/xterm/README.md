@@ -86,4 +86,7 @@ shasum -a 256 xterm-headless.js addon-unicode11.js
 Then run `cargo test -p tui-test-rs --features xtermjs conformance`, which
 checks the backend against the same contract every other one meets, and
 re-measure the table above before changing a version. A version bump also means
-re-checking each package's `LICENSE`, since they carry separate notices.
+re-checking each package's `LICENSE`, since they carry separate notices, and
+updating the versions in `.github/workflows/vendored.yml`, which re-fetches
+both packages whenever these files change and fails if what is checked in is
+not byte for byte what npm publishes.

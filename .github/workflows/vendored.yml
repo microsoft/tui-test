@@ -1,0 +1,44 @@
+name: Vendored assets
+
+# Only when the vendored files themselves change: the point is to catch a
+# bundle that was edited or taken from somewhere other than the pinned
+# release, which can only happen in a commit that touches them.
+on:
+  pull_request:
+    paths: ["crates/tui-test/assets/xterm/**"]
+  push:
+    branches: [main]
+    paths: ["crates/tui-test/assets/xterm/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  xterm:
+    name: xterm.js matches the packages it is pinned to
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The bundles are copied out of the published tarballs unchanged, so a
+      # fresh fetch has to reproduce them byte for byte. Bump these versions
+      # in step with `crates/tui-test/assets/xterm/README.md`.
+      - name: Compare against the published packages
+        env:
+          HEADLESS: 6.0.0
+          UNICODE11: 0.9.0
+        run: |
+          set -euo pipefail
+          assets="$PWD/crates/tui-test/assets/xterm"
+          work="$(mktemp -d)"
+          cd "$work"
+          npm pack "@xterm/headless@$HEADLESS" "@xterm/addon-unicode11@$UNICODE11"
+          tar xzOf "xterm-headless-$HEADLESS.tgz" package/lib-headless/xterm-headless.js > headless.js
+          tar xzOf "xterm-addon-unicode11-$UNICODE11.tgz" package/lib/addon-unicode11.js > unicode11.js
+          diff -q headless.js "$assets/xterm-headless.js"
+          diff -q unicode11.js "$assets/addon-unicode11.js"
+          echo "Both bundles match the published packages."
