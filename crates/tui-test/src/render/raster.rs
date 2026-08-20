@@ -316,7 +316,7 @@ impl FrameRenderer for GridRenderer {
         }
 
         let mut pixels = self.pixmap.data().to_vec();
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             unpremultiply(pixel);
         }
         Ok(RgbaFrame {
