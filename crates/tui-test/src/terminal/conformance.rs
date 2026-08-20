@@ -712,6 +712,47 @@ macro_rules! emulator_conformance_tests {
             assert_eq!(e.color(background), configured);
         }
 
+        /// The dynamic colors are one list, and the OSC code only says where
+        /// in it to start: `OSC 10;a;b` sets the foreground and then the
+        /// background. Folding every parameter onto the first color would let
+        /// a sequence write somewhere it never named.
+        #[test]
+        fn conformance_one_dynamic_color_sequence_sets_successive_colors() {
+            use $crate::profile::{ColorSlot, Rgb};
+            let mut e = conformance_emu(10, 4, 100);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]10;#010203;#040506\x07");
+
+            assert_eq!(
+                e.color(ColorSlot::Foreground),
+                Rgb::new(0x01, 0x02, 0x03),
+                "the first parameter is the color the code names"
+            );
+            assert_eq!(
+                e.color(ColorSlot::Background),
+                Rgb::new(0x04, 0x05, 0x06),
+                "the second parameter is the next color in the list"
+            );
+        }
+
+        /// Each `?` in a dynamic color sequence is answered on its own, under
+        /// the code of the color it asked about.
+        #[test]
+        fn conformance_each_dynamic_color_query_is_answered_separately() {
+            let mut e = conformance_emu(10, 4, 100);
+            e.process(b"\x1b]10;#010203;#040506\x07");
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]10;?;?\x07");
+
+            assert_eq!(
+                String::from_utf8_lossy(&e.take_pending_writes()),
+                "\x1b]10;rgb:0101/0202/0303\x07\x1b]11;rgb:0404/0505/0606\x07",
+                "one reply per query, each under its own code"
+            );
+        }
+
         /// A reply uses the terminator the query used. A program that reads
         /// until the terminator it sent would otherwise wait for one that
         /// never comes.

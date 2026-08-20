@@ -195,13 +195,25 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
   // Setting and querying a dynamic color share one sequence, told apart by a
   // payload of `?`. Returning false leaves the sequence unhandled so xterm.js
   // still sees it, which matters for the ones it acts on itself.
-  function dynamic(prefix, slot) {
+  //
+  // The dynamic colors are one list and `Ps` only says where in it to start,
+  // so `OSC 10;a;b` sets the foreground and then the background, and each `?`
+  // is answered separately under the code of the color it asked about. The
+  // list runs past the cursor into pointer, Tektronix, and highlight colors
+  // this terminal has no notion of; those positions are stepped over rather
+  // than folded onto the last slot, which would let a sequence write somewhere
+  // it never named.
+  var DYNAMIC = { 10: FG, 11: BG, 12: CURSOR };
+
+  function dynamic(prefix) {
     term.parser.registerOscHandler(prefix, function (data) {
       var parts = String(data).split(';');
       var bel = tookBel(prefix);
       for (var i = 0; i < parts.length; i++) {
+        var slot = DYNAMIC[prefix + i];
+        if (slot === undefined) { continue; }
         if (parts[i] === '?') {
-          answer(prefix, resolved(slot), bel);
+          answer(prefix + i, resolved(slot), bel);
         } else {
           var v = parseColor(parts[i]);
           if (v !== null) { overrides[slot] = v; }
@@ -210,9 +222,9 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
       return true;
     });
   }
-  dynamic(10, FG);
-  dynamic(11, BG);
-  dynamic(12, CURSOR);
+  dynamic(10);
+  dynamic(11);
+  dynamic(12);
 
   // `OSC 4` addresses the palette, so each pair names its own slot.
   term.parser.registerOscHandler(4, function (data) {
