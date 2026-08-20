@@ -72,8 +72,8 @@ await terminal.open();
 await terminal.run("vim", ["file.txt"], { backend: "rio" });
 ```
 
-The native package includes all three emulators. Profiles are partial; omitted
-fields use the built-in defaults:
+The native package includes every supported emulator. Profiles are partial;
+omitted fields use the built-in defaults:
 
 ```js
 const terminal = new TuiTest("work", {

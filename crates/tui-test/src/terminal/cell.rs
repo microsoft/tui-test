@@ -22,8 +22,8 @@ use unicode_width::UnicodeWidthStr;
 /// need it either: ghostty keys that off the index (`bold && idx < 8 =>
 /// palette[idx + 8]`), which applies to `38;5;1` just as much as to `31`.
 ///
-/// What all three do agree on is that 0-15 are the slots a theme may override,
-/// which is the only distinction any consumer here acts on.
+/// What every supported backend agrees on is that 0-15 are the slots a theme
+/// may override, which is the only distinction any consumer here acts on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum NamedColor {

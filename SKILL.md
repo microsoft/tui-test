@@ -394,10 +394,11 @@ tui-test open --backend ghostty
 tui-test run --backend rio -- vim file.txt
 ```
 
-All three backends satisfy the same cell-grid contract. Ghostty preserves the
-blink attribute, while Alacritty and Rio cannot report it. Command boundaries,
-exit codes, cwd, and captured command output are parsed separately from the raw
-PTY stream, so switching emulators does not change shell integration behavior.
+Every enabled backend satisfies the same cell-grid contract. Ghostty preserves
+the blink attribute, while Alacritty and Rio cannot report it. Command
+boundaries, exit codes, cwd, and captured command output are parsed separately
+from the raw PTY stream, so switching emulators does not change shell
+integration behavior.
 
 ## Configuration
 

@@ -235,21 +235,22 @@ tui-test open --backend ghostty
 tui-test run --backend rio vim file.txt
 ```
 
-All three backends run the same conformance suite and feed the same renderer,
-assertions, and snapshots. Shell semantic-prompt tracking stays on the raw PTY
-byte stream, so command, exit-code, and cwd behavior is backend-independent.
+Every enabled backend runs the same conformance suite and feeds the same
+renderer, assertions, and snapshots. Shell semantic-prompt tracking stays on
+the raw PTY byte stream, so command, exit-code, and cwd behavior is
+backend-independent.
 Ghostty also preserves SGR blink; Alacritty and rio-vt parse blink but cannot
 report it.
 
-The CLI and published Python/Node native packages include all three backends.
+The CLI and published Python/Node native packages enable every supported
+backend.
 Windows ARM64 artifacts are not currently published because Ghostty's
 upstream Zig build does not support that target.
 
-Rust users get the Alacritty and Rio backends by default and opt into Ghostty
-explicitly:
+The Rust crate defaults to Alacritty. Enable optional backends explicitly:
 
 ```sh
-cargo add tui-test-rs --features ghostty
+cargo add tui-test-rs --features rio
 ```
 
 ```rust
@@ -262,8 +263,8 @@ let options = OpenOptions {
 ```
 
 Building the `ghostty` feature from source requires Zig 0.16 on `PATH`;
-the dependency builds a pinned Ghostty revision. The default Rust feature set
-includes the Alacritty and Rio backends and does not require Zig.
+the dependency builds a pinned Ghostty revision. The `rio` feature enables
+rio-vt and does not require Zig.
 
 ### Inspection
 
@@ -531,7 +532,7 @@ promises.
 |                                      | tui-test                                        | [tui-use](https://github.com/onesuper/tui-use) | [terminal-use](https://github.com/flipbit03/terminal-use) |
 | ------------------------------------ | ------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------------- |
 | Language                             | Rust                                             | TypeScript/Node                                | Rust                                                      |
-| Emulator                             | Alacritty, Ghostty, or Rio, per session           | xterm (headless)                               | alacritty                                                 |
+| Emulator                             | Selectable per session                            | xterm (headless)                               | alacritty                                                 |
 | Shell command tracking               | ✅ command boundaries, exit codes, cwd           | ❌                                             | ❌                                                        |
 | Testing / snapshots                  | ✅ `expect` text / output / exit-code / snapshot | ❌                                             | ❌                                                        |
 | Color & per-cell attributes          | ✅ fg/bg, ANSI-256/hex/rgb, `cells`              | ❌ plain text (+ highlights)                   | via PNG                                                   |
