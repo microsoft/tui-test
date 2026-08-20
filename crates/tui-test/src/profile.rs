@@ -350,12 +350,12 @@ impl Default for ConfigProfile {
 
 /// Concrete session settings resolved from a config profile.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ResolvedConfig {
+pub struct Settings {
     pub profile: Profile,
     pub timeouts: crate::api::Timeouts,
 }
 
-impl From<ConfigProfile> for ResolvedConfig {
+impl From<ConfigProfile> for Settings {
     fn from(value: ConfigProfile) -> Self {
         Self {
             profile: Profile {
@@ -392,7 +392,7 @@ impl ConfigFile {
     }
 
     /// The named profile and its session timeout defaults.
-    pub fn settings(&self, name: Option<&str>) -> anyhow::Result<ResolvedConfig> {
+    pub fn settings(&self, name: Option<&str>) -> anyhow::Result<Settings> {
         let profile = match name {
             Some(name) => self.profiles.get(name).copied().ok_or_else(|| {
                 let known: Vec<&str> = self.profiles.keys().map(String::as_str).collect();
@@ -469,7 +469,7 @@ pub fn resolve_settings(
     explicit_config: Option<&Path>,
     profile_name: Option<&str>,
     cwd: &Path,
-) -> anyhow::Result<ResolvedConfig> {
+) -> anyhow::Result<Settings> {
     if let Some(path) = explicit_config {
         return ConfigFile::load(path)?.settings(profile_name);
     }
@@ -483,7 +483,7 @@ pub fn resolve_settings(
     }
     match profile_name {
         Some(name) => anyhow::bail!("no profile {name:?}: no config file found"),
-        None => Ok(ResolvedConfig::default()),
+        None => Ok(Settings::default()),
     }
 }
 

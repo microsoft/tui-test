@@ -66,7 +66,7 @@ impl ProfileArgs {
     /// Resolve to concrete settings. Done here, in the client, because the
     /// daemon is long-lived and shared and so has no working directory to
     /// resolve a project-local config against.
-    pub fn resolve(&self) -> anyhow::Result<tui_test::profile::ResolvedConfig> {
+    pub fn resolve(&self) -> anyhow::Result<tui_test::profile::Settings> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         tui_test::profile::resolve_settings(self.config.as_deref(), self.profile.as_deref(), &cwd)
     }
