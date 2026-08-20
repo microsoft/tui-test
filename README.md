@@ -293,18 +293,18 @@ Calling `open` or `run` for a session that already has a live child reuses that 
 
 #### Terminal backends
 
-Choose an emulator per session with `--backend alacritty|ghostty`. Alacritty is the default. The `ghostty` backend uses [Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs).
+Select a backend per session with `--backend`. The available values are `alacritty` (default) and `ghostty`; Ghostty uses [Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs).
 
 ```sh
 tui-test open --backend ghostty
 tui-test run --backend ghostty vim file.txt
 ```
 
-`tui-test` uses the same renderer, assertion code, and snapshot format for both backends. Both run the same conformance suite. Shell semantic-prompt tracking reads the raw PTY byte stream, so command, exit-code, and cwd behavior does not depend on the backend. Ghostty preserves SGR blink; Alacritty parses blink but cannot report it.
+All backends use the same renderer, assertions, snapshot format, and conformance suite. Shell semantic-prompt tracking reads raw PTY bytes, so command boundaries, exit codes, and cwd tracking do not depend on the selected backend. Backend-specific VT behavior can differ: Ghostty preserves SGR blink, while Alacritty parses blink but cannot report it.
 
-The CLI and published Python and JavaScript native packages include both backends. Windows ARM64 artifacts are not currently published because Ghostty's upstream Zig build does not support that target.
+The CLI and published Python and JavaScript packages include all backends. Windows ARM64 artifacts are not currently published because Ghostty's upstream Zig build does not support that target.
 
-Rust users opt in explicitly:
+Rust users enable non-default backends through Cargo features. To enable Ghostty:
 
 ```sh
 cargo add tui-test-rs --features ghostty
@@ -319,7 +319,7 @@ let options = OpenOptions {
 };
 ```
 
-Building the `ghostty` feature from source requires Zig 0.16 on `PATH`; the dependency builds a pinned Ghostty revision. The default Rust features build only the Alacritty backend and do not require Zig.
+The default Rust features include only Alacritty and do not require Zig. The `ghostty` feature builds a pinned Ghostty revision and requires Zig 0.16 on `PATH`.
 
 ### Terminal control
 
