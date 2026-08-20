@@ -31,6 +31,7 @@ flate2 = "1.1.9"
 fontdb = { version = "0.23.0", default-features = false, features = ["fs", "std"] }
 gif = "0.14.0"
 interprocess = "2.4.2"
+rquickjs = { version = "0.12.2", features = ["parallel"] }
 ghostty-vt = { package = "libghostty-vt", version = "0.2.1", git = "https://github.com/Uzaaft/libghostty-rs.git", rev = "a28e4ad00d6ba79b98b8cac651ed8976d8500903", default-features = false }
 png = "0.17.16"
 portable-pty = "0.9.0"

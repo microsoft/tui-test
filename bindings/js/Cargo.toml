@@ -17,7 +17,11 @@ test = false
 [dependencies]
 napi = { version = "3", default-features = false, features = ["napi4", "dyn-symbols", "async"] }
 napi-derive = "3"
-tui-test = { workspace = true, features = ["ghostty", "recording-font-jetbrains-mono-styles"] }
+tui-test = { workspace = true, features = [
+    "ghostty",
+    "xtermjs",
+    "recording-font-jetbrains-mono-styles",
+] }
 
 [build-dependencies]
 napi-build = "2"

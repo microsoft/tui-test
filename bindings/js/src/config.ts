@@ -19,7 +19,7 @@ const TIMEOUT_CLASSES: readonly TimeoutClass[] = [
   "exit",
   "ready",
 ];
-const BACKENDS: readonly Backend[] = ["alacritty", "ghostty"];
+const BACKENDS: readonly Backend[] = ["alacritty", "ghostty", "xtermjs"];
 const PROFILE_FIELDS = new Set(["scrollback", "colors"]);
 const COLOR_FIELDS = new Map([
   ["foreground", "foreground"],

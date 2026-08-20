@@ -9,6 +9,7 @@ use tui_test::{Backend, RecordingFormat, Timeouts};
 pub enum BackendArg {
     Alacritty,
     Ghostty,
+    Xtermjs,
 }
 
 impl From<BackendArg> for Backend {
@@ -16,6 +17,7 @@ impl From<BackendArg> for Backend {
         match backend {
             BackendArg::Alacritty => Backend::Alacritty,
             BackendArg::Ghostty => Backend::Ghostty,
+            BackendArg::Xtermjs => Backend::Xtermjs,
         }
     }
 }
