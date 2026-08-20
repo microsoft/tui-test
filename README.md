@@ -1,15 +1,74 @@
 # tui-test
 
-`tui-test` is a rust powered cli for controlling, inspecting, testing, and recording shell sessions and terminal apps. It supports all standard terminal actions (send keys, mouse clicks) & user actions (screenshot, record sessions), & testing (matches screenshot, contains text). `tui-test` supports Windows, Linux, & macOS and it supports a wide range of shells (see [Supported shells](#supported-shells)).
+`tui-test` controls, inspects, tests, and records real shell sessions and
+terminal applications. Use it from the CLI or run the same engine in process
+from Rust, Python, or JavaScript. It supports Windows, Linux, macOS, and a
+wide range of [shells](#supported-shells).
+
+<p align="center">
+  <a href="#installation">Installation</a>
+  ·
+  <a href="#quick-start">Quick start</a>
+  ·
+  <a href="#cli-reference">CLI reference</a>
+  ·
+  <a href="#configuration">Configuration</a>
+</p>
 
 > [!IMPORTANT]
-> `tui-test` is in the middle of a major re-write, the documentation reflects the beta releases
+> `tui-test` is in the middle of a major rewrite. This documentation covers
+> the beta releases.
 
-## Programmatic usage
+## Features
 
-`tui-test` provides a Rust, Python and Node libraries. These libraries are independent of the cli
+- Drive shells and full-screen TUI programs with keyboard, mouse, resize, and
+  signal input.
+- Inspect terminal text, colors, cells, cursor state, titles, command output,
+  and exit codes.
+- Wait for terminal state or assert on text, output, colors, snapshots, and
+  process results.
+- Capture SVG screenshots, APNG/GIF/MP4 recordings, and asciinema casts.
+- Run from the CLI or use the Rust, Python, and JavaScript libraries.
 
-### Rust ([`tui-test-rs`](https://crates.io/crates/tui-test-rs))
+## Installation
+
+Choose the CLI for shell scripts and agent workflows. Choose a programmatic
+library to run the engine inside an application or test process.
+
+<details open>
+<summary><strong>CLI</strong></summary>
+
+### macOS and Linux
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | sh
+```
+
+### Windows
+
+```powershell
+irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
+```
+
+Set `TUI_TEST_VERSION` to install a specific version or
+`TUI_TEST_INSTALL_DIR` to choose the install location.
+
+### Release binaries
+
+Download the latest beta for your platform from
+[GitHub Releases](https://github.com/microsoft/tui-test/releases).
+
+</details>
+
+<details>
+<summary><strong>Programmatic</strong></summary>
+
+The libraries run the engine in process and do not require the CLI.
+
+<details>
+<summary><strong>Rust</strong></summary>
+
+Install [`tui-test-rs`](https://crates.io/crates/tui-test-rs):
 
 ```sh
 cargo add tui-test-rs@0.1.0-beta.1
@@ -28,6 +87,70 @@ feature is enabled:
 | `recording-font-jetbrains-mono-full` | All 16 static family faces |
 
 Each font feature enables `recording-raster`; the tiers are cumulative.
+
+</details>
+
+<details>
+<summary><strong>Python</strong></summary>
+
+Install [`tui-test`](https://github.com/microsoft/tui-test/blob/main/bindings/python/README.md)
+for Python 3.8 or later:
+
+```sh
+pip install --pre tui-test
+```
+
+</details>
+
+<details>
+<summary><strong>JavaScript</strong></summary>
+
+Install
+[`@microsoft/tui-test`](https://github.com/microsoft/tui-test/blob/main/bindings/js/README.md):
+
+```sh
+npm install @microsoft/tui-test@beta # Node 20+
+
+bun add @microsoft/tui-test@beta # Bun (best effort)
+
+deno add npm:@microsoft/tui-test@beta # Deno 2 (best effort)
+```
+
+Node is the supported runtime. Bun and Deno compatibility is best effort.
+Deno requires a local `node_modules` directory and `--allow-ffi` to load the
+native addon.
+
+</details>
+
+</details>
+
+## Quick start
+
+### CLI
+
+Run a command and check the result:
+
+```sh
+tui-test open                  # start a shell session (auto-starts the daemon)
+tui-test submit "echo hello"   # type the command, press Enter
+tui-test wait command          # block until it finishes
+tui-test expect text "hello"   # assert it showed up
+tui-test expect exit-code 0    # assert it exited 0
+tui-test close
+```
+
+Drive a full-screen TUI:
+
+```sh
+tui-test run vim file.txt
+tui-test wait idle             # let the screen settle
+tui-test key press i
+tui-test type "some text"
+tui-test key press Escape : w q Enter
+tui-test wait exit
+```
+
+### Rust
 
 ```rust
 use tui_test::{OpenOptions, Operation, Session};
@@ -60,11 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Python ([`tui-test`](https://github.com/microsoft/tui-test/blob/main/bindings/python/README.md))
-
-```sh
-pip install --pre tui-test
-```
+### Python
 
 ```python
 import asyncio
@@ -81,15 +200,7 @@ async def main():
 asyncio.run(main())
 ```
 
-### Node ([`@microsoft/tui-test`](https://github.com/microsoft/tui-test/blob/main/bindings/js/README.md))
-
-```sh
-npm install @microsoft/tui-test@beta # Node 20+
-
-bun add @microsoft/tui-test@beta # Bun (best effort)
-
-deno add npm:@microsoft/tui-test@beta # Deno 2 (best effort)
-```
+### JavaScript
 
 ```js
 import { TuiTest } from "@microsoft/tui-test";
@@ -103,77 +214,33 @@ await su.expectExitCode(0);
 await su.close();
 ```
 
-Node is the supported runtime. Bun and Deno compatibility is best effort; Deno requires a local `node_modules` directory and `--allow-ffi` to load the native addon.
+## Agent integration
 
-## Cli Installation 
+`tui-test` includes CLI commands that help agents discover and use it:
 
-### install script
+| Command | Description |
+| --- | --- |
+| `agent-context` | Print versioned JSON for every command, flag, enum, default, and exit code. The running CLI generates the JSON, so it stays in sync. |
+| `usage` | Print a one-screen cheatsheet. |
+| `skill` | Print the full workflow guide from [`SKILL.md`](https://github.com/microsoft/tui-test/blob/main/SKILL.md). |
 
-macOS / Linux:
-
-```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | sh
-```
-
-Windows PowerShell:
-
-```powershell
-irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
-```
-
-Use `TUI_TEST_VERSION` to select a specific version or `TUI_TEST_INSTALL_DIR` to select an install location.
-
-### download from releases
-
-Download the latest beta from [releases](https://github.com/microsoft/tui-test/releases).
-
-## Cli Quick start
-
-Run a command and check the result:
-
-```sh
-tui-test open                  # start a shell session (auto-starts the daemon)
-tui-test submit "echo hello"   # type the command, press Enter
-tui-test wait command          # block until it finishes
-tui-test expect text "hello"   # assert it showed up
-tui-test expect exit-code 0    # assert it exited 0
-tui-test close
-```
-
-Drive a full-screen TUI the same way:
-
-```sh
-tui-test run vim file.txt
-tui-test wait idle             # let the screen settle
-tui-test key press i
-tui-test type "some text"
-tui-test key press Escape : w q Enter
-tui-test wait exit
-```
-
-## Built for agents
-
-`tui-test` has native support for AI agents:
-
-- `tui-test agent-context` prints versioned JSON for every command, flag, enum, default, and exit code. It is generated from the cli, so it cannot drift from the real surface.
-- `tui-test usage` prints a one-screen cheatsheet.
-- `tui-test skill` prints the full workflow guide ([SKILL.md](https://github.com/microsoft/tui-test/blob/main/SKILL.md)).
-
-### Skill quick start
+### Install the agent skill
 
 ```sh
 tui-test skill --add
 ```
 
-Adds the `tui-test` skill to the location the user selects in the TUI.
+The command adds the `tui-test` skill to the location selected in the TUI.
 
 Each command returns a stable exit code (see [Exit codes](#exit-codes)), so an agent can tell an assertion failure from a missing session without scraping text.
 
-## Cli Command reference
+## CLI reference
 
 Global flags: `--session <name>` (env `TUI_TEST_SESSION`, default `default`), `--json` for machine-readable output, and `--verbose`/`-v` to log PTY traffic (see [Debugging](#debugging)).
 
-### Timeouts
+### Sessions
+
+#### Timeouts
 
 Waits and assertions fall into five timeout classes:
 
@@ -198,7 +265,7 @@ Precedence: `--timeout`, then the session default from `open`/`run`, then
 `TUI_TEST_TIMEOUT_<CLASS>_MS` (read when the daemon starts). `tui-test state`
 prints a session's effective timeouts.
 
-### Session & lifecycle
+#### Lifecycle
 
 | Command                                                      | Description                                 |
 | ------------------------------------------------------------ | ------------------------------------------- |
@@ -223,7 +290,7 @@ way.
 Calling `open` or `run` for a session that already has a live child reuses that
 child. Pass `--restart` (or its `--force` alias) to replace it explicitly.
 
-### Terminal backends
+#### Terminal backends
 
 Choose an emulator per session with `--backend alacritty|ghostty`. Alacritty
 remains the default; `ghostty` uses
@@ -239,7 +306,8 @@ assertions, and snapshots. Shell semantic-prompt tracking stays on the raw PTY
 byte stream, so command, exit-code, and cwd behavior is backend-independent.
 Ghostty also preserves SGR blink; Alacritty parses blink but cannot report it.
 
-The CLI and published Python/Node native packages include both backends.
+The CLI and published Python and JavaScript native packages include both
+backends.
 Windows ARM64 artifacts are not currently published because Ghostty's
 upstream Zig build does not support that target.
 
@@ -262,7 +330,9 @@ Building the `ghostty` feature from source requires Zig 0.16 on `PATH`;
 the dependency builds a pinned Ghostty revision. The default Rust feature set
 continues to build only the Alacritty backend and does not require Zig.
 
-### Inspection
+### Terminal control
+
+#### Inspection
 
 | Command                                             | Description                                                                                 |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -275,7 +345,7 @@ continues to build only the Alacritty backend and does not require Zig.
 `state` prints `key: value` lines then the screen; `text` and `screenshot`
 print the screen bare.
 
-### Input
+#### Input
 
 | Command                                                       | Description                                                  |
 | ------------------------------------------------------------- | ------------------------------------------------------------ |
@@ -294,7 +364,7 @@ report-all-keys mode before repeat and release events can be represented.
 Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`, and `Meta`;
 the top-level `press` command remains a compatibility alias for `key press`.
 
-### PTY
+#### PTY control
 
 | Command                           | Description                      |
 | --------------------------------- | -------------------------------- |
@@ -302,7 +372,9 @@ the top-level `press` command remains a compatibility alias for `key press`.
 | `write <data>`                    | Write raw bytes (no return key). |
 | `signal INT\|TERM\|KILL` / `kill` | Signal / kill the child.         |
 
-### Wait
+### Waiting and assertions
+
+#### Wait
 
 | Command                                             | Description                         |
 | --------------------------------------------------- | ----------------------------------- |
@@ -314,7 +386,7 @@ the top-level `press` command remains a compatibility alias for `key press`.
 | `wait ready`                                        | Until the shell reports a prompt.   |
 | `wait bell`                                         | Until the next terminal bell event. |
 
-### Expect (exit 0 = pass, 1 = fail)
+#### Expect (exit 0 = pass, 1 = fail)
 
 | Command                                                                         | Description                                |
 | ------------------------------------------------------------------------------- | ------------------------------------------ |
@@ -327,7 +399,9 @@ the top-level `press` command remains a compatibility alias for `key press`.
 
 Colors accept ANSI-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 
-### Screenshots
+### Captures
+
+#### Screenshots
 
 Screenshots render a snapshot of the session in the current terminal by
 default, but can render an SVG using the `-o` output flag. `--zoom 0.5`
@@ -341,7 +415,7 @@ when the terminal has no title they use `tui-test capture - COLSxROWS`.
   <img alt="full-color SVG screenshot of a TUI rendered by tui-test" src="static/screen.svg" width="400">
 </p>
 
-### Recording
+#### Recording
 
 Record a selected part of a session directly to animated APNG (primary), GIF
 (fallback), MP4 video, or standard
@@ -425,7 +499,8 @@ Watch a live session in a second terminal while an agent drives it. Both share
 the same daemon. `monitor` takes over an alternate screen and streams the
 session in full color at ~20fps; press `q`, `Esc`, or `Ctrl-C` to detach.
 
-In-process Python and Node sessions cannot be monitored from another process.
+In-process Python and JavaScript sessions cannot be monitored from another
+process.
 
 https://github.com/user-attachments/assets/741c985f-7861-41c5-9ceb-0f82f705b43f
 
@@ -441,14 +516,6 @@ It needs an interactive terminal (exit `2` otherwise) and an existing session
 (exit `3` if none). The view reads only the shared screen state, so watching
 never blocks the commands the agent is running, and resizing the window just
 re-fits the frame.
-
-### Agents
-
-| Command         | Description                                                                                                                           |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `usage`         | Compact command cheatsheet.                                                                                                           |
-| `agent-context` | Versioned JSON describing every command, flag, enum, default, and the exit-code taxonomy (generated from the cli, so it can't drift). |
-| `skill`         | Long-form workflow guide ([SKILL.md](https://github.com/microsoft/tui-test/blob/main/SKILL.md)).                                      |
 
 ### Exit codes
 
@@ -466,6 +533,8 @@ Every command returns a stable exit code so an agent can branch on the failure c
 With `--json`, failures also carry a `"kind"` field (`assertion`/`usage`/`no_session`/`internal`).
 
 ## Configuration
+
+### Profiles
 
 Settings live in a `tui-test.toml` with named profiles. Everything is
 optional, so a file only states what it changes:
@@ -495,8 +564,8 @@ Looked up nearest first: `./tui-test.toml`, then
 search.
 
 Named profiles do not inherit from `[profiles.default]`; every omitted field
-uses tui-test's built-in default.  `tui-test.toml` affect the cLI only, the libraries
-accept profile configurations when starting a new session.
+uses tui-test's built-in default. `tui-test.toml` affects only the CLI. The
+libraries accept profile configurations when starting a new session.
 
 ### Colors
 
@@ -512,7 +581,9 @@ the same thing in every profile.
 The shipped palette is the classic VGA/xterm one that `TERM=xterm-256color`
 promises.
 
-## Supported shells
+## Compatibility
+
+### Supported shells
 
 - bash
 - zsh
@@ -523,22 +594,22 @@ promises.
 - nushell
 - cmd
 
-## Comparison
+### Comparison
 
 |                                      | tui-test                                        | [tui-use](https://github.com/onesuper/tui-use) | [terminal-use](https://github.com/flipbit03/terminal-use) |
 | ------------------------------------ | ------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------------- |
 | Language                             | Rust                                             | TypeScript/Node                                | Rust                                                      |
 | Emulator                             | alacritty or Ghostty, per session                | xterm (headless)                               | alacritty                                                 |
-| Shell command tracking               | ✅ command boundaries, exit codes, cwd           | ❌                                             | ❌                                                        |
-| Testing / snapshots                  | ✅ `expect` text / output / exit-code / snapshot | ❌                                             | ❌                                                        |
-| Color & per-cell attributes          | ✅ fg/bg, ANSI-256/hex/rgb, `cells`              | ❌ plain text (+ highlights)                   | via PNG                                                   |
-| Image screenshots                    | ✅ SVG                                           | ❌                                             | ✅ PNG                                                    |
-| Built-in recording                   | ✅ APNG/GIF/MP4 export + always-on asciinema cast | ❌                                             | ❌                                                        |
-| Live monitor view                    | ✅                                               | ❌                                             | ✅                                                        |
-| Stable exit-code taxonomy for agents | ✅                                               | ❌                                             | ❌                                                        |
-| Python & JavaScript bindings         | ✅                                               | ❌                                             | ❌                                                        |
+| Shell command tracking               | Yes: command boundaries, exit codes, cwd         | No                                             | No                                                        |
+| Testing / snapshots                  | Yes: `expect` text / output / exit-code / snapshot | No                                           | No                                                        |
+| Color and per-cell attributes        | Yes: fg/bg, ANSI-256/hex/RGB, `cells`            | No: plain text with highlights                 | Via PNG                                                   |
+| Image screenshots                    | Yes: SVG                                         | No                                             | Yes: PNG                                                  |
+| Built-in recording                   | Yes: APNG/GIF/MP4 export and asciinema casts     | No                                             | No                                                        |
+| Live monitor view                    | Yes                                              | No                                             | Yes                                                       |
+| Stable exit-code taxonomy for agents | Yes                                              | No                                             | No                                                        |
+| Python and JavaScript bindings       | Yes                                              | No                                             | No                                                        |
 | Runtime                              | native                                           | Node.js                                        | native                                                    |
-| Platforms                            | Windows + Unix                                   | Windows + Unix                                 | Linux / macOS                                             |
+| Platforms                            | Windows and Unix                                 | Windows and Unix                               | Linux and macOS                                           |
 
 ## Debugging
 
