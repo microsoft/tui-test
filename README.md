@@ -112,16 +112,17 @@ Node is the supported runtime. Bun and Deno compatibility is best effort; Deno r
 macOS / Linux:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | TUI_TEST_VERSION=beta sh
 ```
 
 Windows PowerShell:
 
 ```powershell
+$env:TUI_TEST_VERSION = "beta"
 irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
 ```
 
-Use `TUI_TEST_VERSION` to select a specific version or `TUI_TEST_INSTALL_DIR` to select an install location.
+Use `TUI_TEST_VERSION=beta` to select the latest beta, `TUI_TEST_VERSION=latest` to select the latest stable release, or set an exact release tag. If unset, `TUI_TEST_VERSION` defaults to `latest`. Use `TUI_TEST_INSTALL_DIR` to select an install location.
 
 ### download from releases
 
