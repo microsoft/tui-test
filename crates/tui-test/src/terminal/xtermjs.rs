@@ -275,7 +275,7 @@ impl XtermJsEmu {
 fn decode_into(out: &mut Vec<Vec<EmuCell>>, chars: &str, meta: &[i32], cols: usize) {
     let mut cells = chars.split('\0');
     let mut row = Vec::with_capacity(cols);
-    for m in meta.chunks_exact(STRIDE) {
+    for m in meta.as_chunks::<STRIDE>().0 {
         let ch = cells.next().unwrap_or("");
         let (width, fg, bg, ul_color, ul_style, flags) = (m[0], m[1], m[2], m[3], m[4], m[5]);
 
