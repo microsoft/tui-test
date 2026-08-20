@@ -1,0 +1,138 @@
+name: Update xterm.js
+
+# A vendored bundle has nothing watching it: no lockfile, no dependency bot,
+# and no build that fails when it falls behind. This checks weekly and opens
+# a pull request when either package has a newer release.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    name: Check npm for newer releases
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Look for newer releases
+        id: check
+        run: |
+          set -euo pipefail
+          cd crates/tui-test/assets/xtermjs
+          have_headless="$(jq -r '."@xterm/headless"' pinned.json)"
+          have_unicode11="$(jq -r '."@xterm/addon-unicode11"' pinned.json)"
+          want_headless="$(npm view @xterm/headless version)"
+          want_unicode11="$(npm view @xterm/addon-unicode11 version)"
+          {
+            echo "have_headless=$have_headless"
+            echo "have_unicode11=$have_unicode11"
+            echo "want_headless=$want_headless"
+            echo "want_unicode11=$want_unicode11"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$have_headless" = "$want_headless" ] && [ "$have_unicode11" = "$want_unicode11" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already on the latest of both."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "headless $have_headless -> $want_headless"
+            echo "unicode11 $have_unicode11 -> $want_unicode11"
+          fi
+
+      - name: Vendor the new bundles
+        if: steps.check.outputs.changed == 'true'
+        env:
+          HEADLESS: ${{ steps.check.outputs.want_headless }}
+          UNICODE11: ${{ steps.check.outputs.want_unicode11 }}
+        run: |
+          set -euo pipefail
+          cd crates/tui-test/assets/xtermjs
+          work="$(mktemp -d)"
+          (cd "$work" && npm pack "@xterm/headless@$HEADLESS" "@xterm/addon-unicode11@$UNICODE11")
+          tar xzOf "$work/xterm-headless-$HEADLESS.tgz" package/lib-headless/xterm-headless.js > xterm-headless.js
+          tar xzOf "$work/xterm-addon-unicode11-$UNICODE11.tgz" package/lib/addon-unicode11.js > addon-unicode11.js
+          jq -n --arg h "$HEADLESS" --arg u "$UNICODE11" \
+            '{"@xterm/headless": $h, "@xterm/addon-unicode11": $u}' > pinned.json
+          for f in xterm-headless.js addon-unicode11.js; do
+            sum="$(sha256sum "$f" | cut -d' ' -f1)"
+            sed -i "s|^[0-9a-f]\{64\}  $f\$|$sum  $f|" README.md
+          done
+          git diff --stat
+
+      - name: Install Rust
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      # Nothing else checks this. CI runs the workspace with default features,
+      # so the xterm.js conformance cases never run there, and a pull request
+      # opened with GITHUB_TOKEN does not start a workflow of its own. The
+      # shim reads several things xterm.js does not expose publicly, so a new
+      # release can move one, and this is where that shows up.
+      - name: Conformance
+        if: steps.check.outputs.changed == 'true'
+        id: conformance
+        continue-on-error: true
+        run: cargo test -p tui-test-rs --features xtermjs conformance
+
+      - name: Open a pull request
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEADLESS: ${{ steps.check.outputs.want_headless }}
+          UNICODE11: ${{ steps.check.outputs.want_unicode11 }}
+          WAS_HEADLESS: ${{ steps.check.outputs.have_headless }}
+          WAS_UNICODE11: ${{ steps.check.outputs.have_unicode11 }}
+          CONFORMANCE: ${{ steps.conformance.outcome }}
+        run: |
+          set -euo pipefail
+          branch="xtermjs-update/$HEADLESS-$UNICODE11"
+          title="chore(xtermjs): update vendored bundles to $HEADLESS and $UNICODE11"
+
+          if [ "$CONFORMANCE" = "success" ]; then
+            verdict="The conformance suite passes against the new bundles."
+          else
+            verdict="**The conformance suite fails against the new bundles.** The shim reads several things xterm.js does not expose publicly, so a release can move one. Start at the failing case rather than at the diff."
+          fi
+
+          cat > /tmp/body.md <<BODY
+          \`@xterm/headless\` $WAS_HEADLESS → $HEADLESS
+          \`@xterm/addon-unicode11\` $WAS_UNICODE11 → $UNICODE11
+
+          $verdict
+
+          Two things conformance does not cover, worth checking before merging:
+
+          - **The emoji width table** in \`assets/xtermjs/README.md\`. Agreeing with alacritty on those cases is the reason the unicode11 addon is pinned where it is, and nothing asserts it.
+          - **Each package's \`LICENSE\`**, which are separate notices: \`@xterm/headless\` ships none and declares MIT in its manifest, the addon carries its own.
+
+          Opened by \`.github/workflows/xtermjs-update.yml\`. Pull requests created with \`GITHUB_TOKEN\` do not start CI, so push an empty commit to run it.
+          BODY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add crates/tui-test/assets/xtermjs
+          git commit -s -m "$title" -m "$verdict"
+          git push -f origin "$branch"
+
+          if [ -z "$(gh pr list --head "$branch" --state open --json number -q '.[].number')" ]; then
+            gh pr create --head "$branch" --base main --title "$title" --body-file /tmp/body.md
+          else
+            echo "A pull request for $branch is already open; pushed the update to it."
+          fi
+
+      - name: Fail if conformance did not pass
+        if: steps.check.outputs.changed == 'true' && steps.conformance.outcome != 'success'
+        run: |
+          echo "The pull request was opened, but conformance failed against the new bundles."
+          exit 1

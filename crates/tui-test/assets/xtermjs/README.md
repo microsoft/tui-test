@@ -3,14 +3,16 @@
 Compiled into the `tui-test` binary by `crates/tui-test/src/terminal/xtermjs.rs`
 so the xterm.js backend needs no Node.js at runtime.
 
-| File | Source | Version | License |
-| ---- | ------ | ------- | ------- |
-| `xterm-headless.js` | [`@xterm/headless`](https://www.npmjs.com/package/@xterm/headless) | 6.0.0 | MIT |
-| `addon-unicode11.js` | [`@xterm/addon-unicode11`](https://www.npmjs.com/package/@xterm/addon-unicode11) | 0.9.0 | MIT |
-| `LICENSE` | both of the above, reproduced per package | — | MIT |
+| File | Source | License |
+| ---- | ------ | ------- |
+| `xterm-headless.js` | [`@xterm/headless`](https://www.npmjs.com/package/@xterm/headless) | MIT |
+| `addon-unicode11.js` | [`@xterm/addon-unicode11`](https://www.npmjs.com/package/@xterm/addon-unicode11) | MIT |
+| `LICENSE` | both of the above, reproduced per package | MIT |
 
 `shim.js` is tui-test's own code, not vendored.
 
+`pinned.json` holds the versions these bundles came from, and is the only place
+they are written down so that nothing can claim a version the bytes are not.
 Both bundles are dropped in unchanged, so they are byte-for-byte what npm
 publishes:
 
@@ -71,22 +73,42 @@ no underline draws no underline colour either way. The backend declares this
 where it opts into the conformance suite, so the exception is visible rather
 than silent.
 
+## Addons we do not use yet
+
+Two are worth revisiting, neither of them yet:
+
+`@xterm/addon-unicode-graphemes` would replace the unicode11 addon, but it is
+marked experimental by its own package description, needs an `atob` the QuickJS
+host does not have, and measures two of the cases in the table above
+differently from alacritty. Worth re-measuring against that table once it is no
+longer experimental, and only adopting if it still agrees.
+
+`@xterm/addon-clipboard` implements `OSC 52`, which tui-test does not support
+on any backend today: alacritty parses it and raises `ClipboardStore` and
+`ClipboardLoad`, and the listener in `terminal/alacritty.rs` drops both. Adding
+it here first would make things worse rather than better — `OSC 52;c;?` is
+answered by nothing today, and this addon would make xterm.js alone answer it,
+so the same sequence would behave differently depending on the backend. `OSC
+52` wants to land in the [`Emulator`] contract and the conformance suite first;
+then this addon is how xterm.js implements its half.
+
 ## Updating
 
-Re-fetch both packages at the versions in the table and copy the bundles in
-unchanged, which also re-checks the hashes above against what npm serves today:
+`.github/workflows/xtermjs-update.yml` does this weekly and opens a pull
+request. To do it by hand, from this directory:
 
 ```sh
-npm pack @xterm/headless@6.0.0 @xterm/addon-unicode11@0.9.0
-tar xzOf xterm-headless-6.0.0.tgz package/lib-headless/xterm-headless.js > xterm-headless.js
-tar xzOf xterm-addon-unicode11-0.9.0.tgz package/lib/addon-unicode11.js > addon-unicode11.js
+headless="$(jq -r '."@xterm/headless"' pinned.json)"
+unicode11="$(jq -r '."@xterm/addon-unicode11"' pinned.json)"
+npm pack "@xterm/headless@$headless" "@xterm/addon-unicode11@$unicode11"
+tar xzOf "xterm-headless-$headless.tgz" package/lib-headless/xterm-headless.js > xterm-headless.js
+tar xzOf "xterm-addon-unicode11-$unicode11.tgz" package/lib/addon-unicode11.js > addon-unicode11.js
 shasum -a 256 xterm-headless.js addon-unicode11.js
 ```
 
 Then run `cargo test -p tui-test-rs --features xtermjs conformance`, which
 checks the backend against the same contract every other one meets, and
-re-measure the table above before changing a version. A version bump also means
-re-checking each package's `LICENSE`, since they carry separate notices, and
-updating the versions in `.github/workflows/vendored.yml`, which re-fetches
-both packages whenever these files change and fails if what is checked in is
-not byte for byte what npm publishes.
+re-measure the width table above before changing a version. A version bump also
+means re-checking each package's `LICENSE`, since they carry separate notices.
+`.github/workflows/vendored.yml` re-fetches both packages whenever these files
+change and fails if what is checked in is not byte for byte what npm publishes.

@@ -8,7 +8,7 @@
 //!
 //! Reading a cell means a call into JS, and an 80x30 screen is 2,400 of them
 //! with ten property reads each. Walking the grid that way costs milliseconds
-//! per poll. Instead [`shim.js`](../../../assets/xterm/shim.js) flattens a row
+//! per poll. Instead [`shim.js`](../../../assets/xtermjs/shim.js) flattens a row
 //! span into one string and one integer array, so a whole screen crosses in
 //! two values and this module's job is decoding rather than traversal.
 //!
@@ -28,9 +28,9 @@ use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator};
 
-const XTERM_BUNDLE: &str = include_str!("../../assets/xterm/xterm-headless.js");
-const UNICODE11: &str = include_str!("../../assets/xterm/addon-unicode11.js");
-const SHIM: &str = include_str!("../../assets/xterm/shim.js");
+const XTERM_BUNDLE: &str = include_str!("../../assets/xtermjs/xterm-headless.js");
+const UNICODE11: &str = include_str!("../../assets/xtermjs/addon-unicode11.js");
+const SHIM: &str = include_str!("../../assets/xtermjs/shim.js");
 
 /// The unicode11 addon is UMD and publishes itself by *replacing*
 /// `module.exports`, so it is lifted onto a global the shim can find. Reading
