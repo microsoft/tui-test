@@ -30,14 +30,6 @@ esac
 TARGET="${ARCH}-${OS}"
 ASSET="${BINARY_NAME}-${TARGET}.tar.gz"
 VERSION="${TUI_TEST_VERSION:-latest}"
-
-if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
-  RELEASE_URL="https://github.com/${REPOSITORY}/releases/latest/download"
-else
-  RELEASE_URL="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
-fi
-
-DOWNLOAD_URL="${RELEASE_URL}/${ASSET}"
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t tui-test)"
 ARCHIVE_PATH="${TMP_DIR}/${ASSET}"
@@ -71,6 +63,42 @@ download() {
     fail "curl or wget is required."
   fi
 }
+
+if [ -z "$VERSION" ] || [ "$VERSION" = "latest" ]; then
+  RELEASE_URL="https://github.com/${REPOSITORY}/releases/latest/download"
+elif [ "$VERSION" = "beta" ]; then
+  command -v awk >/dev/null 2>&1 || fail "awk is required to resolve beta releases."
+  RELEASES_PATH="${TMP_DIR}/releases.json"
+  download \
+    "https://api.github.com/repos/${REPOSITORY}/releases?per_page=100" \
+    "$RELEASES_PATH" ||
+    fail "Could not query GitHub releases."
+
+  VERSION="$(
+    awk '
+      /^    "tag_name": "/ {
+        tag = $0
+        sub(/^    "tag_name": "/, "", tag)
+        sub(/",?$/, "", tag)
+        draft = ""
+      }
+      /^    "draft": false,?$/ { draft = "false" }
+      /^    "draft": true,?$/ { draft = "true" }
+      /^    "prerelease": true,?$/ &&
+        draft == "false" &&
+        tag ~ /^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$/ {
+        print tag
+        exit
+      }
+    ' "$RELEASES_PATH"
+  )"
+  [ -n "$VERSION" ] || fail "No beta release was found."
+  RELEASE_URL="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
+else
+  RELEASE_URL="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
+fi
+
+DOWNLOAD_URL="${RELEASE_URL}/${ASSET}"
 
 echo "Downloading tui-test for ${TARGET}..."
 download "$DOWNLOAD_URL" "$ARCHIVE_PATH" ||

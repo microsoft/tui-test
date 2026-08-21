@@ -35,12 +35,13 @@ Use the CLI from shell scripts and agent workflows. The Rust, Python, and JavaSc
 ### macOS and Linux
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | TUI_TEST_VERSION=beta sh
 ```
 
 ### Windows
 
 ```powershell
+$env:TUI_TEST_VERSION = "beta"
 irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
 ```
 
