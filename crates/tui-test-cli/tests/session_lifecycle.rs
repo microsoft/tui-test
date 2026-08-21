@@ -1402,7 +1402,6 @@ fn terminal_backends_match_end_to_end_for_cells_state_and_snapshots() {
     let mut expected_cells = None;
     let mut expected_state = None;
     let mut expected_snapshot = None;
-    let mut expected_resized_snapshot = None;
 
     for backend in Backend::ALL {
         let sandbox = Sandbox::new("backend-parity");
@@ -1516,22 +1515,48 @@ fn terminal_backends_match_end_to_end_for_cells_state_and_snapshots() {
                 "--include-title",
             ],
         );
+        sandbox.ok_in(
+            Some(&sandbox.home),
+            &[
+                "expect",
+                "snapshot",
+                "backend-parity-resized",
+                "--include-colors",
+                "--include-title",
+            ],
+        );
         let resized = std::fs::read_to_string(
             sandbox
                 .home
                 .join("__snapshots__/backend-parity-resized.snap"),
         )
         .expect("read resized parity snapshot");
-        if let Some(expected) = &expected_resized_snapshot {
-            assert_eq!(
-                &resized,
-                expected,
-                "{} produced a different snapshot after resize",
-                backend.as_str()
-            );
-        } else {
-            expected_resized_snapshot = Some(resized);
-        }
+        let state: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "state"])).expect("resized state json");
+        let data = &state["data"];
+        assert_eq!(data["cols"], 16, "{} resized columns", backend.as_str());
+        assert_eq!(data["rows"], 4, "{} resized rows", backend.as_str());
+        assert_eq!(
+            data["title"],
+            "backend parity",
+            "{} resized title",
+            backend.as_str()
+        );
+        let text = data["text"].as_str().expect("resized state text");
+        assert!(
+            text.contains("RED 你") && text.contains("line two"),
+            "{} lost content during resize: {text:?}",
+            backend.as_str()
+        );
+        assert!(
+            resized.contains("backend parity")
+                && resized.contains("RED 你")
+                && resized.contains("line two")
+                && resized.contains("\"fg\": 1")
+                && resized.contains("\"bg\": 4"),
+            "{} lost visual state in the resized snapshot: {resized}",
+            backend.as_str()
+        );
     }
 }
 
