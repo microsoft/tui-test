@@ -436,15 +436,15 @@ fn default_search_paths(cwd: &Path) -> Vec<PathBuf> {
 fn config_search_paths(
     cwd: &Path,
     platform_config_home: Option<&Path>,
-    legacy_home: &Path,
+    tui_test_home: &Path,
 ) -> Vec<PathBuf> {
     let mut paths = vec![cwd.join(CONFIG_FILE)];
     if let Some(config_home) = platform_config_home {
         paths.push(config_home.join("tui-test").join(CONFIG_FILE));
     }
-    let legacy = legacy_home.join(CONFIG_FILE);
-    if !paths.contains(&legacy) {
-        paths.push(legacy);
+    let home_config = tui_test_home.join(CONFIG_FILE);
+    if !paths.contains(&home_config) {
+        paths.push(home_config);
     }
     paths
 }
@@ -769,16 +769,16 @@ mod tests {
     }
 
     #[test]
-    fn the_platform_config_directory_precedes_the_legacy_home() {
+    fn the_platform_config_directory_precedes_tui_test_home() {
         let cwd = Path::new("project");
         let config_home = Path::new("xdg-config");
-        let legacy_home = Path::new("legacy-home");
+        let tui_test_home = Path::new("tui-test-home");
         assert_eq!(
-            config_search_paths(cwd, Some(config_home), legacy_home),
+            config_search_paths(cwd, Some(config_home), tui_test_home),
             vec![
                 cwd.join(CONFIG_FILE),
                 config_home.join("tui-test").join(CONFIG_FILE),
-                legacy_home.join(CONFIG_FILE),
+                tui_test_home.join(CONFIG_FILE),
             ]
         );
     }

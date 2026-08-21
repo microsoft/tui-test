@@ -490,7 +490,7 @@ tui-test open --profile ci
 tui-test open --config ./other.toml --profile ci
 ```
 
-By default, `tui-test` checks `./tui-test.toml` first, then `$XDG_CONFIG_HOME/tui-test/tui-test.toml` on Unix, and finally the legacy `~/.tui-test/tui-test.toml`. `--config` or `TUI_TEST_CONFIG` skips that search and uses the specified file.
+By default, `tui-test` checks `./tui-test.toml` first, then `$XDG_CONFIG_HOME/tui-test/tui-test.toml` on Unix, and finally `~/.tui-test/tui-test.toml`. `--config` or `TUI_TEST_CONFIG` skips that search and uses the specified file.
 
 Named profiles do not inherit from `[profiles.default]`; every omitted field uses tui-test's built-in default. `tui-test.toml` affects only the CLI. The libraries accept profile configurations when starting a new session.
 

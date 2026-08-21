@@ -404,7 +404,7 @@ so switching emulators does not change shell integration behavior.
 `tui-test.toml` holds named profiles; `--profile NAME` selects one and
 `--config PATH` picks the file. Looked up nearest first: `./tui-test.toml`
 then the platform config directory (`$XDG_CONFIG_HOME/tui-test/tui-test.toml`
-on Unix), then legacy `~/.tui-test/tui-test.toml`. No discovered file is fine;
+on Unix), then `~/.tui-test/tui-test.toml`. No discovered file is fine;
 `--config` and `TUI_TEST_CONFIG` are explicit and error when their path is
 missing.
 
