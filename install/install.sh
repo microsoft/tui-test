@@ -30,7 +30,6 @@ esac
 TARGET="${ARCH}-${OS}"
 ASSET="${BINARY_NAME}-${TARGET}.tar.gz"
 VERSION="${TUI_TEST_VERSION:-latest}"
-TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t tui-test)"
 ARCHIVE_PATH="${TMP_DIR}/${ASSET}"
 EXTRACT_DIR="${TMP_DIR}/extract"
@@ -43,23 +42,11 @@ trap cleanup EXIT HUP INT TERM
 download() {
   url="$1"
   destination="$2"
-  use_token="${3:-true}"
 
   if command -v curl >/dev/null 2>&1; then
-    if [ "$use_token" = "true" ] && [ -n "$TOKEN" ]; then
-      curl --proto '=https' --tlsv1.2 -fsSL \
-        -H "Authorization: Bearer ${TOKEN}" \
-        "$url" -o "$destination"
-    else
-      curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$destination"
-    fi
+    curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$destination"
   elif command -v wget >/dev/null 2>&1; then
-    if [ "$use_token" = "true" ] && [ -n "$TOKEN" ]; then
-      wget -q --header="Authorization: Bearer ${TOKEN}" \
-        -O "$destination" "$url"
-    else
-      wget -q -O "$destination" "$url"
-    fi
+    wget -q -O "$destination" "$url"
   else
     fail "curl or wget is required."
   fi
@@ -72,8 +59,7 @@ elif [ "$VERSION" = "beta" ]; then
   RELEASES_PATH="${TMP_DIR}/releases.json"
   download \
     "https://api.github.com/repos/${REPOSITORY}/releases?per_page=100" \
-    "$RELEASES_PATH" \
-    false ||
+    "$RELEASES_PATH" ||
     fail "Could not query GitHub releases."
 
   VERSION="$(

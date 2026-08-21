@@ -24,10 +24,6 @@ switch ($processorArchitecture.ToUpperInvariant()) {
 $target = "$architecture-pc-windows-msvc"
 $asset = "tui-test-$target.zip"
 $version = $env:TUI_TEST_VERSION
-$token = $env:GITHUB_TOKEN
-if ([string]::IsNullOrWhiteSpace($token)) {
-    $token = $env:GH_TOKEN
-}
 
 if ([string]::IsNullOrWhiteSpace($version) -or $version -eq "latest") {
     $releaseUrl = "https://github.com/$repository/releases/latest/download"
@@ -73,9 +69,6 @@ try {
         Uri = $downloadUrl
         OutFile = $archivePath
         UseBasicParsing = $true
-    }
-    if (-not [string]::IsNullOrWhiteSpace($token)) {
-        $request.Headers = @{ Authorization = "Bearer $token" }
     }
 
     Write-Host "Downloading tui-test for $target..."
