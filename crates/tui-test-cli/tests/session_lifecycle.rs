@@ -1503,6 +1503,10 @@ fn terminal_backends_match_end_to_end_for_cells_state_and_snapshots() {
             expected_snapshot = Some(snapshot);
         }
 
+        // Growing the viewport is backend-specific: Ghostty anchors existing
+        // rows at the bottom, while Alacritty and Rio keep them at the top.
+        // Exercise snapshot round-tripping, but compare its visual content
+        // instead of reusing one backend's row layout as the shared baseline.
         sandbox.ok(&["resize", "16", "4"]);
         sandbox.ok_in(
             Some(&sandbox.home),
