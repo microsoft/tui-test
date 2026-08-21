@@ -37,9 +37,6 @@ elseif ($version -eq "beta") {
         Accept = "application/vnd.github+json"
         "X-GitHub-Api-Version" = "2022-11-28"
     }
-    if (-not [string]::IsNullOrWhiteSpace($token)) {
-        $headers["Authorization"] = "Bearer $token"
-    }
 
     $releases = Invoke-RestMethod `
         -Uri "https://api.github.com/repos/$repository/releases?per_page=100" `

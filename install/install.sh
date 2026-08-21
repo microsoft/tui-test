@@ -43,9 +43,10 @@ trap cleanup EXIT HUP INT TERM
 download() {
   url="$1"
   destination="$2"
+  use_token="${3:-true}"
 
   if command -v curl >/dev/null 2>&1; then
-    if [ -n "$TOKEN" ]; then
+    if [ "$use_token" = "true" ] && [ -n "$TOKEN" ]; then
       curl --proto '=https' --tlsv1.2 -fsSL \
         -H "Authorization: Bearer ${TOKEN}" \
         "$url" -o "$destination"
@@ -53,7 +54,7 @@ download() {
       curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$destination"
     fi
   elif command -v wget >/dev/null 2>&1; then
-    if [ -n "$TOKEN" ]; then
+    if [ "$use_token" = "true" ] && [ -n "$TOKEN" ]; then
       wget -q --header="Authorization: Bearer ${TOKEN}" \
         -O "$destination" "$url"
     else
@@ -71,7 +72,8 @@ elif [ "$VERSION" = "beta" ]; then
   RELEASES_PATH="${TMP_DIR}/releases.json"
   download \
     "https://api.github.com/repos/${REPOSITORY}/releases?per_page=100" \
-    "$RELEASES_PATH" ||
+    "$RELEASES_PATH" \
+    false ||
     fail "Could not query GitHub releases."
 
   VERSION="$(
