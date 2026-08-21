@@ -35,16 +35,17 @@ Use the CLI from shell scripts and agent workflows. The Rust, Python, and JavaSc
 ### macOS and Linux
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | TUI_TEST_VERSION=beta sh
 ```
 
 ### Windows
 
 ```powershell
+$env:TUI_TEST_VERSION = "beta"
 irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
 ```
 
-Use `TUI_TEST_VERSION` to select a specific version or `TUI_TEST_INSTALL_DIR` to select an install location.
+Set `TUI_TEST_VERSION` to install a specific version or `TUI_TEST_INSTALL_DIR` to choose the install location.
 
 ### Release binaries
 
