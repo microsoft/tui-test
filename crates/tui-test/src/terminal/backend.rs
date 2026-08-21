@@ -7,6 +7,9 @@ use crate::profile::Profile;
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::emu::Emulator;
 
+#[cfg(feature = "rio")]
+use crate::terminal::rio::RioEmu;
+
 #[cfg(feature = "ghostty")]
 use crate::terminal::ghostty::GhosttyEmu;
 
@@ -18,19 +21,27 @@ pub enum Backend {
     Alacritty,
     #[cfg(feature = "ghostty")]
     Ghostty,
+    #[cfg(feature = "rio")]
+    Rio,
 }
 
 impl Backend {
-    #[cfg(not(feature = "ghostty"))]
+    #[cfg(all(not(feature = "ghostty"), not(feature = "rio")))]
     pub const ALL: [Self; 1] = [Self::Alacritty];
-    #[cfg(feature = "ghostty")]
+    #[cfg(all(feature = "ghostty", not(feature = "rio")))]
     pub const ALL: [Self; 2] = [Self::Alacritty, Self::Ghostty];
+    #[cfg(all(not(feature = "ghostty"), feature = "rio"))]
+    pub const ALL: [Self; 2] = [Self::Alacritty, Self::Rio];
+    #[cfg(all(feature = "ghostty", feature = "rio"))]
+    pub const ALL: [Self; 3] = [Self::Alacritty, Self::Ghostty, Self::Rio];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Alacritty => "alacritty",
             #[cfg(feature = "ghostty")]
             Self::Ghostty => "ghostty",
+            #[cfg(feature = "rio")]
+            Self::Rio => "rio",
         }
     }
 
@@ -44,6 +55,8 @@ impl Backend {
             Self::Alacritty => Ok(Box::new(AlacrittyEmu::new(cols, rows, profile))),
             #[cfg(feature = "ghostty")]
             Self::Ghostty => Ok(Box::new(GhosttyEmu::new(cols, rows, profile)?)),
+            #[cfg(feature = "rio")]
+            Self::Rio => Ok(Box::new(RioEmu::new(cols, rows, profile))),
         }
     }
 
@@ -63,14 +76,19 @@ impl Backend {
             ))),
             #[cfg(feature = "ghostty")]
             Self::Ghostty => self.build(cols, rows, profile),
+            #[cfg(feature = "rio")]
+            Self::Rio => Ok(Box::new(RioEmu::with_bell_tracker(
+                cols, rows, profile, bells,
+            ))),
         }
     }
 
     const fn expected() -> &'static str {
-        if cfg!(feature = "ghostty") {
-            "alacritty, ghostty"
-        } else {
-            "alacritty"
+        match (cfg!(feature = "ghostty"), cfg!(feature = "rio")) {
+            (false, false) => "alacritty",
+            (true, false) => "alacritty, ghostty",
+            (false, true) => "alacritty, rio",
+            (true, true) => "alacritty, ghostty, rio",
         }
     }
 }
@@ -83,6 +101,8 @@ impl std::str::FromStr for Backend {
             "alacritty" => Ok(Self::Alacritty),
             #[cfg(feature = "ghostty")]
             "ghostty" => Ok(Self::Ghostty),
+            #[cfg(feature = "rio")]
+            "rio" => Ok(Self::Rio),
             other => Err(format!(
                 "unknown terminal backend {other:?}; expected one of: {}",
                 Self::expected()
@@ -105,6 +125,13 @@ mod tests {
     #[test]
     fn alacritty_remains_the_default() {
         assert_eq!(Backend::default(), Backend::Alacritty);
+    }
+
+    #[cfg(not(feature = "rio"))]
+    #[test]
+    fn rio_is_rejected_when_its_feature_is_disabled() {
+        assert!("rio".parse::<Backend>().is_err());
+        assert!(serde_json::from_str::<Backend>("\"rio\"").is_err());
     }
 
     #[cfg(feature = "ghostty")]

@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [features]
 default = []
 ghostty = ["dep:ghostty-vt"]
+rio = ["dep:rio-vt"]
 recording-raster = ["dep:fontdb", "dep:gif", "dep:png", "dep:tiny-skia"]
 recording-font-jetbrains-mono = ["recording-raster"]
 recording-font-jetbrains-mono-styles = ["recording-font-jetbrains-mono"]
@@ -33,6 +34,7 @@ ghostty-vt = { workspace = true, optional = true }
 png = { workspace = true, optional = true }
 portable-pty.workspace = true
 regex.workspace = true
+rio-vt = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

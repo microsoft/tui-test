@@ -385,19 +385,20 @@ codes, one class per row of the applicable [exit-code table](#exit-codes):
 
 ## Terminal backends
 
-`open` and `run` accept `--backend alacritty|ghostty`; Alacritty is the
+`open` and `run` accept `--backend alacritty|ghostty|rio`; Alacritty is the
 default. The Python and JavaScript constructors accept the same canonical
 strings as a client default, and each `open`/`run` can override it.
 
 ```sh
 tui-test open --backend ghostty
-tui-test run --backend ghostty -- vim file.txt
+tui-test run --backend rio -- vim file.txt
 ```
 
-Both backends satisfy the same cell-grid contract. Ghostty preserves the blink
-attribute, while Alacritty cannot report it. Command boundaries, exit codes,
-cwd, and captured command output are parsed separately from the raw PTY stream,
-so switching emulators does not change shell integration behavior.
+Every enabled backend satisfies the same cell-grid contract. Ghostty preserves
+the blink attribute, while Alacritty and Rio cannot report it. Command
+boundaries, exit codes, cwd, and captured command output are parsed separately
+from the raw PTY stream, so switching emulators does not change shell
+integration behavior.
 
 ## Configuration
 

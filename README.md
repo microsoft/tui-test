@@ -294,11 +294,11 @@ Calling `open` or `run` for a session that already has a live child reuses that 
 
 #### Terminal backends
 
-Select a backend per session with `--backend`. The available values are `alacritty` (default) and `ghostty`; Ghostty uses [Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs).
+Select a backend per session with `--backend`. The available values are `alacritty` (default), `ghostty`, and `rio`; Ghostty uses [Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs).
 
 ```sh
 tui-test open --backend ghostty
-tui-test run --backend ghostty vim file.txt
+tui-test run --backend rio vim file.txt
 ```
 
 All backends use the same renderer, assertions, snapshot format, and conformance suite. Shell semantic-prompt tracking reads raw PTY bytes, so command boundaries, exit codes, and cwd tracking do not depend on the selected backend. Backend-specific VT behavior can differ: Ghostty preserves SGR blink, while Alacritty parses blink but cannot report it.
@@ -308,14 +308,14 @@ The CLI and published Python and JavaScript packages include all backends. Windo
 Rust users enable non-default backends through Cargo features. To enable Ghostty:
 
 ```sh
-cargo add tui-test-rs --features ghostty
+cargo add tui-test-rs --features rio
 ```
 
 ```rust
 use tui_test::{Backend, OpenOptions};
 
 let options = OpenOptions {
-    backend: Backend::Ghostty,
+    backend: Backend::Rio,
     ..OpenOptions::default()
 };
 ```
@@ -520,7 +520,7 @@ The default palette is the classic VGA/xterm palette expected by `TERM=xterm-256
 | | tui-test | [Tuistory](https://github.com/remorses/tuistory) | [tui-use](https://github.com/onesuper/tui-use) | [terminal-use](https://github.com/flipbit03/terminal-use) |
 | --- | --- | --- | --- | --- |
 | Language | Rust | TypeScript | TypeScript | Rust |
-| Emulator | Alacritty or Ghostty, per session | Ghostty (via OpenTUI) | xterm (headless) | Alacritty |
+| Emulator | Alacritty, Ghostty, or Rio, per session | Ghostty (via OpenTUI) | xterm (headless) | Alacritty |
 | Shell command tracking | ✅ command boundaries, exit codes, cwd | ❌ | ❌ | ❌ |
 | Testing / snapshots | ✅ `expect` text / output / exit-code / snapshot | ✅ snapshots | ❌ | ❌ |
 | Color and per-cell attributes | ✅ fg/bg, ANSI-256/hex/RGB, `cells` | ✅ style-filtered text | ❌ plain text with highlights | ✅ via PNG |

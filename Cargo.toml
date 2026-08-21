@@ -20,6 +20,7 @@ repository = "https://github.com/microsoft/tui-test"
 
 [workspace.dependencies]
 alacritty_terminal = "0.26.0"
+rio-vt = "0.5.3"
 anyhow = "1.0.102"
 bitflags = "2.13.1"
 clap = { version = "4.6.1", features = ["derive"] }

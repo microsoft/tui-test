@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
+use tui_test::Backend;
+
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -771,6 +773,24 @@ fn blinking_program() -> Vec<&'static str> {
     }
 }
 
+fn backend_parity_program() -> Vec<&'static str> {
+    if cfg!(windows) {
+        vec![
+            "pwsh",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            r#"[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); $wide=[char]0x4F60; [Console]::Write("`e[2J`e[H`e]2;backend parity`a`e[1;3;4;31;44mRED`e[0m $wide`r`nline two`e[?25l"); Start-Sleep -Seconds 30"#,
+        ]
+    } else {
+        vec![
+            "sh",
+            "-c",
+            "printf '\\033[2J\\033[H\\033]2;backend parity\\007\\033[1;3;4;31;44mRED\\033[0m 你\\r\\nline two\\033[?25l'; sleep 30",
+        ]
+    }
+}
+
 #[test]
 fn ghostty_backend_is_used_end_to_end() {
     let sandbox = Sandbox::new("ghostty-backend");
@@ -1270,43 +1290,57 @@ fn status_reports_the_daemon_pid_not_the_child() {
 /// no PTY is involved and every backend is covered.
 #[test]
 fn a_window_title_is_tracked_asserted_and_drawn() {
-    let sandbox = Sandbox::new("title");
-    sandbox.ok(&["run", "--cols", "40", "--", "bash", "--norc"]);
-    let before = sandbox.ok(&["get", "title"]);
+    for backend in Backend::ALL {
+        let sandbox = Sandbox::new("title");
+        sandbox.ok(&[
+            "run",
+            "--backend",
+            backend.as_str(),
+            "--cols",
+            "40",
+            "--",
+            "bash",
+            "--norc",
+        ]);
+        let before = sandbox.ok(&["get", "title"]);
 
-    sandbox.ok(&["submit", r#"printf '\033]2;vim: notes.md\007'"#]);
-    sandbox.ok(&["expect", "title", "vim", "--timeout", "5000"]);
-    sandbox.ok(&["expect", "title", "notes\\.\\w+", "--regex"]);
-    sandbox.ok(&["expect", "title", "emacs", "--not"]);
-    assert_ne!(
-        sandbox.ok(&["get", "title"]),
-        before,
-        "the title the program set replaced whatever the session started with"
-    );
+        sandbox.ok(&["submit", r#"printf '\033]2;vim: notes.md\007'"#]);
+        sandbox.ok(&["expect", "title", "vim", "--timeout", "5000"]);
+        sandbox.ok(&["expect", "title", "notes\\.\\w+", "--regex"]);
+        sandbox.ok(&["expect", "title", "emacs", "--not"]);
+        assert_ne!(
+            sandbox.ok(&["get", "title"]),
+            before,
+            "{} did not replace the session's initial title",
+            backend.as_str()
+        );
 
-    // The title is drawn in the window chrome, not in the grid.
-    let svg = sandbox.home.join("titled.svg");
-    sandbox.ok(&[
-        "screenshot",
-        "--out",
-        svg.to_str().expect("utf-8 path"),
-        "--zoom",
-        "0.5",
-    ]);
-    let image = std::fs::read_to_string(&svg).expect("read svg");
-    assert!(
-        image.contains(">vim: notes.md - 40x30</text>")
-            && image.contains(r#"text-anchor="middle""#),
-        "the title is drawn centred in the title bar: {image}"
-    );
-    assert!(
-        image.contains(r#"width="239" height="365" viewBox="0 0 478 730""#),
-        "zoom changes only the displayed dimensions: {image}"
-    );
+        // The title is drawn in the window chrome, not in the grid.
+        let svg = sandbox.home.join("titled.svg");
+        sandbox.ok(&[
+            "screenshot",
+            "--out",
+            svg.to_str().expect("utf-8 path"),
+            "--zoom",
+            "0.5",
+        ]);
+        let image = std::fs::read_to_string(&svg).expect("read svg");
+        assert!(
+            image.contains(">vim: notes.md - 40x30</text>")
+                && image.contains(r#"text-anchor="middle""#),
+            "{} did not draw the title centred in the title bar: {image}",
+            backend.as_str()
+        );
+        assert!(
+            image.contains(r#"width="239" height="365" viewBox="0 0 478 730""#),
+            "{} changed the SVG dimensions at zoom 0.5: {image}",
+            backend.as_str()
+        );
 
-    // An empty title clears it, which is how programs tidy up on exit.
-    sandbox.ok(&["submit", r#"printf '\033]2;\007'"#]);
-    sandbox.ok(&["wait", "title", "vim", "--not", "--timeout", "5000"]);
+        // An empty title clears it, which is how programs tidy up on exit.
+        sandbox.ok(&["submit", r#"printf '\033]2;\007'"#]);
+        sandbox.ok(&["wait", "title", "vim", "--not", "--timeout", "5000"]);
+    }
 }
 
 /// A snapshot leaves the window title out unless it is asked for.
@@ -1316,48 +1350,234 @@ fn a_window_title_is_tracked_asserted_and_drawn() {
 /// to one machine and make it change on `cd` while the screen stayed the same.
 #[test]
 fn a_snapshot_records_the_title_only_when_asked() {
-    let sandbox = Sandbox::new("snap-title");
-    // Wide enough that the title is not truncated, so the assertion is about
-    // whether it was recorded at all rather than about how it was shortened.
-    let set_title = r#"clear; printf '\033]2;tui-test-user@host: /some/path\007'; sleep 30"#;
-    sandbox.ok(&[
-        "run", "--cols", "40", "--", "bash", "--norc", "-c", set_title,
-    ]);
-    sandbox.ok(&["expect", "title", "tui-test-user@host", "--timeout", "5000"]);
+    for backend in Backend::ALL {
+        let sandbox = Sandbox::new("snap-title");
+        // Wide enough that the title is not truncated, so the assertion is
+        // about whether it was recorded at all rather than how it was shortened.
+        let set_title = r#"clear; printf '\033]2;tui-test-user@host: /some/path\007'; sleep 30"#;
+        sandbox.ok(&[
+            "run",
+            "--backend",
+            backend.as_str(),
+            "--cols",
+            "40",
+            "--",
+            "bash",
+            "--norc",
+            "-c",
+            set_title,
+        ]);
+        sandbox.ok(&["expect", "title", "tui-test-user@host", "--timeout", "5000"]);
 
-    let plain = sandbox.ok(&["expect", "snapshot", "plain", "-u"]);
-    assert!(
-        !plain.contains("tui-test-user@host"),
-        "default keeps the title out"
-    );
-    let stored = std::fs::read_to_string(
-        std::env::current_dir()
-            .expect("cwd")
-            .join("__snapshots__/plain.snap"),
-    )
-    .expect("read snapshot");
-    assert!(
-        stored.starts_with("╭────") && !stored.contains("tui-test-user@host"),
-        "the border is plain, so a baseline is not tied to a machine: {stored}"
-    );
-
-    sandbox.ok(&["expect", "snapshot", "titled", "-u", "--include-title"]);
-    let titled = std::fs::read_to_string(
-        std::env::current_dir()
-            .expect("cwd")
-            .join("__snapshots__/titled.snap"),
-    )
-    .expect("read snapshot");
-    assert!(
-        titled.contains("tui-test-user@host: /some/path"),
-        "asking for it puts it in the border: {titled}"
-    );
-
-    for name in ["plain", "titled"] {
-        let _ = std::fs::remove_file(
-            std::env::current_dir()
-                .expect("cwd")
-                .join(format!("__snapshots__/{name}.snap")),
+        let plain = sandbox.ok_in(Some(&sandbox.home), &["expect", "snapshot", "plain", "-u"]);
+        assert!(
+            !plain.contains("tui-test-user@host"),
+            "{} included a title by default",
+            backend.as_str()
         );
+        let stored = std::fs::read_to_string(sandbox.home.join("__snapshots__/plain.snap"))
+            .expect("read snapshot");
+        assert!(
+            stored.starts_with("╭────") && !stored.contains("tui-test-user@host"),
+            "{} tied a default snapshot to the session title: {stored}",
+            backend.as_str()
+        );
+
+        sandbox.ok_in(
+            Some(&sandbox.home),
+            &["expect", "snapshot", "titled", "-u", "--include-title"],
+        );
+        let titled = std::fs::read_to_string(sandbox.home.join("__snapshots__/titled.snap"))
+            .expect("read snapshot");
+        assert!(
+            titled.contains("tui-test-user@host: /some/path"),
+            "{} left the requested title out of the snapshot: {titled}",
+            backend.as_str()
+        );
+    }
+}
+
+#[test]
+fn terminal_backends_match_end_to_end_for_cells_state_and_snapshots() {
+    let mut expected_cells = None;
+    let mut expected_state = None;
+    let mut expected_snapshot = None;
+
+    for backend in Backend::ALL {
+        let sandbox = Sandbox::new("backend-parity");
+        let mut args = vec![
+            "run",
+            "--backend",
+            backend.as_str(),
+            "--cols",
+            "12",
+            "--rows",
+            "3",
+            "--",
+        ];
+        args.extend(backend_parity_program());
+        sandbox.ok(&args);
+        sandbox.ok(&["wait", "text", "line two", "--timeout", "10000"]);
+        sandbox.ok(&["expect", "title", "backend parity", "--timeout", "5000"]);
+
+        let cells: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "cells", "0", "0", "6", "1"]))
+                .expect("cells json");
+        let cells = cells["data"]["cells"].clone();
+        let row = cells.as_array().expect("cell array");
+        assert_eq!(row[0]["char"], "R", "{} first cell", backend.as_str());
+        assert_eq!(row[0]["fg"], 1, "{} named foreground", backend.as_str());
+        assert_eq!(row[0]["bg"], 4, "{} named background", backend.as_str());
+        assert_eq!(row[0]["bold"], true, "{} bold", backend.as_str());
+        assert_eq!(row[0]["italic"], true, "{} italic", backend.as_str());
+        assert_eq!(
+            row[0]["underline_style"],
+            "single",
+            "{} underline",
+            backend.as_str()
+        );
+        assert_eq!(row[4]["char"], "你", "{} wide cell", backend.as_str());
+        assert_eq!(row[5]["char"], "", "{} wide continuation", backend.as_str());
+        if let Some(expected) = &expected_cells {
+            assert_eq!(
+                &cells,
+                expected,
+                "{} produced different cells",
+                backend.as_str()
+            );
+        } else {
+            expected_cells = Some(cells);
+        }
+
+        let state: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "state"])).expect("state json");
+        let data = &state["data"];
+        assert_eq!(
+            data["title"],
+            "backend parity",
+            "{} title",
+            backend.as_str()
+        );
+        assert_eq!(data["bell_count"], 0, "{} OSC terminator", backend.as_str());
+        let state = serde_json::json!({
+            "cols": data["cols"],
+            "rows": data["rows"],
+            "cursor": data["cursor"],
+            "title": data["title"],
+            "bell_count": data["bell_count"],
+            "text": data["text"],
+        });
+        if let Some(expected) = &expected_state {
+            assert_eq!(
+                &state,
+                expected,
+                "{} produced different state",
+                backend.as_str()
+            );
+        } else {
+            expected_state = Some(state);
+        }
+
+        sandbox.ok_in(
+            Some(&sandbox.home),
+            &[
+                "expect",
+                "snapshot",
+                "backend-parity",
+                "-u",
+                "--include-colors",
+                "--include-title",
+            ],
+        );
+        let snapshot =
+            std::fs::read_to_string(sandbox.home.join("__snapshots__/backend-parity.snap"))
+                .expect("read parity snapshot");
+        if let Some(expected) = &expected_snapshot {
+            assert_eq!(
+                &snapshot,
+                expected,
+                "{} produced a different snapshot",
+                backend.as_str()
+            );
+        } else {
+            expected_snapshot = Some(snapshot);
+        }
+
+        // Growing the viewport is backend-specific: Ghostty anchors existing
+        // rows at the bottom, while Alacritty and Rio keep them at the top.
+        // Exercise snapshot round-tripping, but compare its visual content
+        // instead of reusing one backend's row layout as the shared baseline.
+        sandbox.ok(&["resize", "16", "4"]);
+        sandbox.ok_in(
+            Some(&sandbox.home),
+            &[
+                "expect",
+                "snapshot",
+                "backend-parity-resized",
+                "-u",
+                "--include-colors",
+                "--include-title",
+            ],
+        );
+        sandbox.ok_in(
+            Some(&sandbox.home),
+            &[
+                "expect",
+                "snapshot",
+                "backend-parity-resized",
+                "--include-colors",
+                "--include-title",
+            ],
+        );
+        let resized = std::fs::read_to_string(
+            sandbox
+                .home
+                .join("__snapshots__/backend-parity-resized.snap"),
+        )
+        .expect("read resized parity snapshot");
+        let state: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "state"])).expect("resized state json");
+        let data = &state["data"];
+        assert_eq!(data["cols"], 16, "{} resized columns", backend.as_str());
+        assert_eq!(data["rows"], 4, "{} resized rows", backend.as_str());
+        assert_eq!(
+            data["title"],
+            "backend parity",
+            "{} resized title",
+            backend.as_str()
+        );
+        let text = data["text"].as_str().expect("resized state text");
+        assert!(
+            text.contains("RED 你") && text.contains("line two"),
+            "{} lost content during resize: {text:?}",
+            backend.as_str()
+        );
+        assert!(
+            resized.contains("backend parity")
+                && resized.contains("RED 你")
+                && resized.contains("line two")
+                && resized.contains("\"fg\": 1")
+                && resized.contains("\"bg\": 4"),
+            "{} lost visual state in the resized snapshot: {resized}",
+            backend.as_str()
+        );
+    }
+}
+
+#[test]
+fn shell_integration_is_identical_across_terminal_backends() {
+    for backend in Backend::ALL {
+        let sandbox = Sandbox::new("backend-shell-integration");
+        sandbox.ok(&["open", "--backend", backend.as_str()]);
+        let command = if cfg!(windows) {
+            "Write-Output ('backend-'+'shell-ok')"
+        } else {
+            "printf '%s\\n' backend-shell-ok"
+        };
+        sandbox.ok(&["submit", command]);
+        sandbox.ok(&["wait", "text", "backend-shell-ok", "--timeout", "10000"]);
+        sandbox.ok(&["wait", "command"]);
+        sandbox.ok(&["expect", "exit-code", "0"]);
+        sandbox.ok(&["expect", "output", "backend-shell-ok"]);
     }
 }
