@@ -1,6 +1,6 @@
 {
   "name": "@microsoft/tui-test",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "description": "Node bindings for the tui_test terminal engine",
   "type": "module",
   "exports": {
