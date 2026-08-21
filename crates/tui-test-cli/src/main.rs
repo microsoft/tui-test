@@ -159,19 +159,22 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             restart,
             profile,
             timeouts,
-        } => Request::Open {
-            shell: shell.map(Into::into),
-            program: None,
-            backend: backend.map(Into::into).unwrap_or_default(),
-            profile: profile.resolve()?,
-            cols,
-            rows,
-            cwd,
-            env: parse_env(&env)?,
-            wait_ready: ready_flag(wait_ready, no_wait_ready),
-            restart,
-            timeouts: timeouts.into(),
-        },
+        } => {
+            let settings = profile.resolve()?;
+            Request::Open {
+                shell: shell.map(Into::into),
+                program: None,
+                backend: backend.map(Into::into).unwrap_or_default(),
+                profile: settings.profile,
+                cols,
+                rows,
+                cwd,
+                env: parse_env(&env)?,
+                wait_ready: ready_flag(wait_ready, no_wait_ready),
+                restart,
+                timeouts: settings.timeouts.with_overrides(timeouts.into()),
+            }
+        }
         Command::Run {
             program,
             args,
@@ -188,18 +191,19 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         } => {
             let mut prog = vec![program];
             prog.extend(args);
+            let settings = profile.resolve()?;
             Request::Open {
                 shell: None,
                 program: Some(prog),
                 backend: backend.map(Into::into).unwrap_or_default(),
-                profile: profile.resolve()?,
+                profile: settings.profile,
                 cols,
                 rows,
                 cwd,
                 env: parse_env(&env)?,
                 wait_ready: ready_flag(wait_ready, no_wait_ready),
                 restart,
-                timeouts: timeouts.into(),
+                timeouts: settings.timeouts.with_overrides(timeouts.into()),
             }
         }
         Command::Close { .. } => Request::Close,

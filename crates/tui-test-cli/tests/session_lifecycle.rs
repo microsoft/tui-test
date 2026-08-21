@@ -379,6 +379,29 @@ fn a_session_timeout_default_applies_to_later_commands() {
     );
 }
 
+#[test]
+fn config_timeouts_apply_below_command_line_overrides() {
+    let sandbox = Sandbox::new("config-timeouts");
+    let config = sandbox.home.join("timeouts.toml");
+    std::fs::write(
+        &config,
+        "[profiles.default.timeouts]\ntext = 1234\ncommand = 2345\n",
+    )
+    .expect("write config");
+
+    sandbox.ok(&[
+        "open",
+        "--config",
+        config.to_str().expect("utf-8 path"),
+        "--timeout-text",
+        "3456",
+    ]);
+    let raw = sandbox.ok(&["--json", "state"]);
+    let payload: serde_json::Value = serde_json::from_str(&raw).expect("state json");
+    assert_eq!(payload["data"]["timeouts"]["text"], 3456);
+    assert_eq!(payload["data"]["timeouts"]["command"], 2345);
+}
+
 /// The color a screenshot paints is the color an assertion matches.
 ///
 /// These came from two separate hardcoded tables that disagreed on every ANSI
@@ -468,6 +491,24 @@ fn an_unknown_profile_is_rejected() {
     assert!(
         msg.contains("ci"),
         "the error should name the real profile: {msg}"
+    );
+}
+
+#[test]
+fn an_invalid_profile_color_is_a_usage_error_not_a_crash() {
+    let sandbox = Sandbox::new("palette-invalid");
+    let config = sandbox.home.join("invalid.toml");
+    std::fs::write(&config, "[profiles.default.colors]\nred = \"éa\"\n").expect("write config");
+    let out = sandbox.run(&["open", "--config", config.to_str().expect("utf-8 path")]);
+    assert_eq!(out.status.code(), Some(2));
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("invalid hex color"),
+        "the invalid color should be identified: {message}"
+    );
+    assert!(
+        !message.contains("panicked"),
+        "invalid config must not crash the cli: {message}"
     );
 }
 
