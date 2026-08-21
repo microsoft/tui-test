@@ -1,15 +1,62 @@
 # tui-test
 
-`tui-test` is a rust powered cli for controlling, inspecting, testing, and recording shell sessions and terminal apps. It supports all standard terminal actions (send keys, mouse clicks) & user actions (screenshot, record sessions), & testing (matches screenshot, contains text). `tui-test` supports Windows, Linux, & macOS and it supports a wide range of shells (see [Supported shells](#supported-shells)).
+`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. Use it from the CLI or call the same engine from Rust, Python, or JavaScript. It works for AI agents that need structured access to terminal state, terminal automation, and terminal ui application testing.
+
+<p align="center">
+  <a href="#installation">Installation</a>
+  ·
+  <a href="#quick-start">Quick start</a>
+  ·
+  <a href="#built-for-ai-agents">AI agents</a>
+  ·
+  <a href="#api-references">API references</a>
+  ·
+  <a href="#configuration">Configuration</a>
+</p>
 
 > [!IMPORTANT]
-> `tui-test` is in the middle of a major re-write, the documentation reflects the beta releases
+> `tui-test` is undergoing a major rewrite. These docs cover the beta releases.
 
-## Programmatic usage
+## Features
 
-`tui-test` provides a Rust, Python and Node libraries. These libraries are independent of the cli
+- Give AI agents structured terminal state, machine-readable output, perform common terminal actions, stable exit codes, and a CLI-generated skill.
+- Send keyboard and mouse input to shells and full-screen TUI programs, resize the terminal, or signal the child process.
+- Read terminal text, cell colors, cursor position, window titles, command output, and exit codes.
+- Wait for terminal state and assert against text, colors, snapshots, command output, or exit status.
+- Save SVG screenshots, APNG/GIF/MP4 recordings, or asciinema casts.
 
-### Rust ([`tui-test-rs`](https://crates.io/crates/tui-test-rs))
+## Installation
+
+Use the CLI from shell scripts and agent workflows. The Rust, Python, and JavaScript packages use the in-process API and do not require the CLI.
+
+<details>
+<summary><strong>CLI</strong></summary>
+
+### macOS and Linux
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | TUI_TEST_VERSION=beta sh
+```
+
+### Windows
+
+```powershell
+$env:TUI_TEST_VERSION = "beta"
+irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
+```
+
+Set `TUI_TEST_VERSION` to install a specific version or `TUI_TEST_INSTALL_DIR` to choose the install location.
+
+### Release binaries
+
+Download the latest beta for your platform from [GitHub Releases](https://github.com/microsoft/tui-test/releases).
+
+</details>
+
+<details>
+<summary><strong>Rust</strong></summary>
+
+Install [`tui-test-rs`](https://crates.io/crates/tui-test-rs):
 
 ```sh
 cargo add tui-test-rs@0.1.0-beta.1
@@ -17,8 +64,7 @@ cargo add tui-test-rs@0.1.0-beta.1
 cargo add tui-test-rs@0.1.0-beta.1 --features recording-raster
 ```
 
-Raster recording uses installed system fonts unless a JetBrains Mono bundle
-feature is enabled:
+Raster recording uses installed system fonts unless a JetBrains Mono bundle feature is enabled:
 
 | Feature | Bundled JetBrains Mono faces |
 | --- | --- |
@@ -28,6 +74,68 @@ feature is enabled:
 | `recording-font-jetbrains-mono-full` | All 16 static family faces |
 
 Each font feature enables `recording-raster`; the tiers are cumulative.
+
+</details>
+
+<details>
+<summary><strong>Python</strong></summary>
+
+Install [`tui-test`](https://github.com/microsoft/tui-test/blob/main/bindings/python/README.md) for Python 3.8 or later:
+
+```sh
+pip install --pre tui-test
+```
+
+</details>
+
+<details>
+<summary><strong>JavaScript</strong></summary>
+
+Install [`@microsoft/tui-test`](https://github.com/microsoft/tui-test/blob/main/bindings/js/README.md):
+
+```sh
+npm install @microsoft/tui-test@beta # Node 20+
+
+bun add @microsoft/tui-test@beta # Bun (best effort)
+
+deno add npm:@microsoft/tui-test@beta # Deno 2 (best effort)
+```
+
+Node is the supported runtime. Bun and Deno support is best effort. Deno needs a local `node_modules` directory and `--allow-ffi` to load the native addon.
+
+</details>
+
+## Quick start
+
+<details>
+<summary><strong>CLI</strong></summary>
+
+Run a command and check the result:
+
+```sh
+tui-test open                  # start a shell session (auto-starts the daemon)
+tui-test submit "echo hello"   # type the command, press Enter
+tui-test wait command          # block until it finishes
+tui-test expect text "hello"   # assert it showed up
+tui-test expect exit-code 0    # assert it exited 0
+tui-test close
+```
+
+Drive a full-screen TUI:
+
+```sh
+tui-test run vim file.txt
+tui-test wait idle             # let the screen settle
+tui-test key press i
+tui-test type "some text"
+tui-test key press Escape : w q Enter
+tui-test wait exit
+```
+
+</details>
+
+<details>
+<summary><strong>Rust</strong></summary>
 
 ```rust
 use tui_test::{OpenOptions, Operation, Session};
@@ -60,11 +168,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Python ([`tui-test`](https://github.com/microsoft/tui-test/blob/main/bindings/python/README.md))
+</details>
 
-```sh
-pip install --pre tui-test
-```
+<details>
+<summary><strong>Python</strong></summary>
 
 ```python
 import asyncio
@@ -81,15 +188,10 @@ async def main():
 asyncio.run(main())
 ```
 
-### Node ([`@microsoft/tui-test`](https://github.com/microsoft/tui-test/blob/main/bindings/js/README.md))
+</details>
 
-```sh
-npm install @microsoft/tui-test@beta # Node 20+
-
-bun add @microsoft/tui-test@beta # Bun (best effort)
-
-deno add npm:@microsoft/tui-test@beta # Deno 2 (best effort)
-```
+<details>
+<summary><strong>JavaScript</strong></summary>
 
 ```js
 import { TuiTest } from "@microsoft/tui-test";
@@ -103,79 +205,55 @@ await su.expectExitCode(0);
 await su.close();
 ```
 
-Node is the supported runtime. Bun and Deno compatibility is best effort; Deno requires a local `node_modules` directory and `--allow-ffi` to load the native addon.
+</details>
 
-## Cli Installation 
+## Built for AI agents
 
-### install script
+`tui-test` exposes terminal state through commands instead of making an agent scrape a stream of ANSI output. It tracks command boundaries, exit codes, the working directory, prompts, window titles, cursor position, cells, colors, and bell events.
 
-macOS / Linux:
+| Task | Commands |
+| --- | --- |
+| Start or reuse a terminal | `open`, `run`, `sessions` |
+| Inspect what happened | `state`, `text`, `cells`, `get`, `screenshot` |
+| Interact with the program | `submit`, `type`, `key`, `mouse`, `resize`, `signal` |
+| Wait for real terminal state | `wait command`, `wait ready`, `wait idle`, `wait text`, `wait title`, `wait bell` |
+| Check the result | `expect text`, `expect output`, `expect exit-code`, `expect snapshot` |
+| Hand the session to a person | `monitor`, `screenshot`, `record` |
 
-```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | sh
-```
+Wait commands react to the terminal instead of relying on fixed sleeps. `--json` returns machine-readable results, and stable [exit codes](#exit-codes) distinguish a failed assertion from a missing session or daemon error.
 
-Windows PowerShell:
+| Agent command | Description |
+| --- | --- |
+| `agent-context` | Print versioned JSON for every command, flag, enum, default, and exit code. The installed CLI generates the JSON, so it matches that version. |
+| `usage` | Print a one-screen cheatsheet. |
+| `skill` | Print the full workflow guide from [`SKILL.md`](https://github.com/microsoft/tui-test/blob/main/SKILL.md). |
 
-```powershell
-irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
-```
-
-Use `TUI_TEST_VERSION` to select a specific version or `TUI_TEST_INSTALL_DIR` to select an install location.
-
-### download from releases
-
-Download the latest beta from [releases](https://github.com/microsoft/tui-test/releases).
-
-## Cli Quick start
-
-Run a command and check the result:
-
-```sh
-tui-test open                  # start a shell session (auto-starts the daemon)
-tui-test submit "echo hello"   # type the command, press Enter
-tui-test wait command          # block until it finishes
-tui-test expect text "hello"   # assert it showed up
-tui-test expect exit-code 0    # assert it exited 0
-tui-test close
-```
-
-Drive a full-screen TUI the same way:
-
-```sh
-tui-test run vim file.txt
-tui-test wait idle             # let the screen settle
-tui-test key press i
-tui-test type "some text"
-tui-test key press Escape : w q Enter
-tui-test wait exit
-```
-
-## Built for agents
-
-`tui-test` has native support for AI agents:
-
-- `tui-test agent-context` prints versioned JSON for every command, flag, enum, default, and exit code. It is generated from the cli, so it cannot drift from the real surface.
-- `tui-test usage` prints a one-screen cheatsheet.
-- `tui-test skill` prints the full workflow guide ([SKILL.md](https://github.com/microsoft/tui-test/blob/main/SKILL.md)).
-
-### Skill quick start
+### Install the agent skill
 
 ```sh
 tui-test skill --add
 ```
 
-Adds the `tui-test` skill to the location the user selects in the TUI.
+## API references
 
-Each command returns a stable exit code (see [Exit codes](#exit-codes)), so an agent can tell an assertion failure from a missing session without scraping text.
+For programmatic use, the Rust API docs and binding READMEs cover the same terminal operations as the CLI reference.
 
-## Cli Command reference
+| Surface | Reference |
+| --- | --- |
+| CLI | [CLI reference](#cli-reference) |
+| Rust | [`tui-test-rs` API documentation](https://docs.rs/tui-test-rs/latest/tui_test/) |
+| Python | [Python binding README](bindings/python/README.md#api) |
+| JavaScript | [JavaScript binding README](bindings/js/README.md#api) |
 
-Global flags: `--session <name>` (env `TUI_TEST_SESSION`, default `default`), `--json` for machine-readable output, and `--verbose`/`-v` to log PTY traffic (see [Debugging](#debugging)).
+## CLI reference
 
-### Timeouts
+`--session <name>` selects a session (env `TUI_TEST_SESSION`, default `default`). `--json` makes output machine-readable. Use `--verbose` or `-v` to log PTY traffic (see [Debugging](#debugging)).
 
-Waits and assertions fall into five timeout classes:
+### Sessions
+
+#### Timeouts
+
+Waits and assertions use five timeout classes:
 
 | Class | Applies to | Default |
 | --- | --- | --- |
@@ -187,19 +265,16 @@ Waits and assertions fall into five timeout classes:
 
 `open`'s prompt wait caps at 8000 ms unless you set a `ready` timeout.
 
-Set a session default at `open`, override it per call:
+Set session defaults with `open`, then override individual calls as needed:
 
 ```sh
 tui-test open --timeout-text 30000 --timeout-idle 15000 --timeout-ready 20000
 tui-test wait text "done" --timeout 60000   # just this call
 ```
 
-Session defaults can also come from the selected config profile. Precedence:
-`--timeout`, then `open`/`run --timeout-<class>`, then the selected profile,
-then `TUI_TEST_TIMEOUT_<CLASS>_MS` (read when the daemon starts).
-`tui-test state` prints a session's effective timeouts.
+Timeout precedence, from highest to lowest, is `--timeout`, the session default from `open` or `run`, then `TUI_TEST_TIMEOUT_<CLASS>_MS` (read when the daemon starts). `tui-test state` prints the effective values for a session.
 
-### Session & lifecycle
+#### Lifecycle
 
 | Command                                                      | Description                                 |
 | ------------------------------------------------------------ | ------------------------------------------- |
@@ -209,42 +284,28 @@ then `TUI_TEST_TIMEOUT_<CLASS>_MS` (read when the daemon starts).
 | `close [--all]`                                              | Close the current session (or all).         |
 | `daemon start` / `daemon status` / `daemon stop --session N \| --all` | Start, inspect, or stop a session's daemon. |
 
-Each session has its own daemon, so `daemon stop` needs `--session <name>` or
-`--all`. `close` stops it too.
+Each session has its own daemon. `close` stops that daemon. To stop one directly, pass `--session <name>` or `--all` to `daemon stop`.
 
-When a client finds a daemon from another `tui-test` version, it shuts that
-daemon down and starts the current version before sending the command. The
-restart is serialized per session so concurrent clients cannot race.
+If a session's daemon comes from another `tui-test` version, the client replaces it before sending the command. A per-session lock prevents concurrent clients from racing during the restart.
 
-`open` waits for a prompt before returning, `run` does not. Override with
-`--wait-ready` / `--no-wait-ready`. An explicit `--wait-ready` fails (exit 1) if
-no prompt appears; `open`'s implicit wait reports `ready` in its payload either
-way.
+`open` waits for a prompt before returning, `run` does not. Override with `--wait-ready` / `--no-wait-ready`. An explicit `--wait-ready` fails (exit 1) if no prompt appears; `open`'s implicit wait reports `ready` in its payload either way.
 
-Calling `open` or `run` for a session that already has a live child reuses that
-child. Pass `--restart` (or its `--force` alias) to replace it explicitly.
+Calling `open` or `run` for a session that already has a live child reuses that child. Pass `--restart` (or its `--force` alias) to replace it explicitly.
 
-### Terminal backends
+#### Terminal backends
 
-Choose an emulator per session with `--backend alacritty|ghostty`. Alacritty
-remains the default; `ghostty` uses
-[Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs).
+Select a backend per session with `--backend`. The available values are `alacritty` (default) and `ghostty`; Ghostty uses [Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs).
 
 ```sh
 tui-test open --backend ghostty
 tui-test run --backend ghostty vim file.txt
 ```
 
-Both backends run the same conformance suite and feed the same renderer,
-assertions, and snapshots. Shell semantic-prompt tracking stays on the raw PTY
-byte stream, so command, exit-code, and cwd behavior is backend-independent.
-Ghostty also preserves SGR blink; Alacritty parses blink but cannot report it.
+All backends use the same renderer, assertions, snapshot format, and conformance suite. Shell semantic-prompt tracking reads raw PTY bytes, so command boundaries, exit codes, and cwd tracking do not depend on the selected backend. Backend-specific VT behavior can differ: Ghostty preserves SGR blink, while Alacritty parses blink but cannot report it.
 
-The CLI and published Python/Node native packages include both backends.
-Windows ARM64 artifacts are not currently published because Ghostty's
-upstream Zig build does not support that target.
+The CLI and published Python and JavaScript packages include all backends. Windows ARM64 artifacts are not currently published because Ghostty's upstream Zig build does not support that target.
 
-Rust users opt in explicitly:
+Rust users enable non-default backends through Cargo features. To enable Ghostty:
 
 ```sh
 cargo add tui-test-rs --features ghostty
@@ -259,11 +320,11 @@ let options = OpenOptions {
 };
 ```
 
-Building the `ghostty` feature from source requires Zig 0.16 on `PATH`;
-the dependency builds a pinned Ghostty revision. The default Rust feature set
-continues to build only the Alacritty backend and does not require Zig.
+The default Rust features include only Alacritty and do not require Zig. The `ghostty` feature builds a pinned Ghostty revision and requires Zig 0.16 on `PATH`.
 
-### Inspection
+### Terminal control
+
+#### Inspection
 
 | Command                                             | Description                                                                                 |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -273,10 +334,9 @@ continues to build only the Alacritty backend and does not require Zig.
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags).                                                  |
 | `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | Structured getters.                                                                   |
 
-`state` prints `key: value` lines then the screen; `text` and `screenshot`
-print the screen bare.
+`state` prints `key: value` lines then the screen; `text` and `screenshot` print the screen bare.
 
-### Input
+#### Input
 
 | Command                                                       | Description                                                  |
 | ------------------------------------------------------------- | ------------------------------------------------------------ |
@@ -288,14 +348,9 @@ print the screen bare.
 | `mouse click X Y` / `mouse click --on-text "OK" [--clicks N]` | Click by coords or label.                                  |
 | `mouse move\|down\|up\|drag\|scroll ...`                      | Full mouse control.                                        |
 
-Key input follows the Kitty keyboard protocol negotiated by the child. A
-`key press` sends the normal press input and adds a release only when the child
-requests Kitty event-type reporting. Text-producing keys also require
-report-all-keys mode before repeat and release events can be represented.
-Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`, and `Meta`;
-the top-level `press` command remains a compatibility alias for `key press`.
+Key input follows the Kitty keyboard protocol negotiated by the child. A `key press` sends the normal press input and adds a release only when the child requests Kitty event-type reporting. Text-producing keys also require report-all-keys mode before repeat and release events can be represented. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`, and `Meta`; the top-level `press` command remains a compatibility alias for `key press`.
 
-### PTY
+#### PTY control
 
 | Command                           | Description                      |
 | --------------------------------- | -------------------------------- |
@@ -303,7 +358,9 @@ the top-level `press` command remains a compatibility alias for `key press`.
 | `write <data>`                    | Write raw bytes (no return key). |
 | `signal INT\|TERM\|KILL` / `kill` | Signal / kill the child.         |
 
-### Wait
+### Waiting and assertions
+
+#### Wait
 
 | Command                                             | Description                         |
 | --------------------------------------------------- | ----------------------------------- |
@@ -315,7 +372,7 @@ the top-level `press` command remains a compatibility alias for `key press`.
 | `wait ready`                                        | Until the shell reports a prompt.   |
 | `wait bell`                                         | Until the next terminal bell event. |
 
-### Expect (exit 0 = pass, 1 = fail)
+#### Expect (exit 0 = pass, 1 = fail)
 
 | Command                                                                         | Description                                |
 | ------------------------------------------------------------------------------- | ------------------------------------------ |
@@ -326,27 +383,23 @@ the top-level `press` command remains a compatibility alias for `key press`.
 | `expect bell N [--timeout MS]`                                                  | Cumulative bell count reaches at least N.  |
 | `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare against `__snapshots__/NAME.snap`. `--include-title` adds the window title to the frame. |
 
-Colors accept ANSI-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
+Colors accept ANSI-256 (`9`), hex (`#ff0000`), or RGB (`255,0,0`).
 
-### Screenshots
+### Captures
 
-Screenshots render a snapshot of the session in the current terminal by
-default, but can render an SVG using the `-o` output flag. `--zoom 0.5`
-halves the image dimensions while preserving the same rows and columns. Nerd
-Font icons are embedded as vector paths, so SVGs remain self-contained without
-changing the font stack for regular text.
-Rendered screenshots and recordings append `COLSxROWS` to the program title;
-when the terminal has no title they use `tui-test capture - COLSxROWS`.
+#### Screenshots
+
+Without `-o`, `screenshot` draws the session in the current terminal. Pass `-o file.svg` to save a full-color SVG instead. `--zoom 0.5` halves the image dimensions without changing the terminal's rows or columns. Nerd Font icons are embedded as vector paths, so the SVG does not need an installed Nerd Font.
+
+`tui-test` appends `COLSxROWS` to the program title in rendered screenshots and recordings. When the terminal has no title, it uses `tui-test capture - COLSxROWS`.
 
 <p align="center">
   <img alt="full-color SVG screenshot of a TUI rendered by tui-test" src="static/screen.svg" width="400">
 </p>
 
-### Recording
+#### Recording
 
-Record a selected part of a session directly to animated APNG (primary), GIF
-(fallback), MP4 video, or standard
-[asciinema v2](https://docs.asciinema.org/manual/asciicast/v2/) cast:
+`record` writes a selected part of a session to animated APNG (primary), GIF (fallback), MP4 video, or an [asciinema v2](https://docs.asciinema.org/manual/asciicast/v2/) cast:
 
 | Command | Description |
 | --- | --- |
@@ -362,22 +415,7 @@ tui-test wait command
 tui-test record stop
 ```
 
-APNG keeps full 24/32-bit color. APNG, GIF, and MP4 render at 2x pixel density
-for sharper text; `--zoom` multiplies those dimensions, so `--zoom 0.5`
-produces a 1x-size export with the same terminal cells. GIF additionally uses
-palette quantization for viewers that cannot display APNG. MP4 export streams
-rendered frames to `ffmpeg` using H.264, and starting an MP4 recording fails
-immediately unless `ffmpeg` is available on `PATH`. Defaults are 30 fps, 1x
-speed, 1x zoom, a 5-second idle-gap limit, and a 3-second final hold. Zoom does
-not apply to cast output. If a process exits before `record stop`, APNG/GIF/MP4
-capture remains beside the target as `OUT.tui-test.cast`.
-
-Raster export uses the selected JetBrains Mono bundle tier, when enabled, plus
-installed system fonts for Unicode fallbacks. The CLI and language bindings
-enable the styled tier; `recording-raster` alone stays system-font-only. Set
-`TUI_TEST_RECORDING_FONT_FAMILIES=Family One,Family Two` to prioritize specific
-installed families. Export fails with the missing code points instead of
-silently substituting unsupported glyphs.
+`--zoom` scales SVG screenshots and APNG/GIF/MP4 output without changing the terminal's rows or columns, and MP4 export requires `ffmpeg` on `PATH`. The `recording-font-jetbrains-mono*` features bundle JetBrains Mono for raster exports; set `TUI_TEST_RECORDING_FONT_FAMILIES=Family One,Family Two` to prefer installed font families.
 
 <p align="center">
   <img alt="animated APNG terminal recording produced by tui-test" src="static/recording.png" width="400">
@@ -385,48 +423,19 @@ silently substituting unsupported glyphs.
 
 The same 48x10-cell recording rendered at native 100%, 50%, and 25% zoom:
 
-<p align="center">
-  <strong>100%</strong><br>
-  <img alt="terminal recording rendered at 100 percent zoom" src="static/recording-zoom-100.png">
-</p>
+| 100% | 50% | 25% |
+| --- | --- | --- |
+| <img alt="terminal recording rendered at 100 percent zoom" src="static/recording-zoom-100.png"> | <img alt="terminal recording rendered at 50 percent zoom" src="static/recording-zoom-50.png"> | <img alt="terminal recording rendered at 25 percent zoom" src="static/recording-zoom-25.png"> |
+
+The output canvas keeps the same dimensions when the terminal is resized. Existing content reflows inside it:
 
 <p align="center">
-  <strong>50%</strong><br>
-  <img alt="terminal recording rendered at 50 percent zoom" src="static/recording-zoom-50.png">
+  <img alt="animated GIF showing a centered terminal window resizing" src="static/resize-demo.gif" width="400">
 </p>
-
-<p align="center">
-  <strong>25%</strong><br>
-  <img alt="terminal recording rendered at 25 percent zoom" src="static/recording-zoom-25.png">
-</p>
-
-Resize events keep the encoded canvas stable while existing terminal content
-reflows as the window grows and shrinks in place:
-
-<p align="center">
-  <img alt="animated GIF showing a centered terminal window resizing" src="static/resize-demo.gif" width="600">
-</p>
-
-Regenerate the checked-in SVG, APNG, GIF, Nerd Font, and resize examples with:
-
-```sh
-bash scripts/regenerate-static-media.sh
-```
-
-The manually captured `static/tui-test-demo.mp4` is intentionally left unchanged.
-
-Every session also records automatically from open in `.cast` format. Export it
-with `tui-test get-recording > demo.cast` for the wider asciicast ecosystem.
-This interoperability is implemented directly from the public asciicast v2
-format and does not add or depend on GPL tooling.
 
 ### Live monitor
 
-Watch a live session in a second terminal while an agent drives it. Both share
-the same daemon. `monitor` takes over an alternate screen and streams the
-session in full color at ~20fps; press `q`, `Esc`, or `Ctrl-C` to detach.
-
-In-process Python and Node sessions cannot be monitored from another process.
+Watch a live session in a second terminal while an agent or user drives it. Both share the same daemon. `monitor` takes over an alternate screen and streams the session. Programmtic sessions can view state view recordings, not live monitoring
 
 https://github.com/user-attachments/assets/741c985f-7861-41c5-9ceb-0f82f705b43f
 
@@ -438,22 +447,11 @@ https://github.com/user-attachments/assets/741c985f-7861-41c5-9ceb-0f82f705b43f
 tui-test --session work monitor   # watch the 'work' session live
 ```
 
-It needs an interactive terminal (exit `2` otherwise) and an existing session
-(exit `3` if none). The view reads only the shared screen state, so watching
-never blocks the commands the agent is running, and resizing the window just
-re-fits the frame.
-
-### Agents
-
-| Command         | Description                                                                                                                           |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `usage`         | Compact command cheatsheet.                                                                                                           |
-| `agent-context` | Versioned JSON describing every command, flag, enum, default, and the exit-code taxonomy (generated from the cli, so it can't drift). |
-| `skill`         | Long-form workflow guide ([SKILL.md](https://github.com/microsoft/tui-test/blob/main/SKILL.md)).                                      |
+`monitor` needs an interactive terminal (exit `2` otherwise) and an existing session (exit `3` if none). It only reads shared screen state, so it does not block commands sent by the other client. Resizing the monitor window refits the frame without resizing the session.
 
 ### Exit codes
 
-Every command returns a stable exit code so an agent can branch on the failure class without parsing text:
+`tui-test` uses the same exit codes across commands:
 
 | Code | Meaning                                               |
 | ---- | ----------------------------------------------------- |
@@ -468,19 +466,13 @@ With `--json`, failures also carry a `"kind"` field (`assertion`/`usage`/`no_ses
 
 ## Configuration
 
-Settings live in a `tui-test.toml` with named profiles. Everything is
-optional, so a file only states what it changes:
+### Profiles
+
+`tui-test.toml` defines named profiles. Every field is optional:
 
 ```toml
 [profiles.default]
 scrollback = 10000            # rows kept beyond the visible screen
-
-[profiles.default.timeouts]
-text = 5000
-idle = 5000
-command = 30000
-exit = 30000
-ready = 30000
 
 [profiles.default.colors]
 background = "#000000"
@@ -498,31 +490,21 @@ tui-test open --profile ci
 tui-test open --config ./other.toml --profile ci
 ```
 
-Looked up nearest first: `./tui-test.toml`, then the platform config directory
-(`$XDG_CONFIG_HOME/tui-test/tui-test.toml` on Unix), then the legacy
-`~/.tui-test/tui-test.toml`. `--config` or `TUI_TEST_CONFIG` replaces the
-search.
+By default, `tui-test` checks `./tui-test.toml` first, then `$XDG_CONFIG_HOME/tui-test/tui-test.toml` on Unix, and finally the legacy `~/.tui-test/tui-test.toml`. `--config` or `TUI_TEST_CONFIG` skips that search and uses the specified file.
 
-Named profiles do not inherit from `[profiles.default]`; every omitted field
-uses tui-test's built-in default. Unknown settings and invalid colors are
-rejected before a session starts. `tui-test.toml` affects the CLI only; the
-libraries accept profile and timeout settings when starting a new session.
+Named profiles do not inherit from `[profiles.default]`; every omitted field uses tui-test's built-in default. `tui-test.toml` affects only the CLI. The libraries accept profile configurations when starting a new session.
 
 ### Colors
 
-A terminal grid stores colour *indices*, not colours. What index 1 looks like
-is the profile's choice, and tui-test needs that choice twice: to draw a
-screenshot, and to answer `expect --fg "#rrggbb"`. **Both read the same table**,
-so a colour an assertion matches is the colour a screenshot paints.
+A terminal grid stores color indices, not display colors. `tui-test` uses the profile's color table both to draw screenshots and to resolve `expect --fg "#rrggbb"`. A color matched by an assertion is the color drawn in a screenshot.
 
-Only the 16 ANSI slots and the three defaults are configurable. Indices 16-255
-are the xterm colour cube and grey ramp, fixed by the spec, so `--fg 196` means
-the same thing in every profile.
+Only the 16 ANSI slots and the three defaults are configurable. Indices 16-255 are the xterm color cube and gray ramp, fixed by the spec, so `--fg 196` means the same thing in every profile.
 
-The shipped palette is the classic VGA/xterm one that `TERM=xterm-256color`
-promises.
+The default palette is the classic VGA/xterm palette expected by `TERM=xterm-256color`.
 
-## Supported shells
+## Compatibility
+
+### Supported shells
 
 - bash
 - zsh
@@ -533,45 +515,35 @@ promises.
 - nushell
 - cmd
 
-## Comparison
+### Comparison
 
-|                                      | tui-test                                        | [tui-use](https://github.com/onesuper/tui-use) | [terminal-use](https://github.com/flipbit03/terminal-use) |
-| ------------------------------------ | ------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------------- |
-| Language                             | Rust                                             | TypeScript/Node                                | Rust                                                      |
-| Emulator                             | alacritty or Ghostty, per session                | xterm (headless)                               | alacritty                                                 |
-| Shell command tracking               | ✅ command boundaries, exit codes, cwd           | ❌                                             | ❌                                                        |
-| Testing / snapshots                  | ✅ `expect` text / output / exit-code / snapshot | ❌                                             | ❌                                                        |
-| Color & per-cell attributes          | ✅ fg/bg, ANSI-256/hex/rgb, `cells`              | ❌ plain text (+ highlights)                   | via PNG                                                   |
-| Image screenshots                    | ✅ SVG                                           | ❌                                             | ✅ PNG                                                    |
-| Built-in recording                   | ✅ APNG/GIF/MP4 export + always-on asciinema cast | ❌                                             | ❌                                                        |
-| Live monitor view                    | ✅                                               | ❌                                             | ✅                                                        |
-| Stable exit-code taxonomy for agents | ✅                                               | ❌                                             | ❌                                                        |
-| Python & JavaScript bindings         | ✅                                               | ❌                                             | ❌                                                        |
-| Runtime                              | native                                           | Node.js                                        | native                                                    |
-| Platforms                            | Windows + Unix                                   | Windows + Unix                                 | Linux / macOS                                             |
+| | tui-test | [Tuistory](https://github.com/remorses/tuistory) | [tui-use](https://github.com/onesuper/tui-use) | [terminal-use](https://github.com/flipbit03/terminal-use) |
+| --- | --- | --- | --- | --- |
+| Language | Rust | TypeScript | TypeScript | Rust |
+| Emulator | Alacritty or Ghostty, per session | Ghostty (via OpenTUI) | xterm (headless) | Alacritty |
+| Shell command tracking | ✅ command boundaries, exit codes, cwd | ❌ | ❌ | ❌ |
+| Testing / snapshots | ✅ `expect` text / output / exit-code / snapshot | ✅ snapshots | ❌ | ❌ |
+| Color and per-cell attributes | ✅ fg/bg, ANSI-256/hex/RGB, `cells` | ✅ style-filtered text | ❌ plain text with highlights | ✅ via PNG |
+| Image screenshots | ✅ SVG | ✅ PNG | ❌ | ✅ PNG |
+| Built-in recording | ✅ APNG/GIF/MP4 export and asciinema casts | ❌ | ❌ | ❌ |
+| Live monitor view | ✅ | ✅ | ❌ | ✅ |
+| Stable exit-code taxonomy for agents | ✅ | ❌ | ❌ | ❌ |
+| Python and JavaScript bindings | ✅ | ❌ | ❌ | ❌ |
+| Runtime | Native | Node.js | Node.js | Native |
+| Platforms | Windows, Linux, and macOS | Windows, Linux, and macOS | Windows, Linux, and macOS | Linux and macOS |
 
 ## Debugging
 
-By default the daemon writes no log. Start it with `--verbose` to record every byte read from and written to the PTY, plus lifecycle events, to `~/.tui-test/<session>.log`.
+The daemon does not log by default. Start it with `--verbose` to record every byte read from or written to the PTY, along with lifecycle events, in `~/.tui-test/<session>.log`.
 
 ## Contributing
 
-This project welcomes contributions and suggestions. Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
+This project welcomes contributions and suggestions. Most contributions require you to agree to a Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us the rights to use your contribution. For details, visit https://cla.opensource.microsoft.com.
 
-When you submit a pull request, a CLA bot will automatically determine whether you need to provide
-a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
-provided by the bot. You will only need to do this once across all repos using our CLA.
+When you submit a pull request, a CLA bot will automatically determine whether you need to provide a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions provided by the bot. You will only need to do this once across all repos using our CLA.
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
-For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
-contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
 ## Trademarks
 
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft
-trademarks or logos is subject to and must follow
-[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
-Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
-Any use of third-party trademarks or logos are subject to those third-party's policies.
+This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks or logos is subject to and must follow [Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general). Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship. Any use of third-party trademarks or logos are subject to those third-party's policies.
