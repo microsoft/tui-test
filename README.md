@@ -265,14 +265,12 @@ Waits and assertions use five timeout classes:
 
 `open`'s prompt wait caps at 8000 ms unless you set a `ready` timeout.
 
-Set session defaults with `open`, then override individual calls as needed:
+Configure timeouts directly via cli falgs or within [profiles](#profiles) in the configuration. The timeout priority goes from explicit overrides -> profile -> timeout overrides -> `TUI_TEST_TIMEOUT_<CLASS>_MS` (only affects daemon on start). A session's timeouts can be viewed with the `tui-test state` command.
 
 ```sh
 tui-test open --timeout-text 30000 --timeout-idle 15000 --timeout-ready 20000
 tui-test wait text "done" --timeout 60000   # just this call
 ```
-
-Timeout precedence, from highest to lowest, is `--timeout`, the session default from `open` or `run`, then `TUI_TEST_TIMEOUT_<CLASS>_MS` (read when the daemon starts). `tui-test state` prints the effective values for a session.
 
 #### Lifecycle
 
