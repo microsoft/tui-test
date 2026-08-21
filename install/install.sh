@@ -30,6 +30,7 @@ esac
 TARGET="${ARCH}-${OS}"
 ASSET="${BINARY_NAME}-${TARGET}.tar.gz"
 VERSION="${TUI_TEST_VERSION:-latest}"
+TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t tui-test)"
 ARCHIVE_PATH="${TMP_DIR}/${ASSET}"
 EXTRACT_DIR="${TMP_DIR}/extract"
@@ -44,9 +45,20 @@ download() {
   destination="$2"
 
   if command -v curl >/dev/null 2>&1; then
-    curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$destination"
+    if [ -n "$TOKEN" ]; then
+      curl --proto '=https' --tlsv1.2 -fsSL \
+        -H "Authorization: Bearer ${TOKEN}" \
+        "$url" -o "$destination"
+    else
+      curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$destination"
+    fi
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$destination" "$url"
+    if [ -n "$TOKEN" ]; then
+      wget -q --header="Authorization: Bearer ${TOKEN}" \
+        -O "$destination" "$url"
+    else
+      wget -q -O "$destination" "$url"
+    fi
   else
     fail "curl or wget is required."
   fi
