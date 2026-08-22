@@ -103,7 +103,7 @@ jobs:
       - if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
         if: contains(matrix.target, 'musl')
@@ -147,7 +147,8 @@ jobs:
             args: --target x86_64-unknown-linux-gnu --use-napi-cross
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            args: --target aarch64-unknown-linux-gnu --use-napi-cross
+            args: --target aarch64-unknown-linux-gnu -x
+            zigbuild: true
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             args: --target x86_64-unknown-linux-musl -x
