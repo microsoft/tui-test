@@ -105,20 +105,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        if: contains(matrix.target, 'musl')
+        with:
+          tool: cargo-zigbuild
 
-      - if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
-
-      - run: cargo build --release --locked -p tui-test-cli --target ${{ matrix.target }}
+      - if: "!contains(matrix.target, 'musl')"
+        run: cargo build --release --locked -p tui-test-cli --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+
+      - if: contains(matrix.target, 'musl')
+        run: cargo zigbuild --release --locked -p tui-test-cli --target ${{ matrix.target }}
 
       - if: runner.os != 'Windows'
         run: |
