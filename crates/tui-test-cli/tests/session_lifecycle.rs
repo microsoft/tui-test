@@ -1549,6 +1549,9 @@ fn terminal_backends_match_end_to_end_for_cells_state_and_snapshots() {
         // Exercise snapshot round-tripping, but compare its visual content
         // instead of reusing one backend's row layout as the shared baseline.
         sandbox.ok(&["resize", "16", "4"]);
+        // ConPTY asynchronously redraws its screen after a resize. Wait for
+        // that redraw so both halves of the snapshot round-trip see one frame.
+        sandbox.ok(&["wait", "idle", "--timeout", "5000"]);
         sandbox.ok_in(
             Some(&sandbox.home),
             &[
