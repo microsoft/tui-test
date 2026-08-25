@@ -32,6 +32,7 @@ pub struct TermState {
     /// Shell-integration state, derived from the raw PTY stream rather than
     /// the emulator, so it is identical across backends.
     pub tracker: CommandTracker,
+    pub observed_clipboard_revision: u64,
     pub last_change: Instant,
     pub awaiting_start: Option<u64>,
     pub exited: Option<i32>,
@@ -83,6 +84,7 @@ impl Session {
         let state = Arc::new(Mutex::new(TermState {
             emu: backend.build_with_bells(cols, rows, &profile, bells.clone())?,
             tracker: CommandTracker::new(),
+            observed_clipboard_revision: 0,
             last_change: Instant::now(),
             awaiting_start: None,
             exited: None,
@@ -659,6 +661,7 @@ mod tests {
         let state = Arc::new(Mutex::new(TermState {
             emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
             tracker: CommandTracker::new(),
+            observed_clipboard_revision: 0,
             last_change: Instant::now(),
             awaiting_start: None,
             exited: None,

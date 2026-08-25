@@ -11,8 +11,8 @@ use tui_test::shell::Shell as CoreShell;
 use tui_test::{
     global_registry, AutomaticRecording as CoreAutomaticRecording,
     AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend as CoreBackend,
-    BellEvent as CoreBellEvent, Cell as CoreCell, CellColor, Cursor as CoreCursor,
-    EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, KeyAction,
+    BellEvent as CoreBellEvent, Cell as CoreCell, CellColor, ClipboardPattern,
+    Cursor as CoreCursor, EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, KeyAction,
     LocatorDirection as CoreLocatorDirection, LocatorQuery as CoreLocatorQuery,
     LocatorSelector as CoreLocatorSelector, MatchOccurrence as CoreMatchOccurrence, MouseAction,
     MouseOptions as CoreMouseOptions, OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult,
@@ -467,6 +467,12 @@ pub struct LocatorStage {
 pub struct TitleOptions {
     pub regex: Option<bool>,
     pub not: Option<bool>,
+    pub timeout_ms: Option<f64>,
+}
+
+#[napi(object)]
+pub struct ClipboardWaitOptions {
+    pub regex: Option<bool>,
     pub timeout_ms: Option<f64>,
 }
 
@@ -1423,6 +1429,20 @@ impl NativeSession {
     }
 
     #[napi]
+    pub async fn get_clipboard(&self) -> Result<String> {
+        execute(
+            self.handle.clone(),
+            "getClipboard",
+            Operation::GetClipboard,
+            |result| match result {
+                OperationResult::Clipboard(value) => Ok(value),
+                _ => Err(unexpected("getClipboard")),
+            },
+        )
+        .await
+    }
+
+    #[napi]
     pub async fn wait_title(&self, text: String, options: Option<TitleOptions>) -> Result<()> {
         let options = options.unwrap_or(TitleOptions {
             regex: None,
@@ -1440,6 +1460,45 @@ impl NativeSession {
             match handle.execute(operation)? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("waitTitle")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn wait_clipboard(
+        &self,
+        text: Option<String>,
+        options: Option<ClipboardWaitOptions>,
+    ) -> Result<()> {
+        let options = options.unwrap_or(ClipboardWaitOptions {
+            regex: None,
+            timeout_ms: None,
+        });
+        let handle = self.handle.clone();
+        blocking("waitClipboard", move || {
+            let regex = options.regex.unwrap_or(false);
+            let timeout_ms = timeout(options.timeout_ms, "timeoutMs")?;
+            let operation = match text {
+                Some(text) => {
+                    let pattern = if regex {
+                        ClipboardPattern::regex(&text).map_err(|error| {
+                            TuiTestError::usage(format!("invalid regex: {error}"))
+                        })?
+                    } else {
+                        text.into()
+                    };
+                    Operation::WaitClipboardMatch {
+                        pattern,
+                        timeout_ms,
+                    }
+                }
+                None if regex => return Err(TuiTestError::usage("clipboard regex requires text")),
+                None => Operation::WaitClipboard { timeout_ms },
+            };
+            match handle.execute(operation)? {
+                OperationResult::Unit => Ok(()),
+                _ => Err(unexpected("waitClipboard")),
             }
         })
         .await

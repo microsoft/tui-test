@@ -29,7 +29,7 @@ use rquickjs::{Context, Ctx, Function, Object, Runtime};
 use crate::event::BellTracker;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{CursorShape, Emulator};
+use crate::terminal::emu::{ClipboardValidator, CursorShape, Emulator};
 
 const XTERM_BUNDLE: &str = include_str!("../../assets/xtermjs/xterm-headless.js");
 const UNICODE11: &str = include_str!("../../assets/xtermjs/addon-unicode11.js");
@@ -138,6 +138,7 @@ pub struct XtermJsEmu {
     /// cause. Behind a lock because the reads that can fault take `&self`.
     fault: Mutex<Option<String>>,
     bells: BellTracker,
+    clipboard_validator: ClipboardValidator,
 }
 
 /// Render a failed JS call as a message worth reading.
@@ -211,6 +212,7 @@ impl XtermJsEmu {
             profile: *profile,
             fault: Mutex::new(None),
             bells,
+            clipboard_validator: ClipboardValidator::unsupported(),
         };
         emu.sync_size();
         Ok(emu)
@@ -380,6 +382,7 @@ fn decode_into(out: &mut Vec<Vec<EmuCell>>, chars: &str, meta: &[i32], cols: usi
 
 impl Emulator for XtermJsEmu {
     fn process(&mut self, bytes: &[u8]) {
+        self.clipboard_validator.process(bytes);
         // Fed as bytes rather than as a string on purpose: xterm.js runs its
         // own incremental UTF-8 decoder over a byte array and carries a
         // partial sequence across calls, which is what keeps a multi-byte
@@ -401,6 +404,7 @@ impl Emulator for XtermJsEmu {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+            .or_else(|| self.clipboard_validator.fault())
     }
 
     fn take_pending_writes(&mut self) -> Vec<u8> {
@@ -563,6 +567,8 @@ mod tests {
             // `isAttributeDefault()`, and the color is absent from the line's
             // extended attributes while remaining in the current SGR state.
             crate::terminal::conformance::Divergence::UnderlineColorNeedsAStyle,
+            // Clipboard access is unavailable.
+            crate::terminal::conformance::Divergence::ClipboardUnsupported,
         ]
     );
 }

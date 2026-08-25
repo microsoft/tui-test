@@ -701,6 +701,105 @@ fn bell_counts_waits_and_expectations_are_cumulative() {
     session.close().expect("close terminal");
 }
 
+#[test]
+fn clipboard_getter_and_change_wait_track_osc_52() {
+    let registry = SessionRegistry::default();
+    let session = registry.session("clipboard");
+    session.open(OpenOptions::default()).expect("open terminal");
+
+    assert!(matches!(
+        session
+            .execute(Operation::GetClipboard)
+            .expect("read initial clipboard"),
+        OperationResult::Clipboard(value) if value.is_empty()
+    ));
+    let timeout = session
+        .execute(Operation::WaitClipboard {
+            timeout_ms: Some(100),
+        })
+        .expect_err("unchanged clipboard should time out");
+    assert_eq!(timeout.kind, ErrorKind::Assertion);
+
+    session
+        .execute(Operation::Submit {
+            data: Some(clipboard_command("Y2hhbmdlZA==")),
+        })
+        .expect("submit clipboard change");
+    session
+        .execute(Operation::WaitCommand {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for clipboard command");
+    session
+        .execute(Operation::WaitClipboard {
+            timeout_ms: Some(5_000),
+        })
+        .expect("wait for clipboard change");
+    assert!(matches!(
+        session
+            .execute(Operation::GetClipboard)
+            .expect("read changed clipboard"),
+        OperationResult::Clipboard(value) if value == "changed"
+    ));
+
+    session
+        .execute(Operation::Submit {
+            data: Some(clipboard_command("cHJlZml4LXJlYWR5LTQy")),
+        })
+        .expect("submit literal clipboard value");
+    session
+        .execute(Operation::WaitCommand {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for literal clipboard command");
+    session
+        .execute(Operation::wait_clipboard_match("ready", Some(5_000)))
+        .expect("wait for literal clipboard match");
+
+    session
+        .execute(Operation::Submit {
+            data: Some(clipboard_command("YnVpbGQtMTIz")),
+        })
+        .expect("submit regex clipboard value");
+    session
+        .execute(Operation::WaitCommand {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for regex clipboard command");
+    session
+        .execute(Operation::wait_clipboard_match(
+            regex::Regex::new(r"^build-[0-9]+$").unwrap(),
+            Some(5_000),
+        ))
+        .expect("wait for regex clipboard match");
+
+    assert!(tui_test::ClipboardPattern::regex("[").is_err());
+
+    session.close().expect("close terminal");
+}
+
+#[cfg(feature = "xtermjs")]
+#[test]
+fn unsupported_clipboard_getter_returns_an_error() {
+    let registry = SessionRegistry::default();
+    let session = registry.session("clipboard-unsupported");
+    session
+        .open(OpenOptions {
+            backend: tui_test::Backend::Xtermjs,
+            wait_ready: Some(false),
+            ..OpenOptions::default()
+        })
+        .expect("open xterm.js terminal");
+
+    let error = session
+        .execute(Operation::GetClipboard)
+        .expect_err("xterm.js clipboard must be unsupported");
+    assert_eq!(error.kind, ErrorKind::Internal);
+    assert!(error.message.contains("unavailable"));
+
+    session.close().expect("close terminal");
+}
+
 fn two_bells_command() -> String {
     if cfg!(windows) {
         "[Console]::Out.Write([char]7); [Console]::Out.Write([char]7)".to_string()
@@ -714,6 +813,17 @@ fn delayed_bell_command() -> String {
         "Start-Sleep -Milliseconds 300; [Console]::Out.Write([char]7)".to_string()
     } else {
         "sleep 0.3; printf '\\a'".to_string()
+    }
+}
+
+fn clipboard_command(base64: &str) -> String {
+    if cfg!(windows) {
+        format!(
+            "[Console]::Out.Write(([char]27).ToString() + ']52;c;{base64}' + \
+             ([char]7).ToString())"
+        )
+    } else {
+        format!("printf '\\033]52;c;{base64}\\a'")
     }
 }
 

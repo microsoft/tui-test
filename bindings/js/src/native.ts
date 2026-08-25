@@ -3,6 +3,7 @@ import type {
   AutomaticRecordingOptions,
   BellEvent,
   Cell,
+  ClipboardWaitOptions,
   Cursor,
   EffectiveTimeouts,
   LocatorStage,
@@ -261,6 +262,10 @@ export class NativeRuntime {
     return this.#call((session) => session.getTitle());
   }
 
+  getClipboard(): Promise<string> {
+    return this.#call((session) => session.getClipboard());
+  }
+
   getCursor(): Promise<Cursor> {
     return this.#call((session) => session.getCursor());
   }
@@ -345,6 +350,10 @@ export class NativeRuntime {
 
   waitTitle(text: string, options?: TitleOptions): Promise<void> {
     return this.#call((session) => session.waitTitle(text, options));
+  }
+
+  waitClipboard(text?: string, options?: ClipboardWaitOptions): Promise<void> {
+    return this.#call((session) => session.waitClipboard(text, options));
   }
 
   waitIdle(timeoutMs?: number): Promise<void> {

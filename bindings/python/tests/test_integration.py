@@ -1,6 +1,7 @@
 import asyncio
 import gc
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -35,6 +36,15 @@ DELAYED_BELL_COMMAND = (
     if sys.platform == "win32"
     else "sleep 1; printf '\\a'"
 )
+
+
+def clipboard_command(base64):
+    if sys.platform == "win32":
+        return (
+            "[Console]::Out.Write(([char]27).ToString() + "
+            f"']52;c;{base64}' + ([char]7).ToString())"
+        )
+    return f"printf '\\033]52;c;{base64}\\a'"
 
 
 def run(coro):
@@ -387,6 +397,48 @@ class IntegrationTests(unittest.TestCase):
                 self.assertIs(await locator.wait(timeout=2000), locator)
                 await locator.click(timeout=2000)
                 await locator.highlight(timeout=2000)
+
+        run(scenario())
+
+    def test_clipboard_getter_and_change_wait(self):
+        async def scenario():
+            async with self._client() as su:
+                await su.open(shell=SHELL)
+                self.assertEqual(await su.get_clipboard(), "")
+
+                await su.submit(clipboard_command("Y2hhbmdlZA=="))
+                await su.wait_command()
+                await su.wait_clipboard(timeout=5000)
+                self.assertEqual(await su.get_clipboard(), "changed")
+
+                await su.submit(clipboard_command("cHJlZml4LXJlYWR5LTQy"))
+                await su.wait_command()
+                await su.wait_clipboard("ready", timeout=5000)
+
+                await su.submit(clipboard_command("YnVpbGQtMTIz"))
+                await su.wait_command()
+                await su.wait_clipboard(
+                    re.compile(r"^BUILD-[0-9]+$", re.IGNORECASE),
+                    timeout=5000,
+                )
+                with self.assertRaises(ValueError):
+                    await su.wait_clipboard(re.compile(".", re.ASCII))
+                with self.assertRaises(ValueError):
+                    await su.wait_clipboard(re.compile(r"[ a]", re.VERBOSE))
+                with self.assertRaises(ValueError):
+                    await su.wait_clipboard(re.compile(r"(?x:a b)"))
+                with self.assertRaises(ValueError):
+                    await su.wait_clipboard(re.compile(r"(?a:.)"))
+
+        run(scenario())
+
+    def test_xtermjs_clipboard_is_a_typed_internal_error(self):
+        async def scenario():
+            async with self._client(backend="xtermjs") as su:
+                await su.open(shell=SHELL)
+                with self.assertRaises(InternalError) as raised:
+                    await su.get_clipboard()
+                self.assertIn("unavailable", str(raised.exception))
 
         run(scenario())
 

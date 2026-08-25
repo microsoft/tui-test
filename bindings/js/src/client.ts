@@ -15,7 +15,7 @@ import {
 } from "./config.js";
 import type { TimeoutClass } from "./config.js";
 import { uniqueSession } from "./ephemeral.js";
-import { ExpectationError, TuiTestError } from "./errors.js";
+import { ExpectationError, TuiTestError, UsageError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
 import type {
   RuntimeLocatorStage,
@@ -38,6 +38,14 @@ export interface TitleOptions {
   regex?: boolean;
   not?: boolean;
   timeout?: number;
+}
+
+export interface ClipboardWaitOptions {
+  timeout?: number;
+}
+
+function isRegExp(value: unknown): value is RegExp {
+  return Object.prototype.toString.call(value) === "[object RegExp]";
 }
 
 type TextOccurrence =
@@ -666,6 +674,37 @@ export class TuiTest {
     }
   }
 
+  async #waitClipboardRegex(
+    pattern: RegExp,
+    timeoutMs: number | undefined,
+  ): Promise<void> {
+    if (
+      timeoutMs !== undefined &&
+      (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0)
+    ) {
+      throw new UsageError(
+        `timeoutMs must be an integer between 0 and ${Number.MAX_SAFE_INTEGER}`,
+      );
+    }
+    const effectiveTimeout =
+      timeoutMs ?? (await this.#runtime.state()).timeouts.text;
+    const deadline = Date.now() + effectiveTimeout;
+    const matcher = new RegExp(pattern.source, pattern.flags);
+    const initialLastIndex = pattern.lastIndex;
+
+    while (true) {
+      const value = await this.#runtime.getClipboard();
+      matcher.lastIndex = initialLastIndex;
+      if (matcher.test(value)) {
+        return;
+      }
+      await this.#runtime.waitClipboard(undefined, {
+        regex: false,
+        timeoutMs: Math.max(0, deadline - Date.now()),
+      });
+    }
+  }
+
   async #captureArtifact(error: unknown): Promise<void> {
     const artifacts = this.#options.artifacts;
     if (!artifacts || !(error instanceof ExpectationError)) {
@@ -823,6 +862,10 @@ export class TuiTest {
     return this.#runtime.getTitle();
   }
 
+  async getClipboard(): Promise<string> {
+    return this.#runtime.getClipboard();
+  }
+
   async getCursor(): Promise<Cursor> {
     return this.#runtime.getCursor();
   }
@@ -884,6 +927,37 @@ export class TuiTest {
         timeoutMs: this.#timeout("text", opts.timeout),
       }),
     );
+  }
+
+  async waitClipboard(opts?: ClipboardWaitOptions): Promise<void>;
+  async waitClipboard(
+    pattern: string | RegExp,
+    opts?: ClipboardWaitOptions,
+  ): Promise<void>;
+  async waitClipboard(
+    patternOrOpts: string | RegExp | ClipboardWaitOptions = {},
+    opts: ClipboardWaitOptions = {},
+  ): Promise<void> {
+    const text = typeof patternOrOpts === "string" ? patternOrOpts : undefined;
+    const options =
+      typeof patternOrOpts === "string" || isRegExp(patternOrOpts)
+        ? opts
+        : patternOrOpts;
+    await this.#guard("waitClipboard", async () => {
+      if (Object.prototype.hasOwnProperty.call(options, "regex")) {
+        throw new UsageError(
+          "pass a RegExp instead of regex: true",
+        );
+      }
+      const timeoutMs = this.#timeout("text", options.timeout);
+      if (isRegExp(patternOrOpts)) {
+        return this.#waitClipboardRegex(patternOrOpts, timeoutMs);
+      }
+      return this.#runtime.waitClipboard(text, {
+        regex: false,
+        timeoutMs,
+      });
+    });
   }
 
   async waitIdle(opts: { timeout?: number } = {}): Promise<void> {

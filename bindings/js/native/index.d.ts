@@ -39,7 +39,9 @@ export declare class NativeSession {
   resize(cols: number, rows: number): Promise<void>
   signal(name: string): Promise<void>
   getTitle(): Promise<string | null>
+  getClipboard(): Promise<string>
   waitTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
+  waitClipboard(text?: string | undefined | null, options?: ClipboardWaitOptions | undefined | null): Promise<void>
   expectTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
   waitIdle(timeoutMs?: number | undefined | null): Promise<void>
   waitCommand(timeoutMs?: number | undefined | null): Promise<void>
@@ -89,6 +91,11 @@ export interface Cell {
   underline: boolean
   underline_style: UnderlineStyle
   underline_color: Color
+}
+
+export interface ClipboardWaitOptions {
+  regex?: boolean
+  timeoutMs?: number
 }
 
 export declare function closeAll(): Promise<void>

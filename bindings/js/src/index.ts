@@ -1,5 +1,6 @@
 export { TuiTest } from "./client.js";
 export type {
+  ClipboardWaitOptions,
   LocatorClickOptions,
   LocatorDirection,
   LocatorExpectOptions,

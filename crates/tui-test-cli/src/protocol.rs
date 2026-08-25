@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use tui_test::{
-    AutomaticRecording, Backend, Engine, KeyAction, LocatorQuery, MouseOptions, OpenOptions,
-    Operation, OperationResult, RecordingFormat, RunOptions, ScreenshotResult, TuiTestError,
+    AutomaticRecording, Backend, ClipboardPattern, Engine, KeyAction, LocatorQuery, MouseOptions,
+    OpenOptions, Operation, OperationResult, RecordingFormat, RunOptions, ScreenshotResult,
+    TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
@@ -81,6 +82,14 @@ pub enum Request {
         #[serde(default)]
         timeout_ms: Option<u64>,
         not: bool,
+    },
+    WaitClipboard {
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        regex: bool,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
     WaitIdle {
         #[serde(default)]
@@ -248,6 +257,7 @@ impl Request {
                 GetField::Cursor => Operation::GetCursor,
                 GetField::Size => Operation::GetSize,
                 GetField::Title => Operation::GetTitle,
+                GetField::Clipboard => Operation::GetClipboard,
                 GetField::BellCount => Operation::GetBellCount,
                 GetField::BellEvents => Operation::GetBellEvents,
             }),
@@ -272,6 +282,27 @@ impl Request {
                 timeout_ms,
                 not,
             }),
+            Request::WaitClipboard {
+                text,
+                regex,
+                timeout_ms,
+            } => match text {
+                Some(text) => {
+                    let pattern = if regex {
+                        ClipboardPattern::regex(&text).map_err(|error| {
+                            TuiTestError::usage(format!("invalid regex: {error}"))
+                        })?
+                    } else {
+                        text.into()
+                    };
+                    Ok(Operation::WaitClipboardMatch {
+                        pattern,
+                        timeout_ms,
+                    })
+                }
+                None if regex => Err(TuiTestError::usage("clipboard regex requires text")),
+                None => Ok(Operation::WaitClipboard { timeout_ms }),
+            },
             Request::WaitIdle { timeout_ms } => Ok(Operation::WaitIdle { timeout_ms }),
             Request::WaitCommand { timeout_ms } => Ok(Operation::WaitCommand { timeout_ms }),
             Request::WaitExit { timeout_ms } => Ok(Operation::WaitExit { timeout_ms }),
@@ -374,6 +405,7 @@ pub enum GetField {
     Cursor,
     Size,
     Title,
+    Clipboard,
     BellCount,
     BellEvents,
 }
@@ -447,6 +479,7 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
         OperationResult::ExitCode(value) => Ok(json!({ "value": value })),
         OperationResult::Cwd(value) => Ok(json!({ "value": value })),
         OperationResult::Title(value) => Ok(json!({ "value": value })),
+        OperationResult::Clipboard(value) => Ok(json!({ "value": value })),
         OperationResult::Cursor(value) => Ok(json!({ "value": value })),
         OperationResult::Size(value) => Ok(json!({ "value": value })),
         OperationResult::BellCount(value) => Ok(json!({ "value": value })),
@@ -609,6 +642,7 @@ mod tests {
             r#"{"kind":"wait_exit"}"#,
             r#"{"kind":"wait_ready"}"#,
             r#"{"kind":"wait_bell"}"#,
+            r#"{"kind":"wait_clipboard"}"#,
         ] {
             let request: Request = serde_json::from_str(raw).expect("deserialize wait");
             let timeout = match request {
@@ -616,11 +650,25 @@ mod tests {
                 | Request::WaitCommand { timeout_ms }
                 | Request::WaitExit { timeout_ms }
                 | Request::WaitReady { timeout_ms }
-                | Request::WaitBell { timeout_ms } => timeout_ms,
+                | Request::WaitBell { timeout_ms }
+                | Request::WaitClipboard { timeout_ms, .. } => timeout_ms,
                 other => panic!("expected a wait, got {other:?}"),
             };
             assert_eq!(timeout, None);
         }
+    }
+
+    #[test]
+    fn clipboard_regex_requires_text() {
+        let error = Request::WaitClipboard {
+            text: None,
+            regex: true,
+            timeout_ms: None,
+        }
+        .into_operation()
+        .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Usage);
+        assert!(error.message.contains("requires text"));
     }
 
     #[test]

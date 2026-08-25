@@ -40,6 +40,33 @@ class _CapturingClient(client.TuiTest):
         self._native = self.fake
 
 
+class ClipboardPatternTests(unittest.TestCase):
+    def test_compiled_regex_flags_are_encoded(self):
+        self.assertEqual(
+            client._clipboard_pattern(
+                re.compile("ready", re.IGNORECASE | re.MULTILINE | re.DOTALL)
+            ),
+            ("(?ims:ready)", True),
+        )
+
+    def test_unsupported_top_level_and_scoped_flags_are_rejected(self):
+        for pattern in (
+            re.compile(".", re.ASCII),
+            re.compile(r"[ a]", re.VERBOSE),
+            re.compile(r"(?a:.)"),
+            re.compile(r"(?x:a b)"),
+        ):
+            with self.subTest(pattern=pattern.pattern):
+                with self.assertRaises(ValueError):
+                    client._clipboard_pattern(pattern)
+
+    def test_flag_like_text_inside_a_character_class_is_not_rejected(self):
+        self.assertEqual(
+            client._clipboard_pattern(re.compile(r"[(?x:]")),
+            (r"[(?x:]", True),
+        )
+
+
 class TimeoutResolutionTests(unittest.TestCase):
     def test_returns_none_when_nothing_configured(self):
         for class_name in ("text", "idle", "command", "exit", "ready"):
