@@ -2066,6 +2066,7 @@ version = "0.1.0-beta.2"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
+ "base64",
  "bitflags 2.13.1",
  "compact_str",
  "dirs",

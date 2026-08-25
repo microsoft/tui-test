@@ -12,15 +12,21 @@ pinned="$assets/pinned.json"
 
 headless="$(jq -r '."@xterm/headless"' "$pinned")"
 unicode11="$(jq -r '."@xterm/addon-unicode11"' "$pinned")"
+clipboard="$(jq -r '."@xterm/addon-clipboard"' "$pinned")"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 cd "$work"
 
-npm pack "@xterm/headless@$headless" "@xterm/addon-unicode11@$unicode11" >/dev/null
+npm pack \
+  "@xterm/headless@$headless" \
+  "@xterm/addon-unicode11@$unicode11" \
+  "@xterm/addon-clipboard@$clipboard" >/dev/null
 tar xzOf "xterm-headless-$headless.tgz" package/lib-headless/xterm-headless.js \
   > "$assets/xterm-headless.js"
 tar xzOf "xterm-addon-unicode11-$unicode11.tgz" package/lib/addon-unicode11.js \
   > "$assets/addon-unicode11.js"
+tar xzOf "xterm-addon-clipboard-$clipboard.tgz" package/lib/addon-clipboard.js \
+  > "$assets/addon-clipboard.js"
 
-echo "Vendored @xterm/headless@$headless and @xterm/addon-unicode11@$unicode11 into $assets."
+echo "Vendored @xterm/headless@$headless, @xterm/addon-unicode11@$unicode11, and @xterm/addon-clipboard@$clipboard into $assets."

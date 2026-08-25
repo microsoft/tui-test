@@ -37,6 +37,7 @@ recording-font-jetbrains-mono-full = ["recording-font-jetbrains-mono-styles"]
 [dependencies]
 alacritty_terminal.workspace = true
 anyhow.workspace = true
+base64.workspace = true
 bitflags.workspace = true
 compact_str.workspace = true
 dirs.workspace = true

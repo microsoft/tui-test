@@ -23,15 +23,18 @@
 
 use std::sync::Mutex;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use compact_str::{CompactString, ToCompactString};
 use rquickjs::{Context, Ctx, Function, Object, Runtime};
 
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{CursorShape, Emulator};
+use crate::terminal::emu::{ClipboardType, ClipboardValidator, CursorShape, Emulator};
 
 const XTERM_BUNDLE: &str = include_str!(env!("XTERM_HEADLESS_JS"));
 const UNICODE11: &str = include_str!(env!("XTERM_UNICODE11_JS"));
+const CLIPBOARD: &str = include_str!(env!("XTERM_CLIPBOARD_JS"));
 const SHIM: &str = include_str!("../../assets/xtermjs/shim.js");
 
 /// The unicode11 addon is UMD and publishes itself by *replacing*
@@ -39,6 +42,7 @@ const SHIM: &str = include_str!("../../assets/xtermjs/shim.js");
 /// it back before `__boot` runs also leaves `exports.Terminal`, which the shim
 /// set up, untouched.
 const UNICODE11_CAPTURE: &str = "globalThis.__unicode11 = module.exports.Unicode11Addon;";
+const CLIPBOARD_CAPTURE: &str = "globalThis.__clipboardAddon = module.exports.ClipboardAddon;";
 
 /// Ints per cell in the packed `meta` array, mirroring `pack()` in the shim.
 const STRIDE: usize = 6;
@@ -136,6 +140,7 @@ pub struct XtermJsEmu {
     /// consequence rather than a new fact, and the earliest message names the
     /// cause. Behind a lock because the reads that can fault take `&self`.
     fault: Mutex<Option<String>>,
+    clipboard_validator: ClipboardValidator,
 }
 
 /// Render a failed JS call as a message worth reading.
@@ -186,6 +191,21 @@ impl XtermJsEmu {
             ctx.eval::<(), _>(XTERM_BUNDLE)?;
             ctx.eval::<(), _>(UNICODE11)?;
             ctx.eval::<(), _>(UNICODE11_CAPTURE)?;
+            ctx.eval::<(), _>(CLIPBOARD)?;
+            ctx.eval::<(), _>(CLIPBOARD_CAPTURE)?;
+            ctx.globals().set(
+                "__base64Encode",
+                Function::new(ctx.clone(), |text: String| BASE64.encode(text.as_bytes()))?,
+            )?;
+            ctx.globals().set(
+                "__base64Decode",
+                Function::new(ctx.clone(), |text: String| {
+                    BASE64
+                        .decode(text)
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                })?,
+            )?;
             let boot: Function = ctx.globals().get("__boot")?;
             let emu: Object = boot.call((cols, rows, scrollback, base.clone()))?;
             ctx.globals().set("__emu", emu)?;
@@ -199,6 +219,7 @@ impl XtermJsEmu {
             rows,
             profile: *profile,
             fault: Mutex::new(None),
+            clipboard_validator: ClipboardValidator::new(),
         };
         emu.sync_size();
         Ok(emu)
@@ -368,6 +389,7 @@ fn decode_into(out: &mut Vec<Vec<EmuCell>>, chars: &str, meta: &[i32], cols: usi
 
 impl Emulator for XtermJsEmu {
     fn process(&mut self, bytes: &[u8]) {
+        self.clipboard_validator.process(bytes);
         // Fed as bytes rather than as a string on purpose: xterm.js runs its
         // own incremental UTF-8 decoder over a byte array and carries a
         // partial sequence across calls, which is what keeps a multi-byte
@@ -384,10 +406,31 @@ impl Emulator for XtermJsEmu {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+            .or_else(|| self.clipboard_validator.fault())
     }
 
     fn take_pending_writes(&mut self) -> Vec<u8> {
         self.call::<String>("takeReplies").into_bytes()
+    }
+
+    fn clipboard(&self, clipboard: ClipboardType) -> anyhow::Result<String> {
+        let slot = match clipboard {
+            ClipboardType::Clipboard => 0,
+            ClipboardType::Selection => 1,
+        };
+        self.invoke("clipboard", |emu, _| {
+            emu.get::<_, Function>("clipboard")?.call((slot,))
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}",
+                self.fault
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+                    .unwrap_or_else(|| "xterm.js: reading clipboard failed".to_string())
+            )
+        })
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {

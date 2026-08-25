@@ -21,6 +21,7 @@
 // frozen clock means it never does, so one `feed()` always consumes the whole
 // chunk instead of leaving a tail for the next drain.
 
+globalThis.self = globalThis;
 globalThis.process = { title: 'tui-test' };
 globalThis.performance = { now: function () { return 0; } };
 globalThis.console = {
@@ -88,11 +89,50 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
 
   // Replies the terminal wants sent back up the PTY (DA, CPR, and friends).
   var replies = [];
-  term.onData(function (d) { replies.push(d); });
+  term.onData(function (d) {
+    // The clipboard addon always emits BEL. Preserve an ST query's terminator
+    // so programs waiting for the form they sent do not hang.
+    if (d.indexOf('\x1b]52;') === 0 && d.charCodeAt(d.length - 1) === 0x07 && !tookBel(52)) {
+      d = d.slice(0, -1) + '\x1b\\';
+    }
+    replies.push(d);
+  });
 
   var title = null;
   term.onTitleChange(function (t) { title = t ? t : null; });
 
+  var clipboards = ['', ''];
+  function clipboardSlot(selection) {
+    if (selection === 'c') { return 0; }
+    if (selection === 'p' || selection === 's') { return 1; }
+    throw new Error('OSC 52 clipboard selection "' + selection + '" is not supported');
+  }
+  if (typeof globalThis.__clipboardAddon !== 'function') {
+    throw new Error('xterm.js clipboard addon is unavailable');
+  }
+  var clipboardDecodeValid = true;
+  term.loadAddon(new globalThis.__clipboardAddon(
+    {
+      encodeText: function (text) { return globalThis.__base64Encode(text); },
+      decodeText: function (text) {
+        var decoded = globalThis.__base64Decode(text);
+        clipboardDecodeValid = decoded !== undefined;
+        if (!clipboardDecodeValid) { throw new Error('invalid OSC 52 base64'); }
+        return decoded;
+      },
+    },
+    {
+      readText: function (selection) { return clipboards[clipboardSlot(selection)]; },
+      writeText: function (selection, text) {
+        tookBel(52);
+        if (!clipboardDecodeValid) {
+          clipboardDecodeValid = true;
+          return;
+        }
+        clipboards[clipboardSlot(selection)] = text;
+      },
+    }
+  ));
 
   // Colors a program set at runtime, keyed by the same slot numbering the
   // Rust side uses: 0-255 palette, then foreground, background, cursor. Only
@@ -129,7 +169,7 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
   // and one whose terminator is never claimed would sit in this list for the
   // life of the session: a shell that retitles the window on every prompt
   // would leak an entry per prompt.
-  var ANSWERED = { 4: 1, 10: 1, 11: 1, 12: 1, 104: 1, 110: 1, 111: 1, 112: 1 };
+  var ANSWERED = { 4: 1, 10: 1, 11: 1, 12: 1, 52: 1, 104: 1, 110: 1, 111: 1, 112: 1 };
   var terminators = [];
   var inOsc = false, sawEsc = false, code = -1, readingCode = false;
   function scanTerminators(bytes) {
@@ -311,6 +351,7 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     cursorY: function () { return term.buffer.active.cursorY; },
 
     title: function () { return title; },
+    clipboard: function (slot) { return clipboards[slot]; },
 
     // `DECTCEM`. xterm.js spells a hidden cursor as a flag on the core
     // service rather than as a mode this shim can read back.

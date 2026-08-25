@@ -660,6 +660,146 @@ macro_rules! emulator_conformance_tests {
             );
         }
 
+        /// OSC 52 copies into a session-local clipboard and queries it back.
+        ///
+        /// The host clipboard is deliberately not involved: tests must be
+        /// deterministic, headless, and isolated from one another.
+        #[test]
+        fn conformance_osc_52_round_trips_clipboard_text() {
+            use $crate::terminal::emu::ClipboardType;
+            let mut e = conformance_emu(10, 4, 100);
+            let _ = e.take_pending_writes();
+
+            assert_eq!(
+                e.clipboard(ClipboardType::Clipboard)
+                    .expect("clipboard support"),
+                "",
+                "a session starts with an empty clipboard"
+            );
+
+            e.process(b"\x1b]52;c;aGVsbG8=\x07");
+            assert_eq!(
+                e.clipboard(ClipboardType::Clipboard)
+                    .expect("clipboard support"),
+                "hello"
+            );
+
+            e.process(b"\x1b]52;c;?\x07");
+            assert_eq!(
+                String::from_utf8_lossy(&e.take_pending_writes()),
+                "\x1b]52;c;aGVsbG8=\x07",
+                "a query returns the clipboard as base64"
+            );
+        }
+
+        /// An empty base64 payload is a valid request to replace the current
+        /// clipboard contents with an empty string.
+        #[test]
+        fn conformance_osc_52_empty_payload_clears_clipboard() {
+            use $crate::terminal::emu::ClipboardType;
+            let mut e = conformance_emu(10, 4, 100);
+
+            e.process(b"\x1b]52;c;a2VlcCBtZQ==\x07");
+            assert_eq!(
+                e.clipboard(ClipboardType::Clipboard)
+                    .expect("clipboard support"),
+                "keep me"
+            );
+
+            e.process(b"\x1b]52;c;\x07");
+            assert_eq!(
+                e.clipboard(ClipboardType::Clipboard)
+                    .expect("clipboard support"),
+                "",
+                "a valid empty payload clears the clipboard"
+            );
+        }
+
+        /// A malformed payload is not clipboard text and must not replace the
+        /// last valid value.
+        #[test]
+        fn conformance_osc_52_invalid_base64_is_ignored() {
+            use $crate::terminal::emu::ClipboardType;
+            let mut e = conformance_emu(10, 4, 100);
+
+            e.process(b"\x1b]52;c;a2VlcCBtZQ==\x07");
+            e.process(b"\x1b]52;c;%%%\x07");
+            assert_eq!(
+                e.clipboard(ClipboardType::Clipboard)
+                    .expect("clipboard support"),
+                "keep me"
+            );
+        }
+
+        /// Destinations outside the common clipboard/selection set must fail
+        /// explicitly. `process` runs on the PTY reader thread, so the fault is
+        /// recorded here and surfaced by the engine on the next operation.
+        #[test]
+        fn conformance_osc_52_unsupported_selection_records_a_fault() {
+            let mut e = conformance_emu(10, 4, 100);
+
+            e.process(b"\x1b]52;0;Y3V0IGJ1ZmZlcg==\x07");
+            let fault = e.fault().expect("unsupported selection must fault");
+            assert!(
+                fault.contains("clipboard selection") && fault.contains("not supported"),
+                "the fault explains the unsupported clipboard destination: {fault}"
+            );
+        }
+
+        /// The standard clipboard and selection are independent, `p` and `s`
+        /// address the same selection, and an ST query is answered with ST.
+        #[test]
+        fn conformance_osc_52_selection_is_separate_and_preserves_terminator() {
+            use $crate::terminal::emu::ClipboardType;
+            let mut e = conformance_emu(10, 4, 100);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]52;c;Y2xpcGJvYXJk\x07");
+            e.process(b"\x1b]52;p;c2VsZWN0aW9u\x07");
+            assert_eq!(
+                e.clipboard(ClipboardType::Clipboard)
+                    .expect("clipboard support"),
+                "clipboard"
+            );
+            assert_eq!(
+                e.clipboard(ClipboardType::Selection)
+                    .expect("selection support"),
+                "selection"
+            );
+
+            e.process(b"\x1b]52;s;?\x1b\\");
+            assert_eq!(
+                String::from_utf8_lossy(&e.take_pending_writes()),
+                "\x1b]52;s;c2VsZWN0aW9u\x1b\\"
+            );
+        }
+
+        /// PTY reads may split anywhere, including in the base64 payload and
+        /// between the bytes of ST.
+        #[test]
+        fn conformance_osc_52_sequences_can_span_process_calls() {
+            use $crate::terminal::emu::ClipboardType;
+            let mut e = conformance_emu(10, 4, 100);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]52;c;c3");
+            e.process(b"BsaXQ=\x1b");
+            e.process(b"\\");
+            assert_eq!(
+                e.clipboard(ClipboardType::Clipboard)
+                    .expect("clipboard support"),
+                "split"
+            );
+
+            e.process(b"\x1b]52;c;");
+            e.process(b"?\x1b");
+            e.process(b"\\");
+            assert_eq!(
+                String::from_utf8_lossy(&e.take_pending_writes()),
+                "\x1b]52;c;c3BsaXQ=\x1b\\"
+            );
+        }
+
         /// A program can hide the cursor and show it again.
         ///
         /// Full-screen programs hide it while they repaint, so a backend that

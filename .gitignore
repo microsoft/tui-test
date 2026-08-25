@@ -14,3 +14,4 @@ bindings/python/stub-gen/target
 # crate, absent from the repository.
 /crates/tui-test/assets/xtermjs/xterm-headless.js
 /crates/tui-test/assets/xtermjs/addon-unicode11.js
+/crates/tui-test/assets/xtermjs/addon-clipboard.js

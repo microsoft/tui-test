@@ -299,7 +299,7 @@ tui-test open --backend ghostty
 tui-test run --backend xtermjs vim file.txt
 ```
 
-All backends use the same renderer, assertions, snapshot format, and conformance suite. Shell semantic-prompt tracking reads raw PTY bytes, so command boundaries, exit codes, and cwd tracking do not depend on the selected backend. Backend-specific VT behavior can differ: Ghostty preserves SGR blink, while Alacritty parses blink but cannot report it. xterm.js records a cell's underline color only when that cell also has an underline style, which changes nothing about how a cell renders.
+All backends use the same renderer, assertions, snapshot format, and conformance suite. Shell semantic-prompt tracking reads raw PTY bytes, so command boundaries, exit codes, and cwd tracking do not depend on the selected backend. OSC 52 copy and query sequences use isolated, session-local clipboards on every backend rather than reading or changing the host clipboard. Backend-specific VT behavior can differ: Ghostty preserves SGR blink, while Alacritty parses blink but cannot report it. xterm.js records a cell's underline color only when that cell also has an underline style, which changes nothing about how a cell renders.
 
 The CLI and published Python and JavaScript packages include all backends. Windows ARM64 artifacts are not currently published because Ghostty's upstream Zig build does not support that target.
 

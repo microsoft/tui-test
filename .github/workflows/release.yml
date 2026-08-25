@@ -76,7 +76,7 @@ jobs:
           set -euo pipefail
           cd crates/tui-test/assets/xtermjs
           status=0
-          for pkg in @xterm/headless @xterm/addon-unicode11; do
+          for pkg in @xterm/headless @xterm/addon-unicode11 @xterm/addon-clipboard; do
             have="$(jq -r --arg p "$pkg" '.[$p]' pinned.json)"
             want="$(npm view "$pkg" version)"
             if [ "$have" != "$want" ]; then

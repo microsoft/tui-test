@@ -4,6 +4,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use anyhow::{anyhow, Context, Result};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use compact_str::CompactString;
 use ghostty_vt::error::Error as GhosttyError;
 use ghostty_vt::render::{CellIterator, CursorVisualStyle, RowIterator};
@@ -17,7 +19,7 @@ use ghostty_vt::{RenderState, Terminal};
 
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::CursorShape;
+use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape};
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
     RgbColor {
@@ -142,6 +144,7 @@ pub(super) struct GhosttyCore {
     row_iter: RowIterator<'static>,
     cell_iter: CellIterator<'static>,
     pending: Rc<RefCell<Vec<u8>>>,
+    clipboard: Clipboard,
     profile: Profile,
     frame: Option<Frame>,
 }
@@ -179,6 +182,7 @@ impl GhosttyCore {
             .context("setting palette")?;
 
         let pending = Rc::new(RefCell::new(Vec::new()));
+        let clipboard = Clipboard::default();
         terminal
             .on_pty_write({
                 let pending = Rc::clone(&pending);
@@ -189,7 +193,10 @@ impl GhosttyCore {
                 Some(DeviceAttributes {
                     primary: PrimaryDeviceAttributes::new(
                         ConformanceLevel::VT220,
-                        &[DeviceAttributeFeature::ANSI_COLOR],
+                        &[
+                            DeviceAttributeFeature::ANSI_COLOR,
+                            DeviceAttributeFeature::CLIPBOARD,
+                        ],
                     ),
                     secondary: SecondaryDeviceAttributes {
                         device_type: DeviceType::VT220,
@@ -207,6 +214,7 @@ impl GhosttyCore {
             row_iter: RowIterator::new().context("creating row iterator")?,
             cell_iter: CellIterator::new().context("creating cell iterator")?,
             pending,
+            clipboard,
             profile,
             frame: None,
         })
@@ -219,6 +227,27 @@ impl GhosttyCore {
 
     pub(super) fn take_pending_writes(&mut self) -> Vec<u8> {
         std::mem::take(&mut *self.pending.borrow_mut())
+    }
+
+    pub(super) fn set_clipboard(&mut self, clipboard: ClipboardType, text: String) {
+        self.clipboard.set(clipboard, text);
+    }
+
+    pub(super) fn answer_clipboard_query(
+        &mut self,
+        clipboard: ClipboardType,
+        selector: u8,
+        bell_terminated: bool,
+    ) {
+        let encoded = BASE64.encode(self.clipboard.get(clipboard).as_bytes());
+        let terminator = if bell_terminated { "\x07" } else { "\x1b\\" };
+        self.pending.borrow_mut().extend_from_slice(
+            format!("\x1b]52;{};{encoded}{terminator}", char::from(selector)).as_bytes(),
+        );
+    }
+
+    pub(super) fn clipboard(&self, clipboard: ClipboardType) -> String {
+        self.clipboard.get(clipboard).to_string()
     }
 
     pub(super) fn resize(&mut self, cols: u16, rows: u16) -> Result<()> {

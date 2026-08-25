@@ -1,4 +1,5 @@
 {
   "@xterm/headless": "6.0.0",
-  "@xterm/addon-unicode11": "0.9.0"
+  "@xterm/addon-unicode11": "0.9.0",
+  "@xterm/addon-clipboard": "0.2.0"
 }

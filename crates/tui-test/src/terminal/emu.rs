@@ -10,6 +10,8 @@
 //! identical shell-integration behavior by construction rather than by
 //! reimplementation.
 
+use alacritty_terminal::vte::{Parser, Perform};
+
 use crate::profile::{ColorSlot, Rgb};
 use crate::terminal::cell::{Color, EmuCell};
 
@@ -38,6 +40,79 @@ bitflags::bitflags! {
     }
 }
 
+/// One of the two clipboard destinations OSC 52 addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardType {
+    Clipboard,
+    Selection,
+}
+
+/// The session-local clipboard state shared with a backend's event listener.
+#[derive(Debug, Default)]
+pub(crate) struct Clipboard {
+    clipboard: String,
+    selection: String,
+}
+
+impl Clipboard {
+    pub(crate) fn get(&self, clipboard: ClipboardType) -> &str {
+        match clipboard {
+            ClipboardType::Clipboard => &self.clipboard,
+            ClipboardType::Selection => &self.selection,
+        }
+    }
+
+    pub(crate) fn set(&mut self, clipboard: ClipboardType, text: String) {
+        match clipboard {
+            ClipboardType::Clipboard => self.clipboard = text,
+            ClipboardType::Selection => self.selection = text,
+        }
+    }
+}
+
+#[derive(Default)]
+struct ClipboardValidation {
+    fault: Option<String>,
+}
+
+impl Perform for ClipboardValidation {
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        if params.first().copied() != Some(b"52") {
+            return;
+        }
+        let selection = params.get(1).copied().unwrap_or_default();
+        if !matches!(selection, b"c" | b"p" | b"s") && self.fault.is_none() {
+            self.fault = Some(format!(
+                "OSC 52 clipboard selection {:?} is not supported",
+                String::from_utf8_lossy(selection)
+            ));
+        }
+    }
+}
+
+/// Tracks unsupported OSC 52 destinations across arbitrary PTY read splits.
+pub(crate) struct ClipboardValidator {
+    parser: Parser,
+    state: ClipboardValidation,
+}
+
+impl ClipboardValidator {
+    pub(crate) fn new() -> Self {
+        Self {
+            parser: Parser::new(),
+            state: ClipboardValidation::default(),
+        }
+    }
+
+    pub(crate) fn process(&mut self, bytes: &[u8]) {
+        self.parser.advance(&mut self.state, bytes);
+    }
+
+    pub(crate) fn fault(&self) -> Option<String> {
+        self.state.fault.clone()
+    }
+}
+
 /// A headless terminal emulator: bytes in, cell grid out.
 ///
 /// Implementations must be `Send`; the daemon shares the emulator across its
@@ -63,6 +138,16 @@ pub trait Emulator: Send {
     /// attribute replies, cursor position reports, and similar). The caller
     /// forwards these to the PTY.
     fn take_pending_writes(&mut self) -> Vec<u8>;
+
+    /// Read one of this session's clipboard destinations.
+    ///
+    /// Clipboard contents are session-local rather than tied to the host
+    /// system clipboard, so OSC 52 stays deterministic and headless. A
+    /// backend that cannot provide clipboard support must return an error
+    /// instead of silently dropping copy or query sequences.
+    fn clipboard(&self, _clipboard: ClipboardType) -> anyhow::Result<String> {
+        anyhow::bail!("clipboard access is not supported by this terminal backend")
+    }
 
     /// Active Kitty keyboard protocol flags negotiated by the child.
     fn keyboard_mode(&self) -> KeyboardMode {

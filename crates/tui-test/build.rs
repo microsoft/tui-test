@@ -21,7 +21,7 @@ struct Bundle {
     env: &'static str,
 }
 
-const BUNDLES: [Bundle; 2] = [
+const BUNDLES: [Bundle; 3] = [
     Bundle {
         package: "@xterm/headless",
         inner: "package/lib-headless/xterm-headless.js",
@@ -33,6 +33,12 @@ const BUNDLES: [Bundle; 2] = [
         inner: "package/lib/addon-unicode11.js",
         file: "addon-unicode11.js",
         env: "XTERM_UNICODE11_JS",
+    },
+    Bundle {
+        package: "@xterm/addon-clipboard",
+        inner: "package/lib/addon-clipboard.js",
+        file: "addon-clipboard.js",
+        env: "XTERM_CLIPBOARD_JS",
     },
 ];
 
@@ -183,7 +189,8 @@ mod tests {
     fn reads_a_version_out_of_pinned_json() {
         let pinned = r#"{
   "@xterm/headless": "6.0.0",
-  "@xterm/addon-unicode11": "0.9.0"
+  "@xterm/addon-unicode11": "0.9.0",
+  "@xterm/addon-clipboard": "0.2.0"
 }"#;
         assert_eq!(
             pinned_version(pinned, "@xterm/headless").as_deref(),
@@ -192,6 +199,10 @@ mod tests {
         assert_eq!(
             pinned_version(pinned, "@xterm/addon-unicode11").as_deref(),
             Some("0.9.0")
+        );
+        assert_eq!(
+            pinned_version(pinned, "@xterm/addon-clipboard").as_deref(),
+            Some("0.2.0")
         );
         assert_eq!(pinned_version(pinned, "@xterm/nope"), None);
     }

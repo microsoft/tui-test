@@ -7,3 +7,4 @@ install/install.ps1 linguist-detectable=false
 # minified bundle in diffs.
 crates/tui-test/assets/xtermjs/xterm-headless.js linguist-vendored=true
 crates/tui-test/assets/xtermjs/addon-unicode11.js linguist-vendored=true
+crates/tui-test/assets/xtermjs/addon-clipboard.js linguist-vendored=true
