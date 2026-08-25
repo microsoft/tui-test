@@ -548,7 +548,7 @@ The xterm.js bundles are committed under `crates/tui-test/assets/xtermjs` at the
 cargo test -p tui-test-rs --features xtermjs
 ```
 
-`.github/workflows/xtermjs-update.yml` runs that same script weekly and opens a pull request when either package has a newer release, so a vendored bundle does not quietly fall behind.
+`.github/workflows/xtermjs-update.yml` runs that same script weekly and opens a pull request when either package has a newer release, so a vendored bundle does not quietly fall behind. The release workflow separately checks that the committed bundles are byte for byte what npm publishes at the pinned versions.
 
 ## Debugging
 

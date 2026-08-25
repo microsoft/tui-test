@@ -35,6 +35,10 @@ jobs:
 
       - run: sudo apt-get update && sudo apt-get install -y ripgrep
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
       - name: Verify beta release tag
         shell: bash
         run: |
@@ -60,6 +64,34 @@ jobs:
             <(printf '%s\n' "${version_files[@]}" | sort) \
             <(rg -l --path-separator / --fixed-strings "$version" \
               "${version_files[@]}" | sort)
+
+      # A sanity check on what is about to be published, not a freshness gate:
+      # it compares the committed bundles against the versions pinned.json
+      # names, so it can only fail on something under our control — an edited
+      # blob, or a pin bumped without re-vendoring. An upstream release cannot
+      # trip it, which is why it is safe to block a release on.
+      - name: Verify vendored xterm.js matches its pinned versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets="$PWD/crates/tui-test/assets/xtermjs"
+          headless="$(jq -r '."@xterm/headless"' "$assets/pinned.json")"
+          unicode11="$(jq -r '."@xterm/addon-unicode11"' "$assets/pinned.json")"
+          work="$(mktemp -d)"
+          cd "$work"
+          npm pack "@xterm/headless@$headless" "@xterm/addon-unicode11@$unicode11" >/dev/null 2>&1
+          tar xzOf "xterm-headless-$headless.tgz" package/lib-headless/xterm-headless.js > headless.js
+          tar xzOf "xterm-addon-unicode11-$unicode11.tgz" package/lib/addon-unicode11.js > unicode11.js
+          status=0
+          diff -q headless.js "$assets/xterm-headless.js" \
+            || { echo "xterm-headless.js is not @xterm/headless@$headless." >&2; status=1; }
+          diff -q unicode11.js "$assets/addon-unicode11.js" \
+            || { echo "addon-unicode11.js is not @xterm/addon-unicode11@$unicode11." >&2; status=1; }
+          if [ "$status" -ne 0 ]; then
+            echo "Re-run .github/scripts/vendor-xtermjs.sh to restore them." >&2
+            exit 1
+          fi
+          echo "Both bundles match @xterm/headless@$headless and @xterm/addon-unicode11@$unicode11."
 
       - name: Verify tui-test-rs crate package
         run: cargo publish --locked --package tui-test-rs --dry-run
