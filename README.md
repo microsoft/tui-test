@@ -548,7 +548,7 @@ The xterm.js bundles are committed under `crates/tui-test/assets/xtermjs` at the
 cargo test -p tui-test-rs --features xtermjs
 ```
 
-`.github/workflows/vendored.yml` re-fetches both packages whenever those files change and fails if what is committed is not byte for byte what npm publishes. The release workflow fails if the pinned versions are not the latest published ones.
+Updating them is manual and nothing in CI rewrites them. The release workflow does check that the pinned versions are the latest published ones, comparing version strings only.
 
 ## Debugging
 

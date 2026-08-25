@@ -65,6 +65,9 @@ jobs:
             <(rg -l --path-separator / --fixed-strings "$version" \
               "${version_files[@]}" | sort)
 
+      # Compares version strings only: nothing here re-fetches or rewrites the
+      # vendored bundles. Updating those is manual, via
+      # .github/scripts/vendor-xtermjs.sh.
       - name: Verify vendored xterm.js is current
         shell: bash
         run: |

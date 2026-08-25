@@ -12,10 +12,8 @@ so the xterm.js backend needs no Node.js at runtime.
 `shim.js` is tui-test's own code, not vendored.
 
 Both bundles are dropped in unchanged and committed, so building tui-test needs
-neither Node nor a network. `pinned.json` records the versions they came from,
-and `.github/workflows/vendored.yml` re-fetches those versions whenever these
-files change and fails if what is checked in is not byte for byte what npm
-publishes.
+neither Node nor a network. `pinned.json` records the versions they came from.
+Updating them is manual — see below — and nothing in CI rewrites them.
 
 ## Why the unicode11 addon
 
