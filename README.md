@@ -319,7 +319,7 @@ let options = OpenOptions {
 };
 ```
 
-The default Rust features include only Alacritty and do not require Zig. The `ghostty` feature builds a pinned Ghostty revision and requires Zig 0.16 on `PATH`. The `xtermjs` feature embeds xterm.js, which costs about 230 KB of JavaScript in the binary plus compiling QuickJS; building it from a repository checkout fetches the bundles from npm and so requires Node.js on `PATH`. A published release of `tui-test-rs` carries them and requires neither.
+The default Rust features include only Alacritty and do not require Zig. The `ghostty` feature builds a pinned Ghostty revision and requires Zig 0.16 on `PATH`. The `xtermjs` feature needs no extra tooling — xterm.js is vendored and embedded, so it depends on nothing installed on the machine, at the cost of compiling QuickJS and carrying about 230 KB of JavaScript in the binary.
 
 ### Terminal control
 
@@ -533,17 +533,22 @@ The default palette is the classic VGA/xterm palette expected by `TERM=xterm-256
 
 ## Development
 
-Building the workspace with default features needs only a Rust toolchain. The optional backends each add a build requirement:
+Building the workspace with default features needs only a Rust toolchain. Of the optional backends, only `ghostty` adds a build requirement:
 
 | Feature | Requires | Why |
 | ------- | -------- | --- |
 | `ghostty` | Zig 0.16 on `PATH` | builds a pinned Ghostty revision from source |
-| `xtermjs` | Node.js on `PATH` | fetches the pinned xterm.js bundles from npm |
 | `rio` | — | ordinary Rust dependency |
+| `xtermjs` | — | xterm.js is vendored in the repository |
 
-The xterm.js bundles are not committed. `crates/tui-test/build.rs` fetches the versions `crates/tui-test/assets/xtermjs/pinned.json` names into `OUT_DIR` on first build and caches them there. A published release of `tui-test-rs` carries the bundles in the crate, so consuming one needs neither Node.js nor a network — only building from a checkout does.
+The xterm.js bundles are committed under `crates/tui-test/assets/xtermjs` at the versions `pinned.json` names, so a clone builds without a network. To update them:
 
-To bump them, edit `pinned.json`, then run `.github/scripts/vendor-xtermjs.sh` and `cargo test -p tui-test-rs --features xtermjs`. The release workflow fails if the pinned versions are not the latest published ones.
+```sh
+.github/scripts/vendor-xtermjs.sh --latest   # or omit --latest to re-fetch the pinned versions
+cargo test -p tui-test-rs --features xtermjs
+```
+
+`.github/workflows/vendored.yml` re-fetches both packages whenever those files change and fails if what is committed is not byte for byte what npm publishes. The release workflow fails if the pinned versions are not the latest published ones.
 
 ## Debugging
 

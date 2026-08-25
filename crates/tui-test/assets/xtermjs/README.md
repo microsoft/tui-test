@@ -11,10 +11,11 @@ so the xterm.js backend needs no Node.js at runtime.
 
 `shim.js` is tui-test's own code, not vendored.
 
-Both bundles are dropped in unchanged. `pinned.json` records the versions they
-came from, and `.github/workflows/vendored.yml` re-fetches those versions
-whenever these files change and fails if what is checked in is not byte for
-byte what npm publishes.
+Both bundles are dropped in unchanged and committed, so building tui-test needs
+neither Node nor a network. `pinned.json` records the versions they came from,
+and `.github/workflows/vendored.yml` re-fetches those versions whenever these
+files change and fails if what is checked in is not byte for byte what npm
+publishes.
 
 ## Why the unicode11 addon
 
@@ -65,14 +66,8 @@ Two addons are deliberately not used yet: [#175](https://github.com/microsoft/tu
 
 ## Updating
 
-From this directory, with the new versions written into `pinned.json`:
-
 ```sh
-headless="$(jq -r '."@xterm/headless"' pinned.json)"
-unicode11="$(jq -r '."@xterm/addon-unicode11"' pinned.json)"
-npm pack "@xterm/headless@$headless" "@xterm/addon-unicode11@$unicode11"
-tar xzOf "xterm-headless-$headless.tgz" package/lib-headless/xterm-headless.js > xterm-headless.js
-tar xzOf "xterm-addon-unicode11-$unicode11.tgz" package/lib/addon-unicode11.js > addon-unicode11.js
+.github/scripts/vendor-xtermjs.sh --latest   # or omit --latest to re-fetch the pinned versions
 ```
 
 Then run `cargo test -p tui-test-rs --features xtermjs conformance`, re-measure

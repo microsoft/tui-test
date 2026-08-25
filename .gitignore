@@ -9,8 +9,3 @@ bindings/js/native/target
 bindings/python/target
 bindings/python/native/target
 bindings/python/stub-gen/target
-# Fetched from npm by crates/tui-test/build.rs at the versions
-# crates/tui-test/assets/xtermjs/pinned.json names. Present in the published
-# crate, absent from the repository.
-/crates/tui-test/assets/xtermjs/xterm-headless.js
-/crates/tui-test/assets/xtermjs/addon-unicode11.js
