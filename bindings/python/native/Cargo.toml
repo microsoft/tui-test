@@ -17,6 +17,7 @@ test = false
 anyhow.workspace = true
 tui-test = { workspace = true, features = [
     "ghostty",
+    "rio",
     "xtermjs",
     "recording-font-jetbrains-mono-styles",
 ] }

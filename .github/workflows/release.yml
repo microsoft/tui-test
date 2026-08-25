@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing beta release tag to publish (for example, 0.1.0-beta.1)
+        description: Existing beta release tag to publish (for example, 0.1.0-beta.2)
         required: true
         type: string
 
@@ -25,7 +25,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -86,7 +86,7 @@ jobs:
             os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -95,7 +95,7 @@ jobs:
           rustup default stable
           rustup target add ${{ matrix.target }}
 
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
@@ -103,22 +103,20 @@ jobs:
       - if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-      - if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        if: contains(matrix.target, 'musl')
+        with:
+          tool: cargo-zigbuild
 
-      - if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
-
-      - run: cargo build --release --locked -p tui-test-cli --target ${{ matrix.target }}
+      - if: "!contains(matrix.target, 'musl')"
+        run: cargo build --release --locked -p tui-test-cli --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+
+      - if: contains(matrix.target, 'musl')
+        run: cargo zigbuild --release --locked -p tui-test-cli --target ${{ matrix.target }}
 
       - if: runner.os != 'Windows'
         run: |
@@ -131,7 +129,7 @@ jobs:
         run: |
           Compress-Archive -Path "target/${{ matrix.target }}/release/tui-test.exe" -DestinationPath "tui-test-${{ matrix.target }}.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: tui-test-${{ matrix.target }}
           path: |
@@ -149,7 +147,8 @@ jobs:
             args: --target x86_64-unknown-linux-gnu --use-napi-cross
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            args: --target aarch64-unknown-linux-gnu --use-napi-cross
+            args: --target aarch64-unknown-linux-gnu -x
+            zigbuild: true
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             args: --target x86_64-unknown-linux-musl -x
@@ -169,11 +168,11 @@ jobs:
             args: --target x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
           cache: npm
@@ -184,12 +183,12 @@ jobs:
           rustup default stable
           rustup target add ${{ matrix.target }}
 
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
         if: matrix.zigbuild
         with:
           tool: cargo-zigbuild
@@ -202,7 +201,7 @@ jobs:
         shell: bash
         run: npm run build:native -- ${{ matrix.args }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: node-${{ matrix.target }}
           path: bindings/js/native/*.node
@@ -212,11 +211,11 @@ jobs:
     needs: build-node
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
           cache: npm
@@ -230,7 +229,7 @@ jobs:
           npm run create:npm-dirs
         working-directory: bindings/js
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: node-*
           path: bindings/js/artifacts
@@ -242,7 +241,7 @@ jobs:
       - name: Pack Node packages
         run: node .github/scripts/release/package-node.mjs
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
 
@@ -264,7 +263,7 @@ jobs:
           TUI_TEST_TEST_PACKAGE_ROOT="$GITHUB_WORKSPACE/package-test" \
             "$node" --test bindings/js/test/package.integration.test.mjs
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: npm-packages
           path: package-artifacts/npm/*.tgz
@@ -296,27 +295,27 @@ jobs:
             os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
 
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         if: runner.os != 'Linux'
         with:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         if: runner.os == 'Linux' && contains(matrix.target, 'aarch64')
         with:
           platforms: arm64
 
       - name: Build Python wheel
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           command: build
           working-directory: bindings/python
@@ -362,7 +361,7 @@ jobs:
           python -m pip install --disable-pip-version-check "maturin>=1.5,<2"
           maturin sdist --manifest-path native/Cargo.toml --out dist
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         with:
           python-version: "3.8"
@@ -386,13 +385,13 @@ jobs:
             bindings/python/tests/test_integration.py \
             IntegrationTests.test_echo_roundtrip
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: python-wheel-${{ matrix.target }}
           path: bindings/python/dist/*.whl
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         with:
           name: python-sdist
@@ -410,16 +409,16 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: npm-packages
           path: npm-packages
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
 
@@ -467,13 +466,13 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: python-wheel-*
           path: dist
           merge-multiple: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: python-sdist
           path: dist
@@ -496,7 +495,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ env.RELEASE_TAG }}
 
@@ -507,7 +506,7 @@ jobs:
       # Match this workflow and environment in the crate's trusted publisher settings.
       - name: Authenticate with crates.io
         id: auth
-        uses: rust-lang/crates-io-auth-action@v1
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish tui-test-rs to crates.io
         run: cargo publish --locked --package tui-test-rs
@@ -524,7 +523,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
           pattern: tui-test-*

@@ -24,19 +24,46 @@ switch ($processorArchitecture.ToUpperInvariant()) {
 $target = "$architecture-pc-windows-msvc"
 $asset = "tui-test-$target.zip"
 $version = $env:TUI_TEST_VERSION
+$token = $env:GITHUB_TOKEN
+if ([string]::IsNullOrWhiteSpace($token)) {
+    $token = $env:GH_TOKEN
+}
 
 if ([string]::IsNullOrWhiteSpace($version) -or $version -eq "latest") {
     $releaseUrl = "https://github.com/$repository/releases/latest/download"
+}
+elseif ($version -eq "beta") {
+    $headers = @{
+        Accept = "application/vnd.github+json"
+        "X-GitHub-Api-Version" = "2022-11-28"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($token)) {
+        $headers["Authorization"] = "Bearer $token"
+    }
+
+    $releases = Invoke-RestMethod `
+        -Uri "https://api.github.com/repos/$repository/releases?per_page=100" `
+        -Headers $headers `
+        -UseBasicParsing
+    $latestBeta = $releases |
+        Where-Object {
+            $_.prerelease -and
+            -not $_.draft -and
+            $_.tag_name -match "^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$"
+        } |
+        Select-Object -First 1
+    if ($null -eq $latestBeta -or [string]::IsNullOrWhiteSpace($latestBeta.tag_name)) {
+        throw "No beta release was found."
+    }
+
+    $version = $latestBeta.tag_name
+    $releaseUrl = "https://github.com/$repository/releases/download/$version"
 }
 else {
     $releaseUrl = "https://github.com/$repository/releases/download/$version"
 }
 
 $downloadUrl = "$releaseUrl/$asset"
-$token = $env:GITHUB_TOKEN
-if ([string]::IsNullOrWhiteSpace($token)) {
-    $token = $env:GH_TOKEN
-}
 
 $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("tui-test-" + [Guid]::NewGuid())
 $archivePath = Join-Path $tempDir $asset

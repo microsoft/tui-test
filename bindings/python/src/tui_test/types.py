@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional, Union
 
 Color = Union[str, int]
-Backend = Literal["alacritty", "ghostty", "xtermjs"]
+Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
@@ -63,7 +63,7 @@ class Cell:
     inverse: bool
     invisible: bool
     strike: bool
-    #: Always ``False`` from the alacritty backend, which cannot report blink.
+    #: Always ``False`` from the alacritty and rio backends, which cannot report blink.
     blink: bool
     #: Shorthand for ``underline_style != "none"``.
     underline: bool

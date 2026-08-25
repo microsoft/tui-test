@@ -19,6 +19,7 @@ napi = { version = "3", default-features = false, features = ["napi4", "dyn-symb
 napi-derive = "3"
 tui-test = { workspace = true, features = [
     "ghostty",
+    "rio",
     "xtermjs",
     "recording-font-jetbrains-mono-styles",
 ] }

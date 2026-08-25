@@ -9,5 +9,7 @@ pub mod ghostty;
 pub mod integration;
 pub mod locator;
 pub mod pty;
+#[cfg(feature = "rio")]
+pub mod rio;
 #[cfg(feature = "xtermjs")]
 pub mod xtermjs;

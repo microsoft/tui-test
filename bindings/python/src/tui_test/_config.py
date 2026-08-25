@@ -6,7 +6,7 @@ import os
 import sys
 from typing import Any, Dict, Mapping, Optional
 
-VERSION = "0.1.0-beta.1"
+VERSION = "0.1.0-beta.2"
 
 DEFAULT_COLS = 80
 DEFAULT_ROWS = 30
@@ -20,7 +20,7 @@ def resolve_session(session: Optional[str]) -> str:
 
 
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
-_BACKENDS = ("alacritty", "ghostty", "xtermjs")
+_BACKENDS = ("alacritty", "ghostty", "rio", "xtermjs")
 _PROFILE_FIELDS = frozenset(("scrollback", "colors"))
 _COLOR_FIELDS = frozenset(
     (
