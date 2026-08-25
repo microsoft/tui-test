@@ -66,6 +66,26 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     term.unicode.activeVersion = '11';
   }
 
+  // SGR 59 (reset underline color) does not clear xterm.js's stored color: it
+  // leaves the extended-attribute record holding RGB #ffffff, which reads back
+  // through the public getters as an explicit white underline and is
+  // indistinguishable there from a real `58;2::255:255:255`. Correcting it at
+  // the point the parser sets it keeps the two apart, which reading the cell
+  // afterwards cannot: 0 is the same value the record holds for a cell that
+  // never named an underline color.
+  var __charAttributes = term._core._inputHandler.charAttributes.bind(
+    term._core._inputHandler
+  );
+  term._core._inputHandler.charAttributes = function (params) {
+    var result = __charAttributes(params);
+    for (var i = 0; i < params.length; i++) {
+      if (params.params[i] === 59 && !params.hasSubParams(i)) {
+        term._core._inputHandler._curAttrData.extended.underlineColor = 0;
+      }
+    }
+    return result;
+  };
+
   // Replies the terminal wants sent back up the PTY (DA, CPR, and friends).
   var replies = [];
   term.onData(function (d) { replies.push(d); });
@@ -361,16 +381,6 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
           // set SGR 58 to its own foreground color lands here too, and draws
           // the same either way.
           if (ulColor === fg && ulMode === fgMode) { ulMode = 0; }
-
-          // SGR 59 (reset underline color) does not clear the record: it
-          // stores a sentinel that reads back through the public getters as
-          // RGB #ffffff, so an ordinary reset produced a white underline where
-          // there should be none. The sentinel is indistinguishable from a
-          // real `58;2;255;255;255` at this layer -- both report RGB with
-          // value 0xffffff -- so one of the two has to be wrong. Resetting is
-          // overwhelmingly the more common of the two, and getting it wrong
-          // paints a color the terminal never asked for, so it wins.
-          if (ulMode === 2 && ulColor === 0xffffff) { ulMode = 0; }
 
           var flags =
             (c.isBold() ? 1 : 0) |

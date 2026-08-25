@@ -7,6 +7,18 @@ description = "In-process terminal automation, inspection, assertions, and recor
 license.workspace = true
 repository.workspace = true
 readme = "../../README.md"
+# The xterm.js bundles are fetched from npm rather than committed, so they are
+# absent from the repository and cargo's git-based file discovery would leave
+# them out of the published crate too. Listing files explicitly puts them in
+# the tarball, which is what lets a release build without npm or a network.
+include = [
+    "src/**/*.rs",
+    "shell/**",
+    "assets/**",
+    "tests/**",
+    "build.rs",
+    "README.md",
+]
 
 [lib]
 name = "tui_test"

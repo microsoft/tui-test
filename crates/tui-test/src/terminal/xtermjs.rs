@@ -21,15 +21,17 @@
 //! `Sync`-in-spirit: every entry point below takes `&mut self`, so the daemon's
 //! existing mutex is still what serializes access.
 
+use std::sync::Mutex;
+
 use compact_str::{CompactString, ToCompactString};
-use rquickjs::{Context, Function, Object, Runtime};
+use rquickjs::{Context, Ctx, Function, Object, Runtime};
 
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator};
 
-const XTERM_BUNDLE: &str = include_str!("../../assets/xtermjs/xterm-headless.js");
-const UNICODE11: &str = include_str!("../../assets/xtermjs/addon-unicode11.js");
+const XTERM_BUNDLE: &str = include_str!(env!("XTERM_HEADLESS_JS"));
+const UNICODE11: &str = include_str!(env!("XTERM_UNICODE11_JS"));
 const SHIM: &str = include_str!("../../assets/xtermjs/shim.js");
 
 /// The unicode11 addon is UMD and publishes itself by *replacing*
@@ -128,6 +130,34 @@ pub struct XtermJsEmu {
     /// color at runtime but never reach this, so a reset always has a value
     /// to restore.
     profile: Profile,
+    /// The first JS exception this emulator hit, if any.
+    ///
+    /// The first one wins: once the engine has thrown, what follows is a
+    /// consequence rather than a new fact, and the earliest message names the
+    /// cause. Behind a lock because the reads that can fault take `&self`.
+    fault: Mutex<Option<String>>,
+}
+
+/// Render a failed JS call as a message worth reading.
+///
+/// rquickjs reports a thrown exception as a bare [`rquickjs::Error::Exception`]
+/// and parks the value on the context, so the message and stack have to be
+/// claimed with `catch` or the next call overwrites them.
+fn describe(ctx: &Ctx<'_>, method: &str, error: rquickjs::Error) -> String {
+    if !matches!(error, rquickjs::Error::Exception) {
+        return format!("xterm.js: calling {method} failed: {error}");
+    }
+    let thrown = ctx.catch();
+    let detail = match thrown.as_exception() {
+        Some(exception) => match exception.stack() {
+            Some(stack) if !stack.trim().is_empty() => {
+                format!("{exception}\n{}", stack.trim_end())
+            }
+            _ => exception.to_string(),
+        },
+        None => format!("{thrown:?}"),
+    };
+    format!("xterm.js: {method} threw: {detail}")
 }
 
 impl XtermJsEmu {
@@ -168,6 +198,7 @@ impl XtermJsEmu {
             cols,
             rows,
             profile: *profile,
+            fault: Mutex::new(None),
         };
         emu.sync_size();
         Ok(emu)
@@ -188,12 +219,7 @@ impl XtermJsEmu {
     where
         R: for<'js> rquickjs::FromJs<'js> + Default,
     {
-        self.ctx
-            .with(|ctx| -> rquickjs::Result<R> {
-                let emu: Object = ctx.globals().get("__emu")?;
-                emu.get::<_, Function>(method)?.call(())
-            })
-            .unwrap_or_default()
+        self.call_or(method, R::default())
     }
 
     /// Like [`Self::call`], for a method whose failure should not read as
@@ -202,11 +228,7 @@ impl XtermJsEmu {
     where
         R: for<'js> rquickjs::FromJs<'js>,
     {
-        self.ctx
-            .with(|ctx| -> rquickjs::Result<R> {
-                let emu: Object = ctx.globals().get("__emu")?;
-                emu.get::<_, Function>(method)?.call(())
-            })
+        self.invoke(method, |emu, _| emu.get::<_, Function>(method)?.call(()))
             .unwrap_or(fallback)
     }
 
@@ -215,12 +237,47 @@ impl XtermJsEmu {
     where
         R: for<'js> rquickjs::FromJs<'js> + Default,
     {
-        self.ctx
-            .with(|ctx| -> rquickjs::Result<R> {
+        self.invoke(method, |emu, _| {
+            emu.get::<_, Function>(method)?.call((arg,))
+        })
+        .unwrap_or_default()
+    }
+
+    /// Run one call against the shim's emulator object, recording a thrown
+    /// exception rather than reporting the call's own default in its place.
+    ///
+    /// A reader that only sees the fallback cannot tell an empty grid from a
+    /// grid it failed to read, which is the distinction [`Self::fault`] keeps.
+    fn invoke<R, F>(&self, method: &str, body: F) -> Option<R>
+    where
+        R: for<'js> rquickjs::FromJs<'js>,
+        F: for<'js> FnOnce(&Object<'js>, &Ctx<'js>) -> rquickjs::Result<R>,
+    {
+        let result = self.ctx.with(|ctx| {
+            let outcome = (|| -> rquickjs::Result<R> {
                 let emu: Object = ctx.globals().get("__emu")?;
-                emu.get::<_, Function>(method)?.call((arg,))
-            })
-            .unwrap_or_default()
+                body(&emu, &ctx)
+            })();
+            outcome.map_err(|error| describe(&ctx, method, error))
+        });
+        match result {
+            Ok(value) => Some(value),
+            Err(message) => {
+                self.record_fault(message);
+                None
+            }
+        }
+    }
+
+    /// Keep the first fault; see [`XtermJsEmu::fault`].
+    fn record_fault(&self, message: String) {
+        let mut fault = self
+            .fault
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if fault.is_none() {
+            *fault = Some(message);
+        }
     }
 
     /// Decode one packed row span.
@@ -315,11 +372,18 @@ impl Emulator for XtermJsEmu {
         // own incremental UTF-8 decoder over a byte array and carries a
         // partial sequence across calls, which is what keeps a multi-byte
         // character split across two PTY reads from being corrupted.
-        let _ = self.ctx.with(|ctx| -> rquickjs::Result<()> {
-            let emu: Object = ctx.globals().get("__emu")?;
+        self.invoke("feed", |emu, ctx| {
             let buf = rquickjs::TypedArray::<u8>::new(ctx.clone(), bytes)?;
             emu.get::<_, Function>("feed")?.call((buf,))
-        });
+        })
+        .unwrap_or(())
+    }
+
+    fn fault(&self) -> Option<String> {
+        self.fault
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn take_pending_writes(&mut self) -> Vec<u8> {
@@ -327,10 +391,10 @@ impl Emulator for XtermJsEmu {
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
-        let _ = self.ctx.with(|ctx| -> rquickjs::Result<()> {
-            let emu: Object = ctx.globals().get("__emu")?;
+        self.invoke("resize", |emu, _| {
             emu.get::<_, Function>("resize")?.call((cols, rows))
-        });
+        })
+        .unwrap_or(());
         // Read the size back rather than trusting the request: xterm.js clamps
         // to its 2x1 minimum, and recording a smaller size than the grid it
         // actually holds makes every later decode mis-chunk the rows.
@@ -403,6 +467,44 @@ impl Emulator for XtermJsEmu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A JS exception has to reach the caller, not read back as an empty grid.
+    ///
+    /// Everything below `process` returns a value rather than a `Result`, so
+    /// before this a thrown exception left the grid frozen at whatever it last
+    /// held and every later read reported that stale grid as fact.
+    #[test]
+    fn a_thrown_exception_is_reported_rather_than_swallowed() {
+        let mut emu = XtermJsEmu::new(10, 2, &Profile::default()).expect("create emulator");
+        emu.process(b"ok");
+        assert!(emu.fault().is_none(), "a healthy emulator has no fault");
+
+        // Break `feed` the way a bundle upgrade moving a private API would.
+        emu.ctx
+            .with(|ctx| -> rquickjs::Result<()> {
+                let emu: Object = ctx.globals().get("__emu")?;
+                let thrower: Function =
+                    ctx.eval("(function () { throw new Error('feed exploded'); })")?;
+                emu.set("feed", thrower)
+            })
+            .expect("replace feed");
+
+        emu.process(b"more");
+        let fault = emu.fault().expect("the exception is recorded");
+        assert!(
+            fault.contains("feed exploded"),
+            "the fault carries the JS message: {fault}"
+        );
+
+        // The first fault wins: a later failure does not overwrite the message
+        // that named the cause.
+        emu.resize(20, 4);
+        assert_eq!(
+            emu.fault().as_deref(),
+            Some(fault.as_str()),
+            "the first fault is kept"
+        );
+    }
 
     crate::emulator_conformance_tests!(
         |cols, rows, profile| {

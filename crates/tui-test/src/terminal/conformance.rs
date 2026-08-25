@@ -296,6 +296,67 @@ macro_rules! emulator_conformance_tests {
             assert_eq!(rows[0][3].underline_color, None);
         }
 
+        /// Resetting the underline color must not be confusable with setting
+        /// it to white.
+        ///
+        /// xterm.js stores `SGR 59` as an explicit RGB #ffffff rather than as
+        /// an absence, which reads back identically to a real
+        /// `58;2::255:255:255`. Whichever way that ambiguity is guessed at
+        /// read time, one of these two cells is wrong.
+        #[test]
+        fn conformance_resetting_the_underline_color_is_not_white() {
+            use $crate::terminal::cell::Color;
+            let mut e = conformance_emu(10, 2, 100);
+            e.process(b"\x1b[0m\x1b[4;58;2;255;0;0mA\x1b[59mB\x1b[58;2;255;255;255mC");
+            let rows = e.viewable_rows();
+
+            assert_eq!(
+                rows[0][0].underline_color,
+                Some(Color::Rgb(255, 0, 0)),
+                "58 sets the underline color"
+            );
+            assert_eq!(
+                rows[0][1].underline_color, None,
+                "59 resets it, rather than painting white"
+            );
+            assert_eq!(
+                rows[0][2].underline_color,
+                Some(Color::Rgb(255, 255, 255)),
+                "a white underline is still addressable after a reset"
+            );
+        }
+
+        /// A cell carrying no attributes reports none of them.
+        ///
+        /// Backends are free to shortcut the all-default case rather than
+        /// asking a cell for each attribute in turn; this pins that the
+        /// shortcut and the long form agree, in both directions.
+        #[test]
+        fn conformance_default_and_styled_cells_do_not_blur_together() {
+            use $crate::terminal::cell::{Attrs, Color, UnderlineStyle as U};
+            let mut e = conformance_emu(10, 2, 100);
+            e.process(b"\x1b[0mA\x1b[1;3;4;7;9;31;42mB\x1b[0mC");
+            let rows = e.viewable_rows();
+
+            for (x, label) in [(0usize, "before"), (2usize, "after")] {
+                let cell = &rows[0][x];
+                assert_eq!(cell.fg, None, "{label}: no foreground");
+                assert_eq!(cell.bg, None, "{label}: no background");
+                assert_eq!(cell.underline, U::None, "{label}: no underline");
+                assert_eq!(cell.underline_color, None, "{label}: no underline color");
+                assert_eq!(cell.attrs, Attrs::empty(), "{label}: no attributes");
+            }
+
+            let styled = &rows[0][1];
+            assert_eq!(styled.fg, Some(Color::from_index(1)));
+            assert_eq!(styled.bg, Some(Color::from_index(2)));
+            assert_eq!(styled.underline, U::Single);
+            assert!(styled.has(Attrs::BOLD), "bold survives the fast path");
+            assert!(styled.has(Attrs::ITALIC), "italic survives the fast path");
+            assert!(styled.has(Attrs::INVERSE), "inverse survives the fast path");
+            assert!(styled.has(Attrs::STRIKE), "strike survives the fast path");
+        }
+
         /// Named, 256-palette, and 24-bit colors map onto the color vocabulary.
         #[test]
         fn conformance_colors() {

@@ -35,6 +35,15 @@ jobs:
 
       - run: sudo apt-get update && sudo apt-get install -y ripgrep
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      # The bundles are not in the repository; `cargo package` needs them on
+      # disk to carry them in the crate.
+      - name: Vendor xterm.js
+        run: ./.github/scripts/vendor-xtermjs.sh
+
       - name: Verify beta release tag
         shell: bash
         run: |
@@ -61,8 +70,31 @@ jobs:
             <(rg -l --path-separator / --fixed-strings "$version" \
               "${version_files[@]}" | sort)
 
+      - name: Verify vendored xterm.js is current
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd crates/tui-test/assets/xtermjs
+          status=0
+          for pkg in @xterm/headless @xterm/addon-unicode11; do
+            have="$(jq -r --arg p "$pkg" '.[$p]' pinned.json)"
+            want="$(npm view "$pkg" version)"
+            if [ "$have" != "$want" ]; then
+              echo "$pkg is pinned to $have but $want is the latest release." >&2
+              status=1
+            else
+              echo "$pkg is on the latest release ($have)."
+            fi
+          done
+          if [ "$status" -ne 0 ]; then
+            echo "Bump the pinned versions and re-vendor before releasing; see $PWD/README.md." >&2
+          fi
+          exit "$status"
+
+      # --allow-dirty: the vendored bundles are gitignored on purpose, and
+      # packaging them is the point of the step above.
       - name: Verify tui-test-rs crate package
-        run: cargo publish --locked --package tui-test-rs --dry-run
+        run: cargo publish --locked --package tui-test-rs --dry-run --allow-dirty
 
   build-cli:
     needs: verify
@@ -503,13 +535,22 @@ jobs:
           rustup toolchain install stable --profile default
           rustup default stable
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      # The bundles are not in the repository; `cargo package` needs them on
+      # disk to carry them in the crate.
+      - name: Vendor xterm.js
+        run: ./.github/scripts/vendor-xtermjs.sh
+
       # Match this workflow and environment in the crate's trusted publisher settings.
       - name: Authenticate with crates.io
         id: auth
         uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
 
       - name: Publish tui-test-rs to crates.io
-        run: cargo publish --locked --package tui-test-rs
+        run: cargo publish --locked --package tui-test-rs --allow-dirty
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 

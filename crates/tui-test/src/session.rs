@@ -408,6 +408,19 @@ impl Session {
             .pid()
     }
 
+    /// A parse failure the emulator hit on the reader thread, if any.
+    ///
+    /// See [`crate::terminal::emu::Emulator::fault`]. The reader has nobody to
+    /// return an error to, so the failure is recorded there and reported by
+    /// whichever operation runs next.
+    pub fn fault(&self) -> Option<String> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .emu
+            .fault()
+    }
+
     pub fn is_alive(&self) -> Result<bool, crate::api::TuiTestError> {
         if self
             .state

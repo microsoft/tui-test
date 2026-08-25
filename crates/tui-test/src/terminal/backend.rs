@@ -30,11 +30,6 @@ pub enum Backend {
 }
 
 impl Backend {
-    /// Every backend this build can construct.
-    ///
-    /// A slice rather than a fixed-size array so that each optional backend
-    /// adds one line here instead of doubling the number of length-carrying
-    /// definitions the next one has to spell out.
     pub const ALL: &'static [Self] = &[
         Self::Alacritty,
         #[cfg(feature = "ghostty")]

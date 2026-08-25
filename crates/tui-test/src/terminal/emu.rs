@@ -48,6 +48,17 @@ pub trait Emulator: Send {
     /// Feed PTY output bytes into the emulator.
     fn process(&mut self, bytes: &[u8]);
 
+    /// A failure that left the grid no longer a faithful account of the bytes
+    /// fed to it, if one has happened.
+    ///
+    /// Backends that parse in-process cannot fail this way and never report
+    /// one. A backend driving a separate engine can, and the grid it hands
+    /// back afterwards is a guess rather than an answer, so callers surface
+    /// this instead of reading on.
+    fn fault(&self) -> Option<String> {
+        None
+    }
+
     /// Drain bytes the emulator wants written back to the PTY (device
     /// attribute replies, cursor position reports, and similar). The caller
     /// forwards these to the PTY.
