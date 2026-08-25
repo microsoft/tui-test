@@ -12,6 +12,8 @@ use crate::terminal::rio::RioEmu;
 
 #[cfg(feature = "ghostty")]
 use crate::terminal::ghostty::GhosttyEmu;
+#[cfg(feature = "xtermjs")]
+use crate::terminal::xtermjs::XtermJsEmu;
 
 /// The terminal emulator a session uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -23,17 +25,20 @@ pub enum Backend {
     Ghostty,
     #[cfg(feature = "rio")]
     Rio,
+    #[cfg(feature = "xtermjs")]
+    Xtermjs,
 }
 
 impl Backend {
-    #[cfg(all(not(feature = "ghostty"), not(feature = "rio")))]
-    pub const ALL: [Self; 1] = [Self::Alacritty];
-    #[cfg(all(feature = "ghostty", not(feature = "rio")))]
-    pub const ALL: [Self; 2] = [Self::Alacritty, Self::Ghostty];
-    #[cfg(all(not(feature = "ghostty"), feature = "rio"))]
-    pub const ALL: [Self; 2] = [Self::Alacritty, Self::Rio];
-    #[cfg(all(feature = "ghostty", feature = "rio"))]
-    pub const ALL: [Self; 3] = [Self::Alacritty, Self::Ghostty, Self::Rio];
+    pub const ALL: &'static [Self] = &[
+        Self::Alacritty,
+        #[cfg(feature = "ghostty")]
+        Self::Ghostty,
+        #[cfg(feature = "rio")]
+        Self::Rio,
+        #[cfg(feature = "xtermjs")]
+        Self::Xtermjs,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -42,6 +47,8 @@ impl Backend {
             Self::Ghostty => "ghostty",
             #[cfg(feature = "rio")]
             Self::Rio => "rio",
+            #[cfg(feature = "xtermjs")]
+            Self::Xtermjs => "xtermjs",
         }
     }
 
@@ -57,6 +64,8 @@ impl Backend {
             Self::Ghostty => Ok(Box::new(GhosttyEmu::new(cols, rows, profile)?)),
             #[cfg(feature = "rio")]
             Self::Rio => Ok(Box::new(RioEmu::new(cols, rows, profile))),
+            #[cfg(feature = "xtermjs")]
+            Self::Xtermjs => Ok(Box::new(XtermJsEmu::new(cols, rows, profile)?)),
         }
     }
 
@@ -74,22 +83,25 @@ impl Backend {
             Self::Alacritty => Ok(Box::new(AlacrittyEmu::with_bell_tracker(
                 cols, rows, profile, bells,
             ))),
+            // Backends that do not report bells themselves are built the
+            // ordinary way and simply never raise one.
             #[cfg(feature = "ghostty")]
             Self::Ghostty => self.build(cols, rows, profile),
             #[cfg(feature = "rio")]
             Self::Rio => Ok(Box::new(RioEmu::with_bell_tracker(
                 cols, rows, profile, bells,
             ))),
+            #[cfg(feature = "xtermjs")]
+            Self::Xtermjs => self.build(cols, rows, profile),
         }
     }
 
-    const fn expected() -> &'static str {
-        match (cfg!(feature = "ghostty"), cfg!(feature = "rio")) {
-            (false, false) => "alacritty",
-            (true, false) => "alacritty, ghostty",
-            (false, true) => "alacritty, rio",
-            (true, true) => "alacritty, ghostty, rio",
-        }
+    fn expected() -> String {
+        Self::ALL
+            .iter()
+            .map(|backend| backend.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -103,6 +115,8 @@ impl std::str::FromStr for Backend {
             "ghostty" => Ok(Self::Ghostty),
             #[cfg(feature = "rio")]
             "rio" => Ok(Self::Rio),
+            #[cfg(feature = "xtermjs")]
+            "xtermjs" => Ok(Self::Xtermjs),
             other => Err(format!(
                 "unknown terminal backend {other:?}; expected one of: {}",
                 Self::expected()
@@ -117,7 +131,7 @@ mod tests {
 
     #[test]
     fn names_round_trip() {
-        for backend in Backend::ALL {
+        for &backend in Backend::ALL {
             assert_eq!(backend.as_str().parse(), Ok(backend));
         }
     }
@@ -134,6 +148,13 @@ mod tests {
         assert!(serde_json::from_str::<Backend>("\"rio\"").is_err());
     }
 
+    #[cfg(not(feature = "xtermjs"))]
+    #[test]
+    fn xtermjs_is_rejected_when_its_feature_is_disabled() {
+        assert!("xtermjs".parse::<Backend>().is_err());
+        assert!(serde_json::from_str::<Backend>("\"xtermjs\"").is_err());
+    }
+
     #[cfg(feature = "ghostty")]
     #[test]
     fn legacy_backend_spelling_is_rejected() {
@@ -143,7 +164,7 @@ mod tests {
 
     #[test]
     fn every_enabled_backend_constructs() {
-        for backend in Backend::ALL {
+        for &backend in Backend::ALL {
             let mut emulator = backend
                 .build(10, 2, &Profile::default())
                 .unwrap_or_else(|error| panic!("{}: {error:#}", backend.as_str()));

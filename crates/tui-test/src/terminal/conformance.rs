@@ -15,14 +15,49 @@
 //! emulators legitimately diverge (reflow when shrinking below content width)
 //! the test pins only the part that is universal and says why it stops short.
 
+/// Parts of the contract a backend cannot express, declared where it opts in.
+///
+/// This is deliberately not a general escape hatch. A field earns its place
+/// only when the limitation is in the emulator itself rather than in the
+/// mapping onto it, so that adding one is a visible claim a reviewer can
+/// check rather than a way to quiet a failing case.
+#[derive(Debug, Clone, Copy)]
+pub struct Divergences {
+    /// The backend records an underline color only on a cell that also has an
+    /// underline style, so `SGR 58` on its own leaves nothing to read back.
+    ///
+    /// Nothing renders differently: a cell with no underline draws no
+    /// underline color either way. What is lost is the color surviving in the
+    /// cell vocabulary across an `SGR 24` that turns the underline off.
+    pub underline_color_needs_a_style: bool,
+}
+
+impl Divergences {
+    /// A backend that expresses the whole contract.
+    pub const NONE: Self = Self {
+        underline_color_needs_a_style: false,
+    };
+}
+
 /// Generates the conformance tests for one backend. `$make` builds a boxed
 /// emulator from `(cols, rows, &Profile)`.
+///
+/// A second argument declares the parts of the contract the backend cannot
+/// express; see [`Divergences`].
 ///
 /// The body is fully path-qualified because it expands into the caller's
 /// module; it must not collide with whatever that module already imports.
 #[macro_export]
 macro_rules! emulator_conformance_tests {
     ($make:expr) => {
+        $crate::emulator_conformance_tests!(
+            $make,
+            $crate::terminal::conformance::Divergences::NONE
+        );
+    };
+    ($make:expr, $divergences:expr) => {
+        const CONFORMANCE_DIVERGENCES: $crate::terminal::conformance::Divergences = $divergences;
+
         fn conformance_emu(
             cols: u16,
             rows: u16,
@@ -235,6 +270,9 @@ macro_rules! emulator_conformance_tests {
         /// alone. Only a full reset clears both.
         #[test]
         fn conformance_underline_color_outlives_the_underline() {
+            if CONFORMANCE_DIVERGENCES.underline_color_needs_a_style {
+                return;
+            }
             use $crate::terminal::cell::{Color, UnderlineStyle as U};
             let mut e = conformance_emu(10, 2, 100);
             e.process(b"\x1b[58;5;33mA\x1b[4mB\x1b[24mC\x1b[0mD");
@@ -256,6 +294,67 @@ macro_rules! emulator_conformance_tests {
             );
             assert_eq!(rows[0][3].underline, U::None, "0 resets everything");
             assert_eq!(rows[0][3].underline_color, None);
+        }
+
+        /// Resetting the underline color must not be confusable with setting
+        /// it to white.
+        ///
+        /// xterm.js stores `SGR 59` as an explicit RGB #ffffff rather than as
+        /// an absence, which reads back identically to a real
+        /// `58;2::255:255:255`. Whichever way that ambiguity is guessed at
+        /// read time, one of these two cells is wrong.
+        #[test]
+        fn conformance_resetting_the_underline_color_is_not_white() {
+            use $crate::terminal::cell::Color;
+            let mut e = conformance_emu(10, 2, 100);
+            e.process(b"\x1b[0m\x1b[4;58;2;255;0;0mA\x1b[59mB\x1b[58;2;255;255;255mC");
+            let rows = e.viewable_rows();
+
+            assert_eq!(
+                rows[0][0].underline_color,
+                Some(Color::Rgb(255, 0, 0)),
+                "58 sets the underline color"
+            );
+            assert_eq!(
+                rows[0][1].underline_color, None,
+                "59 resets it, rather than painting white"
+            );
+            assert_eq!(
+                rows[0][2].underline_color,
+                Some(Color::Rgb(255, 255, 255)),
+                "a white underline is still addressable after a reset"
+            );
+        }
+
+        /// A cell carrying no attributes reports none of them.
+        ///
+        /// Backends are free to shortcut the all-default case rather than
+        /// asking a cell for each attribute in turn; this pins that the
+        /// shortcut and the long form agree, in both directions.
+        #[test]
+        fn conformance_default_and_styled_cells_do_not_blur_together() {
+            use $crate::terminal::cell::{Attrs, Color, UnderlineStyle as U};
+            let mut e = conformance_emu(10, 2, 100);
+            e.process(b"\x1b[0mA\x1b[1;3;4;7;9;31;42mB\x1b[0mC");
+            let rows = e.viewable_rows();
+
+            for (x, label) in [(0usize, "before"), (2usize, "after")] {
+                let cell = &rows[0][x];
+                assert_eq!(cell.fg, None, "{label}: no foreground");
+                assert_eq!(cell.bg, None, "{label}: no background");
+                assert_eq!(cell.underline, U::None, "{label}: no underline");
+                assert_eq!(cell.underline_color, None, "{label}: no underline color");
+                assert_eq!(cell.attrs, Attrs::empty(), "{label}: no attributes");
+            }
+
+            let styled = &rows[0][1];
+            assert_eq!(styled.fg, Some(Color::from_index(1)));
+            assert_eq!(styled.bg, Some(Color::from_index(2)));
+            assert_eq!(styled.underline, U::Single);
+            assert!(styled.has(Attrs::BOLD), "bold survives the fast path");
+            assert!(styled.has(Attrs::ITALIC), "italic survives the fast path");
+            assert!(styled.has(Attrs::INVERSE), "inverse survives the fast path");
+            assert!(styled.has(Attrs::STRIKE), "strike survives the fast path");
         }
 
         /// Named, 256-palette, and 24-bit colors map onto the color vocabulary.
@@ -674,6 +773,47 @@ macro_rules! emulator_conformance_tests {
             assert_eq!(e.color(background), configured);
         }
 
+        /// The dynamic colors are one list, and the OSC code only says where
+        /// in it to start: `OSC 10;a;b` sets the foreground and then the
+        /// background. Folding every parameter onto the first color would let
+        /// a sequence write somewhere it never named.
+        #[test]
+        fn conformance_one_dynamic_color_sequence_sets_successive_colors() {
+            use $crate::profile::{ColorSlot, Rgb};
+            let mut e = conformance_emu(10, 4, 100);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]10;#010203;#040506\x07");
+
+            assert_eq!(
+                e.color(ColorSlot::Foreground),
+                Rgb::new(0x01, 0x02, 0x03),
+                "the first parameter is the color the code names"
+            );
+            assert_eq!(
+                e.color(ColorSlot::Background),
+                Rgb::new(0x04, 0x05, 0x06),
+                "the second parameter is the next color in the list"
+            );
+        }
+
+        /// Each `?` in a dynamic color sequence is answered on its own, under
+        /// the code of the color it asked about.
+        #[test]
+        fn conformance_each_dynamic_color_query_is_answered_separately() {
+            let mut e = conformance_emu(10, 4, 100);
+            e.process(b"\x1b]10;#010203;#040506\x07");
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]10;?;?\x07");
+
+            assert_eq!(
+                String::from_utf8_lossy(&e.take_pending_writes()),
+                "\x1b]10;rgb:0101/0202/0303\x07\x1b]11;rgb:0404/0505/0606\x07",
+                "one reply per query, each under its own code"
+            );
+        }
+
         /// A reply uses the terminator the query used. A program that reads
         /// until the terminator it sent would otherwise wait for one that
         /// never comes.
@@ -696,6 +836,45 @@ macro_rules! emulator_conformance_tests {
                 st.ends_with(b"\x1b\\"),
                 "an ST query is answered with ST: {:?}",
                 String::from_utf8_lossy(&st)
+            );
+        }
+
+        /// The terminator is recognised even when the read splits it.
+        ///
+        /// A PTY read ends wherever the kernel decides, which can be between
+        /// the two bytes of an `ST`. The terminator a reply echoes has to come
+        /// from the sequence, not from how the bytes happened to arrive.
+        #[test]
+        fn conformance_a_color_reply_echoes_a_terminator_split_across_reads() {
+            let mut e = conformance_emu(10, 4, 100);
+            let _ = e.take_pending_writes();
+
+            e.process(b"\x1b]11;?\x1b");
+            e.process(b"\\");
+            let st = e.take_pending_writes();
+            assert!(
+                st.ends_with(b"\x1b\\"),
+                "a split ST query is answered with ST: {:?}",
+                String::from_utf8_lossy(&st)
+            );
+        }
+
+        /// A palette index that is not a number names no slot.
+        ///
+        /// `OSC 4` addresses a slot by number, and taking the leading digits
+        /// of one that is not would let a malformed sequence write to a slot
+        /// it never named.
+        #[test]
+        fn conformance_a_malformed_palette_index_sets_nothing() {
+            let mut e = conformance_emu(10, 4, 100);
+            let before = e.color(ColorSlot::Indexed(1));
+
+            e.process(b"\x1b]4;1x;#112233\x07");
+
+            assert_eq!(
+                e.color(ColorSlot::Indexed(1)),
+                before,
+                "a malformed index leaves the palette alone"
             );
         }
 

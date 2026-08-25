@@ -56,7 +56,8 @@ export declare class NativeSession {
 export declare const enum Backend {
   Alacritty = 'alacritty',
   Ghostty = 'ghostty',
-  Rio = 'rio'
+  Rio = 'rio',
+  Xtermjs = 'xtermjs'
 }
 
 export interface BellEvent {

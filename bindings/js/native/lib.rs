@@ -26,6 +26,7 @@ pub enum Backend {
     Alacritty,
     Ghostty,
     Rio,
+    Xtermjs,
 }
 
 impl From<Backend> for CoreBackend {
@@ -34,6 +35,7 @@ impl From<Backend> for CoreBackend {
             Backend::Alacritty => Self::Alacritty,
             Backend::Ghostty => Self::Ghostty,
             Backend::Rio => Self::Rio,
+            Backend::Xtermjs => Self::Xtermjs,
         }
     }
 }

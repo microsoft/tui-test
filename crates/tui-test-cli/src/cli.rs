@@ -10,6 +10,7 @@ pub enum BackendArg {
     Alacritty,
     Ghostty,
     Rio,
+    Xtermjs,
 }
 
 impl From<BackendArg> for Backend {
@@ -18,6 +19,7 @@ impl From<BackendArg> for Backend {
             BackendArg::Alacritty => Backend::Alacritty,
             BackendArg::Ghostty => Backend::Ghostty,
             BackendArg::Rio => Backend::Rio,
+            BackendArg::Xtermjs => Backend::Xtermjs,
         }
     }
 }

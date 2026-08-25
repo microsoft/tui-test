@@ -15,7 +15,12 @@ test = false
 
 [dependencies]
 anyhow.workspace = true
-tui-test = { workspace = true, features = ["ghostty", "rio", "recording-font-jetbrains-mono-styles"] }
+tui-test = { workspace = true, features = [
+    "ghostty",
+    "rio",
+    "xtermjs",
+    "recording-font-jetbrains-mono-styles",
+] }
 pyo3 = { version = "0.28" }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }

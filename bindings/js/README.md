@@ -64,12 +64,12 @@ Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSessi
 They reuse a live named session unless `restart: true` is passed. The
 constructor also accepts `backend` and `profile` as defaults for later opens
 and runs. Backend values are `"alacritty"` (default), `"ghostty"`, and
-`"rio"`:
+`"rio"`, and `"xtermjs"`:
 
 ```js
 const terminal = new TuiTest("work", { backend: "ghostty" });
 await terminal.open();
-await terminal.run("vim", ["file.txt"], { backend: "rio" });
+await terminal.run("vim", ["file.txt"], { backend: "xtermjs" });
 ```
 
 The native package includes every supported emulator. Profiles are partial;
