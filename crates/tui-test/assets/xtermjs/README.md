@@ -13,7 +13,6 @@ so the xterm.js backend needs no Node.js at runtime.
 
 Both bundles are dropped in unchanged and committed, so building tui-test needs
 neither Node nor a network. `pinned.json` records the versions they came from.
-Updating them is manual — see below — and nothing in CI rewrites them.
 
 ## Why the unicode11 addon
 
@@ -64,11 +63,13 @@ Two addons are deliberately not used yet: [#175](https://github.com/microsoft/tu
 
 ## Updating
 
+`.github/workflows/xtermjs-update.yml` does this weekly and opens a pull
+request. To do it by hand:
+
 ```sh
 .github/scripts/vendor-xtermjs.sh --latest   # or omit --latest to re-fetch the pinned versions
 ```
 
 Then run `cargo test -p tui-test-rs --features xtermjs conformance`, re-measure
 the width table above, and re-check each package's `LICENSE`, since they carry
-separate notices. The release workflow fails if these are not on the latest
-published versions.
+separate notices.

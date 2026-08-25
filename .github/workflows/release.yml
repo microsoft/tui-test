@@ -35,10 +35,6 @@ jobs:
 
       - run: sudo apt-get update && sudo apt-get install -y ripgrep
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "22"
-
       - name: Verify beta release tag
         shell: bash
         run: |
@@ -64,30 +60,6 @@ jobs:
             <(printf '%s\n' "${version_files[@]}" | sort) \
             <(rg -l --path-separator / --fixed-strings "$version" \
               "${version_files[@]}" | sort)
-
-      # Compares version strings only: nothing here re-fetches or rewrites the
-      # vendored bundles. Updating those is manual, via
-      # .github/scripts/vendor-xtermjs.sh.
-      - name: Verify vendored xterm.js is current
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd crates/tui-test/assets/xtermjs
-          status=0
-          for pkg in @xterm/headless @xterm/addon-unicode11; do
-            have="$(jq -r --arg p "$pkg" '.[$p]' pinned.json)"
-            want="$(npm view "$pkg" version)"
-            if [ "$have" != "$want" ]; then
-              echo "$pkg is pinned to $have but $want is the latest release." >&2
-              status=1
-            else
-              echo "$pkg is on the latest release ($have)."
-            fi
-          done
-          if [ "$status" -ne 0 ]; then
-            echo "Bump the pinned versions and re-vendor before releasing; see $PWD/README.md." >&2
-          fi
-          exit "$status"
 
       - name: Verify tui-test-rs crate package
         run: cargo publish --locked --package tui-test-rs --dry-run

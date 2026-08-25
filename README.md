@@ -541,14 +541,14 @@ Building the workspace with default features needs only a Rust toolchain. Of the
 | `rio` | — | ordinary Rust dependency |
 | `xtermjs` | — | xterm.js is vendored in the repository |
 
-The xterm.js bundles are committed under `crates/tui-test/assets/xtermjs` at the versions `pinned.json` names, so a clone builds without a network. To update them:
+The xterm.js bundles are committed under `crates/tui-test/assets/xtermjs` at the versions `pinned.json` names, so a clone builds without a network. To update them by hand:
 
 ```sh
 .github/scripts/vendor-xtermjs.sh --latest   # or omit --latest to re-fetch the pinned versions
 cargo test -p tui-test-rs --features xtermjs
 ```
 
-Updating them is manual and nothing in CI rewrites them. The release workflow does check that the pinned versions are the latest published ones, comparing version strings only.
+`.github/workflows/xtermjs-update.yml` runs that same script weekly and opens a pull request when either package has a newer release, so a vendored bundle does not quietly fall behind.
 
 ## Debugging
 
