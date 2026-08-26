@@ -34,26 +34,26 @@ Use the CLI from shell scripts and agent workflows. The Rust, Python, and JavaSc
 
 ### macOS and Linux
 
-With Homebrew:
-
+#### homebrew 
 ```sh
 brew tap microsoft/tui-test https://github.com/microsoft/tui-test
 brew install tui-test
 ```
 
-Or with the install script:
+#### bash
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | TUI_TEST_VERSION=beta sh
 ```
+Set `TUI_TEST_VERSION` to install a specific version or `TUI_TEST_INSTALL_DIR` to choose the install location.
 
 ### Windows
 
+#### powershell
 ```powershell
 $env:TUI_TEST_VERSION = "beta"
 irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
 ```
-
 Set `TUI_TEST_VERSION` to install a specific version or `TUI_TEST_INSTALL_DIR` to choose the install location.
 
 ### Release binaries
