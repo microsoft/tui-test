@@ -287,15 +287,38 @@ mod tests {
         assert_eq!(emu.encode_key(&press("\u{4f60}")), None);
     }
 
-    /// Every token the shared encoder accepts, for the differential check.
-    const ORACLE_TOKENS: &[&str] = &[
-        "Up", "Down", "Left", "Right", "Home", "End", "PageUp", "PageDown", "Insert", "Delete",
-        "Backspace", "Tab", "Enter", "Space", "Escape", "F1", "F2", "F3", "F4", "F5", "F6", "F7",
-        "F8", "F9", "F10", "F11", "F12", "a", "z", "A", "0", "9", "-", "=", "[", "]", ";", "'",
-        ",", ".", "/", "\\", "`",
+    /// Key tokens whose encoding the two encoders both claim to define.
+    ///
+    /// Deliberately not every combination. Ghostty encodes combinations the
+    /// legacy scheme cannot express by upgrading them to `CSI-u` or xterm's
+    /// `modifyOtherKeys` form: `Ctrl+Tab` becomes `CSI 27;5;9~` where legacy
+    /// has only a bare `\t` with the Ctrl lost, and `Ctrl+Shift+0` becomes
+    /// `CSI 41;5u`. That is a richer answer to a different question, not a
+    /// different answer to this one, so those combinations are excluded here
+    /// rather than asserted and then explained away. What is left is the set
+    /// where legacy has a defined encoding and both encoders should produce it.
+    const ORACLE_CASES: &[&str] = &[
+        // Cursor and editing keys, which DECCKM moves between CSI and SS3.
+        "Up", "Down", "Left", "Right", "Home", "End",
+        "PageUp", "PageDown", "Insert", "Delete",
+        "Ctrl+Up", "Ctrl+Down", "Ctrl+Left", "Ctrl+Right", "Ctrl+Home", "Ctrl+End",
+        "Shift+Up", "Shift+Down", "Shift+Left", "Shift+Right",
+        "Alt+Up", "Alt+Down", "Alt+Left", "Alt+Right",
+        // Control keys with their classic C0 encodings.
+        "Backspace", "Tab", "Enter", "Escape", "Space",
+        "Alt+Backspace", "Alt+Enter", "Alt+Escape", "Shift+Tab",
+        // Function keys. F3 is left out: ghostty and kitty spell it
+        // `CSI 13~` where xterm spells it `SS3 R`, a naming split that
+        // predates both and that neither is wrong about.
+        "F1", "F2", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+        // Text, shifted text, and the two modifiers legacy does define for it.
+        "a", "z", "A", "Z", "0", "9", "-", "=", "[", "]", ";", "'", ",", ".", "/", "\\", "`",
+        "!", "@", "#", "$", "%", "^", "&", "*", "(", ")", "_", "+", "{", "}", ":", "\"", "<",
+        ">", "?", "|", "~",
+        "Shift+a", "Shift+z", "Shift+0", "Shift+9", "Shift+-", "Shift+/",
+        "Ctrl+a", "Ctrl+z", "Ctrl+c", "Ctrl+d", "Ctrl+l", "Ctrl+u", "Ctrl+w",
+        "Alt+a", "Alt+z", "Alt+0", "Alt+9",
     ];
-
-    const ORACLE_PREFIXES: &[&str] = &["", "Ctrl+", "Alt+", "Shift+", "Ctrl+Alt+", "Ctrl+Shift+"];
 
     /// Terminal states to compare under, as the bytes that set them.
     const ORACLE_MODES: &[(&str, &[u8])] = &[
@@ -306,19 +329,89 @@ mod tests {
         ("kitty report all", b"\x1b[>15u"),
     ];
 
-    /// Compare the shared encoder against ghostty's, which is a reference
-    /// implementation maintained by people who do nothing else.
+    /// Drop the event-type sub-parameter when it is the default.
     ///
-    /// This is the check that keeps the fallback honest. Three of the four
-    /// backends have no encoder and will always use `keys.rs`, so a
+    /// Under `REPORT_EVENT_TYPES` the Kitty protocol writes the event as
+    /// `modifiers:event`, where `1` means press. Press is the default and the
+    /// spec allows omitting it: kitty itself emits `CSI A`, ghostty emits
+    /// `CSI 1;1:1A`. Both decode to the same event, so normalizing here
+    /// compares the two encoders at the level they actually disagree on
+    /// rather than pinning one of two legal spellings.
+    ///
+    /// Only a `:1` immediately before the final byte is a default event type.
+    /// An alternate-key sub-parameter such as the `:65` in `CSI 97:65;6u`
+    /// sits before the `;` and is left alone.
+    fn normalize_default_event_type(bytes: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            let is_default_event = bytes[i] == b':'
+                && bytes.get(i + 1) == Some(&b'1')
+                && bytes
+                    .get(i + 2)
+                    .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'~');
+            if is_default_event {
+                i += 2;
+                continue;
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        out
+    }
+
+    /// Drop a `1;1` parameter pair that means "no modifiers, one repeat".
+    ///
+    /// `CSI 1;1 A` and `CSI A` are the same event: both parameters are at
+    /// their defaults, and every terminal that emits the short form expects
+    /// the long one to be accepted. Ghostty writes them out once event
+    /// reporting is on; kitty and xterm omit them. As with the event type,
+    /// this normalizes a spelling rather than a meaning.
+    fn normalize_default_params(bytes: &[u8]) -> Vec<u8> {
+        let Some(rest) = bytes.strip_prefix(b"\x1b[1;1") else {
+            return bytes.to_vec();
+        };
+        // Only when what remains is the final byte, so a longer parameter
+        // list that merely starts `1;1` is left alone.
+        if rest.len() == 1 && (rest[0].is_ascii_alphabetic() || rest[0] == b'~') {
+            let mut out = b"\x1b[".to_vec();
+            out.extend_from_slice(rest);
+            return out;
+        }
+        bytes.to_vec()
+    }
+
+    /// Events where the two encoders genuinely disagree, with the reason.
+    ///
+    /// Kept as a named list rather than dropped from the matrix, so the
+    /// disagreement stays visible and a change to either side still shows up
+    /// as this list going stale.
+    const ORACLE_KNOWN_DIVERGENCES: &[(&str, &str, &str)] = &[(
+        "kitty report all",
+        "Space",
+        "ghostty sends the text ` `, the shared encoder sends `CSI 32u`. \
+         Report-all-keys means what it says: the Kitty spec has text-producing \
+         keys report as escape codes under this flag, so the shared encoder \
+         looks right and this is worth raising upstream.",
+    )];
+
+    /// Hold the shared encoder against ghostty's, which is a reference
+    /// implementation maintained by people who work on nothing else.
+    ///
+    /// This is what keeps the fallback honest. Three of the four backends
+    /// have no encoder of their own and will always use `keys.rs`, so a
     /// disagreement here is `keys.rs` being wrong on three backends rather
-    /// than a difference of opinion between two.
+    /// than two encoders holding different opinions.
+    ///
+    /// It has already paid for itself: it caught `key press A` sending `a`,
+    /// `Space` encoding to nothing, and `Alt+a` losing its modifier.
     #[test]
     fn the_shared_encoder_agrees_with_ghostty() {
         use crate::api::KeyAction;
         use crate::input::keys;
 
         let mut disagreements = Vec::new();
+        let mut compared = 0usize;
         for (mode_name, mode_bytes) in ORACLE_MODES {
             let mut emu = GhosttyEmu::new(20, 4, &Profile::default()).unwrap();
             emu.process(mode_bytes);
@@ -326,39 +419,44 @@ mod tests {
                 keyboard: emu.keyboard_mode(),
                 cursor_key_application: emu.cursor_key_application(),
             };
-            for prefix in ORACLE_PREFIXES {
-                for key in ORACLE_TOKENS {
-                    let token = format!("{prefix}{key}");
-                    let presses = match keys::token_to_presses(&token, KeyAction::Down) {
-                        Ok(presses) => presses,
-                        Err(_) => continue,
-                    };
-                    let Some(native) = presses
-                        .iter()
-                        .map(|press| emu.encode_key(press))
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        continue;
-                    };
-                    let native = native.concat();
-                    let shared =
-                        keys::token_to_seq_for_action_with_mode(&token, KeyAction::Down, modes)
-                            .unwrap_or_default();
-                    if native != shared.as_bytes() {
-                        disagreements.push(format!(
-                            "  {mode_name:<24} {token:<14} ghostty {:<22?} shared {:?}",
-                            String::from_utf8_lossy(&native),
-                            shared
-                        ));
-                    }
+            for token in ORACLE_CASES {
+                let presses = keys::token_to_presses(token, KeyAction::Down).expect("valid token");
+                let Some(native) = presses
+                    .iter()
+                    .map(|press| emu.encode_key(press))
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    continue;
+                };
+                compared += 1;
+                let native = normalize_default_params(&normalize_default_event_type(&native.concat()));
+                let shared = keys::token_to_seq_for_action_with_mode(token, KeyAction::Down, modes)
+                    .expect("valid token");
+                let known = ORACLE_KNOWN_DIVERGENCES
+                    .iter()
+                    .any(|(mode, case, _)| mode == mode_name && case == token);
+                if known {
+                    assert_ne!(
+                        native,
+                        shared.as_bytes(),
+                        "{mode_name} {token} now agrees; drop it from \
+                         ORACLE_KNOWN_DIVERGENCES"
+                    );
+                    continue;
+                }
+                if native != shared.as_bytes() {
+                    disagreements.push(format!(
+                        "  {mode_name:<24} {token:<12} ghostty {:<18?} shared {shared:?}",
+                        String::from_utf8_lossy(&native)
+                    ));
                 }
             }
         }
+        assert!(compared > 400, "only {compared} events were comparable");
         assert!(
             disagreements.is_empty(),
-            "the shared encoder disagrees with ghostty on {} of {} events:\n{}",
+            "the shared encoder disagrees with ghostty on {} of {compared} events:\n{}",
             disagreements.len(),
-            ORACLE_MODES.len() * ORACLE_PREFIXES.len() * ORACLE_TOKENS.len(),
             disagreements.join("\n")
         );
     }
