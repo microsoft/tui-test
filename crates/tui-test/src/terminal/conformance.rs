@@ -30,12 +30,22 @@ pub struct Divergences {
     /// underline color either way. What is lost is the color surviving in the
     /// cell vocabulary across an `SGR 24` that turns the underline off.
     pub underline_color_needs_a_style: bool,
+
+    /// The backend does not implement the Kitty keyboard protocol at all, so
+    /// it can never report a mode the child pushed.
+    ///
+    /// Unlike the other divergences this one is visible to a user: key input
+    /// falls back to legacy encodings even for a child that asked for `CSI u`.
+    /// It belongs here rather than in a profile default because it is the
+    /// emulator's own limit, not a setting.
+    pub no_kitty_keyboard: bool,
 }
 
 impl Divergences {
     /// A backend that expresses the whole contract.
     pub const NONE: Self = Self {
         underline_color_needs_a_style: false,
+        no_kitty_keyboard: false,
     };
 }
 
@@ -294,6 +304,65 @@ macro_rules! emulator_conformance_tests {
             );
             assert_eq!(rows[0][3].underline, U::None, "0 resets everything");
             assert_eq!(rows[0][3].underline_color, None);
+        }
+
+        /// A child pushes Kitty keyboard modes with `CSI > Ps u` and pops them
+        /// with `CSI < u`. Every backend that implements the protocol has to
+        /// report the same flags, because `key press` encodes from them: a
+        /// backend that under-reports silently sends legacy keys to a child
+        /// that asked for `CSI u`.
+        #[test]
+        fn conformance_kitty_keyboard_modes_are_pushed_and_popped() {
+            if CONFORMANCE_DIVERGENCES.no_kitty_keyboard {
+                return;
+            }
+            use $crate::terminal::emu::KeyboardMode as K;
+            let mut e = conformance_emu(10, 2, 100);
+            assert_eq!(e.keyboard_mode(), K::empty(), "nothing is on to start");
+
+            e.process(b"\x1b[>3u");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::DISAMBIGUATE_ESC_CODES | K::REPORT_EVENT_TYPES,
+                "1 and 2 are the two bits of 3"
+            );
+
+            e.process(b"\x1b[>31u");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::DISAMBIGUATE_ESC_CODES
+                    | K::REPORT_EVENT_TYPES
+                    | K::REPORT_ALTERNATE_KEYS
+                    | K::REPORT_ALL_KEYS_AS_ESC
+                    | K::REPORT_ASSOCIATED_TEXT,
+                "every flag maps to its own bit"
+            );
+
+            e.process(b"\x1b[<u");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::DISAMBIGUATE_ESC_CODES | K::REPORT_EVENT_TYPES,
+                "popping restores what was underneath"
+            );
+            e.process(b"\x1b[<u");
+            assert_eq!(e.keyboard_mode(), K::empty(), "popping the last leaves none");
+        }
+
+        /// `kitty_keyboard = false` makes the session behave like a terminal
+        /// that never implemented the protocol, whatever the child pushes.
+        #[test]
+        fn conformance_kitty_keyboard_can_be_turned_off() {
+            use $crate::terminal::emu::KeyboardMode as K;
+            let mut e = conformance_emu_with(
+                10,
+                2,
+                $crate::profile::Profile {
+                    kitty_keyboard: false,
+                    ..Default::default()
+                },
+            );
+            e.process(b"\x1b[>31u");
+            assert_eq!(e.keyboard_mode(), K::empty());
         }
 
         /// Resetting the underline color must not be confusable with setting
