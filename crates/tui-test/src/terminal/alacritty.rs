@@ -340,6 +340,10 @@ impl Emulator for AlacrittyEmu {
             .collect()
     }
 
+    fn cursor_key_application(&self) -> bool {
+        self.term.mode().contains(TermMode::APP_CURSOR)
+    }
+
     fn keyboard_mode(&self) -> KeyboardMode {
         let mode = self.term.mode();
         let mut keyboard_mode = KeyboardMode::empty();

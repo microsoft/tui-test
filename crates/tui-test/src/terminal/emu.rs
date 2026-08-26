@@ -69,6 +69,36 @@ pub trait Emulator: Send {
         KeyboardMode::empty()
     }
 
+    /// Encode one key event with the backend's own key encoder.
+    ///
+    /// `None` means the backend has no encoder, or has one that cannot express
+    /// this event, and the caller falls back to [`crate::input::keys`]. Only
+    /// ghostty ships an encoder: alacritty and rio keep theirs in their GUI
+    /// crates rather than their VT libraries, and the xterm.js headless bundle
+    /// omits `evaluateKeyboardEvent` entirely.
+    ///
+    /// Preferring the backend matters because encoding depends on more terminal
+    /// state than the shared encoder models, and a backend's own encoder reads
+    /// that state directly. Ghostty's, for one, applies keypad application
+    /// mode, `modifyOtherKeys`, and the alt-escape prefix, none of which are
+    /// visible through this trait.
+    ///
+    /// An empty `Vec` is a real answer, not an absence: some events encode to
+    /// nothing at all, such as a bare modifier press.
+    fn encode_key(&self, _press: &crate::input::keys::KeyPress) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Whether the cursor keys are in application mode (`DECCKM`, `CSI ?1h`).
+    ///
+    /// A child in this mode expects `SS3 A` from the up arrow rather than
+    /// `CSI A`, and readline, vim, and less all turn it on. It is part of this
+    /// trait for the same reason [`Emulator::keyboard_mode`] is: key encoding
+    /// is shared, so anything it has to branch on has to be readable here.
+    fn cursor_key_application(&self) -> bool {
+        false
+    }
+
     fn resize(&mut self, cols: u16, rows: u16);
 
     /// Current grid size as `(cols, rows)`.

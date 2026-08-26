@@ -347,6 +347,11 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     // color *modes* packed into `flags` alongside the SGR booleans: a raw
     // color of 1 is palette slot 1 or the RGB triple #000001 depending on its
     // mode, so the mode has to travel with it.
+    // DECCKM. xterm.js exposes the mode set on the public `modes` object.
+    cursorKeyApplication: function () {
+      return term.modes.applicationCursorKeysMode ? 1 : 0;
+    },
+
     pack: function (start, end) {
       var buf = term.buffer.active, cols = term.cols;
       var chars = [], meta = [];

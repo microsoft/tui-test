@@ -854,18 +854,45 @@ fn key_action(
     tokens: Vec<String>,
     action: crate::api::KeyAction,
 ) -> Result<(), TuiTestError> {
-    let keyboard_mode = session
-        .state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .emu
-        .keyboard_mode();
-    let sequence = keys::tokens_to_seq_for_action_with_mode(&tokens, action, keyboard_mode)
-        .map_err(|error| TuiTestError::usage(error.to_string()))?;
+    // A backend with its own key encoder is preferred, per token, because it
+    // reads terminal state the shared encoder does not model: ghostty's
+    // applies keypad application mode, `modifyOtherKeys`, and the alt-escape
+    // prefix. A backend that has no encoder, or cannot express a particular
+    // event, answers `None` and that token falls back.
+    let mut sequence: Vec<u8> = Vec::new();
+    {
+        let state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let modes = keys::InputModes {
+            keyboard: state.emu.keyboard_mode(),
+            cursor_key_application: state.emu.cursor_key_application(),
+        };
+        for token in &tokens {
+            let presses = keys::token_to_presses(token, action)
+                .map_err(|error| TuiTestError::usage(error.to_string()))?;
+            let encoded: Option<Vec<Vec<u8>>> = presses
+                .iter()
+                .map(|press| state.emu.encode_key(press))
+                .collect();
+            match encoded {
+                // All or nothing per token: a token half-encoded by the
+                // backend and half by the fallback would interleave two
+                // encodings of the same keypress.
+                Some(parts) => sequence.extend(parts.concat()),
+                None => {
+                    let text = keys::token_to_seq_for_action_with_mode(token, action, modes)
+                        .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                    sequence.extend_from_slice(text.as_bytes());
+                }
+            }
+        }
+    }
     if sequence.is_empty() {
         Ok(())
     } else {
-        act(session.write(sequence.as_bytes()))
+        act(session.write(&sequence))
     }
 }
 

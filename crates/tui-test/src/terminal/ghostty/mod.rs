@@ -11,6 +11,7 @@ use alacritty_terminal::vte::{Params, Parser, Perform};
 use anyhow::{anyhow, Context, Result};
 
 use crate::profile::{ColorSlot, Profile, Rgb};
+use crate::input::keys::KeyPress;
 use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::{CursorShape, Emulator};
 
@@ -166,6 +167,19 @@ impl Emulator for GhosttyEmu {
         self.call("draining replies", GhosttyCore::take_pending_writes)
     }
 
+    fn encode_key(&self, press: &KeyPress) -> Option<Vec<u8>> {
+        // The worker owns the terminal, so the event has to be moved across
+        // the channel rather than borrowed.
+        let press = press.clone();
+        self.call_result("encoding key", move |core| core.encode_key(&press))
+    }
+
+    fn cursor_key_application(&self) -> bool {
+        self.call_result("reading cursor key mode", |core| {
+            core.cursor_key_application()
+        })
+    }
+
     fn resize(&mut self, cols: u16, rows: u16) {
         self.call_result("resize", move |core| core.resize(cols, rows));
     }
@@ -214,6 +228,68 @@ mod tests {
     crate::emulator_conformance_tests!(|cols, rows, profile| {
         Box::new(GhosttyEmu::new(cols, rows, profile).expect("create Ghostty emulator"))
     });
+
+    fn press(key: &str) -> KeyPress {
+        KeyPress {
+            key: key.into(),
+            mods: crate::input::keys::Mods::default(),
+            event: crate::input::keys::KeyEventKind::Press,
+        }
+    }
+
+    /// The whole point of routing: ghostty's encoder reads the modes off the
+    /// live terminal, so `DECCKM` reaches key encoding without this backend
+    /// having to report the mode separately.
+    #[test]
+    fn the_encoder_follows_the_terminals_cursor_key_mode() {
+        let mut emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        assert_eq!(emu.encode_key(&press("up")).as_deref(), Some(&b"\x1b[A"[..]));
+
+        emu.process(b"\x1b[?1h");
+        assert_eq!(emu.encode_key(&press("up")).as_deref(), Some(&b"\x1bOA"[..]));
+
+        emu.process(b"\x1b[?1l");
+        assert_eq!(emu.encode_key(&press("up")).as_deref(), Some(&b"\x1b[A"[..]));
+    }
+
+    /// Kitty flags reach the encoder from the same terminal state.
+    #[test]
+    fn the_encoder_follows_the_negotiated_kitty_flags() {
+        let mut emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        assert_eq!(emu.encode_key(&press("a")).as_deref(), Some(&b"a"[..]));
+
+        emu.process(b"\x1b[>1u");
+        let mut escape = press("a");
+        escape.key = "escape".into();
+        assert_eq!(
+            emu.encode_key(&escape).as_deref(),
+            Some(&b"\x1b[27u"[..]),
+            "disambiguation is what mode 1 asks for"
+        );
+    }
+
+    /// A modifier ghostty's bitmask cannot represent has to decline rather
+    /// than encode without it, so the caller falls back instead of silently
+    /// sending a key with the modifier dropped.
+    #[test]
+    fn kitty_only_modifiers_decline_rather_than_lose_the_modifier() {
+        let emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        for modifier in ["hyper", "meta"] {
+            let mut event = press("a");
+            match modifier {
+                "hyper" => event.mods.hyper = true,
+                _ => event.mods.meta = true,
+            }
+            assert_eq!(emu.encode_key(&event), None, "{modifier} is not encodable");
+        }
+    }
+
+    /// A key ghostty has no code for declines too.
+    #[test]
+    fn an_unmapped_key_declines() {
+        let emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        assert_eq!(emu.encode_key(&press("\u{4f60}")), None);
+    }
 
     #[test]
     fn title_sequences_can_span_process_calls() {

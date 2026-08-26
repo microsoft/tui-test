@@ -103,6 +103,12 @@ also require report-all-keys mode before repeat and release events can be
 represented. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`,
 and `Meta`. Top-level `press` remains a compatibility alias for `key press`.
 
+Cursor keys follow `DECCKM`: `Up` sends `SS3 A` when the child has set
+`CSI ?1h` and `CSI A` otherwise. Encoding is routed to the backend's own key
+encoder when it has one (ghostty does; the others do not) and falls back to
+tui-test's shared encoder, so a backend that models more terminal state gets
+to use it.
+
 ### PTY control
 
 | Command                        | Description                                          |

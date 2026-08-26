@@ -349,6 +349,10 @@ The default Rust features include only Alacritty and do not require Zig. The `gh
 
 Key input follows the Kitty keyboard protocol negotiated by the child. A `key press` sends the normal press input and adds a release only when the child requests Kitty event-type reporting. Text-producing keys also require report-all-keys mode before repeat and release events can be represented. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`, and `Meta`; the top-level `press` command remains a compatibility alias for `key press`.
 
+Cursor keys follow `DECCKM` (`CSI ?1h`), so `key press Up` sends `SS3 A` to a child that asked for application cursor keys and `CSI A` otherwise. readline, vim, and less all set it.
+
+Encoding is done by the backend's own key encoder where it has one, and by tui-test's shared encoder otherwise. Only ghostty ships one; alacritty and rio keep theirs in their GUI crates rather than their VT libraries, and the xterm.js headless bundle omits key handling entirely. Routing to it matters because a backend's encoder reads terminal state the shared encoder does not model, such as keypad application mode and `modifyOtherKeys`.
+
 #### PTY control
 
 | Command                           | Description                      |
