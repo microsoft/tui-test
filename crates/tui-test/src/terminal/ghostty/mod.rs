@@ -287,6 +287,32 @@ mod tests {
         assert_eq!(emu.encode_key(&press("\u{4f60}")), None);
     }
 
+    /// A profile that turns the protocol off has to reach the backend's own
+    /// encoder too, not just `keyboard_mode`. Ghostty reads its Kitty flags
+    /// off the live terminal, which goes around the profile unless the
+    /// encoder is told otherwise.
+    #[test]
+    fn a_disabled_profile_stops_the_backend_encoding_kitty() {
+        let profile = Profile {
+            kitty_keyboard: false,
+            ..Default::default()
+        };
+        let mut emu = GhosttyEmu::new(10, 2, &profile).unwrap();
+        emu.process(b"\x1b[>1u");
+
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::empty());
+        assert_eq!(
+            emu.encode_key(&press("Escape")).as_deref(),
+            Some(&b"\x1b"[..]),
+            "a disabled profile keeps the legacy encoding"
+        );
+        assert_eq!(
+            emu.encode_key(&press("a")).as_deref(),
+            Some(&b"a"[..]),
+            "and text is still text"
+        );
+    }
+
     #[test]
     fn title_sequences_can_span_process_calls() {
         let mut emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
