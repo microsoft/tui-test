@@ -211,9 +211,15 @@ impl Emulator for GhosttyEmu {
 mod tests {
     use super::*;
 
-    crate::emulator_conformance_tests!(|cols, rows, profile| {
-        Box::new(GhosttyEmu::new(cols, rows, profile).expect("create Ghostty emulator"))
-    });
+    crate::emulator_conformance_tests!(
+        |cols, rows, profile| {
+            Box::new(GhosttyEmu::new(cols, rows, profile).expect("create Ghostty emulator"))
+        },
+        crate::terminal::conformance::Divergences {
+            underline_color_needs_a_style: false,
+            bell_events_unsupported: true,
+        }
+    );
 
     #[test]
     fn title_sequences_can_span_process_calls() {

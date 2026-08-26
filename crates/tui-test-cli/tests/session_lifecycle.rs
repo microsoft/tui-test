@@ -307,45 +307,69 @@ fn wait_ready_without_a_session_reports_no_session() {
 
 #[test]
 fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
-    let sandbox = Sandbox::new("bells");
-    sandbox.ok(&["open"]);
+    for backend in [Backend::Alacritty, Backend::Rio, Backend::Xtermjs] {
+        let sandbox = Sandbox::new("bells");
+        sandbox.ok(&["open", "--backend", backend.as_str()]);
 
-    sandbox.ok(&["submit", &two_bells_command()]);
-    sandbox.ok(&["expect", "bell", "2", "--timeout", "5000"]);
-    sandbox.ok(&["wait", "command"]);
+        sandbox.ok(&["submit", &two_bells_command()]);
+        sandbox.ok(&["expect", "bell", "2", "--timeout", "5000"]);
+        sandbox.ok(&["wait", "command"]);
 
-    let state = sandbox.ok(&["state"]);
-    assert!(state.contains("bell_count: 2"), "{state}");
-    assert!(!state.contains("bell_events"), "{state}");
+        let state = sandbox.ok(&["state"]);
+        assert!(state.contains("bell_count: 2"), "{state}");
+        assert!(!state.contains("bell_events"), "{state}");
 
-    let response: serde_json::Value =
-        serde_json::from_str(&sandbox.ok(&["--json", "get", "bell-events"]))
-            .expect("parse bell events response");
-    let events = response["data"]["value"]
-        .as_array()
-        .expect("bell events array");
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[0]["sequence"], 1);
-    assert_eq!(events[1]["sequence"], 2);
-    assert!(
-        events[1]["elapsed_ms"].as_u64().expect("second timestamp")
-            >= events[0]["elapsed_ms"].as_u64().expect("first timestamp")
-    );
+        let response: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "get", "bell-events"]))
+                .expect("parse bell events response");
+        let events = response["data"]["value"]
+            .as_array()
+            .expect("bell events array");
+        assert_eq!(events.len(), 2, "{}", backend.as_str());
+        assert_eq!(events[0]["sequence"], 1, "{}", backend.as_str());
+        assert_eq!(events[1]["sequence"], 2, "{}", backend.as_str());
+        assert!(
+            events[1]["elapsed_ms"].as_u64().expect("second timestamp")
+                >= events[0]["elapsed_ms"].as_u64().expect("first timestamp")
+        );
 
-    for _ in 0..2 {
+        for _ in 0..2 {
+            let response: serde_json::Value =
+                serde_json::from_str(&sandbox.ok(&["--json", "get", "bells"]))
+                    .expect("parse bell count response");
+            assert_eq!(response["data"]["value"], 2, "{}", backend.as_str());
+        }
+
+        sandbox.ok(&["submit", &delayed_bell_command()]);
+        sandbox.ok(&["wait", "bell", "--timeout", "5000"]);
+        sandbox.ok(&["expect", "bell", "3", "--timeout", "5000"]);
         let response: serde_json::Value =
             serde_json::from_str(&sandbox.ok(&["--json", "get", "bells"]))
-                .expect("parse bell count response");
-        assert_eq!(response["data"]["value"], 2);
+                .expect("parse final bell count response");
+        assert_eq!(response["data"]["value"], 3, "{}", backend.as_str());
     }
+}
 
-    sandbox.ok(&["submit", &delayed_bell_command()]);
-    sandbox.ok(&["wait", "bell", "--timeout", "5000"]);
-    sandbox.ok(&["expect", "bell", "3", "--timeout", "5000"]);
-    let response: serde_json::Value =
-        serde_json::from_str(&sandbox.ok(&["--json", "get", "bells"]))
-            .expect("parse final bell count response");
-    assert_eq!(response["data"]["value"], 3);
+#[test]
+fn ghostty_bell_operations_report_the_unsupported_feature() {
+    let sandbox = Sandbox::new("ghostty-bells");
+    sandbox.ok(&["open", "--backend", "ghostty"]);
+
+    for args in [
+        &["get", "bells"][..],
+        &["get", "bell-events"][..],
+        &["wait", "bell", "--timeout", "1"][..],
+        &["expect", "bell", "1", "--timeout", "1"][..],
+    ] {
+        let output = sandbox.run(args);
+        assert!(!output.status.success(), "`tui-test {}`", args.join(" "));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("bell events are not supported by this terminal backend"),
+            "`tui-test {}`: {stderr}",
+            args.join(" ")
+        );
+    }
 }
 
 /// A session timeout default must apply to later commands without `--timeout`.

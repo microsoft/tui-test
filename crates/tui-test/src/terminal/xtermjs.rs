@@ -23,9 +23,11 @@
 
 use std::sync::Mutex;
 
+use alacritty_terminal::vte::{Parser, Perform};
 use compact_str::{CompactString, ToCompactString};
 use rquickjs::{Context, Ctx, Function, Object, Runtime};
 
+use crate::event::BellTracker;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator};
@@ -115,6 +117,18 @@ fn attrs(flags: i32) -> Attrs {
     a
 }
 
+struct BellListener {
+    bells: BellTracker,
+}
+
+impl Perform for BellListener {
+    fn execute(&mut self, byte: u8) {
+        if byte == b'\x07' {
+            self.bells.ring();
+        }
+    }
+}
+
 pub struct XtermJsEmu {
     // Held to keep the interpreter alive for as long as the context that runs
     // in it; nothing calls through it directly.
@@ -136,6 +150,8 @@ pub struct XtermJsEmu {
     /// consequence rather than a new fact, and the earliest message names the
     /// cause. Behind a lock because the reads that can fault take `&self`.
     fault: Mutex<Option<String>>,
+    bell_parser: Parser,
+    bell_listener: BellListener,
 }
 
 /// Render a failed JS call as a message worth reading.
@@ -162,6 +178,15 @@ fn describe(ctx: &Ctx<'_>, method: &str, error: rquickjs::Error) -> String {
 
 impl XtermJsEmu {
     pub fn new(cols: u16, rows: u16, profile: &Profile) -> anyhow::Result<Self> {
+        Self::with_bell_tracker(cols, rows, profile, BellTracker::default())
+    }
+
+    pub(crate) fn with_bell_tracker(
+        cols: u16,
+        rows: u16,
+        profile: &Profile,
+        bells: BellTracker,
+    ) -> anyhow::Result<Self> {
         // The color every slot takes when no program has changed it. Resolved
         // here rather than in the shim so a query is answered with the same
         // value whichever backend a session runs on.
@@ -199,6 +224,8 @@ impl XtermJsEmu {
             rows,
             profile: *profile,
             fault: Mutex::new(None),
+            bell_parser: Parser::new(),
+            bell_listener: BellListener { bells },
         };
         emu.sync_size();
         Ok(emu)
@@ -368,6 +395,9 @@ fn decode_into(out: &mut Vec<Vec<EmuCell>>, chars: &str, meta: &[i32], cols: usi
 
 impl Emulator for XtermJsEmu {
     fn process(&mut self, bytes: &[u8]) {
+        // VTE calls `execute` only for BEL in the ground state; BEL terminating
+        // an OSC sequence is consumed by `osc_dispatch` instead.
+        self.bell_parser.advance(&mut self.bell_listener, bytes);
         // Fed as bytes rather than as a string on purpose: xterm.js runs its
         // own incremental UTF-8 decoder over a byte array and carries a
         // partial sequence across calls, which is what keeps a multi-byte
@@ -384,6 +414,10 @@ impl Emulator for XtermJsEmu {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    fn ensure_bell_support(&self) -> anyhow::Result<()> {
+        Ok(())
     }
 
     fn take_pending_writes(&mut self) -> Vec<u8> {
@@ -506,6 +540,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn multiple_bells_in_one_chunk_are_counted_individually() {
+        let bells = BellTracker::default();
+        let mut emulator =
+            XtermJsEmu::with_bell_tracker(80, 24, &Profile::default(), bells.clone())
+                .expect("create emulator");
+
+        emulator.process(b"\x07\x07");
+
+        assert_eq!(bells.count(), 2);
+        assert_eq!(bells.sequence(), 2);
+    }
+
+    #[test]
+    fn an_osc_bell_terminator_does_not_ring_the_terminal_bell() {
+        let bells = BellTracker::default();
+        let mut emulator =
+            XtermJsEmu::with_bell_tracker(80, 24, &Profile::default(), bells.clone())
+                .expect("create emulator");
+
+        emulator.process(b"\x1b]0;window");
+        emulator.process(b" title\x07");
+        assert_eq!(bells.count(), 0);
+
+        emulator.process(b"\x07");
+        assert_eq!(bells.count(), 1);
+    }
+
     crate::emulator_conformance_tests!(
         |cols, rows, profile| {
             Box::new(XtermJsEmu::new(cols, rows, profile).expect("create xterm.js emulator"))
@@ -518,6 +580,7 @@ mod tests {
             // `isAttributeDefault()`, and the color is absent from the line's
             // extended attributes while remaining in the current SGR state.
             underline_color_needs_a_style: true,
+            bell_events_unsupported: false,
         }
     );
 }

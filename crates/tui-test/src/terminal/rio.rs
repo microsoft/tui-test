@@ -263,6 +263,10 @@ impl Emulator for RioEmu {
         self.processor.advance(&mut self.term, bytes);
     }
 
+    fn ensure_bell_support(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn take_pending_writes(&mut self) -> Vec<u8> {
         std::mem::take(&mut *self.pending.lock().unwrap_or_else(PoisonError::into_inner))
     }

@@ -324,6 +324,10 @@ impl Emulator for AlacrittyEmu {
         }
     }
 
+    fn ensure_bell_support(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn take_pending_writes(&mut self) -> Vec<u8> {
         let queued = match self.pending.lock() {
             Ok(mut queue) => std::mem::take(&mut *queue),

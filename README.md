@@ -299,7 +299,7 @@ tui-test open --backend ghostty
 tui-test run --backend xtermjs vim file.txt
 ```
 
-All backends use the same renderer, assertions, snapshot format, and conformance suite. Shell semantic-prompt tracking reads raw PTY bytes, so command boundaries, exit codes, and cwd tracking do not depend on the selected backend. Backend-specific VT behavior can differ: Ghostty preserves SGR blink, while Alacritty parses blink but cannot report it. xterm.js records a cell's underline color only when that cell also has an underline style.
+All backends use the same renderer, assertions, snapshot format, and conformance suite. Shell semantic-prompt tracking reads raw PTY bytes, so command boundaries, exit codes, and cwd tracking do not depend on the selected backend. Backend-specific VT behavior can differ: Ghostty preserves SGR blink, while Alacritty parses blink but cannot report it. xterm.js records a cell's underline color only when that cell also has an underline style. Ghostty's Rust bindings do not expose bell notifications, so bell-specific operations return an unsupported-feature error with that backend.
 
 The CLI and published Python and JavaScript packages include all backends. Windows ARM64 artifacts are not currently published because Ghostty's upstream Zig build does not support that target.
 
