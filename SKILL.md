@@ -103,6 +103,11 @@ also require report-all-keys mode before repeat and release events can be
 represented. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`,
 and `Meta`. Top-level `press` remains a compatibility alias for `key press`.
 
+A profile with `kitty_keyboard = false` ignores the child's mode requests and
+keeps legacy encodings, which is how a terminal without the protocol behaves.
+The `xtermjs` backend always behaves this way; its bundle does not implement
+the protocol.
+
 ### PTY control
 
 | Command                        | Description                                          |
@@ -412,6 +417,7 @@ missing.
 ```toml
 [profiles.ci]
 scrollback = 500
+kitty_keyboard = false
 
 [profiles.ci.timeouts]
 text = 15000
@@ -421,7 +427,8 @@ ready = 60000
 red = "#ff0000"
 ```
 
-A profile sets timeout defaults, `scrollback` (default 10000), and colors:
+A profile sets timeout defaults, `scrollback` (default 10000),
+`kitty_keyboard` (default true), and colors:
 `foreground`, `background`, `cursor`, and the 16 ANSI slots by name (`red`,
 `bright_red`, ...). Indices 16-255 are spec-defined and not configurable, so
 `--fg 196` is stable across profiles. Unknown settings and invalid colors are
@@ -430,7 +437,7 @@ rejected before a session starts.
 Named profiles do not inherit from `[profiles.default]`; omitted fields use
 tui-test's built-in defaults. The in-process APIs accept profile objects:
 Rust passes `Profile` directly, Python uses `Profile` / `Colors`, and
-JavaScript uses `{ scrollback, colors }`. A profile can be a client default or
+JavaScript uses `{ scrollback, kittyKeyboard, colors }`. A profile can be a client default or
 a per-`open` / per-`run` override. The bindings do not load `tui-test.toml`.
 
 The palette is what a screenshot paints **and** what `expect --fg/--bg` matches

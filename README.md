@@ -349,6 +349,8 @@ The default Rust features include only Alacritty and do not require Zig. The `gh
 
 Key input follows the Kitty keyboard protocol negotiated by the child. A `key press` sends the normal press input and adds a release only when the child requests Kitty event-type reporting. Text-producing keys also require report-all-keys mode before repeat and release events can be represented. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`, and `Meta`; the top-level `press` command remains a compatibility alias for `key press`.
 
+Set `kitty_keyboard = false` on a profile to run against a terminal that never implemented the protocol, so a child's mode requests are ignored and keys keep their legacy encodings. The `xtermjs` backend always behaves this way: its bundle has no implementation of the protocol.
+
 #### PTY control
 
 | Command                           | Description                      |
@@ -472,6 +474,7 @@ With `--json`, failures also carry a `"kind"` field (`assertion`/`usage`/`no_ses
 ```toml
 [profiles.default]
 scrollback = 10000            # rows kept beyond the visible screen
+kitty_keyboard = true         # honor the Kitty keyboard protocol
 
 [profiles.default.colors]
 background = "#000000"
@@ -481,6 +484,7 @@ red        = "#800000"        # any of the 16 ANSI slots, by name
 
 [profiles.ci]
 scrollback = 500              # other fields use built-in defaults
+kitty_keyboard = false        # behave like a terminal without the protocol
 ```
 
 ```bash

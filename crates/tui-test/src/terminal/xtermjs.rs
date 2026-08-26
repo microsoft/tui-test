@@ -518,6 +518,10 @@ mod tests {
             // `isAttributeDefault()`, and the color is absent from the line's
             // extended attributes while remaining in the current SGR state.
             underline_color_needs_a_style: true,
+            // xterm.js has no Kitty keyboard protocol implementation at all:
+            // the bundle contains no handler for `CSI > u`, `CSI = u`, or
+            // `CSI < u`, so the modes a child pushes are parsed and dropped.
+            no_kitty_keyboard: true,
         }
     );
 }

@@ -202,6 +202,7 @@ pub struct RioEmu {
     colors: ColorState,
     cols: u16,
     rows: u16,
+    kitty_keyboard: bool,
 }
 
 impl RioEmu {
@@ -238,6 +239,7 @@ impl RioEmu {
             colors,
             cols,
             rows,
+            kitty_keyboard: profile.kitty_keyboard,
         }
     }
 
@@ -268,6 +270,15 @@ impl Emulator for RioEmu {
     }
 
     fn keyboard_mode(&self) -> KeyboardMode {
+        // rio-vt has no switch for the protocol the way alacritty's `Config`
+        // does, so a disabled profile is honored here instead: the modes are
+        // still tracked, they just never reach key encoding. A child that
+        // queries with `CSI ? u` is still answered, which is the one way this
+        // differs from alacritty; filtering the query out of the byte stream
+        // is what would close it.
+        if !self.kitty_keyboard {
+            return KeyboardMode::empty();
+        }
         let mode = self.term.mode();
         let mut keyboard_mode = KeyboardMode::empty();
         for (rio_mode, keyboard_flag) in [

@@ -12,7 +12,7 @@ use anyhow::{anyhow, Context, Result};
 
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::EmuCell;
-use crate::terminal::emu::{CursorShape, Emulator};
+use crate::terminal::emu::{CursorShape, Emulator, KeyboardMode};
 
 use self::core::GhosttyCore;
 
@@ -164,6 +164,10 @@ impl Emulator for GhosttyEmu {
 
     fn take_pending_writes(&mut self) -> Vec<u8> {
         self.call("draining replies", GhosttyCore::take_pending_writes)
+    }
+
+    fn keyboard_mode(&self) -> KeyboardMode {
+        self.call_result("reading keyboard mode", |core| core.keyboard_mode())
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
