@@ -387,7 +387,8 @@ impl Emulator for XtermJsEmu {
         let bell_count: i32 = self
             .invoke("feed", |emu, ctx| {
                 let buf = rquickjs::TypedArray::<u8>::new(ctx.clone(), bytes)?;
-                emu.get::<_, Function>("feed")?.call((buf,))
+                let result: Object = emu.get::<_, Function>("feed")?.call((buf,))?;
+                result.get("bell_count")
             })
             .unwrap_or_default();
         for _ in 0..bell_count.max(0) {

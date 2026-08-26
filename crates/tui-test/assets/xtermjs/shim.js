@@ -305,7 +305,7 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
       scanTerminators(bytes);
       term.write(bytes);
       drain();
-      return bellCount;
+      return { bell_count: bellCount };
     },
 
     // Joined rather than returned as an array: one string crossing the
