@@ -215,10 +215,7 @@ mod tests {
         |cols, rows, profile| {
             Box::new(GhosttyEmu::new(cols, rows, profile).expect("create Ghostty emulator"))
         },
-        crate::terminal::conformance::Divergences {
-            underline_color_needs_a_style: false,
-            bell_events_unsupported: true,
-        }
+        &[crate::terminal::conformance::Divergence::BellEventsUnsupported]
     );
 
     #[test]

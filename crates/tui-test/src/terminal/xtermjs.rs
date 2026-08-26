@@ -572,15 +572,14 @@ mod tests {
         |cols, rows, profile| {
             Box::new(XtermJsEmu::new(cols, rows, profile).expect("create xterm.js emulator"))
         },
-        crate::terminal::conformance::Divergences {
+        &[
             // xterm.js keeps a cell's underline color in an extended-attribute
             // record it allocates only for a cell that has an underline style,
             // so `SGR 58` alone is not readable back off the cell. Verified
             // against the bundle rather than inferred: the cell reports
             // `isAttributeDefault()`, and the color is absent from the line's
             // extended attributes while remaining in the current SGR state.
-            underline_color_needs_a_style: true,
-            bell_events_unsupported: false,
-        }
+            crate::terminal::conformance::Divergence::UnderlineColorNeedsAStyle,
+        ]
     );
 }
