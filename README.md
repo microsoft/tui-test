@@ -41,7 +41,6 @@ brew install tui-test
 ```
 
 #### bash
-
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | TUI_TEST_VERSION=beta sh
 ```
