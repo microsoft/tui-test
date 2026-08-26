@@ -295,6 +295,82 @@ mod tests {
         assert_eq!(emu.encode_key(&press("\u{4f60}")), None);
     }
 
+    /// Every token the shared encoder accepts, for the differential check.
+    const ORACLE_TOKENS: &[&str] = &[
+        "Up", "Down", "Left", "Right", "Home", "End", "PageUp", "PageDown", "Insert", "Delete",
+        "Backspace", "Tab", "Enter", "Space", "Escape", "F1", "F2", "F3", "F4", "F5", "F6", "F7",
+        "F8", "F9", "F10", "F11", "F12", "a", "z", "A", "0", "9", "-", "=", "[", "]", ";", "'",
+        ",", ".", "/", "\\", "`",
+    ];
+
+    const ORACLE_PREFIXES: &[&str] = &["", "Ctrl+", "Alt+", "Shift+", "Ctrl+Alt+", "Ctrl+Shift+"];
+
+    /// Terminal states to compare under, as the bytes that set them.
+    const ORACLE_MODES: &[(&str, &[u8])] = &[
+        ("legacy", b""),
+        ("application cursor keys", b"\x1b[?1h"),
+        ("kitty disambiguate", b"\x1b[>1u"),
+        ("kitty events", b"\x1b[>3u"),
+        ("kitty report all", b"\x1b[>15u"),
+    ];
+
+    /// Compare the shared encoder against ghostty's, which is a reference
+    /// implementation maintained by people who do nothing else.
+    ///
+    /// This is the check that keeps the fallback honest. Three of the four
+    /// backends have no encoder and will always use `keys.rs`, so a
+    /// disagreement here is `keys.rs` being wrong on three backends rather
+    /// than a difference of opinion between two.
+    #[test]
+    fn the_shared_encoder_agrees_with_ghostty() {
+        use crate::api::KeyAction;
+        use crate::input::keys;
+
+        let mut disagreements = Vec::new();
+        for (mode_name, mode_bytes) in ORACLE_MODES {
+            let mut emu = GhosttyEmu::new(20, 4, &Profile::default()).unwrap();
+            emu.process(mode_bytes);
+            let modes = keys::InputModes {
+                keyboard: emu.keyboard_mode(),
+                cursor_key_application: emu.cursor_key_application(),
+            };
+            for prefix in ORACLE_PREFIXES {
+                for key in ORACLE_TOKENS {
+                    let token = format!("{prefix}{key}");
+                    let presses = match keys::token_to_presses(&token, KeyAction::Down) {
+                        Ok(presses) => presses,
+                        Err(_) => continue,
+                    };
+                    let Some(native) = presses
+                        .iter()
+                        .map(|press| emu.encode_key(press))
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        continue;
+                    };
+                    let native = native.concat();
+                    let shared =
+                        keys::token_to_seq_for_action_with_mode(&token, KeyAction::Down, modes)
+                            .unwrap_or_default();
+                    if native != shared.as_bytes() {
+                        disagreements.push(format!(
+                            "  {mode_name:<24} {token:<14} ghostty {:<22?} shared {:?}",
+                            String::from_utf8_lossy(&native),
+                            shared
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            disagreements.is_empty(),
+            "the shared encoder disagrees with ghostty on {} of {} events:\n{}",
+            disagreements.len(),
+            ORACLE_MODES.len() * ORACLE_PREFIXES.len() * ORACLE_TOKENS.len(),
+            disagreements.join("\n")
+        );
+    }
+
     #[test]
     fn title_sequences_can_span_process_calls() {
         let mut emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
