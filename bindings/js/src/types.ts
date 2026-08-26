@@ -83,6 +83,8 @@ export interface Colors {
 
 export interface Profile {
   scrollback?: number;
+  /** Record OSC 8 hyperlinks on the cells they cover. Defaults to true. */
+  hyperlinks?: boolean;
   colors?: Colors;
 }
 

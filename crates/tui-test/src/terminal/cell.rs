@@ -7,6 +7,7 @@
 
 use bitflags::bitflags;
 use compact_str::CompactString;
+use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
 
 /// The 16 themeable palette slots (ANSI 0-15).
@@ -161,6 +162,23 @@ bitflags! {
 /// The grapheme stored in the cell that follows a double-width character.
 pub const CONTINUATION: &str = "";
 
+/// An OSC 8 hyperlink attached to a cell.
+///
+/// The `id` is the sequence's `id=` parameter and exists so that two runs of
+/// cells can be known to belong to the same link even when they are not
+/// adjacent, which is how a link that wraps a line stays one link. It is not
+/// the link's identity: cells carrying the same `uri` with no `id` are
+/// ordinary unrelated links.
+///
+/// Only these two survive parsing. OSC 8 allows arbitrary `key=value` params
+/// before the URI, but every emulator tui-test supports keeps `id` and drops
+/// the rest before a cell can be read back, so there is nothing to report.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Hyperlink {
+    pub id: Option<CompactString>,
+    pub uri: CompactString,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmuCell {
     /// The cell's grapheme. A blank cell holds `" "`; [`CONTINUATION`] (the
@@ -176,6 +194,14 @@ pub struct EmuCell {
     /// grapheme it colors.
     pub underline_color: Option<Color>,
     pub attrs: Attrs,
+    /// The OSC 8 hyperlink this cell sits inside, if any.
+    ///
+    /// Behind an `Arc` because a link covers a run of cells rather than one:
+    /// storing it inline would put a copy of the URI in every cell of the run
+    /// and grow `EmuCell` by more than it currently occupies. alacritty and
+    /// rio already hand out reference-counted links, so this is also what
+    /// they cost to clone.
+    pub hyperlink: Option<Arc<Hyperlink>>,
 }
 
 impl EmuCell {
@@ -188,11 +214,17 @@ impl EmuCell {
             underline: UnderlineStyle::None,
             underline_color: None,
             attrs: Attrs::empty(),
+            hyperlink: None,
         }
     }
 
     pub fn has(&self, attr: Attrs) -> bool {
         self.attrs.contains(attr)
+    }
+
+    /// The URI this cell links to, if it links anywhere.
+    pub fn uri(&self) -> Option<&str> {
+        Some(self.hyperlink.as_ref()?.uri.as_str())
     }
 }
 

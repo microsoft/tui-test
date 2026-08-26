@@ -21,7 +21,9 @@ use compact_str::{CompactString, ToCompactString};
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
+use crate::terminal::cell::{
+    Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION,
+};
 use crate::terminal::emu::{CursorShape, Emulator, KeyboardMode};
 
 /// Alacritty's palette colors arrive either as a `Named` variant or an index;
@@ -74,7 +76,25 @@ fn underline_from_alac(c: &alacritty_terminal::term::cell::Cell) -> UnderlineSty
     }
 }
 
-fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
+/// alacritty invents an id for a link that arrived without one, appending
+/// `_alacritty` to a process-wide counter. That is a rendering aid, not
+/// something the child sent, and letting it through would put a value in
+/// snapshots that changes with the order links were parsed in and that no
+/// other backend produces. A link with no `id=` reports `None`.
+///
+/// A child that really sent `id=7_alacritty` is indistinguishable from a
+/// synthesized one and reports `None` too. Telling them apart would mean
+/// parsing OSC 8 ourselves, which is a lot of machinery for a collision
+/// nobody will hit.
+fn hyperlink_from_alac(link: &alacritty_terminal::term::cell::Hyperlink) -> Arc<Hyperlink> {
+    let id = link.id();
+    Arc::new(Hyperlink {
+        id: (!id.ends_with("_alacritty")).then(|| id.to_compact_string()),
+        uri: link.uri().to_compact_string(),
+    })
+}
+
+fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell, hyperlinks: bool) -> EmuCell {
     let flags = c.flags;
     // Only WIDE_CHAR_SPACER is a continuation: it is the second column of a
     // wide char on this row. LEADING_WIDE_CHAR_SPACER is the opposite, a filler
@@ -115,6 +135,11 @@ fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
         underline: underline_from_alac(c),
         underline_color: c.underline_color().and_then(color_from_alac),
         attrs,
+        hyperlink: hyperlinks
+            .then(|| c.hyperlink())
+            .flatten()
+            .as_ref()
+            .map(hyperlink_from_alac),
     }
 }
 
@@ -291,7 +316,7 @@ impl AlacrittyEmu {
             let mut row = Vec::with_capacity(self.cols as usize);
             for col in 0..self.cols as usize {
                 let cell = &grid[Line(line)][Column(col)];
-                row.push(cell_from_alac(cell));
+                row.push(cell_from_alac(cell, self.profile.hyperlinks));
             }
             out.push(row);
         }

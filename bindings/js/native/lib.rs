@@ -108,6 +108,7 @@ pub struct OpenOptions {
     pub wait_ready: Option<bool>,
     pub restart: Option<bool>,
     pub profile_scrollback: Option<f64>,
+    pub profile_hyperlinks: Option<bool>,
     pub profile_colors: Option<Vec<(String, String)>>,
     pub timeouts: Option<Timeouts>,
 }
@@ -124,6 +125,7 @@ pub struct RunOptions {
     pub wait_ready: Option<bool>,
     pub restart: Option<bool>,
     pub profile_scrollback: Option<f64>,
+    pub profile_hyperlinks: Option<bool>,
     pub profile_colors: Option<Vec<(String, String)>>,
     pub timeouts: Option<Timeouts>,
 }
@@ -529,11 +531,15 @@ fn core_timeouts(value: Option<Timeouts>) -> std::result::Result<CoreTimeouts, T
 
 fn core_profile(
     scrollback: Option<f64>,
+    hyperlinks: Option<bool>,
     colors: &[(String, String)],
 ) -> std::result::Result<CoreProfile, TuiTestError> {
     let mut profile = CoreProfile::default();
     if let Some(scrollback) = scrollback {
         profile.scrollback = integer(scrollback, "profile.scrollback", usize::MAX as u64)? as usize;
+    }
+    if let Some(hyperlinks) = hyperlinks {
+        profile.hyperlinks = hyperlinks;
     }
     for (name, value) in colors {
         let value = Rgb::parse(value)
@@ -553,6 +559,7 @@ fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptio
     };
     let profile = core_profile(
         value.profile_scrollback,
+        value.profile_hyperlinks,
         value.profile_colors.as_deref().unwrap_or_default(),
     )?;
     Ok(CoreOpenOptions {
@@ -581,6 +588,7 @@ fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, TuiTest
     }
     let profile = core_profile(
         value.profile_scrollback,
+        value.profile_hyperlinks,
         value.profile_colors.as_deref().unwrap_or_default(),
     )?;
     Ok(CoreRunOptions {

@@ -472,6 +472,7 @@ With `--json`, failures also carry a `"kind"` field (`assertion`/`usage`/`no_ses
 ```toml
 [profiles.default]
 scrollback = 10000            # rows kept beyond the visible screen
+hyperlinks = true             # record OSC 8 links on the cells they cover
 
 [profiles.default.colors]
 background = "#000000"
@@ -481,6 +482,7 @@ red        = "#800000"        # any of the 16 ANSI slots, by name
 
 [profiles.ci]
 scrollback = 500              # other fields use built-in defaults
+hyperlinks = false            # behave like a terminal without OSC 8
 ```
 
 ```bash

@@ -36,6 +36,7 @@ class Colors:
 @dataclass
 class Profile:
     scrollback: Optional[int] = None
+    hyperlinks: Optional[bool] = None
     colors: Optional[Colors] = None
 
 

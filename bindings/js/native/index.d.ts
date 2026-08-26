@@ -131,6 +131,7 @@ export interface OpenOptions {
   waitReady?: boolean
   restart?: boolean
   profileScrollback?: number
+  profileHyperlinks?: boolean
   profileColors?: Array<[string, string]>
   timeouts?: Timeouts
 }
@@ -187,6 +188,7 @@ export interface RunOptions {
   waitReady?: boolean
   restart?: boolean
   profileScrollback?: number
+  profileHyperlinks?: boolean
   profileColors?: Array<[string, string]>
   timeouts?: Timeouts
 }

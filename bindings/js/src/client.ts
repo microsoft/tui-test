@@ -269,6 +269,7 @@ export class TuiTest {
       waitReady: opts.waitReady,
       restart: opts.restart,
       profileScrollback: profile?.scrollback,
+      profileHyperlinks: profile?.hyperlinks,
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
     };
@@ -291,6 +292,7 @@ export class TuiTest {
       waitReady: opts.waitReady,
       restart: opts.restart,
       profileScrollback: profile?.scrollback,
+      profileHyperlinks: profile?.hyperlinks,
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
     };

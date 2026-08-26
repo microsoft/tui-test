@@ -410,6 +410,14 @@ pub struct Cell {
     pub underline: bool,
     pub underline_style: String,
     pub underline_color: CellColor,
+    /// The OSC 8 URI this cell links to, empty when it links nowhere.
+    pub link: String,
+    /// The link's `id=` parameter, empty when the sequence carried none.
+    ///
+    /// Separate from `link` because it identifies a link across a wrap rather
+    /// than describing where the link points, and because the ghostty backend
+    /// can report the URI without it.
+    pub link_id: String,
 }
 
 #[derive(Debug, Clone)]

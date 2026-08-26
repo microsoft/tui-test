@@ -838,6 +838,13 @@ fn cell_model(x: u16, y: u16, cell: &EmuCell) -> Cell {
         underline: cell.underline.is_underlined(),
         underline_style: cell.underline.name().to_string(),
         underline_color: cell_color(cell.underline_color),
+        link: cell.uri().unwrap_or_default().to_string(),
+        link_id: cell
+            .hyperlink
+            .as_ref()
+            .and_then(|link| link.id.as_deref())
+            .unwrap_or_default()
+            .to_string(),
     }
 }
 
@@ -1658,6 +1665,10 @@ mod tests {
             underline: UnderlineStyle::Curly,
             underline_color: Some(Color::Rgb(1, 2, 3)),
             attrs: Attrs::all(),
+            hyperlink: Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: Some("anchor".into()),
+                uri: "https://example.com".into(),
+            })),
         };
         let value = cell_model(3, 4, &cell);
         assert_eq!(value.x, 3);

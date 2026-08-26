@@ -211,9 +211,19 @@ impl Emulator for GhosttyEmu {
 mod tests {
     use super::*;
 
-    crate::emulator_conformance_tests!(|cols, rows, profile| {
-        Box::new(GhosttyEmu::new(cols, rows, profile).expect("create Ghostty emulator"))
-    });
+    crate::emulator_conformance_tests!(
+        |cols, rows, profile| {
+            Box::new(GhosttyEmu::new(cols, rows, profile).expect("create Ghostty emulator"))
+        },
+        crate::terminal::conformance::Divergences {
+            underline_color_needs_a_style: false,
+            // libghostty-vt exposes a cell's hyperlink through
+            // `ghostty_grid_ref_hyperlink_uri`, which returns the URI and
+            // nothing else. There is no accessor for the `id=` parameter, so
+            // it is not that the mapping drops it: it never crosses the FFI.
+            hyperlink_has_no_id: true,
+        }
+    );
 
     #[test]
     fn title_sequences_can_span_process_calls() {

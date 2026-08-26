@@ -21,13 +21,15 @@
 //! `Sync`-in-spirit: every entry point below takes `&mut self`, so the daemon's
 //! existing mutex is still what serializes access.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use compact_str::{CompactString, ToCompactString};
 use rquickjs::{Context, Ctx, Function, Object, Runtime};
 
 use crate::profile::{ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
+use crate::terminal::cell::{
+    Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION,
+};
 use crate::terminal::emu::{CursorShape, Emulator};
 
 const XTERM_BUNDLE: &str = include_str!("../../assets/xtermjs/xterm-headless.js");
@@ -41,7 +43,7 @@ const SHIM: &str = include_str!("../../assets/xtermjs/shim.js");
 const UNICODE11_CAPTURE: &str = "globalThis.__unicode11 = module.exports.Unicode11Addon;";
 
 /// Ints per cell in the packed `meta` array, mirroring `pack()` in the shim.
-const STRIDE: usize = 6;
+const STRIDE: usize = 7;
 
 /// Where the three dynamic colors sit in the flat table handed to the shim,
 /// which continues past the 256 palette slots. The numbering is this
@@ -187,7 +189,8 @@ impl XtermJsEmu {
             ctx.eval::<(), _>(UNICODE11)?;
             ctx.eval::<(), _>(UNICODE11_CAPTURE)?;
             let boot: Function = ctx.globals().get("__boot")?;
-            let emu: Object = boot.call((cols, rows, scrollback, base.clone()))?;
+            let emu: Object =
+                boot.call((cols, rows, scrollback, base.clone(), profile.hyperlinks))?;
             ctx.globals().set("__emu", emu)?;
             Ok(())
         })?;
@@ -312,29 +315,58 @@ impl XtermJsEmu {
             let batch_end = (batch + PACK_BATCH_ROWS as i32).min(end);
             let packed = self
                 .ctx
-                .with(|ctx| -> rquickjs::Result<(String, Vec<i32>)> {
+                .with(|ctx| -> rquickjs::Result<(String, Vec<i32>, String)> {
                     let emu: Object = ctx.globals().get("__emu")?;
                     let packed: rquickjs::Array =
                         emu.get::<_, Function>("pack")?.call((batch, batch_end))?;
-                    Ok((packed.get(0)?, packed.get(1)?))
+                    Ok((packed.get(0)?, packed.get(1)?, packed.get(2)?))
                 });
-            let (chars, meta) = match packed {
+            let (chars, meta, links) = match packed {
                 Ok(p) => p,
                 Err(_) => return Vec::new(),
             };
-            decode_into(&mut out, &chars, &meta, cols);
+            decode_into(&mut out, &chars, &meta, &decode_links(&links), cols);
         }
         out
     }
 }
 
+/// Rebuild the batch's link table, whose entries the packed cells index by
+/// their position in it, one-based so that `0` means "no link".
+///
+/// Each entry is the `id=` parameter, empty when the sequence carried none,
+/// then NUL, then the URI. Entries are separated by `\u{1}`, which cannot
+/// appear in either: xterm.js parses an OSC payload only up to a C0 byte.
+fn decode_links(packed: &str) -> Vec<Arc<Hyperlink>> {
+    if packed.is_empty() {
+        return Vec::new();
+    }
+    packed
+        .split('\u{1}')
+        .map(|entry| {
+            let (id, uri) = entry.split_once('\0').unwrap_or(("", entry));
+            Arc::new(Hyperlink {
+                id: (!id.is_empty()).then(|| id.to_compact_string()),
+                uri: uri.to_compact_string(),
+            })
+        })
+        .collect()
+}
+
 /// Decode a packed batch into whole rows, appending to `out`.
-fn decode_into(out: &mut Vec<Vec<EmuCell>>, chars: &str, meta: &[i32], cols: usize) {
+fn decode_into(
+    out: &mut Vec<Vec<EmuCell>>,
+    chars: &str,
+    meta: &[i32],
+    links: &[Arc<Hyperlink>],
+    cols: usize,
+) {
     let mut cells = chars.split('\0');
     let mut row = Vec::with_capacity(cols);
     for m in meta.as_chunks::<STRIDE>().0 {
         let ch = cells.next().unwrap_or("");
-        let (width, fg, bg, ul_color, ul_style, flags) = (m[0], m[1], m[2], m[3], m[4], m[5]);
+        let (width, fg, bg, ul_color, ul_style, flags, link) =
+            (m[0], m[1], m[2], m[3], m[4], m[5], m[6]);
 
         // Width alone does not identify a continuation. xterm.js also reports
         // width 0 for a genuine zero-width grapheme that had no base character
@@ -358,6 +390,10 @@ fn decode_into(out: &mut Vec<Vec<EmuCell>>, chars: &str, meta: &[i32], cols: usi
             underline: underline(ul_style),
             underline_color: color(ul_color, flags, UL_PALETTE, UL_RGB),
             attrs: attrs(flags),
+            hyperlink: usize::try_from(link)
+                .ok()
+                .and_then(|link| links.get(link.checked_sub(1)?))
+                .cloned(),
         });
 
         if row.len() == cols {
@@ -518,6 +554,7 @@ mod tests {
             // `isAttributeDefault()`, and the color is absent from the line's
             // extended attributes while remaining in the current SGR state.
             underline_color_needs_a_style: true,
+            hyperlink_has_no_id: false,
         }
     );
 }
