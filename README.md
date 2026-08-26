@@ -34,6 +34,15 @@ Use the CLI from shell scripts and agent workflows. The Rust, Python, and JavaSc
 
 ### macOS and Linux
 
+With Homebrew:
+
+```sh
+brew tap microsoft/tui-test https://github.com/microsoft/tui-test
+brew install tui-test
+```
+
+Or with the install script:
+
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | TUI_TEST_VERSION=beta sh
 ```
