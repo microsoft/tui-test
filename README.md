@@ -292,14 +292,14 @@ Calling `open` or `run` for a session that already has a live child reuses that 
 
 #### Terminal backends
 
-Select a backend per session with `--backend`. The available values are `alacritty` (default), `ghostty`, `rio`, and `xtermjs`; Ghostty uses [Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs), and `xtermjs` runs [xterm.js](https://xtermjs.org) — the emulator behind VS Code's terminal — inside an embedded QuickJS interpreter.
+Select a backend per session with `--backend`. The available values are `alacritty` (default), `ghostty`, `rio`, and `xtermjs`; Ghostty uses [Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs), and `xtermjs` runs [xterm.js](https://xtermjs.org) inside [QuickJS](https://bellard.org/quickjs/).
 
 ```sh
 tui-test open --backend ghostty
 tui-test run --backend xtermjs vim file.txt
 ```
 
-All backends use the same renderer, assertions, snapshot format, and conformance suite. Shell semantic-prompt tracking reads raw PTY bytes, so command boundaries, exit codes, and cwd tracking do not depend on the selected backend. Backend-specific VT behavior can differ: Ghostty preserves SGR blink, while Alacritty parses blink but cannot report it. xterm.js records a cell's underline color only when that cell also has an underline style, which changes nothing about how a cell renders.
+All backends use the same renderer, assertions, snapshot format, and conformance suite. Shell semantic-prompt tracking reads raw PTY bytes, so command boundaries, exit codes, and cwd tracking do not depend on the selected backend. Backend-specific VT behavior can differ: Ghostty preserves SGR blink, while Alacritty parses blink but cannot report it. xterm.js records a cell's underline color only when that cell also has an underline style.
 
 The CLI and published Python and JavaScript packages include all backends. Windows ARM64 artifacts are not currently published because Ghostty's upstream Zig build does not support that target.
 
@@ -319,7 +319,7 @@ let options = OpenOptions {
 };
 ```
 
-The default Rust features include only Alacritty and do not require Zig. The `ghostty` feature builds a pinned Ghostty revision and requires Zig 0.16 on `PATH`. The `xtermjs` feature needs no extra tooling — xterm.js is vendored and embedded, so it depends on nothing installed on the machine, at the cost of compiling QuickJS and carrying about 230 KB of JavaScript in the binary.
+The default Rust features include only Alacritty and do not require Zig. The `ghostty` feature builds a pinned Ghostty revision and requires Zig 0.16 on `PATH`.
 
 ### Terminal control
 
@@ -530,25 +530,6 @@ The default palette is the classic VGA/xterm palette expected by `TERM=xterm-256
 | Python and JavaScript bindings | ✅ | ❌ | ❌ | ❌ |
 | Runtime | Native | Node.js | Node.js | Native |
 | Platforms | Windows, Linux, and macOS | Windows, Linux, and macOS | Windows, Linux, and macOS | Linux and macOS |
-
-## Development
-
-Building the workspace with default features needs only a Rust toolchain. Of the optional backends, only `ghostty` adds a build requirement:
-
-| Feature | Requires | Why |
-| ------- | -------- | --- |
-| `ghostty` | Zig 0.16 on `PATH` | builds a pinned Ghostty revision from source |
-| `rio` | — | ordinary Rust dependency |
-| `xtermjs` | — | xterm.js is vendored in the repository |
-
-The xterm.js bundles are committed under `crates/tui-test/assets/xtermjs` at the versions `pinned.json` names, so a clone builds without a network. To update them by hand:
-
-```sh
-.github/scripts/vendor-xtermjs.sh --latest   # or omit --latest to re-fetch the pinned versions
-cargo test -p tui-test-rs --features xtermjs
-```
-
-`.github/workflows/xtermjs-update.yml` runs that same script weekly and opens a pull request when either package has a newer release, so a vendored bundle does not quietly fall behind.
 
 ## Debugging
 
