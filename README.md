@@ -59,9 +59,9 @@ Download the latest beta for your platform from [GitHub Releases](https://github
 Install [`tui-test-rs`](https://crates.io/crates/tui-test-rs):
 
 ```sh
-cargo add tui-test-rs@0.1.0-beta.2
+cargo add tui-test-rs@0.1.0-beta.3
 # Add APNG/GIF/MP4 export support when the Rust application needs raster recording:
-cargo add tui-test-rs@0.1.0-beta.2 --features recording-raster
+cargo add tui-test-rs@0.1.0-beta.3 --features recording-raster
 ```
 
 Raster recording uses installed system fonts unless a JetBrains Mono bundle feature is enabled:

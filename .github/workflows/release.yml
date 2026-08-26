@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing beta release tag to publish (for example, 0.1.0-beta.2)
+        description: Existing beta release tag to publish (for example, 0.1.0-beta.3)
         required: true
         type: string
 
