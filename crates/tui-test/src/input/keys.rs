@@ -536,14 +536,22 @@ fn action_events(action: KeyAction) -> &'static [KeyEventKind] {
 /// never has to know tui-test's spelling of a key name.
 #[derive(Debug, Clone)]
 pub struct KeyPress {
-    /// The key's name, lowercased. Either one of the named keys (`"up"`,
-    /// `"f5"`, `"enter"`) or a single character.
+    /// The key's name. Either one of the named keys, lowercased (`"up"`,
+    /// `"f5"`, `"enter"`), or the single *unshifted* character the key sits
+    /// on, so `!` arrives as `"1"` with `mods.shift`.
     ///
     /// Owned rather than borrowed: a key name is a handful of bytes, and the
     /// ghostty backend has to move it to the thread that owns its terminal.
     pub key: CompactString,
     pub mods: Mods,
     pub event: KeyEventKind,
+    /// The text this key produces, for the keys that produce any.
+    ///
+    /// Carried rather than derived because deriving it needs a keyboard
+    /// layout: `Shift+1` is `!` on a US layout and `"` on a UK one. tui-test
+    /// works in the US layout its token vocabulary already assumes, and a
+    /// backend encoder is handed the answer rather than asked to guess.
+    pub text: Option<CompactString>,
 }
 
 /// Split a token into the key events an action produces.
@@ -566,25 +574,55 @@ pub fn token_to_presses(token: &str, action: KeyAction) -> anyhow::Result<Vec<Ke
         InputModes::default(),
     )
     .is_some();
-    let keys: Vec<CompactString> = if is_named || parsed.key.chars().count() == 1 {
-        vec![parsed.key.to_ascii_lowercase().into()]
+
+    // Mirrors how `token_to_seq_for_action_with_mode` classifies the same
+    // token, so both encoders are handed the same events. A named key keeps
+    // its name; a character is reduced to the key it sits on plus the text it
+    // produces, which is what an encoder needs to know.
+    let keys: Vec<(CompactString, Mods, Option<CompactString>)> = if is_named {
+        let text = (parsed.key.eq_ignore_ascii_case("space")).then(|| " ".into());
+        vec![(parsed.key.to_ascii_lowercase().into(), parsed.mods, text)]
+    } else if parsed.key.chars().count() == 1 {
+        let ch = parsed.key.chars().next().expect("one character");
+        let (key, mods) = if parsed.mods.any() {
+            (ch, parsed.mods)
+        } else {
+            literal_key(ch)
+        };
+        vec![(key.to_compact_string(), mods, Some(produced_text(key, mods)))]
     } else if parsed.mods.any() {
         anyhow::bail!("invalid key: '{}'", parsed.key);
     } else {
-        parsed.key.chars().map(|ch| ch.to_compact_string()).collect()
+        parsed
+            .key
+            .chars()
+            .map(|ch| {
+                let (key, mods) = literal_key(ch);
+                (key.to_compact_string(), mods, Some(produced_text(key, mods)))
+            })
+            .collect()
     };
 
     let mut out = Vec::new();
-    for key in keys {
+    for (key, mods, text) in keys {
         for &event in action_events(action) {
             out.push(KeyPress {
                 key: key.clone(),
-                mods: parsed.mods,
+                mods,
                 event,
+                text: text.clone(),
             });
         }
     }
     Ok(out)
+}
+
+/// The text an unshifted key plus its modifiers actually produces.
+fn produced_text(key: char, mods: Mods) -> CompactString {
+    match mods.shift.then(|| shift_ascii(key)).flatten() {
+        Some(shifted) => shifted.to_compact_string(),
+        None => key.to_compact_string(),
+    }
 }
 
 /// Translate one key token and action using the active terminal keyboard mode.

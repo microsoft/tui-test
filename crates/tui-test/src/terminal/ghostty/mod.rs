@@ -230,11 +230,9 @@ mod tests {
     });
 
     fn press(key: &str) -> KeyPress {
-        KeyPress {
-            key: key.into(),
-            mods: crate::input::keys::Mods::default(),
-            event: crate::input::keys::KeyEventKind::Press,
-        }
+        crate::input::keys::token_to_presses(key, crate::api::KeyAction::Down)
+            .expect("valid token")
+            .remove(0)
     }
 
     /// The whole point of routing: ghostty's encoder reads the modes off the
@@ -259,10 +257,8 @@ mod tests {
         assert_eq!(emu.encode_key(&press("a")).as_deref(), Some(&b"a"[..]));
 
         emu.process(b"\x1b[>1u");
-        let mut escape = press("a");
-        escape.key = "escape".into();
         assert_eq!(
-            emu.encode_key(&escape).as_deref(),
+            emu.encode_key(&press("Escape")).as_deref(),
             Some(&b"\x1b[27u"[..]),
             "disambiguation is what mode 1 asks for"
         );
@@ -275,11 +271,7 @@ mod tests {
     fn kitty_only_modifiers_decline_rather_than_lose_the_modifier() {
         let emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
         for modifier in ["hyper", "meta"] {
-            let mut event = press("a");
-            match modifier {
-                "hyper" => event.mods.hyper = true,
-                _ => event.mods.meta = true,
-            }
+            let event = press(&format!("{modifier}+a"));
             assert_eq!(emu.encode_key(&event), None, "{modifier} is not encodable");
         }
     }

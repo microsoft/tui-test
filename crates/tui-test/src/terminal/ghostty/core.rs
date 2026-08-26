@@ -8,6 +8,7 @@ use compact_str::CompactString;
 use ghostty_vt::error::Error as GhosttyError;
 use ghostty_vt::key::{
     Action as GhosttyKeyAction, Encoder, Event as GhosttyKeyEvent, Key, Mods as GhosttyMods,
+    OptionAsAlt,
 };
 use ghostty_vt::render::{CellIterator, CursorVisualStyle, RowIterator};
 use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef};
@@ -255,24 +256,28 @@ impl GhosttyCore {
             })
             .set_mods(ghostty_mods(press.mods));
 
-        // A printable key carries the text it produces. Ghostty needs it to
-        // encode the associated-text and alternate-key parts of the Kitty
-        // protocol, and to know a press is text-bearing at all.
+        // A key that produces text has to say so. Ghostty encodes nothing at
+        // all for a text-bearing key with no `utf8` set, and needs it for the
+        // associated-text and alternate-key parts of the Kitty protocol.
+        // `unshifted_codepoint` is what the key sits on, which is exactly what
+        // `KeyPress::key` already holds for a character.
         let mut chars = press.key.chars();
         if let (Some(ch), None) = (chars.next(), chars.next()) {
-            let text = if press.mods.shift {
-                ch.to_uppercase().to_string()
-            } else {
-                ch.to_string()
-            };
             event.set_unshifted_codepoint(ch);
-            if press.event != KeyEventKind::Release {
+        }
+        if press.event != KeyEventKind::Release {
+            if let Some(text) = press.text.as_deref() {
                 event.set_utf8(Some(text));
             }
         }
 
         let mut encoder = Encoder::new().context("creating key encoder")?;
         encoder.set_options_from_terminal(&self.terminal);
+        // `set_options_from_terminal` resets this to `False`, which is a
+        // macOS GUI question rather than a terminal one: with it off, Alt is
+        // Option and composes text instead of prefixing ESC. A headless
+        // session has no keyboard and no compose behavior, so Alt is Alt.
+        encoder.set_macos_option_as_alt(OptionAsAlt::True);
         let mut out = Vec::with_capacity(16);
         encoder
             .encode_to_vec(&event, &mut out)
