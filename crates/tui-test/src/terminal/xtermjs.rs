@@ -403,10 +403,6 @@ impl Emulator for XtermJsEmu {
             .clone()
     }
 
-    fn ensure_bell_support(&self) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     fn take_pending_writes(&mut self) -> Vec<u8> {
         self.call::<String>("takeReplies").into_bytes()
     }

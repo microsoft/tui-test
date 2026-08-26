@@ -69,9 +69,7 @@ impl Backend {
         }
     }
 
-    /// Like [`Self::build`], but wires up bell tracking where the backend
-    /// supports it. Backends without native bell support report that
-    /// limitation when a bell operation is requested.
+    /// Like [`Self::build`], but wires up bell tracking.
     pub(crate) fn build_with_bells(
         self,
         cols: u16,
@@ -83,9 +81,10 @@ impl Backend {
             Self::Alacritty => Ok(Box::new(AlacrittyEmu::with_bell_tracker(
                 cols, rows, profile, bells,
             ))),
-            // Ghostty does not expose bell events through its Rust bindings.
             #[cfg(feature = "ghostty")]
-            Self::Ghostty => self.build(cols, rows, profile),
+            Self::Ghostty => Ok(Box::new(GhosttyEmu::with_bell_tracker(
+                cols, rows, profile, bells,
+            )?)),
             #[cfg(feature = "rio")]
             Self::Rio => Ok(Box::new(RioEmu::with_bell_tracker(
                 cols, rows, profile, bells,

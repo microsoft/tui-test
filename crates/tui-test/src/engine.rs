@@ -12,7 +12,6 @@ use crate::api::{
 use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
 use crate::config::{self, POLL_DELAY_MS};
-use crate::event::BellTracker;
 use crate::input::{keys, mouse};
 use crate::logger::Logger;
 use crate::session::{Session as TerminalSession, TermState};
@@ -565,10 +564,10 @@ fn dispatch(
                 .size();
             Ok(OperationResult::Size(Size { cols, rows }))
         }
-        Operation::GetBellCount => Ok(OperationResult::BellCount(bell_tracker(session)?.count())),
-        Operation::GetBellEvents => Ok(OperationResult::BellEvents(
-            bell_tracker(session)?.snapshot().events,
-        )),
+        Operation::GetBellCount => Ok(OperationResult::BellCount(session.bells.count())),
+        Operation::GetBellEvents => {
+            Ok(OperationResult::BellEvents(session.bells.snapshot().events))
+        }
         Operation::Write { data } => {
             act(session.write(data.as_bytes()))?;
             Ok(OperationResult::Unit)
@@ -759,15 +758,6 @@ fn dispatch(
 
 fn act(result: anyhow::Result<()>) -> Result<(), TuiTestError> {
     result.map_err(|error| TuiTestError::internal(error.to_string()))
-}
-
-fn bell_tracker(session: &TerminalSession) -> Result<&BellTracker, TuiTestError> {
-    let state = session
-        .state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    act(state.emu.ensure_bell_support())?;
-    Ok(&session.bells)
 }
 
 fn state(session: &TerminalSession) -> crate::api::State {
@@ -1233,12 +1223,11 @@ fn wait_ready(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestE
 }
 
 fn wait_bell(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
-    let bells = bell_tracker(session)?;
-    let baseline = bells.sequence();
+    let baseline = session.bells.sequence();
     let mut rang = false;
     poll_until(
         || {
-            rang = bells.sequence() != baseline;
+            rang = session.bells.sequence() != baseline;
             rang || session_stopped(session)
         },
         timeout_ms,
@@ -1458,11 +1447,10 @@ fn expect_bell_count(
     expected: u64,
     timeout_ms: u64,
 ) -> Result<(), TuiTestError> {
-    let bells = bell_tracker(session)?;
-    let mut actual = bells.count();
+    let mut actual = session.bells.count();
     poll_until(
         || {
-            actual = bells.count();
+            actual = session.bells.count();
             actual >= expected || session_stopped(session)
         },
         timeout_ms,

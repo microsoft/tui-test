@@ -307,7 +307,7 @@ fn wait_ready_without_a_session_reports_no_session() {
 
 #[test]
 fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
-    for backend in [Backend::Alacritty, Backend::Rio, Backend::Xtermjs] {
+    for &backend in Backend::ALL {
         let sandbox = Sandbox::new("bells");
         sandbox.ok(&["open", "--backend", backend.as_str()]);
 
@@ -347,28 +347,6 @@ fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
             serde_json::from_str(&sandbox.ok(&["--json", "get", "bells"]))
                 .expect("parse final bell count response");
         assert_eq!(response["data"]["value"], 3, "{}", backend.as_str());
-    }
-}
-
-#[test]
-fn ghostty_bell_operations_report_the_unsupported_feature() {
-    let sandbox = Sandbox::new("ghostty-bells");
-    sandbox.ok(&["open", "--backend", "ghostty"]);
-
-    for args in [
-        &["get", "bells"][..],
-        &["get", "bell-events"][..],
-        &["wait", "bell", "--timeout", "1"][..],
-        &["expect", "bell", "1", "--timeout", "1"][..],
-    ] {
-        let output = sandbox.run(args);
-        assert!(!output.status.success(), "`tui-test {}`", args.join(" "));
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("bell events are not supported by this terminal backend"),
-            "`tui-test {}`: {stderr}",
-            args.join(" ")
-        );
     }
 }
 

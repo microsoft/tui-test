@@ -64,14 +64,6 @@ pub trait Emulator: Send {
     /// forwards these to the PTY.
     fn take_pending_writes(&mut self) -> Vec<u8>;
 
-    /// Confirm that this backend reports terminal bell events.
-    ///
-    /// Bell operations must fail explicitly when a backend cannot observe
-    /// them rather than returning a permanent zero or waiting until timeout.
-    fn ensure_bell_support(&self) -> anyhow::Result<()> {
-        anyhow::bail!("bell events are not supported by this terminal backend")
-    }
-
     /// Active Kitty keyboard protocol flags negotiated by the child.
     fn keyboard_mode(&self) -> KeyboardMode {
         KeyboardMode::empty()

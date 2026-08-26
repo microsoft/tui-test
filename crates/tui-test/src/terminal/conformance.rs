@@ -30,9 +30,6 @@ pub enum Divergence {
     /// underline color either way. What is lost is the color surviving in the
     /// cell vocabulary across an `SGR 24` that turns the underline off.
     UnderlineColorNeedsAStyle,
-
-    /// The backend cannot report terminal bell events.
-    BellEventsUnsupported,
 }
 
 /// Generates the conformance tests for one backend. `$make` builds a boxed
@@ -98,25 +95,6 @@ macro_rules! emulator_conformance_tests {
                 assert_eq!(row.len(), 10, "every row must be full width");
             }
             assert_eq!(e.size(), (10, 4));
-        }
-
-        /// Bell availability is explicit rather than indistinguishable from a
-        /// session in which no bell has rung.
-        #[test]
-        fn conformance_bell_event_support_is_explicit() {
-            let e = conformance_emu(10, 4, 100);
-            let support = e.ensure_bell_support();
-            if CONFORMANCE_DIVERGENCES
-                .contains(&$crate::terminal::conformance::Divergence::BellEventsUnsupported)
-            {
-                let error = support.expect_err("an unsupported backend must return an error");
-                assert!(
-                    error.to_string().contains("not supported"),
-                    "the error explains that bell events are unsupported: {error}"
-                );
-            } else {
-                support.expect("bell event support");
-            }
         }
 
         /// `full_rows` is as rectangular as `viewable_rows`; ragged history
