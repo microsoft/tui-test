@@ -256,6 +256,15 @@ impl GhosttyCore {
             })
             .set_mods(ghostty_mods(press.mods));
 
+        // Shift that went into producing the text is *consumed*: it made `A`
+        // out of `a` and is not reported separately. Without this a plain
+        // `Shift+a` encodes as `CSI 97;2u` instead of the text `A`, and the
+        // Kitty spec is explicit that a text-producing key still sends its
+        // text when only disambiguation is on.
+        if press.mods.shift && press.text.as_deref().is_some_and(|text| text != press.key) {
+            event.set_consumed_mods(GhosttyMods::SHIFT);
+        }
+
         // A key that produces text has to say so. Ghostty encodes nothing at
         // all for a text-bearing key with no `utf8` set, and needs it for the
         // associated-text and alternate-key parts of the Kitty protocol.
