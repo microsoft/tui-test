@@ -10,10 +10,10 @@ use std::thread::{self, JoinHandle};
 use alacritty_terminal::vte::{Params, Parser, Perform};
 use anyhow::{anyhow, Context, Result};
 
-use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::input::keys::KeyPress;
+use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::EmuCell;
-use crate::terminal::emu::{CursorShape, Emulator};
+use crate::terminal::emu::{CursorShape, Emulator, KeyboardMode};
 
 use self::core::GhosttyCore;
 
@@ -178,6 +178,10 @@ impl Emulator for GhosttyEmu {
         self.call_result("reading cursor key mode", |core| {
             core.cursor_key_application()
         })
+    }
+
+    fn keyboard_mode(&self) -> KeyboardMode {
+        self.call_result("reading keyboard mode", |core| core.keyboard_mode())
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {

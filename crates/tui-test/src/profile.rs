@@ -30,6 +30,13 @@ use crate::terminal::cell::NamedColor;
 /// xterm.js 1,000), so this is always set explicitly rather than inherited.
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
 
+/// Whether the Kitty keyboard protocol is honored when a profile is silent.
+///
+/// On, because a session that ignored the protocol would send legacy keys to
+/// a child that had asked for `CSI u` and asked to be told about key releases,
+/// which is not a terminal any user runs.
+pub const DEFAULT_KITTY_KEYBOARD: bool = true;
+
 /// The file a profile is read from, under the config directory.
 pub const CONFIG_FILE: &str = "tui-test.toml";
 
@@ -317,6 +324,15 @@ pub fn xterm_color(index: u8) -> Rgb {
 pub struct Profile {
     /// Rows retained beyond the visible screen.
     pub scrollback: usize,
+    /// Whether the terminal honors the Kitty keyboard protocol.
+    ///
+    /// Turning this off makes the session behave like a terminal that never
+    /// implemented the protocol: the child's mode pushes are ignored, so
+    /// [`crate::terminal::emu::Emulator::keyboard_mode`] stays empty and
+    /// `key press` keeps sending legacy encodings. That is the state a TUI
+    /// falls back to on the many terminals that lack the protocol, and it is
+    /// worth being able to test against.
+    pub kitty_keyboard: bool,
     pub colors: Colors,
 }
 
@@ -324,6 +340,7 @@ impl Default for Profile {
     fn default() -> Self {
         Profile {
             scrollback: DEFAULT_SCROLLBACK,
+            kitty_keyboard: DEFAULT_KITTY_KEYBOARD,
             colors: Colors::default(),
         }
     }
@@ -334,6 +351,7 @@ impl Default for Profile {
 #[serde(default, deny_unknown_fields)]
 pub struct ConfigProfile {
     pub scrollback: usize,
+    pub kitty_keyboard: bool,
     pub colors: Colors,
     pub timeouts: crate::api::Timeouts,
 }
@@ -342,6 +360,7 @@ impl Default for ConfigProfile {
     fn default() -> Self {
         Self {
             scrollback: DEFAULT_SCROLLBACK,
+            kitty_keyboard: DEFAULT_KITTY_KEYBOARD,
             colors: Colors::default(),
             timeouts: crate::api::Timeouts::default(),
         }
@@ -360,6 +379,7 @@ impl From<ConfigProfile> for Settings {
         Self {
             profile: Profile {
                 scrollback: value.scrollback,
+                kitty_keyboard: value.kitty_keyboard,
                 colors: value.colors,
             },
             timeouts: value.timeouts,
@@ -520,6 +540,27 @@ mod tests {
         let cfg = ConfigFile::parse("").unwrap();
         assert_eq!(cfg.profile(None).unwrap(), Profile::default());
         assert_eq!(Profile::default().scrollback, 10_000);
+        assert!(
+            Profile::default().kitty_keyboard,
+            "the protocol is honored unless a profile says otherwise"
+        );
+    }
+
+    /// `kitty_keyboard` is the one profile field that turns a whole protocol
+    /// off, so it is read from the config file rather than only settable
+    /// through the in-process APIs.
+    #[test]
+    fn a_profile_can_turn_the_kitty_keyboard_protocol_off() {
+        let cfg = ConfigFile::parse(
+            r##"
+            [profiles.legacy]
+            kitty_keyboard = false
+            "##,
+        )
+        .unwrap();
+        let p = cfg.profile(Some("legacy")).unwrap();
+        assert!(!p.kitty_keyboard);
+        assert_eq!(p.scrollback, DEFAULT_SCROLLBACK, "other fields untouched");
     }
 
     /// Every field is individually optional, so a profile can set one color

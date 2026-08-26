@@ -20,7 +20,7 @@ const TIMEOUT_CLASSES: readonly TimeoutClass[] = [
   "ready",
 ];
 const BACKENDS: readonly Backend[] = ["alacritty", "ghostty", "rio", "xtermjs"];
-const PROFILE_FIELDS = new Set(["scrollback", "colors"]);
+const PROFILE_FIELDS = new Set(["scrollback", "kittyKeyboard", "colors"]);
 const COLOR_FIELDS = new Map([
   ["foreground", "foreground"],
   ["background", "background"],
@@ -114,6 +114,7 @@ function profileObject(value: unknown, name: string): Record<string, unknown> {
 
 export interface ProfilePayload {
   scrollback?: number;
+  kittyKeyboard?: boolean;
   colors: [string, string][];
 }
 
@@ -143,11 +144,13 @@ export function profilePayload(profile?: Profile): ProfilePayload | undefined {
     }
     return {
       scrollback: raw.scrollback as number | undefined,
+      kittyKeyboard: raw.kittyKeyboard as boolean | undefined,
       colors: payloadColors,
     };
   }
   return {
     scrollback: raw.scrollback as number | undefined,
+    kittyKeyboard: raw.kittyKeyboard as boolean | undefined,
     colors: [],
   };
 }

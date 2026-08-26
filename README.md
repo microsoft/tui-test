@@ -352,6 +352,7 @@ Key input follows the Kitty keyboard protocol negotiated by the child. A `key pr
 Cursor keys follow `DECCKM` (`CSI ?1h`), so `key press Up` sends `SS3 A` to a child that asked for application cursor keys and `CSI A` otherwise. readline, vim, and less all set it.
 
 Encoding is done by the backend's own key encoder where it has one, and by tui-test's shared encoder otherwise. Only ghostty ships one; alacritty and rio keep theirs in their GUI crates rather than their VT libraries, and the xterm.js headless bundle omits key handling entirely. Routing to it matters because a backend's encoder reads terminal state the shared encoder does not model, such as keypad application mode and `modifyOtherKeys`.
+Set `kitty_keyboard = false` on a profile to run against a terminal that never implemented the protocol, so a child's mode requests are ignored and keys keep their legacy encodings. The `xtermjs` backend always behaves this way: its bundle has no implementation of the protocol.
 
 #### PTY control
 
@@ -476,6 +477,7 @@ With `--json`, failures also carry a `"kind"` field (`assertion`/`usage`/`no_ses
 ```toml
 [profiles.default]
 scrollback = 10000            # rows kept beyond the visible screen
+kitty_keyboard = true         # honor the Kitty keyboard protocol
 
 [profiles.default.colors]
 background = "#000000"
@@ -485,6 +487,7 @@ red        = "#800000"        # any of the 16 ANSI slots, by name
 
 [profiles.ci]
 scrollback = 500              # other fields use built-in defaults
+kitty_keyboard = false        # behave like a terminal without the protocol
 ```
 
 ```bash

@@ -7,8 +7,8 @@ use anyhow::{anyhow, Context, Result};
 use compact_str::CompactString;
 use ghostty_vt::error::Error as GhosttyError;
 use ghostty_vt::key::{
-    Action as GhosttyKeyAction, Encoder, Event as GhosttyKeyEvent, Key, Mods as GhosttyMods,
-    OptionAsAlt,
+    Action as GhosttyKeyAction, Encoder, Event as GhosttyKeyEvent, Key, KittyKeyFlags,
+    Mods as GhosttyMods, OptionAsAlt,
 };
 use ghostty_vt::render::{CellIterator, CursorVisualStyle, RowIterator};
 use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef};
@@ -22,7 +22,7 @@ use ghostty_vt::{RenderState, Terminal};
 use crate::input::keys::{KeyEventKind, KeyPress, Mods};
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::CursorShape;
+use crate::terminal::emu::{CursorShape, KeyboardMode};
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
     RgbColor {
@@ -289,6 +289,47 @@ impl GhosttyCore {
         self.terminal
             .mode(Mode::DECCKM)
             .context("reading cursor key mode")
+    }
+
+    /// Kitty keyboard flags the child has pushed onto ghostty's mode stack.
+    ///
+    /// Ghostty's `Terminal` takes no configuration, so a profile that turns
+    /// the protocol off is honored here rather than in the emulator: the
+    /// modes are still tracked, they just never reach key encoding.
+    pub(super) fn keyboard_mode(&self) -> Result<KeyboardMode> {
+        if !self.profile.kitty_keyboard {
+            return Ok(KeyboardMode::empty());
+        }
+        let flags = self
+            .terminal
+            .kitty_keyboard_flags()
+            .context("reading Kitty keyboard flags")?;
+        let mut mode = KeyboardMode::empty();
+        for (ghostty_flag, keyboard_flag) in [
+            (
+                KittyKeyFlags::DISAMBIGUATE,
+                KeyboardMode::DISAMBIGUATE_ESC_CODES,
+            ),
+            (
+                KittyKeyFlags::REPORT_EVENTS,
+                KeyboardMode::REPORT_EVENT_TYPES,
+            ),
+            (
+                KittyKeyFlags::REPORT_ALTERNATES,
+                KeyboardMode::REPORT_ALTERNATE_KEYS,
+            ),
+            (
+                KittyKeyFlags::REPORT_ALL,
+                KeyboardMode::REPORT_ALL_KEYS_AS_ESC,
+            ),
+            (
+                KittyKeyFlags::REPORT_ASSOCIATED,
+                KeyboardMode::REPORT_ASSOCIATED_TEXT,
+            ),
+        ] {
+            mode.set(keyboard_flag, flags.contains(ghostty_flag));
+        }
+        Ok(mode)
     }
 
     pub(super) fn resize(&mut self, cols: u16, rows: u16) -> Result<()> {
