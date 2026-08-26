@@ -264,7 +264,6 @@ impl GhosttyCore {
         if press.mods.shift && press.text.as_deref().is_some_and(|text| text != press.key) {
             event.set_consumed_mods(GhosttyMods::SHIFT);
         }
-
         // A key that produces text has to say so. Ghostty encodes nothing at
         // all for a text-bearing key with no `utf8` set, and needs it for the
         // associated-text and alternate-key parts of the Kitty protocol.
@@ -287,6 +286,16 @@ impl GhosttyCore {
         // Option and composes text instead of prefixing ESC. A headless
         // session has no keyboard and no compose behavior, so Alt is Alt.
         encoder.set_macos_option_as_alt(OptionAsAlt::True);
+        // `set_options_from_terminal` reads the Kitty flags straight off the
+        // terminal, which is the whole point of routing here but goes around
+        // the profile. A disabled profile still tracks the modes a child
+        // pushes, it just must not encode with them, so they are cleared back
+        // out after the terminal has had its say. Without this a session with
+        // `kitty_keyboard = false` reports no flags and then encodes `Escape`
+        // as `CSI 27u` anyway.
+        if !self.profile.kitty_keyboard {
+            encoder.set_kitty_flags(KittyKeyFlags::DISABLED);
+        }
         let mut out = Vec::with_capacity(16);
         encoder
             .encode_to_vec(&event, &mut out)
