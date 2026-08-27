@@ -203,9 +203,14 @@ fn text_locators_are_lazy_reusable_queries() {
         .unwrap_err()
         .message
         .contains("Terminal content:"));
+    let command = if cfg!(windows) {
+        "Write-Output ('locator-'+'target locator-'+'target')"
+    } else {
+        "printf 'locator-%s locator-%s\\n' target target"
+    };
     session
         .execute(Operation::Submit {
-            data: Some("echo locator-target locator-target".to_string()),
+            data: Some(command.to_string()),
         })
         .expect("submit locator output");
     locator
