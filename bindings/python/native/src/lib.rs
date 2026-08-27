@@ -8,8 +8,8 @@ use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
-    Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, KeyAction, MouseAction, OpenOptions,
-    OpenResult, Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions,
+    Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, KeyAction, MouseAction, MouseOptions,
+    OpenOptions, OpenResult, Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions,
     ScreenshotResult, Size, SnapshotResult, State, Timeouts, TuiTestError,
 };
 
@@ -473,7 +473,7 @@ impl NativeSession {
                             x: x.as_ref().map(|x| integer_u16(x, "x")).transpose()?,
                             y: y.as_ref().map(|y| integer_u16(y, "y")).transpose()?,
                             on_text,
-                            button: integer_u8(&button, "button")?,
+                            options: mouse_options(&button)?,
                             clicks: integer_u8(&clicks, "clicks")?,
                         },
                     },
@@ -529,7 +529,7 @@ impl NativeSession {
                         action: MouseAction::Down {
                             x: integer_u16(&x, "x")?,
                             y: integer_u16(&y, "y")?,
-                            button: integer_u8(&button, "button")?,
+                            options: mouse_options(&button)?,
                         },
                     },
                 )
@@ -558,7 +558,7 @@ impl NativeSession {
                         action: MouseAction::Up {
                             x: integer_u16(&x, "x")?,
                             y: integer_u16(&y, "y")?,
-                            button: integer_u8(&button, "button")?,
+                            options: mouse_options(&button)?,
                         },
                     },
                 )
@@ -593,7 +593,7 @@ impl NativeSession {
                             y1: integer_u16(&y1, "y1")?,
                             x2: integer_u16(&x2, "x2")?,
                             y2: integer_u16(&y2, "y2")?,
-                            button: integer_u8(&button, "button")?,
+                            options: mouse_options(&button)?,
                         },
                     },
                 )
@@ -1223,6 +1223,12 @@ fn capture_optional_integer(value: Option<Bound<'_, PyAny>>) -> Option<IntegerIn
 
 fn integer_u8(value: &IntegerInput, name: &str) -> Result<u8, TuiTestError> {
     integer_unsigned(value, name, u8::MAX as u128).map(|value| value as u8)
+}
+
+fn mouse_options(value: &IntegerInput) -> Result<MouseOptions, TuiTestError> {
+    let code = integer_u8(value, "button")?;
+    MouseOptions::from_sgr_code(code)
+        .ok_or_else(|| TuiTestError::usage(format!("invalid mouse button code {code}")))
 }
 
 fn integer_u16(value: &IntegerInput, name: &str) -> Result<u16, TuiTestError> {

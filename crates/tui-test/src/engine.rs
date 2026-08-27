@@ -878,7 +878,7 @@ fn mouse_action(
             x,
             y,
             on_text,
-            button,
+            options,
             clicks,
         } => {
             let (x, y) = if let Some(text) = on_text {
@@ -890,24 +890,24 @@ fn mouse_action(
             };
             let mut out = String::new();
             for _ in 0..clicks.max(1) {
-                out.push_str(&mouse::click(x, y, button));
+                out.push_str(&mouse::click(x, y, options));
             }
             out
         }
         crate::api::MouseAction::Move { x, y } => mouse::motion(x, y),
-        crate::api::MouseAction::Down { x, y, button } => mouse::down(x, y, button),
-        crate::api::MouseAction::Up { x, y, button } => mouse::up(x, y, button),
+        crate::api::MouseAction::Down { x, y, options } => mouse::down(x, y, options),
+        crate::api::MouseAction::Up { x, y, options } => mouse::up(x, y, options),
         crate::api::MouseAction::Drag {
             x1,
             y1,
             x2,
             y2,
-            button,
+            options,
         } => format!(
             "{}{}{}",
-            mouse::down(x1, y1, button),
-            mouse::drag_motion(x2, y2, button),
-            mouse::up(x2, y2, button)
+            mouse::down(x1, y1, options),
+            mouse::drag_motion(x2, y2, options),
+            mouse::up(x2, y2, options)
         ),
         crate::api::MouseAction::Scroll { direction, amount } => {
             let up = direction.eq_ignore_ascii_case("up");

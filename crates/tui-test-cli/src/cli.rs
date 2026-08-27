@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand};
 
 use tui_test::config::{DEFAULT_COLS, DEFAULT_ROWS};
 use tui_test::shell::Shell;
-use tui_test::{Backend, RecordingFormat, Timeouts};
+use tui_test::{Backend, MouseButton, MouseOptions, RecordingFormat, Timeouts};
 
 #[derive(Clone, Copy, clap::ValueEnum)]
 #[clap(rename_all = "lowercase")]
@@ -453,6 +453,39 @@ mod tests {
     }
 
     #[test]
+    fn mouse_commands_parse_named_buttons_and_modifiers() {
+        let cli = Cli::try_parse_from([
+            "tui-test", "mouse", "click", "4", "7", "--button", "right", "--ctrl", "--shift",
+        ])
+        .expect("parse mouse options");
+        let Some(Command::Mouse {
+            action: MouseCmd::Click { options, .. },
+        }) = cli.command
+        else {
+            panic!("expected mouse click");
+        };
+        assert_eq!(
+            MouseOptions::from(options),
+            MouseOptions {
+                button: MouseButton::Right,
+                ctrl: true,
+                shift: true,
+                ..MouseOptions::default()
+            }
+        );
+
+        let numeric = Cli::try_parse_from(["tui-test", "mouse", "down", "4", "7", "--button", "1"])
+            .expect("parse legacy numeric button");
+        let Some(Command::Mouse {
+            action: MouseCmd::Down { options, .. },
+        }) = numeric.command
+        else {
+            panic!("expected mouse down");
+        };
+        assert_eq!(MouseOptions::from(options).button, MouseButton::Middle);
+    }
+
+    #[test]
     fn skill_accepts_the_add_flag() {
         let cli = Cli::try_parse_from(["tui-test", "skill", "--add"]).expect("parse skill");
         assert!(matches!(cli.command, Some(Command::Skill { add: true })));
@@ -843,6 +876,55 @@ pub enum KeyCmd {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub enum MouseButtonArg {
+    #[default]
+    #[value(alias = "0")]
+    Left,
+    #[value(alias = "1")]
+    Middle,
+    #[value(alias = "2")]
+    Right,
+}
+
+impl From<MouseButtonArg> for MouseButton {
+    fn from(button: MouseButtonArg) -> Self {
+        match button {
+            MouseButtonArg::Left => MouseButton::Left,
+            MouseButtonArg::Middle => MouseButton::Middle,
+            MouseButtonArg::Right => MouseButton::Right,
+        }
+    }
+}
+
+#[derive(Args, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseOptionsArg {
+    /// Mouse button.
+    #[arg(long, value_enum, default_value = "left")]
+    button: MouseButtonArg,
+    /// Hold Alt while sending the mouse action.
+    #[arg(long)]
+    alt: bool,
+    /// Hold Ctrl while sending the mouse action.
+    #[arg(long)]
+    ctrl: bool,
+    /// Hold Shift while sending the mouse action.
+    #[arg(long)]
+    shift: bool,
+}
+
+impl From<MouseOptionsArg> for MouseOptions {
+    fn from(options: MouseOptionsArg) -> Self {
+        Self {
+            button: options.button.into(),
+            alt: options.alt,
+            ctrl: options.ctrl,
+            shift: options.shift,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum MouseCmd {
     /// Click at a cell, or on the first cell matching --on-text.
@@ -854,9 +936,8 @@ pub enum MouseCmd {
         /// Click the first cell containing this text.
         #[arg(long)]
         on_text: Option<String>,
-        /// Button: 0 left, 1 middle, 2 right.
-        #[arg(long, default_value_t = 0)]
-        button: u8,
+        #[command(flatten)]
+        options: MouseOptionsArg,
         /// Number of clicks.
         #[arg(long, default_value_t = 1)]
         clicks: u8,
@@ -874,9 +955,8 @@ pub enum MouseCmd {
         x: u16,
         /// Row, 0-based.
         y: u16,
-        /// Button: 0 left, 1 middle, 2 right.
-        #[arg(long, default_value_t = 0)]
-        button: u8,
+        #[command(flatten)]
+        options: MouseOptionsArg,
     },
     /// Release a button at a cell.
     Up {
@@ -884,9 +964,8 @@ pub enum MouseCmd {
         x: u16,
         /// Row, 0-based.
         y: u16,
-        /// Button: 0 left, 1 middle, 2 right.
-        #[arg(long, default_value_t = 0)]
-        button: u8,
+        #[command(flatten)]
+        options: MouseOptionsArg,
     },
     /// Drag from one cell to another.
     Drag {
@@ -898,9 +977,8 @@ pub enum MouseCmd {
         x2: u16,
         /// End row, 0-based.
         y2: u16,
-        /// Button: 0 left, 1 middle, 2 right.
-        #[arg(long, default_value_t = 0)]
-        button: u8,
+        #[command(flatten)]
+        options: MouseOptionsArg,
     },
     /// Scroll the wheel up or down.
     Scroll {

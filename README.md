@@ -176,6 +176,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Mouse button actions use semantic options rather than terminal protocol codes:
+
+```rust
+use tui_test::{MouseAction, MouseButton, MouseOptions, Operation};
+
+let action = Operation::Mouse {
+    action: MouseAction::Click {
+        x: Some(10),
+        y: Some(5),
+        on_text: None,
+        options: MouseOptions {
+            button: MouseButton::Right,
+            ctrl: true,
+            ..MouseOptions::default()
+        },
+        clicks: 1,
+    },
+};
+```
+
 </details>
 
 <details>
@@ -353,7 +373,7 @@ The default Rust features include only Alacritty and do not require Zig. The `gh
 | `key down <Key...>` / `key up <Key...>`                       | Simulate explicit keydown and keyup events.                |
 | `key repeat <Key...>`                                         | Send repeat events (press-equivalent in legacy mode).      |
 | `mouse click X Y` / `mouse click --on-text "OK" [--clicks N]` | Click by coords or label.                                  |
-| `mouse move\|down\|up\|drag\|scroll ...`                      | Full mouse control.                                        |
+| `mouse move\|down\|up\|drag\|scroll ...`                      | Full mouse control. Button actions accept `--button left\|middle\|right` and `--alt`, `--ctrl`, or `--shift`. |
 
 Key input follows the Kitty keyboard protocol negotiated by the child. A `key press` sends the normal press input and adds a release only when the child requests Kitty event-type reporting. Text-producing keys also require report-all-keys mode before repeat and release events can be represented. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`, and `Meta`; the top-level `press` command remains a compatibility alias for `key press`.
 

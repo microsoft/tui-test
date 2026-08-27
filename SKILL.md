@@ -93,8 +93,8 @@ without parsing text:
 | `key press <Key...>`                                                       | Simulate key presses, e.g. `key press Ctrl+C`.                               |
 | `key down <Key...>` / `key up <Key...>`                                    | Simulate explicit keydown and keyup events.                                  |
 | `key repeat <Key...>`                                                      | Send repeat events (press-equivalent in legacy mode).                        |
-| `mouse click X Y` / `mouse click --on-text "OK" [--button N] [--clicks N]` | Click by coordinates or by visible label.                                    |
-| `mouse move\|down\|up\|drag\|scroll ...`                                   | Full mouse control (`--button` default 0=left, `scroll --amount` default 3). |
+| `mouse click X Y` / `mouse click --on-text "OK" [--clicks N]`              | Click by coordinates or by visible label.                                    |
+| `mouse move\|down\|up\|drag\|scroll ...`                                   | Full mouse control; button actions accept `--button left\|middle\|right` and `--alt`, `--ctrl`, or `--shift`. |
 
 Key input automatically follows the Kitty keyboard protocol flags negotiated by
 the child application. A `key press` sends the normal press input and adds a
@@ -179,6 +179,7 @@ tui-test wait exit
 ```sh
 tui-test mouse click --on-text "OK"     # click a label, no coordinates needed
 tui-test mouse click 10 5 --clicks 2    # double-click at column 10, row 5
+tui-test mouse click 10 5 --button right --ctrl
 tui-test mouse scroll down --amount 5   # scroll the wheel
 tui-test mouse drag 2 2 20 2            # drag from (2,2) to (20,2)
 ```
