@@ -154,7 +154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session.execute(Operation::Submit {
         data: Some("echo hello".into()),
     })?;
-    let hello = session.locator("hello");
+    let hello = session.get_by_text("hello");
     hello.wait_with_timeout(Some(5_000))?;
     hello.last().highlight()?;
     session.execute(Operation::ExpectExitCode {
@@ -365,9 +365,9 @@ action; `wait`, `click`, and `highlight` are selected with `--action`. Click is
 strict unless the selector chooses one occurrence. Highlighted cells appear in
 the live monitor and SVG screenshots until the terminal redraws.
 
-The Rust, Python, and JavaScript APIs can also stack locators: calling
-`locator()` on a locator constrains the child search to the dynamically
-resolved parent match.
+The Rust, Python, and JavaScript APIs expose chainable `get_by_text` /
+`getByText` and `get_by_style` / `getByStyle` locators. Each stage searches
+inside the dynamically resolved parent match.
 
 #### PTY control
 

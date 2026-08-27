@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ._config import VERSION as __version__
 from ._ephemeral import unique_session
-from .client import TextLocator, TuiTest, close_all, get_recording, sessions
+from .client import Locator, TuiTest, close_all, get_recording, sessions
 from .errors import (
     ExpectationError,
     InternalError,
@@ -30,7 +30,7 @@ from .types import (
 
 __all__ = [
     "TuiTest",
-    "TextLocator",
+    "Locator",
     "sessions",
     "close_all",
     "get_recording",

@@ -12,6 +12,11 @@ export declare class NativeSession {
   waitTextSelector(text: string, options?: TextSelectorOptions | undefined | null, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
   clickText(text: string, options?: TextSelectorOptions | undefined | null, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
   highlightText(text: string, options?: TextSelectorOptions | undefined | null, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
+  findLocator(queryJson: string): Promise<Array<TextMatch>>
+  waitLocator(queryJson: string, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  clickLocator(queryJson: string, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  highlightLocator(queryJson: string, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
+  expectLocator(requestJson: string, timeoutMs?: number | undefined | null): Promise<void>
   packedScreen(full?: boolean | undefined | null): Promise<PackedScreen>
   cells(x: number, y: number, w?: number | undefined | null, h?: number | undefined | null): Promise<Array<Cell>>
   getCommand(): Promise<string | null>
@@ -122,7 +127,6 @@ export interface ExpectTextOptions {
   beforeRegex?: boolean
   beforeOccurrence?: string
   beforeNth?: number
-  withinJson?: string
   not?: boolean
   fg?: string
   bg?: string
@@ -296,7 +300,6 @@ export interface TextSelectorOptions {
   beforeRegex?: boolean
   beforeOccurrence?: string
   beforeNth?: number
-  withinJson?: string
 }
 
 export interface TextSpan {

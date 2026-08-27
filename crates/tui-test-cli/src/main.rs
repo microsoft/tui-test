@@ -465,7 +465,6 @@ fn map_selector(text: String, args: TextSelectorArgs, default: MatchOccurrence) 
             ),
         },
         occurrence: map_occurrence(args.match_mode, args.nth, default),
-        within: None,
     }
 }
 

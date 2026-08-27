@@ -214,7 +214,7 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
-    def test_text_locator_is_lazy_selectable_and_actionable(self):
+    def test_get_by_locators_are_lazy_selectable_and_actionable(self):
         async def scenario():
             script = (
                 "import sys,time; "
@@ -226,17 +226,23 @@ class IntegrationTests(unittest.TestCase):
             )
             async with self._client() as su:
                 await su.run(sys.executable, "-c", script)
-                locator = su.locator("item")
+                locator = su.get_by_text("item")
                 waited = await locator.wait(timeout=2000)
                 self.assertIs(waited, locator)
                 self.assertEqual(await locator.count(), 3)
                 nested = (
-                    su.locator("item item")
-                    .locator("item")
-                    .locator("tem")
+                    su.get_by_text("item item")
+                    .get_by_style(TextStyle(bold=True))
+                    .get_by_text("tem")
                 )
                 await nested.wait(timeout=2000)
                 self.assertEqual(await nested.count(), 2)
+                self.assertEqual(
+                    await su.get_by_style(
+                        TextStyle(bold=True)
+                    ).get_by_text("item").count(),
+                    2,
+                )
 
                 items = await locator.all()
                 self.assertEqual(len(items), 3)
@@ -255,7 +261,7 @@ class IntegrationTests(unittest.TestCase):
                         "on_failure": "text",
                     }
                     with self.assertRaises(ExpectationError) as raised:
-                        await su.locator("missing-item").location()
+                        await su.get_by_text("missing-item").location()
                     self.assertIn("Terminal content:", str(raised.exception))
                     self.assertIsNotNone(raised.exception.terminal)
                     self.assertIn("item item", raised.exception.terminal.text)

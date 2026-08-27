@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use tui_test::{
     global_registry, ErrorKind, MatchOccurrence, OpenOptions, Operation, OperationResult,
-    RunOptions, Session, SessionRegistry, TextSelector, Timeouts,
+    RunOptions, Session, SessionRegistry, TextSelector, TextStyle, Timeouts,
 };
 
 fn run_options(program: &str, args: &[&str]) -> RunOptions {
@@ -191,12 +191,12 @@ fn text_locators_are_lazy_reusable_queries() {
     let session = Session::new(format!("native-locator-{}", std::process::id()));
     session
         .open(OpenOptions {
-            wait_ready: Some(false),
+            wait_ready: Some(true),
             ..OpenOptions::default()
         })
         .expect("open terminal");
 
-    let locator = session.locator(TextSelector::new("locator-target"));
+    let locator = session.get_by_text(TextSelector::new("locator-target"));
     assert_eq!(locator.count().expect("count initial matches"), 0);
     assert!(locator
         .location()
@@ -218,9 +218,9 @@ fn text_locators_are_lazy_reusable_queries() {
         .expect("wait with the same locator");
     assert_eq!(locator.count().expect("count current matches"), 2);
     let nested = session
-        .locator("locator-target locator-target")
-        .locator("locator-target")
-        .locator("target");
+        .get_by_text("locator-target locator-target")
+        .get_by_text("locator-target")
+        .get_by_text("target");
     assert_eq!(nested.count().expect("count nested matches"), 2);
     nested.highlight().expect("highlight nested matches");
     locator.highlight().expect("highlight all current matches");
@@ -240,8 +240,8 @@ fn text_locators_are_lazy_reusable_queries() {
             .column
     );
     assert_eq!(
-        locator.unique().selector().occurrence,
-        MatchOccurrence::Unique
+        locator.unique().query().selector.occurrence(),
+        &MatchOccurrence::Unique
     );
     session.close().expect("close terminal");
 }
@@ -251,7 +251,7 @@ fn text_locator_highlight_marks_the_current_grid() {
     let session = Session::new(format!("native-highlight-{}", std::process::id()));
     session
         .open(OpenOptions {
-            wait_ready: Some(false),
+            wait_ready: Some(true),
             ..OpenOptions::default()
         })
         .expect("open terminal");
@@ -261,7 +261,7 @@ fn text_locator_highlight_marks_the_current_grid() {
         })
         .expect("submit highlighted output");
 
-    let locator = session.locator("highlight-target").last();
+    let locator = session.get_by_text("highlight-target").last();
     locator
         .wait_with_timeout(Some(5_000))
         .expect("wait for highlighted text");
@@ -281,6 +281,45 @@ fn text_locator_highlight_marks_the_current_grid() {
         locator.location().expect("resolve locator after highlight"),
         location
     );
+    session.close().expect("close terminal");
+}
+
+#[test]
+fn text_and_style_locators_chain_against_the_live_grid() {
+    let session = Session::new(format!("native-style-locator-{}", std::process::id()));
+    session
+        .open(OpenOptions {
+            wait_ready: Some(true),
+            ..OpenOptions::default()
+        })
+        .expect("open terminal");
+    let command = if cfg!(windows) {
+        "[Console]::Write(('plain '+[char]27+'[1mBOLD'+[char]27+'[0m'+[Environment]::NewLine))"
+    } else {
+        "printf 'plain \\033[1mBOLD\\033[0m\\n'"
+    };
+    session
+        .execute(Operation::Submit {
+            data: Some(command.to_string()),
+        })
+        .expect("submit styled output");
+
+    let bold = TextStyle {
+        bold: Some(true),
+        ..TextStyle::default()
+    };
+    let styled_text = session
+        .get_by_style(bold.clone())
+        .get_by_text("BOLD")
+        .unique();
+    styled_text
+        .wait_with_timeout(Some(5_000))
+        .expect("wait for text inside bold run");
+    assert_eq!(styled_text.location().unwrap().text, "BOLD");
+
+    let text_style = session.get_by_text("BOLD").get_by_style(bold).unique();
+    assert_eq!(text_style.location().unwrap().text, "BOLD");
+    text_style.highlight().expect("highlight styled text");
     session.close().expect("close terminal");
 }
 

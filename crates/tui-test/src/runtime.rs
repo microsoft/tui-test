@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, Weak};
 use sha2::{Digest, Sha256};
 
 use crate::api::{
-    MatchOccurrence, OpenOptions, OpenResult, Operation, OperationResult, RunOptions, TextMatch,
-    TextSelector, TuiTestError,
+    LocatorQuery, LocatorSelector, MatchOccurrence, OpenOptions, OpenResult, Operation,
+    OperationResult, RunOptions, StyleSelector, TextMatch, TextSelector, TuiTestError,
 };
 use crate::engine::Engine;
 use crate::logger::Logger;
@@ -52,34 +52,40 @@ impl LocatorTarget {
     }
 }
 
-/// A lazy text query that is resolved against the current terminal grid for
+/// A lazy query that is resolved against the current terminal grid for
 /// every read, wait, or action.
 #[derive(Clone)]
-pub struct TextLocator {
+pub struct Locator {
     target: LocatorTarget,
-    selector: TextSelector,
+    query: LocatorQuery,
 }
 
-impl TextLocator {
-    fn new(target: LocatorTarget, selector: impl Into<TextSelector>) -> Self {
+impl Locator {
+    fn new(target: LocatorTarget, query: LocatorQuery) -> Self {
+        Self { target, query }
+    }
+
+    pub fn query(&self) -> &LocatorQuery {
+        &self.query
+    }
+
+    pub fn get_by_text(&self, selector: impl Into<TextSelector>) -> Self {
         Self {
-            target,
-            selector: selector.into(),
+            target: self.target.clone(),
+            query: LocatorQuery {
+                selector: LocatorSelector::Text(selector.into()),
+                within: Some(Box::new(self.query.clone())),
+            },
         }
     }
 
-    pub fn selector(&self) -> &TextSelector {
-        &self.selector
-    }
-
-    /// Create a child locator whose matches must be contained by this
-    /// locator's selected terminal region.
-    pub fn locator(&self, selector: impl Into<TextSelector>) -> Self {
-        let mut selector = selector.into();
-        append_parent(&mut selector, self.selector.clone());
+    pub fn get_by_style(&self, selector: impl Into<StyleSelector>) -> Self {
         Self {
             target: self.target.clone(),
-            selector,
+            query: LocatorQuery {
+                selector: LocatorSelector::Style(selector.into()),
+                within: Some(Box::new(self.query.clone())),
+            },
         }
     }
 
@@ -105,21 +111,21 @@ impl TextLocator {
 
     fn with_occurrence(&self, occurrence: MatchOccurrence) -> Self {
         let mut locator = self.clone();
-        locator.selector.occurrence = occurrence;
+        *locator.query.selector.occurrence_mut() = occurrence;
         locator
     }
 
-    fn strict_selector(&self) -> TextSelector {
-        let mut selector = self.selector.clone();
-        if selector.occurrence == MatchOccurrence::Any {
-            selector.occurrence = MatchOccurrence::Unique;
+    fn strict_query(&self) -> LocatorQuery {
+        let mut query = self.query.clone();
+        if query.selector.occurrence() == &MatchOccurrence::Any {
+            *query.selector.occurrence_mut() = MatchOccurrence::Unique;
         }
-        selector
+        query
     }
 
     pub fn all(&self) -> Result<Vec<Self>, TuiTestError> {
         let matches = self.locations()?;
-        if self.selector.occurrence == MatchOccurrence::Any {
+        if self.query.selector.occurrence() == &MatchOccurrence::Any {
             Ok((0..matches.len()).map(|index| self.nth(index)).collect())
         } else {
             Ok(matches.into_iter().map(|_| self.clone()).collect())
@@ -131,8 +137,8 @@ impl TextLocator {
     }
 
     pub fn locations(&self) -> Result<Vec<TextMatch>, TuiTestError> {
-        match self.target.execute(Operation::FindText {
-            selector: self.selector.clone(),
+        match self.target.execute(Operation::FindLocator {
+            query: self.query.clone(),
         })? {
             OperationResult::Matches(matches) => Ok(matches),
             _ => Err(TuiTestError::internal(
@@ -142,9 +148,9 @@ impl TextLocator {
     }
 
     pub fn location(&self) -> Result<TextMatch, TuiTestError> {
-        let selector = self.strict_selector();
-        let description = selector.text.clone();
-        match self.target.execute(Operation::FindText { selector })? {
+        let query = self.strict_query();
+        let description = query.selector.description();
+        match self.target.execute(Operation::FindLocator { query })? {
             OperationResult::Matches(mut matches) if matches.len() == 1 => Ok(matches.remove(0)),
             OperationResult::Matches(_) => {
                 let diagnostic = match self.target.execute(Operation::Text { full: false }) {
@@ -178,8 +184,8 @@ impl TextLocator {
 
     fn wait_for(&self, not: bool, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
         self.target
-            .execute(Operation::WaitTextSelector {
-                selector: self.selector.clone(),
+            .execute(Operation::WaitLocator {
+                query: self.query.clone(),
                 not,
                 timeout_ms,
             })
@@ -192,8 +198,8 @@ impl TextLocator {
 
     pub fn click_with(&self, options: LocatorClickOptions) -> Result<(), TuiTestError> {
         self.target
-            .execute(Operation::ClickText {
-                selector: self.strict_selector(),
+            .execute(Operation::ClickLocator {
+                query: self.strict_query(),
                 button: options.button,
                 clicks: options.clicks,
                 timeout_ms: options.timeout_ms,
@@ -207,18 +213,11 @@ impl TextLocator {
 
     pub fn highlight_with_timeout(&self, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
         self.target
-            .execute(Operation::HighlightText {
-                selector: self.selector.clone(),
+            .execute(Operation::HighlightLocator {
+                query: self.query.clone(),
                 timeout_ms,
             })
             .map(|_| ())
-    }
-}
-
-fn append_parent(selector: &mut TextSelector, parent: TextSelector) {
-    match selector.within.as_deref_mut() {
-        Some(within) => append_parent(within, parent),
-        None => selector.within = Some(Box::new(parent)),
     }
 }
 
@@ -240,8 +239,18 @@ impl Session {
         &self.name
     }
 
-    pub fn locator(&self, selector: impl Into<TextSelector>) -> TextLocator {
-        TextLocator::new(LocatorTarget::Session(self.clone()), selector)
+    pub fn get_by_text(&self, selector: impl Into<TextSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Session(self.clone()),
+            LocatorQuery::text(selector),
+        )
+    }
+
+    pub fn get_by_style(&self, selector: impl Into<StyleSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Session(self.clone()),
+            LocatorQuery::style(selector),
+        )
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
@@ -301,8 +310,18 @@ impl SessionHandle {
         &self.name
     }
 
-    pub fn locator(&self, selector: impl Into<TextSelector>) -> TextLocator {
-        TextLocator::new(LocatorTarget::Handle(self.clone()), selector)
+    pub fn get_by_text(&self, selector: impl Into<TextSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Handle(self.clone()),
+            LocatorQuery::text(selector),
+        )
+    }
+
+    pub fn get_by_style(&self, selector: impl Into<StyleSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Handle(self.clone()),
+            LocatorQuery::style(selector),
+        )
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {

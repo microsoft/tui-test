@@ -210,6 +210,46 @@ export class NativeRuntime {
     );
   }
 
+  findLocator(queryJson: string): Promise<TextMatch[]> {
+    return this.#call((session) => session.findLocator(queryJson));
+  }
+
+  waitLocator(
+    queryJson: string,
+    not = false,
+    timeoutMs?: number,
+  ): Promise<void> {
+    return this.#call((session) =>
+      session.waitLocator(queryJson, not, timeoutMs),
+    );
+  }
+
+  clickLocator(
+    queryJson: string,
+    button = 0,
+    clicks = 1,
+    timeoutMs?: number,
+  ): Promise<void> {
+    return this.#call((session) =>
+      session.clickLocator(queryJson, button, clicks, timeoutMs),
+    );
+  }
+
+  highlightLocator(
+    queryJson: string,
+    timeoutMs?: number,
+  ): Promise<TextMatch[]> {
+    return this.#call((session) =>
+      session.highlightLocator(queryJson, timeoutMs),
+    );
+  }
+
+  expectLocator(requestJson: string, timeoutMs?: number): Promise<void> {
+    return this.#call((session) =>
+      session.expectLocator(requestJson, timeoutMs),
+    );
+  }
+
   /**
    * Private packed snapshot. The detached Uint8Array is read-only by contract
    * and contains newline-delimited full logical rows, including trailing spaces

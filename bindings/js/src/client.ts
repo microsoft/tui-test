@@ -100,18 +100,24 @@ export interface LocatorExpectOptions {
   timeout?: number;
 }
 
-export interface TextLocator {
-  locator(text: string, opts?: TextSelectorOptions): TextLocator;
-  any(): TextLocator;
-  unique(): TextLocator;
-  first(): TextLocator;
-  last(): TextLocator;
-  nth(index: number): TextLocator;
+export interface StyleSelectorOptions {
+  full?: boolean;
+  occurrence?: TextOccurrence;
+}
+
+export interface Locator {
+  getByText(text: string, opts?: TextSelectorOptions): Locator;
+  getByStyle(style: TextStyleExpectation, opts?: StyleSelectorOptions): Locator;
+  any(): Locator;
+  unique(): Locator;
+  first(): Locator;
+  last(): Locator;
+  nth(index: number): Locator;
   locations(): Promise<TextMatch[]>;
   location(): Promise<TextMatch>;
   count(): Promise<number>;
-  all(): Promise<TextLocator[]>;
-  wait(opts?: LocatorWaitOptions): Promise<TextLocator>;
+  all(): Promise<Locator[]>;
+  wait(opts?: LocatorWaitOptions): Promise<Locator>;
   click(opts?: LocatorClickOptions): Promise<void>;
   highlight(opts?: LocatorHighlightOptions): Promise<void>;
   expect(opts?: LocatorExpectOptions): Promise<void>;
@@ -223,40 +229,7 @@ function occurrenceOptions(occurrence?: TextOccurrence): {
   return { occurrence: "nth", nth: occurrence.nth };
 }
 
-function cloneOccurrence(occurrence?: TextOccurrence): TextOccurrence | undefined {
-  occurrenceOptions(occurrence);
-  return typeof occurrence === "object" && occurrence !== null
-    ? { nth: occurrence.nth }
-    : occurrence;
-}
-
-function cloneSelectorOptions(opts: TextSelectorOptions): TextSelectorOptions {
-  return {
-    ...opts,
-    occurrence: cloneOccurrence(opts.occurrence),
-    scope: opts.scope
-      ? {
-          after: opts.scope.after
-            ? {
-                ...opts.scope.after,
-                occurrence: cloneOccurrence(opts.scope.after.occurrence),
-              }
-            : undefined,
-          before: opts.scope.before
-            ? {
-                ...opts.scope.before,
-                occurrence: cloneOccurrence(opts.scope.before.occurrence),
-              }
-            : undefined,
-        }
-      : undefined,
-  };
-}
-
-function selectorOptions(
-  opts: TextSelectorOptions,
-  withinJson?: string,
-): NativeTextSelectorOptions {
+function selectorOptions(opts: TextSelectorOptions): NativeTextSelectorOptions {
   const after = opts.scope?.after;
   const before = opts.scope?.before;
   const afterOccurrence = occurrenceOptions(after?.occurrence);
@@ -274,15 +247,28 @@ function selectorOptions(
     beforeRegex: before?.regex,
     beforeOccurrence: beforeOccurrence.occurrence,
     beforeNth: beforeOccurrence.nth,
-    withinJson,
   };
 }
 
-function selectorJson(
+type CoreOccurrence = string | { nth: number };
+
+interface CoreSelectorValue {
+  occurrence: CoreOccurrence;
+  [key: string]: unknown;
+}
+
+interface LocatorQueryValue {
+  selector: {
+    kind: "text" | "style";
+    selector: CoreSelectorValue;
+  };
+  within: LocatorQueryValue | null;
+}
+
+function textSelectorValue(
   text: string,
   opts: TextSelectorOptions,
-  withinJson?: string,
-): string {
+): CoreSelectorValue {
   const occurrence = occurrenceOptions(opts.occurrence);
   const anchor = (value: TextAnchor | undefined): object | null => {
     if (!value) {
@@ -298,7 +284,7 @@ function selectorJson(
           : { nth: selected.nth },
     };
   };
-  return JSON.stringify({
+  return {
     text,
     regex: opts.regex ?? false,
     full: opts.full ?? false,
@@ -311,122 +297,166 @@ function selectorJson(
       occurrence.nth === undefined
         ? occurrence.occurrence ?? "any"
         : { nth: occurrence.nth },
-    within: withinJson === undefined ? null : JSON.parse(withinJson),
-  });
+  };
+}
+
+function styleSelectorValue(
+  style: TextStyleExpectation,
+  opts: StyleSelectorOptions,
+): CoreSelectorValue {
+  if (!Object.values(style).some((value) => value !== undefined)) {
+    throw new TypeError("getByStyle requires at least one style property");
+  }
+  const occurrence = occurrenceOptions(opts.occurrence);
+  return {
+    style: textStyleValue(style),
+    full: opts.full ?? false,
+    occurrence:
+      occurrence.nth === undefined
+        ? occurrence.occurrence ?? "any"
+        : { nth: occurrence.nth },
+  };
+}
+
+function textStyleValue(style: TextStyleExpectation): object {
+  return {
+    foreground: style.foreground,
+    background: style.background,
+    bold: style.bold,
+    dim: style.dim,
+    italic: style.italic,
+    underline_style: style.underlineStyle,
+    underline_color: style.underlineColor,
+    inverse: style.inverse,
+    hidden: style.hidden,
+    strikethrough: style.strikethrough,
+    blink: style.blink,
+  };
+}
+
+function textQuery(
+  text: string,
+  opts: TextSelectorOptions,
+  within: LocatorQueryValue | null = null,
+): LocatorQueryValue {
+  return {
+    selector: { kind: "text", selector: textSelectorValue(text, opts) },
+    within,
+  };
+}
+
+function styleQuery(
+  style: TextStyleExpectation,
+  opts: StyleSelectorOptions,
+  within: LocatorQueryValue | null = null,
+): LocatorQueryValue {
+  return {
+    selector: { kind: "style", selector: styleSelectorValue(style, opts) },
+    within,
+  };
+}
+
+function cloneQuery(query: LocatorQueryValue): LocatorQueryValue {
+  return JSON.parse(JSON.stringify(query)) as LocatorQueryValue;
 }
 
 interface LocatorActions {
-  locations(
-    text: string,
-    options: TextSelectorOptions,
-    withinJson: string | undefined,
-    operation: string,
-  ): Promise<TextMatch[]>;
+  locations(query: LocatorQueryValue, operation: string): Promise<TextMatch[]>;
   wait(
-    text: string,
-    options: TextSelectorOptions,
-    withinJson: string | undefined,
+    query: LocatorQueryValue,
     hidden: boolean,
     timeout: number | undefined,
     operation: string,
   ): Promise<void>;
-  click(
-    text: string,
-    options: TextSelectorOptions,
-    withinJson: string | undefined,
-    action: LocatorClickOptions,
-  ): Promise<void>;
+  click(query: LocatorQueryValue, action: LocatorClickOptions): Promise<void>;
   highlight(
-    text: string,
-    options: TextSelectorOptions,
-    withinJson: string | undefined,
+    query: LocatorQueryValue,
     timeout: number | undefined,
   ): Promise<void>;
   expect(
-    text: string,
-    options: TextSelectorOptions,
-    withinJson: string | undefined,
+    query: LocatorQueryValue,
     expectation: LocatorExpectOptions,
   ): Promise<void>;
   fail(operation: string, message: string): Promise<never>;
 }
 
-class TextLocatorImpl implements TextLocator {
-  readonly #text: string;
-  readonly #options: TextSelectorOptions;
+class LocatorImpl implements Locator {
+  readonly #query: LocatorQueryValue;
   readonly #actions: LocatorActions;
-  readonly #withinJson: string | undefined;
 
-  constructor(
-    text: string,
-    options: TextSelectorOptions,
-    actions: LocatorActions,
-    withinJson?: string,
-  ) {
-    this.#text = text;
-    this.#options = cloneSelectorOptions(options);
+  constructor(query: LocatorQueryValue, actions: LocatorActions) {
+    this.#query = cloneQuery(query);
     this.#actions = actions;
-    this.#withinJson = withinJson;
   }
 
-  #withOccurrence(occurrence: TextOccurrence): TextLocatorImpl {
-    return new TextLocatorImpl(
-      this.#text,
-      { ...this.#options, occurrence },
-      this.#actions,
-      this.#withinJson,
-    );
+  #withOccurrence(occurrence: TextOccurrence): LocatorImpl {
+    const query = cloneQuery(this.#query);
+    const selected = occurrenceOptions(occurrence);
+    query.selector.selector.occurrence =
+      selected.nth === undefined
+        ? selected.occurrence ?? "any"
+        : { nth: selected.nth };
+    return new LocatorImpl(query, this.#actions);
   }
 
-  #strictOptions(): TextSelectorOptions {
-    return {
-      ...cloneSelectorOptions(this.#options),
-      occurrence:
-        (this.#options.occurrence ?? "any") === "any"
-          ? "unique"
-          : cloneOccurrence(this.#options.occurrence),
-    };
+  #strictQuery(): LocatorQueryValue {
+    const query = cloneQuery(this.#query);
+    if (query.selector.selector.occurrence === "any") {
+      query.selector.selector.occurrence = "unique";
+    }
+    return query;
   }
 
-  any(): TextLocator {
+  any(): Locator {
     return this.#withOccurrence("any");
   }
 
-  unique(): TextLocator {
+  unique(): Locator {
     return this.#withOccurrence("unique");
   }
 
-  first(): TextLocator {
+  first(): Locator {
     return this.#withOccurrence("first");
   }
 
-  last(): TextLocator {
+  last(): Locator {
     return this.#withOccurrence("last");
   }
 
-  nth(index: number): TextLocator {
+  nth(index: number): Locator {
     if (!Number.isSafeInteger(index) || index < 0) {
       throw new TypeError("locator nth index must be a non-negative integer");
     }
     return this.#withOccurrence({ nth: index });
   }
 
-  locator(text: string, opts: TextSelectorOptions = {}): TextLocator {
-    return new TextLocatorImpl(
-      text,
-      { ...opts, occurrence: opts.occurrence ?? "any" },
+  getByText(text: string, opts: TextSelectorOptions = {}): Locator {
+    return new LocatorImpl(
+      textQuery(
+        text,
+        { ...opts, occurrence: opts.occurrence ?? "any" },
+        this.#query,
+      ),
       this.#actions,
-      selectorJson(this.#text, this.#options, this.#withinJson),
+    );
+  }
+
+  getByStyle(
+    style: TextStyleExpectation,
+    opts: StyleSelectorOptions = {},
+  ): Locator {
+    return new LocatorImpl(
+      styleQuery(
+        style,
+        { ...opts, occurrence: opts.occurrence ?? "any" },
+        this.#query,
+      ),
+      this.#actions,
     );
   }
 
   locationsWithOperation(operation: string): Promise<TextMatch[]> {
-    return this.#actions.locations(
-      this.#text,
-      this.#options,
-      this.#withinJson,
-      operation,
-    );
+    return this.#actions.locations(this.#query, operation);
   }
 
   locations(): Promise<TextMatch[]> {
@@ -435,15 +465,18 @@ class TextLocatorImpl implements TextLocator {
 
   async location(): Promise<TextMatch> {
     const matches = await this.#actions.locations(
-      this.#text,
-      this.#strictOptions(),
-      this.#withinJson,
+      this.#strictQuery(),
       "locator.location",
     );
     if (matches.length !== 1) {
+      const current = this.#query.selector;
+      const description =
+        current.kind === "text"
+          ? JSON.stringify(current.selector.text)
+          : "style";
       return this.#actions.fail(
         "locator.location",
-        `no match found for ${JSON.stringify(this.#text)}`,
+        `no match found for ${description}`,
       );
     }
     return matches[0];
@@ -453,41 +486,31 @@ class TextLocatorImpl implements TextLocator {
     return (await this.locations()).length;
   }
 
-  async all(): Promise<TextLocator[]> {
+  async all(): Promise<Locator[]> {
     const matches = await this.locations();
-    if ((this.#options.occurrence ?? "any") === "any") {
+    if (this.#query.selector.selector.occurrence === "any") {
       return matches.map((_, index) => this.nth(index));
     }
-    return matches.map(
-      () =>
-        new TextLocatorImpl(
-          this.#text,
-          this.#options,
-          this.#actions,
-          this.#withinJson,
-        ),
-    );
+    return matches.map(() => new LocatorImpl(this.#query, this.#actions));
   }
 
   waitWithOperation(
     opts: LocatorWaitOptions,
     operation: string,
-  ): Promise<TextLocator> {
+  ): Promise<Locator> {
     return this.#wait(opts, operation);
   }
 
   async #wait(
     opts: LocatorWaitOptions,
     operation: string,
-  ): Promise<TextLocator> {
+  ): Promise<Locator> {
     const state = opts.state ?? "visible";
     if (state !== "visible" && state !== "hidden") {
       throw new TypeError("locator state must be 'visible' or 'hidden'");
     }
     await this.#actions.wait(
-      this.#text,
-      this.#options,
-      this.#withinJson,
+      this.#query,
       state === "hidden",
       opts.timeout,
       operation,
@@ -495,35 +518,20 @@ class TextLocatorImpl implements TextLocator {
     return this;
   }
 
-  wait(opts: LocatorWaitOptions = {}): Promise<TextLocator> {
+  wait(opts: LocatorWaitOptions = {}): Promise<Locator> {
     return this.#wait(opts, "locator.wait");
   }
 
   click(opts: LocatorClickOptions = {}): Promise<void> {
-    return this.#actions.click(
-      this.#text,
-      this.#strictOptions(),
-      this.#withinJson,
-      opts,
-    );
+    return this.#actions.click(this.#strictQuery(), opts);
   }
 
   highlight(opts: LocatorHighlightOptions = {}): Promise<void> {
-    return this.#actions.highlight(
-      this.#text,
-      this.#options,
-      this.#withinJson,
-      opts.timeout,
-    );
+    return this.#actions.highlight(this.#query, opts.timeout);
   }
 
   expect(opts: LocatorExpectOptions = {}): Promise<void> {
-    return this.#actions.expect(
-      this.#text,
-      this.#options,
-      this.#withinJson,
-      opts,
-    );
+    return this.#actions.expect(this.#query, opts);
   }
 }
 
@@ -604,59 +612,47 @@ export class TuiTest {
     return resolveTimeout(cls, callTimeout, this.#options);
   }
 
-  #textLocator(text: string, opts: TextSelectorOptions): TextLocatorImpl {
+  #makeLocator(query: LocatorQueryValue): LocatorImpl {
     const actions: LocatorActions = {
-      locations: (value, options, withinJson, operation) =>
+      locations: (value, operation) =>
         this.#guard(operation, () =>
-          this.#runtime.findText(value, selectorOptions(options, withinJson)),
+          this.#runtime.findLocator(JSON.stringify(value)),
         ),
-      wait: (value, options, withinJson, hidden, timeout, operation) =>
+      wait: (value, hidden, timeout, operation) =>
         this.#guard(operation, () =>
-          this.#runtime.waitTextSelector(
-            value,
-            selectorOptions(options, withinJson),
+          this.#runtime.waitLocator(
+            JSON.stringify(value),
             hidden,
             this.#timeout("text", timeout),
           ),
         ),
-      click: (value, options, withinJson, action) =>
+      click: (value, action) =>
         this.#guard("locator.click", () =>
-          this.#runtime.clickText(
-            value,
-            selectorOptions(options, withinJson),
+          this.#runtime.clickLocator(
+            JSON.stringify(value),
             action.button ?? 0,
             action.clicks ?? 1,
             this.#timeout("text", action.timeout),
           ),
         ),
-      highlight: (value, options, withinJson, timeout) =>
+      highlight: (value, timeout) =>
         this.#guard("locator.highlight", async () => {
-          await this.#runtime.highlightText(
-            value,
-            selectorOptions(options, withinJson),
+          await this.#runtime.highlightLocator(
+            JSON.stringify(value),
             this.#timeout("text", timeout),
           );
         }),
-      expect: (value, options, withinJson, expectation) => {
+      expect: (value, expectation) => {
         const style = expectation.style ?? {};
         return this.#guard("locator.expect", () =>
-          this.#runtime.expectText(value, {
-            ...selectorOptions(options, withinJson),
-            strict: true,
-            not: expectation.not ?? false,
-            fg: style.foreground,
-            bg: style.background,
-            bold: style.bold,
-            dim: style.dim,
-            italic: style.italic,
-            underlineStyle: style.underlineStyle,
-            underlineColor: style.underlineColor,
-            inverse: style.inverse,
-            hidden: style.hidden,
-            strikethrough: style.strikethrough,
-            blink: style.blink,
-            timeoutMs: this.#timeout("text", expectation.timeout),
-          }),
+          this.#runtime.expectLocator(
+            JSON.stringify([
+              value,
+              textStyleValue(style),
+              expectation.not ?? false,
+            ]),
+            this.#timeout("text", expectation.timeout),
+          ),
         );
       },
       fail: async (operation, message) => {
@@ -674,11 +670,7 @@ export class TuiTest {
         });
       },
     };
-    return new TextLocatorImpl(
-      text,
-      { ...opts, occurrence: opts.occurrence ?? "any" },
-      actions,
-    );
+    return new LocatorImpl(query, actions);
   }
 
   async #guard<T>(operation: string, action: () => Promise<T>): Promise<T> {
@@ -890,13 +882,32 @@ export class TuiTest {
     return this.#runtime.stopRecording();
   }
 
-  locator(text: string, opts: TextSelectorOptions = {}): TextLocator {
-    return this.#textLocator(text, opts);
+  getByText(text: string, opts: TextSelectorOptions = {}): Locator {
+    return this.#makeLocator(
+      textQuery(text, { ...opts, occurrence: opts.occurrence ?? "any" }),
+    );
   }
 
-  async waitText(text: string, opts: WaitTextOptions = {}): Promise<TextLocator> {
+  getByStyle(
+    style: TextStyleExpectation,
+    opts: StyleSelectorOptions = {},
+  ): Locator {
+    return this.#makeLocator(
+      styleQuery(style, {
+        ...opts,
+        occurrence: opts.occurrence ?? "any",
+      }),
+    );
+  }
+
+  async waitText(text: string, opts: WaitTextOptions = {}): Promise<Locator> {
     const { not = false, timeout, ...selector } = opts;
-    const locator = this.#textLocator(text, selector);
+    const locator = this.#makeLocator(
+      textQuery(text, {
+        ...selector,
+        occurrence: selector.occurrence ?? "any",
+      }),
+    );
     await locator.waitWithOperation(
       { state: not ? "hidden" : "visible", timeout },
       "waitText",
@@ -915,7 +926,9 @@ export class TuiTest {
   }
 
   async findText(text: string, opts: TextSelectorOptions = {}): Promise<TextMatch[]> {
-    return this.#textLocator(text, opts).locationsWithOperation("findText");
+    return this.#makeLocator(
+      textQuery(text, { ...opts, occurrence: opts.occurrence ?? "any" }),
+    ).locationsWithOperation("findText");
   }
 
   async waitIdle(opts: { timeout?: number } = {}): Promise<void> {

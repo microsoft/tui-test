@@ -146,8 +146,6 @@ pub struct TextSelector {
     pub whitespace: WhitespaceMode,
     pub scope: TextScope,
     pub occurrence: MatchOccurrence,
-    /// Parent match whose source-cell range must contain this match.
-    pub within: Option<Box<TextSelector>>,
 }
 
 impl Default for TextSelector {
@@ -159,7 +157,6 @@ impl Default for TextSelector {
             whitespace: WhitespaceMode::Exact,
             scope: TextScope::default(),
             occurrence: MatchOccurrence::Any,
-            within: None,
         }
     }
 }
@@ -170,14 +167,6 @@ impl TextSelector {
             text: text.into(),
             ..Self::default()
         }
-    }
-
-    pub fn uses_full_grid(&self) -> bool {
-        self.full
-            || self
-                .within
-                .as_deref()
-                .is_some_and(TextSelector::uses_full_grid)
     }
 }
 
@@ -212,6 +201,103 @@ pub struct TextStyle {
 impl TextStyle {
     pub fn is_empty(&self) -> bool {
         self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+/// Select contiguous per-row runs whose cells match every requested style.
+pub struct StyleSelector {
+    pub style: TextStyle,
+    pub full: bool,
+    pub occurrence: MatchOccurrence,
+}
+
+impl Default for StyleSelector {
+    fn default() -> Self {
+        Self {
+            style: TextStyle::default(),
+            full: false,
+            occurrence: MatchOccurrence::Any,
+        }
+    }
+}
+
+impl From<TextStyle> for StyleSelector {
+    fn from(style: TextStyle) -> Self {
+        Self {
+            style,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "selector", rename_all = "snake_case")]
+pub enum LocatorSelector {
+    Text(TextSelector),
+    Style(StyleSelector),
+}
+
+impl LocatorSelector {
+    pub fn occurrence(&self) -> &MatchOccurrence {
+        match self {
+            Self::Text(selector) => &selector.occurrence,
+            Self::Style(selector) => &selector.occurrence,
+        }
+    }
+
+    pub fn occurrence_mut(&mut self) -> &mut MatchOccurrence {
+        match self {
+            Self::Text(selector) => &mut selector.occurrence,
+            Self::Style(selector) => &mut selector.occurrence,
+        }
+    }
+
+    pub fn full(&self) -> bool {
+        match self {
+            Self::Text(selector) => selector.full,
+            Self::Style(selector) => selector.full,
+        }
+    }
+
+    pub fn description(&self) -> String {
+        match self {
+            Self::Text(selector) => selector.text.clone(),
+            Self::Style(_) => "style".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One lazy locator stage plus the parent region that constrains it.
+pub struct LocatorQuery {
+    pub selector: LocatorSelector,
+    #[serde(default)]
+    pub within: Option<Box<LocatorQuery>>,
+}
+
+impl LocatorQuery {
+    pub fn text(selector: impl Into<TextSelector>) -> Self {
+        Self {
+            selector: LocatorSelector::Text(selector.into()),
+            within: None,
+        }
+    }
+
+    pub fn style(selector: impl Into<StyleSelector>) -> Self {
+        Self {
+            selector: LocatorSelector::Style(selector.into()),
+            within: None,
+        }
+    }
+
+    pub fn uses_full_grid(&self) -> bool {
+        self.selector.full()
+            || self
+                .within
+                .as_deref()
+                .is_some_and(LocatorQuery::uses_full_grid)
     }
 }
 
@@ -306,6 +392,30 @@ pub enum Operation {
     },
     HighlightText {
         selector: TextSelector,
+        timeout_ms: Option<u64>,
+    },
+    FindLocator {
+        query: LocatorQuery,
+    },
+    WaitLocator {
+        query: LocatorQuery,
+        not: bool,
+        timeout_ms: Option<u64>,
+    },
+    ClickLocator {
+        query: LocatorQuery,
+        button: u8,
+        clicks: u8,
+        timeout_ms: Option<u64>,
+    },
+    HighlightLocator {
+        query: LocatorQuery,
+        timeout_ms: Option<u64>,
+    },
+    ExpectLocator {
+        query: LocatorQuery,
+        not: bool,
+        style: TextStyle,
         timeout_ms: Option<u64>,
     },
     ExpectText {
@@ -730,13 +840,18 @@ mod tests {
     fn nested_selectors_use_full_grid_when_any_stage_requests_it() {
         let mut parent = TextSelector::new("parent");
         parent.full = true;
-        let mut child = TextSelector::new("child");
-        child.within = Some(Box::new(parent));
+        let child = LocatorQuery {
+            selector: LocatorSelector::Text(TextSelector::new("child")),
+            within: Some(Box::new(LocatorQuery::text(parent))),
+        };
         assert!(child.uses_full_grid());
 
         let mut full_child = TextSelector::new("child");
         full_child.full = true;
-        full_child.within = Some(Box::new(TextSelector::new("parent")));
-        assert!(full_child.uses_full_grid());
+        let query = LocatorQuery {
+            selector: LocatorSelector::Text(full_child),
+            within: Some(Box::new(LocatorQuery::text("parent"))),
+        };
+        assert!(query.uses_full_grid());
     }
 }

@@ -312,7 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session.execute(Operation::Submit {
         data: Some("echo hello".into()),
     })?;
-    let hello = session.locator("hello");
+    let hello = session.get_by_text("hello");
     hello.wait_with_timeout(Some(5_000))?;
     hello.last().highlight()?;
     session.execute(Operation::ExpectExitCode {
@@ -356,14 +356,15 @@ await su.close();
 ```
 
 The Rust crate exposes `Session` and `SessionRegistry` for terminal ownership,
-`TextLocator` for lazy text queries and actions, plus the `Operation` and
+`Locator` for lazy text/style queries and actions, plus the `Operation` and
 `OperationResult` enums for the command surface.
 
 Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
 / `type` / `write`, `keyboard.press|down|repeat|up`, compatibility
 `press`,
 `mouse.click|move|down|up|drag|scroll`,
-`resize`, `signal` / `kill`, `state`, `text`, `locator`, `cells`, the dedicated
+`resize`, `signal` / `kill`, `state`, `text`, `get_by_text` / `get_by_style`,
+`cells`, the dedicated
 `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` /
 `get_size` / `get_title` / `get_bell_count` / `get_bell_events` methods,
 `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` /
@@ -375,13 +376,13 @@ and `getRecording`. The JavaScript client otherwise uses the same names in
 camelCase (`startRecording`, `stopRecording`, `waitCommand`, `expectText`,
 `getExitCode`, etc.).
 
-`locator()` returns a lazy text query in all three languages. The query is
-resolved again for every read or action, so the same locator can wait and then
-click the current match. It supports `any`, `unique`, `first`, `last`, `nth`,
-`all`, match locations, click-at-center, and highlighting. Calling `locator()`
-on an existing locator searches inside the dynamically resolved parent match.
-Python `wait_text()` and JavaScript `waitText()` return the locator they waited
-on.
+`get_by_text()` / `getByText()` and `get_by_style()` / `getByStyle()` return
+lazy locators in the three languages. Every text or contiguous style-run stage
+can be chained and is resolved again for each read or action, so the same
+locator can wait and then click the current match. Locators support `any`,
+`unique`, `first`, `last`, `nth`, `all`, match locations, click-at-center, and
+highlighting. Python `wait_text()` and JavaScript `waitText()` return the
+`get_by_text` locator they waited on.
 
 The constructors accept a session name plus backend, profile, timeout, and
 artifact options: `TuiTest(session="default", *, backend=None, timeouts=None,

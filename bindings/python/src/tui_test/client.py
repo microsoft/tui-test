@@ -127,7 +127,6 @@ def _selector_value(
     after: Optional[TextAnchor],
     before: Optional[TextAnchor],
     occurrence: TextOccurrence,
-    within: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     return {
         "text": text,
@@ -139,6 +138,56 @@ def _selector_value(
             "before": _anchor_value(before),
         },
         "occurrence": _occurrence_value(occurrence),
+    }
+
+
+def _text_query_value(
+    text: str,
+    *,
+    regex: bool,
+    full: bool,
+    whitespace: str,
+    after: Optional[TextAnchor],
+    before: Optional[TextAnchor],
+    occurrence: TextOccurrence,
+    within: Optional[Dict[str, object]],
+) -> Dict[str, object]:
+    return {
+        "selector": {
+            "kind": "text",
+            "selector": _selector_value(
+                text,
+                regex=regex,
+                full=full,
+                whitespace=whitespace,
+                after=after,
+                before=before,
+                occurrence=occurrence,
+            ),
+        },
+        "within": copy.deepcopy(within),
+    }
+
+
+def _style_query_value(
+    style: TextStyle,
+    *,
+    full: bool,
+    occurrence: TextOccurrence,
+    within: Optional[Dict[str, object]],
+) -> Dict[str, object]:
+    style_value = asdict(style)
+    if not any(value is not None for value in style_value.values()):
+        raise ValueError("get_by_style requires at least one style property")
+    return {
+        "selector": {
+            "kind": "style",
+            "selector": {
+                "style": style_value,
+                "full": full,
+                "occurrence": _occurrence_value(occurrence),
+            },
+        },
         "within": copy.deepcopy(within),
     }
 
@@ -206,44 +255,47 @@ class _Mouse:
         await self._c._await(self._c._native.mouse_scroll(direction, amount))
 
 
-class TextLocator:
-    """A lazy text query resolved against the current terminal grid."""
+class Locator:
+    """A lazy text/style query resolved against the current terminal grid."""
 
     def __init__(
-        self, client: "TuiTest", selector: Dict[str, object]
+        self, client: "TuiTest", query: Dict[str, object]
     ) -> None:
         self._client = client
-        self._selector = copy.deepcopy(selector)
+        self._query = copy.deepcopy(query)
 
-    def _with_occurrence(self, occurrence: TextOccurrence) -> "TextLocator":
-        selector = copy.deepcopy(self._selector)
-        selector["occurrence"] = _occurrence_value(occurrence)
-        return TextLocator(self._client, selector)
+    def _with_occurrence(self, occurrence: TextOccurrence) -> "Locator":
+        query = copy.deepcopy(self._query)
+        query["selector"]["selector"]["occurrence"] = _occurrence_value(
+            occurrence
+        )
+        return Locator(self._client, query)
 
-    def _strict_selector(self) -> Dict[str, object]:
-        selector = copy.deepcopy(self._selector)
+    def _strict_query(self) -> Dict[str, object]:
+        query = copy.deepcopy(self._query)
+        selector = query["selector"]["selector"]
         if selector["occurrence"] == "any":
             selector["occurrence"] = "unique"
-        return selector
+        return query
 
-    def any(self) -> "TextLocator":
+    def any(self) -> "Locator":
         return self._with_occurrence("any")
 
-    def unique(self) -> "TextLocator":
+    def unique(self) -> "Locator":
         return self._with_occurrence("unique")
 
-    def first(self) -> "TextLocator":
+    def first(self) -> "Locator":
         return self._with_occurrence("first")
 
-    def last(self) -> "TextLocator":
+    def last(self) -> "Locator":
         return self._with_occurrence("last")
 
-    def nth(self, index: int) -> "TextLocator":
+    def nth(self, index: int) -> "Locator":
         if isinstance(index, bool) or not isinstance(index, int) or index < 0:
             raise ValueError("locator nth index must be a non-negative integer")
         return self._with_occurrence(index)
 
-    def locator(
+    def get_by_text(
         self,
         text: str,
         *,
@@ -253,8 +305,8 @@ class TextLocator:
         after: Optional[TextAnchor] = None,
         before: Optional[TextAnchor] = None,
         occurrence: TextOccurrence = "any",
-    ) -> "TextLocator":
-        return self._client._make_locator(
+    ) -> "Locator":
+        return self._client._make_text_locator(
             text,
             regex=regex,
             full=full,
@@ -262,7 +314,21 @@ class TextLocator:
             after=after,
             before=before,
             occurrence=occurrence,
-            within=self._selector,
+            within=self._query,
+        )
+
+    def get_by_style(
+        self,
+        style: TextStyle,
+        *,
+        full: bool = False,
+        occurrence: TextOccurrence = "any",
+    ) -> "Locator":
+        return self._client._make_style_locator(
+            style,
+            full=full,
+            occurrence=occurrence,
+            within=self._query,
         )
 
     async def locations(self) -> List[TextMatch]:
@@ -271,19 +337,25 @@ class TextLocator:
     async def _locations(self, op_name: str) -> List[TextMatch]:
         values = await self._client._guarded(
             op_name,
-            self._client._native.find_text(json.dumps(self._selector)),
+            self._client._native.find_locator(json.dumps(self._query)),
         )
         return [TextMatch.from_dict(value) for value in values]
 
     async def location(self) -> TextMatch:
-        selector = self._strict_selector()
+        query = self._strict_query()
         values = await self._client._guarded(
             "locator.location",
-            self._client._native.find_text(json.dumps(selector)),
+            self._client._native.find_locator(json.dumps(query)),
         )
         if len(values) != 1:
-            message = "locator.location: no match found for {!r}".format(
-                self._selector["text"]
+            current = self._query["selector"]
+            description = (
+                repr(current["selector"]["text"])
+                if current["kind"] == "text"
+                else "style"
+            )
+            message = "locator.location: no match found for {}".format(
+                description
             )
             try:
                 message += "\n\nTerminal content:\n{}".format(
@@ -301,18 +373,21 @@ class TextLocator:
     async def count(self) -> int:
         return len(await self.locations())
 
-    async def all(self) -> List["TextLocator"]:
+    async def all(self) -> List["Locator"]:
         matches = await self.locations()
-        if self._selector["occurrence"] == "any":
+        if (
+            self._query["selector"]["selector"]["occurrence"]
+            == "any"
+        ):
             return [self.nth(index) for index in range(len(matches))]
-        return [TextLocator(self._client, self._selector) for _ in matches]
+        return [Locator(self._client, self._query) for _ in matches]
 
     async def wait(
         self,
         *,
         state: Literal["visible", "hidden"] = "visible",
         timeout: Optional[int] = None,
-    ) -> "TextLocator":
+    ) -> "Locator":
         return await self._wait(state=state, timeout=timeout, op_name="locator.wait")
 
     async def _wait(
@@ -321,13 +396,13 @@ class TextLocator:
         state: Literal["visible", "hidden"],
         timeout: Optional[int],
         op_name: str,
-    ) -> "TextLocator":
+    ) -> "Locator":
         if state not in ("visible", "hidden"):
             raise ValueError("locator state must be 'visible' or 'hidden'")
         await self._client._guarded(
             op_name,
-            self._client._native.wait_text_selector(
-                json.dumps(self._selector),
+            self._client._native.wait_locator(
+                json.dumps(self._query),
                 state == "hidden",
                 self._client._timeout("text", timeout),
             ),
@@ -343,8 +418,8 @@ class TextLocator:
     ) -> None:
         await self._client._guarded(
             "locator.click",
-            self._client._native.click_text(
-                json.dumps(self._strict_selector()),
+            self._client._native.click_locator(
+                json.dumps(self._strict_query()),
                 button,
                 clicks,
                 self._client._timeout("text", timeout),
@@ -354,8 +429,8 @@ class TextLocator:
     async def highlight(self, *, timeout: Optional[int] = None) -> None:
         await self._client._guarded(
             "locator.highlight",
-            self._client._native.highlight_text(
-                json.dumps(self._selector),
+            self._client._native.highlight_locator(
+                json.dumps(self._query),
                 self._client._timeout("text", timeout),
             ),
         )
@@ -369,10 +444,10 @@ class TextLocator:
     ) -> None:
         await self._client._guarded(
             "locator.expect",
-            self._client._native.expect_text_selector(
+            self._client._native.expect_locator(
                 json.dumps(
                     [
-                        self._selector,
+                        self._query,
                         asdict(style or TextStyle()),
                         not_,
                     ]
@@ -595,7 +670,7 @@ class TuiTest:
     async def text(self, *, full: bool = False) -> str:
         return await self._await(self._native.text(full))
 
-    def locator(
+    def get_by_text(
         self,
         text: str,
         *,
@@ -605,8 +680,8 @@ class TuiTest:
         after: Optional[TextAnchor] = None,
         before: Optional[TextAnchor] = None,
         occurrence: TextOccurrence = "any",
-    ) -> TextLocator:
-        return self._make_locator(
+    ) -> Locator:
+        return self._make_text_locator(
             text,
             regex=regex,
             full=full,
@@ -617,7 +692,7 @@ class TuiTest:
             within=None,
         )
 
-    def _make_locator(
+    def _make_text_locator(
         self,
         text: str,
         *,
@@ -628,16 +703,48 @@ class TuiTest:
         before: Optional[TextAnchor],
         occurrence: TextOccurrence,
         within: Optional[Dict[str, object]],
-    ) -> TextLocator:
-        return TextLocator(
+    ) -> Locator:
+        return Locator(
             self,
-            _selector_value(
+            _text_query_value(
                 text,
                 regex=regex,
                 full=full,
                 whitespace=whitespace,
                 after=after,
                 before=before,
+                occurrence=occurrence,
+                within=within,
+            ),
+        )
+
+    def get_by_style(
+        self,
+        style: TextStyle,
+        *,
+        full: bool = False,
+        occurrence: TextOccurrence = "any",
+    ) -> Locator:
+        return self._make_style_locator(
+            style,
+            full=full,
+            occurrence=occurrence,
+            within=None,
+        )
+
+    def _make_style_locator(
+        self,
+        style: TextStyle,
+        *,
+        full: bool,
+        occurrence: TextOccurrence,
+        within: Optional[Dict[str, object]],
+    ) -> Locator:
+        return Locator(
+            self,
+            _style_query_value(
+                style,
+                full=full,
                 occurrence=occurrence,
                 within=within,
             ),
@@ -654,7 +761,7 @@ class TuiTest:
         before: Optional[TextAnchor] = None,
         occurrence: TextOccurrence = "any",
     ) -> List[TextMatch]:
-        return await self.locator(
+        return await self.get_by_text(
             text,
             regex=regex,
             full=full,
@@ -750,8 +857,8 @@ class TuiTest:
         occurrence: TextOccurrence = "any",
         not_: bool = False,
         timeout: Optional[int] = None,
-    ) -> TextLocator:
-        locator = self.locator(
+    ) -> Locator:
+        locator = self.get_by_text(
             text,
             regex=regex,
             full=full,

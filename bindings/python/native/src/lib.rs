@@ -8,8 +8,8 @@ use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
-    Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, KeyAction, MouseAction, OpenOptions,
-    OpenResult, Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions,
+    Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, KeyAction, LocatorQuery, MouseAction,
+    OpenOptions, OpenResult, Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions,
     ScreenshotResult, Size, SnapshotResult, State, TextMatch, TextSelector, TextStyle, Timeouts,
     TuiTestError,
 };
@@ -332,6 +332,138 @@ impl NativeSession {
                 )
             },
             matches_to_py,
+        )
+    }
+
+    fn find_locator<'py>(
+        &self,
+        py: Python<'py>,
+        query_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let query: LocatorQuery = serde_json::from_str(&query_json)
+                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                execute_matches(&name, Operation::FindLocator { query })
+            },
+            matches_to_py,
+        )
+    }
+
+    #[pyo3(signature = (query_json, not_, timeout_ms))]
+    fn wait_locator<'py>(
+        &self,
+        py: Python<'py>,
+        query_json: String,
+        not_: bool,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let query: LocatorQuery = serde_json::from_str(&query_json)
+                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                execute_unit(
+                    &name,
+                    Operation::WaitLocator {
+                        query,
+                        not: not_,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    #[pyo3(signature = (query_json, button, clicks, timeout_ms))]
+    fn click_locator<'py>(
+        &self,
+        py: Python<'py>,
+        query_json: String,
+        button: Bound<'py, PyAny>,
+        clicks: Bound<'py, PyAny>,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let button = capture_integer(&button);
+        let clicks = capture_integer(&clicks);
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let query: LocatorQuery = serde_json::from_str(&query_json)
+                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                execute_unit(
+                    &name,
+                    Operation::ClickLocator {
+                        query,
+                        button: integer_u8(&button, "button")?,
+                        clicks: integer_u8(&clicks, "clicks")?,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    #[pyo3(signature = (query_json, timeout_ms))]
+    fn highlight_locator<'py>(
+        &self,
+        py: Python<'py>,
+        query_json: String,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let query: LocatorQuery = serde_json::from_str(&query_json)
+                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                execute_matches(
+                    &name,
+                    Operation::HighlightLocator {
+                        query,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            matches_to_py,
+        )
+    }
+
+    #[pyo3(signature = (request_json, timeout_ms))]
+    fn expect_locator<'py>(
+        &self,
+        py: Python<'py>,
+        request_json: String,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let (query, style, not): (LocatorQuery, TextStyle, bool) =
+                    serde_json::from_str(&request_json)
+                        .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                execute_unit(
+                    &name,
+                    Operation::ExpectLocator {
+                        query,
+                        not,
+                        style,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
         )
     }
 

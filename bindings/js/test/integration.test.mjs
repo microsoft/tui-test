@@ -406,7 +406,7 @@ test("text locators scope matches and assert styles", async () => {
   }
 });
 
-test("text locators are lazy, selectable, and actionable", async () => {
+test("get-by locators are lazy, chainable, and actionable", async () => {
   const su = new TuiTest(uniqueSession("reusable-text-locators"));
   const script =
     typeof globalThis.Deno === "undefined"
@@ -415,22 +415,27 @@ test("text locators are lazy, selectable, and actionable", async () => {
   const args = typeof globalThis.Deno === "undefined" ? ["-e", script] : ["eval", script];
   try {
     await su.run(process.execPath, args);
-    const locator = su.locator("item");
+    const locator = su.getByText("item");
     assert.throws(() => locator.nth(-1), /non-negative integer/);
     assert.throws(
-      () => su.locator("item", { occurrence: { nth: -1 } }),
+      () => su.getByText("item", { occurrence: { nth: -1 } }),
       /non-negative integer/,
     );
+    assert.throws(() => su.getByStyle({}), /at least one style/);
 
     const waited = await locator.wait({ timeout: 2000 });
     assert.strictEqual(waited, locator);
     assert.equal(await locator.count(), 3);
     const nested = su
-      .locator("item item")
-      .locator("item")
-      .locator("tem");
+      .getByText("item item")
+      .getByStyle({ bold: true })
+      .getByText("tem");
     await nested.wait({ timeout: 2000 });
     assert.equal(await nested.count(), 2);
+    assert.equal(
+      await su.getByStyle({ bold: true }).getByText("item").count(),
+      2,
+    );
 
     const items = await locator.all();
     assert.equal(items.length, 3);
@@ -442,7 +447,7 @@ test("text locators are lazy, selectable, and actionable", async () => {
       (error) => error instanceof ExpectationError,
     );
     await assert.rejects(
-      su.locator("missing-item").location(),
+      su.getByText("missing-item").location(),
       (error) =>
         error instanceof ExpectationError &&
         error.message.includes("Terminal content:") &&
