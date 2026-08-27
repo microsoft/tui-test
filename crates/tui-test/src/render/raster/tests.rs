@@ -394,6 +394,40 @@ fn cell_aligned_symbols_do_not_bleed_outside_their_grid_cell() {
     }
 }
 
+#[cfg(feature = "recording-font-jetbrains-mono-styles")]
+#[test]
+fn block_elements_in_titles_keep_title_font_metrics() {
+    let mut content = frame(vec![vec![EmuCell::blank(); 28]]);
+    content.title = Some("\u{2588}".to_string());
+    let zoom = 2.0;
+    let mut renderer = GridRenderer::with_zoom(28, 1, zoom).unwrap();
+    let image = renderer.render(&content).unwrap();
+    let (panel_width, panel_height) = crate::render::svg::pixel_size(28, 1);
+    let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
+    let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
+    let origin_x = (image.dimensions().0 - panel_width) / 2;
+    let origin_y = (image.dimensions().1 - panel_height) / 2;
+    let title_color = [
+        super::super::svg::TITLE_FG.r,
+        super::super::svg::TITLE_FG.g,
+        super::super::svg::TITLE_FG.b,
+        255,
+    ];
+    let header_bottom = origin_y + (super::super::svg::HEADER_H * zoom as f32).round() as u32;
+    let title_rows = (origin_y..header_bottom)
+        .filter(|&y| {
+            (origin_x..origin_x + panel_width).any(|x| pixel_at(&image, x, y) == title_color)
+        })
+        .collect::<Vec<_>>();
+    let title_height = title_rows.last().unwrap() - title_rows.first().unwrap() + 1;
+    let maximum_title_height = (super::super::svg::TITLE_FONT_SIZE * zoom as f32 * 1.5) as u32;
+    assert!(
+        title_height <= maximum_title_height,
+        "title glyphs occupy {title_height}px of a {}px header",
+        header_bottom - origin_y
+    );
+}
+
 #[test]
 fn supported_unicode_renders_and_missing_unicode_is_reported_when_absent() {
     let mut renderer = GridRenderer::new(1, 1);
