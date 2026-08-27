@@ -1,16 +1,43 @@
-use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
+use tiny_skia::{FillRule, Mask, Paint, PathBuilder, Pixmap, Rect, Transform};
 
 use super::font::GlyphOutline;
 use crate::profile::Rgb;
 
+#[derive(Clone, Copy)]
+pub(super) struct PixelBounds {
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+}
+
+impl PixelBounds {
+    pub fn new(left: u32, top: u32, right: u32, bottom: u32) -> Self {
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    fn dimensions(self) -> Option<(u32, u32)> {
+        let width = self.right.checked_sub(self.left)?;
+        let height = self.bottom.checked_sub(self.top)?;
+        (width > 0 && height > 0).then_some((width, height))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_glyph(
     pixmap: &mut Pixmap,
+    clip_mask: Option<&mut Mask>,
     glyph: &GlyphOutline,
     origin_x: f32,
     origin_y: f32,
     cell_width: f32,
     cell_height: f32,
+    pixel_bounds: Option<PixelBounds>,
     baseline: f32,
     color: Rgb,
     font_size: f32,
@@ -19,6 +46,19 @@ pub(super) fn draw_glyph(
     let bounds_width = f32::from(glyph.bounds.x_max - glyph.bounds.x_min).max(1.0);
     let bounds_height = f32::from(glyph.bounds.y_max - glyph.bounds.y_min).max(1.0);
     let transform = if glyph.powerline {
+        let (origin_x, origin_y, cell_width, cell_height) = if let Some(bounds) = pixel_bounds {
+            let Some((width, height)) = bounds.dimensions() else {
+                return;
+            };
+            (
+                bounds.left as f32,
+                bounds.top as f32,
+                width as f32,
+                height as f32,
+            )
+        } else {
+            (origin_x, origin_y, cell_width, cell_height)
+        };
         let scale_x = cell_width / bounds_width;
         let scale_y = cell_height / bounds_height;
         Transform::from_row(
@@ -51,11 +91,52 @@ pub(super) fn draw_glyph(
 
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.r, color.g, color.b, 255);
-    pixmap.fill_path(&glyph.path, &paint, FillRule::Winding, transform, None);
+    if glyph.clip_to_cell {
+        if let (Some(bounds), Some(clip_mask)) = (pixel_bounds, clip_mask) {
+            set_clip_rect(clip_mask, bounds, 255);
+            draw_transformed_glyph(
+                pixmap,
+                glyph,
+                &paint,
+                transform,
+                output_scale,
+                Some(clip_mask),
+            );
+            set_clip_rect(clip_mask, bounds, 0);
+            return;
+        }
+    }
+    draw_transformed_glyph(pixmap, glyph, &paint, transform, output_scale, None);
+}
+
+fn set_clip_rect(mask: &mut Mask, bounds: PixelBounds, value: u8) {
+    let width = mask.width() as usize;
+    let left = bounds.left.min(mask.width()) as usize;
+    let right = bounds.right.min(mask.width()) as usize;
+    let top = bounds.top.min(mask.height()) as usize;
+    let bottom = bounds.bottom.min(mask.height()) as usize;
+    if left >= right || top >= bottom {
+        return;
+    }
+    let data = mask.data_mut();
+    for y in top..bottom {
+        data[y * width + left..y * width + right].fill(value);
+    }
+}
+
+fn draw_transformed_glyph(
+    pixmap: &mut Pixmap,
+    glyph: &GlyphOutline,
+    paint: &Paint,
+    transform: Transform,
+    output_scale: f32,
+    mask: Option<&Mask>,
+) {
+    pixmap.fill_path(&glyph.path, paint, FillRule::Winding, transform, mask);
     if glyph.synthetic_bold {
         let mut bold = transform;
         bold.tx += 0.65 * output_scale;
-        pixmap.fill_path(&glyph.path, &paint, FillRule::Winding, bold, None);
+        pixmap.fill_path(&glyph.path, paint, FillRule::Winding, bold, mask);
     }
 }
 

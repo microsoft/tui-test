@@ -20,6 +20,7 @@ pub(super) struct GlyphOutline {
     pub synthetic_bold: bool,
     pub synthetic_italic: bool,
     pub powerline: bool,
+    pub clip_to_cell: bool,
 }
 
 pub(super) struct FontSystem {
@@ -67,6 +68,8 @@ impl FontSystem {
                         synthetic_bold,
                         synthetic_italic,
                         powerline: nerd_font::is_powerline_separator(key.character),
+                        clip_to_cell: nerd_font::is_private_use(key.character)
+                            || is_block_element(key.character),
                     })
                 })
                 .flatten();
@@ -76,6 +79,10 @@ impl FontSystem {
         }
         None
     }
+}
+
+fn is_block_element(character: char) -> bool {
+    matches!(character as u32, 0x2580..=0x259f)
 }
 
 fn is_bold_face(face: &fontdb::FaceInfo) -> bool {

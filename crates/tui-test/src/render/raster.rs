@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use tiny_skia::Pixmap;
+use tiny_skia::{Mask, Pixmap};
 
 use crate::profile::ColorSlot;
 use crate::record::frames::Frame;
@@ -16,7 +16,7 @@ mod font;
 use draw::{
     draw_glyph, fill_antialiased_rect, fill_circle, fill_pixel_rect, fill_rounded_rect,
     fill_rounded_rect_alpha, fill_top_rounded_rect, format_glyph_sequence, is_default_ignorable,
-    unpremultiply, unsupported_grapheme,
+    unpremultiply, unsupported_grapheme, PixelBounds,
 };
 use font::{FontSystem, GlyphKey};
 
@@ -55,6 +55,7 @@ pub struct GridRenderer {
     width: u32,
     height: u32,
     pixmap: Pixmap,
+    clip_mask: Mask,
     fonts: FontSystem,
 }
 
@@ -92,6 +93,9 @@ impl GridRenderer {
             height,
             pixmap: Pixmap::new(width, height).ok_or_else(|| {
                 anyhow::anyhow!("terminal recording dimensions must fit a pixmap")
+            })?,
+            clip_mask: Mask::new(width, height).ok_or_else(|| {
+                anyhow::anyhow!("terminal recording dimensions must fit a clip mask")
             })?,
             fonts: FontSystem::new(),
         })
@@ -210,7 +214,7 @@ impl FrameRenderer for GridRenderer {
             }
         }
 
-        let (pixmap, fonts) = (&mut self.pixmap, &mut self.fonts);
+        let (pixmap, clip_mask, fonts) = (&mut self.pixmap, &mut self.clip_mask, &mut self.fonts);
         for (y, row) in grid.iter().enumerate() {
             for x in 0..usize::from(cols) {
                 let cell = row.get(x).unwrap_or(&blank);
@@ -234,6 +238,12 @@ impl FrameRenderer for GridRenderer {
                     + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + y as f32 * svg::CELL_H) * scale;
                 let cell_width = svg::CELL_W * span as f32 * scale;
                 let cell_height = svg::CELL_H * scale;
+                let pixel_bounds = PixelBounds::new(
+                    grid_x(origin_x, x, scale),
+                    grid_y(origin_y, y, scale),
+                    grid_x(origin_x, x + span, scale),
+                    grid_y(origin_y, y + 1, scale),
+                );
                 let baseline = origin_y
                     + (svg::HEADER_H
                         + svg::CONTENT_PADDING_TOP
@@ -257,11 +267,13 @@ impl FrameRenderer for GridRenderer {
                     match fonts.resolve(key) {
                         Some(glyph) => draw_glyph(
                             pixmap,
+                            Some(clip_mask),
                             glyph,
                             cell_origin_x,
                             cell_origin_y,
                             cell_width,
                             cell_height,
+                            Some(pixel_bounds),
                             baseline,
                             style.fg,
                             svg::FONT_SIZE,
@@ -299,6 +311,7 @@ impl FrameRenderer for GridRenderer {
         if let Some(cursor) = frame.cursor {
             draw_cursor(
                 &mut self.pixmap,
+                &mut self.clip_mask,
                 &mut self.fonts,
                 grid,
                 cursor,
@@ -346,6 +359,7 @@ fn grid_y(origin_y: f32, row: usize, scale: f32) -> u32 {
 #[allow(clippy::too_many_arguments)]
 fn draw_cursor(
     pixmap: &mut Pixmap,
+    clip_mask: &mut Mask,
     fonts: &mut FontSystem,
     grid: &[Vec<EmuCell>],
     (cx, cy): (u16, usize),
@@ -435,11 +449,13 @@ fn draw_cursor(
         match fonts.resolve(key) {
             Some(glyph) => draw_glyph(
                 pixmap,
+                Some(clip_mask),
                 glyph,
                 origin_x,
                 origin_y,
                 cell_width,
                 cell_height,
+                Some(PixelBounds::new(left, top, right, bottom)),
                 baseline,
                 svg::bg_of(cell, colors),
                 svg::FONT_SIZE,
@@ -501,11 +517,13 @@ fn draw_title(
             match fonts.resolve(key) {
                 Some(glyph) => draw_glyph(
                     pixmap,
+                    None,
                     glyph,
                     x,
                     origin_y,
                     width,
                     svg::HEADER_H * scale,
+                    None,
                     baseline,
                     svg::TITLE_FG,
                     svg::TITLE_FONT_SIZE,

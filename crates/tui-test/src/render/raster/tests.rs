@@ -306,6 +306,91 @@ fn bundled_styles_do_not_need_synthetic_bold_or_italic() {
     }
 }
 
+#[cfg(feature = "recording-font-jetbrains-mono-styles")]
+#[test]
+fn cell_aligned_symbols_do_not_bleed_outside_their_grid_cell() {
+    for character in [
+        "\u{e0b0}", "\u{f115}", "\u{2588}", "\u{2593}", "\u{2592}", "\u{2591}",
+    ] {
+        for zoom in [1.25, 2.0] {
+            let mut symbol = cell(character, Attrs::empty());
+            symbol.fg = Some(Color::Rgb(80, 160, 255));
+            symbol.bg = Some(Color::Rgb(30, 60, 100));
+            let mut grid = vec![vec![EmuCell::blank(); 3]; 3];
+            grid[1][1] = symbol;
+            let content = frame(grid);
+            let background = content.render_state.resolve(None, false);
+            let mut renderer = GridRenderer::with_zoom(3, 3, zoom).unwrap();
+            let image = renderer.render(&content).unwrap();
+            let (panel_width, panel_height) = crate::render::svg::pixel_size(3, 3);
+            let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
+            let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
+            let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
+            let origin_y = (image.dimensions().1 - panel_height) as f32 / 2.0;
+            let scale = zoom as f32;
+            let content_left = grid_x(origin_x, 0, scale);
+            let content_right = grid_x(origin_x, 3, scale);
+            let content_top = grid_y(origin_y, 0, scale);
+            let content_bottom = grid_y(origin_y, 3, scale);
+            let cell_left = grid_x(origin_x, 1, scale);
+            let cell_right = grid_x(origin_x, 2, scale);
+            let cell_top = grid_y(origin_y, 1, scale);
+            let cell_bottom = grid_y(origin_y, 2, scale);
+            let cell_background = [30, 60, 100, 255];
+
+            for y in content_top..content_bottom {
+                for x in content_left..content_right {
+                    if (cell_left..cell_right).contains(&x) && (cell_top..cell_bottom).contains(&y)
+                    {
+                        continue;
+                    }
+                    assert_eq!(
+                        pixel_at(&image, x, y),
+                        [background.r, background.g, background.b, 255],
+                        "{character:?} escaped its grid cell at ({x}, {y}), zoom {zoom}"
+                    );
+                }
+            }
+
+            assert!(
+                (cell_top..cell_bottom)
+                    .any(|y| (cell_left..cell_right)
+                        .any(|x| pixel_at(&image, x, y) != cell_background)),
+                "{character:?} did not render at zoom {zoom}"
+            );
+            if character == "\u{e0b0}" {
+                for (edge, touches) in [
+                    (
+                        "left",
+                        (cell_top..cell_bottom)
+                            .any(|y| pixel_at(&image, cell_left, y) != cell_background),
+                    ),
+                    (
+                        "right",
+                        (cell_top..cell_bottom)
+                            .any(|y| pixel_at(&image, cell_right - 1, y) != cell_background),
+                    ),
+                    (
+                        "top",
+                        (cell_left..cell_right)
+                            .any(|x| pixel_at(&image, x, cell_top) != cell_background),
+                    ),
+                    (
+                        "bottom",
+                        (cell_left..cell_right)
+                            .any(|x| pixel_at(&image, x, cell_bottom - 1) != cell_background),
+                    ),
+                ] {
+                    assert!(
+                        touches,
+                        "Powerline glyph missed the {edge} edge at zoom {zoom}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn supported_unicode_renders_and_missing_unicode_is_reported_when_absent() {
     let mut renderer = GridRenderer::new(1, 1);
