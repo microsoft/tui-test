@@ -234,13 +234,17 @@ Wait commands react to the terminal instead of relying on fixed sleeps. `--json`
 | --- | --- |
 | `agent-context` | Print versioned JSON for every command, flag, enum, default, and exit code. The installed CLI generates the JSON, so it matches that version. |
 | `usage` | Print a one-screen cheatsheet. |
-| `skill` | Print the full workflow guide from [`SKILL.md`](https://github.com/microsoft/tui-test/blob/main/SKILL.md). |
+| `skill` | Print a self-contained guide containing [`SKILL.md`](https://github.com/microsoft/tui-test/blob/main/SKILL.md) and every bundled reference. |
 
 ### Install the agent skill
 
 ```sh
 tui-test skill --add
 ```
+
+The installed skill includes local, version-matched references for the CLI,
+Rust, Python, and JavaScript APIs, plus task-oriented recipes. The main
+`SKILL.md` selects the right interface and links to those references.
 
 ## API references
 
