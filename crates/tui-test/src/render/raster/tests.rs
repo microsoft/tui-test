@@ -358,7 +358,10 @@ fn cell_aligned_symbols_do_not_bleed_outside_their_grid_cell() {
                         .any(|x| pixel_at(&image, x, y) != cell_background)),
                 "{character:?} did not render at zoom {zoom}"
             );
-            if character == "\u{e0b0}" {
+            if matches!(
+                character,
+                "\u{e0b0}" | "\u{2588}" | "\u{2593}" | "\u{2592}" | "\u{2591}"
+            ) {
                 for (edge, touches) in [
                     (
                         "left",
@@ -383,7 +386,7 @@ fn cell_aligned_symbols_do_not_bleed_outside_their_grid_cell() {
                 ] {
                     assert!(
                         touches,
-                        "Powerline glyph missed the {edge} edge at zoom {zoom}"
+                        "{character:?} missed the {edge} cell edge at zoom {zoom}"
                     );
                 }
             }

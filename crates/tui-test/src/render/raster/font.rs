@@ -19,7 +19,7 @@ pub(super) struct GlyphOutline {
     pub units_per_em: u16,
     pub synthetic_bold: bool,
     pub synthetic_italic: bool,
-    pub powerline: bool,
+    pub fit_to_cell: bool,
     pub clip_to_cell: bool,
 }
 
@@ -67,7 +67,8 @@ impl FontSystem {
                         units_per_em: face.units_per_em(),
                         synthetic_bold,
                         synthetic_italic,
-                        powerline: nerd_font::is_powerline_separator(key.character),
+                        fit_to_cell: nerd_font::is_powerline_separator(key.character)
+                            || is_full_cell_block(key.character),
                         clip_to_cell: nerd_font::is_private_use(key.character)
                             || is_block_element(key.character),
                     })
@@ -83,6 +84,10 @@ impl FontSystem {
 
 fn is_block_element(character: char) -> bool {
     matches!(character as u32, 0x2580..=0x259f)
+}
+
+fn is_full_cell_block(character: char) -> bool {
+    matches!(character as u32, 0x2588 | 0x2591..=0x2593)
 }
 
 fn is_bold_face(face: &fontdb::FaceInfo) -> bool {

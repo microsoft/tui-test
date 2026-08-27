@@ -45,7 +45,7 @@ pub(super) fn draw_glyph(
 ) {
     let bounds_width = f32::from(glyph.bounds.x_max - glyph.bounds.x_min).max(1.0);
     let bounds_height = f32::from(glyph.bounds.y_max - glyph.bounds.y_min).max(1.0);
-    let transform = if glyph.powerline {
+    let transform = if glyph.fit_to_cell {
         let (origin_x, origin_y, cell_width, cell_height) = if let Some(bounds) = pixel_bounds {
             let Some((width, height)) = bounds.dimensions() else {
                 return;
