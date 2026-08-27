@@ -200,14 +200,16 @@ impl FrameRenderer for GridRenderer {
                     run += 1;
                 }
                 if background != colors.resolve(None, false) {
+                    let left = grid_x(origin_x, x, scale);
+                    let right = grid_x(origin_x, x + run, scale);
+                    let top = grid_y(origin_y, y, scale);
+                    let bottom = grid_y(origin_y, y + 1, scale);
                     fill_crisp_rect(
                         &mut self.pixmap,
-                        origin_x + (svg::MARGIN_X + x as f32 * svg::CELL_W) * scale,
-                        origin_y
-                            + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + y as f32 * svg::CELL_H)
-                                * scale,
-                        run as f32 * svg::CELL_W * scale,
-                        svg::CELL_H * scale,
+                        left,
+                        top,
+                        right - left,
+                        bottom - top,
                         background,
                     );
                 }
@@ -337,6 +339,15 @@ impl FrameRenderer for GridRenderer {
     fn pixel_size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
+}
+
+fn grid_x(origin_x: f32, column: usize, scale: f32) -> f32 {
+    (origin_x + (svg::MARGIN_X + column as f32 * svg::CELL_W) * scale).round()
+}
+
+fn grid_y(origin_y: f32, row: usize, scale: f32) -> f32 {
+    (origin_y + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + row as f32 * svg::CELL_H) * scale)
+        .round()
 }
 
 #[allow(clippy::too_many_arguments)]

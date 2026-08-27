@@ -80,41 +80,47 @@ fn adjacent_background_cells_are_seamless_at_fractional_zoom() {
         Color::Rgb(244, 191, 79),
         Color::Rgb(97, 197, 84),
     ];
-    let grid = backgrounds
-        .iter()
-        .copied()
-        .map(|background| EmuCell {
-            bg: Some(background),
-            ..EmuCell::blank()
-        })
-        .collect::<Vec<_>>();
-    let zoom = 1.25;
-    let mut renderer = GridRenderer::with_zoom(backgrounds.len() as u16, 1, zoom).unwrap();
-    let image = renderer.render(&frame(vec![grid])).unwrap();
-    let (panel_width, panel_height) = crate::render::svg::pixel_size(backgrounds.len() as u16, 1);
-    let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
-    let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
-    let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
-    let origin_y = (image.dimensions().1 - panel_height) as f32 / 2.0;
-    let scale = zoom as f32;
-    let y = (origin_y
-        + (super::super::svg::HEADER_H
-            + super::super::svg::CONTENT_PADDING_TOP
-            + super::super::svg::CELL_H / 2.0)
-            * scale)
-        .floor() as u32;
+    let rows = 5;
+    let grid = vec![
+        backgrounds
+            .iter()
+            .copied()
+            .map(|background| EmuCell {
+                bg: Some(background),
+                ..EmuCell::blank()
+            })
+            .collect::<Vec<_>>();
+        rows
+    ];
 
-    for boundary in 1..backgrounds.len() {
-        let edge = origin_x
-            + (super::super::svg::MARGIN_X + boundary as f32 * super::super::svg::CELL_W) * scale;
-        let left = color_to_pixel(backgrounds[boundary - 1]);
-        let right = color_to_pixel(backgrounds[boundary]);
-        for x in [edge.floor() as u32, edge.ceil() as u32] {
-            let actual = pixel_at(&image, x, y);
-            assert!(
-                actual == left || actual == right,
-                "unexpected blended pixel {actual:?} at cell boundary {boundary} (x={x})"
-            );
+    for zoom in [1.02, 1.25] {
+        let mut renderer = GridRenderer::with_zoom(backgrounds.len() as u16, rows, zoom).unwrap();
+        let image = renderer.render(&frame(grid.clone())).unwrap();
+        let (panel_width, panel_height) =
+            crate::render::svg::pixel_size(backgrounds.len() as u16, rows);
+        let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
+        let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
+        let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
+        let origin_y = (image.dimensions().1 - panel_height) as f32 / 2.0;
+        let scale = zoom as f32;
+
+        for row in 0..rows {
+            let top = grid_y(origin_y, row, scale);
+            let bottom = grid_y(origin_y, row + 1, scale);
+            for (column, background) in backgrounds.iter().copied().enumerate() {
+                let left = grid_x(origin_x, column, scale);
+                let right = grid_x(origin_x, column + 1, scale);
+                let expected = color_to_pixel(background);
+                for y in top..bottom {
+                    for x in left..right {
+                        assert_eq!(
+                            pixel_at(&image, x, y),
+                            expected,
+                            "unexpected pixel at cell ({column}, {row}), ({x}, {y}), zoom {zoom}"
+                        );
+                    }
+                }
+            }
         }
     }
 }
@@ -350,4 +356,18 @@ fn color_to_pixel(color: Color) -> [u8; 4] {
         Color::Rgb(r, g, b) => [r, g, b, 255],
         _ => unreachable!("the test uses RGB colors"),
     }
+}
+
+fn grid_x(origin_x: f32, column: usize, scale: f32) -> u32 {
+    (origin_x + (super::super::svg::MARGIN_X + column as f32 * super::super::svg::CELL_W) * scale)
+        .round() as u32
+}
+
+fn grid_y(origin_y: f32, row: usize, scale: f32) -> u32 {
+    (origin_y
+        + (super::super::svg::HEADER_H
+            + super::super::svg::CONTENT_PADDING_TOP
+            + row as f32 * super::super::svg::CELL_H)
+            * scale)
+        .round() as u32
 }
