@@ -123,6 +123,70 @@ test("profilePayload validates profile and color fields", () => {
   assert.throws(() => profilePayload({ colors: { red: 123 } }), /must be a string/);
 });
 
+test("mouse helpers encode named buttons and modifiers", async () => {
+  const calls = [];
+  const originals = {
+    mouseClick: NativeRuntime.prototype.mouseClick,
+    mouseDown: NativeRuntime.prototype.mouseDown,
+    mouseUp: NativeRuntime.prototype.mouseUp,
+    mouseDrag: NativeRuntime.prototype.mouseDrag,
+  };
+  NativeRuntime.prototype.mouseClick = async (options) => {
+    calls.push(["click", options]);
+  };
+  NativeRuntime.prototype.mouseDown = async (x, y, button) => {
+    calls.push(["down", x, y, button]);
+  };
+  NativeRuntime.prototype.mouseUp = async (x, y, button) => {
+    calls.push(["up", x, y, button]);
+  };
+  NativeRuntime.prototype.mouseDrag = async (x1, y1, x2, y2, button) => {
+    calls.push(["drag", x1, y1, x2, y2, button]);
+  };
+
+  try {
+    const su = new TuiTest("mouse-options");
+    await su.mouse.click(null, null, {
+      onText: "OK",
+      button: "right",
+      alt: true,
+      ctrl: true,
+      shift: true,
+      clicks: 2,
+    });
+    await su.mouse.down(1, 2, { button: "middle", ctrl: true });
+    await su.mouse.up(3, 4, { button: "right", alt: true });
+    await su.mouse.drag(5, 6, 7, 8, { shift: true });
+
+    assert.deepEqual(calls, [
+      [
+        "click",
+        {
+          x: undefined,
+          y: undefined,
+          onText: "OK",
+          button: 30,
+          clicks: 2,
+        },
+      ],
+      ["down", 1, 2, 17],
+      ["up", 3, 4, 10],
+      ["drag", 5, 6, 7, 8, 4],
+    ]);
+
+    await assert.rejects(
+      su.mouse.click(0, 0, { button: "primary" }),
+      /unknown mouse button "primary"/,
+    );
+    await assert.rejects(
+      su.mouse.click(0, 0, { ctrl: "yes" }),
+      /ctrl must be a boolean/,
+    );
+  } finally {
+    Object.assign(NativeRuntime.prototype, originals);
+  }
+});
+
 test("unknown timeout classes are rejected before native dispatch", async () => {
   assert.throws(() => timeoutsPayload({ comand: 100 }), /comand/);
   assert.throws(() => new TuiTest("s", { timeouts: { txt: 100 } }), /txt/);

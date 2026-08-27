@@ -17,6 +17,11 @@ pub fn motion(x: u16, y: u16) -> String {
     format!("{CSI}<35;{};{}M", x + 1, y + 1)
 }
 
+/// SGR drag motion at (x, y), preserving the button and modifier bits.
+pub fn drag_motion(x: u16, y: u16, button: u8) -> String {
+    format!("{CSI}<{};{};{}M", button | 32, x + 1, y + 1)
+}
+
 /// Scroll wheel: SGR codes 64 (up) and 65 (down).
 pub fn scroll(x: u16, y: u16, up: bool) -> String {
     let code = if up { 64 } else { 65 };
@@ -26,4 +31,16 @@ pub fn scroll(x: u16, y: u16, up: bool) -> String {
 /// A full click: press then release.
 pub fn click(x: u16, y: u16, button: u8) -> String {
     format!("{}{}", down(x, y, button), up(x, y, button))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_buttons_and_modifiers() {
+        assert_eq!(click(2, 3, 18), "\u{1b}[<18;3;4M\u{1b}[<18;3;4m");
+        assert_eq!(motion(2, 3), "\u{1b}[<35;3;4M");
+        assert_eq!(drag_motion(2, 3, 18), "\u{1b}[<50;3;4M");
+    }
 }

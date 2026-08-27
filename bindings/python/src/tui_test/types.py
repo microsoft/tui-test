@@ -5,6 +5,7 @@ from typing import Any, Dict, Literal, Optional, Union
 
 Color = Union[str, int]
 Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
+MouseButton = Literal["left", "middle", "right"]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]

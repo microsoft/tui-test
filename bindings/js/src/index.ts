@@ -1,7 +1,9 @@
 export { TuiTest } from "./client.js";
 export type {
   ExpectTextOptions,
+  MouseButton,
   MouseButtonOptions,
+  MouseClickOptions,
   TitleOptions,
   RecordingFormat,
   RecordingOptions,

@@ -11,7 +11,17 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Backend, BellEvent, Cell, Colors, Profile, RecordingFormat, State, Timeouts
+from .types import (
+    Backend,
+    BellEvent,
+    Cell,
+    Colors,
+    MouseButton,
+    Profile,
+    RecordingFormat,
+    State,
+    Timeouts,
+)
 
 __all__ = [
     "TuiTest",
@@ -29,6 +39,7 @@ __all__ = [
     "Cell",
     "Backend",
     "Colors",
+    "MouseButton",
     "Profile",
     "RecordingFormat",
     "State",

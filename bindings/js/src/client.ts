@@ -51,8 +51,18 @@ export interface ExpectTextOptions {
   timeout?: number;
 }
 
+export type MouseButton = "left" | "middle" | "right";
+
 export interface MouseButtonOptions {
-  button?: number;
+  button?: MouseButton;
+  alt?: boolean;
+  ctrl?: boolean;
+  shift?: boolean;
+}
+
+export interface MouseClickOptions extends MouseButtonOptions {
+  onText?: string;
+  clicks?: number;
 }
 
 export type RecordingFormat = "apng" | "gif" | "mp4" | "cast";
@@ -99,6 +109,33 @@ function optional<T>(value: T | null | undefined): T | undefined {
   return value ?? undefined;
 }
 
+function isMouseButton(value: unknown): value is MouseButton {
+  return value === "left" || value === "middle" || value === "right";
+}
+
+function mouseModifier(value: boolean | undefined, name: string, bit: number): number {
+  if (value !== undefined && typeof value !== "boolean") {
+    throw new TypeError(`${name} must be a boolean`);
+  }
+  return value ? bit : 0;
+}
+
+function mouseButtonCode(opts: MouseButtonOptions): number {
+  const button = opts.button ?? "left";
+  if (!isMouseButton(button)) {
+    throw new TypeError(
+      `unknown mouse button "${String(button)}"; expected one of left, middle, right`,
+    );
+  }
+  const base = { left: 0, middle: 1, right: 2 }[button];
+  return (
+    base +
+    mouseModifier(opts.shift, "shift", 4) +
+    mouseModifier(opts.alt, "alt", 8) +
+    mouseModifier(opts.ctrl, "ctrl", 16)
+  );
+}
+
 class Keyboard {
   #runtime: NativeRuntime;
 
@@ -133,13 +170,13 @@ class Mouse {
   async click(
     x: number | null = null,
     y: number | null = null,
-    opts: { onText?: string; button?: number; clicks?: number } = {},
+    opts: MouseClickOptions = {},
   ): Promise<void> {
     await this.#runtime.mouseClick({
       x: optional(x),
       y: optional(y),
       onText: opts.onText,
-      button: opts.button ?? 0,
+      button: mouseButtonCode(opts),
       clicks: opts.clicks ?? 1,
     });
   }
@@ -149,11 +186,11 @@ class Mouse {
   }
 
   async down(x: number, y: number, opts: MouseButtonOptions = {}): Promise<void> {
-    await this.#runtime.mouseDown(x, y, opts.button ?? 0);
+    await this.#runtime.mouseDown(x, y, mouseButtonCode(opts));
   }
 
   async up(x: number, y: number, opts: MouseButtonOptions = {}): Promise<void> {
-    await this.#runtime.mouseUp(x, y, opts.button ?? 0);
+    await this.#runtime.mouseUp(x, y, mouseButtonCode(opts));
   }
 
   async drag(
@@ -163,7 +200,7 @@ class Mouse {
     y2: number,
     opts: MouseButtonOptions = {},
   ): Promise<void> {
-    await this.#runtime.mouseDrag(x1, y1, x2, y2, opts.button ?? 0);
+    await this.#runtime.mouseDrag(x1, y1, x2, y2, mouseButtonCode(opts));
   }
 
   async scroll(direction: "up" | "down", opts: { amount?: number } = {}): Promise<void> {

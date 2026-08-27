@@ -57,6 +57,17 @@ adds a release only when the negotiated Kitty mode can represent it.
 events; `keyboard.repeat()` simulates repeats. Top-level `press()` remains a
 compatibility alias.
 
+Mouse actions use zero-based terminal cell coordinates. `click()`, `down()`,
+`up()`, and `drag()` accept Playwright-style `"left"`, `"middle"`, or
+`"right"` buttons plus `alt`, `ctrl`, and `shift` modifiers:
+
+```js
+await terminal.mouse.click(10, 5, { button: "right", ctrl: true });
+await terminal.mouse.down(10, 5, { button: "middle" });
+await terminal.mouse.up(10, 5, { button: "middle" });
+await terminal.mouse.drag(1, 2, 20, 2, { button: "left", shift: true });
+```
+
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 
 `open` and `run` accept

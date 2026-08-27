@@ -62,6 +62,17 @@ adds a release only when the negotiated Kitty mode can represent it.
 events; `keyboard.repeat()` simulates repeats. Top-level `press()` remains a
 compatibility alias.
 
+Mouse actions use zero-based terminal cell coordinates. `click()`, `down()`,
+`up()`, and `drag()` accept Playwright-style `"left"`, `"middle"`, or
+`"right"` buttons plus `alt`, `ctrl`, and `shift` modifiers:
+
+```python
+await terminal.mouse.click(10, 5, button="right", ctrl=True)
+await terminal.mouse.down(10, 5, button="middle")
+await terminal.mouse.up(10, 5, button="middle")
+await terminal.mouse.drag(1, 2, 20, 2, button="left", shift=True)
+```
+
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 
 `open()` and `run()` accept `backend=`, `wait_ready=`, `restart=`, `retries=`,

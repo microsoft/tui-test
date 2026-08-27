@@ -906,7 +906,7 @@ fn mouse_action(
         } => format!(
             "{}{}{}",
             mouse::down(x1, y1, button),
-            mouse::motion(x2, y2),
+            mouse::drag_motion(x2, y2, button),
             mouse::up(x2, y2, button)
         ),
         crate::api::MouseAction::Scroll { direction, amount } => {

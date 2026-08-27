@@ -27,7 +27,16 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Backend, BellEvent, Cell, Profile, RecordingFormat, State, Timeouts
+from .types import (
+    Backend,
+    BellEvent,
+    Cell,
+    MouseButton,
+    Profile,
+    RecordingFormat,
+    State,
+    Timeouts,
+)
 
 _TERMINAL_MARKER = "Terminal content:\n"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
@@ -88,6 +97,36 @@ def _extract_terminal_text(message: Optional[str]) -> Optional[str]:
     return message[index + len(_TERMINAL_MARKER):].rstrip("\n") or None
 
 
+_MOUSE_BUTTON_CODES = {
+    "left": 0,
+    "middle": 1,
+    "right": 2,
+}  # type: Dict[MouseButton, int]
+
+
+def _mouse_button_code(
+    button: MouseButton,
+    *,
+    alt: bool,
+    ctrl: bool,
+    shift: bool,
+) -> int:
+    if not isinstance(button, str):
+        raise TypeError("button must be a string")
+    try:
+        code = _MOUSE_BUTTON_CODES[button]
+    except KeyError:
+        raise ValueError(
+            "unknown mouse button {!r}; expected one of left, middle, right".format(
+                button
+            )
+        ) from None
+    for name, value in (("alt", alt), ("ctrl", ctrl), ("shift", shift)):
+        if not isinstance(value, bool):
+            raise TypeError("{} must be a bool".format(name))
+    return code + 4 * shift + 8 * alt + 16 * ctrl
+
+
 class _Keyboard:
     def __init__(self, client: "TuiTest") -> None:
         self._c = client
@@ -115,27 +154,81 @@ class _Mouse:
         y: Optional[int] = None,
         *,
         on_text: Optional[str] = None,
-        button: int = 0,
+        button: MouseButton = "left",
+        alt: bool = False,
+        ctrl: bool = False,
+        shift: bool = False,
         clicks: int = 1,
     ) -> None:
+        code = _mouse_button_code(
+            button,
+            alt=alt,
+            ctrl=ctrl,
+            shift=shift,
+        )
         await self._c._await(
-            self._c._native.mouse_click(x, y, on_text, button, clicks)
+            self._c._native.mouse_click(x, y, on_text, code, clicks)
         )
 
     async def move(self, x: int, y: int) -> None:
         await self._c._await(self._c._native.mouse_move(x, y))
 
-    async def down(self, x: int, y: int, *, button: int = 0) -> None:
-        await self._c._await(self._c._native.mouse_down(x, y, button))
+    async def down(
+        self,
+        x: int,
+        y: int,
+        *,
+        button: MouseButton = "left",
+        alt: bool = False,
+        ctrl: bool = False,
+        shift: bool = False,
+    ) -> None:
+        code = _mouse_button_code(
+            button,
+            alt=alt,
+            ctrl=ctrl,
+            shift=shift,
+        )
+        await self._c._await(self._c._native.mouse_down(x, y, code))
 
-    async def up(self, x: int, y: int, *, button: int = 0) -> None:
-        await self._c._await(self._c._native.mouse_up(x, y, button))
+    async def up(
+        self,
+        x: int,
+        y: int,
+        *,
+        button: MouseButton = "left",
+        alt: bool = False,
+        ctrl: bool = False,
+        shift: bool = False,
+    ) -> None:
+        code = _mouse_button_code(
+            button,
+            alt=alt,
+            ctrl=ctrl,
+            shift=shift,
+        )
+        await self._c._await(self._c._native.mouse_up(x, y, code))
 
     async def drag(
-        self, x1: int, y1: int, x2: int, y2: int, *, button: int = 0
+        self,
+        x1: int,
+        y1: int,
+        x2: int,
+        y2: int,
+        *,
+        button: MouseButton = "left",
+        alt: bool = False,
+        ctrl: bool = False,
+        shift: bool = False,
     ) -> None:
+        code = _mouse_button_code(
+            button,
+            alt=alt,
+            ctrl=ctrl,
+            shift=shift,
+        )
         await self._c._await(
-            self._c._native.mouse_drag(x1, y1, x2, y2, button)
+            self._c._native.mouse_drag(x1, y1, x2, y2, code)
         )
 
     async def scroll(self, direction: str, *, amount: int = 3) -> None:

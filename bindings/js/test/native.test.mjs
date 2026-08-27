@@ -75,4 +75,13 @@ test("public facade omits generic request dispatchers", async () => {
   assert.doesNotMatch(declarations, /\bsend\(/);
   assert.doesNotMatch(declarations, /\bget\(/);
   assert.doesNotMatch(declarations, /payload|request dispatcher/);
+  assert.match(
+    declarations,
+    /export type MouseButton = "left" \| "middle" \| "right"/,
+  );
+  assert.match(
+    declarations,
+    /interface MouseButtonOptions \{[\s\S]*button\?: MouseButton[\s\S]*alt\?: boolean[\s\S]*ctrl\?: boolean[\s\S]*shift\?: boolean[\s\S]*\}/,
+  );
+  assert.doesNotMatch(declarations, /interface MouseButtonOptions \{\s*button\?: number/);
 });
