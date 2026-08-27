@@ -444,6 +444,7 @@ pub struct ExpectTextOptions {
     pub before_regex: Option<bool>,
     pub before_occurrence: Option<String>,
     pub before_nth: Option<f64>,
+    pub within_json: Option<String>,
     pub not: Option<bool>,
     pub fg: Option<String>,
     pub bg: Option<String>,
@@ -475,6 +476,7 @@ pub struct TextSelectorOptions {
     pub before_regex: Option<bool>,
     pub before_occurrence: Option<String>,
     pub before_nth: Option<f64>,
+    pub within_json: Option<String>,
 }
 
 #[napi(object)]
@@ -650,6 +652,12 @@ fn core_selector(
             )))
         }
     };
+    let within = options
+        .within_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|error| TuiTestError::usage(format!("invalid parent locator: {error}")))?;
     Ok(CoreTextSelector {
         text,
         regex: options.regex.unwrap_or(false),
@@ -672,6 +680,7 @@ fn core_selector(
             )?,
         },
         occurrence: core_occurrence(options.occurrence, options.nth, default, "nth")?,
+        within,
     })
 }
 
@@ -904,6 +913,83 @@ impl NativeSession {
                     Ok(matches.into_iter().map(TextMatch::from).collect())
                 }
                 _ => Err(unexpected("findText")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn wait_text_selector(
+        &self,
+        text: String,
+        options: Option<TextSelectorOptions>,
+        not: Option<bool>,
+        timeout_ms: Option<f64>,
+    ) -> Result<()> {
+        let handle = self.handle.clone();
+        blocking("waitTextSelector", move || {
+            let selector =
+                core_selector(text, options.unwrap_or_default(), CoreMatchOccurrence::Any)?;
+            match handle.execute(Operation::WaitTextSelector {
+                selector,
+                not: not.unwrap_or(false),
+                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+            })? {
+                OperationResult::Unit => Ok(()),
+                _ => Err(unexpected("waitTextSelector")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn click_text(
+        &self,
+        text: String,
+        options: Option<TextSelectorOptions>,
+        button: Option<f64>,
+        clicks: Option<f64>,
+        timeout_ms: Option<f64>,
+    ) -> Result<()> {
+        let handle = self.handle.clone();
+        blocking("clickText", move || {
+            let selector = core_selector(
+                text,
+                options.unwrap_or_default(),
+                CoreMatchOccurrence::Unique,
+            )?;
+            match handle.execute(Operation::ClickText {
+                selector,
+                button: u8_value(button.unwrap_or(0.0), "button")?,
+                clicks: u8_value(clicks.unwrap_or(1.0), "clicks")?,
+                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+            })? {
+                OperationResult::Unit => Ok(()),
+                _ => Err(unexpected("clickText")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn highlight_text(
+        &self,
+        text: String,
+        options: Option<TextSelectorOptions>,
+        timeout_ms: Option<f64>,
+    ) -> Result<Vec<TextMatch>> {
+        let handle = self.handle.clone();
+        blocking("highlightText", move || {
+            let selector =
+                core_selector(text, options.unwrap_or_default(), CoreMatchOccurrence::Any)?;
+            match handle.execute(Operation::HighlightText {
+                selector,
+                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+            })? {
+                OperationResult::Matches(matches) => {
+                    Ok(matches.into_iter().map(TextMatch::from).collect())
+                }
+                _ => Err(unexpected("highlightText")),
             }
         })
         .await
@@ -1418,6 +1504,7 @@ impl NativeSession {
                     before_regex: options.before_regex,
                     before_occurrence: options.before_occurrence,
                     before_nth: options.before_nth,
+                    within_json: options.within_json,
                 },
                 default,
             )?;

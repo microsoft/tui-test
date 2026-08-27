@@ -1,8 +1,13 @@
 export { TuiTest } from "./client.js";
 export type {
   ExpectTextOptions,
+  LocatorClickOptions,
+  LocatorExpectOptions,
+  LocatorHighlightOptions,
+  LocatorWaitOptions,
   MouseButtonOptions,
   TextAnchor,
+  TextLocator,
   TextOccurrence,
   TextSelectorOptions,
   TextStyleExpectation,

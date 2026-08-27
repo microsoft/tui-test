@@ -154,19 +154,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session.execute(Operation::Submit {
         data: Some("echo hello".into()),
     })?;
-    session.execute(Operation::WaitCommand {
-        timeout_ms: Some(30_000),
-    })?;
-    session.execute(Operation::ExpectText {
-        text: "hello".into(),
-        regex: false,
-        full: false,
-        strict: false,
-        not: false,
-        fg: None,
-        bg: None,
-        timeout_ms: Some(5_000),
-    })?;
+    let hello = session.locator("hello");
+    hello.wait_with_timeout(Some(5_000))?;
+    hello.last().highlight()?;
     session.execute(Operation::ExpectExitCode {
         code: 0,
         timeout_ms: Some(5_000),
@@ -189,8 +179,8 @@ async def main():
     async with TuiTest() as su:
         await su.open()
         await su.submit("echo hello")
-        await su.wait_command()
-        await su.expect_text("hello")
+        hello = await su.wait_text("hello")
+        await hello.last().highlight()
         await su.expect_exit_code(0)
 
 asyncio.run(main())
@@ -207,8 +197,8 @@ import { TuiTest } from "@microsoft/tui-test";
 const su = new TuiTest();
 await su.open();
 await su.submit("echo hello");
-await su.waitCommand();
-await su.expectText("hello");
+const hello = await su.waitText("hello");
+await hello.last().highlight();
 await su.expectExitCode(0);
 await su.close();
 ```
@@ -222,8 +212,8 @@ await su.close();
 | Task | Commands |
 | --- | --- |
 | Start or reuse a terminal | `open`, `run`, `sessions` |
-| Inspect what happened | `state`, `text`, `cells`, `get`, `screenshot` |
-| Interact with the program | `submit`, `type`, `key`, `mouse`, `resize`, `signal` |
+| Inspect what happened | `state`, `text`, `locator`, `cells`, `get`, `screenshot` |
+| Interact with the program | `locator --action click`, `submit`, `type`, `key`, `mouse`, `resize`, `signal` |
 | Wait for real terminal state | `wait command`, `wait ready`, `wait idle`, `wait text`, `wait title`, `wait bell` |
 | Check the result | `expect text`, `expect output`, `expect exit-code`, `expect snapshot` |
 | Hand the session to a person | `monitor`, `screenshot`, `record` |
@@ -337,6 +327,7 @@ The default Rust features include only Alacritty and do not require Zig. The `gh
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, effective timeouts, text snapshot. |
 | `text [--full]`                                     | Plain text of the viewport (or scrollback).                                                 |
+| `locator "T" [options]`                             | Match text and return its zero-based row/column spans.                                      |
 | `screenshot [-o file.svg] [--full] [--zoom N]`      | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.   |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags).                                                  |
 | `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | Structured getters.                                                                   |
@@ -356,6 +347,27 @@ The default Rust features include only Alacritty and do not require Zig. The `gh
 | `mouse move\|down\|up\|drag\|scroll ...`                      | Full mouse control.                                        |
 
 Key input follows the Kitty keyboard protocol negotiated by the child. A `key press` sends the normal press input and adds a release only when the child requests Kitty event-type reporting. Text-producing keys also require report-all-keys mode before repeat and release events can be represented. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`, and `Meta`; the top-level `press` command remains a compatibility alias for `key press`.
+
+#### Text locators
+
+`locator` uses one selector for inspection and actions:
+
+```sh
+tui-test locator "Save"                                      # all locations
+tui-test locator "Save" --match last --action click          # wait, then click its middle cell
+tui-test locator 'item\s+\d+' --regex --action highlight     # highlight every match
+```
+
+Selectors support exact or normalized whitespace, full scrollback, regular
+expressions, `after` / `before` anchors, and
+`any|unique|first|last|nth` occurrence selection. `locations` is the default
+action; `wait`, `click`, and `highlight` are selected with `--action`. Click is
+strict unless the selector chooses one occurrence. Highlighted cells appear in
+the live monitor and SVG screenshots until the terminal redraws.
+
+The Rust, Python, and JavaScript APIs can also stack locators: calling
+`locator()` on a locator constrains the child search to the dynamically
+resolved parent match.
 
 #### PTY control
 

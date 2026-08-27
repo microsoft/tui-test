@@ -249,6 +249,92 @@ impl NativeSession {
         )
     }
 
+    #[pyo3(signature = (selector_json, not_, timeout_ms))]
+    fn wait_text_selector<'py>(
+        &self,
+        py: Python<'py>,
+        selector_json: String,
+        not_: bool,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let selector: TextSelector = serde_json::from_str(&selector_json)
+                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                execute_unit(
+                    &name,
+                    Operation::WaitTextSelector {
+                        selector,
+                        not: not_,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    #[pyo3(signature = (selector_json, button, clicks, timeout_ms))]
+    fn click_text<'py>(
+        &self,
+        py: Python<'py>,
+        selector_json: String,
+        button: Bound<'py, PyAny>,
+        clicks: Bound<'py, PyAny>,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let button = capture_integer(&button);
+        let clicks = capture_integer(&clicks);
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let selector: TextSelector = serde_json::from_str(&selector_json)
+                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                execute_unit(
+                    &name,
+                    Operation::ClickText {
+                        selector,
+                        button: integer_u8(&button, "button")?,
+                        clicks: integer_u8(&clicks, "clicks")?,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    #[pyo3(signature = (selector_json, timeout_ms))]
+    fn highlight_text<'py>(
+        &self,
+        py: Python<'py>,
+        selector_json: String,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let selector: TextSelector = serde_json::from_str(&selector_json)
+                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                execute_matches(
+                    &name,
+                    Operation::HighlightText {
+                        selector,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            matches_to_py,
+        )
+    }
+
     fn packed_screen<'py>(&self, py: Python<'py>, full: bool) -> PyResult<Bound<'py, PyAny>> {
         let name = self.name.clone();
         future_blocking(

@@ -30,6 +30,9 @@ test("generated native declarations expose typed operations", async () => {
     "state",
     "text",
     "findText",
+    "waitTextSelector",
+    "clickText",
+    "highlightText",
     "cells",
     "getCommand",
     "getBellCount",
@@ -65,6 +68,33 @@ test("generated native declarations expose typed operations", async () => {
   );
   assert.doesNotMatch(declarations, /\bBuffer\b/);
   assert.doesNotMatch(declarations, /interface PackedScreen \{[\s\S]*\bbuffer:/);
+});
+
+test("public declarations expose reusable text locators", async () => {
+  const declarations = await readFile(
+    new URL("../dist/client.d.ts", import.meta.url),
+    "utf8",
+  );
+  for (const method of [
+    "locator",
+    "any",
+    "unique",
+    "first",
+    "last",
+    "nth",
+    "locations",
+    "location",
+    "count",
+    "all",
+    "wait",
+    "click",
+    "highlight",
+    "expect",
+  ]) {
+    assert.match(declarations, new RegExp(`\\b${method}\\(`));
+  }
+  assert.match(declarations, /\blocator\(text: string/);
+  assert.match(declarations, /waitText\([\s\S]*Promise<TextLocator>/);
 });
 
 test("public facade omits generic request dispatchers", async () => {

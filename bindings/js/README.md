@@ -28,8 +28,8 @@ import { TuiTest } from "@microsoft/tui-test";
 const su = new TuiTest();
 await su.open();
 await su.submit("echo hello");
-await su.waitCommand();
-await su.expectText("hello");
+const hello = await su.waitText("hello");
+await hello.last().highlight();
 await su.expectExitCode(0);
 await su.close();
 ```
@@ -49,7 +49,7 @@ All derive from `TuiTestError` and carry `kind` and `exitCode`. `waitX` and `exp
 
 ## API
 
-`new TuiTest(session?, { backend?, profile?, timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `findText`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle` / `getBellCount` / `getBellEvents`, `screenshot`, `startRecording` / `stopRecording`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady` / `waitBell`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectBellCount` / `expectSnapshot`, `close`, and `closeQuiet`.
+`new TuiTest(session?, { backend?, profile?, timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `locator`, `findText`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle` / `getBellCount` / `getBellEvents`, `screenshot`, `startRecording` / `stopRecording`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady` / `waitBell`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectBellCount` / `expectSnapshot`, `close`, and `closeQuiet`.
 
 `keyboard.press()` simulates key presses: it sends the normal press input and
 adds a release only when the negotiated Kitty mode can represent it.
@@ -57,10 +57,37 @@ adds a release only when the negotiated Kitty mode can represent it.
 events; `keyboard.repeat()` simulates repeats. Top-level `press()` remains a
 compatibility alias.
 
-`findText(text, options)` returns zero-based row/column spans and supports
-normalized whitespace, `after` / `before` anchors, and any/unique/first/last/nth
-occurrences. `expectText` accepts the same selector options plus `style` checks
-for colors, bold, dim, italic, underline, inverse, hidden, strikethrough, and blink.
+`locator(text, options)` creates a lazy query. It resolves against the latest
+terminal grid whenever it is read or acted on:
+
+```js
+const terminal = new TuiTest();
+const settings = terminal.locator("Settings Save", {
+  whitespace: "normalize",
+});
+const save = settings.locator("Save");
+await save.wait();
+await save.click();
+
+const items = terminal.locator(String.raw`item \d+`, { regex: true });
+await items.highlight(); // highlights every match
+const second = items.nth(1);
+console.log(await second.location());
+```
+
+Locators support `any()`, `unique()`, `first()`, `last()`, `nth()`, `all()`,
+`count()`, `locations()`, `location()`, `wait()`, `expect()`, `click()`, and
+`highlight()`. Calling `locator()` on a locator searches inside each selected
+parent match, and every stage is re-resolved for each action. Clicks target the
+middle cell and require one match unless a positional selector narrows the
+locator. Highlights appear in the live monitor and SVG screenshots until the
+terminal redraws. Like Playwright, `all()` captures the current list without
+waiting and returns lazy `nth()` locators; wait first when the list is still
+loading. `findText()` remains a one-shot locations helper. `waitText()` now
+returns the locator it waited on, so it can be clicked or highlighted next.
+
+`expectText` accepts the same selector options plus `style` checks for colors,
+bold, dim, italic, underline, inverse, hidden, strikethrough, and blink.
 
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 

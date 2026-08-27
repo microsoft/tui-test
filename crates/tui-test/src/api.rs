@@ -137,7 +137,7 @@ pub struct TextScope {
     pub before: Option<TextAnchor>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TextSelector {
     pub text: String,
@@ -146,6 +146,22 @@ pub struct TextSelector {
     pub whitespace: WhitespaceMode,
     pub scope: TextScope,
     pub occurrence: MatchOccurrence,
+    /// Parent match whose source-cell range must contain this match.
+    pub within: Option<Box<TextSelector>>,
+}
+
+impl Default for TextSelector {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            regex: false,
+            full: false,
+            whitespace: WhitespaceMode::Exact,
+            scope: TextScope::default(),
+            occurrence: MatchOccurrence::Any,
+            within: None,
+        }
+    }
 }
 
 impl TextSelector {
@@ -154,6 +170,26 @@ impl TextSelector {
             text: text.into(),
             ..Self::default()
         }
+    }
+
+    pub fn uses_full_grid(&self) -> bool {
+        self.full
+            || self
+                .within
+                .as_deref()
+                .is_some_and(TextSelector::uses_full_grid)
+    }
+}
+
+impl From<&str> for TextSelector {
+    fn from(text: &str) -> Self {
+        Self::new(text)
+    }
+}
+
+impl From<String> for TextSelector {
+    fn from(text: String) -> Self {
+        Self::new(text)
     }
 }
 
@@ -256,6 +292,21 @@ pub enum Operation {
     },
     FindText {
         selector: TextSelector,
+    },
+    WaitTextSelector {
+        selector: TextSelector,
+        not: bool,
+        timeout_ms: Option<u64>,
+    },
+    ClickText {
+        selector: TextSelector,
+        button: u8,
+        clicks: u8,
+        timeout_ms: Option<u64>,
+    },
+    HighlightText {
+        selector: TextSelector,
+        timeout_ms: Option<u64>,
     },
     ExpectText {
         text: String,
@@ -673,5 +724,19 @@ mod tests {
         for zoom in [0.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
             assert!(resolve_zoom(Some(zoom)).is_err());
         }
+    }
+
+    #[test]
+    fn nested_selectors_use_full_grid_when_any_stage_requests_it() {
+        let mut parent = TextSelector::new("parent");
+        parent.full = true;
+        let mut child = TextSelector::new("child");
+        child.within = Some(Box::new(parent));
+        assert!(child.uses_full_grid());
+
+        let mut full_child = TextSelector::new("child");
+        full_child.full = true;
+        full_child.within = Some(Box::new(TextSelector::new("parent")));
+        assert!(full_child.uses_full_grid());
     }
 }

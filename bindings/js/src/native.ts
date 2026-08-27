@@ -177,6 +177,39 @@ export class NativeRuntime {
     return this.#call((session) => session.findText(text, options));
   }
 
+  waitTextSelector(
+    text: string,
+    options: TextSelectorOptions | undefined,
+    not = false,
+    timeoutMs?: number,
+  ): Promise<void> {
+    return this.#call((session) =>
+      session.waitTextSelector(text, options, not, timeoutMs),
+    );
+  }
+
+  clickText(
+    text: string,
+    options: TextSelectorOptions | undefined,
+    button = 0,
+    clicks = 1,
+    timeoutMs?: number,
+  ): Promise<void> {
+    return this.#call((session) =>
+      session.clickText(text, options, button, clicks, timeoutMs),
+    );
+  }
+
+  highlightText(
+    text: string,
+    options: TextSelectorOptions | undefined,
+    timeoutMs?: number,
+  ): Promise<TextMatch[]> {
+    return this.#call((session) =>
+      session.highlightText(text, options, timeoutMs),
+    );
+  }
+
   /**
    * Private packed snapshot. The detached Uint8Array is read-only by contract
    * and contains newline-delimited full logical rows, including trailing spaces

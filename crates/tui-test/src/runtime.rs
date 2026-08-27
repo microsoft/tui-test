@@ -5,7 +5,10 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, Weak};
 
 use sha2::{Digest, Sha256};
 
-use crate::api::{OpenOptions, OpenResult, Operation, OperationResult, RunOptions, TuiTestError};
+use crate::api::{
+    MatchOccurrence, OpenOptions, OpenResult, Operation, OperationResult, RunOptions, TextMatch,
+    TextSelector, TuiTestError,
+};
 use crate::engine::Engine;
 use crate::logger::Logger;
 
@@ -15,6 +18,208 @@ const MAX_COMPLETED_RECORDINGS: usize = 1024;
 pub struct Session {
     name: Arc<str>,
     engine: Arc<Engine>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LocatorClickOptions {
+    pub button: u8,
+    pub clicks: u8,
+    pub timeout_ms: Option<u64>,
+}
+
+impl Default for LocatorClickOptions {
+    fn default() -> Self {
+        Self {
+            button: 0,
+            clicks: 1,
+            timeout_ms: None,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum LocatorTarget {
+    Session(Session),
+    Handle(SessionHandle),
+}
+
+impl LocatorTarget {
+    fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
+        match self {
+            Self::Session(session) => session.execute(operation),
+            Self::Handle(session) => session.execute(operation),
+        }
+    }
+}
+
+/// A lazy text query that is resolved against the current terminal grid for
+/// every read, wait, or action.
+#[derive(Clone)]
+pub struct TextLocator {
+    target: LocatorTarget,
+    selector: TextSelector,
+}
+
+impl TextLocator {
+    fn new(target: LocatorTarget, selector: impl Into<TextSelector>) -> Self {
+        Self {
+            target,
+            selector: selector.into(),
+        }
+    }
+
+    pub fn selector(&self) -> &TextSelector {
+        &self.selector
+    }
+
+    /// Create a child locator whose matches must be contained by this
+    /// locator's selected terminal region.
+    pub fn locator(&self, selector: impl Into<TextSelector>) -> Self {
+        let mut selector = selector.into();
+        append_parent(&mut selector, self.selector.clone());
+        Self {
+            target: self.target.clone(),
+            selector,
+        }
+    }
+
+    pub fn any(&self) -> Self {
+        self.with_occurrence(MatchOccurrence::Any)
+    }
+
+    pub fn unique(&self) -> Self {
+        self.with_occurrence(MatchOccurrence::Unique)
+    }
+
+    pub fn first(&self) -> Self {
+        self.with_occurrence(MatchOccurrence::First)
+    }
+
+    pub fn last(&self) -> Self {
+        self.with_occurrence(MatchOccurrence::Last)
+    }
+
+    pub fn nth(&self, index: usize) -> Self {
+        self.with_occurrence(MatchOccurrence::Nth(index))
+    }
+
+    fn with_occurrence(&self, occurrence: MatchOccurrence) -> Self {
+        let mut locator = self.clone();
+        locator.selector.occurrence = occurrence;
+        locator
+    }
+
+    fn strict_selector(&self) -> TextSelector {
+        let mut selector = self.selector.clone();
+        if selector.occurrence == MatchOccurrence::Any {
+            selector.occurrence = MatchOccurrence::Unique;
+        }
+        selector
+    }
+
+    pub fn all(&self) -> Result<Vec<Self>, TuiTestError> {
+        let matches = self.locations()?;
+        if self.selector.occurrence == MatchOccurrence::Any {
+            Ok((0..matches.len()).map(|index| self.nth(index)).collect())
+        } else {
+            Ok(matches.into_iter().map(|_| self.clone()).collect())
+        }
+    }
+
+    pub fn count(&self) -> Result<usize, TuiTestError> {
+        self.locations().map(|matches| matches.len())
+    }
+
+    pub fn locations(&self) -> Result<Vec<TextMatch>, TuiTestError> {
+        match self.target.execute(Operation::FindText {
+            selector: self.selector.clone(),
+        })? {
+            OperationResult::Matches(matches) => Ok(matches),
+            _ => Err(TuiTestError::internal(
+                "locator locations returned an unexpected result type",
+            )),
+        }
+    }
+
+    pub fn location(&self) -> Result<TextMatch, TuiTestError> {
+        let selector = self.strict_selector();
+        let description = selector.text.clone();
+        match self.target.execute(Operation::FindText { selector })? {
+            OperationResult::Matches(mut matches) if matches.len() == 1 => Ok(matches.remove(0)),
+            OperationResult::Matches(_) => {
+                let diagnostic = match self.target.execute(Operation::Text { full: false }) {
+                    Ok(OperationResult::Text(screen)) => {
+                        format!("\n\nTerminal content:\n{screen}")
+                    }
+                    Ok(_) => "\n\nTerminal content unavailable: unexpected result type".to_string(),
+                    Err(error) => format!("\n\nTerminal content unavailable: {error}"),
+                };
+                Err(TuiTestError::assertion(format!(
+                    "no match found for '{description}'{diagnostic}"
+                )))
+            }
+            _ => Err(TuiTestError::internal(
+                "locator location returned an unexpected result type",
+            )),
+        }
+    }
+
+    pub fn wait(&self) -> Result<(), TuiTestError> {
+        self.wait_with_timeout(None)
+    }
+
+    pub fn wait_with_timeout(&self, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
+        self.wait_for(false, timeout_ms)
+    }
+
+    pub fn wait_hidden(&self, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
+        self.wait_for(true, timeout_ms)
+    }
+
+    fn wait_for(&self, not: bool, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
+        self.target
+            .execute(Operation::WaitTextSelector {
+                selector: self.selector.clone(),
+                not,
+                timeout_ms,
+            })
+            .map(|_| ())
+    }
+
+    pub fn click(&self) -> Result<(), TuiTestError> {
+        self.click_with(LocatorClickOptions::default())
+    }
+
+    pub fn click_with(&self, options: LocatorClickOptions) -> Result<(), TuiTestError> {
+        self.target
+            .execute(Operation::ClickText {
+                selector: self.strict_selector(),
+                button: options.button,
+                clicks: options.clicks,
+                timeout_ms: options.timeout_ms,
+            })
+            .map(|_| ())
+    }
+
+    pub fn highlight(&self) -> Result<(), TuiTestError> {
+        self.highlight_with_timeout(None)
+    }
+
+    pub fn highlight_with_timeout(&self, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
+        self.target
+            .execute(Operation::HighlightText {
+                selector: self.selector.clone(),
+                timeout_ms,
+            })
+            .map(|_| ())
+    }
+}
+
+fn append_parent(selector: &mut TextSelector, parent: TextSelector) {
+    match selector.within.as_deref_mut() {
+        Some(within) => append_parent(within, parent),
+        None => selector.within = Some(Box::new(parent)),
+    }
 }
 
 impl Session {
@@ -33,6 +238,10 @@ impl Session {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn locator(&self, selector: impl Into<TextSelector>) -> TextLocator {
+        TextLocator::new(LocatorTarget::Session(self.clone()), selector)
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
@@ -90,6 +299,10 @@ pub struct SessionHandle {
 impl SessionHandle {
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn locator(&self, selector: impl Into<TextSelector>) -> TextLocator {
+        TextLocator::new(LocatorTarget::Handle(self.clone()), selector)
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {

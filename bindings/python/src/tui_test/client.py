@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import atexit
+import copy
 import json
 import os
 import time
@@ -11,6 +12,7 @@ from typing import (
     Callable,
     Dict,
     Iterable,
+    Literal,
     List,
     Mapping,
     Optional,
@@ -27,6 +29,7 @@ from .errors import (
     InternalError,
     NoSessionError,
     TerminalArtifact,
+    TuiTestError,
     UsageError,
 )
 from .types import (
@@ -95,7 +98,13 @@ def _profile_values(
 
 def _occurrence_value(value: TextOccurrence) -> object:
     if isinstance(value, int) and not isinstance(value, bool):
+        if value < 0:
+            raise ValueError("text occurrence index must be non-negative")
         return {"nth": value}
+    if value not in ("any", "unique", "first", "last"):
+        raise ValueError(
+            "text occurrence must be any, unique, first, last, or a non-negative integer"
+        )
     return value
 
 
@@ -118,6 +127,7 @@ def _selector_value(
     after: Optional[TextAnchor],
     before: Optional[TextAnchor],
     occurrence: TextOccurrence,
+    within: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     return {
         "text": text,
@@ -129,6 +139,7 @@ def _selector_value(
             "before": _anchor_value(before),
         },
         "occurrence": _occurrence_value(occurrence),
+        "within": copy.deepcopy(within),
     }
 
 
@@ -193,6 +204,182 @@ class _Mouse:
 
     async def scroll(self, direction: str, *, amount: int = 3) -> None:
         await self._c._await(self._c._native.mouse_scroll(direction, amount))
+
+
+class TextLocator:
+    """A lazy text query resolved against the current terminal grid."""
+
+    def __init__(
+        self, client: "TuiTest", selector: Dict[str, object]
+    ) -> None:
+        self._client = client
+        self._selector = copy.deepcopy(selector)
+
+    def _with_occurrence(self, occurrence: TextOccurrence) -> "TextLocator":
+        selector = copy.deepcopy(self._selector)
+        selector["occurrence"] = _occurrence_value(occurrence)
+        return TextLocator(self._client, selector)
+
+    def _strict_selector(self) -> Dict[str, object]:
+        selector = copy.deepcopy(self._selector)
+        if selector["occurrence"] == "any":
+            selector["occurrence"] = "unique"
+        return selector
+
+    def any(self) -> "TextLocator":
+        return self._with_occurrence("any")
+
+    def unique(self) -> "TextLocator":
+        return self._with_occurrence("unique")
+
+    def first(self) -> "TextLocator":
+        return self._with_occurrence("first")
+
+    def last(self) -> "TextLocator":
+        return self._with_occurrence("last")
+
+    def nth(self, index: int) -> "TextLocator":
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise ValueError("locator nth index must be a non-negative integer")
+        return self._with_occurrence(index)
+
+    def locator(
+        self,
+        text: str,
+        *,
+        regex: bool = False,
+        full: bool = False,
+        whitespace: str = "exact",
+        after: Optional[TextAnchor] = None,
+        before: Optional[TextAnchor] = None,
+        occurrence: TextOccurrence = "any",
+    ) -> "TextLocator":
+        return self._client._make_locator(
+            text,
+            regex=regex,
+            full=full,
+            whitespace=whitespace,
+            after=after,
+            before=before,
+            occurrence=occurrence,
+            within=self._selector,
+        )
+
+    async def locations(self) -> List[TextMatch]:
+        return await self._locations("locator.locations")
+
+    async def _locations(self, op_name: str) -> List[TextMatch]:
+        values = await self._client._guarded(
+            op_name,
+            self._client._native.find_text(json.dumps(self._selector)),
+        )
+        return [TextMatch.from_dict(value) for value in values]
+
+    async def location(self) -> TextMatch:
+        selector = self._strict_selector()
+        values = await self._client._guarded(
+            "locator.location",
+            self._client._native.find_text(json.dumps(selector)),
+        )
+        if len(values) != 1:
+            message = "locator.location: no match found for {!r}".format(
+                self._selector["text"]
+            )
+            try:
+                message += "\n\nTerminal content:\n{}".format(
+                    await self._client.text()
+                )
+            except TuiTestError as diagnostic_error:
+                message += "\n\nTerminal content unavailable: {}".format(
+                    diagnostic_error
+                )
+            error = ExpectationError(message)
+            await self._client._capture_artifacts(error)
+            raise error
+        return TextMatch.from_dict(values[0])
+
+    async def count(self) -> int:
+        return len(await self.locations())
+
+    async def all(self) -> List["TextLocator"]:
+        matches = await self.locations()
+        if self._selector["occurrence"] == "any":
+            return [self.nth(index) for index in range(len(matches))]
+        return [TextLocator(self._client, self._selector) for _ in matches]
+
+    async def wait(
+        self,
+        *,
+        state: Literal["visible", "hidden"] = "visible",
+        timeout: Optional[int] = None,
+    ) -> "TextLocator":
+        return await self._wait(state=state, timeout=timeout, op_name="locator.wait")
+
+    async def _wait(
+        self,
+        *,
+        state: Literal["visible", "hidden"],
+        timeout: Optional[int],
+        op_name: str,
+    ) -> "TextLocator":
+        if state not in ("visible", "hidden"):
+            raise ValueError("locator state must be 'visible' or 'hidden'")
+        await self._client._guarded(
+            op_name,
+            self._client._native.wait_text_selector(
+                json.dumps(self._selector),
+                state == "hidden",
+                self._client._timeout("text", timeout),
+            ),
+        )
+        return self
+
+    async def click(
+        self,
+        *,
+        button: int = 0,
+        clicks: int = 1,
+        timeout: Optional[int] = None,
+    ) -> None:
+        await self._client._guarded(
+            "locator.click",
+            self._client._native.click_text(
+                json.dumps(self._strict_selector()),
+                button,
+                clicks,
+                self._client._timeout("text", timeout),
+            ),
+        )
+
+    async def highlight(self, *, timeout: Optional[int] = None) -> None:
+        await self._client._guarded(
+            "locator.highlight",
+            self._client._native.highlight_text(
+                json.dumps(self._selector),
+                self._client._timeout("text", timeout),
+            ),
+        )
+
+    async def expect(
+        self,
+        *,
+        not_: bool = False,
+        style: Optional[TextStyle] = None,
+        timeout: Optional[int] = None,
+    ) -> None:
+        await self._client._guarded(
+            "locator.expect",
+            self._client._native.expect_text_selector(
+                json.dumps(
+                    [
+                        self._selector,
+                        asdict(style or TextStyle()),
+                        not_,
+                    ]
+                ),
+                self._client._timeout("text", timeout),
+            ),
+        )
 
 
 class TuiTest:
@@ -408,6 +595,54 @@ class TuiTest:
     async def text(self, *, full: bool = False) -> str:
         return await self._await(self._native.text(full))
 
+    def locator(
+        self,
+        text: str,
+        *,
+        regex: bool = False,
+        full: bool = False,
+        whitespace: str = "exact",
+        after: Optional[TextAnchor] = None,
+        before: Optional[TextAnchor] = None,
+        occurrence: TextOccurrence = "any",
+    ) -> TextLocator:
+        return self._make_locator(
+            text,
+            regex=regex,
+            full=full,
+            whitespace=whitespace,
+            after=after,
+            before=before,
+            occurrence=occurrence,
+            within=None,
+        )
+
+    def _make_locator(
+        self,
+        text: str,
+        *,
+        regex: bool,
+        full: bool,
+        whitespace: str,
+        after: Optional[TextAnchor],
+        before: Optional[TextAnchor],
+        occurrence: TextOccurrence,
+        within: Optional[Dict[str, object]],
+    ) -> TextLocator:
+        return TextLocator(
+            self,
+            _selector_value(
+                text,
+                regex=regex,
+                full=full,
+                whitespace=whitespace,
+                after=after,
+                before=before,
+                occurrence=occurrence,
+                within=within,
+            ),
+        )
+
     async def find_text(
         self,
         text: str,
@@ -419,7 +654,7 @@ class TuiTest:
         before: Optional[TextAnchor] = None,
         occurrence: TextOccurrence = "any",
     ) -> List[TextMatch]:
-        selector = _selector_value(
+        return await self.locator(
             text,
             regex=regex,
             full=full,
@@ -427,11 +662,7 @@ class TuiTest:
             after=after,
             before=before,
             occurrence=occurrence,
-        )
-        values = await self._guarded(
-            "find_text", self._native.find_text(json.dumps(selector))
-        )
-        return [TextMatch.from_dict(value) for value in values]
+        )._locations("find_text")
 
     async def _packed_screen(
         self, *, full: bool = False
@@ -513,14 +744,26 @@ class TuiTest:
         *,
         regex: bool = False,
         full: bool = False,
+        whitespace: str = "exact",
+        after: Optional[TextAnchor] = None,
+        before: Optional[TextAnchor] = None,
+        occurrence: TextOccurrence = "any",
         not_: bool = False,
         timeout: Optional[int] = None,
-    ) -> None:
-        await self._guarded(
-            "wait_text",
-            self._native.wait_text(
-                text, regex, full, not_, self._timeout("text", timeout)
-            ),
+    ) -> TextLocator:
+        locator = self.locator(
+            text,
+            regex=regex,
+            full=full,
+            whitespace=whitespace,
+            after=after,
+            before=before,
+            occurrence=occurrence,
+        )
+        return await locator._wait(
+            state="hidden" if not_ else "visible",
+            timeout=timeout,
+            op_name="wait_text",
         )
 
     async def wait_title(

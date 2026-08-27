@@ -14,7 +14,7 @@ use crate::assert::snapshot::{self, SnapshotStatus};
 use crate::config::{self, POLL_DELAY_MS};
 use crate::input::{keys, mouse};
 use crate::logger::Logger;
-use crate::session::{Session as TerminalSession, TermState};
+use crate::session::{Session as TerminalSession, TermState, TextHighlight};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::emu::Emulator;
 use crate::terminal::locator::{self, Pattern};
@@ -339,7 +339,7 @@ impl Engine {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             LiveFrame {
-                grid: state.emu.viewable_rows(),
+                grid: highlighted_rows(&state, false),
                 cursor: state.emu.cursor(),
                 size: state.emu.size(),
                 exited: state.exited,
@@ -486,6 +486,31 @@ fn grid(session: &TerminalSession, full: bool) -> Vec<Vec<EmuCell>> {
         state.emu.full_rows()
     } else {
         state.emu.viewable_rows()
+    }
+}
+
+fn highlighted_rows(state: &TermState, full: bool) -> Vec<Vec<EmuCell>> {
+    let mut rows = if full {
+        state.emu.full_rows()
+    } else {
+        state.emu.viewable_rows()
+    };
+    apply_highlight(&mut rows, state.highlight.as_ref(), full);
+    rows
+}
+
+fn apply_highlight(rows: &mut [Vec<EmuCell>], highlight: Option<&TextHighlight>, full: bool) {
+    let Some(highlight) = highlight else {
+        return;
+    };
+    let row_offset = if full { 0 } else { highlight.viewport_offset };
+    for &(x, absolute_y) in &highlight.cells {
+        let Some(y) = absolute_y.checked_sub(row_offset) else {
+            continue;
+        };
+        if let Some(cell) = rows.get_mut(y).and_then(|row| row.get_mut(x)) {
+            cell.attrs.toggle(Attrs::INVERSE);
+        }
     }
 }
 
@@ -666,6 +691,42 @@ fn dispatch(
         Operation::FindText { selector } => {
             Ok(OperationResult::Matches(find_text(session, &selector)?))
         }
+        Operation::WaitTextSelector {
+            selector,
+            not,
+            timeout_ms,
+        } => {
+            wait_selected_text(
+                session,
+                &selector,
+                not,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
+        Operation::ClickText {
+            selector,
+            button,
+            clicks,
+            timeout_ms,
+        } => {
+            click_selected_text(
+                session,
+                &selector,
+                button,
+                clicks,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
+        Operation::HighlightText {
+            selector,
+            timeout_ms,
+        } => Ok(OperationResult::Matches(highlight_selected_text(
+            session,
+            &selector,
+            timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+        )?)),
         Operation::ExpectText {
             text,
             regex,
@@ -1365,9 +1426,258 @@ fn find_text(
     selector: &TextSelector,
 ) -> Result<Vec<TextMatch>, TuiTestError> {
     validate_selector(selector)?;
-    locator::locate(&grid(session, selector.full), selector)
+    locator::locate(&grid(session, selector.uses_full_grid()), selector)
         .map(|matches| matches.into_iter().map(|matched| matched.value).collect())
         .map_err(|error| TuiTestError::assertion(error.to_string()))
+}
+
+fn wait_selected_text(
+    session: &TerminalSession,
+    selector: &TextSelector,
+    not: bool,
+    timeout_ms: u64,
+) -> Result<(), TuiTestError> {
+    validate_selector(selector)?;
+    let mut matched = false;
+    let mut last_error = None;
+    poll_until(
+        || {
+            match locator::locate(&grid(session, selector.uses_full_grid()), selector) {
+                Ok(candidates) => {
+                    matched = candidates.is_empty() == not;
+                    last_error = None;
+                }
+                Err(error) => {
+                    matched = false;
+                    last_error = Some(error.to_string());
+                }
+            }
+            matched || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if matched {
+        Ok(())
+    } else if let Some(error) = last_error {
+        Err(TuiTestError::assertion(error))
+    } else if session_stopped(session) {
+        Err(TuiTestError::assertion(format!(
+            "session exited before '{}' became {}",
+            selector.text,
+            if not { "hidden" } else { "visible" }
+        )))
+    } else {
+        Err(TuiTestError::assertion(timeout_message(
+            &selector.text,
+            timeout_ms,
+            not,
+        )))
+    }
+}
+
+fn resolve_click_point(
+    session: &TerminalSession,
+    selector: &TextSelector,
+    timeout_ms: u64,
+) -> Result<(u16, u16), TuiTestError> {
+    validate_selector(selector)?;
+    let mut point = None;
+    let mut last_error = None;
+    poll_until(
+        || {
+            let outcome = {
+                let state = session
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let visible_rows = state.emu.viewable_rows();
+                let visible_len = visible_rows.len();
+                if selector.uses_full_grid() {
+                    let full_rows = state.emu.full_rows();
+                    let viewport_offset = full_rows.len().saturating_sub(visible_len);
+                    locate_click_point(&full_rows, selector, viewport_offset, visible_len)
+                } else {
+                    locate_click_point(&visible_rows, selector, 0, visible_len)
+                }
+            };
+            match outcome {
+                Ok(Some(value)) => {
+                    point = Some(value);
+                    last_error = None;
+                }
+                Ok(None) => {
+                    last_error = None;
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                }
+            }
+            point.is_some() || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if let Some(point) = point {
+        Ok(point)
+    } else if let Some(error) = last_error {
+        Err(error)
+    } else if session_stopped(session) {
+        Err(TuiTestError::assertion(format!(
+            "session exited before '{}' could be clicked",
+            selector.text
+        )))
+    } else {
+        Err(TuiTestError::assertion(format!(
+            "timed out after {} waiting for one '{}' match to click",
+            format_timeout(timeout_ms),
+            selector.text
+        )))
+    }
+}
+
+fn locate_click_point(
+    rows: &[Vec<EmuCell>],
+    selector: &TextSelector,
+    viewport_offset: usize,
+    visible_rows: usize,
+) -> Result<Option<(u16, u16)>, TuiTestError> {
+    let mut candidates = locator::locate(rows, selector)
+        .map_err(|error| TuiTestError::assertion(error.to_string()))?;
+    if candidates.len() > 1 {
+        return Err(TuiTestError::assertion(format!(
+            "click requires one match for '{}', but found {}",
+            selector.text,
+            candidates.len()
+        )));
+    }
+    let Some(matched) = candidates.pop() else {
+        return Ok(None);
+    };
+    let (x, absolute_y) = matched_center(&matched).ok_or_else(|| {
+        TuiTestError::assertion(format!("'{}' matched no terminal cells", selector.text))
+    })?;
+    let y = if selector.uses_full_grid() {
+        absolute_y.checked_sub(viewport_offset).ok_or_else(|| {
+            TuiTestError::assertion(format!(
+                "'{}' matched in scrollback outside the visible viewport and cannot be clicked",
+                selector.text
+            ))
+        })?
+    } else {
+        absolute_y
+    };
+    if y >= visible_rows {
+        return Err(TuiTestError::assertion(format!(
+            "'{}' matched outside the visible viewport and cannot be clicked",
+            selector.text
+        )));
+    }
+    let x = u16::try_from(x)
+        .map_err(|_| TuiTestError::internal("matched column is outside terminal coordinates"))?;
+    let y = u16::try_from(y)
+        .map_err(|_| TuiTestError::internal("matched row is outside terminal coordinates"))?;
+    Ok(Some((x, y)))
+}
+
+fn click_selected_text(
+    session: &TerminalSession,
+    selector: &TextSelector,
+    button: u8,
+    clicks: u8,
+    timeout_ms: u64,
+) -> Result<(), TuiTestError> {
+    let (x, y) = resolve_click_point(session, selector, timeout_ms)?;
+    let mut sequence = String::new();
+    for _ in 0..clicks.max(1) {
+        sequence.push_str(&mouse::click(x, y, button));
+    }
+    act(session.write(sequence.as_bytes()))
+}
+
+fn matched_center(matched: &locator::LocatedMatch) -> Option<(usize, usize)> {
+    matched
+        .cells
+        .get(matched.cells.len() / 2)
+        .map(|cell| (cell.x, cell.y))
+}
+
+fn highlight_selected_text(
+    session: &TerminalSession,
+    selector: &TextSelector,
+    timeout_ms: u64,
+) -> Result<Vec<TextMatch>, TuiTestError> {
+    validate_selector(selector)?;
+    let mut resolved = None;
+    let mut last_error = None;
+    poll_until(
+        || {
+            let outcome = {
+                let mut state = session
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let full_rows = state.emu.full_rows();
+                let visible_rows = state.emu.viewable_rows();
+                let viewport_offset = full_rows.len().saturating_sub(visible_rows.len());
+                let full = selector.uses_full_grid();
+                let rows = if full { &full_rows } else { &visible_rows };
+                match locator::locate(rows, selector) {
+                    Ok(candidates) if candidates.is_empty() => Ok(None),
+                    Ok(candidates) => {
+                        let row_offset = if full { 0 } else { viewport_offset };
+                        state.highlight = Some(TextHighlight {
+                            cells: candidates
+                                .iter()
+                                .flat_map(|matched| {
+                                    matched
+                                        .cells
+                                        .iter()
+                                        .map(|cell| (cell.x, row_offset.saturating_add(cell.y)))
+                                })
+                                .collect(),
+                            viewport_offset,
+                        });
+                        Ok(Some(
+                            candidates
+                                .into_iter()
+                                .map(|matched| matched.value)
+                                .collect(),
+                        ))
+                    }
+                    Err(error) => Err(TuiTestError::assertion(error.to_string())),
+                }
+            };
+            match outcome {
+                Ok(Some(matches)) => {
+                    resolved = Some(matches);
+                    last_error = None;
+                }
+                Ok(None) => {
+                    last_error = None;
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                }
+            }
+            resolved.is_some() || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if let Some(matches) = resolved {
+        Ok(matches)
+    } else if let Some(error) = last_error {
+        Err(error)
+    } else if session_stopped(session) {
+        Err(TuiTestError::assertion(format!(
+            "session exited before '{}' could be highlighted",
+            selector.text
+        )))
+    } else {
+        Err(TuiTestError::assertion(format!(
+            "timed out after {} waiting for '{}' to highlight",
+            format_timeout(timeout_ms),
+            selector.text
+        )))
+    }
 }
 
 fn validate_selector(selector: &TextSelector) -> Result<(), TuiTestError> {
@@ -1385,6 +1695,9 @@ fn validate_selector(selector: &TextSelector) -> Result<(), TuiTestError> {
     .flatten()
     {
         validate(text, *regex)?;
+    }
+    if let Some(parent) = selector.within.as_deref() {
+        validate_selector(parent)?;
     }
     Ok(())
 }
@@ -1422,7 +1735,7 @@ fn expect_selected_text(
     let mut matched = false;
     poll_until(
         || {
-            match locator::locate(&grid(session, selector.full), selector) {
+            match locator::locate(&grid(session, selector.uses_full_grid()), selector) {
                 Ok(candidates) if not => {
                     let unexpected = if style.is_empty() {
                         candidates.first()
@@ -1780,7 +2093,9 @@ fn svg_snapshot(session: &TerminalSession, full: bool) -> SvgSnapshot {
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    svg_snapshot_from(state.emu.as_ref(), full)
+    let mut snapshot = svg_snapshot_from(state.emu.as_ref(), full);
+    apply_highlight(&mut snapshot.rows, state.highlight.as_ref(), full);
+    snapshot
 }
 
 fn screenshot(
@@ -1949,6 +2264,8 @@ mod tests {
                 }],
             },
             cells: vec![locator::MatchedCell { x: 3, y: 1, cell }],
+            source_start: 3,
+            source_end: 4,
         };
         assert!(check_style_with_emulator(
             &matched,
@@ -1970,6 +2287,100 @@ mod tests {
         .unwrap();
         assert!(error.contains("row 1, column 3"));
         assert!(error.contains("expected bold=false"));
+    }
+
+    #[test]
+    fn highlight_maps_full_grid_cells_into_the_viewport() {
+        let mut rows = vec![vec![EmuCell::blank(); 3]; 2];
+        let highlight = TextHighlight {
+            cells: vec![(1, 4)],
+            viewport_offset: 3,
+        };
+        apply_highlight(&mut rows, Some(&highlight), false);
+        assert!(rows[1][1].has(Attrs::INVERSE));
+        assert!(!rows[0][1].has(Attrs::INVERSE));
+    }
+
+    #[test]
+    fn highlight_uses_absolute_rows_for_full_grid_renders() {
+        let mut rows = vec![vec![EmuCell::blank(); 3]; 5];
+        let highlight = TextHighlight {
+            cells: vec![(1, 4)],
+            viewport_offset: 3,
+        };
+        apply_highlight(&mut rows, Some(&highlight), true);
+        assert!(rows[4][1].has(Attrs::INVERSE));
+        assert!(!rows[1][1].has(Attrs::INVERSE));
+    }
+
+    #[test]
+    fn locator_clicks_the_middle_match_cell() {
+        let matched = locator::LocatedMatch {
+            value: TextMatch {
+                text: "save".into(),
+                start: TextPosition { row: 2, column: 4 },
+                end: TextPosition { row: 2, column: 8 },
+                spans: vec![TextSpan {
+                    row: 2,
+                    start: 4,
+                    end: 8,
+                }],
+            },
+            cells: (4..8)
+                .map(|x| locator::MatchedCell {
+                    x,
+                    y: 2,
+                    cell: EmuCell::blank(),
+                })
+                .collect(),
+            source_start: 4,
+            source_end: 8,
+        };
+        assert_eq!(matched_center(&matched), Some((6, 2)));
+    }
+
+    #[test]
+    fn full_grid_clicks_map_visible_rows_to_viewport_coordinates() {
+        let rows = ["old", "older", "history", "prompt", "row save"]
+            .into_iter()
+            .map(|line| {
+                line.chars()
+                    .map(|ch| EmuCell {
+                        ch: ch.to_string().into(),
+                        ..EmuCell::blank()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut parent = TextSelector::new("row save");
+        parent.full = true;
+        let mut selector = TextSelector::new("save");
+        selector.within = Some(Box::new(parent));
+        selector.occurrence = crate::api::MatchOccurrence::Unique;
+        assert_eq!(
+            locate_click_point(&rows, &selector, 3, 2).unwrap(),
+            Some((6, 1))
+        );
+    }
+
+    #[test]
+    fn full_grid_clicks_reject_matches_above_the_viewport() {
+        let rows = ["save", "history", "prompt"]
+            .into_iter()
+            .map(|line| {
+                line.chars()
+                    .map(|ch| EmuCell {
+                        ch: ch.to_string().into(),
+                        ..EmuCell::blank()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut selector = TextSelector::new("save");
+        selector.full = true;
+        selector.occurrence = crate::api::MatchOccurrence::Unique;
+        let error = locate_click_point(&rows, &selector, 1, 2).unwrap_err();
+        assert!(error.message.contains("outside the visible viewport"));
     }
 
     #[test]

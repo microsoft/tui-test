@@ -406,6 +406,61 @@ test("text locators scope matches and assert styles", async () => {
   }
 });
 
+test("text locators are lazy, selectable, and actionable", async () => {
+  const su = new TuiTest(uniqueSession("reusable-text-locators"));
+  const script =
+    typeof globalThis.Deno === "undefined"
+      ? "setTimeout(() => process.stdout.write('item outside\\n\\x1b[1mitem item\\x1b[0m\\n'), 200); setInterval(() => {}, 1000)"
+      : "setTimeout(() => Deno.stdout.writeSync(new TextEncoder().encode('item outside\\n\\x1b[1mitem item\\x1b[0m\\n')), 200); setInterval(() => {}, 1000)";
+  const args = typeof globalThis.Deno === "undefined" ? ["-e", script] : ["eval", script];
+  try {
+    await su.run(process.execPath, args);
+    const locator = su.locator("item");
+    assert.throws(() => locator.nth(-1), /non-negative integer/);
+    assert.throws(
+      () => su.locator("item", { occurrence: { nth: -1 } }),
+      /non-negative integer/,
+    );
+
+    const waited = await locator.wait({ timeout: 2000 });
+    assert.strictEqual(waited, locator);
+    assert.equal(await locator.count(), 3);
+    const nested = su
+      .locator("item item")
+      .locator("item")
+      .locator("tem");
+    await nested.wait({ timeout: 2000 });
+    assert.equal(await nested.count(), 2);
+
+    const items = await locator.all();
+    assert.equal(items.length, 3);
+    assert.equal((await items[0].location()).start.column, 0);
+    assert.equal((await items[1].location()).start.row, 1);
+    assert.equal((await locator.last().location()).start.column, 5);
+    await assert.rejects(
+      locator.unique().locations(),
+      (error) => error instanceof ExpectationError,
+    );
+    await assert.rejects(
+      su.locator("missing-item").location(),
+      (error) =>
+        error instanceof ExpectationError &&
+        error.message.includes("Terminal content:") &&
+        error.message.includes("item item"),
+    );
+
+    await nested.highlight();
+    await nested.first().click({ timeout: 2000 });
+    await nested.first().expect({ style: { bold: true } });
+
+    const helper = await su.waitText("item", { timeout: 2000 });
+    assert.equal(typeof helper.click, "function");
+    await helper.first().highlight();
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
 test("panic containment rejects as InternalError and Node keeps running", async () => {
   const runtime = new NativeRuntime(uniqueSession("panic-probe"));
   await assert.rejects(

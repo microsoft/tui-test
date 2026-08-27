@@ -69,6 +69,8 @@ pub struct MatchedCell {
 pub struct LocatedMatch {
     pub value: TextMatch,
     pub cells: Vec<MatchedCell>,
+    pub(crate) source_start: usize,
+    pub(crate) source_end: usize,
 }
 
 struct FlatGrid {
@@ -79,6 +81,29 @@ struct FlatGrid {
 
 /// Locate the matches selected by `selector`.
 pub fn locate(rows: &[Vec<EmuCell>], selector: &TextSelector) -> anyhow::Result<Vec<LocatedMatch>> {
+    let allowed = match selector.within.as_deref() {
+        Some(parent) => {
+            let parents = locate(rows, parent)?;
+            if parents.is_empty() {
+                return Ok(Vec::new());
+            }
+            Some(
+                parents
+                    .into_iter()
+                    .map(|matched| (matched.source_start, matched.source_end))
+                    .collect::<Vec<_>>(),
+            )
+        }
+        None => None,
+    };
+    locate_within(rows, selector, allowed.as_deref())
+}
+
+fn locate_within(
+    rows: &[Vec<EmuCell>],
+    selector: &TextSelector,
+    allowed: Option<&[(usize, usize)]>,
+) -> anyhow::Result<Vec<LocatedMatch>> {
     if rows.is_empty() {
         return Ok(Vec::new());
     }
@@ -91,12 +116,31 @@ pub fn locate(rows: &[Vec<EmuCell>], selector: &TextSelector) -> anyhow::Result<
         .ranges(&flat.chars)
         .into_iter()
         .filter(|(match_start, match_end)| *match_start >= start && *match_end <= end)
+        .filter(|range| {
+            allowed.is_none_or(|allowed| {
+                source_range(&flat, *range).is_some_and(|(source_start, source_end)| {
+                    allowed.iter().any(|(allowed_start, allowed_end)| {
+                        source_start >= *allowed_start && source_end <= *allowed_end
+                    })
+                })
+            })
+        })
         .collect();
     let selected = select(ranges, &selector.occurrence, &pattern.describe())?;
     Ok(selected
         .into_iter()
         .filter_map(|range| materialize(rows, &flat, range))
         .collect())
+}
+
+fn source_range(flat: &FlatGrid, (start, end): (usize, usize)) -> Option<(usize, usize)> {
+    if start >= end {
+        return None;
+    }
+    Some((
+        *flat.sources.get(start)?,
+        flat.sources.get(end - 1)?.saturating_add(1),
+    ))
 }
 
 /// Compatibility helper for the simple text waits and mouse text lookup.
@@ -239,11 +283,7 @@ fn materialize(
     flat: &FlatGrid,
     (start, end): (usize, usize),
 ) -> Option<LocatedMatch> {
-    if start >= end {
-        return None;
-    }
-    let source_start = *flat.sources.get(start)?;
-    let source_end = flat.sources.get(end - 1)?.saturating_add(1);
+    let (source_start, source_end) = source_range(flat, (start, end))?;
     let mut cells = Vec::new();
     for position in source_start..source_end {
         let y = position / flat.width;
@@ -287,6 +327,8 @@ fn materialize(
             spans,
         },
         cells,
+        source_start,
+        source_end,
     })
 }
 
@@ -366,7 +408,83 @@ mod tests {
 
     #[test]
     fn unique_reports_ambiguous_text() {
-        let error = locate(&grid(&["same same"]), &TextSelector::new("same")).unwrap_err();
+        let mut selector = TextSelector::new("same");
+        selector.occurrence = MatchOccurrence::Unique;
+        let error = locate(&grid(&["same same"]), &selector).unwrap_err();
         assert!(error.to_string().contains("found 2"));
+    }
+
+    #[test]
+    fn selectors_find_all_occurrences_by_default() {
+        let found = locate(&grid(&["same same"]), &TextSelector::new("same")).unwrap();
+        assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn child_locators_match_only_inside_parent_regions() {
+        let mut parent = TextSelector::new("Settings Save");
+        parent.whitespace = WhitespaceMode::Normalize;
+        let mut child = TextSelector::new("Save");
+        child.within = Some(Box::new(parent));
+
+        let found = locate(&grid(&["Settings", "  Save", "Save outside"]), &child).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].value.start, TextPosition { row: 1, column: 2 });
+    }
+
+    #[test]
+    fn child_locators_honor_parent_occurrence_selection() {
+        let rows = grid(&["panel: Save", "panel: Save"]);
+        let mut parent = TextSelector::new("panel: Save");
+        parent.occurrence = MatchOccurrence::Last;
+        let mut child = TextSelector::new("Save");
+        child.within = Some(Box::new(parent));
+
+        let found = locate(&rows, &child).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].value.start, TextPosition { row: 1, column: 7 });
+    }
+
+    #[test]
+    fn locator_regions_compose_across_multiple_levels() {
+        let outer = TextSelector::new("panel [Save]");
+        let mut middle = TextSelector::new("[Save]");
+        middle.within = Some(Box::new(outer));
+        let mut inner = TextSelector::new("Save");
+        inner.within = Some(Box::new(middle));
+
+        let found = locate(&grid(&["panel [Save]", "Save outside"]), &inner).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].value.start, TextPosition { row: 0, column: 7 });
+    }
+
+    #[test]
+    fn child_occurrences_are_selected_across_all_parent_regions() {
+        let rows = grid(&["[a]", "[a]"]);
+        let parent = TextSelector::new("[a]");
+        let mut child = TextSelector::new("a");
+        child.within = Some(Box::new(parent));
+        assert_eq!(locate(&rows, &child).unwrap().len(), 2);
+
+        child.occurrence = MatchOccurrence::Nth(1);
+        assert_eq!(
+            locate(&rows, &child).unwrap()[0].value.start,
+            TextPosition { row: 1, column: 1 }
+        );
+        child.occurrence = MatchOccurrence::Unique;
+        assert!(locate(&rows, &child)
+            .unwrap_err()
+            .to_string()
+            .contains("found 2"));
+    }
+
+    #[test]
+    fn child_matches_cannot_span_separate_parent_regions() {
+        let rows = grid(&["ab  ", "  ab"]);
+        let parent = TextSelector::new("ab");
+        let mut child = TextSelector::new("b a");
+        child.whitespace = WhitespaceMode::Normalize;
+        child.within = Some(Box::new(parent));
+        assert!(locate(&rows, &child).unwrap().is_empty());
     }
 }

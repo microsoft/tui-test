@@ -13,9 +13,10 @@ use std::time::{Duration, Instant};
 use clap::{CommandFactory, Parser};
 
 use cli::{
-    Cli, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, KeyCmd, MatchArg, MouseCmd, RecordCmd,
-    TextSelectorArgs, TextStyleArgs, WaitCmd, WhitespaceArg,
+    Cli, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, KeyCmd, LocatorActionArg, MatchArg,
+    MouseCmd, RecordCmd, TextSelectorArgs, TextStyleArgs, WaitCmd, WhitespaceArg,
 };
+use protocol::DAEMON_PROTOCOL_VERSION;
 use protocol::{GetField, MouseAction, Request, Response};
 use tui_test::{MatchOccurrence, TextAnchor, TextScope, TextSelector, TextStyle, WhitespaceMode};
 /// Long-form agent skill manifest, printed by `tui-test skill`.
@@ -276,6 +277,15 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         },
         Command::Wait { what } => map_wait(what),
         Command::Find { what } => map_find(what),
+        Command::Locator {
+            text,
+            selector,
+            action,
+            not,
+            timeout,
+            button,
+            clicks,
+        } => map_locator(text, selector, action, not, timeout, button, clicks)?,
         Command::Expect { what } => map_expect(what),
         _ => anyhow::bail!("unsupported command"),
     };
@@ -455,6 +465,7 @@ fn map_selector(text: String, args: TextSelectorArgs, default: MatchOccurrence) 
             ),
         },
         occurrence: map_occurrence(args.match_mode, args.nth, default),
+        within: None,
     }
 }
 
@@ -480,6 +491,52 @@ fn map_find(what: FindCmd) -> Request {
             selector: map_selector(text, selector, MatchOccurrence::Any),
         },
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn map_locator(
+    text: String,
+    selector: TextSelectorArgs,
+    action: LocatorActionArg,
+    not: bool,
+    timeout_ms: Option<u64>,
+    button: Option<u8>,
+    clicks: Option<u8>,
+) -> anyhow::Result<Request> {
+    if not && action != LocatorActionArg::Wait {
+        anyhow::bail!("--not is only valid with --action wait");
+    }
+    if action != LocatorActionArg::Click && (button.is_some() || clicks.is_some()) {
+        anyhow::bail!("--button and --clicks are only valid with --action click");
+    }
+    if action == LocatorActionArg::Locations && timeout_ms.is_some() {
+        anyhow::bail!("--timeout is only valid with --action wait, click, or highlight");
+    }
+    let default = match action {
+        LocatorActionArg::Locations | LocatorActionArg::Wait | LocatorActionArg::Highlight => {
+            MatchOccurrence::Any
+        }
+        LocatorActionArg::Click => MatchOccurrence::Unique,
+    };
+    let selector = map_selector(text, selector, default);
+    Ok(match action {
+        LocatorActionArg::Locations => Request::FindText { selector },
+        LocatorActionArg::Wait => Request::WaitTextSelector {
+            selector,
+            not,
+            timeout_ms,
+        },
+        LocatorActionArg::Click => Request::ClickText {
+            selector,
+            button: button.unwrap_or(0),
+            clicks: clicks.unwrap_or(1),
+            timeout_ms,
+        },
+        LocatorActionArg::Highlight => Request::HighlightText {
+            selector,
+            timeout_ms,
+        },
+    })
 }
 
 fn map_expect(what: ExpectCmd) -> Request {
@@ -634,8 +691,8 @@ fn daemon_lock_is_stale(path: &Path, stale_after: Duration) -> bool {
 /// Spawn or replace the daemon for this session when necessary.
 fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     let socket = config::socket_name(session);
-    if let Some(version) = running_daemon_version(session, &socket)? {
-        if version == env!("CARGO_PKG_VERSION") {
+    if let Some(identity) = running_daemon_identity(session, &socket)? {
+        if identity.is_current() {
             report_existing_daemon(session, verbose);
             return Ok(DaemonStart::AlreadyRunning);
         }
@@ -644,13 +701,13 @@ fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     config::ensure_home()?;
     let _lock = DaemonLock::acquire(session)?;
 
-    match running_daemon_version(session, &socket)? {
-        Some(version) if version == env!("CARGO_PKG_VERSION") => {
+    match running_daemon_identity(session, &socket)? {
+        Some(identity) if identity.is_current() => {
             report_existing_daemon(session, verbose);
             Ok(DaemonStart::AlreadyRunning)
         }
-        Some(version) => {
-            restart_daemon(session, &socket, &version, verbose)?;
+        Some(identity) => {
+            restart_daemon(session, &socket, &identity.label(), verbose)?;
             Ok(DaemonStart::Restarted)
         }
         None => {
@@ -660,9 +717,25 @@ fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     }
 }
 
-fn running_daemon_version(session: &str, socket: &str) -> anyhow::Result<Option<String>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DaemonIdentity {
+    version: String,
+    protocol: u32,
+}
+
+impl DaemonIdentity {
+    fn is_current(&self) -> bool {
+        self.version == env!("CARGO_PKG_VERSION") && self.protocol == DAEMON_PROTOCOL_VERSION
+    }
+
+    fn label(&self) -> String {
+        format!("{} (protocol {})", self.version, self.protocol)
+    }
+}
+
+fn running_daemon_identity(session: &str, socket: &str) -> anyhow::Result<Option<DaemonIdentity>> {
     match ipc::send(socket, &Request::Status) {
-        Ok(status) => Ok(Some(daemon_version(&status).to_string())),
+        Ok(status) => Ok(Some(daemon_identity(&status))),
         Err(error) if ipc::is_running(socket) => anyhow::bail!(
             "could not verify the daemon for session '{session}': {error}; run \
              `tui-test --session {session} close`, then retry"
@@ -671,13 +744,22 @@ fn running_daemon_version(session: &str, socket: &str) -> anyhow::Result<Option<
     }
 }
 
-fn daemon_version(status: &Response) -> &str {
-    status
+fn daemon_identity(status: &Response) -> DaemonIdentity {
+    let version = status
         .data
         .as_ref()
         .and_then(|data| data.get("version"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or("unknown")
+        .to_string();
+    let protocol = status
+        .data
+        .as_ref()
+        .and_then(|data| data.get("protocol_version"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(0);
+    DaemonIdentity { version, protocol }
 }
 
 fn report_existing_daemon(session: &str, verbose: bool) {
@@ -1100,6 +1182,7 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           run [--config F] [--profile P] [--restart] <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
+          locator \"T\" [selector options] [--action locations|wait|click|highlight]\n\
           find text \"T\" [selector options] | cells X Y [W H]\n\
           get command|output|exit-code|cwd|cursor|size|title|bells|bell-events\n\
 INPUT     type \"text\" | submit [\"text\"]\n\
@@ -1222,6 +1305,56 @@ mod tests {
     }
 
     #[test]
+    fn locator_click_maps_to_one_strict_action_request() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "locator",
+            "Save",
+            "--after-text",
+            "Settings",
+            "--action",
+            "click",
+        ])
+        .unwrap();
+        let Request::ClickText {
+            selector,
+            button,
+            clicks,
+            ..
+        } = build_request(cli.command.expect("command")).unwrap()
+        else {
+            panic!("expected click text request");
+        };
+        assert_eq!(selector.scope.after.unwrap().text, "Settings");
+        assert_eq!(selector.occurrence, MatchOccurrence::Unique);
+        assert_eq!(button, 0);
+        assert_eq!(clicks, 1);
+    }
+
+    #[test]
+    fn locator_wait_defaults_to_all_matches_and_supports_not() {
+        let cli =
+            Cli::try_parse_from(["tui-test", "locator", "Saving", "--action", "wait", "--not"])
+                .unwrap();
+        let Request::WaitTextSelector { selector, not, .. } =
+            build_request(cli.command.expect("command")).unwrap()
+        else {
+            panic!("expected wait text selector request");
+        };
+        assert_eq!(selector.occurrence, MatchOccurrence::Any);
+        assert!(not);
+    }
+
+    #[test]
+    fn locator_rejects_options_for_another_action() {
+        let cli = Cli::try_parse_from(["tui-test", "locator", "Save", "--clicks", "2"]).unwrap();
+        assert!(build_request(cli.command.expect("command"))
+            .unwrap_err()
+            .to_string()
+            .contains("--action click"));
+    }
+
+    #[test]
     fn expect_text_maps_style_options_to_the_protocol() {
         let cli = Cli::try_parse_from([
             "tui-test",
@@ -1247,15 +1380,26 @@ mod tests {
     }
 
     #[test]
-    fn daemon_version_identifies_stale_or_unversioned_daemons() {
-        let current = Response::with(json!({ "version": env!("CARGO_PKG_VERSION") }));
-        assert_eq!(daemon_version(&current), env!("CARGO_PKG_VERSION"));
+    fn daemon_identity_rejects_stale_or_unversioned_protocols() {
+        let current = Response::with(json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "protocol_version": DAEMON_PROTOCOL_VERSION,
+        }));
+        assert!(daemon_identity(&current).is_current());
 
-        let stale = Response::with(json!({ "version": "0.0.0-old" }));
-        assert_eq!(daemon_version(&stale), "0.0.0-old");
+        let stale = Response::with(json!({
+            "version": "0.0.0-old",
+            "protocol_version": DAEMON_PROTOCOL_VERSION,
+        }));
+        assert!(!daemon_identity(&stale).is_current());
 
-        let unversioned = Response::with(json!({}));
-        assert_eq!(daemon_version(&unversioned), "unknown");
+        let legacy_same_version = Response::with(json!({ "version": env!("CARGO_PKG_VERSION") }));
+        assert!(!daemon_identity(&legacy_same_version).is_current());
+        assert_eq!(daemon_identity(&legacy_same_version).protocol, 0);
+
+        let unversioned = daemon_identity(&Response::with(json!({})));
+        assert_eq!(unversioned.version, "unknown");
+        assert_eq!(unversioned.protocol, 0);
     }
 
     #[test]

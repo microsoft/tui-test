@@ -80,6 +80,7 @@ without parsing text:
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, timeouts, and a text snapshot. |
 | `text [--full]`                                     | Rendered viewport text, or full scrollback with `--full`.                                                           |
+| `locator "T" [selector options] [--action A]`       | Resolve locations (default), wait, click, or highlight using one text selector.                                    |
 | `find text "T" [selector options]`                  | Selected matches with zero-based row/column spans.                                                                  |
 | `screenshot [PATH] [-o FILE] [--full] [--zoom N]`   | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.                           |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags) for a region.                                                             |
@@ -143,6 +144,12 @@ normalize`, `--match any|unique|first|last`, and zero-based `--nth`. Anchors
 also accept `--after-match` / `--before-match` and `--after-nth` /
 `--before-nth`. Styles include `--fg`, `--bg`, boolean SGR attributes such as
 `--bold[=false]`, and underline style/color.
+
+`locator "T"` returns match locations by default. `--action wait` waits on the
+same selector, `--action click` waits for one match and clicks its middle cell,
+and `--action highlight` marks every selected match in the live monitor and SVG
+screenshots until the terminal redraws. Use `--match first|last|unique` or
+`--nth N` to narrow repeated text.
 
 ### Recording, monitor & self-docs
 
@@ -305,19 +312,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session.execute(Operation::Submit {
         data: Some("echo hello".into()),
     })?;
-    session.execute(Operation::WaitCommand {
-        timeout_ms: Some(30_000),
-    })?;
-    session.execute(Operation::ExpectText {
-        text: "hello".into(),
-        regex: false,
-        full: false,
-        strict: false,
-        not: false,
-        fg: None,
-        bg: None,
-        timeout_ms: Some(5_000),
-    })?;
+    let hello = session.locator("hello");
+    hello.wait_with_timeout(Some(5_000))?;
+    hello.last().highlight()?;
     session.execute(Operation::ExpectExitCode {
         code: 0,
         timeout_ms: Some(5_000),
@@ -337,8 +334,8 @@ async def main():
     async with TuiTest() as su:                     # closes the session on exit
         await su.open()
         await su.submit("echo hello")
-        await su.wait_command()
-        await su.expect_text("hello", strict=False)  # command echo + output both match
+        hello = await su.wait_text("hello")
+        await hello.last().highlight()               # command echo + output both match
         await su.expect_exit_code(0)
 
 asyncio.run(main())
@@ -352,20 +349,21 @@ import { TuiTest } from "@microsoft/tui-test";
 const su = new TuiTest();
 await su.open();
 await su.submit("echo hello");
-await su.waitCommand();
-await su.expectText("hello", { strict: false });
+const hello = await su.waitText("hello");
+await hello.last().highlight();
 await su.expectExitCode(0);
 await su.close();
 ```
 
 The Rust crate exposes `Session` and `SessionRegistry` for terminal ownership,
-plus the `Operation` and `OperationResult` enums for the command surface.
+`TextLocator` for lazy text queries and actions, plus the `Operation` and
+`OperationResult` enums for the command surface.
 
 Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
 / `type` / `write`, `keyboard.press|down|repeat|up`, compatibility
 `press`,
 `mouse.click|move|down|up|drag|scroll`,
-`resize`, `signal` / `kill`, `state`, `text`, `cells`, the dedicated
+`resize`, `signal` / `kill`, `state`, `text`, `locator`, `cells`, the dedicated
 `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` /
 `get_size` / `get_title` / `get_bell_count` / `get_bell_events` methods,
 `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` /
@@ -376,6 +374,14 @@ and `close`. Python module-level helpers are `sessions`,
 and `getRecording`. The JavaScript client otherwise uses the same names in
 camelCase (`startRecording`, `stopRecording`, `waitCommand`, `expectText`,
 `getExitCode`, etc.).
+
+`locator()` returns a lazy text query in all three languages. The query is
+resolved again for every read or action, so the same locator can wait and then
+click the current match. It supports `any`, `unique`, `first`, `last`, `nth`,
+`all`, match locations, click-at-center, and highlighting. Calling `locator()`
+on an existing locator searches inside the dynamically resolved parent match.
+Python `wait_text()` and JavaScript `waitText()` return the locator they waited
+on.
 
 The constructors accept a session name plus backend, profile, timeout, and
 artifact options: `TuiTest(session="default", *, backend=None, timeouts=None,

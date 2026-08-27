@@ -382,6 +382,75 @@ fn a_session_timeout_default_applies_to_later_commands() {
 }
 
 #[test]
+fn locator_actions_share_one_selector_contract() {
+    let sandbox = Sandbox::new("locator-actions");
+    sandbox.ok(&["open"]);
+    let command = if cfg!(windows) {
+        "Write-Output 'locator    target'"
+    } else {
+        "printf 'locator    target\\n'"
+    };
+    sandbox.ok(&["submit", command]);
+    sandbox.ok(&[
+        "locator",
+        "locator target",
+        "--whitespace",
+        "normalize",
+        "--action",
+        "wait",
+        "--timeout",
+        "5000",
+    ]);
+    sandbox.ok(&["wait", "command", "--timeout", "30000"]);
+
+    let response: serde_json::Value = serde_json::from_str(&sandbox.ok(&[
+        "--json",
+        "locator",
+        "locator target",
+        "--whitespace",
+        "normalize",
+    ]))
+    .expect("parse locator locations");
+    assert!(
+        response["data"]["matches"]
+            .as_array()
+            .is_some_and(|matches| !matches.is_empty()),
+        "locator should return match locations: {response}"
+    );
+
+    let before = sandbox.home.join("before-highlight.svg");
+    let after = sandbox.home.join("after-highlight.svg");
+    sandbox.ok(&["screenshot", "--out", before.to_str().unwrap()]);
+    sandbox.ok(&[
+        "locator",
+        "locator target",
+        "--whitespace",
+        "normalize",
+        "--action",
+        "highlight",
+    ]);
+    sandbox.ok(&["screenshot", "--out", after.to_str().unwrap()]);
+    assert_ne!(
+        std::fs::read_to_string(before).unwrap(),
+        std::fs::read_to_string(after).unwrap(),
+        "highlight should be visible in screenshots"
+    );
+
+    sandbox.ok(&[
+        "locator",
+        "locator target",
+        "--whitespace",
+        "normalize",
+        "--match",
+        "last",
+        "--action",
+        "click",
+        "--timeout",
+        "5000",
+    ]);
+}
+
+#[test]
 fn config_timeouts_apply_below_command_line_overrides() {
     let sandbox = Sandbox::new("config-timeouts");
     let config = sandbox.home.join("timeouts.toml");
@@ -1208,9 +1277,10 @@ fn daemon_status_reports_not_running_as_json() {
 fn daemon_start_is_idempotent_and_makes_status_answer() {
     let sandbox = Sandbox::new("start");
     sandbox.ok(&["daemon", "start"]);
-    let status = sandbox.ok(&["daemon", "status"]);
+    let status = sandbox.ok(&["--json", "daemon", "status"]);
+    let status: serde_json::Value = serde_json::from_str(&status).expect("daemon status json");
     assert!(
-        status.contains("version"),
+        status["data"]["version"].is_string() && status["data"]["protocol_version"].is_u64(),
         "a started daemon should answer status: {status}"
     );
 

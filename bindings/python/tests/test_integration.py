@@ -214,6 +214,73 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
+    def test_text_locator_is_lazy_selectable_and_actionable(self):
+        async def scenario():
+            script = (
+                "import sys,time; "
+                "time.sleep(.2); "
+                "sys.stdout.write("
+                "'item outside\\n\\x1b[1mitem item\\x1b[0m\\n'"
+                "); "
+                "sys.stdout.flush(); time.sleep(30)"
+            )
+            async with self._client() as su:
+                await su.run(sys.executable, "-c", script)
+                locator = su.locator("item")
+                waited = await locator.wait(timeout=2000)
+                self.assertIs(waited, locator)
+                self.assertEqual(await locator.count(), 3)
+                nested = (
+                    su.locator("item item")
+                    .locator("item")
+                    .locator("tem")
+                )
+                await nested.wait(timeout=2000)
+                self.assertEqual(await nested.count(), 2)
+
+                items = await locator.all()
+                self.assertEqual(len(items), 3)
+                self.assertEqual((await items[0].location()).start.column, 0)
+                self.assertEqual((await items[1].location()).start.row, 1)
+                self.assertEqual(
+                    (await locator.last().location()).start.column, 5
+                )
+
+                with self.assertRaises(ExpectationError):
+                    await locator.unique().locations()
+
+                with tempfile.TemporaryDirectory() as root:
+                    su._artifacts = {
+                        "dir": root,
+                        "on_failure": "text",
+                    }
+                    with self.assertRaises(ExpectationError) as raised:
+                        await su.locator("missing-item").location()
+                    self.assertIn("Terminal content:", str(raised.exception))
+                    self.assertIsNotNone(raised.exception.terminal)
+                    self.assertIn("item item", raised.exception.terminal.text)
+
+                await nested.highlight()
+                await nested.first().click(timeout=2000)
+                await nested.first().expect(style=TextStyle(bold=True))
+
+        run(scenario())
+
+    def test_wait_text_returns_an_actionable_locator(self):
+        async def scenario():
+            script = (
+                "import sys,time; "
+                "sys.stdout.write('clickable\\n'); "
+                "sys.stdout.flush(); time.sleep(30)"
+            )
+            async with self._client() as su:
+                await su.run(sys.executable, "-c", script)
+                locator = await su.wait_text("clickable", timeout=2000)
+                await locator.click(timeout=2000)
+                await locator.highlight(timeout=2000)
+
+        run(scenario())
+
     def test_effective_timeouts_are_exposed_in_typed_state(self):
         async def scenario():
             expected = Timeouts(

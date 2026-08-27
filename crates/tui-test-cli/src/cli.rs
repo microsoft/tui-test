@@ -342,10 +342,35 @@ pub enum Command {
         #[command(subcommand)]
         what: ExpectCmd,
     },
-    /// Locate text and return its row/column spans.
+    /// Compatibility locations helper; prefer `locator`.
     Find {
         #[command(subcommand)]
         what: FindCmd,
+    },
+    /// Locate text and resolve an action against the current terminal grid.
+    ///
+    /// Click waits for one match by default; highlight marks all matches. Use
+    /// --match first|last or --nth to select from repeated text.
+    Locator {
+        /// Text or regular expression to locate.
+        text: String,
+        #[command(flatten)]
+        selector: TextSelectorArgs,
+        /// Resolve locations, wait, click, or highlight.
+        #[arg(long, value_enum, default_value_t = LocatorActionArg::Locations)]
+        action: LocatorActionArg,
+        /// For --action wait, wait until the locator is absent.
+        #[arg(long)]
+        not: bool,
+        /// Timeout in milliseconds for wait, click, or highlight.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+        /// Mouse button for --action click: 0 left, 1 middle, 2 right.
+        #[arg(long)]
+        button: Option<u8>,
+        /// Number of clicks for --action click.
+        #[arg(long)]
+        clicks: Option<u8>,
     },
     /// Print the session's recording (asciinema v2 cast) to stdout.
     ///
@@ -753,6 +778,40 @@ mod tests {
     }
 
     #[test]
+    fn locator_accepts_selector_and_action_options() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "locator",
+            "Save",
+            "--after-text",
+            "Settings",
+            "--whitespace",
+            "normalize",
+            "--nth",
+            "1",
+            "--action",
+            "click",
+            "--clicks",
+            "2",
+        ])
+        .expect("parse locator action");
+        let Some(Command::Locator {
+            selector,
+            action,
+            clicks,
+            ..
+        }) = cli.command
+        else {
+            panic!("expected locator");
+        };
+        assert_eq!(selector.after_text.as_deref(), Some("Settings"));
+        assert_eq!(selector.whitespace, WhitespaceArg::Normalize);
+        assert_eq!(selector.nth, Some(1));
+        assert_eq!(action, LocatorActionArg::Click);
+        assert_eq!(clicks, Some(2));
+    }
+
+    #[test]
     fn expect_text_accepts_generic_styles() {
         let cli = Cli::try_parse_from([
             "tui-test",
@@ -1004,6 +1063,16 @@ pub enum MatchArg {
     Unique,
     First,
     Last,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "lower")]
+pub enum LocatorActionArg {
+    #[default]
+    Locations,
+    Wait,
+    Click,
+    Highlight,
 }
 
 #[derive(Args)]

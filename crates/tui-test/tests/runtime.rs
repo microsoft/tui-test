@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tui_test::{
-    global_registry, ErrorKind, OpenOptions, Operation, OperationResult, RunOptions, Session,
-    SessionRegistry, Timeouts,
+    global_registry, ErrorKind, MatchOccurrence, OpenOptions, Operation, OperationResult,
+    RunOptions, Session, SessionRegistry, TextSelector, Timeouts,
 };
 
 fn run_options(program: &str, args: &[&str]) -> RunOptions {
@@ -183,6 +183,99 @@ fn packed_screen_is_native_owned_utf8() {
     };
     let text = String::from_utf8(screen.utf8).expect("packed screen is UTF-8");
     assert_eq!(text.split('\n').count(), screen.rows as usize);
+    session.close().expect("close terminal");
+}
+
+#[test]
+fn text_locators_are_lazy_reusable_queries() {
+    let session = Session::new(format!("native-locator-{}", std::process::id()));
+    session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            ..OpenOptions::default()
+        })
+        .expect("open terminal");
+
+    let locator = session.locator(TextSelector::new("locator-target"));
+    assert_eq!(locator.count().expect("count initial matches"), 0);
+    assert!(locator
+        .location()
+        .unwrap_err()
+        .message
+        .contains("Terminal content:"));
+    session
+        .execute(Operation::Submit {
+            data: Some("echo locator-target locator-target".to_string()),
+        })
+        .expect("submit locator output");
+    locator
+        .wait_with_timeout(Some(5_000))
+        .expect("wait with the same locator");
+    assert_eq!(locator.count().expect("count current matches"), 2);
+    let nested = session
+        .locator("locator-target locator-target")
+        .locator("locator-target")
+        .locator("target");
+    assert_eq!(nested.count().expect("count nested matches"), 2);
+    nested.highlight().expect("highlight nested matches");
+    locator.highlight().expect("highlight all current matches");
+    assert_eq!(locator.all().expect("materialize locators").len(), 2);
+    assert_eq!(
+        locator
+            .nth(1)
+            .location()
+            .expect("resolve second match")
+            .start
+            .column,
+        locator
+            .last()
+            .location()
+            .expect("resolve last match")
+            .start
+            .column
+    );
+    assert_eq!(
+        locator.unique().selector().occurrence,
+        MatchOccurrence::Unique
+    );
+    session.close().expect("close terminal");
+}
+
+#[test]
+fn text_locator_highlight_marks_the_current_grid() {
+    let session = Session::new(format!("native-highlight-{}", std::process::id()));
+    session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            ..OpenOptions::default()
+        })
+        .expect("open terminal");
+    session
+        .execute(Operation::Submit {
+            data: Some("echo highlight-target".to_string()),
+        })
+        .expect("submit highlighted output");
+
+    let locator = session.locator("highlight-target").last();
+    locator
+        .wait_with_timeout(Some(5_000))
+        .expect("wait for highlighted text");
+    session
+        .execute(Operation::WaitIdle {
+            timeout_ms: Some(5_000),
+        })
+        .expect("wait for idle before highlighting");
+    let location = locator.location().expect("resolve highlighted location");
+    locator.highlight().expect("highlight locator");
+    session
+        .execute(Operation::WaitIdle {
+            timeout_ms: Some(10),
+        })
+        .expect("highlight must not reset terminal idle timing");
+    assert_eq!(
+        locator.location().expect("resolve locator after highlight"),
+        location
+    );
     session.close().expect("close terminal");
 }
 

@@ -19,6 +19,14 @@ use crate::terminal::emu::Emulator;
 use crate::terminal::integration::CommandTracker;
 use crate::terminal::pty::{Pty, SpawnOptions};
 
+#[derive(Debug, Clone)]
+pub(crate) struct TextHighlight {
+    /// Match cells in full-grid coordinates.
+    pub cells: Vec<(usize, usize)>,
+    /// Full-grid row where the viewport began when the highlight was created.
+    pub viewport_offset: usize,
+}
+
 pub struct TermState {
     pub emu: Box<dyn Emulator>,
     /// Shell-integration state, derived from the raw PTY stream rather than
@@ -28,6 +36,7 @@ pub struct TermState {
     pub awaiting_start: Option<u64>,
     pub exited: Option<i32>,
     pub exit_error: Option<String>,
+    pub highlight: Option<TextHighlight>,
 }
 
 pub struct Session {
@@ -95,6 +104,7 @@ impl Session {
             awaiting_start: None,
             exited: None,
             exit_error: None,
+            highlight: None,
         }));
         let pty = Arc::new(Mutex::new(pty));
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -132,6 +142,7 @@ impl Session {
                             st.emu.process(&buf[..n]);
                             st.tracker.feed(&buf[..n]);
                             st.last_change = Instant::now();
+                            st.highlight = None;
                             reader_recorder.on_data(&buf[..n]);
                             st.emu.take_pending_writes()
                         };
@@ -474,6 +485,7 @@ fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, col
     recorder.on_resize(cols, rows);
     state.emu.resize(cols, rows);
     state.last_change = Instant::now();
+    state.highlight = None;
 }
 
 fn drain_reader_and_recorder(reader: &mut Option<JoinHandle<()>>, recorder: &mut Recorder) {
@@ -616,6 +628,7 @@ mod tests {
             awaiting_start: None,
             exited: None,
             exit_error: None,
+            highlight: None,
         }));
         let capture = recorder.capture();
         let output_state = Arc::clone(&state);

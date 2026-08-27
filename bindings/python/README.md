@@ -54,7 +54,7 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 ## API
 
-`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `find_text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count` / `get_bell_events`, `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
+`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `locator`, `find_text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count` / `get_bell_events`, `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
 
 `keyboard.press()` simulates key presses: it sends the normal press input and
 adds a release only when the negotiated Kitty mode can represent it.
@@ -62,11 +62,40 @@ adds a release only when the negotiated Kitty mode can represent it.
 events; `keyboard.repeat()` simulates repeats. Top-level `press()` remains a
 compatibility alias.
 
-`find_text()` returns typed zero-based row/column spans and supports normalized
-whitespace, `after` / `before` anchors, and any/unique/first/last/nth
-occurrences. `expect_text()` accepts the same selector options plus `TextStyle`
-checks for colors, bold, dim, italic, underline, inverse, hidden,
-strikethrough, and blink.
+`locator()` creates a lazy query. It resolves against the latest terminal grid
+whenever it is read or acted on:
+
+```python
+from tui_test import TuiTest
+
+terminal = TuiTest()
+settings = terminal.locator(
+    "Settings Save",
+    whitespace="normalize",
+)
+save = settings.locator("Save")
+await save.wait()
+await save.click()
+
+items = terminal.locator(r"item \d+", regex=True)
+await items.highlight()  # highlights every match
+second = items.nth(1)
+print(await second.location())
+```
+
+Locators support `any()`, `unique()`, `first()`, `last()`, `nth()`, `all()`,
+`count()`, `locations()`, `location()`, `wait()`, `expect()`, `click()`, and
+`highlight()`. Calling `locator()` on a locator searches inside each selected
+parent match, and every stage is re-resolved for each action. Clicks target the
+middle cell and require one match unless a positional selector narrows the
+locator. Highlights appear in the live monitor and SVG screenshots until the
+terminal redraws. Like Playwright, `all()` captures the current list without
+waiting and returns lazy `nth()` locators; wait first when the list is still
+loading. `find_text()` remains a one-shot locations helper. `wait_text()` now
+returns the locator it waited on, so it can be clicked or highlighted next.
+
+`expect_text()` accepts the same selector options plus `TextStyle` checks for
+colors, bold, dim, italic, underline, inverse, hidden, strikethrough, and blink.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 

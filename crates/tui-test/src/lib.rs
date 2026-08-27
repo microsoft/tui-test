@@ -17,5 +17,7 @@ mod session;
 
 pub use api::*;
 pub use engine::Engine;
-pub use runtime::{global_registry, Session, SessionHandle, SessionRegistry};
+pub use runtime::{
+    global_registry, LocatorClickOptions, Session, SessionHandle, SessionRegistry, TextLocator,
+};
 pub use terminal::backend::Backend;

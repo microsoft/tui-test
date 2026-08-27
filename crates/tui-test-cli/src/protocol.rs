@@ -8,6 +8,10 @@ use tui_test::{
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
+/// Bump when a client and same-package-version daemon can no longer exchange
+/// every request and response.
+pub const DAEMON_PROTOCOL_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Request {
@@ -121,6 +125,24 @@ pub enum Request {
     },
     FindText {
         selector: TextSelector,
+    },
+    WaitTextSelector {
+        selector: TextSelector,
+        not: bool,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    ClickText {
+        selector: TextSelector,
+        button: u8,
+        clicks: u8,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    HighlightText {
+        selector: TextSelector,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
     ExpectTextSelector {
         selector: TextSelector,
@@ -295,6 +317,33 @@ impl Request {
             Request::WaitReady { timeout_ms } => Ok(Operation::WaitReady { timeout_ms }),
             Request::WaitBell { timeout_ms } => Ok(Operation::WaitBell { timeout_ms }),
             Request::FindText { selector } => Ok(Operation::FindText { selector }),
+            Request::WaitTextSelector {
+                selector,
+                not,
+                timeout_ms,
+            } => Ok(Operation::WaitTextSelector {
+                selector,
+                not,
+                timeout_ms,
+            }),
+            Request::ClickText {
+                selector,
+                button,
+                clicks,
+                timeout_ms,
+            } => Ok(Operation::ClickText {
+                selector,
+                button,
+                clicks,
+                timeout_ms,
+            }),
+            Request::HighlightText {
+                selector,
+                timeout_ms,
+            } => Ok(Operation::HighlightText {
+                selector,
+                timeout_ms,
+            }),
             Request::ExpectText {
                 text,
                 regex,

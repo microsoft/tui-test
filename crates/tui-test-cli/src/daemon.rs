@@ -12,7 +12,7 @@ use tui_test::engine::Engine;
 use tui_test::logger::Logger;
 use tui_test::Operation;
 
-use crate::protocol::{Request, Response};
+use crate::protocol::{Request, Response, DAEMON_PROTOCOL_VERSION};
 use crate::{config, ipc, monitor};
 
 pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
@@ -136,6 +136,10 @@ fn enrich_cli_response(response: &mut Response, session: &str, logging: bool, st
         data.insert(
             "version".to_string(),
             serde_json::json!(env!("CARGO_PKG_VERSION")),
+        );
+        data.insert(
+            "protocol_version".to_string(),
+            serde_json::json!(DAEMON_PROTOCOL_VERSION),
         );
     }
 }
