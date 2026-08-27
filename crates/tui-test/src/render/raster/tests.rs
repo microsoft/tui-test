@@ -71,6 +71,55 @@ fn fractional_zoom_shrinks_output_without_changing_grid_dimensions() {
 }
 
 #[test]
+fn adjacent_background_cells_are_seamless_at_fractional_zoom() {
+    let backgrounds = [
+        Color::Rgb(125, 86, 244),
+        Color::Rgb(125, 86, 244),
+        Color::Rgb(125, 86, 244),
+        Color::Rgb(236, 106, 94),
+        Color::Rgb(244, 191, 79),
+        Color::Rgb(97, 197, 84),
+    ];
+    let grid = backgrounds
+        .iter()
+        .copied()
+        .map(|background| EmuCell {
+            bg: Some(background),
+            ..EmuCell::blank()
+        })
+        .collect::<Vec<_>>();
+    let zoom = 1.25;
+    let mut renderer = GridRenderer::with_zoom(backgrounds.len() as u16, 1, zoom).unwrap();
+    let image = renderer.render(&frame(vec![grid])).unwrap();
+    let (panel_width, panel_height) = crate::render::svg::pixel_size(backgrounds.len() as u16, 1);
+    let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
+    let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
+    let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
+    let origin_y = (image.dimensions().1 - panel_height) as f32 / 2.0;
+    let scale = zoom as f32;
+    let y = (origin_y
+        + (super::super::svg::HEADER_H
+            + super::super::svg::CONTENT_PADDING_TOP
+            + super::super::svg::CELL_H / 2.0)
+            * scale)
+        .floor() as u32;
+
+    for boundary in 1..backgrounds.len() {
+        let edge = origin_x
+            + (super::super::svg::MARGIN_X + boundary as f32 * super::super::svg::CELL_W) * scale;
+        let left = color_to_pixel(backgrounds[boundary - 1]);
+        let right = color_to_pixel(backgrounds[boundary]);
+        for x in [edge.floor() as u32, edge.ceil() as u32] {
+            let actual = pixel_at(&image, x, y);
+            assert!(
+                actual == left || actual == right,
+                "unexpected blended pixel {actual:?} at cell boundary {boundary} (x={x})"
+            );
+        }
+    }
+}
+
+#[test]
 fn invalid_zoom_is_rejected() {
     for zoom in [0.0, -1.0, f64::INFINITY, f64::NAN] {
         assert!(GridRenderer::with_zoom(1, 1, zoom).is_err());
@@ -294,4 +343,11 @@ fn pixel_at(frame: &RgbaFrame, x: u32, y: u32) -> [u8; 4] {
     let (width, _) = frame.dimensions();
     let offset = ((y * width + x) * 4) as usize;
     frame.as_raw()[offset..offset + 4].try_into().unwrap()
+}
+
+fn color_to_pixel(color: Color) -> [u8; 4] {
+    match color {
+        Color::Rgb(r, g, b) => [r, g, b, 255],
+        _ => unreachable!("the test uses RGB colors"),
+    }
 }

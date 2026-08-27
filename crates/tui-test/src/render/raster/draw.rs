@@ -68,6 +68,23 @@ pub(super) fn fill_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height:
     pixmap.fill_rect(rect, &paint, Transform::identity(), None);
 }
 
+pub(super) fn fill_crisp_rect(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: Rgb,
+) {
+    let Some(rect) = Rect::from_xywh(x, y, width, height) else {
+        return;
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, 255);
+    paint.anti_alias = false;
+    pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+}
+
 pub(super) fn fill_circle(pixmap: &mut Pixmap, x: f32, y: f32, radius: f32, color: Rgb) {
     let Some(path) = PathBuilder::from_circle(x, y, radius) else {
         return;

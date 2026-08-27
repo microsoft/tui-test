@@ -14,9 +14,9 @@ mod draw;
 mod font;
 
 use draw::{
-    draw_glyph, fill_circle, fill_rect, fill_rounded_rect, fill_rounded_rect_alpha,
-    fill_top_rounded_rect, format_glyph_sequence, is_default_ignorable, unpremultiply,
-    unsupported_grapheme,
+    draw_glyph, fill_circle, fill_crisp_rect, fill_rect, fill_rounded_rect,
+    fill_rounded_rect_alpha, fill_top_rounded_rect, format_glyph_sequence, is_default_ignorable,
+    unpremultiply, unsupported_grapheme,
 };
 use font::{FontSystem, GlyphKey};
 
@@ -189,21 +189,29 @@ impl FrameRenderer for GridRenderer {
 
         let blank = EmuCell::blank();
         for (y, row) in grid.iter().enumerate() {
-            for x in 0..usize::from(cols) {
+            let mut x = 0;
+            while x < usize::from(cols) {
                 let cell = row.get(x).unwrap_or(&blank);
                 let background = svg::bg_of(cell, colors);
+                let mut run = 1;
+                while x + run < usize::from(cols)
+                    && svg::bg_of(row.get(x + run).unwrap_or(&blank), colors) == background
+                {
+                    run += 1;
+                }
                 if background != colors.resolve(None, false) {
-                    fill_rect(
+                    fill_crisp_rect(
                         &mut self.pixmap,
                         origin_x + (svg::MARGIN_X + x as f32 * svg::CELL_W) * scale,
                         origin_y
                             + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + y as f32 * svg::CELL_H)
                                 * scale,
-                        svg::CELL_W * scale,
+                        run as f32 * svg::CELL_W * scale,
                         svg::CELL_H * scale,
                         background,
                     );
                 }
+                x += run;
             }
         }
 
