@@ -14,7 +14,7 @@ mod draw;
 mod font;
 
 use draw::{
-    draw_glyph, fill_circle, fill_crisp_rect, fill_rect, fill_rounded_rect,
+    draw_glyph, fill_antialiased_rect, fill_circle, fill_pixel_rect, fill_rounded_rect,
     fill_rounded_rect_alpha, fill_top_rounded_rect, format_glyph_sequence, is_default_ignorable,
     unpremultiply, unsupported_grapheme,
 };
@@ -152,7 +152,7 @@ impl FrameRenderer for GridRenderer {
             svg::WINDOW_RADIUS * scale,
             svg::TITLE_BG,
         );
-        fill_rect(
+        fill_antialiased_rect(
             &mut self.pixmap,
             origin_x,
             origin_y + (svg::HEADER_H - svg::TITLE_DIVIDER_H) * scale,
@@ -204,14 +204,7 @@ impl FrameRenderer for GridRenderer {
                     let right = grid_x(origin_x, x + run, scale);
                     let top = grid_y(origin_y, y, scale);
                     let bottom = grid_y(origin_y, y + 1, scale);
-                    fill_crisp_rect(
-                        &mut self.pixmap,
-                        left,
-                        top,
-                        right - left,
-                        bottom - top,
-                        background,
-                    );
+                    fill_pixel_rect(&mut self.pixmap, left, top, right, bottom, background);
                 }
                 x += run;
             }
@@ -281,7 +274,7 @@ impl FrameRenderer for GridRenderer {
                 }
 
                 if style.underline {
-                    fill_rect(
+                    fill_antialiased_rect(
                         pixmap,
                         cell_origin_x,
                         cell_origin_y + cell_height - 3.0 * scale,
@@ -291,7 +284,7 @@ impl FrameRenderer for GridRenderer {
                     );
                 }
                 if style.strike {
-                    fill_rect(
+                    fill_antialiased_rect(
                         pixmap,
                         cell_origin_x,
                         baseline - svg::FONT_SIZE * 0.32 * scale,
@@ -341,13 +334,13 @@ impl FrameRenderer for GridRenderer {
     }
 }
 
-fn grid_x(origin_x: f32, column: usize, scale: f32) -> f32 {
-    (origin_x + (svg::MARGIN_X + column as f32 * svg::CELL_W) * scale).round()
+fn grid_x(origin_x: f32, column: usize, scale: f32) -> u32 {
+    (origin_x + (svg::MARGIN_X + column as f32 * svg::CELL_W) * scale).round() as u32
 }
 
-fn grid_y(origin_y: f32, row: usize, scale: f32) -> f32 {
+fn grid_y(origin_y: f32, row: usize, scale: f32) -> u32 {
     (origin_y + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + row as f32 * svg::CELL_H) * scale)
-        .round()
+        .round() as u32
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -376,30 +369,42 @@ fn draw_cursor(
     } else {
         1
     };
+    let column = usize::from(cx);
     let origin_x = panel_origin_x + (svg::MARGIN_X + f32::from(cx) * svg::CELL_W) * scale;
     let origin_y = panel_origin_y
         + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + cy as f32 * svg::CELL_H) * scale;
     let cell_width = svg::CELL_W * span as f32 * scale;
     let cell_height = svg::CELL_H * scale;
-    let thickness = 2.0 * scale;
+    let left = grid_x(panel_origin_x, column, scale);
+    let right = grid_x(panel_origin_x, column + span, scale);
+    let top = grid_y(panel_origin_y, cy, scale);
+    let bottom = grid_y(panel_origin_y, cy + 1, scale);
+    let thickness = (2.0 * scale).round().max(1.0) as u32;
     let color = colors.color(ColorSlot::Cursor);
     match colors.cursor_shape() {
         CursorShape::Block => {
-            fill_rect(pixmap, origin_x, origin_y, cell_width, cell_height, color);
+            fill_pixel_rect(pixmap, left, top, right, bottom, color);
         }
         CursorShape::Underline => {
-            fill_rect(
+            fill_pixel_rect(
                 pixmap,
-                origin_x,
-                origin_y + cell_height - thickness,
-                cell_width,
-                thickness,
+                left,
+                bottom.saturating_sub(thickness).max(top),
+                right,
+                bottom,
                 color,
             );
             return;
         }
         CursorShape::Bar => {
-            fill_rect(pixmap, origin_x, origin_y, thickness, cell_height, color);
+            fill_pixel_rect(
+                pixmap,
+                left,
+                top,
+                left.saturating_add(thickness).min(right),
+                bottom,
+                color,
+            );
             return;
         }
     }

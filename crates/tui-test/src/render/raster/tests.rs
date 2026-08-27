@@ -19,6 +19,10 @@ fn cell(character: &str, attrs: Attrs) -> EmuCell {
 }
 
 fn frame(grid: Vec<Vec<EmuCell>>) -> Frame {
+    frame_with_cursor(grid, None)
+}
+
+fn frame_with_cursor(grid: Vec<Vec<EmuCell>>, cursor: Option<(u16, usize)>) -> Frame {
     let emulator = AlacrittyEmu::new(
         grid.first().map_or(1, Vec::len) as u16,
         grid.len().max(1) as u16,
@@ -29,7 +33,7 @@ fn frame(grid: Vec<Vec<EmuCell>>) -> Frame {
         title: None,
         duration: Duration::ZERO,
         render_state: RenderState::capture(&emulator),
-        cursor: None,
+        cursor,
     }
 }
 
@@ -77,7 +81,13 @@ fn adjacent_background_cells_are_seamless_at_fractional_zoom() {
         Color::Rgb(125, 86, 244),
         Color::Rgb(125, 86, 244),
         Color::Rgb(236, 106, 94),
+        Color::Rgb(236, 106, 94),
+        Color::Rgb(236, 106, 94),
         Color::Rgb(244, 191, 79),
+        Color::Rgb(244, 191, 79),
+        Color::Rgb(244, 191, 79),
+        Color::Rgb(97, 197, 84),
+        Color::Rgb(97, 197, 84),
         Color::Rgb(97, 197, 84),
     ];
     let rows = 5;
@@ -120,6 +130,56 @@ fn adjacent_background_cells_are_seamless_at_fractional_zoom() {
                         );
                     }
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn block_cursor_is_aligned_with_background_cells_at_fractional_zoom() {
+    let background = Color::Rgb(97, 197, 84);
+    let mut row = vec![
+        EmuCell {
+            bg: Some(background),
+            ..EmuCell::blank()
+        };
+        3
+    ];
+    row.push(EmuCell::blank());
+
+    for zoom in [1.02, 1.25] {
+        let content = frame_with_cursor(vec![row.clone()], Some((3, 0)));
+        let cursor = content
+            .render_state
+            .color(crate::profile::ColorSlot::Cursor);
+        let mut renderer = GridRenderer::with_zoom(4, 1, zoom).unwrap();
+        let image = renderer.render(&content).unwrap();
+        let (panel_width, panel_height) = crate::render::svg::pixel_size(4, 1);
+        let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
+        let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
+        let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
+        let origin_y = (image.dimensions().1 - panel_height) as f32 / 2.0;
+        let scale = zoom as f32;
+        let top = grid_y(origin_y, 0, scale);
+        let bottom = grid_y(origin_y, 1, scale);
+        let background_left = grid_x(origin_x, 2, scale);
+        let cursor_left = grid_x(origin_x, 3, scale);
+        let cursor_right = grid_x(origin_x, 4, scale);
+
+        for y in top..bottom {
+            for x in background_left..cursor_left {
+                assert_eq!(
+                    pixel_at(&image, x, y),
+                    color_to_pixel(background),
+                    "background gap before cursor at ({x}, {y}), zoom {zoom}"
+                );
+            }
+            for x in cursor_left..cursor_right {
+                assert_eq!(
+                    pixel_at(&image, x, y),
+                    [cursor.r, cursor.g, cursor.b, 255],
+                    "misaligned cursor pixel at ({x}, {y}), zoom {zoom}"
+                );
             }
         }
     }
