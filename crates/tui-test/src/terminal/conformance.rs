@@ -15,48 +15,38 @@
 //! emulators legitimately diverge (reflow when shrinking below content width)
 //! the test pins only the part that is universal and says why it stops short.
 
-/// Parts of the contract a backend cannot express, declared where it opts in.
+/// One part of the contract a backend cannot express, declared where it opts in.
 ///
-/// This is deliberately not a general escape hatch. A field earns its place
+/// This is deliberately not a general escape hatch. A variant earns its place
 /// only when the limitation is in the emulator itself rather than in the
 /// mapping onto it, so that adding one is a visible claim a reviewer can
 /// check rather than a way to quiet a failing case.
-#[derive(Debug, Clone, Copy)]
-pub struct Divergences {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Divergence {
     /// The backend records an underline color only on a cell that also has an
     /// underline style, so `SGR 58` on its own leaves nothing to read back.
     ///
     /// Nothing renders differently: a cell with no underline draws no
     /// underline color either way. What is lost is the color surviving in the
     /// cell vocabulary across an `SGR 24` that turns the underline off.
-    pub underline_color_needs_a_style: bool,
-}
-
-impl Divergences {
-    /// A backend that expresses the whole contract.
-    pub const NONE: Self = Self {
-        underline_color_needs_a_style: false,
-    };
+    UnderlineColorNeedsAStyle,
 }
 
 /// Generates the conformance tests for one backend. `$make` builds a boxed
 /// emulator from `(cols, rows, &Profile)`.
 ///
-/// A second argument declares the parts of the contract the backend cannot
-/// express; see [`Divergences`].
+/// A second argument lists the parts of the contract the backend cannot
+/// express; see [`Divergence`].
 ///
 /// The body is fully path-qualified because it expands into the caller's
 /// module; it must not collide with whatever that module already imports.
 #[macro_export]
 macro_rules! emulator_conformance_tests {
     ($make:expr) => {
-        $crate::emulator_conformance_tests!(
-            $make,
-            $crate::terminal::conformance::Divergences::NONE
-        );
+        $crate::emulator_conformance_tests!($make, &[]);
     };
     ($make:expr, $divergences:expr) => {
-        const CONFORMANCE_DIVERGENCES: $crate::terminal::conformance::Divergences = $divergences;
+        const CONFORMANCE_DIVERGENCES: &[$crate::terminal::conformance::Divergence] = $divergences;
 
         fn conformance_emu(
             cols: u16,
@@ -270,7 +260,9 @@ macro_rules! emulator_conformance_tests {
         /// alone. Only a full reset clears both.
         #[test]
         fn conformance_underline_color_outlives_the_underline() {
-            if CONFORMANCE_DIVERGENCES.underline_color_needs_a_style {
+            if CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::UnderlineColorNeedsAStyle)
+            {
                 return;
             }
             use $crate::terminal::cell::{Color, UnderlineStyle as U};
