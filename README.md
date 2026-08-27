@@ -34,17 +34,25 @@ Use the CLI from shell scripts and agent workflows. The Rust, Python, and JavaSc
 
 ### macOS and Linux
 
+#### homebrew 
+```sh
+brew tap microsoft/tui-test https://github.com/microsoft/tui-test
+brew install tui-test
+```
+
+#### bash
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | TUI_TEST_VERSION=beta sh
 ```
+Set `TUI_TEST_VERSION` to install a specific version or `TUI_TEST_INSTALL_DIR` to choose the install location.
 
 ### Windows
 
+#### powershell
 ```powershell
 $env:TUI_TEST_VERSION = "beta"
 irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
 ```
-
 Set `TUI_TEST_VERSION` to install a specific version or `TUI_TEST_INSTALL_DIR` to choose the install location.
 
 ### Release binaries
@@ -59,9 +67,9 @@ Download the latest beta for your platform from [GitHub Releases](https://github
 Install [`tui-test-rs`](https://crates.io/crates/tui-test-rs):
 
 ```sh
-cargo add tui-test-rs@0.1.0-beta.1
+cargo add tui-test-rs@0.1.0-beta.2
 # Add APNG/GIF/MP4 export support when the Rust application needs raster recording:
-cargo add tui-test-rs@0.1.0-beta.1 --features recording-raster
+cargo add tui-test-rs@0.1.0-beta.2 --features recording-raster
 ```
 
 Raster recording uses installed system fonts unless a JetBrains Mono bundle feature is enabled:
@@ -265,14 +273,12 @@ Waits and assertions use five timeout classes:
 
 `open`'s prompt wait caps at 8000 ms unless you set a `ready` timeout.
 
-Set session defaults with `open`, then override individual calls as needed:
+Configure timeouts directly via cli falgs or within [profiles](#profiles) in the configuration. The timeout priority goes from explicit overrides -> profile -> timeout overrides -> `TUI_TEST_TIMEOUT_<CLASS>_MS` (only affects daemon on start). A session's timeouts can be viewed with the `tui-test state` command.
 
 ```sh
 tui-test open --timeout-text 30000 --timeout-idle 15000 --timeout-ready 20000
 tui-test wait text "done" --timeout 60000   # just this call
 ```
-
-Timeout precedence, from highest to lowest, is `--timeout`, the session default from `open` or `run`, then `TUI_TEST_TIMEOUT_<CLASS>_MS` (read when the daemon starts). `tui-test state` prints the effective values for a session.
 
 #### Lifecycle
 
@@ -294,28 +300,29 @@ Calling `open` or `run` for a session that already has a live child reuses that 
 
 #### Terminal backends
 
-Select a backend per session with `--backend`. The available values are `alacritty` (default) and `ghostty`; Ghostty uses [Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs).
+Select a backend per session with `--backend`. The available values are `alacritty` (default), `ghostty`, `rio`, and `xtermjs`; Ghostty uses [Ghostty's Rust VT bindings](https://github.com/Uzaaft/libghostty-rs), and `xtermjs` runs [xterm.js](https://xtermjs.org) inside [QuickJS](https://bellard.org/quickjs/).
 
 ```sh
 tui-test open --backend ghostty
-tui-test run --backend ghostty vim file.txt
+tui-test run --backend xtermjs vim file.txt
 ```
 
-All backends use the same renderer, assertions, snapshot format, and conformance suite. Shell semantic-prompt tracking reads raw PTY bytes, so command boundaries, exit codes, and cwd tracking do not depend on the selected backend. Backend-specific VT behavior can differ: Ghostty preserves SGR blink, while Alacritty parses blink but cannot report it.
+All backends use the same renderer, assertions, snapshot format, and conformance suite. Shell semantic-prompt tracking reads raw PTY bytes, so command boundaries, exit codes, and cwd tracking do not depend on the selected backend. Backend-specific VT behavior can differ: Ghostty preserves SGR blink, while Alacritty parses blink but cannot report it. xterm.js records a cell's underline color only when that cell also has an underline style.
 
 The CLI and published Python and JavaScript packages include all backends. Windows ARM64 artifacts are not currently published because Ghostty's upstream Zig build does not support that target.
 
 Rust users enable non-default backends through Cargo features. To enable Ghostty:
 
 ```sh
-cargo add tui-test-rs --features ghostty
+cargo add tui-test-rs --features rio
+cargo add tui-test-rs --features xtermjs
 ```
 
 ```rust
 use tui_test::{Backend, OpenOptions};
 
 let options = OpenOptions {
-    backend: Backend::Ghostty,
+    backend: Backend::Rio,
     ..OpenOptions::default()
 };
 ```
@@ -490,7 +497,7 @@ tui-test open --profile ci
 tui-test open --config ./other.toml --profile ci
 ```
 
-By default, `tui-test` checks `./tui-test.toml` first, then `~/.tui-test/tui-test.toml`. `--config` or `TUI_TEST_CONFIG` skips that search and uses the specified file.
+By default, `tui-test` checks `./tui-test.toml` first, then `$XDG_CONFIG_HOME/tui-test/tui-test.toml` on Unix, and finally `~/.tui-test/tui-test.toml`. `--config` or `TUI_TEST_CONFIG` skips that search and uses the specified file.
 
 Named profiles do not inherit from `[profiles.default]`; every omitted field uses tui-test's built-in default. `tui-test.toml` affects only the CLI. The libraries accept profile configurations when starting a new session.
 
@@ -520,7 +527,7 @@ The default palette is the classic VGA/xterm palette expected by `TERM=xterm-256
 | | tui-test | [Tuistory](https://github.com/remorses/tuistory) | [tui-use](https://github.com/onesuper/tui-use) | [terminal-use](https://github.com/flipbit03/terminal-use) |
 | --- | --- | --- | --- | --- |
 | Language | Rust | TypeScript | TypeScript | Rust |
-| Emulator | Alacritty or Ghostty, per session | Ghostty (via OpenTUI) | xterm (headless) | Alacritty |
+| Emulator | Alacritty, Ghostty, Rio, or xterm.js, per session | Ghostty (via OpenTUI) | xterm (headless) | Alacritty |
 | Shell command tracking | ✅ command boundaries, exit codes, cwd | ❌ | ❌ | ❌ |
 | Testing / snapshots | ✅ `expect` text / output / exit-code / snapshot | ✅ snapshots | ❌ | ❌ |
 | Color and per-cell attributes | ✅ fg/bg, ANSI-256/hex/RGB, `cells` | ✅ style-filtered text | ❌ plain text with highlights | ✅ via PNG |

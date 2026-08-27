@@ -3,3 +3,14 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 [target.aarch64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+# rio-vt's Rust simdutf binding and Ghostty's static library both embed the
+# upstream C++ `simdutf` namespace. Rename the cc-rs copy so the two backends
+# can coexist without duplicate symbols or symbol interposition.
+CXXFLAGS_aarch64_apple_darwin = "-Dsimdutf=tui_test_rio_simdutf"
+CXXFLAGS_x86_64_apple_darwin = "-Dsimdutf=tui_test_rio_simdutf"
+CXXFLAGS_aarch64_unknown_linux_gnu = "-Dsimdutf=tui_test_rio_simdutf -DSIMDUTF_IMPLEMENTATION_ARM64=0"
+CXXFLAGS_aarch64_unknown_linux_musl = "-Dsimdutf=tui_test_rio_simdutf"
+CXXFLAGS_x86_64_unknown_linux_gnu = "-Dsimdutf=tui_test_rio_simdutf"
+CXXFLAGS_x86_64_unknown_linux_musl = "-Dsimdutf=tui_test_rio_simdutf -DSIMDUTF_IMPLEMENTATION_ICELAKE=0"

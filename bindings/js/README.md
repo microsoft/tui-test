@@ -68,16 +68,17 @@ Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSessi
 `{ backend, cols, rows, cwd, env, waitReady, restart, retries, profile, timeouts }`.
 They reuse a live named session unless `restart: true` is passed. The
 constructor also accepts `backend` and `profile` as defaults for later opens
-and runs. Backend values are `"alacritty"` (default) and `"ghostty"`:
+and runs. Backend values are `"alacritty"` (default), `"ghostty"`, and
+`"rio"`, and `"xtermjs"`:
 
 ```js
 const terminal = new TuiTest("work", { backend: "ghostty" });
 await terminal.open();
-await terminal.run("vim", ["file.txt"], { backend: "alacritty" });
+await terminal.run("vim", ["file.txt"], { backend: "xtermjs" });
 ```
 
-The native package includes both emulators. Profiles are partial; omitted
-fields use the built-in defaults:
+The native package includes every supported emulator. Profiles are partial;
+omitted fields use the built-in defaults:
 
 ```js
 const terminal = new TuiTest("work", {

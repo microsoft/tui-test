@@ -15,6 +15,7 @@ use ghostty_vt::terminal::{
 };
 use ghostty_vt::{RenderState, Terminal};
 
+use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::CursorShape;
@@ -147,7 +148,7 @@ pub(super) struct GhosttyCore {
 }
 
 impl GhosttyCore {
-    pub(super) fn new(cols: u16, rows: u16, profile: Profile) -> Result<Self> {
+    pub(super) fn new(cols: u16, rows: u16, profile: Profile, bells: BellTracker) -> Result<Self> {
         let mut terminal = Terminal::new(cols.max(1), rows.max(1)).context("creating terminal")?;
         terminal
             .resize(cols.max(1), rows.max(1), 1, 1)
@@ -185,6 +186,8 @@ impl GhosttyCore {
                 move |_terminal, data| pending.borrow_mut().extend_from_slice(data)
             })
             .context("registering PTY replies")?
+            .on_bell(move |_terminal| bells.ring())
+            .context("registering bell events")?
             .on_device_attributes(|_terminal| {
                 Some(DeviceAttributes {
                     primary: PrimaryDeviceAttributes::new(
@@ -377,7 +380,7 @@ mod tests {
 
     #[test]
     fn renders_wide_cells_into_the_neutral_grid() {
-        let mut core = GhosttyCore::new(5, 3, Profile::default()).unwrap();
+        let mut core = GhosttyCore::new(5, 3, Profile::default(), BellTracker::default()).unwrap();
         core.process("abcd你".as_bytes());
         let rows = &core.frame().unwrap().rows;
         assert_eq!(rows[0][4].ch, " ");
@@ -387,7 +390,7 @@ mod tests {
 
     #[test]
     fn queues_terminal_replies_synchronously() {
-        let mut core = GhosttyCore::new(10, 4, Profile::default()).unwrap();
+        let mut core = GhosttyCore::new(10, 4, Profile::default(), BellTracker::default()).unwrap();
         core.process(b"\x1b[3;5H\x1b[6n");
         assert_eq!(core.take_pending_writes(), b"\x1b[3;5R");
     }

@@ -28,6 +28,8 @@ const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 pub enum Backend {
     Alacritty,
     Ghostty,
+    Rio,
+    Xtermjs,
 }
 
 impl From<Backend> for CoreBackend {
@@ -35,6 +37,8 @@ impl From<Backend> for CoreBackend {
         match value {
             Backend::Alacritty => Self::Alacritty,
             Backend::Ghostty => Self::Ghostty,
+            Backend::Rio => Self::Rio,
+            Backend::Xtermjs => Self::Xtermjs,
         }
     }
 }

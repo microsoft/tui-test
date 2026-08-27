@@ -408,6 +408,19 @@ impl Session {
             .pid()
     }
 
+    /// A parse failure the emulator hit on the reader thread, if any.
+    ///
+    /// See [`crate::terminal::emu::Emulator::fault`]. The reader has nobody to
+    /// return an error to, so the failure is recorded there and reported by
+    /// whichever operation runs next.
+    pub fn fault(&self) -> Option<String> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .emu
+            .fault()
+    }
+
     pub fn is_alive(&self) -> Result<bool, crate::api::TuiTestError> {
         if self
             .state
@@ -460,6 +473,7 @@ fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, col
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     recorder.on_resize(cols, rows);
     state.emu.resize(cols, rows);
+    state.last_change = Instant::now();
 }
 
 fn drain_reader_and_recorder(reader: &mut Option<JoinHandle<()>>, recorder: &mut Recorder) {
@@ -592,7 +606,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn resize_is_queued_after_output_already_processing_at_the_old_size() {
+    fn resize_is_queued_after_old_output_and_starts_a_new_idle_period() {
         let path = test_path("resize-order");
         let mut recorder = Recorder::create(path.clone(), 1, 1, &[], Arc::new(Logger::disabled()));
         let state = Arc::new(Mutex::new(TermState {
@@ -621,7 +635,16 @@ mod tests {
             release_tx.send(()).unwrap();
         });
 
+        let resize_started = Instant::now();
         resize_emulator_and_record(&state, &recorder, 2, 1);
+        assert!(
+            state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .last_change
+                >= resize_started,
+            "wait idle must not reuse the quiet period from before a resize"
+        );
         release.join().unwrap();
         output.join().unwrap();
         recorder.capture().on_data(b"new-size-output");

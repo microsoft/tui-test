@@ -11,7 +11,7 @@ import type {
 } from "../native/index.js";
 
 export type Color = "default" | number | string;
-export type Backend = "alacritty" | "ghostty";
+export type Backend = "alacritty" | "ghostty" | "rio" | "xtermjs";
 
 /** `"none"` is a value, not an absence: an un-underlined cell reports it. */
 export type UnderlineStyle =
@@ -41,7 +41,7 @@ export interface Cell extends Omit<NativeCell, "fg" | "bg" | "underline_style" |
   /** The cell's grapheme; `" "` when blank, `""` for the second column of a double-width character. */
   fg: Color;
   bg: Color;
-  /** Always `false` from the alacritty backend, which cannot report blink. */
+  /** Always `false` from the alacritty and rio backends, which cannot report blink. */
   /** Shorthand for `underline_style !== "none"`. */
   underline_style: UnderlineStyle;
   /**

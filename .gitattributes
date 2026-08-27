@@ -1,3 +1,9 @@
 * text=auto eol=lf
 install/install.sh linguist-detectable=false
 install/install.ps1 linguist-detectable=false
+
+# Third-party bundles dropped in unchanged. `vendored` rather than
+# `detectable=false` because that is what they are, and it also collapses the
+# minified bundle in diffs.
+crates/tui-test/assets/xtermjs/xterm-headless.js linguist-vendored=true
+crates/tui-test/assets/xtermjs/addon-unicode11.js linguist-vendored=true

@@ -281,6 +281,14 @@ impl Engine {
     {
         let mut guard = self.lock_session();
         let session = guard.as_mut().ok_or_else(TuiTestError::no_session)?;
+        // The emulator is fed on the reader thread, where there is nobody to
+        // return an error to, so a backend that failed to parse records it and
+        // the next operation reports it. Checked before the operation runs:
+        // once the grid has stopped tracking the bytes, every answer read out
+        // of it is a guess, and a wrong answer is worse than a failure.
+        if let Some(fault) = session.fault() {
+            return Err(TuiTestError::internal(fault));
+        }
         match operation(session) {
             Err(mut error) if error.kind == ErrorKind::Assertion => {
                 error.message = assertion_message(session, &error.message);

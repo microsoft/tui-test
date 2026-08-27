@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::shell::Shell;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Timeouts {
     pub text: Option<u64>,
     pub idle: Option<u64>,
@@ -23,6 +23,17 @@ impl Timeouts {
             Command => self.command,
             Exit => self.exit,
             Ready => self.ready,
+        }
+    }
+
+    /// Apply higher-precedence timeout values over these defaults.
+    pub fn with_overrides(self, overrides: Self) -> Self {
+        Self {
+            text: overrides.text.or(self.text),
+            idle: overrides.idle.or(self.idle),
+            command: overrides.command.or(self.command),
+            exit: overrides.exit.or(self.exit),
+            ready: overrides.ready.or(self.ready),
         }
     }
 }

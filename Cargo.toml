@@ -12,7 +12,7 @@ default-members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
@@ -20,6 +20,7 @@ repository = "https://github.com/microsoft/tui-test"
 
 [workspace.dependencies]
 alacritty_terminal = "0.26.0"
+rio-vt = "0.5.3"
 anyhow = "1.0.102"
 bitflags = "2.13.1"
 clap = { version = "4.6.1", features = ["derive"] }
@@ -31,6 +32,7 @@ flate2 = "1.1.9"
 fontdb = { version = "0.23.0", default-features = false, features = ["fs", "std"] }
 gif = "0.14.0"
 interprocess = "2.4.2"
+rquickjs = { version = "0.12.2", features = ["parallel"] }
 ghostty-vt = { package = "libghostty-vt", version = "0.2.1", git = "https://github.com/Uzaaft/libghostty-rs.git", rev = "a28e4ad00d6ba79b98b8cac651ed8976d8500903", default-features = false }
 png = "0.17.16"
 portable-pty = "0.9.0"

@@ -40,8 +40,8 @@ Three commands let an agent look up the rest of the surface instead of guessing:
   racing the restart.
 - **Defaults.** New sessions are `80x30`. Timeouts come in five classes: `text`
   and `idle` default to 5s; `command`, `exit`, and `ready` to 30s. Set a session
-  default with `open --timeout-<class> <ms>`, or override one call with
-  `--timeout`. `state` reports the effective values.
+  default in the selected config profile or with `open --timeout-<class> <ms>`,
+  or override one call with `--timeout`. `state` reports the effective values.
 
 ## Exit codes
 
@@ -392,39 +392,47 @@ codes, one class per row of the applicable [exit-code table](#exit-codes):
 
 ## Terminal backends
 
-`open` and `run` accept `--backend alacritty|ghostty`; Alacritty is the
+`open` and `run` accept `--backend alacritty|ghostty|rio`; Alacritty is the
 default. The Python and JavaScript constructors accept the same canonical
 strings as a client default, and each `open`/`run` can override it.
 
 ```sh
 tui-test open --backend ghostty
-tui-test run --backend ghostty -- vim file.txt
+tui-test run --backend rio -- vim file.txt
 ```
 
-Both backends satisfy the same cell-grid contract. Ghostty preserves the blink
-attribute, while Alacritty cannot report it. Command boundaries, exit codes,
-cwd, and captured command output are parsed separately from the raw PTY stream,
-so switching emulators does not change shell integration behavior.
+Every enabled backend satisfies the same cell-grid contract. Ghostty preserves
+the blink attribute, while Alacritty and Rio cannot report it. Command
+boundaries, exit codes, cwd, and captured command output are parsed separately
+from the raw PTY stream, so switching emulators does not change shell
+integration behavior.
 
 ## Configuration
 
 `tui-test.toml` holds named profiles; `--profile NAME` selects one and
 `--config PATH` picks the file. Looked up nearest first: `./tui-test.toml`
-then `~/.tui-test/tui-test.toml`. No discovered file is fine; `--config` and
-`TUI_TEST_CONFIG` are explicit and error when their path is missing.
+then the platform config directory (`$XDG_CONFIG_HOME/tui-test/tui-test.toml`
+on Unix), then `~/.tui-test/tui-test.toml`. No discovered file is fine;
+`--config` and `TUI_TEST_CONFIG` are explicit and error when their path is
+missing.
 
 ```toml
 [profiles.ci]
 scrollback = 500
 
+[profiles.ci.timeouts]
+text = 15000
+ready = 60000
+
 [profiles.ci.colors]
 red = "#ff0000"
 ```
 
-A profile sets `scrollback` (default 10000) and colors: `foreground`,
-`background`, `cursor`, and the 16 ANSI slots by name (`red`, `bright_red`,
-...). Indices 16-255 are spec-defined and not configurable, so `--fg 196` is
-stable across profiles.
+A profile sets timeout defaults, `scrollback` (default 10000), and colors:
+`foreground`, `background`, `cursor`, and the 16 ANSI slots by name (`red`,
+`bright_red`, ...). Indices 16-255 are spec-defined and not configurable, so
+`--fg 196` is stable across profiles. Unknown settings and invalid colors are
+rejected before a session starts.
 
 Named profiles do not inherit from `[profiles.default]`; omitted fields use
 tui-test's built-in defaults. The in-process APIs accept profile objects:

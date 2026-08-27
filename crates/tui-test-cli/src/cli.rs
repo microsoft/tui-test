@@ -9,6 +9,8 @@ use tui_test::{Backend, RecordingFormat, Timeouts};
 pub enum BackendArg {
     Alacritty,
     Ghostty,
+    Rio,
+    Xtermjs,
 }
 
 impl From<BackendArg> for Backend {
@@ -16,6 +18,8 @@ impl From<BackendArg> for Backend {
         match backend {
             BackendArg::Alacritty => Backend::Alacritty,
             BackendArg::Ghostty => Backend::Ghostty,
+            BackendArg::Rio => Backend::Rio,
+            BackendArg::Xtermjs => Backend::Xtermjs,
         }
     }
 }
@@ -53,8 +57,8 @@ impl From<ShellArg> for Shell {
 /// Which terminal profile a session runs with.
 #[derive(Args, Clone, Default)]
 pub struct ProfileArgs {
-    /// Config file to read (default: ./tui-test.toml, then
-    /// ~/.tui-test/tui-test.toml).
+    /// Config file to read (default: ./tui-test.toml, then the platform config
+    /// directory, then ~/.tui-test/tui-test.toml).
     #[arg(long, value_name = "PATH")]
     pub config: Option<std::path::PathBuf>,
     /// Named profile from the config file (default: `default`).
@@ -66,9 +70,9 @@ impl ProfileArgs {
     /// Resolve to concrete settings. Done here, in the client, because the
     /// daemon is long-lived and shared and so has no working directory to
     /// resolve a project-local config against.
-    pub fn resolve(&self) -> anyhow::Result<tui_test::profile::Profile> {
+    pub fn resolve(&self) -> anyhow::Result<tui_test::profile::Settings> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        tui_test::profile::resolve(self.config.as_deref(), self.profile.as_deref(), &cwd)
+        tui_test::profile::resolve_settings(self.config.as_deref(), self.profile.as_deref(), &cwd)
     }
 }
 
@@ -567,16 +571,22 @@ mod tests {
 
     #[test]
     fn open_backend_values_map_to_terminal_backends() {
-        let cli = Cli::try_parse_from(["tui-test", "open", "--backend", "ghostty"])
-            .expect("parse backend");
-        let Some(Command::Open {
-            backend: Some(backend),
-            ..
-        }) = cli.command
-        else {
-            panic!("expected Open with a backend");
-        };
-        assert_eq!(Backend::from(backend), Backend::Ghostty);
+        for (name, expected) in [
+            ("alacritty", Backend::Alacritty),
+            ("ghostty", Backend::Ghostty),
+            ("rio", Backend::Rio),
+        ] {
+            let cli = Cli::try_parse_from(["tui-test", "open", "--backend", name])
+                .unwrap_or_else(|error| panic!("parse {name}: {error}"));
+            let Some(Command::Open {
+                backend: Some(backend),
+                ..
+            }) = cli.command
+            else {
+                panic!("expected Open with backend {name}");
+            };
+            assert_eq!(Backend::from(backend), expected);
+        }
         assert!(Cli::try_parse_from(["tui-test", "open", "--backend", "libghostty"]).is_err());
     }
 
