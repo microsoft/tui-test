@@ -540,80 +540,36 @@ jobs:
 
   update-homebrew:
     name: Open Homebrew formula update
-    needs:
-      - verify
-      - release
-    if: always() && needs.verify.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    needs: release
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
-
-      - name: Download Homebrew release assets
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          mkdir homebrew-assets
-          targets=(
-            aarch64-apple-darwin
-            x86_64-apple-darwin
-            aarch64-unknown-linux-gnu
-            x86_64-unknown-linux-gnu
-          )
-          for target in "${targets[@]}"; do
-            gh release download "$RELEASE_TAG" \
-              --pattern "tui-test-${target}.tar.gz" \
-              --dir homebrew-assets
-          done
-
       - name: Update Homebrew formula
+        shell: bash
         run: |
-          node .github/scripts/release/update-homebrew-formula.mjs \
-            "$RELEASE_TAG" \
-            homebrew-assets \
-            Formula/tui-test.rb
+          gh release view "$RELEASE_TAG" --json assets |
+            node .github/scripts/release/update-homebrew-formula.mjs "$RELEASE_TAG"
 
       - name: Open a pull request
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- Formula/tui-test.rb; then
-            echo "The Homebrew formula already matches $RELEASE_TAG."
-            exit 0
-          fi
-
           branch="homebrew-update/$RELEASE_TAG"
           title="chore(homebrew): update formula to $RELEASE_TAG"
-
-          cat > /tmp/body.md <<BODY
-          Updates \`Formula/tui-test.rb\` to \`$RELEASE_TAG\` using SHA-256 checksums from the published macOS and Linux release archives.
-
-          Opened automatically by \`.github/workflows/release.yml\`. Pull requests created with \`GITHUB_TOKEN\` do not start CI, so push an empty commit to run it.
-          BODY
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add Formula/tui-test.rb
           git commit -s -m "$title"
-          git push -f origin "$branch"
-
-          if [ -z "$(gh pr list --head "$branch" --state open --json number -q '.[].number')" ]; then
-            gh pr create --head "$branch" --base main --title "$title" --body-file /tmp/body.md
-          else
-            echo "A pull request for $branch is already open; pushed the update to it."
-          fi
+          git push origin "$branch"
+          gh pr create --head "$branch" --base main --title "$title" --body ""

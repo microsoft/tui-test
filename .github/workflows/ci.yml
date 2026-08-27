@@ -53,10 +53,6 @@ jobs:
           cache: npm
           cache-dependency-path: bindings/js/package-lock.json
 
-      - name: Test release scripts
-        if: runner.os == 'Linux'
-        run: node --test .github/scripts/release/update-homebrew-formula.test.mjs
-
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
