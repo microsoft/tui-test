@@ -689,45 +689,6 @@ fn dispatch(
             )?;
             Ok(OperationResult::Unit)
         }
-        Operation::FindText { selector } => {
-            Ok(OperationResult::Matches(find_text(session, &selector)?))
-        }
-        Operation::WaitTextSelector {
-            selector,
-            not,
-            timeout_ms,
-        } => {
-            wait_selected_text(
-                session,
-                &selector,
-                not,
-                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
-            )?;
-            Ok(OperationResult::Unit)
-        }
-        Operation::ClickText {
-            selector,
-            button,
-            clicks,
-            timeout_ms,
-        } => {
-            click_selected_text(
-                session,
-                &selector,
-                button,
-                clicks,
-                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
-            )?;
-            Ok(OperationResult::Unit)
-        }
-        Operation::HighlightText {
-            selector,
-            timeout_ms,
-        } => Ok(OperationResult::Matches(highlight_selected_text(
-            session,
-            &selector,
-            timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
-        )?)),
         Operation::FindLocator { query } => {
             Ok(OperationResult::Matches(find_locator(session, &query)?))
         }
@@ -800,21 +761,6 @@ fn dispatch(
                 not,
                 fg,
                 bg,
-                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
-            )?;
-            Ok(OperationResult::Unit)
-        }
-        Operation::ExpectTextSelector {
-            selector,
-            not,
-            style,
-            timeout_ms,
-        } => {
-            expect_selected_text(
-                session,
-                &selector,
-                not,
-                &style,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?;
             Ok(OperationResult::Unit)
@@ -1490,6 +1436,7 @@ fn validate_locator_query(query: &LocatorQuery) -> Result<(), TuiTestError> {
     if let Some(parent) = query.within.as_deref() {
         validate_locator_query(parent)?;
     }
+    validate_style(&query.style)?;
     Ok(())
 }
 
@@ -1566,60 +1513,6 @@ fn wait_locator(
     } else {
         Err(TuiTestError::assertion(timeout_message(
             &description,
-            timeout_ms,
-            not,
-        )))
-    }
-}
-
-fn find_text(
-    session: &TerminalSession,
-    selector: &TextSelector,
-) -> Result<Vec<TextMatch>, TuiTestError> {
-    validate_selector(selector)?;
-    locator::locate(&grid(session, selector.full), selector)
-        .map(|matches| matches.into_iter().map(|matched| matched.value).collect())
-        .map_err(|error| TuiTestError::assertion(error.to_string()))
-}
-
-fn wait_selected_text(
-    session: &TerminalSession,
-    selector: &TextSelector,
-    not: bool,
-    timeout_ms: u64,
-) -> Result<(), TuiTestError> {
-    validate_selector(selector)?;
-    let mut matched = false;
-    let mut last_error = None;
-    poll_until(
-        || {
-            match locator::locate(&grid(session, selector.full), selector) {
-                Ok(candidates) => {
-                    matched = candidates.is_empty() == not;
-                    last_error = None;
-                }
-                Err(error) => {
-                    matched = false;
-                    last_error = Some(error.to_string());
-                }
-            }
-            matched || session_stopped(session)
-        },
-        timeout_ms,
-    );
-    if matched {
-        Ok(())
-    } else if let Some(error) = last_error {
-        Err(TuiTestError::assertion(error))
-    } else if session_stopped(session) {
-        Err(TuiTestError::assertion(format!(
-            "session exited before '{}' became {}",
-            selector.text,
-            if not { "hidden" } else { "visible" }
-        )))
-    } else {
-        Err(TuiTestError::assertion(timeout_message(
-            &selector.text,
             timeout_ms,
             not,
         )))
@@ -1712,82 +1605,6 @@ fn click_locator(
     act(session.write(sequence.as_bytes()))
 }
 
-fn resolve_click_point(
-    session: &TerminalSession,
-    selector: &TextSelector,
-    timeout_ms: u64,
-) -> Result<(u16, u16), TuiTestError> {
-    validate_selector(selector)?;
-    let mut point = None;
-    let mut last_error = None;
-    poll_until(
-        || {
-            let outcome = {
-                let state = session
-                    .state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let visible_rows = state.emu.viewable_rows();
-                let visible_len = visible_rows.len();
-                if selector.full {
-                    let full_rows = state.emu.full_rows();
-                    let viewport_offset = full_rows.len().saturating_sub(visible_len);
-                    locate_click_point(&full_rows, selector, viewport_offset, visible_len)
-                } else {
-                    locate_click_point(&visible_rows, selector, 0, visible_len)
-                }
-            };
-            match outcome {
-                Ok(Some(value)) => {
-                    point = Some(value);
-                    last_error = None;
-                }
-                Ok(None) => {
-                    last_error = None;
-                }
-                Err(error) => {
-                    last_error = Some(error);
-                }
-            }
-            point.is_some() || session_stopped(session)
-        },
-        timeout_ms,
-    );
-    if let Some(point) = point {
-        Ok(point)
-    } else if let Some(error) = last_error {
-        Err(error)
-    } else if session_stopped(session) {
-        Err(TuiTestError::assertion(format!(
-            "session exited before '{}' could be clicked",
-            selector.text
-        )))
-    } else {
-        Err(TuiTestError::assertion(format!(
-            "timed out after {} waiting for one '{}' match to click",
-            format_timeout(timeout_ms),
-            selector.text
-        )))
-    }
-}
-
-fn locate_click_point(
-    rows: &[Vec<EmuCell>],
-    selector: &TextSelector,
-    viewport_offset: usize,
-    visible_rows: usize,
-) -> Result<Option<(u16, u16)>, TuiTestError> {
-    let candidates = locator::locate(rows, selector)
-        .map_err(|error| TuiTestError::assertion(error.to_string()))?;
-    click_point_from_candidates(
-        candidates,
-        &selector.text,
-        selector.full,
-        viewport_offset,
-        visible_rows,
-    )
-}
-
 fn click_point_from_candidates(
     mut candidates: Vec<locator::LocatedMatch>,
     description: &str,
@@ -1826,21 +1643,6 @@ fn click_point_from_candidates(
     let y = u16::try_from(y)
         .map_err(|_| TuiTestError::internal("matched row is outside terminal coordinates"))?;
     Ok(Some((x, y)))
-}
-
-fn click_selected_text(
-    session: &TerminalSession,
-    selector: &TextSelector,
-    button: u8,
-    clicks: u8,
-    timeout_ms: u64,
-) -> Result<(), TuiTestError> {
-    let (x, y) = resolve_click_point(session, selector, timeout_ms)?;
-    let mut sequence = String::new();
-    for _ in 0..clicks.max(1) {
-        sequence.push_str(&mouse::click(x, y, button));
-    }
-    act(session.write(sequence.as_bytes()))
 }
 
 fn matched_center(matched: &locator::LocatedMatch) -> Option<(usize, usize)> {
@@ -1927,86 +1729,6 @@ fn highlight_locator(
         Err(TuiTestError::assertion(format!(
             "timed out after {} waiting for '{description}' to highlight",
             format_timeout(timeout_ms),
-        )))
-    }
-}
-
-fn highlight_selected_text(
-    session: &TerminalSession,
-    selector: &TextSelector,
-    timeout_ms: u64,
-) -> Result<Vec<TextMatch>, TuiTestError> {
-    validate_selector(selector)?;
-    let mut resolved = None;
-    let mut last_error = None;
-    poll_until(
-        || {
-            let outcome = {
-                let mut state = session
-                    .state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let full_rows = state.emu.full_rows();
-                let visible_rows = state.emu.viewable_rows();
-                let viewport_offset = full_rows.len().saturating_sub(visible_rows.len());
-                let full = selector.full;
-                let rows = if full { &full_rows } else { &visible_rows };
-                match locator::locate(rows, selector) {
-                    Ok(candidates) if candidates.is_empty() => Ok(None),
-                    Ok(candidates) => {
-                        let row_offset = if full { 0 } else { viewport_offset };
-                        state.highlight = Some(TextHighlight {
-                            cells: candidates
-                                .iter()
-                                .flat_map(|matched| {
-                                    matched
-                                        .cells
-                                        .iter()
-                                        .map(|cell| (cell.x, row_offset.saturating_add(cell.y)))
-                                })
-                                .collect(),
-                            viewport_offset,
-                        });
-                        Ok(Some(
-                            candidates
-                                .into_iter()
-                                .map(|matched| matched.value)
-                                .collect(),
-                        ))
-                    }
-                    Err(error) => Err(TuiTestError::assertion(error.to_string())),
-                }
-            };
-            match outcome {
-                Ok(Some(matches)) => {
-                    resolved = Some(matches);
-                    last_error = None;
-                }
-                Ok(None) => {
-                    last_error = None;
-                }
-                Err(error) => {
-                    last_error = Some(error);
-                }
-            }
-            resolved.is_some() || session_stopped(session)
-        },
-        timeout_ms,
-    );
-    if let Some(matches) = resolved {
-        Ok(matches)
-    } else if let Some(error) = last_error {
-        Err(error)
-    } else if session_stopped(session) {
-        Err(TuiTestError::assertion(format!(
-            "session exited before '{}' could be highlighted",
-            selector.text
-        )))
-    } else {
-        Err(TuiTestError::assertion(format!(
-            "timed out after {} waiting for '{}' to highlight",
-            format_timeout(timeout_ms),
-            selector.text
         )))
     }
 }
@@ -2114,76 +1836,6 @@ fn expect_locator(
     } else {
         Err(TuiTestError::assertion(timeout_message(
             &description,
-            timeout_ms,
-            not,
-        )))
-    }
-}
-
-fn expect_selected_text(
-    session: &TerminalSession,
-    selector: &TextSelector,
-    not: bool,
-    style: &TextStyle,
-    timeout_ms: u64,
-) -> Result<(), TuiTestError> {
-    validate_selector(selector)?;
-    validate_style(style)?;
-    let mut last_error = None;
-    let mut matched = false;
-    poll_until(
-        || {
-            match locator::locate(&grid(session, selector.full), selector) {
-                Ok(candidates) if not => {
-                    let unexpected = if style.is_empty() {
-                        candidates.first()
-                    } else {
-                        candidates
-                            .iter()
-                            .find(|candidate| check_style(session, candidate, style).is_none())
-                    };
-                    matched = unexpected.is_none();
-                    if let Some(candidate) = unexpected {
-                        last_error = Some(format!(
-                            "unexpected '{}' match at row {}, column {}",
-                            selector.text, candidate.value.start.row, candidate.value.start.column
-                        ));
-                    }
-                }
-                Ok(candidates) => {
-                    last_error = None;
-                    matched = candidates.iter().any(|candidate| {
-                        if let Some(error) = check_style(session, candidate, style) {
-                            if last_error.is_none() {
-                                last_error = Some(error);
-                            }
-                            false
-                        } else {
-                            true
-                        }
-                    });
-                }
-                Err(error) => {
-                    matched = false;
-                    last_error = Some(error.to_string());
-                }
-            }
-            matched || session_stopped(session)
-        },
-        timeout_ms,
-    );
-    if matched {
-        Ok(())
-    } else if let Some(error) = last_error {
-        Err(TuiTestError::assertion(error))
-    } else if session_stopped(session) {
-        Err(TuiTestError::assertion(format!(
-            "session exited before '{}' matched",
-            selector.text
-        )))
-    } else {
-        Err(TuiTestError::assertion(timeout_message(
-            &selector.text,
             timeout_ms,
             not,
         )))
@@ -2821,6 +2473,7 @@ mod tests {
         let query = LocatorQuery {
             selector: LocatorSelector::Text(selector),
             within: Some(Box::new(LocatorQuery::text(parent))),
+            style: Default::default(),
         };
         let candidates = locator::locate_query(&rows, &query, &mut |_, _| false).unwrap();
         assert_eq!(
@@ -2845,7 +2498,9 @@ mod tests {
         let mut selector = TextSelector::new("save");
         selector.full = true;
         selector.occurrence = crate::api::MatchOccurrence::Unique;
-        let error = locate_click_point(&rows, &selector, 1, 2).unwrap_err();
+        let query = LocatorQuery::text(selector);
+        let candidates = locator::locate_query(&rows, &query, &mut |_, _| false).unwrap();
+        let error = click_point_from_candidates(candidates, "save", true, 1, 2).unwrap_err();
         assert!(error.message.contains("outside the visible viewport"));
     }
 

@@ -4,7 +4,6 @@ import type {
   Cell,
   Cursor,
   EffectiveTimeouts,
-  ExpectTextOptions,
   MouseClickOptions,
   OpenOptions,
   OpenResult,
@@ -16,10 +15,8 @@ import type {
   SnapshotOptions,
   State,
   TextMatch,
-  TextSelectorOptions,
   Timeouts,
   TitleOptions,
-  WaitTextOptions,
 } from "../native/index.js";
 
 type NativeBinding = typeof import("../native/index.js");
@@ -171,43 +168,6 @@ export class NativeRuntime {
 
   text(full = false): Promise<string> {
     return this.#call((session) => session.text(full));
-  }
-
-  findText(text: string, options?: TextSelectorOptions): Promise<TextMatch[]> {
-    return this.#call((session) => session.findText(text, options));
-  }
-
-  waitTextSelector(
-    text: string,
-    options: TextSelectorOptions | undefined,
-    not = false,
-    timeoutMs?: number,
-  ): Promise<void> {
-    return this.#call((session) =>
-      session.waitTextSelector(text, options, not, timeoutMs),
-    );
-  }
-
-  clickText(
-    text: string,
-    options: TextSelectorOptions | undefined,
-    button = 0,
-    clicks = 1,
-    timeoutMs?: number,
-  ): Promise<void> {
-    return this.#call((session) =>
-      session.clickText(text, options, button, clicks, timeoutMs),
-    );
-  }
-
-  highlightText(
-    text: string,
-    options: TextSelectorOptions | undefined,
-    timeoutMs?: number,
-  ): Promise<TextMatch[]> {
-    return this.#call((session) =>
-      session.highlightText(text, options, timeoutMs),
-    );
   }
 
   findLocator(queryJson: string): Promise<TextMatch[]> {
@@ -366,10 +326,6 @@ export class NativeRuntime {
     return this.#call((session) => session.signal(name));
   }
 
-  waitText(text: string, options?: WaitTextOptions): Promise<void> {
-    return this.#call((session) => session.waitText(text, options));
-  }
-
   waitTitle(text: string, options?: TitleOptions): Promise<void> {
     return this.#call((session) => session.waitTitle(text, options));
   }
@@ -396,10 +352,6 @@ export class NativeRuntime {
 
   expectTitle(text: string, options?: TitleOptions): Promise<void> {
     return this.#call((session) => session.expectTitle(text, options));
-  }
-
-  expectText(text: string, options?: ExpectTextOptions): Promise<void> {
-    return this.#call((session) => session.expectText(text, options));
   }
 
   expectExitCode(code: number, timeoutMs?: number): Promise<void> {
@@ -454,7 +406,6 @@ export type {
   Cell as NativeCell,
   Cursor as NativeCursor,
   EffectiveTimeouts as NativeEffectiveTimeouts,
-  ExpectTextOptions as NativeExpectTextOptions,
   MouseClickOptions as NativeMouseClickOptions,
   OpenOptions as NativeOpenOptions,
   OpenResult as NativeOpenResult,
@@ -466,7 +417,5 @@ export type {
   SnapshotOptions as NativeSnapshotOptions,
   State as NativeState,
   TextMatch as NativeTextMatch,
-  TextSelectorOptions as NativeTextSelectorOptions,
   Timeouts as NativeTimeouts,
-  WaitTextOptions as NativeWaitTextOptions,
 };

@@ -2,15 +2,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use tui_test::{
-    Backend, Engine, KeyAction, OpenOptions, Operation, OperationResult, RecordingFormat,
-    RunOptions, ScreenshotResult, TextSelector, TextStyle, TuiTestError,
+    Backend, Engine, KeyAction, LocatorQuery, OpenOptions, Operation, OperationResult,
+    RecordingFormat, RunOptions, ScreenshotResult, TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
 /// Bump when a client and same-package-version daemon can no longer exchange
 /// every request and response.
-pub const DAEMON_PROTOCOL_VERSION: u32 = 1;
+pub const DAEMON_PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -123,32 +123,30 @@ pub enum Request {
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
-    FindText {
-        selector: TextSelector,
+    FindLocator {
+        query: LocatorQuery,
     },
-    WaitTextSelector {
-        selector: TextSelector,
+    WaitLocator {
+        query: LocatorQuery,
         not: bool,
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
-    ClickText {
-        selector: TextSelector,
+    ClickLocator {
+        query: LocatorQuery,
         button: u8,
         clicks: u8,
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
-    HighlightText {
-        selector: TextSelector,
+    HighlightLocator {
+        query: LocatorQuery,
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
-    ExpectTextSelector {
-        selector: TextSelector,
+    ExpectLocator {
+        query: LocatorQuery,
         not: bool,
-        #[serde(default)]
-        style: TextStyle,
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
@@ -316,34 +314,30 @@ impl Request {
             Request::WaitExit { timeout_ms } => Ok(Operation::WaitExit { timeout_ms }),
             Request::WaitReady { timeout_ms } => Ok(Operation::WaitReady { timeout_ms }),
             Request::WaitBell { timeout_ms } => Ok(Operation::WaitBell { timeout_ms }),
-            Request::FindText { selector } => Ok(Operation::FindText { selector }),
-            Request::WaitTextSelector {
-                selector,
+            Request::FindLocator { query } => Ok(Operation::FindLocator { query }),
+            Request::WaitLocator {
+                query,
                 not,
                 timeout_ms,
-            } => Ok(Operation::WaitTextSelector {
-                selector,
+            } => Ok(Operation::WaitLocator {
+                query,
                 not,
                 timeout_ms,
             }),
-            Request::ClickText {
-                selector,
+            Request::ClickLocator {
+                query,
                 button,
                 clicks,
                 timeout_ms,
-            } => Ok(Operation::ClickText {
-                selector,
+            } => Ok(Operation::ClickLocator {
+                query,
                 button,
                 clicks,
                 timeout_ms,
             }),
-            Request::HighlightText {
-                selector,
-                timeout_ms,
-            } => Ok(Operation::HighlightText {
-                selector,
-                timeout_ms,
-            }),
+            Request::HighlightLocator { query, timeout_ms } => {
+                Ok(Operation::HighlightLocator { query, timeout_ms })
+            }
             Request::ExpectText {
                 text,
                 regex,
@@ -363,15 +357,14 @@ impl Request {
                 bg,
                 timeout_ms,
             }),
-            Request::ExpectTextSelector {
-                selector,
+            Request::ExpectLocator {
+                query,
                 not,
-                style,
                 timeout_ms,
-            } => Ok(Operation::ExpectTextSelector {
-                selector,
+            } => Ok(Operation::ExpectLocator {
+                query,
                 not,
-                style,
+                style: Default::default(),
                 timeout_ms,
             }),
             Request::ExpectTitle {

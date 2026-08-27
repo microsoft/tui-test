@@ -75,6 +75,7 @@ impl Locator {
             query: LocatorQuery {
                 selector: LocatorSelector::Text(selector.into()),
                 within: Some(Box::new(self.query.clone())),
+                style: Default::default(),
             },
         }
     }
@@ -85,6 +86,7 @@ impl Locator {
             query: LocatorQuery {
                 selector: LocatorSelector::Style(selector.into()),
                 within: Some(Box::new(self.query.clone())),
+                style: Default::default(),
             },
         }
     }

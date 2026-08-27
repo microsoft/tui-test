@@ -41,7 +41,8 @@ MAPPING = {
     "wait": [("client", "wait_title"), ("client", "wait_text"), ("client", "wait_idle"), ("client", "wait_command"), ("client", "wait_exit"), ("client", "wait_bell")],
     "expect": [("client", "expect_title"), ("client", "expect_text"), ("client", "expect_exit_code"), ("client", "expect_output"), ("client", "expect_bell_count"), ("client", "expect_snapshot")],
     "find": [("client", "find_text")],
-    "locator": [("client", "get_by_text")],
+    "click": [("client", "get_by_text")],
+    "highlight": [("client", "get_by_text")],
     "get-recording": [("module", "get_recording")],
 }
 

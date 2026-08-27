@@ -382,22 +382,22 @@ fn a_session_timeout_default_applies_to_later_commands() {
 }
 
 #[test]
-fn locator_actions_share_one_selector_contract() {
-    let sandbox = Sandbox::new("locator-actions");
+fn text_actions_share_one_selector_contract() {
+    let sandbox = Sandbox::new("text-actions");
     sandbox.ok(&["open"]);
     let command = if cfg!(windows) {
-        "Write-Output 'locator    target'"
+        "[Console]::Write(([char]27+'[1mlocator    target'+[char]27+'[0m'+[Environment]::NewLine))"
     } else {
-        "printf 'locator    target\\n'"
+        "printf '\\033[1mlocator    target\\033[0m\\n'"
     };
     sandbox.ok(&["submit", command]);
     sandbox.ok(&[
-        "locator",
+        "wait",
+        "text",
         "locator target",
         "--whitespace",
         "normalize",
-        "--action",
-        "wait",
+        "--bold",
         "--timeout",
         "5000",
     ]);
@@ -405,29 +405,31 @@ fn locator_actions_share_one_selector_contract() {
 
     let response: serde_json::Value = serde_json::from_str(&sandbox.ok(&[
         "--json",
-        "locator",
+        "find",
+        "text",
         "locator target",
         "--whitespace",
         "normalize",
+        "--bold",
     ]))
-    .expect("parse locator locations");
+    .expect("parse text locations");
     assert!(
         response["data"]["matches"]
             .as_array()
             .is_some_and(|matches| !matches.is_empty()),
-        "locator should return match locations: {response}"
+        "find should return match locations: {response}"
     );
 
     let before = sandbox.home.join("before-highlight.svg");
     let after = sandbox.home.join("after-highlight.svg");
     sandbox.ok(&["screenshot", "--out", before.to_str().unwrap()]);
     sandbox.ok(&[
-        "locator",
+        "highlight",
+        "text",
         "locator target",
         "--whitespace",
         "normalize",
-        "--action",
-        "highlight",
+        "--bold",
     ]);
     sandbox.ok(&["screenshot", "--out", after.to_str().unwrap()]);
     assert_ne!(
@@ -437,14 +439,14 @@ fn locator_actions_share_one_selector_contract() {
     );
 
     sandbox.ok(&[
-        "locator",
+        "click",
+        "text",
         "locator target",
         "--whitespace",
         "normalize",
         "--match",
         "last",
-        "--action",
-        "click",
+        "--bold",
         "--timeout",
         "5000",
     ]);

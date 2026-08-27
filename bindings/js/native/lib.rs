@@ -11,14 +11,12 @@ use tui_test::shell::Shell as CoreShell;
 use tui_test::{
     global_registry, Backend as CoreBackend, BellEvent as CoreBellEvent, Cell as CoreCell,
     CellColor, Cursor as CoreCursor, EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind,
-    KeyAction, LocatorQuery as CoreLocatorQuery, MatchOccurrence as CoreMatchOccurrence,
-    MouseAction, OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation,
-    OperationResult, RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
+    KeyAction, LocatorQuery as CoreLocatorQuery, MouseAction, OpenOptions as CoreOpenOptions,
+    OpenResult as CoreOpenResult, Operation, OperationResult,
+    RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
     ScreenshotResult as CoreScreenshotResult, SessionHandle, Size as CoreSize,
-    SnapshotResult as CoreSnapshotResult, State as CoreState, TextAnchor as CoreTextAnchor,
-    TextMatch as CoreTextMatch, TextScope as CoreTextScope, TextSelector as CoreTextSelector,
+    SnapshotResult as CoreSnapshotResult, State as CoreState, TextMatch as CoreTextMatch,
     TextStyle as CoreTextStyle, Timeouts as CoreTimeouts, TuiTestError,
-    WhitespaceMode as CoreWhitespaceMode,
 };
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
@@ -413,68 +411,10 @@ pub struct MouseClickOptions {
 }
 
 #[napi(object)]
-pub struct WaitTextOptions {
-    pub regex: Option<bool>,
-    pub full: Option<bool>,
-    pub not: Option<bool>,
-    pub timeout_ms: Option<f64>,
-}
-
-#[napi(object)]
 pub struct TitleOptions {
     pub regex: Option<bool>,
     pub not: Option<bool>,
     pub timeout_ms: Option<f64>,
-}
-
-#[derive(Default)]
-#[napi(object)]
-pub struct ExpectTextOptions {
-    pub regex: Option<bool>,
-    pub full: Option<bool>,
-    pub strict: Option<bool>,
-    pub whitespace: Option<String>,
-    pub occurrence: Option<String>,
-    pub nth: Option<f64>,
-    pub after_text: Option<String>,
-    pub after_regex: Option<bool>,
-    pub after_occurrence: Option<String>,
-    pub after_nth: Option<f64>,
-    pub before_text: Option<String>,
-    pub before_regex: Option<bool>,
-    pub before_occurrence: Option<String>,
-    pub before_nth: Option<f64>,
-    pub not: Option<bool>,
-    pub fg: Option<String>,
-    pub bg: Option<String>,
-    pub bold: Option<bool>,
-    pub dim: Option<bool>,
-    pub italic: Option<bool>,
-    pub underline_style: Option<String>,
-    pub underline_color: Option<String>,
-    pub inverse: Option<bool>,
-    pub hidden: Option<bool>,
-    pub strikethrough: Option<bool>,
-    pub blink: Option<bool>,
-    pub timeout_ms: Option<f64>,
-}
-
-#[derive(Default)]
-#[napi(object)]
-pub struct TextSelectorOptions {
-    pub regex: Option<bool>,
-    pub full: Option<bool>,
-    pub whitespace: Option<String>,
-    pub occurrence: Option<String>,
-    pub nth: Option<f64>,
-    pub after_text: Option<String>,
-    pub after_regex: Option<bool>,
-    pub after_occurrence: Option<String>,
-    pub after_nth: Option<f64>,
-    pub before_text: Option<String>,
-    pub before_regex: Option<bool>,
-    pub before_occurrence: Option<String>,
-    pub before_nth: Option<f64>,
 }
 
 #[napi(object)]
@@ -585,94 +525,6 @@ fn u16_value(value: f64, name: &str) -> std::result::Result<u16, TuiTestError> {
 
 fn u8_value(value: f64, name: &str) -> std::result::Result<u8, TuiTestError> {
     Ok(integer(value, name, u64::from(u8::MAX))? as u8)
-}
-
-fn core_occurrence(
-    value: Option<String>,
-    nth: Option<f64>,
-    default: CoreMatchOccurrence,
-    name: &str,
-) -> std::result::Result<CoreMatchOccurrence, TuiTestError> {
-    if let Some(index) = nth {
-        if value.as_deref().is_some_and(|value| value != "nth") {
-            return Err(TuiTestError::usage(format!(
-                "{name} cannot combine occurrence '{value:?}' with nth"
-            )));
-        }
-        return Ok(CoreMatchOccurrence::Nth(
-            integer(index, name, usize::MAX as u64)? as usize,
-        ));
-    }
-    match value.as_deref() {
-        None => Ok(default),
-        Some("any") => Ok(CoreMatchOccurrence::Any),
-        Some("unique") => Ok(CoreMatchOccurrence::Unique),
-        Some("first") => Ok(CoreMatchOccurrence::First),
-        Some("last") => Ok(CoreMatchOccurrence::Last),
-        Some("nth") => Err(TuiTestError::usage(format!("{name} requires an nth index"))),
-        Some(value) => Err(TuiTestError::usage(format!(
-            "{name} must be any, unique, first, last, or nth (got '{value}')"
-        ))),
-    }
-}
-
-fn core_anchor(
-    text: Option<String>,
-    regex: Option<bool>,
-    occurrence: Option<String>,
-    nth: Option<f64>,
-    name: &str,
-) -> std::result::Result<Option<CoreTextAnchor>, TuiTestError> {
-    match text {
-        Some(text) => Ok(Some(CoreTextAnchor {
-            text,
-            regex: regex.unwrap_or(false),
-            occurrence: core_occurrence(occurrence, nth, CoreMatchOccurrence::Unique, name)?,
-        })),
-        None if regex.unwrap_or(false) || occurrence.is_some() || nth.is_some() => Err(
-            TuiTestError::usage(format!("{name} options require anchor text")),
-        ),
-        None => Ok(None),
-    }
-}
-
-fn core_selector(
-    text: String,
-    options: TextSelectorOptions,
-    default: CoreMatchOccurrence,
-) -> std::result::Result<CoreTextSelector, TuiTestError> {
-    let whitespace = match options.whitespace.as_deref() {
-        None | Some("exact") => CoreWhitespaceMode::Exact,
-        Some("normalize") => CoreWhitespaceMode::Normalize,
-        Some(value) => {
-            return Err(TuiTestError::usage(format!(
-                "whitespace must be exact or normalize (got '{value}')"
-            )))
-        }
-    };
-    Ok(CoreTextSelector {
-        text,
-        regex: options.regex.unwrap_or(false),
-        full: options.full.unwrap_or(false),
-        whitespace,
-        scope: CoreTextScope {
-            after: core_anchor(
-                options.after_text,
-                options.after_regex,
-                options.after_occurrence,
-                options.after_nth,
-                "afterNth",
-            )?,
-            before: core_anchor(
-                options.before_text,
-                options.before_regex,
-                options.before_occurrence,
-                options.before_nth,
-                "beforeNth",
-            )?,
-        },
-        occurrence: core_occurrence(options.occurrence, options.nth, default, "nth")?,
-    })
 }
 
 fn i32_value(value: f64, name: &str) -> std::result::Result<i32, TuiTestError> {
@@ -886,103 +738,6 @@ impl NativeSession {
                 _ => Err(unexpected("text")),
             },
         )
-        .await
-    }
-
-    #[napi]
-    pub async fn find_text(
-        &self,
-        text: String,
-        options: Option<TextSelectorOptions>,
-    ) -> Result<Vec<TextMatch>> {
-        let handle = self.handle.clone();
-        blocking("findText", move || {
-            let selector =
-                core_selector(text, options.unwrap_or_default(), CoreMatchOccurrence::Any)?;
-            match handle.execute(Operation::FindText { selector })? {
-                OperationResult::Matches(matches) => {
-                    Ok(matches.into_iter().map(TextMatch::from).collect())
-                }
-                _ => Err(unexpected("findText")),
-            }
-        })
-        .await
-    }
-
-    #[napi]
-    pub async fn wait_text_selector(
-        &self,
-        text: String,
-        options: Option<TextSelectorOptions>,
-        not: Option<bool>,
-        timeout_ms: Option<f64>,
-    ) -> Result<()> {
-        let handle = self.handle.clone();
-        blocking("waitTextSelector", move || {
-            let selector =
-                core_selector(text, options.unwrap_or_default(), CoreMatchOccurrence::Any)?;
-            match handle.execute(Operation::WaitTextSelector {
-                selector,
-                not: not.unwrap_or(false),
-                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
-            })? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("waitTextSelector")),
-            }
-        })
-        .await
-    }
-
-    #[napi]
-    pub async fn click_text(
-        &self,
-        text: String,
-        options: Option<TextSelectorOptions>,
-        button: Option<f64>,
-        clicks: Option<f64>,
-        timeout_ms: Option<f64>,
-    ) -> Result<()> {
-        let handle = self.handle.clone();
-        blocking("clickText", move || {
-            let selector = core_selector(
-                text,
-                options.unwrap_or_default(),
-                CoreMatchOccurrence::Unique,
-            )?;
-            match handle.execute(Operation::ClickText {
-                selector,
-                button: u8_value(button.unwrap_or(0.0), "button")?,
-                clicks: u8_value(clicks.unwrap_or(1.0), "clicks")?,
-                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
-            })? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("clickText")),
-            }
-        })
-        .await
-    }
-
-    #[napi]
-    pub async fn highlight_text(
-        &self,
-        text: String,
-        options: Option<TextSelectorOptions>,
-        timeout_ms: Option<f64>,
-    ) -> Result<Vec<TextMatch>> {
-        let handle = self.handle.clone();
-        blocking("highlightText", move || {
-            let selector =
-                core_selector(text, options.unwrap_or_default(), CoreMatchOccurrence::Any)?;
-            match handle.execute(Operation::HighlightText {
-                selector,
-                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
-            })? {
-                OperationResult::Matches(matches) => {
-                    Ok(matches.into_iter().map(TextMatch::from).collect())
-                }
-                _ => Err(unexpected("highlightText")),
-            }
-        })
         .await
     }
 
@@ -1512,31 +1267,6 @@ impl NativeSession {
     }
 
     #[napi]
-    pub async fn wait_text(&self, text: String, options: Option<WaitTextOptions>) -> Result<()> {
-        let options = options.unwrap_or(WaitTextOptions {
-            regex: None,
-            full: None,
-            not: None,
-            timeout_ms: None,
-        });
-        let handle = self.handle.clone();
-        blocking("waitText", move || {
-            let operation = Operation::WaitText {
-                text,
-                regex: options.regex.unwrap_or(false),
-                full: options.full.unwrap_or(false),
-                timeout_ms: timeout(options.timeout_ms, "timeoutMs")?,
-                not: options.not.unwrap_or(false),
-            };
-            match handle.execute(operation)? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("waitText")),
-            }
-        })
-        .await
-    }
-
-    #[napi]
     pub async fn wait_idle(&self, timeout_ms: Option<f64>) -> Result<()> {
         self.timeout_unit("waitIdle", timeout_ms, |timeout_ms| Operation::WaitIdle {
             timeout_ms,
@@ -1572,65 +1302,6 @@ impl NativeSession {
     pub async fn wait_bell(&self, timeout_ms: Option<f64>) -> Result<()> {
         self.timeout_unit("waitBell", timeout_ms, |timeout_ms| Operation::WaitBell {
             timeout_ms,
-        })
-        .await
-    }
-
-    #[napi]
-    pub async fn expect_text(
-        &self,
-        text: String,
-        options: Option<ExpectTextOptions>,
-    ) -> Result<()> {
-        let options = options.unwrap_or_default();
-        let handle = self.handle.clone();
-        blocking("expectText", move || {
-            let default = if options.strict.unwrap_or(true) {
-                CoreMatchOccurrence::Unique
-            } else {
-                CoreMatchOccurrence::First
-            };
-            let selector = core_selector(
-                text,
-                TextSelectorOptions {
-                    regex: options.regex,
-                    full: options.full,
-                    whitespace: options.whitespace,
-                    occurrence: options.occurrence,
-                    nth: options.nth,
-                    after_text: options.after_text,
-                    after_regex: options.after_regex,
-                    after_occurrence: options.after_occurrence,
-                    after_nth: options.after_nth,
-                    before_text: options.before_text,
-                    before_regex: options.before_regex,
-                    before_occurrence: options.before_occurrence,
-                    before_nth: options.before_nth,
-                },
-                default,
-            )?;
-            let operation = Operation::ExpectTextSelector {
-                selector,
-                not: options.not.unwrap_or(false),
-                style: CoreTextStyle {
-                    foreground: options.fg,
-                    background: options.bg,
-                    bold: options.bold,
-                    dim: options.dim,
-                    italic: options.italic,
-                    underline_style: options.underline_style,
-                    underline_color: options.underline_color,
-                    inverse: options.inverse,
-                    hidden: options.hidden,
-                    strikethrough: options.strikethrough,
-                    blink: options.blink,
-                },
-                timeout_ms: timeout(options.timeout_ms, "timeoutMs")?,
-            };
-            match handle.execute(operation)? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("expectText")),
-            }
         })
         .await
     }

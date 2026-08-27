@@ -467,7 +467,9 @@ test("get-by locators are lazy, chainable, and actionable", async () => {
 });
 
 test("panic containment rejects as InternalError and Node keeps running", async () => {
-  const runtime = new NativeRuntime(uniqueSession("panic-probe"));
+  const name = uniqueSession("panic-probe");
+  const runtime = new NativeRuntime(name);
+  const client = new TuiTest(name);
   await assert.rejects(
     runtime.panicProbe(),
     (error) =>
@@ -477,7 +479,7 @@ test("panic containment rejects as InternalError and Node keeps running", async 
 
   try {
     await runtime.run({ program: process.execPath, args: evalArgs });
-    await runtime.waitText("ready", { timeoutMs: 2000 });
+    await client.waitText("ready", { timeout: 2000 });
     assert.match(await runtime.text(), /ready/);
   } finally {
     await runtime.close();

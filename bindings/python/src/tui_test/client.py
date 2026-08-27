@@ -442,8 +442,23 @@ class Locator:
         style: Optional[TextStyle] = None,
         timeout: Optional[int] = None,
     ) -> None:
+        await self._expect(
+            not_=not_,
+            style=style,
+            timeout=timeout,
+            op_name="locator.expect",
+        )
+
+    async def _expect(
+        self,
+        *,
+        not_: bool,
+        style: Optional[TextStyle],
+        timeout: Optional[int],
+        op_name: str,
+    ) -> None:
         await self._client._guarded(
-            "locator.expect",
+            op_name,
             self._client._native.expect_locator(
                 json.dumps(
                     [
@@ -950,7 +965,7 @@ class TuiTest:
         style: Optional[TextStyle] = None,
         timeout: Optional[int] = None,
     ) -> None:
-        selector = _selector_value(
+        locator = self.get_by_text(
             text,
             regex=regex,
             full=full,
@@ -968,12 +983,11 @@ class TuiTest:
             style_value["foreground"] = fg
         if style_value["background"] is None:
             style_value["background"] = bg
-        await self._guarded(
-            "expect_text",
-            self._native.expect_text_selector(
-                json.dumps([selector, style_value, not_]),
-                self._timeout("text", timeout),
-            ),
+        await locator._expect(
+            not_=not_,
+            style=TextStyle(**style_value),
+            timeout=timeout,
+            op_name="expect_text",
         )
 
     async def expect_exit_code(

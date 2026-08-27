@@ -342,35 +342,20 @@ pub enum Command {
         #[command(subcommand)]
         what: ExpectCmd,
     },
-    /// Compatibility locations helper; prefer `locator`.
+    /// Find current terminal matches and return their locations.
     Find {
         #[command(subcommand)]
         what: FindCmd,
     },
-    /// Locate text and resolve an action against the current terminal grid.
-    ///
-    /// Click waits for one match by default; highlight marks all matches. Use
-    /// --match first|last or --nth to select from repeated text.
-    Locator {
-        /// Text or regular expression to locate.
-        text: String,
-        #[command(flatten)]
-        selector: TextSelectorArgs,
-        /// Resolve locations, wait, click, or highlight.
-        #[arg(long, value_enum, default_value_t = LocatorActionArg::Locations)]
-        action: LocatorActionArg,
-        /// For --action wait, wait until the locator is absent.
-        #[arg(long)]
-        not: bool,
-        /// Timeout in milliseconds for wait, click, or highlight.
-        #[arg(long, value_name = "MS")]
-        timeout: Option<u64>,
-        /// Mouse button for --action click: 0 left, 1 middle, 2 right.
-        #[arg(long)]
-        button: Option<u8>,
-        /// Number of clicks for --action click.
-        #[arg(long)]
-        clicks: Option<u8>,
+    /// Wait for one text query, then click its middle cell.
+    Click {
+        #[command(subcommand)]
+        what: ClickCmd,
+    },
+    /// Highlight text matching the query and optional style constraints.
+    Highlight {
+        #[command(subcommand)]
+        what: HighlightCmd,
     },
     /// Print the session's recording (asciinema v2 cast) to stdout.
     ///
@@ -766,22 +751,23 @@ mod tests {
         ])
         .expect("parse find text");
         let Some(Command::Find {
-            what: FindCmd::Text { selector, .. },
+            what: FindCmd::Text { query },
         }) = cli.command
         else {
             panic!("expected Find text");
         };
-        assert_eq!(selector.after_text.as_deref(), Some("Settings"));
-        assert_eq!(selector.after_match, Some(MatchArg::Last));
-        assert_eq!(selector.whitespace, WhitespaceArg::Normalize);
-        assert_eq!(selector.nth, Some(1));
+        assert_eq!(query.selector.after_text.as_deref(), Some("Settings"));
+        assert_eq!(query.selector.after_match, Some(MatchArg::Last));
+        assert_eq!(query.selector.whitespace, WhitespaceArg::Normalize);
+        assert_eq!(query.selector.nth, Some(1));
     }
 
     #[test]
-    fn locator_accepts_selector_and_action_options() {
+    fn click_text_accepts_selector_style_and_action_options() {
         let cli = Cli::try_parse_from([
             "tui-test",
-            "locator",
+            "click",
+            "text",
             "Save",
             "--after-text",
             "Settings",
@@ -789,26 +775,23 @@ mod tests {
             "normalize",
             "--nth",
             "1",
-            "--action",
-            "click",
+            "--fg",
+            "2",
             "--clicks",
             "2",
         ])
-        .expect("parse locator action");
-        let Some(Command::Locator {
-            selector,
-            action,
-            clicks,
-            ..
+        .expect("parse click text");
+        let Some(Command::Click {
+            what: ClickCmd::Text { query, clicks, .. },
         }) = cli.command
         else {
-            panic!("expected locator");
+            panic!("expected click text");
         };
-        assert_eq!(selector.after_text.as_deref(), Some("Settings"));
-        assert_eq!(selector.whitespace, WhitespaceArg::Normalize);
-        assert_eq!(selector.nth, Some(1));
-        assert_eq!(action, LocatorActionArg::Click);
-        assert_eq!(clicks, Some(2));
+        assert_eq!(query.selector.after_text.as_deref(), Some("Settings"));
+        assert_eq!(query.selector.whitespace, WhitespaceArg::Normalize);
+        assert_eq!(query.selector.nth, Some(1));
+        assert_eq!(query.style.fg.as_deref(), Some("2"));
+        assert_eq!(clicks, 2);
     }
 
     #[test]
@@ -825,14 +808,14 @@ mod tests {
         ])
         .expect("parse styled expectation");
         let Some(Command::Expect {
-            what: ExpectCmd::Text { style, .. },
+            what: ExpectCmd::Text { query, .. },
         }) = cli.command
         else {
             panic!("expected Expect text");
         };
-        assert_eq!(style.bold, Some(true));
-        assert_eq!(style.italic, Some(false));
-        assert_eq!(style.underline_style.as_deref(), Some("curly"));
+        assert_eq!(query.style.bold, Some(true));
+        assert_eq!(query.style.italic, Some(false));
+        assert_eq!(query.style.underline_style.as_deref(), Some("curly"));
     }
 
     #[test]
@@ -1065,16 +1048,6 @@ pub enum MatchArg {
     Last,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
-#[clap(rename_all = "lower")]
-pub enum LocatorActionArg {
-    #[default]
-    Locations,
-    Wait,
-    Click,
-    Highlight,
-}
-
 #[derive(Args)]
 pub struct TextSelectorArgs {
     /// Treat the target text as a regular expression.
@@ -1156,13 +1129,52 @@ pub struct TextStyleArgs {
     pub blink: Option<bool>,
 }
 
+#[derive(Args)]
+pub struct TextQueryArgs {
+    /// Text or regular expression to match.
+    pub text: String,
+    #[command(flatten)]
+    pub selector: TextSelectorArgs,
+    #[command(flatten)]
+    pub style: Box<TextStyleArgs>,
+}
+
 #[derive(Subcommand)]
 pub enum FindCmd {
     /// Find text and return its row/column spans.
     Text {
-        text: String,
         #[command(flatten)]
-        selector: TextSelectorArgs,
+        query: TextQueryArgs,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ClickCmd {
+    /// Wait for matching text, then click its middle cell.
+    Text {
+        #[command(flatten)]
+        query: TextQueryArgs,
+        /// Mouse button: 0 left, 1 middle, 2 right.
+        #[arg(long, default_value_t = 0)]
+        button: u8,
+        /// Number of clicks.
+        #[arg(long, default_value_t = 1)]
+        clicks: u8,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum HighlightCmd {
+    /// Wait for matching text, then highlight every selected occurrence.
+    Text {
+        #[command(flatten)]
+        query: TextQueryArgs,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
     },
 }
 
@@ -1170,14 +1182,8 @@ pub enum FindCmd {
 pub enum WaitCmd {
     /// Wait until text/regex appears on screen (the most precise wait).
     Text {
-        /// Text or regex to wait for.
-        text: String,
-        /// Treat <text> as a regular expression.
-        #[arg(long)]
-        regex: bool,
-        /// Search the full scrollback, not just the visible viewport.
-        #[arg(long)]
-        full: bool,
+        #[command(flatten)]
+        query: TextQueryArgs,
         /// Invert: wait until the text is NOT present.
         #[arg(long)]
         not: bool,
@@ -1247,9 +1253,8 @@ pub enum WaitCmd {
 pub enum ExpectCmd {
     /// Assert text is visible, optionally with a required color.
     Text {
-        text: String,
         #[command(flatten)]
-        selector: TextSelectorArgs,
+        query: TextQueryArgs,
         /// Allow multiple matches instead of requiring exactly one.
         #[arg(
             long = "no-strict",
@@ -1259,8 +1264,6 @@ pub enum ExpectCmd {
         /// Invert: assert the text is NOT present.
         #[arg(long)]
         not: bool,
-        #[command(flatten)]
-        style: Box<TextStyleArgs>,
         /// Timeout in milliseconds.
         #[arg(long, value_name = "MS")]
         timeout: Option<u64>,

@@ -80,8 +80,7 @@ without parsing text:
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, timeouts, and a text snapshot. |
 | `text [--full]`                                     | Rendered viewport text, or full scrollback with `--full`.                                                           |
-| `locator "T" [selector options] [--action A]`       | Resolve locations (default), wait, click, or highlight using one text selector.                                    |
-| `find text "T" [selector options]`                  | Selected matches with zero-based row/column spans.                                                                  |
+| `find text "T" [selector/style options]`            | Current matches with zero-based row/column spans.                                                                   |
 | `screenshot [PATH] [-o FILE] [--full] [--zoom N]`   | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.                           |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags) for a region.                                                             |
 | `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | One structured field.                                                                                        |
@@ -95,6 +94,7 @@ without parsing text:
 | `key press <Key...>`                                                       | Simulate key presses, e.g. `key press Ctrl+C`.                               |
 | `key down <Key...>` / `key up <Key...>`                                    | Simulate explicit keydown and keyup events.                                  |
 | `key repeat <Key...>`                                                      | Send repeat events (press-equivalent in legacy mode).                        |
+| `click text "T" [selector/style options]`                                  | Auto-wait for one match and click its middle cell.                           |
 | `mouse click X Y` / `mouse click --on-text "OK" [--button N] [--clicks N]` | Click by coordinates or by visible label.                                    |
 | `mouse move\|down\|up\|drag\|scroll ...`                                   | Full mouse control (`--button` default 0=left, `scroll --amount` default 3). |
 
@@ -118,7 +118,7 @@ and `Meta`. Top-level `press` remains a compatibility alias for `key press`.
 
 | Command                                             | Description                                                                                |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `wait text "T" [--regex --full --not --timeout MS]` | Until text/regex is (with `--not`, is not) visible. Most precise wait.                     |
+| `wait text "T" [selector/style options] [--not --timeout MS]` | Until the complete query is (with `--not`, is not) matched.                               |
 | `wait title "T" [--regex --not --timeout MS]`       | Until the window title (`OSC 0`/`OSC 2`) matches. Programs announce progress there.        |
 | `wait idle [--timeout MS]`                          | Until the screen stops repainting (~250ms quiet).                                          |
 | `wait command [--timeout MS]`                       | Until the current foreground command finishes (needs shell integration).                   |
@@ -145,11 +145,11 @@ also accept `--after-match` / `--before-match` and `--after-nth` /
 `--before-nth`. Styles include `--fg`, `--bg`, boolean SGR attributes such as
 `--bold[=false]`, and underline style/color.
 
-`locator "T"` returns match locations by default. `--action wait` waits on the
-same selector, `--action click` waits for one match and clicks its middle cell,
-and `--action highlight` marks every selected match in the live monitor and SVG
-screenshots until the terminal redraws. Use `--match first|last|unique` or
-`--nth N` to narrow repeated text.
+`find`, `wait`, `expect`, `click`, and `highlight` text commands accept the
+same selector and style flags. `click text` auto-waits for one match and clicks
+its middle cell. `highlight text` marks every selected match in the live
+monitor and SVG screenshots until the terminal redraws. Use
+`--match first|last|unique` or `--nth N` to narrow repeated text.
 
 ### Recording, monitor & self-docs
 

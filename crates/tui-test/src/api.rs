@@ -275,6 +275,8 @@ pub struct LocatorQuery {
     pub selector: LocatorSelector,
     #[serde(default)]
     pub within: Option<Box<LocatorQuery>>,
+    #[serde(default)]
+    pub style: TextStyle,
 }
 
 impl LocatorQuery {
@@ -282,6 +284,7 @@ impl LocatorQuery {
         Self {
             selector: LocatorSelector::Text(selector.into()),
             within: None,
+            style: TextStyle::default(),
         }
     }
 
@@ -289,6 +292,7 @@ impl LocatorQuery {
         Self {
             selector: LocatorSelector::Style(selector.into()),
             within: None,
+            style: TextStyle::default(),
         }
     }
 
@@ -376,24 +380,6 @@ pub enum Operation {
     WaitBell {
         timeout_ms: Option<u64>,
     },
-    FindText {
-        selector: TextSelector,
-    },
-    WaitTextSelector {
-        selector: TextSelector,
-        not: bool,
-        timeout_ms: Option<u64>,
-    },
-    ClickText {
-        selector: TextSelector,
-        button: u8,
-        clicks: u8,
-        timeout_ms: Option<u64>,
-    },
-    HighlightText {
-        selector: TextSelector,
-        timeout_ms: Option<u64>,
-    },
     FindLocator {
         query: LocatorQuery,
     },
@@ -426,12 +412,6 @@ pub enum Operation {
         not: bool,
         fg: Option<String>,
         bg: Option<String>,
-        timeout_ms: Option<u64>,
-    },
-    ExpectTextSelector {
-        selector: TextSelector,
-        not: bool,
-        style: TextStyle,
         timeout_ms: Option<u64>,
     },
     ExpectTitle {
@@ -843,6 +823,7 @@ mod tests {
         let child = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("child")),
             within: Some(Box::new(LocatorQuery::text(parent))),
+            style: Default::default(),
         };
         assert!(child.uses_full_grid());
 
@@ -851,6 +832,7 @@ mod tests {
         let query = LocatorQuery {
             selector: LocatorSelector::Text(full_child),
             within: Some(Box::new(LocatorQuery::text("parent"))),
+            style: Default::default(),
         };
         assert!(query.uses_full_grid());
     }

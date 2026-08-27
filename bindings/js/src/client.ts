@@ -16,7 +16,6 @@ import type { TimeoutClass } from "./config.js";
 import { uniqueSession } from "./ephemeral.js";
 import { ExpectationError, TuiTestError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
-import type { NativeTextSelectorOptions } from "./native.js";
 import type {
   BellEvent,
   Cell,
@@ -229,27 +228,6 @@ function occurrenceOptions(occurrence?: TextOccurrence): {
   return { occurrence: "nth", nth: occurrence.nth };
 }
 
-function selectorOptions(opts: TextSelectorOptions): NativeTextSelectorOptions {
-  const after = opts.scope?.after;
-  const before = opts.scope?.before;
-  const afterOccurrence = occurrenceOptions(after?.occurrence);
-  const beforeOccurrence = occurrenceOptions(before?.occurrence);
-  return {
-    regex: opts.regex ?? false,
-    full: opts.full ?? false,
-    whitespace: opts.whitespace ?? "exact",
-    ...occurrenceOptions(opts.occurrence),
-    afterText: after?.text,
-    afterRegex: after?.regex,
-    afterOccurrence: afterOccurrence.occurrence,
-    afterNth: afterOccurrence.nth,
-    beforeText: before?.text,
-    beforeRegex: before?.regex,
-    beforeOccurrence: beforeOccurrence.occurrence,
-    beforeNth: beforeOccurrence.nth,
-  };
-}
-
 type CoreOccurrence = string | { nth: number };
 
 interface CoreSelectorValue {
@@ -376,6 +354,7 @@ interface LocatorActions {
   expect(
     query: LocatorQueryValue,
     expectation: LocatorExpectOptions,
+    operation: string,
   ): Promise<void>;
   fail(operation: string, message: string): Promise<never>;
 }
@@ -531,7 +510,18 @@ class LocatorImpl implements Locator {
   }
 
   expect(opts: LocatorExpectOptions = {}): Promise<void> {
-    return this.#actions.expect(this.#query, opts);
+    return this.#expect(opts, "locator.expect");
+  }
+
+  expectWithOperation(
+    opts: LocatorExpectOptions,
+    operation: string,
+  ): Promise<void> {
+    return this.#expect(opts, operation);
+  }
+
+  #expect(opts: LocatorExpectOptions, operation: string): Promise<void> {
+    return this.#actions.expect(this.#query, opts, operation);
   }
 }
 
@@ -642,9 +632,9 @@ export class TuiTest {
             this.#timeout("text", timeout),
           );
         }),
-      expect: (value, expectation) => {
+      expect: (value, expectation, operation) => {
         const style = expectation.style ?? {};
-        return this.#guard("locator.expect", () =>
+        return this.#guard(operation, () =>
           this.#runtime.expectLocator(
             JSON.stringify([
               value,
@@ -972,25 +962,33 @@ export class TuiTest {
   }
 
   async expectText(text: string, opts: ExpectTextOptions = {}): Promise<void> {
-    const style = opts.style ?? {};
-    await this.#guard("expectText", () =>
-      this.#runtime.expectText(text, {
-        ...selectorOptions(opts),
-        strict: opts.strict ?? true,
-        not: opts.not ?? false,
-        fg: style.foreground ?? opts.fg,
-        bg: style.background ?? opts.bg,
-        bold: style.bold,
-        dim: style.dim,
-        italic: style.italic,
-        underlineStyle: style.underlineStyle,
-        underlineColor: style.underlineColor,
-        inverse: style.inverse,
-        hidden: style.hidden,
-        strikethrough: style.strikethrough,
-        blink: style.blink,
-        timeoutMs: this.#timeout("text", opts.timeout),
+    const {
+      strict = true,
+      not = false,
+      fg,
+      bg,
+      style = {},
+      timeout,
+      ...selector
+    } = opts;
+    const locator = this.#makeLocator(
+      textQuery(text, {
+        ...selector,
+        occurrence:
+          selector.occurrence ?? (strict ? "unique" : "first"),
       }),
+    );
+    await locator.expectWithOperation(
+      {
+        not,
+        style: {
+          ...style,
+          foreground: style.foreground ?? fg,
+          background: style.background ?? bg,
+        },
+        timeout,
+      },
+      "expectText",
     );
   }
 

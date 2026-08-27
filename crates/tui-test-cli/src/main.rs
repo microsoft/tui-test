@@ -13,12 +13,15 @@ use std::time::{Duration, Instant};
 use clap::{CommandFactory, Parser};
 
 use cli::{
-    Cli, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, KeyCmd, LocatorActionArg, MatchArg,
-    MouseCmd, RecordCmd, TextSelectorArgs, TextStyleArgs, WaitCmd, WhitespaceArg,
+    Cli, ClickCmd, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, HighlightCmd, KeyCmd, MatchArg,
+    MouseCmd, RecordCmd, TextQueryArgs, TextSelectorArgs, TextStyleArgs, WaitCmd, WhitespaceArg,
 };
 use protocol::DAEMON_PROTOCOL_VERSION;
 use protocol::{GetField, MouseAction, Request, Response};
-use tui_test::{MatchOccurrence, TextAnchor, TextScope, TextSelector, TextStyle, WhitespaceMode};
+use tui_test::{
+    LocatorQuery, LocatorSelector, MatchOccurrence, TextAnchor, TextScope, TextSelector, TextStyle,
+    WhitespaceMode,
+};
 /// Long-form agent skill manifest, printed by `tui-test skill`.
 const SKILL_MD: &str = include_str!("../../../SKILL.md");
 
@@ -277,15 +280,8 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         },
         Command::Wait { what } => map_wait(what),
         Command::Find { what } => map_find(what),
-        Command::Locator {
-            text,
-            selector,
-            action,
-            not,
-            timeout,
-            button,
-            clicks,
-        } => map_locator(text, selector, action, not, timeout, button, clicks)?,
+        Command::Click { what } => map_click(what),
+        Command::Highlight { what } => map_highlight(what),
         Command::Expect { what } => map_expect(what),
         _ => anyhow::bail!("unsupported command"),
     };
@@ -370,15 +366,11 @@ fn map_mouse(action: MouseCmd) -> MouseAction {
 fn map_wait(what: WaitCmd) -> Request {
     match what {
         WaitCmd::Text {
-            text,
-            regex,
-            full,
+            query,
             not,
             timeout,
-        } => Request::WaitText {
-            text,
-            regex,
-            full,
+        } => Request::WaitLocator {
+            query: map_query(query, MatchOccurrence::Any),
             timeout_ms: timeout,
             not,
         },
@@ -484,73 +476,57 @@ fn map_style(args: TextStyleArgs) -> TextStyle {
     }
 }
 
+fn map_query(args: TextQueryArgs, default: MatchOccurrence) -> LocatorQuery {
+    LocatorQuery {
+        selector: LocatorSelector::Text(map_selector(args.text, args.selector, default)),
+        within: None,
+        style: map_style(*args.style),
+    }
+}
+
 fn map_find(what: FindCmd) -> Request {
     match what {
-        FindCmd::Text { text, selector } => Request::FindText {
-            selector: map_selector(text, selector, MatchOccurrence::Any),
+        FindCmd::Text { query } => Request::FindLocator {
+            query: map_query(query, MatchOccurrence::Any),
         },
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn map_locator(
-    text: String,
-    selector: TextSelectorArgs,
-    action: LocatorActionArg,
-    not: bool,
-    timeout_ms: Option<u64>,
-    button: Option<u8>,
-    clicks: Option<u8>,
-) -> anyhow::Result<Request> {
-    if not && action != LocatorActionArg::Wait {
-        anyhow::bail!("--not is only valid with --action wait");
-    }
-    if action != LocatorActionArg::Click && (button.is_some() || clicks.is_some()) {
-        anyhow::bail!("--button and --clicks are only valid with --action click");
-    }
-    if action == LocatorActionArg::Locations && timeout_ms.is_some() {
-        anyhow::bail!("--timeout is only valid with --action wait, click, or highlight");
-    }
-    let default = match action {
-        LocatorActionArg::Locations | LocatorActionArg::Wait | LocatorActionArg::Highlight => {
-            MatchOccurrence::Any
-        }
-        LocatorActionArg::Click => MatchOccurrence::Unique,
-    };
-    let selector = map_selector(text, selector, default);
-    Ok(match action {
-        LocatorActionArg::Locations => Request::FindText { selector },
-        LocatorActionArg::Wait => Request::WaitTextSelector {
-            selector,
-            not,
-            timeout_ms,
+fn map_click(what: ClickCmd) -> Request {
+    match what {
+        ClickCmd::Text {
+            query,
+            button,
+            clicks,
+            timeout,
+        } => Request::ClickLocator {
+            query: map_query(query, MatchOccurrence::Unique),
+            button,
+            clicks,
+            timeout_ms: timeout,
         },
-        LocatorActionArg::Click => Request::ClickText {
-            selector,
-            button: button.unwrap_or(0),
-            clicks: clicks.unwrap_or(1),
-            timeout_ms,
+    }
+}
+
+fn map_highlight(what: HighlightCmd) -> Request {
+    match what {
+        HighlightCmd::Text { query, timeout } => Request::HighlightLocator {
+            query: map_query(query, MatchOccurrence::Any),
+            timeout_ms: timeout,
         },
-        LocatorActionArg::Highlight => Request::HighlightText {
-            selector,
-            timeout_ms,
-        },
-    })
+    }
 }
 
 fn map_expect(what: ExpectCmd) -> Request {
     match what {
         ExpectCmd::Text {
-            text,
-            selector,
+            query,
             no_strict,
             not,
-            style,
             timeout,
-        } => Request::ExpectTextSelector {
-            selector: map_selector(
-                text,
-                selector,
+        } => Request::ExpectLocator {
+            query: map_query(
+                query,
                 if no_strict {
                     MatchOccurrence::First
                 } else {
@@ -558,7 +534,6 @@ fn map_expect(what: ExpectCmd) -> Request {
                 },
             ),
             not,
-            style: map_style(*style),
             timeout_ms: timeout,
         },
         ExpectCmd::Title {
@@ -1181,20 +1156,21 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           run [--config F] [--profile P] [--restart] <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
-          locator \"T\" [selector options] [--action locations|wait|click|highlight]\n\
-          find text \"T\" [selector options] | cells X Y [W H]\n\
+          find text \"T\" [selector/style options] | cells X Y [W H]\n\
           get command|output|exit-code|cwd|cursor|size|title|bells|bell-events\n\
 INPUT     type \"text\" | submit [\"text\"]\n\
           key press|down|repeat|up <Key...>\n\
+          click text \"T\" [selector/style options] [--button N --clicks N]\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
-WAIT      wait text \"T\" [--regex --full --not --timeout MS]\n\
+WAIT      wait text \"T\" [selector/style options] [--not --timeout MS]\n\
           wait title \"T\" [--regex --not --timeout MS]\n\
           wait idle | wait command | wait exit | wait ready | wait bell\n\
 EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex] | expect bell N\n\
           expect snapshot NAME [-u] [--include-colors --include-title]\n\
+DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
 WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
@@ -1294,63 +1270,72 @@ mod tests {
             "1",
         ])
         .unwrap();
-        let Request::FindText { selector } = build_request(cli.command.expect("command")).unwrap()
+        let Request::FindLocator { query } = build_request(cli.command.expect("command")).unwrap()
         else {
             panic!("expected find text request");
         };
-        assert_eq!(selector.scope.after.unwrap().text, "Settings");
+        let LocatorSelector::Text(selector) = &query.selector else {
+            panic!("expected text locator");
+        };
+        assert_eq!(selector.scope.after.as_ref().unwrap().text, "Settings");
         assert_eq!(selector.whitespace, WhitespaceMode::Normalize);
         assert_eq!(selector.occurrence, MatchOccurrence::Nth(1));
     }
 
     #[test]
-    fn locator_click_maps_to_one_strict_action_request() {
+    fn click_text_maps_to_one_strict_action_request() {
         let cli = Cli::try_parse_from([
             "tui-test",
-            "locator",
+            "click",
+            "text",
             "Save",
             "--after-text",
             "Settings",
-            "--action",
-            "click",
+            "--fg",
+            "2",
         ])
         .unwrap();
-        let Request::ClickText {
-            selector,
+        let Request::ClickLocator {
+            query,
             button,
             clicks,
             ..
         } = build_request(cli.command.expect("command")).unwrap()
         else {
-            panic!("expected click text request");
+            panic!("expected click locator request");
         };
-        assert_eq!(selector.scope.after.unwrap().text, "Settings");
+        let LocatorSelector::Text(selector) = &query.selector else {
+            panic!("expected text locator");
+        };
+        assert_eq!(selector.scope.after.as_ref().unwrap().text, "Settings");
         assert_eq!(selector.occurrence, MatchOccurrence::Unique);
+        assert_eq!(query.style.foreground.as_deref(), Some("2"));
         assert_eq!(button, 0);
         assert_eq!(clicks, 1);
     }
 
     #[test]
-    fn locator_wait_defaults_to_all_matches_and_supports_not() {
-        let cli =
-            Cli::try_parse_from(["tui-test", "locator", "Saving", "--action", "wait", "--not"])
-                .unwrap();
-        let Request::WaitTextSelector { selector, not, .. } =
+    fn wait_text_defaults_to_all_matches_and_supports_styles_and_not() {
+        let cli = Cli::try_parse_from([
+            "tui-test", "wait", "text", "Saving", "--fg", "yellow", "--not",
+        ])
+        .unwrap();
+        let Request::WaitLocator { query, not, .. } =
             build_request(cli.command.expect("command")).unwrap()
         else {
-            panic!("expected wait text selector request");
+            panic!("expected wait locator request");
+        };
+        let LocatorSelector::Text(selector) = &query.selector else {
+            panic!("expected text locator");
         };
         assert_eq!(selector.occurrence, MatchOccurrence::Any);
+        assert_eq!(query.style.foreground.as_deref(), Some("yellow"));
         assert!(not);
     }
 
     #[test]
-    fn locator_rejects_options_for_another_action() {
-        let cli = Cli::try_parse_from(["tui-test", "locator", "Save", "--clicks", "2"]).unwrap();
-        assert!(build_request(cli.command.expect("command"))
-            .unwrap_err()
-            .to_string()
-            .contains("--action click"));
+    fn removed_locator_command_is_rejected() {
+        assert!(Cli::try_parse_from(["tui-test", "locator", "Save"]).is_err());
     }
 
     #[test]
@@ -1367,15 +1352,17 @@ mod tests {
             "curly",
         ])
         .unwrap();
-        let Request::ExpectTextSelector {
-            selector, style, ..
-        } = build_request(cli.command.expect("command")).unwrap()
+        let Request::ExpectLocator { query, .. } =
+            build_request(cli.command.expect("command")).unwrap()
         else {
             panic!("expected styled text request");
         };
+        let LocatorSelector::Text(selector) = &query.selector else {
+            panic!("expected text locator");
+        };
         assert_eq!(selector.occurrence, MatchOccurrence::First);
-        assert_eq!(style.bold, Some(true));
-        assert_eq!(style.underline_style.as_deref(), Some("curly"));
+        assert_eq!(query.style.bold, Some(true));
+        assert_eq!(query.style.underline_style.as_deref(), Some("curly"));
     }
 
     #[test]

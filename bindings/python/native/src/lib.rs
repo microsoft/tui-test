@@ -10,8 +10,7 @@ use tui_test::shell::Shell;
 use tui_test::{
     Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, KeyAction, LocatorQuery, MouseAction,
     OpenOptions, OpenResult, Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions,
-    ScreenshotResult, Size, SnapshotResult, State, TextMatch, TextSelector, TextStyle, Timeouts,
-    TuiTestError,
+    ScreenshotResult, Size, SnapshotResult, State, TextMatch, TextStyle, Timeouts, TuiTestError,
 };
 
 pyo3::create_exception!(
@@ -229,109 +228,6 @@ impl NativeSession {
             py,
             move || execute_text(&name, Operation::Text { full }),
             string_to_py,
-        )
-    }
-
-    fn find_text<'py>(
-        &self,
-        py: Python<'py>,
-        selector_json: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
-        future_blocking(
-            py,
-            move || {
-                let selector: TextSelector = serde_json::from_str(&selector_json)
-                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
-                execute_matches(&name, Operation::FindText { selector })
-            },
-            matches_to_py,
-        )
-    }
-
-    #[pyo3(signature = (selector_json, not_, timeout_ms))]
-    fn wait_text_selector<'py>(
-        &self,
-        py: Python<'py>,
-        selector_json: String,
-        not_: bool,
-        timeout_ms: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
-        future_blocking(
-            py,
-            move || {
-                let selector: TextSelector = serde_json::from_str(&selector_json)
-                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
-                execute_unit(
-                    &name,
-                    Operation::WaitTextSelector {
-                        selector,
-                        not: not_,
-                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
-                    },
-                )
-            },
-            unit_to_py,
-        )
-    }
-
-    #[pyo3(signature = (selector_json, button, clicks, timeout_ms))]
-    fn click_text<'py>(
-        &self,
-        py: Python<'py>,
-        selector_json: String,
-        button: Bound<'py, PyAny>,
-        clicks: Bound<'py, PyAny>,
-        timeout_ms: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let button = capture_integer(&button);
-        let clicks = capture_integer(&clicks);
-        let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
-        future_blocking(
-            py,
-            move || {
-                let selector: TextSelector = serde_json::from_str(&selector_json)
-                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
-                execute_unit(
-                    &name,
-                    Operation::ClickText {
-                        selector,
-                        button: integer_u8(&button, "button")?,
-                        clicks: integer_u8(&clicks, "clicks")?,
-                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
-                    },
-                )
-            },
-            unit_to_py,
-        )
-    }
-
-    #[pyo3(signature = (selector_json, timeout_ms))]
-    fn highlight_text<'py>(
-        &self,
-        py: Python<'py>,
-        selector_json: String,
-        timeout_ms: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
-        future_blocking(
-            py,
-            move || {
-                let selector: TextSelector = serde_json::from_str(&selector_json)
-                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
-                execute_matches(
-                    &name,
-                    Operation::HighlightText {
-                        selector,
-                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
-                    },
-                )
-            },
-            matches_to_py,
         )
     }
 
@@ -912,36 +808,6 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (text, regex, full, not_, timeout_ms))]
-    fn wait_text<'py>(
-        &self,
-        py: Python<'py>,
-        text: String,
-        regex: bool,
-        full: bool,
-        not_: bool,
-        timeout_ms: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
-        future_blocking(
-            py,
-            move || {
-                execute_unit(
-                    &name,
-                    Operation::WaitText {
-                        text,
-                        regex,
-                        full,
-                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
-                        not: not_,
-                    },
-                )
-            },
-            unit_to_py,
-        )
-    }
-
     #[pyo3(signature = (text, regex, not_, timeout_ms))]
     fn wait_title<'py>(
         &self,
@@ -1100,72 +966,6 @@ impl NativeSession {
                         text,
                         regex,
                         not: not_,
-                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
-                    },
-                )
-            },
-            unit_to_py,
-        )
-    }
-
-    #[pyo3(signature = (text, regex, full, strict, not_, fg, bg, timeout_ms))]
-    #[allow(clippy::too_many_arguments)]
-    fn expect_text<'py>(
-        &self,
-        py: Python<'py>,
-        text: String,
-        regex: bool,
-        full: bool,
-        strict: bool,
-        not_: bool,
-        fg: Option<String>,
-        bg: Option<String>,
-        timeout_ms: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
-        future_blocking(
-            py,
-            move || {
-                execute_unit(
-                    &name,
-                    Operation::ExpectText {
-                        text,
-                        regex,
-                        full,
-                        strict,
-                        not: not_,
-                        fg,
-                        bg,
-                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
-                    },
-                )
-            },
-            unit_to_py,
-        )
-    }
-
-    #[pyo3(signature = (request_json, timeout_ms))]
-    fn expect_text_selector<'py>(
-        &self,
-        py: Python<'py>,
-        request_json: String,
-        timeout_ms: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
-        future_blocking(
-            py,
-            move || {
-                let (selector, style, not): (TextSelector, TextStyle, bool) =
-                    serde_json::from_str(&request_json)
-                        .map_err(|error| TuiTestError::usage(error.to_string()))?;
-                execute_unit(
-                    &name,
-                    Operation::ExpectTextSelector {
-                        selector,
-                        not,
-                        style,
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
                 )

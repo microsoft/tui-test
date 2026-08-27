@@ -8,10 +8,6 @@ export declare class NativeSession {
   close(): Promise<void>
   state(): Promise<State>
   text(full?: boolean | undefined | null): Promise<string>
-  findText(text: string, options?: TextSelectorOptions | undefined | null): Promise<Array<TextMatch>>
-  waitTextSelector(text: string, options?: TextSelectorOptions | undefined | null, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
-  clickText(text: string, options?: TextSelectorOptions | undefined | null, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
-  highlightText(text: string, options?: TextSelectorOptions | undefined | null, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
   findLocator(queryJson: string): Promise<Array<TextMatch>>
   waitLocator(queryJson: string, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
   clickLocator(queryJson: string, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
@@ -45,13 +41,11 @@ export declare class NativeSession {
   getTitle(): Promise<string | null>
   waitTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
   expectTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
-  waitText(text: string, options?: WaitTextOptions | undefined | null): Promise<void>
   waitIdle(timeoutMs?: number | undefined | null): Promise<void>
   waitCommand(timeoutMs?: number | undefined | null): Promise<void>
   waitExit(timeoutMs?: number | undefined | null): Promise<void>
   waitReady(timeoutMs?: number | undefined | null): Promise<void>
   waitBell(timeoutMs?: number | undefined | null): Promise<void>
-  expectText(text: string, options?: ExpectTextOptions | undefined | null): Promise<void>
   expectExitCode(code: number, timeoutMs?: number | undefined | null): Promise<void>
   expectOutput(text: string, regex?: boolean | undefined | null): Promise<void>
   expectBellCount(count: number, timeoutMs?: number | undefined | null): Promise<void>
@@ -110,36 +104,6 @@ export interface EffectiveTimeouts {
   command: number
   exit: number
   ready: number
-}
-
-export interface ExpectTextOptions {
-  regex?: boolean
-  full?: boolean
-  strict?: boolean
-  whitespace?: string
-  occurrence?: string
-  nth?: number
-  afterText?: string
-  afterRegex?: boolean
-  afterOccurrence?: string
-  afterNth?: number
-  beforeText?: string
-  beforeRegex?: boolean
-  beforeOccurrence?: string
-  beforeNth?: number
-  not?: boolean
-  fg?: string
-  bg?: string
-  bold?: boolean
-  dim?: boolean
-  italic?: boolean
-  underlineStyle?: string
-  underlineColor?: string
-  inverse?: boolean
-  hidden?: boolean
-  strikethrough?: boolean
-  blink?: boolean
-  timeoutMs?: number
 }
 
 export interface MouseClickOptions {
@@ -286,22 +250,6 @@ export interface TextPosition {
   column: number
 }
 
-export interface TextSelectorOptions {
-  regex?: boolean
-  full?: boolean
-  whitespace?: string
-  occurrence?: string
-  nth?: number
-  afterText?: string
-  afterRegex?: boolean
-  afterOccurrence?: string
-  afterNth?: number
-  beforeText?: string
-  beforeRegex?: boolean
-  beforeOccurrence?: string
-  beforeNth?: number
-}
-
 export interface TextSpan {
   row: number
   start: number
@@ -329,11 +277,4 @@ export declare const enum UnderlineStyle {
   Curly = 'curly',
   Dotted = 'dotted',
   Dashed = 'dashed'
-}
-
-export interface WaitTextOptions {
-  regex?: boolean
-  full?: boolean
-  not?: boolean
-  timeoutMs?: number
 }

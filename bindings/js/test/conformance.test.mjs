@@ -52,7 +52,8 @@ const MAPPING = {
   wait: [["client", "waitTitle"], ["client", "waitText"], ["client", "waitIdle"], ["client", "waitCommand"], ["client", "waitExit"], ["client", "waitBell"]],
   expect: [["client", "expectTitle"], ["client", "expectText"], ["client", "expectExitCode"], ["client", "expectOutput"], ["client", "expectBellCount"], ["client", "expectSnapshot"]],
   find: [["client", "findText"]],
-  locator: [["client", "getByText"]],
+  click: [["client", "getByText"]],
+  highlight: [["client", "getByText"]],
   "get-recording": [["module", "getRecording"]],
 };
 

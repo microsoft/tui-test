@@ -414,9 +414,11 @@ class LocatorTests(unittest.TestCase):
             )
         )
         name, args = terminal.fake.calls[1]
-        self.assertEqual(name, "expect_text_selector")
-        selector, style, not_ = json.loads(args[0])
-        self.assertEqual(selector["occurrence"], "first")
+        self.assertEqual(name, "expect_locator")
+        query, style, not_ = json.loads(args[0])
+        self.assertEqual(
+            query["selector"]["selector"]["occurrence"], "first"
+        )
         self.assertTrue(style["bold"])
         self.assertEqual(style["underline_style"], "curly")
         self.assertFalse(not_)
