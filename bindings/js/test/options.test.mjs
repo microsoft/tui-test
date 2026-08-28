@@ -166,8 +166,9 @@ test("constructor and per-run profile objects recolor the terminal", async () =>
     await su.getByText("constructor-profile").wait({ timeout: 5000 });
     await su
       .getByText("constructor-profile")
+      .getByStyle({ foreground: "#010203" })
       .unique()
-      .expect({ style: { foreground: "#010203" } });
+      .expect();
 
     await su.run(process.execPath, argsFor("call-profile"), {
       restart: true,
@@ -176,8 +177,9 @@ test("constructor and per-run profile objects recolor the terminal", async () =>
     await su.getByText("call-profile").wait({ timeout: 5000 });
     await su
       .getByText("call-profile")
+      .getByStyle({ foreground: "#040506" })
       .unique()
-      .expect({ style: { foreground: "#040506" } });
+      .expect();
   } finally {
     await su.closeQuiet();
   }

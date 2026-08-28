@@ -18,6 +18,7 @@ mod session;
 pub use api::*;
 pub use engine::Engine;
 pub use runtime::{
-    global_registry, Locator, LocatorClickOptions, Session, SessionHandle, SessionRegistry,
+    global_registry, Locator, LocatorClickOptions, LocatorExpectOptions, Session, SessionHandle,
+    SessionRegistry,
 };
 pub use terminal::backend::Backend;

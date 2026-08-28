@@ -423,7 +423,7 @@ fn map_anchor(
     })
 }
 
-fn map_selector(text: String, args: TextSelectorArgs, default: MatchOccurrence) -> TextSelector {
+fn map_selector(text: String, args: TextSelectorArgs) -> TextSelector {
     TextSelector {
         text,
         regex: args.regex,
@@ -446,7 +446,6 @@ fn map_selector(text: String, args: TextSelectorArgs, default: MatchOccurrence) 
                 args.before_nth,
             ),
         },
-        occurrence: map_occurrence(args.match_mode, args.nth, default),
     }
 }
 
@@ -467,8 +466,10 @@ fn map_style(args: TextStyleArgs) -> TextStyle {
 }
 
 fn map_query(args: TextQueryArgs, default: MatchOccurrence) -> LocatorQuery {
+    let occurrence = map_occurrence(args.selector.match_mode, args.selector.nth, default);
     LocatorQuery {
-        selector: LocatorSelector::Text(map_selector(args.text, args.selector, default)),
+        selector: LocatorSelector::Text(map_selector(args.text, args.selector)),
+        occurrence,
         within: None,
         direction: LocatorDirection::Within,
         style: map_style(*args.style),
@@ -515,7 +516,7 @@ fn map_expect(what: ExpectCmd) -> Request {
             not,
             timeout,
         } => Request::ExpectLocator {
-            query: map_query(query, MatchOccurrence::Unique),
+            query: map_query(query, MatchOccurrence::Any),
             not,
             timeout_ms: timeout,
         },
@@ -1237,7 +1238,7 @@ mod tests {
         };
         assert_eq!(selector.scope.after.as_ref().unwrap().text, "Settings");
         assert_eq!(selector.whitespace, WhitespaceMode::Normalize);
-        assert_eq!(selector.occurrence, MatchOccurrence::Nth(1));
+        assert_eq!(query.occurrence, MatchOccurrence::Nth(1));
     }
 
     #[test]
@@ -1266,7 +1267,7 @@ mod tests {
             panic!("expected text locator");
         };
         assert_eq!(selector.scope.after.as_ref().unwrap().text, "Settings");
-        assert_eq!(selector.occurrence, MatchOccurrence::Unique);
+        assert_eq!(query.occurrence, MatchOccurrence::Unique);
         assert_eq!(query.style.foreground.as_deref(), Some("2"));
         assert_eq!(button, 0);
         assert_eq!(clicks, 1);
@@ -1289,8 +1290,6 @@ mod tests {
             "expect",
             "text",
             "Warning",
-            "--match",
-            "first",
             "--bold",
             "--underline-style",
             "curly",
@@ -1301,10 +1300,8 @@ mod tests {
         else {
             panic!("expected styled text request");
         };
-        let LocatorSelector::Text(selector) = &query.selector else {
-            panic!("expected text locator");
-        };
-        assert_eq!(selector.occurrence, MatchOccurrence::First);
+        assert!(matches!(&query.selector, LocatorSelector::Text(_)));
+        assert_eq!(query.occurrence, MatchOccurrence::Any);
         assert_eq!(query.style.bold, Some(true));
         assert_eq!(query.style.underline_style.as_deref(), Some("curly"));
     }

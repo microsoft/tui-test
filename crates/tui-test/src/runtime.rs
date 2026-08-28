@@ -7,8 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::api::{
     LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, OpenOptions, OpenResult,
-    Operation, OperationResult, RunOptions, StyleSelector, TextMatch, TextSelector, TextStyle,
-    TuiTestError,
+    Operation, OperationResult, RunOptions, StyleSelector, TextMatch, TextSelector, TuiTestError,
 };
 use crate::engine::Engine;
 use crate::logger::Logger;
@@ -38,10 +37,9 @@ impl Default for LocatorClickOptions {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct LocatorExpectOptions {
     pub not: bool,
-    pub style: TextStyle,
     pub timeout_ms: Option<u64>,
 }
 
@@ -90,6 +88,7 @@ impl Locator {
             target: self.target.clone(),
             query: LocatorQuery {
                 selector: LocatorSelector::Text(selector.into()),
+                occurrence: MatchOccurrence::Any,
                 within: Some(Box::new(self.query.clone())),
                 direction,
                 style: Default::default(),
@@ -110,6 +109,7 @@ impl Locator {
             target: self.target.clone(),
             query: LocatorQuery {
                 selector: LocatorSelector::Style(selector.into()),
+                occurrence: MatchOccurrence::Any,
                 within: Some(Box::new(self.query.clone())),
                 direction,
                 style: Default::default(),
@@ -139,21 +139,21 @@ impl Locator {
 
     fn with_occurrence(&self, occurrence: MatchOccurrence) -> Self {
         let mut locator = self.clone();
-        *locator.query.selector.occurrence_mut() = occurrence;
+        locator.query.occurrence = occurrence;
         locator
     }
 
     fn strict_query(&self) -> LocatorQuery {
         let mut query = self.query.clone();
-        if query.selector.occurrence() == &MatchOccurrence::Any {
-            *query.selector.occurrence_mut() = MatchOccurrence::Unique;
+        if query.occurrence == MatchOccurrence::Any {
+            query.occurrence = MatchOccurrence::Unique;
         }
         query
     }
 
     pub fn all(&self) -> Result<Vec<Self>, TuiTestError> {
         let matches = self.locations()?;
-        if self.query.selector.occurrence() == &MatchOccurrence::Any {
+        if self.query.occurrence == MatchOccurrence::Any {
             Ok((0..matches.len()).map(|index| self.nth(index)).collect())
         } else {
             Ok(matches.into_iter().map(|_| self.clone()).collect())
@@ -254,10 +254,9 @@ impl Locator {
 
     pub fn expect_with(&self, options: LocatorExpectOptions) -> Result<(), TuiTestError> {
         self.target
-            .execute(Operation::ExpectLocator {
-                query: self.strict_query(),
+            .execute(Operation::WaitLocator {
+                query: self.query.clone(),
                 not: options.not,
-                style: options.style,
                 timeout_ms: options.timeout_ms,
             })
             .map(|_| ())

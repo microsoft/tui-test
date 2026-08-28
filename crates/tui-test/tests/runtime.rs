@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tui_test::{
-    global_registry, ErrorKind, LocatorDirection, LocatorQuery, MatchOccurrence, OpenOptions,
-    Operation, OperationResult, RunOptions, Session, SessionRegistry, TextSelector, TextStyle,
-    Timeouts,
+    global_registry, ErrorKind, LocatorDirection, LocatorExpectOptions, LocatorQuery,
+    MatchOccurrence, OpenOptions, Operation, OperationResult, RunOptions, Session, SessionRegistry,
+    TextSelector, TextStyle, Timeouts,
 };
 
 fn run_options(program: &str, args: &[&str]) -> RunOptions {
@@ -61,10 +61,9 @@ fn named_handles_share_a_process_local_terminal() {
         })
         .expect("wait for command");
     second
-        .execute(Operation::ExpectLocator {
+        .execute(Operation::WaitLocator {
             query: LocatorQuery::text("native-runtime"),
             not: false,
-            style: TextStyle::default(),
             timeout_ms: Some(5_000),
         })
         .expect("find command output");
@@ -212,7 +211,14 @@ fn text_locators_are_lazy_reusable_queries() {
         .wait_with_timeout(Some(5_000))
         .expect("wait with the same locator");
     assert_eq!(locator.count().expect("count current matches"), 2);
-    assert!(locator.expect().is_err());
+    locator.expect().expect("expect any matching result");
+    assert!(locator
+        .unique()
+        .expect_with(LocatorExpectOptions {
+            timeout_ms: Some(20),
+            ..LocatorExpectOptions::default()
+        })
+        .is_err());
     locator.first().expect().expect("expect one selected match");
     let relative = locator
         .first()
@@ -244,7 +250,7 @@ fn text_locators_are_lazy_reusable_queries() {
             .column
     );
     assert_eq!(
-        locator.unique().query().selector.occurrence(),
+        &locator.unique().query().occurrence,
         &MatchOccurrence::Unique
     );
     session.close().expect("close terminal");
@@ -323,6 +329,7 @@ fn text_and_style_locators_chain_against_the_live_grid() {
 
     let text_style = session.get_by_text("BOLD").get_by_style(bold).unique();
     assert_eq!(text_style.location().unwrap().text, "BOLD");
+    text_style.expect().expect("expect styled text");
     text_style.highlight().expect("highlight styled text");
     session.close().expect("close terminal");
 }

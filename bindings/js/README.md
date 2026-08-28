@@ -78,23 +78,30 @@ const second = items.nth(1);
 console.log(await second.location());
 
 await terminal
-  .getByStyle({ bold: true })
   .getByText("Warning")
-  .click();
+  .getByStyle({ bold: true })
+  .unique()
+  .expect();
 ```
 
 Locators support `any()`, `unique()`, `first()`, `last()`, `nth()`, `all()`,
 `count()`, `locations()`, `location()`, `wait()`, `expect()`, `click()`, and
 `highlight()`, plus chainable `getByText()` and `getByStyle()`. A style locator
 matches contiguous per-row cell runs with the requested colors or attributes.
-Each chained stage searches inside every selected parent match, and the whole
-chain is re-resolved for each action. Clicks target the middle cell and require
-one match unless a positional selector narrows the locator. Highlights appear
-in the live monitor and SVG screenshots until the terminal redraws. Like
-Playwright, `all()` captures the current list without waiting and returns lazy
+When chained with the default `within` direction, `getByStyle()` filters and
+preserves each parent match, requiring all of its visible cells to match the
+style. Each chain is re-resolved for every action. Clicks target the middle
+cell and require one match unless a positional selector narrows the locator.
+Highlights appear in the live monitor and SVG screenshots until the terminal
+redraws. Like Playwright, `all()` captures the current list without waiting and returns lazy
 `nth()` locators; wait first when the list is still loading. Chained searches
 default to `direction: "within"` and can use `"after"` or `"before"` for
-relative terminal regions.
+relative terminal regions. `getByText()` and `getByStyle()` always begin with
+all matches; select an occurrence only with `any()`, `unique()`, `first()`,
+`last()`, or `nth()`. An unselected locator's `expect()` succeeds when at
+least one match exists, while `unique().expect()` requires exactly one.
+`click()` and `location()` require one target and therefore treat an
+unselected locator as unique.
 
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 

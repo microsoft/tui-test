@@ -40,7 +40,6 @@ from .types import (
     RecordingFormat,
     State,
     TextMatch,
-    TextOccurrence,
     TextStyle,
     Timeouts,
 )
@@ -50,6 +49,7 @@ _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
 
 _T = TypeVar("_T")
 EnvLike = Union[Mapping[str, str], Iterable[Tuple[str, str]], None]
+_Occurrence = Union[Literal["any", "unique", "first", "last"], int]
 
 
 async def _await_native(awaitable: Awaitable[_T]) -> _T:
@@ -95,7 +95,7 @@ def _profile_values(
     return normalized.get("scrollback"), list(colors.items())
 
 
-def _occurrence_fields(value: TextOccurrence) -> Dict[str, object]:
+def _occurrence_fields(value: _Occurrence) -> Dict[str, object]:
     if isinstance(value, int) and not isinstance(value, bool):
         if value < 0:
             raise ValueError("text occurrence index must be non-negative")
@@ -113,7 +113,6 @@ def _text_stage_value(
     regex: bool,
     full: bool,
     whitespace: str,
-    occurrence: TextOccurrence,
     direction: LocatorDirection,
 ) -> Dict[str, object]:
     if direction not in ("within", "after", "before"):
@@ -125,7 +124,7 @@ def _text_stage_value(
         "regex": regex,
         "full": full,
         "whitespace": whitespace,
-        **_occurrence_fields(occurrence),
+        **_occurrence_fields("any"),
     }
 
 
@@ -135,7 +134,6 @@ def _text_query_value(
     regex: bool,
     full: bool,
     whitespace: str,
-    occurrence: TextOccurrence,
     direction: LocatorDirection,
     within: Optional[List[Dict[str, object]]],
 ) -> List[Dict[str, object]]:
@@ -146,7 +144,6 @@ def _text_query_value(
             regex=regex,
             full=full,
             whitespace=whitespace,
-            occurrence=occurrence,
             direction=direction,
         )
     )
@@ -157,7 +154,6 @@ def _style_query_value(
     style: TextStyle,
     *,
     full: bool,
-    occurrence: TextOccurrence,
     direction: LocatorDirection,
     within: Optional[List[Dict[str, object]]],
 ) -> List[Dict[str, object]]:
@@ -173,7 +169,7 @@ def _style_query_value(
             "direction": direction,
             "style": style_value,
             "full": full,
-            **_occurrence_fields(occurrence),
+            **_occurrence_fields("any"),
         }
     )
     return stages
@@ -251,7 +247,7 @@ class Locator:
         self._client = client
         self._query = copy.deepcopy(query)
 
-    def _with_occurrence(self, occurrence: TextOccurrence) -> "Locator":
+    def _with_occurrence(self, occurrence: _Occurrence) -> "Locator":
         query = copy.deepcopy(self._query)
         query[-1].update(_occurrence_fields(occurrence))
         return Locator(self._client, query)
@@ -286,7 +282,6 @@ class Locator:
         regex: bool = False,
         full: bool = False,
         whitespace: str = "exact",
-        occurrence: TextOccurrence = "any",
         direction: LocatorDirection = "within",
     ) -> "Locator":
         return self._client._make_text_locator(
@@ -294,7 +289,6 @@ class Locator:
             regex=regex,
             full=full,
             whitespace=whitespace,
-            occurrence=occurrence,
             direction=direction,
             within=self._query,
         )
@@ -304,13 +298,11 @@ class Locator:
         style: TextStyle,
         *,
         full: bool = False,
-        occurrence: TextOccurrence = "any",
         direction: LocatorDirection = "within",
     ) -> "Locator":
         return self._client._make_style_locator(
             style,
             full=full,
-            occurrence=occurrence,
             direction=direction,
             within=self._query,
         )
@@ -408,14 +400,12 @@ class Locator:
         self,
         *,
         not_: bool = False,
-        style: Optional[TextStyle] = None,
         timeout: Optional[int] = None,
     ) -> None:
         await self._client._guarded(
             "locator.expect",
             self._client._native.expect_locator(
-                self._strict_query(),
-                asdict(style or TextStyle()),
+                self._query,
                 not_,
                 self._client._timeout("text", timeout),
             ),
@@ -642,14 +632,12 @@ class TuiTest:
         regex: bool = False,
         full: bool = False,
         whitespace: str = "exact",
-        occurrence: TextOccurrence = "any",
     ) -> Locator:
         return self._make_text_locator(
             text,
             regex=regex,
             full=full,
             whitespace=whitespace,
-            occurrence=occurrence,
             direction="within",
             within=None,
         )
@@ -661,7 +649,6 @@ class TuiTest:
         regex: bool,
         full: bool,
         whitespace: str,
-        occurrence: TextOccurrence,
         direction: LocatorDirection,
         within: Optional[List[Dict[str, object]]],
     ) -> Locator:
@@ -672,7 +659,6 @@ class TuiTest:
                 regex=regex,
                 full=full,
                 whitespace=whitespace,
-                occurrence=occurrence,
                 direction=direction,
                 within=within,
             ),
@@ -683,12 +669,10 @@ class TuiTest:
         style: TextStyle,
         *,
         full: bool = False,
-        occurrence: TextOccurrence = "any",
     ) -> Locator:
         return self._make_style_locator(
             style,
             full=full,
-            occurrence=occurrence,
             direction="within",
             within=None,
         )
@@ -698,7 +682,6 @@ class TuiTest:
         style: TextStyle,
         *,
         full: bool,
-        occurrence: TextOccurrence,
         direction: LocatorDirection,
         within: Optional[List[Dict[str, object]]],
     ) -> Locator:
@@ -707,7 +690,6 @@ class TuiTest:
             _style_query_value(
                 style,
                 full=full,
-                occurrence=occurrence,
                 direction=direction,
                 within=within,
             ),

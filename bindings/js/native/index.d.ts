@@ -12,7 +12,7 @@ export declare class NativeSession {
   waitLocator(stages: Array<LocatorStage>, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
   clickLocator(stages: Array<LocatorStage>, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
   highlightLocator(stages: Array<LocatorStage>, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
-  expectLocator(stages: Array<LocatorStage>, style?: LocatorStyle | undefined | null, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  expectLocator(stages: Array<LocatorStage>, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
   packedScreen(full?: boolean | undefined | null): Promise<PackedScreen>
   cells(x: number, y: number, w?: number | undefined | null, h?: number | undefined | null): Promise<Array<Cell>>
   getCommand(): Promise<string | null>

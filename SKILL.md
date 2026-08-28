@@ -148,7 +148,8 @@ also accept `--after-match` / `--before-match` and `--after-nth` /
 selector and style flags. `click text` auto-waits for one match and clicks its
 middle cell. `highlight text` marks every selected match in the live
 monitor and SVG screenshots until the terminal redraws. Use
-`--match first|last|unique` or `--nth N` to narrow repeated text.
+`--match first|last|unique` or `--nth N` to narrow repeated text. `find`,
+`expect`, and `highlight` default to any match.
 
 ### Recording, monitor & self-docs
 
@@ -383,8 +384,14 @@ lazy locators in the three languages. Every text or contiguous style-run stage
 can be chained and is resolved again for each read or action, so the same
 locator can wait and then click the current match. Locators support `any`,
 `unique`, `first`, `last`, `nth`, `all`, match locations, click-at-center, and
-highlighting and expectations. Chained stages search `within`, `after`, or `before` the
-dynamically resolved parent match.
+highlighting, and expectations. Chained stages search `within`, `after`, or
+`before` the dynamically resolved parent match. Programmatic selectors always
+start with all matches; select occurrences only by chaining `any`, `unique`,
+`first`, `last`, or `nth`. `expect` succeeds when any selected match exists;
+`unique().expect()` requires exactly one. Compose style expectations as a
+nested `get_by_style` / `getByStyle` stage. With the default `within`
+direction, it filters and preserves parent matches whose visible cells all
+satisfy the style.
 
 The constructors accept a session name plus backend, profile, timeout, and
 artifact options: `TuiTest(session="default", *, backend=None, timeouts=None,

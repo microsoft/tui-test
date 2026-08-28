@@ -367,13 +367,21 @@ Selectors support exact or normalized whitespace, full scrollback, regular
 expressions, `after` / `before` anchors, and
 `any|unique|first|last|nth` occurrence selection. Click is strict unless the
 selector chooses one occurrence. Highlighted cells appear in the live monitor
-and SVG screenshots until the terminal redraws.
+and SVG screenshots until the terminal redraws. `find`, `expect`, and
+`highlight` default to any match; use `--match unique` when exactly one is
+required.
 
 The Rust, Python, and JavaScript APIs expose chainable `get_by_text` /
 `getByText` and `get_by_style` / `getByStyle` locators. Each stage searches
 `within`, `after`, or `before` the dynamically resolved parent match. Rust
 uses `get_by_text_relative(..., LocatorDirection::After)`; Python and
 JavaScript pass `direction="after"` / `{ direction: "after" }`.
+Programmatic selectors always start with all matches, and occurrence selection
+is expressed only by chaining `any`, `unique`, `first`, `last`, or `nth`.
+`expect` succeeds when any selected match exists; add `unique` to require
+exactly one. Style expectations are composed with a nested `get_by_style` /
+`getByStyle` locator. With the default `within` direction, that stage filters
+and preserves parent matches whose visible cells all satisfy the style.
 
 #### PTY control
 

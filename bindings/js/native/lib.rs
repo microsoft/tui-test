@@ -649,7 +649,6 @@ fn core_query(stages: Vec<LocatorStage>) -> std::result::Result<CoreLocatorQuery
                     full: stage.full.unwrap_or(false),
                     whitespace,
                     scope: Default::default(),
-                    occurrence,
                 })
             }
             LocatorStageKind::Style => {
@@ -666,12 +665,12 @@ fn core_query(stages: Vec<LocatorStage>) -> std::result::Result<CoreLocatorQuery
                         TuiTestError::usage("style locator stage requires style")
                     })?),
                     full: stage.full.unwrap_or(false),
-                    occurrence,
                 })
             }
         };
         parent = Some(CoreLocatorQuery {
             selector,
+            occurrence,
             within: parent.map(Box::new),
             direction: match stage.direction {
                 None | Some(LocatorStageDirection::Within) => CoreLocatorDirection::Within,
@@ -985,17 +984,15 @@ impl NativeSession {
     pub async fn expect_locator(
         &self,
         stages: Vec<LocatorStage>,
-        style: Option<LocatorStyle>,
         not: Option<bool>,
         timeout_ms: Option<f64>,
     ) -> Result<()> {
         let handle = self.handle.clone();
         blocking("expectLocator", move || {
             let query = core_query(stages)?;
-            match handle.execute(Operation::ExpectLocator {
+            match handle.execute(Operation::WaitLocator {
                 query,
                 not: not.unwrap_or(false),
-                style: style.map(core_style).unwrap_or_default(),
                 timeout_ms: timeout(timeout_ms, "timeoutMs")?,
             })? {
                 OperationResult::Unit => Ok(()),

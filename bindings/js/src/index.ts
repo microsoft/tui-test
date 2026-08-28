@@ -10,7 +10,6 @@ export type {
   RelativeStyleSelectorOptions,
   RelativeTextSelectorOptions,
   StyleSelectorOptions,
-  TextOccurrence,
   TextSelectorOptions,
   TextStyleExpectation,
   TitleOptions,

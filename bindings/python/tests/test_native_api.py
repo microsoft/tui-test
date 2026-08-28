@@ -3,7 +3,7 @@ import inspect
 import unittest
 from pathlib import Path
 
-from tui_test import TuiTest, _native, unique_session
+from tui_test import Locator, TuiTest, _native, unique_session
 
 
 class _IndexValue:
@@ -18,6 +18,16 @@ class NativeSurfaceTests(unittest.TestCase):
     def test_public_client_omits_one_shot_text_methods(self):
         for name in ("find_text", "wait_text", "expect_text"):
             self.assertFalse(hasattr(TuiTest, name), name)
+        for method in (
+            TuiTest.get_by_text,
+            TuiTest.get_by_style,
+            Locator.get_by_text,
+            Locator.get_by_style,
+        ):
+            self.assertNotIn("occurrence", inspect.signature(method).parameters)
+        self.assertNotIn(
+            "style", inspect.signature(Locator.expect).parameters
+        )
 
     def test_native_session_has_only_typed_terminal_methods(self):
         session = _native.NativeSession(unique_session("surface"))

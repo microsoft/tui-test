@@ -145,7 +145,6 @@ pub struct TextSelector {
     pub full: bool,
     pub whitespace: WhitespaceMode,
     pub scope: TextScope,
-    pub occurrence: MatchOccurrence,
 }
 
 impl Default for TextSelector {
@@ -156,7 +155,6 @@ impl Default for TextSelector {
             full: false,
             whitespace: WhitespaceMode::Exact,
             scope: TextScope::default(),
-            occurrence: MatchOccurrence::Any,
         }
     }
 }
@@ -204,23 +202,12 @@ impl TextStyle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 /// Select contiguous per-row runs whose cells match every requested style.
 pub struct StyleSelector {
     pub style: TextStyle,
     pub full: bool,
-    pub occurrence: MatchOccurrence,
-}
-
-impl Default for StyleSelector {
-    fn default() -> Self {
-        Self {
-            style: TextStyle::default(),
-            full: false,
-            occurrence: MatchOccurrence::Any,
-        }
-    }
 }
 
 impl From<TextStyle> for StyleSelector {
@@ -240,20 +227,6 @@ pub enum LocatorSelector {
 }
 
 impl LocatorSelector {
-    pub fn occurrence(&self) -> &MatchOccurrence {
-        match self {
-            Self::Text(selector) => &selector.occurrence,
-            Self::Style(selector) => &selector.occurrence,
-        }
-    }
-
-    pub fn occurrence_mut(&mut self) -> &mut MatchOccurrence {
-        match self {
-            Self::Text(selector) => &mut selector.occurrence,
-            Self::Style(selector) => &mut selector.occurrence,
-        }
-    }
-
     pub fn full(&self) -> bool {
         match self {
             Self::Text(selector) => selector.full,
@@ -281,10 +254,16 @@ pub enum LocatorDirection {
     Before,
 }
 
+fn default_locator_occurrence() -> MatchOccurrence {
+    MatchOccurrence::Any
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// One lazy locator stage plus the parent query that positions it.
 pub struct LocatorQuery {
     pub selector: LocatorSelector,
+    #[serde(default = "default_locator_occurrence")]
+    pub occurrence: MatchOccurrence,
     #[serde(default)]
     pub within: Option<Box<LocatorQuery>>,
     #[serde(default)]
@@ -297,6 +276,7 @@ impl LocatorQuery {
     pub fn text(selector: impl Into<TextSelector>) -> Self {
         Self {
             selector: LocatorSelector::Text(selector.into()),
+            occurrence: MatchOccurrence::Any,
             within: None,
             direction: LocatorDirection::Within,
             style: TextStyle::default(),
@@ -306,6 +286,7 @@ impl LocatorQuery {
     pub fn style(selector: impl Into<StyleSelector>) -> Self {
         Self {
             selector: LocatorSelector::Style(selector.into()),
+            occurrence: MatchOccurrence::Any,
             within: None,
             direction: LocatorDirection::Within,
             style: TextStyle::default(),
@@ -405,12 +386,6 @@ pub enum Operation {
     },
     HighlightLocator {
         query: LocatorQuery,
-        timeout_ms: Option<u64>,
-    },
-    ExpectLocator {
-        query: LocatorQuery,
-        not: bool,
-        style: TextStyle,
         timeout_ms: Option<u64>,
     },
     ExpectTitle {
@@ -821,6 +796,7 @@ mod tests {
         parent.full = true;
         let child = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("child")),
+            occurrence: MatchOccurrence::Any,
             within: Some(Box::new(LocatorQuery::text(parent))),
             direction: LocatorDirection::Within,
             style: Default::default(),
@@ -831,6 +807,7 @@ mod tests {
         full_child.full = true;
         let query = LocatorQuery {
             selector: LocatorSelector::Text(full_child),
+            occurrence: MatchOccurrence::Any,
             within: Some(Box::new(LocatorQuery::text("parent"))),
             direction: LocatorDirection::Within,
             style: Default::default(),

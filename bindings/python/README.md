@@ -85,9 +85,10 @@ print(await second.location())
 
 await (
     terminal
-    .get_by_style(TextStyle(bold=True))
     .get_by_text("Warning")
-    .click()
+    .get_by_style(TextStyle(bold=True))
+    .unique()
+    .expect()
 )
 ```
 
@@ -95,14 +96,22 @@ Locators support `any()`, `unique()`, `first()`, `last()`, `nth()`, `all()`,
 `count()`, `locations()`, `location()`, `wait()`, `expect()`, `click()`, and
 `highlight()`, plus chainable `get_by_text()` and `get_by_style()`. A style
 locator matches contiguous per-row cell runs with the requested colors or
-attributes. Chained stages default to searching `within` every selected parent
-match and can use `direction="after"` or `direction="before"` for relative
-terminal regions. The whole chain is re-resolved for each action. Clicks target
-the middle cell and require one match unless a positional selector narrows the
-locator. Highlights appear in the live monitor and SVG screenshots until the
-terminal redraws. Like Playwright, `all()` captures the current list without
-waiting and returns lazy `nth()` locators; wait first when the list is still
-loading.
+attributes. When chained with the default `within` direction,
+`get_by_style()` filters and preserves each parent match, requiring all of its
+visible cells to match the style. Other stages search `within` each parent by
+default and can use `direction="after"` or `direction="before"` for relative
+terminal regions. The whole chain is re-resolved for each action. Clicks
+target the middle cell and require one match unless a positional selector
+narrows the locator. Highlights appear in the live monitor and SVG screenshots
+until the terminal redraws. Like Playwright, `all()` captures the current list
+without waiting and returns lazy `nth()` locators; wait first when the list is
+still loading.
+
+`get_by_text()` and `get_by_style()` always begin with all matches; select an
+occurrence only with `any()`, `unique()`, `first()`, `last()`, or `nth()`. An
+unselected locator's `expect()` succeeds when at least one match exists, while
+`unique().expect()` requires exactly one. `click()` and `location()` require
+one target and therefore treat an unselected locator as unique.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 

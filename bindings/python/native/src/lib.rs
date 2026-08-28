@@ -330,20 +330,15 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (stages, style, not_, timeout_ms))]
+    #[pyo3(signature = (stages, not_, timeout_ms))]
     fn expect_locator<'py>(
         &self,
         py: Python<'py>,
         stages: Vec<Bound<'py, PyAny>>,
-        style: Bound<'py, PyAny>,
         not_: bool,
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let query = capture_locator_query(&stages);
-        let style = style
-            .cast::<PyDict>()
-            .map_err(|error| TuiTestError::usage(error.to_string()))
-            .and_then(core_style);
         let timeout_ms = capture_optional_integer(timeout_ms);
         let name = self.name.clone();
         future_blocking(
@@ -351,10 +346,9 @@ impl NativeSession {
             move || {
                 execute_unit(
                     &name,
-                    Operation::ExpectLocator {
+                    Operation::WaitLocator {
                         query: query?,
                         not: not_,
-                        style: style?,
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
                 )
@@ -1427,7 +1421,6 @@ fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, Tu
                     full: py_bool(dict, "full")?.unwrap_or(false),
                     whitespace,
                     scope: Default::default(),
-                    occurrence,
                 })
             }
             Some("style") => {
@@ -1447,7 +1440,6 @@ fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, Tu
                 LocatorSelector::Style(StyleSelector {
                     style: core_style(style)?,
                     full: py_bool(dict, "full")?.unwrap_or(false),
-                    occurrence,
                 })
             }
             Some(value) => {
@@ -1459,6 +1451,7 @@ fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, Tu
         };
         parent = Some(LocatorQuery {
             selector,
+            occurrence,
             within: parent.map(Box::new),
             direction,
             style: TextStyle::default(),

@@ -9,7 +9,6 @@ Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
 LocatorDirection = Literal["within", "after", "before"]
-TextOccurrence = Union[Literal["any", "unique", "first", "last"], int]
 
 
 @dataclass

@@ -162,8 +162,9 @@ test(
         await terminal.getByText(marker).wait({ timeout: 5000 });
         await terminal
           .getByText(marker)
+          .getByStyle({ foreground: "#010203" })
           .unique()
-          .expect({ style: { foreground: "#010203" } });
+          .expect();
       },
     );
     assert.equal(trackedCount(), 0);

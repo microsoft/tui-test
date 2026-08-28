@@ -215,17 +215,11 @@ export class NativeRuntime {
 
   expectLocator(
     stages: RuntimeLocatorStage[],
-    style: RuntimeLocatorStyle | undefined,
     not = false,
     timeoutMs?: number,
   ): Promise<void> {
     return this.#call((session) =>
-      session.expectLocator(
-        stages as LocatorStage[],
-        style,
-        not,
-        timeoutMs,
-      ),
+      session.expectLocator(stages as LocatorStage[], not, timeoutMs),
     );
   }
 

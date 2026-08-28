@@ -291,10 +291,9 @@ impl Request {
                 query,
                 not,
                 timeout_ms,
-            } => Ok(Operation::ExpectLocator {
+            } => Ok(Operation::WaitLocator {
                 query,
                 not,
-                style: Default::default(),
                 timeout_ms,
             }),
             Request::ExpectTitle {

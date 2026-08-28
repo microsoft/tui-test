@@ -419,12 +419,17 @@ class LocatorTests(unittest.TestCase):
 
         run(
             terminal.get_by_text("Warning")
+            .get_by_style(
+                TextStyle(bold=True, underline_style="curly")
+            )
             .first()
-            .expect(style=TextStyle(bold=True, underline_style="curly"))
+            .expect()
         )
         name, args = terminal.fake.calls[1]
         self.assertEqual(name, "expect_locator")
-        query, style, not_ = args[:3]
+        query, not_ = args[:2]
+        style = query[-1]["style"]
+        self.assertEqual(query[-1]["direction"], "within")
         self.assertEqual(query[-1]["occurrence"], "first")
         self.assertTrue(style["bold"])
         self.assertEqual(style["underline_style"], "curly")
@@ -500,12 +505,16 @@ class LocatorTests(unittest.TestCase):
         self.assertEqual(name, "highlight_locator")
         self.assertEqual(args[0][-1]["occurrence"], "any")
 
-        run(locator.expect(style=TextStyle(bold=True)))
+        run(locator.expect())
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "expect_locator")
-        query, style, not_ = args[:3]
+        query, not_ = args[:2]
+        self.assertEqual(query[-1]["occurrence"], "any")
+        self.assertFalse(not_)
+
+        run(locator.unique().expect())
+        query, not_ = terminal.fake.calls[-1][1][:2]
         self.assertEqual(query[-1]["occurrence"], "unique")
-        self.assertTrue(style["bold"])
         self.assertFalse(not_)
 
     def test_relative_locator_wait_returns_the_same_locator(self):
@@ -533,6 +542,10 @@ class LocatorTests(unittest.TestCase):
             run(locator.wait(state="gone"))
         with self.assertRaisesRegex(ValueError, "locator direction"):
             locator.get_by_text("child", direction="sideways")
+        with self.assertRaises(TypeError):
+            terminal.get_by_text("Save", occurrence="last")
+        with self.assertRaises(TypeError):
+            locator.expect(style=TextStyle(bold=True))
         with self.assertRaisesRegex(ValueError, "at least one style"):
             terminal.get_by_style(TextStyle())
 

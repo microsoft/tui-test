@@ -101,6 +101,18 @@ test("public declarations expose reusable get-by locators", async () => {
   assert.match(declarations, /\bgetByText\(text: string/);
   assert.match(declarations, /\bgetByStyle\(/);
   assert.doesNotMatch(declarations, /\b(?:findText|waitText|expectText)\(/);
+  const textOptions = declarations.match(
+    /export interface TextSelectorOptions \{([^}]*)\}/s,
+  )?.[1];
+  const styleOptions = declarations.match(
+    /export interface StyleSelectorOptions \{([^}]*)\}/s,
+  )?.[1];
+  const expectOptions = declarations.match(
+    /export interface LocatorExpectOptions \{([^}]*)\}/s,
+  )?.[1];
+  assert.doesNotMatch(textOptions ?? "", /occurrence/);
+  assert.doesNotMatch(styleOptions ?? "", /occurrence/);
+  assert.doesNotMatch(expectOptions ?? "", /style/);
 });
 
 test("public facade omits generic request dispatchers", async () => {

@@ -93,55 +93,59 @@ pub fn locate_query<F>(
 where
     F: FnMut(&EmuCell, &TextStyle) -> bool,
 {
-    let allowed = match query.within.as_deref() {
+    let mut parents = match query.within.as_deref() {
         Some(parent) => {
             let mut parents = locate_query(rows, parent, style_matches)?;
             if parents.is_empty() {
                 return Ok(Vec::new());
             }
             parents.sort_by_key(|matched| matched.source_start);
-            let width = rows.iter().map(Vec::len).max().unwrap_or(0);
-            Some(relative_regions(
-                &parents,
-                query.direction,
-                width.saturating_mul(rows.len()),
-            ))
+            Some(parents)
         }
         None => None,
     };
-    let occurrence = query.selector.occurrence().clone();
+    let allowed = parents.as_ref().map(|parents| {
+        let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+        relative_regions(parents, query.direction, width.saturating_mul(rows.len()))
+    });
+    let occurrence = query.occurrence.clone();
     let mut matches = match &query.selector {
-        LocatorSelector::Text(selector) => {
-            let mut selector = selector.clone();
-            selector.occurrence = MatchOccurrence::Any;
-            locate_text_within(rows, &selector, allowed.as_deref())?
+        LocatorSelector::Text(selector) => locate_text_within(rows, selector, allowed.as_deref())?,
+        LocatorSelector::Style(selector)
+            if query.direction == LocatorDirection::Within && parents.is_some() =>
+        {
+            let mut matches = parents.take().expect("parent matches are present");
+            matches
+                .retain(|matched| located_match_has_style(matched, &selector.style, style_matches));
+            matches
         }
         LocatorSelector::Style(selector) => {
-            let mut selector = selector.clone();
-            selector.occurrence = MatchOccurrence::Any;
-            locate_style_within(rows, &selector, allowed.as_deref(), style_matches)?
+            locate_style_within(rows, selector, allowed.as_deref(), style_matches)?
         }
     };
     if !query.style.is_empty() {
-        matches.retain(|matched| {
-            let visible = matched
-                .cells
-                .iter()
-                .filter(|cell| {
-                    !cell.cell.ch.is_empty() && !cell.cell.ch.chars().all(char::is_whitespace)
-                })
-                .collect::<Vec<_>>();
-            let cells = if visible.is_empty() {
-                matched.cells.iter().collect::<Vec<_>>()
-            } else {
-                visible
-            };
-            cells
-                .into_iter()
-                .all(|cell| style_matches(&cell.cell, &query.style))
-        });
+        matches.retain(|matched| located_match_has_style(matched, &query.style, style_matches));
     }
     select_items(matches, &occurrence, &query.selector.description())
+}
+
+fn located_match_has_style<F>(
+    matched: &LocatedMatch,
+    style: &TextStyle,
+    style_matches: &mut F,
+) -> bool
+where
+    F: FnMut(&EmuCell, &TextStyle) -> bool,
+{
+    let visible = |cell: &MatchedCell| {
+        !cell.cell.ch.is_empty() && !cell.cell.ch.chars().all(char::is_whitespace)
+    };
+    let has_visible = matched.cells.iter().any(&visible);
+    matched
+        .cells
+        .iter()
+        .filter(|cell| !has_visible || visible(cell))
+        .all(|cell| style_matches(&cell.cell, style))
 }
 
 fn relative_regions(
@@ -201,8 +205,7 @@ fn locate_text_within(
             })
         })
         .collect();
-    let selected = select(ranges, &selector.occurrence, &pattern.describe())?;
-    Ok(selected
+    Ok(ranges
         .into_iter()
         .filter_map(|range| materialize(rows, &flat, range))
         .collect())
@@ -260,8 +263,7 @@ where
             ranges.push((start, y * flat.width + row.len()));
         }
     }
-    let selected = select(ranges, &selector.occurrence, "style")?;
-    Ok(selected
+    Ok(ranges
         .into_iter()
         .filter_map(|range| materialize(rows, &flat, range))
         .collect())
@@ -535,7 +537,6 @@ mod tests {
     #[test]
     fn scopes_a_match_after_an_anchor() {
         let mut selector = TextSelector::new("Save");
-        selector.occurrence = MatchOccurrence::First;
         selector.scope = TextScope {
             after: Some(TextAnchor {
                 text: "Settings".into(),
@@ -551,20 +552,31 @@ mod tests {
     #[test]
     fn selects_any_last_and_nth_occurrences() {
         let rows = grid(&["item item item"]);
-        let mut selector = TextSelector::new("item");
-        selector.occurrence = MatchOccurrence::Any;
-        assert_eq!(locate(&rows, &selector).unwrap().len(), 3);
-        selector.occurrence = MatchOccurrence::Last;
-        assert_eq!(locate(&rows, &selector).unwrap()[0].value.start.column, 10);
-        selector.occurrence = MatchOccurrence::Nth(1);
-        assert_eq!(locate(&rows, &selector).unwrap()[0].value.start.column, 5);
+        let mut query = LocatorQuery::text("item");
+        assert_eq!(locate_query_text(&rows, &query).unwrap().len(), 3);
+        query.occurrence = MatchOccurrence::Last;
+        assert_eq!(
+            locate_query_text(&rows, &query).unwrap()[0]
+                .value
+                .start
+                .column,
+            10
+        );
+        query.occurrence = MatchOccurrence::Nth(1);
+        assert_eq!(
+            locate_query_text(&rows, &query).unwrap()[0]
+                .value
+                .start
+                .column,
+            5
+        );
     }
 
     #[test]
     fn unique_reports_ambiguous_text() {
-        let mut selector = TextSelector::new("same");
-        selector.occurrence = MatchOccurrence::Unique;
-        let error = locate(&grid(&["same same"]), &selector).unwrap_err();
+        let mut query = LocatorQuery::text("same");
+        query.occurrence = MatchOccurrence::Unique;
+        let error = locate_query_text(&grid(&["same same"]), &query).unwrap_err();
         assert!(error.to_string().contains("found 2"));
     }
 
@@ -580,6 +592,7 @@ mod tests {
         parent.whitespace = WhitespaceMode::Normalize;
         let child = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("Save")),
+            occurrence: MatchOccurrence::Any,
             within: Some(Box::new(LocatorQuery::text(parent))),
             direction: LocatorDirection::Within,
             style: Default::default(),
@@ -594,11 +607,12 @@ mod tests {
     #[test]
     fn child_locators_honor_parent_occurrence_selection() {
         let rows = grid(&["panel: Save", "panel: Save"]);
-        let mut parent = TextSelector::new("panel: Save");
+        let mut parent = LocatorQuery::text("panel: Save");
         parent.occurrence = MatchOccurrence::Last;
         let child = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("Save")),
-            within: Some(Box::new(LocatorQuery::text(parent))),
+            occurrence: MatchOccurrence::Any,
+            within: Some(Box::new(parent)),
             direction: LocatorDirection::Within,
             style: Default::default(),
         };
@@ -613,12 +627,14 @@ mod tests {
         let outer = TextSelector::new("panel [Save]");
         let middle = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("[Save]")),
+            occurrence: MatchOccurrence::Any,
             within: Some(Box::new(LocatorQuery::text(outer))),
             direction: LocatorDirection::Within,
             style: Default::default(),
         };
         let inner = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("Save")),
+            occurrence: MatchOccurrence::Any,
             within: Some(Box::new(middle)),
             direction: LocatorDirection::Within,
             style: Default::default(),
@@ -633,29 +649,27 @@ mod tests {
     fn child_occurrences_are_selected_across_all_parent_regions() {
         let rows = grid(&["[a]", "[a]"]);
         let parent = TextSelector::new("[a]");
-        let mut child = TextSelector::new("a");
-        let query = |child| LocatorQuery {
-            selector: LocatorSelector::Text(child),
+        let query = |occurrence| LocatorQuery {
+            selector: LocatorSelector::Text(TextSelector::new("a")),
+            occurrence,
             within: Some(Box::new(LocatorQuery::text(parent.clone()))),
             direction: LocatorDirection::Within,
             style: Default::default(),
         };
         assert_eq!(
-            locate_query_text(&rows, &query(child.clone()))
+            locate_query_text(&rows, &query(MatchOccurrence::Any))
                 .unwrap()
                 .len(),
             2
         );
 
-        child.occurrence = MatchOccurrence::Nth(1);
         assert_eq!(
-            locate_query_text(&rows, &query(child.clone())).unwrap()[0]
+            locate_query_text(&rows, &query(MatchOccurrence::Nth(1))).unwrap()[0]
                 .value
                 .start,
             TextPosition { row: 1, column: 1 }
         );
-        child.occurrence = MatchOccurrence::Unique;
-        assert!(locate_query_text(&rows, &query(child))
+        assert!(locate_query_text(&rows, &query(MatchOccurrence::Unique))
             .unwrap_err()
             .to_string()
             .contains("found 2"));
@@ -665,10 +679,8 @@ mod tests {
     fn relative_directions_segment_multiple_parent_matches() {
         let rows = grid(&["Section One", "Save 1", "Section Two", "Save 2"]);
         let query = |parent, text, direction, occurrence| LocatorQuery {
-            selector: LocatorSelector::Text(TextSelector {
-                occurrence,
-                ..TextSelector::new(text)
-            }),
+            selector: LocatorSelector::Text(TextSelector::new(text)),
+            occurrence,
             within: Some(Box::new(LocatorQuery::text(parent))),
             direction,
             style: Default::default(),
@@ -731,6 +743,7 @@ mod tests {
         }
         let query = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("OK")),
+            occurrence: MatchOccurrence::Any,
             within: Some(Box::new(LocatorQuery::style(TextStyle {
                 bold: Some(true),
                 ..TextStyle::default()
@@ -751,6 +764,7 @@ mod tests {
         child.whitespace = WhitespaceMode::Normalize;
         let query = LocatorQuery {
             selector: LocatorSelector::Text(child),
+            occurrence: MatchOccurrence::Any,
             within: Some(Box::new(LocatorQuery::text(parent))),
             direction: LocatorDirection::Within,
             style: Default::default(),
@@ -771,6 +785,7 @@ mod tests {
         });
         let styled_text = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("OL")),
+            occurrence: MatchOccurrence::Any,
             within: Some(Box::new(LocatorQuery::style(style.clone()))),
             direction: LocatorDirection::Within,
             style: Default::default(),
@@ -780,12 +795,38 @@ mod tests {
 
         let text_style = LocatorQuery {
             selector: LocatorSelector::Style(style),
+            occurrence: MatchOccurrence::Any,
             within: Some(Box::new(LocatorQuery::text("BOLD"))),
             direction: LocatorDirection::Within,
             style: Default::default(),
         };
         let found = locate_query_text(&rows, &text_style).unwrap();
         assert_eq!(found[0].value.text, "BOLD");
+    }
+
+    #[test]
+    fn nested_style_filters_the_entire_parent_match() {
+        let mut rows = grid(&["Warning"]);
+        for cell in &mut rows[0][..4] {
+            cell.attrs.insert(Attrs::BOLD);
+        }
+        let query = LocatorQuery {
+            selector: LocatorSelector::Style(StyleSelector::from(TextStyle {
+                bold: Some(true),
+                ..TextStyle::default()
+            })),
+            occurrence: MatchOccurrence::Any,
+            within: Some(Box::new(LocatorQuery::text("Warning"))),
+            direction: LocatorDirection::Within,
+            style: Default::default(),
+        };
+
+        assert!(locate_query_text(&rows, &query).unwrap().is_empty());
+        for cell in &mut rows[0] {
+            cell.attrs.insert(Attrs::BOLD);
+        }
+        let found = locate_query_text(&rows, &query).unwrap();
+        assert_eq!(found[0].value.text, "Warning");
     }
 
     #[test]
@@ -801,9 +842,9 @@ mod tests {
                     bold: Some(true),
                     ..TextStyle::default()
                 },
-                occurrence,
                 ..StyleSelector::default()
             }),
+            occurrence,
             within: Some(Box::new(parent.clone())),
             direction: LocatorDirection::Within,
             style: Default::default(),
@@ -829,10 +870,9 @@ mod tests {
     fn style_constraints_filter_before_unique_selection() {
         let mut rows = grid(&["X X"]);
         rows[0][2].attrs.insert(Attrs::BOLD);
-        let mut selector = TextSelector::new("X");
-        selector.occurrence = MatchOccurrence::Unique;
         let query = LocatorQuery {
-            selector: LocatorSelector::Text(selector),
+            selector: LocatorSelector::Text(TextSelector::new("X")),
+            occurrence: MatchOccurrence::Unique,
             within: None,
             direction: LocatorDirection::Within,
             style: TextStyle {

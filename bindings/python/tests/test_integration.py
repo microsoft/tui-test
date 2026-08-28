@@ -225,15 +225,23 @@ class IntegrationTests(unittest.TestCase):
                     .location()
                 )
                 self.assertEqual(from_style.start.row, 3)
-                await su.get_by_text("Warning").unique().expect(
-                    style=TextStyle(bold=True)
+                await (
+                    su.get_by_text("Warning")
+                    .get_by_style(TextStyle(bold=True))
+                    .unique()
+                    .expect()
                 )
                 with self.assertRaises(ExpectationError) as raised:
-                    await su.get_by_text("Warning").unique().expect(
-                        style=TextStyle(bold=False),
-                        timeout=20,
+                    await (
+                        su.get_by_text("Warning")
+                        .get_by_style(TextStyle(bold=False))
+                        .unique()
+                        .expect(timeout=20)
                     )
-                self.assertIn("expected bold=false", str(raised.exception))
+                self.assertIn(
+                    "waiting for 'style' to be visible",
+                    str(raised.exception),
+                )
 
         run(scenario())
 
@@ -253,8 +261,9 @@ class IntegrationTests(unittest.TestCase):
                 waited = await locator.wait(timeout=2000)
                 self.assertIs(waited, locator)
                 self.assertEqual(await locator.count(), 3)
+                await locator.expect(timeout=20)
                 with self.assertRaises(ExpectationError):
-                    await locator.expect(timeout=20)
+                    await locator.unique().expect(timeout=20)
                 nested = (
                     su.get_by_text("item item")
                     .get_by_style(TextStyle(bold=True))
@@ -293,7 +302,7 @@ class IntegrationTests(unittest.TestCase):
 
                 await nested.highlight()
                 await nested.first().click(timeout=2000)
-                await nested.first().expect(style=TextStyle(bold=True))
+                await nested.first().expect()
 
         run(scenario())
 
@@ -344,8 +353,11 @@ class IntegrationTests(unittest.TestCase):
                     profile=Profile(colors=Colors(red="#010203")),
                 )
                 await su.get_by_text(marker).wait(timeout=5000)
-                await su.get_by_text(marker).unique().expect(
-                    style=TextStyle(foreground="#010203")
+                await (
+                    su.get_by_text(marker)
+                    .get_by_style(TextStyle(foreground="#010203"))
+                    .unique()
+                    .expect()
                 )
 
         run(scenario())

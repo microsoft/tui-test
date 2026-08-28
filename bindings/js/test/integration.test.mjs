@@ -419,15 +419,20 @@ test("text locators scope matches and assert styles", async () => {
       ).start.row,
       3,
     );
-    await su.getByText("Warning").unique().expect({ style: { bold: true } });
+    await su
+      .getByText("Warning")
+      .getByStyle({ bold: true })
+      .unique()
+      .expect();
     await assert.rejects(
-      su.getByText("Warning").unique().expect({
-        style: { bold: false },
-        timeout: 20,
-      }),
+      su
+        .getByText("Warning")
+        .getByStyle({ bold: false })
+        .unique()
+        .expect({ timeout: 20 }),
       (error) =>
         error instanceof ExpectationError &&
-        error.message.includes("expected bold=false"),
+        error.message.includes("waiting for 'style' to be visible"),
     );
   } finally {
     await su.closeQuiet();
@@ -446,16 +451,21 @@ test("get-by locators are lazy, chainable, and actionable", async () => {
     const locator = su.getByText("item");
     assert.throws(() => locator.nth(-1), /non-negative integer/);
     assert.throws(
-      () => su.getByText("item", { occurrence: { nth: -1 } }),
-      /non-negative integer/,
+      () => su.getByText("item", { occurrence: "last" }),
+      /select locator occurrences with/,
+    );
+    assert.throws(
+      () => locator.expect({ style: { bold: true } }),
+      /refine the locator with getByStyle/,
     );
     assert.throws(() => su.getByStyle({}), /at least one style/);
 
     const waited = await locator.wait({ timeout: 2000 });
     assert.strictEqual(waited, locator);
     assert.equal(await locator.count(), 3);
+    await locator.expect({ timeout: 20 });
     await assert.rejects(
-      locator.expect({ timeout: 20 }),
+      locator.unique().expect({ timeout: 20 }),
       (error) => error instanceof ExpectationError,
     );
     const nested = su
@@ -488,7 +498,7 @@ test("get-by locators are lazy, chainable, and actionable", async () => {
 
     await nested.highlight();
     await nested.first().click({ timeout: 2000 });
-    await nested.first().expect({ style: { bold: true } });
+    await nested.first().expect();
 
     await su.getByText("item").wait({ timeout: 2000 });
     await su.getByText("item").first().highlight();
