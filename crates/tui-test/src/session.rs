@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use crate::event::BellTracker;
 use crate::logger::Logger;
 use crate::profile::Profile;
-use crate::record::{self, CaptureError, Recorder, StartRecording};
+use crate::record::{self, AutomaticRecordingGuard, CaptureError, Recorder, StartRecording};
 #[cfg(feature = "recording-raster")]
 use crate::render::raster::GridRenderer;
 use crate::shell::{self, Shell};
@@ -41,6 +41,7 @@ pub struct Session {
     pub cancelled: Arc<AtomicBool>,
     pub(crate) bells: BellTracker,
     recorder: Recorder,
+    _automatic_recording: Option<AutomaticRecordingGuard>,
     logger: Arc<Logger>,
     reader: Option<JoinHandle<()>>,
     _process_watcher: JoinHandle<()>,
@@ -66,8 +67,26 @@ impl Session {
         env: Vec<(String, String)>,
         timeouts: crate::api::Timeouts,
         logger: Arc<Logger>,
-        recording_path: PathBuf,
+        recording_path: Option<PathBuf>,
+        recording_required: bool,
     ) -> anyhow::Result<Self> {
+        let automatic_recording = recording_path
+            .as_ref()
+            .cloned()
+            .map(AutomaticRecordingGuard::register);
+        let mut rec_env = vec![("TERM".to_string(), "xterm-256color".to_string())];
+        if let Some(sh) = shell {
+            rec_env.push(("SHELL".to_string(), sh.as_str().to_string()));
+        }
+        let recorder = Recorder::create(
+            recording_path,
+            cols,
+            rows,
+            &rec_env,
+            recording_required,
+            logger.clone(),
+        )?;
+
         let (pty, reader) = if let Some(program) = &program {
             let (target, args) = program
                 .split_first()
@@ -98,12 +117,6 @@ impl Session {
         }));
         let pty = Arc::new(Mutex::new(pty));
         let cancelled = Arc::new(AtomicBool::new(false));
-
-        let mut rec_env = vec![("TERM".to_string(), "xterm-256color".to_string())];
-        if let Some(sh) = shell {
-            rec_env.push(("SHELL".to_string(), sh.as_str().to_string()));
-        }
-        let recorder = Recorder::create(recording_path, cols, rows, &rec_env, logger.clone());
 
         let reader_state = state.clone();
         let reader_pty = pty.clone();
@@ -201,6 +214,7 @@ impl Session {
             cancelled,
             bells,
             recorder,
+            _automatic_recording: automatic_recording,
             logger,
             reader: Some(reader_handle),
             _process_watcher: process_watcher,
@@ -608,7 +622,15 @@ mod tests {
     #[test]
     fn resize_is_queued_after_old_output_and_starts_a_new_idle_period() {
         let path = test_path("resize-order");
-        let mut recorder = Recorder::create(path.clone(), 1, 1, &[], Arc::new(Logger::disabled()));
+        let mut recorder = Recorder::create(
+            Some(path.clone()),
+            1,
+            1,
+            &[],
+            false,
+            Arc::new(Logger::disabled()),
+        )
+        .unwrap();
         let state = Arc::new(Mutex::new(TermState {
             emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
             tracker: CommandTracker::new(),
@@ -680,7 +702,15 @@ mod tests {
     #[test]
     fn shutdown_drains_reader_tail_before_stopping_recorder() {
         let path = test_path("reader-tail");
-        let mut recorder = Recorder::create(path.clone(), 1, 1, &[], Arc::new(Logger::disabled()));
+        let mut recorder = Recorder::create(
+            Some(path.clone()),
+            1,
+            1,
+            &[],
+            false,
+            Arc::new(Logger::disabled()),
+        )
+        .unwrap();
         let capture = recorder.capture();
         let mut reader = Some(std::thread::spawn(move || {
             capture.on_data(b"reader-tail-marker");

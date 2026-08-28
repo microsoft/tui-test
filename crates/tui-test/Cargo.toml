@@ -28,6 +28,7 @@ anyhow.workspace = true
 bitflags.workspace = true
 compact_str.workspace = true
 dirs.workspace = true
+dunce.workspace = true
 flate2.workspace = true
 fontdb = { workspace = true, optional = true }
 gif = { workspace = true, optional = true }

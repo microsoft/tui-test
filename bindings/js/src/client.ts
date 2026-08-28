@@ -8,6 +8,7 @@ import {
   backendPayload,
   envPairs,
   profilePayload,
+  recordingPayload,
   resolveSession,
   resolveTimeout,
   timeoutsPayload,
@@ -187,7 +188,7 @@ export class TuiTest {
     backendPayload(opts.backend);
     profilePayload(opts.profile);
     this.#options = opts;
-    this.#runtime = new NativeRuntime(this.session);
+    this.#runtime = new NativeRuntime(this.session, recordingPayload(opts.recording));
     this.keyboard = new Keyboard(this.#runtime);
     this.mouse = new Mouse(this.#runtime);
   }
@@ -299,6 +300,10 @@ export class TuiTest {
 
   async close(): Promise<void> {
     await this.#runtime.close();
+  }
+
+  async retainRecording(): Promise<void> {
+    await this.#runtime.retainRecording();
   }
 
   async closeQuiet(): Promise<void> {

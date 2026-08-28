@@ -71,6 +71,32 @@ pub fn home_dir() -> PathBuf {
     base.join(".tui-test")
 }
 
+/// Root directory for automatic session recordings.
+pub fn recording_root(recording: &crate::api::AutomaticRecording) -> PathBuf {
+    if let Some(directory) = &recording.directory {
+        return directory.clone();
+    }
+    if let Ok(directory) = std::env::var("TUI_TEST_HOME") {
+        return PathBuf::from(directory).join("recordings");
+    }
+    dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("tui-test")
+}
+
+pub fn canonical_recording_root(
+    recording: &crate::api::AutomaticRecording,
+) -> std::io::Result<PathBuf> {
+    let root = recording_root(recording);
+    let root = if root.is_absolute() {
+        root
+    } else {
+        std::env::current_dir()?.join(root)
+    };
+    std::fs::create_dir_all(&root)?;
+    dunce::canonicalize(root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +162,25 @@ mod tests {
             }
             result.unwrap();
         }
+    }
+
+    #[test]
+    fn recording_roots_are_canonicalized_for_active_file_tracking() {
+        let parent =
+            std::env::temp_dir().join(format!("tui-test-recording-root-{}", std::process::id()));
+        let root = parent.join("root");
+        let direct = crate::api::AutomaticRecording {
+            directory: Some(root.clone()),
+            ..crate::api::AutomaticRecording::default()
+        };
+        let alias = crate::api::AutomaticRecording {
+            directory: Some(root.join("..").join("root")),
+            ..crate::api::AutomaticRecording::default()
+        };
+        assert_eq!(
+            canonical_recording_root(&direct).unwrap(),
+            canonical_recording_root(&alias).unwrap()
+        );
+        std::fs::remove_dir_all(parent).unwrap();
     }
 }

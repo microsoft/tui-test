@@ -8,6 +8,7 @@ Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
+AutomaticRecordingMode = Literal["disabled", "on-failure", "always"]
 
 
 @dataclass
@@ -46,6 +47,16 @@ class Timeouts:
     command: Optional[int] = None
     exit: Optional[int] = None
     ready: Optional[int] = None
+
+
+@dataclass
+class AutomaticRecording:
+    mode: Optional[AutomaticRecordingMode] = None
+    #: Root directory; automatic casts are stored below ``cli`` or ``native``.
+    directory: Optional[str] = None
+    retention_count: Optional[int] = None
+    retention_age_seconds: Optional[int] = None
+    retention_size_bytes: Optional[int] = None
 
 
 @dataclass

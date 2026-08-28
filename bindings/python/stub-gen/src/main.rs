@@ -89,7 +89,15 @@ mod stubs {
             import typing
 
             class NativeSession:
-                def __new__(cls, name: str) -> NativeSession: ...
+                def __new__(
+                    cls,
+                    name: str,
+                    recording_mode: typing.Optional[str] = None,
+                    recording_directory: typing.Optional[str] = None,
+                    retention_count: typing.Optional[int] = None,
+                    retention_age_seconds: typing.Optional[int] = None,
+                    retention_size_bytes: typing.Optional[int] = None,
+                ) -> NativeSession: ...
 
                 def open(
                     self,
@@ -131,6 +139,7 @@ mod stubs {
                 ) -> typing.Awaitable[typing.Dict[str, typing.Any]]: ...
 
                 def close(self) -> typing.Awaitable[None]: ...
+                def retain_recording(self) -> typing.Awaitable[None]: ...
                 def state(self) -> typing.Awaitable[typing.Dict[str, typing.Any]]: ...
                 def text(self, full: bool) -> typing.Awaitable[str]: ...
                 def packed_screen(self, full: bool) -> typing.Awaitable[typing.Tuple[memoryview, int, int]]:

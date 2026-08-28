@@ -143,7 +143,7 @@ Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
 | ----------------------------------- | ---------------------------------------------------------------------------- |
 | `record start OUT [options]`        | Start APNG, GIF, MP4, or asciicast recording; `--zoom N` scales image/video output. |
 | `record stop`                       | Finish the active recording.                                                 |
-| `get-recording [session]`           | Print the always-on asciinema v2 cast (works even after the session stopped).|
+| `get-recording [session] [--config PATH]` | Print the automatic asciinema v2 cast. |
 | `monitor`                           | Watch the session live, full-color, in another terminal.                     |
 | `usage` / `agent-context` / `skill` | Self-documentation (see top of guide).                                       |
 
@@ -219,15 +219,16 @@ Snapshots live in `__snapshots__/<NAME>.snap` next to where you run the command.
 
 ## Recording
 
-Every session records automatically from the moment it opens, in asciinema v2
-cast format, stored in your XDG cache by session name. The path is reported in
-the `open` / `run` response. Recordings persist after the session ends; stale
-ones are swept when a daemon next starts (recordings of still-running sessions
-are kept).
+Sessions record automatically in asciinema v2 format by default. The path is
+reported in the `open` / `run` response; it is empty when automatic recording
+is disabled. Configure `[recording]` in `tui-test.toml` with mode `disabled`,
+`on-failure`, or `always`, plus an optional storage root and retention count,
+age, or total-size limits. `on-failure` writes while the session runs and
+deletes the cast after a successful close.
 
 ```sh
-tui-test get-recording > demo.cast    # current session's recording to stdout
-tui-test get-recording work > w.cast  # a specific session by name (even if stopped)
+tui-test get-recording > demo.cast
+tui-test get-recording work --config ./tui-test.toml > w.cast
 ```
 
 Record a selected span directly to APNG, GIF, MP4, or cast:
@@ -364,17 +365,17 @@ Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
 `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` /
 `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` /
 `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`,
-and `close`. Python module-level helpers are `sessions`,
+`retain_recording`, and `close`. Python module-level helpers are `sessions`,
 `close_all`, and `get_recording`; JavaScript exports `sessions`, `closeAll`,
 and `getRecording`. The JavaScript client otherwise uses the same names in
-camelCase (`startRecording`, `stopRecording`, `waitCommand`, `expectText`,
-`getExitCode`, etc.).
+camelCase (`startRecording`, `stopRecording`, `retainRecording`, `waitCommand`,
+`expectText`, `getExitCode`, etc.).
 
-The constructors accept a session name plus backend, profile, timeout, and
-artifact options: `TuiTest(session="default", *, backend=None, timeouts=None,
-profile=None, artifacts=None)` in Python and `new TuiTest(session?, {
-backend?, profile?, timeouts?, artifacts? })` in JavaScript. `run` takes the
-program then its arguments
+The constructors accept a session name plus backend, profile, timeout,
+artifact, and automatic recording options: `TuiTest(session="default", *,
+backend=None, timeouts=None, profile=None, artifacts=None, recording=None)` in
+Python and `new TuiTest(session?, { backend?, profile?, timeouts?, artifacts?,
+recording? })` in JavaScript. `run` takes the program then its arguments
 (`await su.run("vim", "file.txt")` in Python, `await su.run("vim",
 ["file.txt"])` in JavaScript).
 
@@ -419,6 +420,13 @@ ready = 60000
 
 [profiles.ci.colors]
 red = "#ff0000"
+
+[recording]
+mode = "on-failure"
+directory = "./artifacts"
+retention_count = 100
+retention_age_seconds = 86400
+retention_size_bytes = 1073741824
 ```
 
 A profile sets timeout defaults, `scrollback` (default 10000), and colors:
@@ -431,7 +439,11 @@ Named profiles do not inherit from `[profiles.default]`; omitted fields use
 tui-test's built-in defaults. The in-process APIs accept profile objects:
 Rust passes `Profile` directly, Python uses `Profile` / `Colors`, and
 JavaScript uses `{ scrollback, colors }`. A profile can be a client default or
-a per-`open` / per-`run` override. The bindings do not load `tui-test.toml`.
+a per-`open` / per-`run` override. Recording directories are resolved relative
+to the config file and use `cli` / `native` subdirectories. CLI storage is
+further namespaced by `TUI_TEST_HOME`, so independent daemon groups cannot
+prune each other. The bindings do not load `tui-test.toml`; pass their
+`recording` client option instead.
 
 The palette is what a screenshot paints **and** what `expect --fg/--bg` matches
 a `#rrggbb` against, so the two always agree.

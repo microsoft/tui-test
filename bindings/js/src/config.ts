@@ -1,4 +1,10 @@
-import type { Backend, Profile, Timeouts } from "./types.js";
+import type {
+  AutomaticRecording,
+  AutomaticRecordingMode,
+  Backend,
+  Profile,
+  Timeouts,
+} from "./types.js";
 
 export const DEFAULT_COLS = 80;
 export const DEFAULT_ROWS = 30;
@@ -20,7 +26,19 @@ const TIMEOUT_CLASSES: readonly TimeoutClass[] = [
   "ready",
 ];
 const BACKENDS: readonly Backend[] = ["alacritty", "ghostty", "rio", "xtermjs"];
+const RECORDING_MODES: readonly AutomaticRecordingMode[] = [
+  "disabled",
+  "on-failure",
+  "always",
+];
 const PROFILE_FIELDS = new Set(["scrollback", "colors"]);
+const RECORDING_FIELDS = new Set([
+  "mode",
+  "directory",
+  "retentionCount",
+  "retentionAgeSeconds",
+  "retentionSizeBytes",
+]);
 const COLOR_FIELDS = new Map([
   ["foreground", "foreground"],
   ["background", "background"],
@@ -115,6 +133,64 @@ function profileObject(value: unknown, name: string): Record<string, unknown> {
 export interface ProfilePayload {
   scrollback?: number;
   colors: [string, string][];
+}
+
+export interface AutomaticRecordingPayload {
+  mode?: AutomaticRecordingMode;
+  directory?: string;
+  retentionCount?: number;
+  retentionAgeSeconds?: number;
+  retentionSizeBytes?: number;
+}
+
+export function recordingPayload(
+  recording?: AutomaticRecording,
+): AutomaticRecordingPayload | undefined {
+  if (recording === undefined) {
+    return undefined;
+  }
+  const raw = profileObject(recording, "recording");
+  const unknown = Object.keys(raw).filter((key) => !RECORDING_FIELDS.has(key));
+  if (unknown.length > 0) {
+    throw new TypeError(`unknown recording field ${unknown.join(", ")}`);
+  }
+  const payload: AutomaticRecordingPayload = {};
+  if (raw.mode !== undefined) {
+    if (
+      typeof raw.mode !== "string" ||
+      !(RECORDING_MODES as readonly string[]).includes(raw.mode)
+    ) {
+      throw new TypeError(
+        `unknown recording mode "${String(raw.mode)}"; expected one of ${RECORDING_MODES.join(", ")}`,
+      );
+    }
+    payload.mode = raw.mode as AutomaticRecordingMode;
+  }
+  if (raw.directory !== undefined) {
+    if (typeof raw.directory !== "string" || raw.directory.length === 0) {
+      throw new TypeError("recording.directory must be a non-empty string");
+    }
+    payload.directory = raw.directory;
+  }
+  for (const key of [
+    "retentionCount",
+    "retentionAgeSeconds",
+    "retentionSizeBytes",
+  ] as const) {
+    const value = raw[key];
+    if (
+      value !== undefined &&
+      (typeof value !== "number" ||
+        !Number.isSafeInteger(value) ||
+        value < 0)
+    ) {
+      throw new TypeError(`recording.${key} must be a non-negative safe integer`);
+    }
+    if (typeof value === "number") {
+      payload[key] = value;
+    }
+  }
+  return payload;
 }
 
 export function profilePayload(profile?: Profile): ProfilePayload | undefined {

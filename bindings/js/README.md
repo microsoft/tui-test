@@ -49,7 +49,7 @@ All derive from `TuiTestError` and carry `kind` and `exitCode`. `waitX` and `exp
 
 ## API
 
-`new TuiTest(session?, { backend?, profile?, timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle` / `getBellCount` / `getBellEvents`, `screenshot`, `startRecording` / `stopRecording`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady` / `waitBell`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectBellCount` / `expectSnapshot`, `close`, and `closeQuiet`.
+`new TuiTest(session?, { backend?, profile?, timeouts?, artifacts?, recording? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle` / `getBellCount` / `getBellEvents`, `screenshot`, `startRecording` / `stopRecording`, `retainRecording`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady` / `waitBell`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectBellCount` / `expectSnapshot`, `close`, and `closeQuiet`.
 
 `keyboard.press()` simulates key presses: it sends the normal press input and
 adds a release only when the negotiated Kitty mode can represent it.
@@ -107,13 +107,37 @@ await withTerminal({}, async (t) => {
 
 Each terminal has a unique name, so parallel workers do not collide.
 `setTerminalDefaults(...)` sets suite-wide options (`profile`, `artifacts`,
-`timeouts`, ...).
+`timeouts`, `recording`, ...).
 
 ## Cancellation and recordings
 
 Cancelling a promise does not cancel the underlying Rust operation. Operations for single sessions wait for completion (ex: `close()`, `closeAll()`).
 
-Closing a session removes it from `sessions()`, but keeps its recording. `getRecording()` can read that recording for the rest of the process. The 1024 most recently closed sessions have their recordings retained.
+Automatic casts use `recording: { mode, directory, retentionCount,
+retentionAgeSeconds, retentionSizeBytes }`. `mode` is `"disabled"`,
+`"on-failure"`, or `"always"` (the default). A configured directory is the
+storage root; process-local casts are written below its `native` subdirectory.
+The default retention count is 1024, and the oldest completed casts are
+removed when any configured count, age, or total-size limit is exceeded.
+
+`"on-failure"` writes the cast while the session runs, then deletes it after a
+successful close. Assertion and internal operation failures retain it.
+`withTerminal()` also retains it when the callback throws; other test-runner
+integrations can call `retainRecording()` before teardown. Closing removes the
+session from `sessions()`, while `getRecording()` can read any retained cast
+for the rest of the process.
+
+```js
+const su = new TuiTest("work", {
+  recording: {
+    mode: "on-failure",
+    directory: "./artifacts",
+    retentionCount: 100,
+    retentionAgeSeconds: 86400,
+    retentionSizeBytes: 1_073_741_824,
+  },
+});
+```
 
 ```js
 await su.startRecording("demo.png", { fps: 30, speed: 1, zoom: 0.5 });

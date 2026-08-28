@@ -27,7 +27,16 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Backend, BellEvent, Cell, Profile, RecordingFormat, State, Timeouts
+from .types import (
+    AutomaticRecording,
+    Backend,
+    BellEvent,
+    Cell,
+    Profile,
+    RecordingFormat,
+    State,
+    Timeouts,
+)
 
 _TERMINAL_MARKER = "Terminal content:\n"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
@@ -151,9 +160,18 @@ class TuiTest:
         timeouts: Optional[Timeouts] = None,
         profile: Optional[Profile] = None,
         artifacts: Optional[Dict[str, Any]] = None,
+        recording: Optional[AutomaticRecording] = None,
     ) -> None:
         self._session = cfg.resolve_session(session)
-        self._native = native.NativeSession(self._session)
+        recording_values = cfg.normalize_recording(recording) or {}
+        self._native = native.NativeSession(
+            self._session,
+            recording_values.get("mode"),
+            recording_values.get("directory"),
+            recording_values.get("retention_count"),
+            recording_values.get("retention_age_seconds"),
+            recording_values.get("retention_size_bytes"),
+        )
         self._backend = cfg.normalize_backend(backend)
         self._timeouts = cfg.normalize_timeouts(timeouts)
         self._profile = cfg.normalize_profile(profile)
@@ -321,6 +339,9 @@ class TuiTest:
 
     async def close(self) -> None:
         await self._await(self._native.close())
+
+    async def retain_recording(self) -> None:
+        await self._await(self._native.retain_recording())
 
     async def close_quiet(self) -> None:
         try:

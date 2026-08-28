@@ -54,7 +54,7 @@ All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError`
 
 ## API
 
-`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count` / `get_bell_events`, `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
+`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None, recording=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count` / `get_bell_events`, `screenshot`, `start_recording` / `stop_recording`, `retain_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
 
 `keyboard.press()` simulates key presses: it sends the normal press input and
 adds a release only when the negotiated Kitty mode can represent it.
@@ -111,13 +111,38 @@ async def test_echo():
         await t.expect_text("hi")
 ```
 
-Each terminal is uniquely named, so parallel workers don't collide. `set_terminal_defaults(...)` sets suite-wide options (`profile`, `timeouts`, `artifacts`, ...).
+Each terminal is uniquely named, so parallel workers don't collide. `set_terminal_defaults(...)` sets suite-wide options (`profile`, `timeouts`, `artifacts`, `recording`, ...).
 
 ## Cancellation and recordings
 
 Cancelling a task does not cancel the underlying Rust operation. Operations for single sessoins wait for completion (ex: `close()`, `close_all()`).
 
-Closing a session removes it from `sessions()`, but keeps its recording. `get_recording()` can read that recording for the rest of the process. The 1024 most recently closed sessions have their recordings retained.
+Automatic casts use `recording={"mode": ..., "directory": ...,
+"retention_count": ..., "retention_age_seconds": ...,
+"retention_size_bytes": ...}`. The mode is `"disabled"`, `"on-failure"`, or
+`"always"` (the default). A configured directory is the storage root;
+process-local casts are written below its `native` subdirectory. The default
+retention count is 1024, and the oldest completed casts are removed when any
+configured count, age, or total-size limit is exceeded.
+
+`"on-failure"` writes the cast while the session runs, then deletes it after a
+successful close. Assertion and internal operation failures retain it.
+`testing.terminal()` also retains it when the context body raises; other test
+fixtures can call `retain_recording()` before teardown. Closing removes the
+session from `sessions()`, while `get_recording()` can read any retained cast
+for the rest of the process.
+
+```python
+su = TuiTest(
+    recording={
+        "mode": "on-failure",
+        "directory": "./artifacts",
+        "retention_count": 100,
+        "retention_age_seconds": 86400,
+        "retention_size_bytes": 1_073_741_824,
+    }
+)
+```
 
 ```python
 await su.start_recording("demo.png", fps=30, speed=1.0, zoom=0.5)

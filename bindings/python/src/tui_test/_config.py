@@ -21,7 +21,17 @@ def resolve_session(session: Optional[str]) -> str:
 
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
 _BACKENDS = ("alacritty", "ghostty", "rio", "xtermjs")
+_RECORDING_MODES = ("disabled", "on-failure", "always")
 _PROFILE_FIELDS = frozenset(("scrollback", "colors"))
+_RECORDING_FIELDS = frozenset(
+    (
+        "mode",
+        "directory",
+        "retention_count",
+        "retention_age_seconds",
+        "retention_size_bytes",
+    )
+)
 _COLOR_FIELDS = frozenset(
     (
         "foreground",
@@ -112,6 +122,51 @@ def _object_mapping(value: object, name: str) -> Dict[str, Any]:
     if isinstance(value, collections.abc.Mapping):
         return dict(value)
     raise TypeError("{} must be a dataclass or mapping".format(name))
+
+
+def normalize_recording(recording: object) -> Optional[Dict[str, Any]]:
+    if recording is None:
+        return None
+    raw = _object_mapping(recording, "recording")
+    unknown = sorted(set(raw) - _RECORDING_FIELDS)
+    if unknown:
+        raise ValueError(
+            "unknown recording field {}".format(
+                ", ".join(repr(name) for name in unknown)
+            )
+        )
+
+    normalized = {}  # type: Dict[str, Any]
+    mode = raw.get("mode")
+    if mode is not None:
+        if not isinstance(mode, str) or mode not in _RECORDING_MODES:
+            raise ValueError(
+                "unknown recording mode {!r}; expected one of {}".format(
+                    mode, ", ".join(_RECORDING_MODES)
+                )
+            )
+        normalized["mode"] = mode
+
+    directory = raw.get("directory")
+    if directory is not None:
+        if not isinstance(directory, str) or not directory:
+            raise TypeError("recording.directory must be a non-empty string")
+        normalized["directory"] = directory
+
+    for name in (
+        "retention_count",
+        "retention_age_seconds",
+        "retention_size_bytes",
+    ):
+        value = raw.get(name)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise TypeError(
+                "recording.{} must be a non-negative integer".format(name)
+            )
+        normalized[name] = value
+    return normalized
 
 
 def normalize_profile(profile: object) -> Optional[Dict[str, Any]]:

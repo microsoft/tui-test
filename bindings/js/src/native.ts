@@ -1,5 +1,6 @@
 import { InternalError, UsageError, makeError } from "./errors.js";
 import type {
+  AutomaticRecordingOptions,
   BellEvent,
   Cell,
   Cursor,
@@ -134,16 +135,19 @@ async function invoke<T>(action: () => Promise<T>): Promise<T> {
   }
 }
 
-async function createSession(name: string): Promise<NativeSessionHandle> {
+async function createSession(
+  name: string,
+  recording?: AutomaticRecordingOptions,
+): Promise<NativeSessionHandle> {
   const binding = await loadBinding();
-  return new binding.NativeSession(name);
+  return new binding.NativeSession(name, recording);
 }
 
 export class NativeRuntime {
   #session: Promise<NativeSessionHandle>;
 
-  constructor(name: string) {
-    this.#session = createSession(name);
+  constructor(name: string, recording?: AutomaticRecordingOptions) {
+    this.#session = createSession(name, recording);
   }
 
   async #call<T>(action: (session: NativeSessionHandle) => Promise<T>): Promise<T> {
@@ -161,6 +165,10 @@ export class NativeRuntime {
 
   close(): Promise<void> {
     return this.#call((session) => session.close());
+  }
+
+  retainRecording(): Promise<void> {
+    return this.#call((session) => session.retainRecording());
   }
 
   state(): Promise<State> {

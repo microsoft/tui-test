@@ -348,6 +348,9 @@ pub enum Command {
     GetRecording {
         /// Session to read (defaults to --session / the default session).
         session: Option<String>,
+        /// Config file used to resolve a custom automatic recording directory.
+        #[arg(long, value_name = "PATH")]
+        config: Option<std::path::PathBuf>,
     },
     /// Watch a session live in another terminal (full-color, framed).
     ///

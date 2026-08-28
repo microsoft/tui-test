@@ -66,6 +66,7 @@ class NativeSurfaceTests(unittest.TestCase):
             "start_recording",
             "stop_recording",
             "recording",
+            "retain_recording",
         ):
             self.assertTrue(hasattr(session, name), name)
 

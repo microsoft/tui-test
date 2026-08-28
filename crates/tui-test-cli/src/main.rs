@@ -11,6 +11,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
+use fs2::FileExt;
 
 use cli::{Cli, Command, DaemonCmd, ExpectCmd, GetArg, KeyCmd, MouseCmd, RecordCmd, WaitCmd};
 use protocol::{GetField, MouseAction, Request, Response};
@@ -47,7 +48,10 @@ fn main() {
             print!("{SKILL_MD}");
             0
         }
-        Command::GetRecording { session: target } => get_recording(target.unwrap_or(session)),
+        Command::GetRecording {
+            session: target,
+            config,
+        } => get_recording(target.unwrap_or(session), config.as_deref()),
         Command::Sessions => list_sessions(cli.json),
         Command::Close { all } if all => close_all(cli.json),
         Command::Daemon {
@@ -83,6 +87,17 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
     // Closing must remain available when the running daemon is from an older
     // client; every other command requires matching protocol behavior.
     let allow_incompatible = matches!(&request, Request::Close);
+    let _lifecycle = if allow_incompatible {
+        match DaemonLock::acquire(session) {
+            Ok(lock) => Some(lock),
+            Err(error) => {
+                eprintln!("failed to lock daemon lifecycle: {error}");
+                return 4;
+            }
+        }
+    } else {
+        None
+    };
     let socket = config::socket_name(session);
     if allow_incompatible && !ipc::is_running(&socket) {
         if json {
@@ -97,7 +112,15 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
             return 4;
         }
     };
-    match ipc::exchange(conn, &request) {
+    let result = ipc::exchange(conn, &request);
+    match result {
+        Ok(resp) if allow_incompatible && resp.ok => {
+            if let Err(error) = wait_for_daemon_state(&socket, false, DAEMON_STATE_TIMEOUT) {
+                eprintln!("daemon did not stop: {error}");
+                return 4;
+            }
+            print_response(&resp, json)
+        }
         Ok(resp) => print_response(&resp, json),
         Err(_) if allow_incompatible && !ipc::is_running(&socket) => {
             if json {
@@ -173,6 +196,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 wait_ready: ready_flag(wait_ready, no_wait_ready),
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
+                recording: Box::new(settings.recording),
             }
         }
         Command::Run {
@@ -204,6 +228,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 wait_ready: ready_flag(wait_ready, no_wait_ready),
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
+                recording: Box::new(settings.recording),
             }
         }
         Command::Close { .. } => Request::Close,
@@ -467,8 +492,6 @@ fn parse_env(pairs: &[String]) -> anyhow::Result<Vec<(String, String)>> {
 
 const DAEMON_STATE_TIMEOUT: Duration = Duration::from_secs(5);
 const DAEMON_LOCK_TIMEOUT: Duration = Duration::from_secs(35);
-const DAEMON_LOCK_STALE_AFTER: Duration = Duration::from_secs(30);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DaemonStart {
     AlreadyRunning,
@@ -476,40 +499,34 @@ enum DaemonStart {
     Restarted,
 }
 
-struct DaemonLock {
-    path: std::path::PathBuf,
+pub(crate) struct DaemonLock {
+    _file: std::fs::File,
 }
 
 impl DaemonLock {
-    fn acquire(session: &str) -> anyhow::Result<Self> {
-        Self::acquire_path(
-            config::daemon_lock_file(session),
-            DAEMON_LOCK_TIMEOUT,
-            DAEMON_LOCK_STALE_AFTER,
-        )
+    pub(crate) fn acquire(session: &str) -> anyhow::Result<Self> {
+        config::ensure_home()?;
+        Self::acquire_path(config::daemon_lock_file(session), DAEMON_LOCK_TIMEOUT)
     }
 
-    fn acquire_path(
-        path: std::path::PathBuf,
-        timeout: Duration,
-        stale_after: Duration,
-    ) -> anyhow::Result<Self> {
+    fn acquire_path(path: std::path::PathBuf, timeout: Duration) -> anyhow::Result<Self> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to open daemon lifecycle lock {}: {error}",
+                    path.display()
+                )
+            })?;
         let start = Instant::now();
         loop {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(_) => return Ok(Self { path }),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if daemon_lock_is_stale(&path, stale_after) {
-                        match std::fs::remove_file(&path) {
-                            Ok(()) => continue,
-                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                            Err(_) => {}
-                        }
-                    }
+            match file.try_lock_exclusive() {
+                Ok(()) => return Ok(Self { _file: file }),
+                Err(error) if lock_is_contended(&error) => {
                     if start.elapsed() >= timeout {
                         anyhow::bail!(
                             "timed out waiting for daemon lifecycle lock {}",
@@ -525,35 +542,18 @@ impl DaemonLock {
                     );
                 }
             }
+
+            fn lock_is_contended(error: &std::io::Error) -> bool {
+                error.kind() == std::io::ErrorKind::WouldBlock
+                    || matches!(error.raw_os_error(), Some(32) | Some(33))
+            }
         }
     }
-}
-
-impl Drop for DaemonLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-fn daemon_lock_is_stale(path: &Path, stale_after: Duration) -> bool {
-    std::fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|age| age >= stale_after)
 }
 
 /// Spawn or replace the daemon for this session when necessary.
 fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     let socket = config::socket_name(session);
-    if let Some(version) = running_daemon_version(session, &socket)? {
-        if version == env!("CARGO_PKG_VERSION") {
-            report_existing_daemon(session, verbose);
-            return Ok(DaemonStart::AlreadyRunning);
-        }
-    }
-
-    config::ensure_home()?;
     let _lock = DaemonLock::acquire(session)?;
 
     match running_daemon_version(session, &socket)? {
@@ -758,9 +758,9 @@ fn spawn_detached(exe: &Path, session: &str, verbose: bool) -> anyhow::Result<()
 }
 
 /// Stream a session's recording (asciinema v2 cast) to stdout.
-fn get_recording(session: String) -> i32 {
+fn get_recording(session: String, explicit_config: Option<&Path>) -> i32 {
     let socket = config::socket_name(&session);
-    if ipc::is_running(&socket) {
+    let live_path = if ipc::is_running(&socket) {
         let response = match ipc::connect(&socket) {
             Ok(connection) => match ipc::exchange(connection, &Request::FlushRecording) {
                 Ok(response) => response,
@@ -784,8 +784,44 @@ fn get_recording(session: String) -> i32 {
             );
             return response.kind.map_or(5, tui_test::ErrorKind::exit_code);
         }
-    }
-    let path = config::recording_file(&session);
+        let disabled = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("disabled"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if disabled {
+            eprintln!("automatic recording is disabled for session '{session}'");
+            return 3;
+        }
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("recording"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|path| !path.is_empty())
+            .map(std::path::PathBuf::from)
+    } else {
+        None
+    };
+    let path = match live_path {
+        Some(path) => path,
+        None => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let recording = match tui_test::profile::resolve_recording(explicit_config, &cwd) {
+                Ok(recording) => recording,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return 2;
+                }
+            };
+            if recording.mode == tui_test::AutomaticRecordingMode::Disabled {
+                eprintln!("automatic recording is disabled for session '{session}'");
+                return 3;
+            }
+            config::recording_file(&session, &recording)
+        }
+    };
     match std::fs::read(&path) {
         Ok(bytes) => {
             use std::io::Write;
@@ -915,13 +951,25 @@ fn daemon_stop(session: &str, all: bool, targeted: bool, json: bool) -> i32 {
         );
         return 2;
     }
+    let _lock = match DaemonLock::acquire(session) {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("failed to lock daemon lifecycle: {error}");
+            return 4;
+        }
+    };
     let socket = config::socket_name(session);
     if !ipc::is_running(&socket) {
         eprintln!("no daemon running for session '{session}'");
         return 3;
     }
-    match ipc::send(&socket, &Request::Shutdown) {
+    let result = ipc::send(&socket, &Request::Shutdown);
+    match result {
         Ok(resp) if resp.ok => {
+            if let Err(error) = wait_for_daemon_state(&socket, false, DAEMON_STATE_TIMEOUT) {
+                eprintln!("daemon did not stop: {error}");
+                return 4;
+            }
             report_stopped(&[session.to_string()], json);
             0
         }
@@ -935,13 +983,42 @@ fn daemon_stop(session: &str, all: bool, targeted: bool, json: bool) -> i32 {
 
 fn stop_all_daemons(json: bool) -> i32 {
     let mut stopped = Vec::new();
+    let mut failed = Vec::new();
     for name in running_sessions() {
-        if ipc::send(&config::socket_name(&name), &Request::Shutdown).is_ok() {
-            stopped.push(name);
+        let _lock = match DaemonLock::acquire(&name) {
+            Ok(lock) => lock,
+            Err(error) => {
+                failed.push(format!("{name}: {error}"));
+                continue;
+            }
+        };
+        let socket = config::socket_name(&name);
+        match ipc::send(&socket, &Request::Shutdown) {
+            Ok(response) if response.ok => {
+                match wait_for_daemon_state(&socket, false, DAEMON_STATE_TIMEOUT) {
+                    Ok(()) => stopped.push(name),
+                    Err(error) => failed.push(format!("{name}: {error}")),
+                }
+            }
+            Ok(response) => failed.push(format!(
+                "{name}: {}",
+                response
+                    .message
+                    .as_deref()
+                    .unwrap_or("daemon refused to stop")
+            )),
+            Err(error) => failed.push(format!("{name}: {error}")),
         }
     }
     report_stopped(&stopped, json);
-    0
+    for error in &failed {
+        eprintln!("failed to stop daemon {error}");
+    }
+    if failed.is_empty() {
+        0
+    } else {
+        4
+    }
 }
 
 fn report_stopped(stopped: &[String], json: bool) {
@@ -1121,26 +1198,16 @@ mod tests {
     }
 
     #[test]
-    fn daemon_lifecycle_lock_serializes_and_recovers_stale_files() {
+    fn daemon_lifecycle_lock_serializes_callers() {
         let root = unique_test_path("daemon-lock");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("work.pid.lock");
-        let first = DaemonLock::acquire_path(
-            path.clone(),
-            Duration::from_secs(1),
-            Duration::from_secs(30),
-        )
-        .unwrap();
+        let first = DaemonLock::acquire_path(path.clone(), Duration::from_secs(1)).unwrap();
 
         let blocked_path = path.clone();
         let blocked = std::thread::spawn(move || {
             let start = Instant::now();
-            let lock = DaemonLock::acquire_path(
-                blocked_path,
-                Duration::from_secs(1),
-                Duration::from_secs(30),
-            )
-            .unwrap();
+            let lock = DaemonLock::acquire_path(blocked_path, Duration::from_secs(1)).unwrap();
             (start.elapsed(), lock)
         });
         std::thread::sleep(Duration::from_millis(100));
@@ -1148,11 +1215,6 @@ mod tests {
         let (waited, second) = blocked.join().unwrap();
         assert!(waited >= Duration::from_millis(75));
         drop(second);
-
-        std::fs::write(&path, b"stale").unwrap();
-        let recovered =
-            DaemonLock::acquire_path(path.clone(), Duration::from_secs(1), Duration::ZERO).unwrap();
-        drop(recovered);
         let _ = std::fs::remove_dir_all(root);
     }
 

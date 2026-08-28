@@ -3,6 +3,7 @@ import { IS_MACOS, IS_WINDOWS } from "../config.js";
 import { uniqueSession } from "../ephemeral.js";
 import type {
   ArtifactOptions,
+  AutomaticRecording,
   Backend,
   ClientOptions,
   Profile,
@@ -29,6 +30,7 @@ export interface CreateTerminalOptions {
   timeouts?: Timeouts;
   profile?: Profile;
   artifacts?: ArtifactOptions;
+  recording?: AutomaticRecording;
 }
 
 let defaults: Partial<CreateTerminalOptions> = {};
@@ -77,7 +79,13 @@ export function trackedCount(): number {
 
 function clientOptions(opts: CreateTerminalOptions): ClientOptions {
   const client: ClientOptions = {};
-  for (const key of ["backend", "timeouts", "profile", "artifacts"] as const) {
+  for (const key of [
+    "backend",
+    "timeouts",
+    "profile",
+    "artifacts",
+    "recording",
+  ] as const) {
     const value = opts[key];
     if (value !== undefined) {
       Object.assign(client, { [key]: value });
@@ -127,6 +135,15 @@ export async function withTerminal<T>(
   const terminal = await createTerminal(options);
   try {
     return await fn(terminal);
+  } catch (error) {
+    try {
+      await terminal.retainRecording();
+    } catch (retentionError) {
+      if (error instanceof Error && error.cause === undefined) {
+        error.cause = retentionError;
+      }
+    }
+    throw error;
   } finally {
     await terminal.closeQuiet();
     untrackTerminal(terminal);

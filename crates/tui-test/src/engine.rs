@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::api::{
-    Cell, CellColor, Cursor, EffectiveTimeouts, ErrorKind, OpenOptions, OpenResult, Operation,
-    OperationResult, PackedScreen, RunOptions, RuntimeStatus, ScreenshotResult, Size,
-    SnapshotResult, TuiTestError,
+    AutomaticRecording, AutomaticRecordingMode, Cell, CellColor, Cursor, EffectiveTimeouts,
+    ErrorKind, OpenOptions, OpenResult, Operation, OperationResult, PackedScreen, RunOptions,
+    RuntimeStatus, ScreenshotResult, Size, SnapshotResult, TuiTestError,
 };
 use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
@@ -26,7 +26,9 @@ pub struct Engine {
     live: Arc<Mutex<Option<LiveTarget>>>,
     interrupt: Mutex<Option<InterruptTarget>>,
     logger: Arc<Logger>,
-    recording_path: PathBuf,
+    recording_relative_path: PathBuf,
+    prune_recordings_on_close: bool,
+    recording: Mutex<RecordingState>,
 }
 
 #[derive(Clone)]
@@ -38,6 +40,15 @@ struct InterruptTarget {
 struct LiveTarget {
     state: Arc<Mutex<TermState>>,
     shell: Option<&'static str>,
+}
+
+#[derive(Clone)]
+struct RecordingState {
+    path: Option<PathBuf>,
+    scope: Option<PathBuf>,
+    options: AutomaticRecording,
+    failed: bool,
+    configured: bool,
 }
 
 pub struct LiveFrame {
@@ -53,7 +64,7 @@ pub struct LiveFrame {
 fn operation_summary(operation: &Operation) -> String {
     match operation {
         Operation::Open(options) => format!(
-            "Open {{ backend: {}, shell: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, restart: {}, timeouts: {:?}, env: <{} vars> }}",
+            "Open {{ backend: {}, shell: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, restart: {}, timeouts: {:?}, recording: {:?}, env: <{} vars> }}",
             options.backend.as_str(),
             options.shell,
             options.profile.scrollback,
@@ -63,10 +74,11 @@ fn operation_summary(operation: &Operation) -> String {
             options.wait_ready,
             options.restart,
             options.timeouts,
+            options.recording.mode,
             options.env.len()
         ),
         Operation::Run(options) => format!(
-            "Run {{ backend: {}, program: {:?}, args: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, restart: {}, timeouts: {:?}, env: <{} vars> }}",
+            "Run {{ backend: {}, program: {:?}, args: {:?}, scrollback: {}, {}x{}, cwd: {:?}, wait_ready: {:?}, restart: {}, timeouts: {:?}, recording: {:?}, env: <{} vars> }}",
             options.backend.as_str(),
             options.program,
             options.args,
@@ -77,6 +89,7 @@ fn operation_summary(operation: &Operation) -> String {
             options.wait_ready,
             options.restart,
             options.timeouts,
+            options.recording.mode,
             options.env.len()
         ),
         other => format!("{other:?}"),
@@ -84,7 +97,25 @@ fn operation_summary(operation: &Operation) -> String {
 }
 
 impl Engine {
-    pub fn new(name: String, logger: Arc<Logger>, recording_path: PathBuf) -> Self {
+    pub fn new(name: String, logger: Arc<Logger>, recording_relative_path: PathBuf) -> Self {
+        Self::new_inner(name, logger, recording_relative_path, true)
+    }
+
+    pub fn new_with_external_recording_retention(
+        name: String,
+        logger: Arc<Logger>,
+        recording_relative_path: PathBuf,
+    ) -> Self {
+        Self::new_inner(name, logger, recording_relative_path, false)
+    }
+
+    fn new_inner(
+        name: String,
+        logger: Arc<Logger>,
+        recording_relative_path: PathBuf,
+        prune_recordings_on_close: bool,
+    ) -> Self {
+        let options = AutomaticRecording::default();
         Self {
             name,
             operations: Mutex::new(()),
@@ -92,23 +123,19 @@ impl Engine {
             live: Arc::new(Mutex::new(None)),
             interrupt: Mutex::new(None),
             logger,
-            recording_path,
+            recording_relative_path,
+            prune_recordings_on_close,
+            recording: Mutex::new(RecordingState {
+                path: None,
+                scope: None,
+                options,
+                failed: false,
+                configured: false,
+            }),
         }
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute_inner(operation)
-        }))
-        .unwrap_or_else(|payload| {
-            Err(TuiTestError::internal(format!(
-                "native terminal operation panicked: {}",
-                panic_message(payload.as_ref())
-            )))
-        })
-    }
-
-    fn execute_inner(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
         let _operation = self
             .operations
             .lock()
@@ -117,6 +144,25 @@ impl Engine {
             self.logger
                 .event(&format!("operation {}", operation_summary(&operation)));
         }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.execute_inner(operation)
+        }))
+        .unwrap_or_else(|payload| {
+            Err(TuiTestError::internal(format!(
+                "native terminal operation panicked: {}",
+                panic_message(payload.as_ref())
+            )))
+        });
+        if result
+            .as_ref()
+            .is_err_and(|error| matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal))
+        {
+            self.mark_recording_for_retention();
+        }
+        result
+    }
+
+    fn execute_inner(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
         match operation {
             Operation::Open(options) => self.open(options).map(OperationResult::Open),
             Operation::Run(options) => self.run(options).map(OperationResult::Open),
@@ -131,7 +177,10 @@ impl Engine {
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 if let Some(session) = self.lock_session().take() {
                     session.kill();
+                    drop(session);
                 }
+                self.cleanup_unretained_recording();
+                self.prune_completed_recordings();
                 Ok(OperationResult::Unit)
             }
             other => self.with_session(|session| dispatch(session, other)),
@@ -151,6 +200,7 @@ impl Engine {
             options.wait_ready,
             options.restart,
             options.timeouts,
+            options.recording,
         )
     }
 
@@ -170,6 +220,7 @@ impl Engine {
             options.wait_ready,
             options.restart,
             options.timeouts,
+            options.recording,
         )
     }
 
@@ -187,7 +238,9 @@ impl Engine {
         wait_ready: Option<bool>,
         restart: bool,
         timeouts: crate::api::Timeouts,
+        mut recording: AutomaticRecording,
     ) -> Result<OpenResult, TuiTestError> {
+        recording.validate()?;
         let mut current = self.lock_session();
         if let Some(previous) = current.as_ref() {
             if !restart && previous.is_alive()? {
@@ -195,7 +248,7 @@ impl Engine {
                     shell_pid: previous.pid(),
                     session: self.name.clone(),
                     ready: previous.is_ready(),
-                    recording: self.recording_path.to_string_lossy().into_owned(),
+                    recording: self.recording_path_string(),
                 });
             }
         }
@@ -210,8 +263,34 @@ impl Engine {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         if let Some(previous) = current.take() {
             previous.kill();
+            drop(previous);
+            self.cleanup_unretained_recording();
+            self.prune_completed_recordings();
         }
         drop(current);
+        let recording_required =
+            recording.mode != AutomaticRecordingMode::Disabled && recording.directory.is_some();
+        let (recording_path, recording_scope) =
+            if recording.mode == AutomaticRecordingMode::Disabled {
+                (None, None)
+            } else {
+                let recording_root = absolute_recording_root(&recording)?;
+                recording.directory = Some(recording_root.clone());
+                (
+                    Some(recording_root.join(&self.recording_relative_path)),
+                    recording_path_for_scope(&recording_root, &self.recording_relative_path),
+                )
+            };
+        *self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = RecordingState {
+            path: recording_path.clone(),
+            scope: recording_scope,
+            options: recording.clone(),
+            failed: false,
+            configured: true,
+        };
         let session = TerminalSession::open(
             shell,
             program.clone(),
@@ -223,7 +302,8 @@ impl Engine {
             env,
             timeouts,
             self.logger.clone(),
-            self.recording_path.clone(),
+            recording_path,
+            recording_required,
         )
         .map_err(|error| TuiTestError::internal(format!("failed to open session: {error}")))?;
 
@@ -271,7 +351,7 @@ impl Engine {
             shell_pid,
             session: self.name.clone(),
             ready,
-            recording: self.recording_path.to_string_lossy().into_owned(),
+            recording: self.recording_path_string(),
         })
     }
 
@@ -374,8 +454,42 @@ impl Engine {
         self.lock_session().is_some()
     }
 
-    pub fn recording_path(&self) -> &PathBuf {
-        &self.recording_path
+    pub fn recording_path(&self) -> Option<PathBuf> {
+        self.recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .path
+            .clone()
+    }
+
+    pub fn recording_configured(&self) -> bool {
+        self.recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .configured
+    }
+
+    pub fn recording_options(&self) -> AutomaticRecording {
+        self.recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .options
+            .clone()
+    }
+
+    pub fn retain_recording(&self) {
+        let _operation = self
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.mark_recording_for_retention();
+    }
+
+    fn mark_recording_for_retention(&self) {
+        self.recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .failed = true;
     }
 
     pub fn flush_recording(&self) -> Result<(), TuiTestError> {
@@ -383,9 +497,71 @@ impl Engine {
             .operations
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.recording_path().is_none() {
+            return Err(TuiTestError::usage("automatic recording is disabled"));
+        }
         let guard = self.lock_session();
-        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
-        session.flush_recording()
+        if let Some(session) = guard.as_ref() {
+            return session.flush_recording();
+        }
+        if self.recording_path().is_some_and(|path| path.is_file()) {
+            Ok(())
+        } else {
+            Err(TuiTestError::no_session())
+        }
+    }
+
+    pub(crate) fn retained_recording(&self) -> Option<(PathBuf, AutomaticRecording)> {
+        let recording = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if recording.path.as_ref().is_some_and(|path| {
+            path.is_file()
+                && recording_should_be_retained(&recording.options, recording.failed, path)
+        }) {
+            Some((
+                recording
+                    .path
+                    .clone()
+                    .expect("recording path checked above"),
+                recording.options.clone(),
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn recording_path_string(&self) -> String {
+        self.recording_path()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    fn cleanup_unretained_recording(&self) {
+        let recording = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(path) = recording.path.as_ref() else {
+            return;
+        };
+        if !recording_should_be_retained(&recording.options, recording.failed, path) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    fn prune_completed_recordings(&self) {
+        if !self.prune_recordings_on_close {
+            return;
+        }
+        let recording = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(scope) = recording.scope.as_deref() {
+            crate::record::prune_automatic_recordings(scope, &recording.options);
+        }
     }
 
     fn lock_session(&self) -> MutexGuard<'_, Option<TerminalSession>> {
@@ -400,9 +576,53 @@ impl Drop for Engine {
         if let Ok(session) = self.session.get_mut() {
             if let Some(session) = session.take() {
                 session.kill();
+                drop(session);
             }
         }
+        self.cleanup_unretained_recording();
+        self.prune_completed_recordings();
     }
+}
+
+fn recording_should_be_retained(
+    options: &AutomaticRecording,
+    failed: bool,
+    path: &std::path::Path,
+) -> bool {
+    let mode_retains = match options.mode {
+        AutomaticRecordingMode::Disabled => false,
+        AutomaticRecordingMode::OnFailure => failed,
+        AutomaticRecordingMode::Always => true,
+    };
+    if !mode_retains
+        || options.retention_count == Some(0)
+        || options.retention_age_seconds == Some(0)
+    {
+        return false;
+    }
+
+    match options.retention_size_bytes {
+        Some(limit) => std::fs::metadata(path)
+            .map(|metadata| metadata.len() <= limit)
+            .unwrap_or(false),
+        None => true,
+    }
+}
+
+fn absolute_recording_root(recording: &AutomaticRecording) -> Result<PathBuf, TuiTestError> {
+    match config::canonical_recording_root(recording) {
+        Ok(root) => Ok(root),
+        Err(error) if recording.directory.is_some() => Err(TuiTestError::usage(format!(
+            "failed to prepare automatic recording directory: {error}"
+        ))),
+        Err(_) => Ok(config::recording_root(recording)),
+    }
+}
+
+fn recording_path_for_scope(root: &std::path::Path, relative: &std::path::Path) -> Option<PathBuf> {
+    root.join(relative)
+        .parent()
+        .map(std::path::Path::to_path_buf)
 }
 
 fn open_ready_timeout(session: &TerminalSession) -> u64 {

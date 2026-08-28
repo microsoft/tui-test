@@ -11,7 +11,18 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Backend, BellEvent, Cell, Colors, Profile, RecordingFormat, State, Timeouts
+from .types import (
+    AutomaticRecording,
+    AutomaticRecordingMode,
+    Backend,
+    BellEvent,
+    Cell,
+    Colors,
+    Profile,
+    RecordingFormat,
+    State,
+    Timeouts,
+)
 
 __all__ = [
     "TuiTest",
@@ -25,6 +36,8 @@ __all__ = [
     "NoSessionError",
     "InternalError",
     "TerminalArtifact",
+    "AutomaticRecording",
+    "AutomaticRecordingMode",
     "BellEvent",
     "Cell",
     "Backend",

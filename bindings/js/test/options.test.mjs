@@ -11,6 +11,7 @@ import {
   backendPayload,
   envPairs,
   profilePayload,
+  recordingPayload,
   resolveTimeout,
   timeoutsPayload,
 } from "../dist/config.js";
@@ -121,6 +122,30 @@ test("profilePayload validates profile and color fields", () => {
     /chartreuse/,
   );
   assert.throws(() => profilePayload({ colors: { red: 123 } }), /must be a string/);
+});
+
+test("recordingPayload validates automatic recording options", () => {
+  assert.equal(recordingPayload(), undefined);
+  assert.deepEqual(
+    recordingPayload({
+      mode: "on-failure",
+      directory: "artifacts",
+      retentionCount: 10,
+      retentionAgeSeconds: 60,
+      retentionSizeBytes: 1024,
+    }),
+    {
+      mode: "on-failure",
+      directory: "artifacts",
+      retentionCount: 10,
+      retentionAgeSeconds: 60,
+      retentionSizeBytes: 1024,
+    },
+  );
+  assert.throws(() => recordingPayload({ mode: "sometimes" }), /recording mode/);
+  assert.throws(() => recordingPayload({ directory: "" }), /non-empty string/);
+  assert.throws(() => recordingPayload({ retentionCount: -1 }), /non-negative/);
+  assert.throws(() => recordingPayload({ retainCount: 1 }), /retainCount/);
 });
 
 test("unknown timeout classes are rejected before native dispatch", async () => {
