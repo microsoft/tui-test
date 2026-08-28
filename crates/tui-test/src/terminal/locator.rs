@@ -46,12 +46,19 @@ impl Pattern {
             }
             Pattern::Regex(regex) => {
                 let block: String = chars.iter().collect();
+                let mut byte_offset = 0;
+                let mut char_offset = 0;
                 regex
                     .find_iter(&block)
-                    .filter(|matched| !matched.is_empty())
-                    .map(|matched| {
-                        let start = block[..matched.start()].chars().count();
-                        (start, start + matched.as_str().chars().count())
+                    .filter_map(|matched| {
+                        if matched.is_empty() {
+                            return None;
+                        }
+                        char_offset += block[byte_offset..matched.start()].chars().count();
+                        let start = char_offset;
+                        char_offset += matched.as_str().chars().count();
+                        byte_offset = matched.end();
+                        Some((start, char_offset))
                     })
                     .collect()
             }
@@ -82,7 +89,7 @@ struct FlatGrid {
 
 /// Locate the matches selected by `selector`.
 pub fn locate(rows: &[Vec<EmuCell>], selector: &TextSelector) -> anyhow::Result<Vec<LocatedMatch>> {
-    locate_text_within(rows, selector, None)
+    locate_text_within(rows, selector, None, None)
 }
 
 pub fn locate_query<F>(
@@ -109,8 +116,18 @@ where
         relative_regions(parents, query.direction, width.saturating_mul(rows.len()))
     });
     let occurrence = query.occurrence.clone();
+    let select_early = query.style.is_empty();
+    let mut selected_early = false;
     let mut matches = match &query.selector {
-        LocatorSelector::Text(selector) => locate_text_within(rows, selector, allowed.as_deref())?,
+        LocatorSelector::Text(selector) => {
+            selected_early = select_early;
+            locate_text_within(
+                rows,
+                selector,
+                allowed.as_deref(),
+                select_early.then_some(&occurrence),
+            )?
+        }
         LocatorSelector::Style(selector)
             if query.direction == LocatorDirection::Within && parents.is_some() =>
         {
@@ -120,13 +137,24 @@ where
             matches
         }
         LocatorSelector::Style(selector) => {
-            locate_style_within(rows, selector, allowed.as_deref(), style_matches)?
+            selected_early = select_early;
+            locate_style_within(
+                rows,
+                selector,
+                allowed.as_deref(),
+                select_early.then_some(&occurrence),
+                style_matches,
+            )?
         }
     };
     if !query.style.is_empty() {
         matches.retain(|matched| located_match_has_style(matched, &query.style, style_matches));
     }
-    select_items(matches, &occurrence, &query.selector.description())
+    if selected_early {
+        Ok(matches)
+    } else {
+        select_items(matches, &occurrence, &query.selector.description())
+    }
 }
 
 fn located_match_has_style<F>(
@@ -182,6 +210,7 @@ fn locate_text_within(
     rows: &[Vec<EmuCell>],
     selector: &TextSelector,
     allowed: Option<&[(usize, usize)]>,
+    occurrence: Option<&MatchOccurrence>,
 ) -> anyhow::Result<Vec<LocatedMatch>> {
     if rows.is_empty() {
         return Ok(Vec::new());
@@ -205,6 +234,11 @@ fn locate_text_within(
             })
         })
         .collect();
+    let ranges = if let Some(occurrence) = occurrence {
+        select(ranges, occurrence, &pattern.describe())?
+    } else {
+        ranges
+    };
     Ok(ranges
         .into_iter()
         .filter_map(|range| materialize(rows, &flat, range))
@@ -215,6 +249,7 @@ fn locate_style_within<F>(
     rows: &[Vec<EmuCell>],
     selector: &StyleSelector,
     allowed: Option<&[(usize, usize)]>,
+    occurrence: Option<&MatchOccurrence>,
     style_matches: &mut F,
 ) -> anyhow::Result<Vec<LocatedMatch>>
 where
@@ -263,6 +298,11 @@ where
             ranges.push((start, y * flat.width + row.len()));
         }
     }
+    let ranges = if let Some(occurrence) = occurrence {
+        select(ranges, occurrence, "style")?
+    } else {
+        ranges
+    };
     Ok(ranges
         .into_iter()
         .filter_map(|range| materialize(rows, &flat, range))
@@ -451,7 +491,7 @@ fn materialize(
                 *end = end.saturating_add(1);
             }
             _ => spans.push(TextSpan {
-                row: cell.y.min(u16::MAX as usize) as u16,
+                row: cell.y.min(u32::MAX as usize) as u32,
                 start: cell.x.min(u16::MAX as usize) as u16,
                 end: cell.x.saturating_add(1).min(u16::MAX as usize) as u16,
             }),
@@ -461,11 +501,11 @@ fn materialize(
         value: TextMatch {
             text: flat.chars[start..end].iter().collect(),
             start: TextPosition {
-                row: first.y.min(u16::MAX as usize) as u16,
+                row: first.y.min(u32::MAX as usize) as u32,
                 column: first.x.min(u16::MAX as usize) as u16,
             },
             end: TextPosition {
-                row: last.y.min(u16::MAX as usize) as u16,
+                row: last.y.min(u32::MAX as usize) as u32,
                 column: last.x.saturating_add(1).min(u16::MAX as usize) as u16,
             },
             spans,
@@ -532,6 +572,29 @@ mod tests {
         assert_eq!(found[0].value.text, "hello world");
         assert_eq!(found[0].value.start, TextPosition { row: 0, column: 2 });
         assert_eq!(found[0].value.end, TextPosition { row: 1, column: 9 });
+    }
+
+    #[test]
+    fn regex_ranges_map_utf8_offsets_in_one_pass() {
+        let chars = "é界a".chars().collect::<Vec<_>>();
+        assert_eq!(
+            Pattern::new(".", true).unwrap().ranges(&chars),
+            vec![(0, 1), (1, 2), (2, 3)]
+        );
+    }
+
+    #[test]
+    fn locations_preserve_rows_above_u16() {
+        let mut rows = vec![Vec::new(); u16::MAX as usize + 2];
+        rows[u16::MAX as usize + 1] = vec![EmuCell {
+            ch: "X".into(),
+            ..EmuCell::blank()
+        }];
+
+        let found = locate_query_text(&rows, &LocatorQuery::text("X")).unwrap();
+        assert_eq!(found[0].value.start.row, u16::MAX as u32 + 1);
+        assert_eq!(found[0].value.end.row, u16::MAX as u32 + 1);
+        assert_eq!(found[0].value.spans[0].row, u16::MAX as u32 + 1);
     }
 
     #[test]

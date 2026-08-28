@@ -190,7 +190,8 @@ class IntegrationTests(unittest.TestCase):
                 "import sys,time; "
                 "sys.stdout.write("
                 "'Settings One\\n  Save\\nSettings Two\\n  Save\\n"
-                "\\x1b[1mWarning\\x1b[0m\\n'"
+                "\\x1b[1mWarning\\x1b[0m\\n"
+                "\\x1b[1mPart\\x1b[0mial\\n'"
                 "); "
                 "sys.stdout.flush(); time.sleep(30)"
             )
@@ -242,6 +243,18 @@ class IntegrationTests(unittest.TestCase):
                     "waiting for 'style' to be visible",
                     str(raised.exception),
                 )
+                await (
+                    su.get_by_style(TextStyle(bold=True))
+                    .get_by_text("Part")
+                    .unique()
+                    .expect()
+                )
+                with self.assertRaises(ExpectationError):
+                    await (
+                        su.get_by_text("Partial")
+                        .get_by_style(TextStyle(bold=True))
+                        .expect(timeout=20)
+                    )
 
         run(scenario())
 
@@ -261,9 +274,23 @@ class IntegrationTests(unittest.TestCase):
                 waited = await locator.wait(timeout=2000)
                 self.assertIs(waited, locator)
                 self.assertEqual(await locator.count(), 3)
+                await locator.any().expect(timeout=20)
                 await locator.expect(timeout=20)
+                await locator.first().expect(timeout=20)
+                await locator.last().expect(timeout=20)
+                await locator.nth(2).expect(timeout=20)
+                await locator.nth(3).expect(not_=True, timeout=20)
+                await su.get_by_text("missing-item").unique().expect(
+                    not_=True,
+                    timeout=20,
+                )
                 with self.assertRaises(ExpectationError):
                     await locator.unique().expect(timeout=20)
+                with self.assertRaises(ExpectationError) as raised:
+                    await locator.unique().expect(not_=True, timeout=20)
+                self.assertIn("found 3", str(raised.exception))
+                with self.assertRaises(ExpectationError):
+                    await locator.first().expect(not_=True, timeout=20)
                 nested = (
                     su.get_by_text("item item")
                     .get_by_style(TextStyle(bold=True))

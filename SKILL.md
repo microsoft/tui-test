@@ -391,7 +391,10 @@ start with all matches; select occurrences only by chaining `any`, `unique`,
 `unique().expect()` requires exactly one. Compose style expectations as a
 nested `get_by_style` / `getByStyle` stage. With the default `within`
 direction, it filters and preserves parent matches whose visible cells all
-satisfy the style.
+satisfy the style. Negation is an expectation option: a negated `unique`
+locator passes with zero matches, fails with one present match, and remains
+ambiguous with multiple matches. `count()` returns the exact current match
+count for an assertion in the host test framework.
 
 The constructors accept a session name plus backend, profile, timeout, and
 artifact options: `TuiTest(session="default", *, backend=None, timeouts=None,

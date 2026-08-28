@@ -212,6 +212,10 @@ fn text_locators_are_lazy_reusable_queries() {
         .expect("wait with the same locator");
     assert_eq!(locator.count().expect("count current matches"), 2);
     locator.expect().expect("expect any matching result");
+    locator.any().expect().expect("expect explicit any match");
+    locator.first().expect().expect("expect first match");
+    locator.last().expect().expect("expect last match");
+    locator.nth(1).expect().expect("expect second match");
     assert!(locator
         .unique()
         .expect_with(LocatorExpectOptions {
@@ -219,6 +223,26 @@ fn text_locators_are_lazy_reusable_queries() {
             ..LocatorExpectOptions::default()
         })
         .is_err());
+    let hidden = LocatorExpectOptions {
+        not: true,
+        timeout_ms: Some(20),
+    };
+    session
+        .get_by_text("missing-locator-target")
+        .unique()
+        .expect_with(hidden)
+        .expect("expect an absent unique locator");
+    locator
+        .nth(2)
+        .expect_with(hidden)
+        .expect("expect an absent third match");
+    assert!(locator
+        .unique()
+        .expect_with(hidden)
+        .unwrap_err()
+        .message
+        .contains("found 2"));
+    assert!(locator.first().expect_with(hidden).is_err());
     locator.first().expect().expect("expect one selected match");
     let relative = locator
         .first()

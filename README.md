@@ -382,6 +382,10 @@ is expressed only by chaining `any`, `unique`, `first`, `last`, or `nth`.
 exactly one. Style expectations are composed with a nested `get_by_style` /
 `getByStyle` locator. With the default `within` direction, that stage filters
 and preserves parent matches whose visible cells all satisfy the style.
+Negation is an expectation option, not a locator selector; combining it with
+`unique` means zero matches pass, one present match fails, and multiple matches
+remain ambiguous. Use `count()` with the host test framework to assert an
+exact current count.
 
 #### PTY control
 

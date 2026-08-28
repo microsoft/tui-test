@@ -551,13 +551,13 @@ pub struct BellEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TextPosition {
-    pub row: u16,
+    pub row: u32,
     pub column: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TextSpan {
-    pub row: u16,
+    pub row: u32,
     pub start: u16,
     pub end: u16,
 }

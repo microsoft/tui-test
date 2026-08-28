@@ -382,7 +382,7 @@ test("private packed screens retain full UTF-8 logical rows and own their bytes"
 test("text locators scope matches and assert styles", async () => {
   const su = new TuiTest(uniqueSession("text-locators"));
   const script =
-    "process.stdout.write('Settings One\\n  Save\\nSettings Two\\n  Save\\n\\x1b[1mWarning\\x1b[0m\\n');" +
+    "process.stdout.write('Settings One\\n  Save\\nSettings Two\\n  Save\\n\\x1b[1mWarning\\x1b[0m\\n\\x1b[1mPart\\x1b[0mial\\n');" +
     "setInterval(() => {}, 1000)";
   try {
     await su.run(process.execPath, ["-e", script]);
@@ -434,6 +434,18 @@ test("text locators scope matches and assert styles", async () => {
         error instanceof ExpectationError &&
         error.message.includes("waiting for 'style' to be visible"),
     );
+    await su
+      .getByStyle({ bold: true })
+      .getByText("Part")
+      .unique()
+      .expect();
+    await assert.rejects(
+      su
+        .getByText("Partial")
+        .getByStyle({ bold: true })
+        .expect({ timeout: 20 }),
+      (error) => error instanceof ExpectationError,
+    );
   } finally {
     await su.closeQuiet();
   }
@@ -463,9 +475,28 @@ test("get-by locators are lazy, chainable, and actionable", async () => {
     const waited = await locator.wait({ timeout: 2000 });
     assert.strictEqual(waited, locator);
     assert.equal(await locator.count(), 3);
+    await locator.any().expect({ timeout: 20 });
     await locator.expect({ timeout: 20 });
+    await locator.first().expect({ timeout: 20 });
+    await locator.last().expect({ timeout: 20 });
+    await locator.nth(2).expect({ timeout: 20 });
+    await locator.nth(3).expect({ not: true, timeout: 20 });
+    await su
+      .getByText("missing-item")
+      .unique()
+      .expect({ not: true, timeout: 20 });
     await assert.rejects(
       locator.unique().expect({ timeout: 20 }),
+      (error) => error instanceof ExpectationError,
+    );
+    await assert.rejects(
+      locator.unique().expect({ not: true, timeout: 20 }),
+      (error) =>
+        error instanceof ExpectationError &&
+        error.message.includes("found 3"),
+    );
+    await assert.rejects(
+      locator.first().expect({ not: true, timeout: 20 }),
       (error) => error instanceof ExpectationError,
     );
     const nested = su

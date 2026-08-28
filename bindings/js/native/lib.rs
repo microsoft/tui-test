@@ -341,13 +341,13 @@ impl TryFrom<CoreCell> for Cell {
 
 #[napi(object)]
 pub struct TextPosition {
-    pub row: u16,
+    pub row: u32,
     pub column: u16,
 }
 
 #[napi(object)]
 pub struct TextSpan {
-    pub row: u16,
+    pub row: u32,
     pub start: u16,
     pub end: u16,
 }

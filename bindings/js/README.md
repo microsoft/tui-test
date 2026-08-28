@@ -101,7 +101,10 @@ all matches; select an occurrence only with `any()`, `unique()`, `first()`,
 `last()`, or `nth()`. An unselected locator's `expect()` succeeds when at
 least one match exists, while `unique().expect()` requires exactly one.
 `click()` and `location()` require one target and therefore treat an
-unselected locator as unique.
+unselected locator as unique. Negation belongs to the assertion:
+`unique().expect({ not: true })` passes for zero matches, fails when one is
+present, and reports ambiguity for multiple matches. `count()` returns the
+current number of selected matches for an exact test-framework assertion.
 
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 
