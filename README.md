@@ -214,7 +214,7 @@ await su.close();
 | Start or reuse a terminal | `open`, `run`, `sessions` |
 | Inspect what happened | `state`, `text`, `find text`, `cells`, `get`, `screenshot` |
 | Interact with the program | `click text`, `submit`, `type`, `key`, `mouse`, `resize`, `signal` |
-| Wait for real terminal state | `wait command`, `wait ready`, `wait idle`, `wait text`, `wait title`, `wait bell` |
+| Wait for real terminal state | `expect text`, `wait command`, `wait ready`, `wait idle`, `wait title`, `wait bell` |
 | Check the result | `expect text`, `expect output`, `expect exit-code`, `expect snapshot` |
 | Hand the session to a person | `monitor`, `screenshot`, `record` |
 
@@ -267,7 +267,7 @@ Configure timeouts directly via cli falgs or within [profiles](#profiles) in the
 
 ```sh
 tui-test open --timeout-text 30000 --timeout-idle 15000 --timeout-ready 20000
-tui-test wait text "done" --timeout 60000   # just this call
+tui-test expect text "done" --timeout 60000 # just this call
 ```
 
 #### Lifecycle
@@ -355,7 +355,6 @@ Text commands share the same selector and optional style flags:
 
 ```sh
 tui-test find text "Save"                                    # current locations
-tui-test wait text "Save" --fg green                         # wait for green Save
 tui-test expect text "Save" --fg green                       # assert green Save
 tui-test click text "Save" --fg green --timeout 5000         # auto-wait, then click
 tui-test highlight text 'item\s+\d+' --regex                 # highlight every match
@@ -385,7 +384,6 @@ inside the dynamically resolved parent match.
 
 | Command                                             | Description                         |
 | --------------------------------------------------- | ----------------------------------- |
-| `wait text "T" [selector/style options] [--not --timeout MS]` | Until the complete query is (not) matched. |
 | `wait title "T" [--regex --not --timeout MS]`       | Until the window title (OSC 0/2) matches. |
 | `wait idle`                                         | Until the screen stops changing.    |
 | `wait command`                                      | Until the current command finishes. |

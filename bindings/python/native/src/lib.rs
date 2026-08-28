@@ -8,9 +8,11 @@ use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
-    Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, KeyAction, LocatorQuery, MouseAction,
-    OpenOptions, OpenResult, Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions,
-    ScreenshotResult, Size, SnapshotResult, State, TextMatch, TextStyle, Timeouts, TuiTestError,
+    Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, KeyAction, LocatorQuery,
+    LocatorSelector, MatchOccurrence, MouseAction, OpenOptions, OpenResult, Operation,
+    OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
+    SnapshotResult, State, StyleSelector, TextAnchor, TextMatch, TextScope, TextSelector,
+    TextStyle, Timeouts, TuiTestError, WhitespaceMode,
 };
 
 pyo3::create_exception!(
@@ -234,39 +236,35 @@ impl NativeSession {
     fn find_locator<'py>(
         &self,
         py: Python<'py>,
-        query_json: String,
+        stages: Vec<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let query = capture_locator_query(&stages);
         let name = self.name.clone();
         future_blocking(
             py,
-            move || {
-                let query: LocatorQuery = serde_json::from_str(&query_json)
-                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
-                execute_matches(&name, Operation::FindLocator { query })
-            },
+            move || execute_matches(&name, Operation::FindLocator { query: query? }),
             matches_to_py,
         )
     }
 
-    #[pyo3(signature = (query_json, not_, timeout_ms))]
+    #[pyo3(signature = (stages, not_, timeout_ms))]
     fn wait_locator<'py>(
         &self,
         py: Python<'py>,
-        query_json: String,
+        stages: Vec<Bound<'py, PyAny>>,
         not_: bool,
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let query = capture_locator_query(&stages);
         let timeout_ms = capture_optional_integer(timeout_ms);
         let name = self.name.clone();
         future_blocking(
             py,
             move || {
-                let query: LocatorQuery = serde_json::from_str(&query_json)
-                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
                 execute_unit(
                     &name,
                     Operation::WaitLocator {
-                        query,
+                        query: query?,
                         not: not_,
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
@@ -276,15 +274,16 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (query_json, button, clicks, timeout_ms))]
+    #[pyo3(signature = (stages, button, clicks, timeout_ms))]
     fn click_locator<'py>(
         &self,
         py: Python<'py>,
-        query_json: String,
+        stages: Vec<Bound<'py, PyAny>>,
         button: Bound<'py, PyAny>,
         clicks: Bound<'py, PyAny>,
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let query = capture_locator_query(&stages);
         let button = capture_integer(&button);
         let clicks = capture_integer(&clicks);
         let timeout_ms = capture_optional_integer(timeout_ms);
@@ -292,12 +291,10 @@ impl NativeSession {
         future_blocking(
             py,
             move || {
-                let query: LocatorQuery = serde_json::from_str(&query_json)
-                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
                 execute_unit(
                     &name,
                     Operation::ClickLocator {
-                        query,
+                        query: query?,
                         button: integer_u8(&button, "button")?,
                         clicks: integer_u8(&clicks, "clicks")?,
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
@@ -308,24 +305,23 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (query_json, timeout_ms))]
+    #[pyo3(signature = (stages, timeout_ms))]
     fn highlight_locator<'py>(
         &self,
         py: Python<'py>,
-        query_json: String,
+        stages: Vec<Bound<'py, PyAny>>,
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let query = capture_locator_query(&stages);
         let timeout_ms = capture_optional_integer(timeout_ms);
         let name = self.name.clone();
         future_blocking(
             py,
             move || {
-                let query: LocatorQuery = serde_json::from_str(&query_json)
-                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
                 execute_matches(
                     &name,
                     Operation::HighlightLocator {
-                        query,
+                        query: query?,
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
                 )
@@ -334,27 +330,31 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (request_json, timeout_ms))]
+    #[pyo3(signature = (stages, style, not_, timeout_ms))]
     fn expect_locator<'py>(
         &self,
         py: Python<'py>,
-        request_json: String,
+        stages: Vec<Bound<'py, PyAny>>,
+        style: Bound<'py, PyAny>,
+        not_: bool,
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let query = capture_locator_query(&stages);
+        let style = style
+            .cast::<PyDict>()
+            .map_err(|error| TuiTestError::usage(error.to_string()))
+            .and_then(core_style);
         let timeout_ms = capture_optional_integer(timeout_ms);
         let name = self.name.clone();
         future_blocking(
             py,
             move || {
-                let (query, style, not): (LocatorQuery, TextStyle, bool) =
-                    serde_json::from_str(&request_json)
-                        .map_err(|error| TuiTestError::usage(error.to_string()))?;
                 execute_unit(
                     &name,
                     Operation::ExpectLocator {
-                        query,
-                        not,
-                        style,
+                        query: query?,
+                        not: not_,
+                        style: style?,
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
                 )
@@ -1300,6 +1300,168 @@ fn integer_u64(value: &IntegerInput, name: &str) -> Result<u64, TuiTestError> {
 
 fn optional_u64(value: Option<&IntegerInput>, name: &str) -> Result<Option<u64>, TuiTestError> {
     value.map(|value| integer_u64(value, name)).transpose()
+}
+
+fn py_item<'py>(
+    dict: &Bound<'py, PyDict>,
+    key: &str,
+) -> Result<Option<Bound<'py, PyAny>>, TuiTestError> {
+    dict.get_item(key)
+        .map_err(|error| TuiTestError::usage(error.to_string()))
+        .map(|value| value.filter(|value| !value.is_none()))
+}
+
+fn py_string(dict: &Bound<'_, PyDict>, key: &str) -> Result<Option<String>, TuiTestError> {
+    py_item(dict, key)?
+        .map(|value| {
+            value
+                .extract::<String>()
+                .map_err(|error| TuiTestError::usage(format!("{key}: {error}")))
+        })
+        .transpose()
+}
+
+fn py_bool(dict: &Bound<'_, PyDict>, key: &str) -> Result<Option<bool>, TuiTestError> {
+    py_item(dict, key)?
+        .map(|value| {
+            value
+                .extract::<bool>()
+                .map_err(|error| TuiTestError::usage(format!("{key}: {error}")))
+        })
+        .transpose()
+}
+
+fn py_usize(dict: &Bound<'_, PyDict>, key: &str) -> Result<Option<usize>, TuiTestError> {
+    py_item(dict, key)?
+        .map(|value| {
+            integer_u64(&capture_integer(&value), key).and_then(|value| {
+                usize::try_from(value)
+                    .map_err(|_| TuiTestError::usage(format!("{key} is too large")))
+            })
+        })
+        .transpose()
+}
+
+fn core_occurrence(
+    value: Option<String>,
+    nth: Option<usize>,
+    name: &str,
+) -> Result<MatchOccurrence, TuiTestError> {
+    if let Some(index) = nth {
+        if let Some(value) = value.as_deref().filter(|value| *value != "nth") {
+            return Err(TuiTestError::usage(format!(
+                "{name} cannot combine occurrence '{value}' with nth"
+            )));
+        }
+        return Ok(MatchOccurrence::Nth(index));
+    }
+    match value.as_deref() {
+        None | Some("any") => Ok(MatchOccurrence::Any),
+        Some("unique") => Ok(MatchOccurrence::Unique),
+        Some("first") => Ok(MatchOccurrence::First),
+        Some("last") => Ok(MatchOccurrence::Last),
+        Some("nth") => Err(TuiTestError::usage(format!("{name} requires an nth index"))),
+        Some(value) => Err(TuiTestError::usage(format!(
+            "{name} must be any, unique, first, last, or nth (got '{value}')"
+        ))),
+    }
+}
+
+fn core_anchor(dict: &Bound<'_, PyDict>, prefix: &str) -> Result<Option<TextAnchor>, TuiTestError> {
+    let text = py_string(dict, &format!("{prefix}_text"))?;
+    let regex = py_bool(dict, &format!("{prefix}_regex"))?;
+    let occurrence = py_string(dict, &format!("{prefix}_occurrence"))?;
+    let nth = py_usize(dict, &format!("{prefix}_nth"))?;
+    match text {
+        Some(text) => Ok(Some(TextAnchor {
+            text,
+            regex: regex.unwrap_or(false),
+            occurrence: core_occurrence(occurrence, nth, &format!("{prefix}_nth"))?,
+        })),
+        None if regex.unwrap_or(false) || occurrence.is_some() || nth.is_some() => Err(
+            TuiTestError::usage(format!("{prefix} options require anchor text")),
+        ),
+        None => Ok(None),
+    }
+}
+
+fn core_style(dict: &Bound<'_, PyDict>) -> Result<TextStyle, TuiTestError> {
+    Ok(TextStyle {
+        foreground: py_string(dict, "foreground")?,
+        background: py_string(dict, "background")?,
+        bold: py_bool(dict, "bold")?,
+        dim: py_bool(dict, "dim")?,
+        italic: py_bool(dict, "italic")?,
+        underline_style: py_string(dict, "underline_style")?,
+        underline_color: py_string(dict, "underline_color")?,
+        inverse: py_bool(dict, "inverse")?,
+        hidden: py_bool(dict, "hidden")?,
+        strikethrough: py_bool(dict, "strikethrough")?,
+        blink: py_bool(dict, "blink")?,
+    })
+}
+
+fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, TuiTestError> {
+    let mut parent = None;
+    for (index, stage) in stages.iter().enumerate() {
+        let dict = stage
+            .cast::<PyDict>()
+            .map_err(|error| TuiTestError::usage(format!("stages[{index}]: {error}")))?;
+        let occurrence = core_occurrence(
+            py_string(dict, "occurrence")?,
+            py_usize(dict, "nth")?,
+            &format!("stages[{index}].nth"),
+        )?;
+        let selector = match py_string(dict, "kind")?.as_deref() {
+            Some("text") => {
+                let whitespace = match py_string(dict, "whitespace")?.as_deref() {
+                    None | Some("exact") => WhitespaceMode::Exact,
+                    Some("normalize") => WhitespaceMode::Normalize,
+                    Some(value) => {
+                        return Err(TuiTestError::usage(format!(
+                            "whitespace must be exact or normalize (got '{value}')"
+                        )))
+                    }
+                };
+                LocatorSelector::Text(TextSelector {
+                    text: py_string(dict, "text")?
+                        .ok_or_else(|| TuiTestError::usage("text locator stage requires text"))?,
+                    regex: py_bool(dict, "regex")?.unwrap_or(false),
+                    full: py_bool(dict, "full")?.unwrap_or(false),
+                    whitespace,
+                    scope: TextScope {
+                        after: core_anchor(dict, "after")?,
+                        before: core_anchor(dict, "before")?,
+                    },
+                    occurrence,
+                })
+            }
+            Some("style") => {
+                let style = py_item(dict, "style")?
+                    .ok_or_else(|| TuiTestError::usage("style locator stage requires style"))?;
+                let style = style
+                    .cast::<PyDict>()
+                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                LocatorSelector::Style(StyleSelector {
+                    style: core_style(style)?,
+                    full: py_bool(dict, "full")?.unwrap_or(false),
+                    occurrence,
+                })
+            }
+            Some(value) => {
+                return Err(TuiTestError::usage(format!(
+                    "unknown locator stage kind '{value}'"
+                )))
+            }
+            None => return Err(TuiTestError::usage("locator stage requires kind")),
+        };
+        parent = Some(LocatorQuery {
+            selector,
+            within: parent.map(Box::new),
+            style: TextStyle::default(),
+        });
+    }
+    parent.ok_or_else(|| TuiTestError::usage("locator requires at least one stage"))
 }
 
 fn profile_from_parts(

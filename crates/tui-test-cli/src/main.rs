@@ -301,8 +301,8 @@ fn resolve_client_path(path: String) -> anyhow::Result<String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
-fn map_field(f: GetArg) -> GetField {
-    match f {
+fn map_field(field: GetArg) -> GetField {
+    match field {
         GetArg::Command => GetField::Command,
         GetArg::Output => GetField::Output,
         GetArg::ExitCode => GetField::ExitCode,
@@ -1163,8 +1163,7 @@ INPUT     type \"text\" | submit [\"text\"]\n\
           click text \"T\" [selector/style options] [--button N --clicks N]\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
-WAIT      wait text \"T\" [selector/style options] [--not --timeout MS]\n\
-          wait title \"T\" [--regex --not --timeout MS]\n\
+WAIT      wait title \"T\" [--regex --not --timeout MS]\n\
           wait idle | wait command | wait exit | wait ready | wait bell\n\
 EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\

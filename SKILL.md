@@ -118,7 +118,6 @@ and `Meta`. Top-level `press` remains a compatibility alias for `key press`.
 
 | Command                                             | Description                                                                                |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `wait text "T" [selector/style options] [--not --timeout MS]` | Until the complete query is (with `--not`, is not) matched.                               |
 | `wait title "T" [--regex --not --timeout MS]`       | Until the window title (`OSC 0`/`OSC 2`) matches. Programs announce progress there.        |
 | `wait idle [--timeout MS]`                          | Until the screen stops repainting (~250ms quiet).                                          |
 | `wait command [--timeout MS]`                       | Until the current foreground command finishes (needs shell integration).                   |
@@ -145,9 +144,9 @@ also accept `--after-match` / `--before-match` and `--after-nth` /
 `--before-nth`. Styles include `--fg`, `--bg`, boolean SGR attributes such as
 `--bold[=false]`, and underline style/color.
 
-`find`, `wait`, `expect`, `click`, and `highlight` text commands accept the
-same selector and style flags. `click text` auto-waits for one match and clicks
-its middle cell. `highlight text` marks every selected match in the live
+`find`, `expect`, `click`, and `highlight` text commands accept the same
+selector and style flags. `click text` auto-waits for one match and clicks its
+middle cell. `highlight text` marks every selected match in the live
 monitor and SVG screenshots until the terminal redraws. Use
 `--match first|last|unique` or `--nth N` to narrow repeated text.
 
@@ -218,8 +217,8 @@ Snapshots live in `__snapshots__/<NAME>.snap` next to where you run the command.
 
 ## Waiting: pick the right one
 
-- `wait text "T"`: waits until text/regex is visible. The most precise wait; use
-  it whenever you know what output to look for. `--not` waits for it to disappear.
+- `expect text "T"`: retries the text-and-style query until it matches.
+  `--not` waits for it to disappear.
 - `wait command`: waits until the current command finishes, via the shell's OSC
   integration markers. Use it after `submit`. Without shell integration it falls
   back to "screen idle". Bump `--timeout` for long commands (default 30s).

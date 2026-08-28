@@ -63,6 +63,11 @@ test("generated native declarations expose typed operations", async () => {
   assert.doesNotMatch(declarations, /Promise<unknown>/);
   assert.match(
     declarations,
+    /findLocator\(stages: Array<LocatorStage>\)/,
+  );
+  assert.doesNotMatch(declarations, /(?:queryJson|requestJson): string/);
+  assert.match(
+    declarations,
     /interface PackedScreen \{[\s\S]*readonly cols: number[\s\S]*readonly rows: number[\s\S]*readonly utf8: Uint8Array[\s\S]*\}/,
   );
   assert.doesNotMatch(declarations, /\bBuffer\b/);

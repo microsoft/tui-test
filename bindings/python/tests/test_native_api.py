@@ -119,7 +119,13 @@ class NativeStubTests(unittest.TestCase):
             / "_native.pyi"
         ).read_text(encoding="utf-8")
         self.assertNotIn("async def ", stub)
+        self.assertNotIn("query_json", stub)
+        self.assertNotIn("request_json", stub)
         self.assertIn("def open(", stub)
+        self.assertIn(
+            "def find_locator(self, stages: typing.List[typing.Dict[str, typing.Any]])",
+            stub,
+        )
         self.assertIn("typing.Awaitable[", stub)
 
 

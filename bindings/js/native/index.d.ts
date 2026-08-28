@@ -8,11 +8,11 @@ export declare class NativeSession {
   close(): Promise<void>
   state(): Promise<State>
   text(full?: boolean | undefined | null): Promise<string>
-  findLocator(queryJson: string): Promise<Array<TextMatch>>
-  waitLocator(queryJson: string, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
-  clickLocator(queryJson: string, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
-  highlightLocator(queryJson: string, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
-  expectLocator(requestJson: string, timeoutMs?: number | undefined | null): Promise<void>
+  findLocator(stages: Array<LocatorStage>): Promise<Array<TextMatch>>
+  waitLocator(stages: Array<LocatorStage>, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  clickLocator(stages: Array<LocatorStage>, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  highlightLocator(stages: Array<LocatorStage>, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
+  expectLocator(stages: Array<LocatorStage>, style?: LocatorStyle | undefined | null, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
   packedScreen(full?: boolean | undefined | null): Promise<PackedScreen>
   cells(x: number, y: number, w?: number | undefined | null, h?: number | undefined | null): Promise<Array<Cell>>
   getCommand(): Promise<string | null>
@@ -104,6 +104,44 @@ export interface EffectiveTimeouts {
   command: number
   exit: number
   ready: number
+}
+
+export interface LocatorStage {
+  kind: LocatorStageKind
+  text?: string
+  regex?: boolean
+  full?: boolean
+  whitespace?: string
+  occurrence?: string
+  nth?: number
+  afterText?: string
+  afterRegex?: boolean
+  afterOccurrence?: string
+  afterNth?: number
+  beforeText?: string
+  beforeRegex?: boolean
+  beforeOccurrence?: string
+  beforeNth?: number
+  style?: LocatorStyle
+}
+
+export declare const enum LocatorStageKind {
+  Text = 'text',
+  Style = 'style'
+}
+
+export interface LocatorStyle {
+  foreground?: string
+  background?: string
+  bold?: boolean
+  dim?: boolean
+  italic?: boolean
+  underlineStyle?: string
+  underlineColor?: string
+  inverse?: boolean
+  hidden?: boolean
+  strikethrough?: boolean
+  blink?: boolean
 }
 
 export interface MouseClickOptions {

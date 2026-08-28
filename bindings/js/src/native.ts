@@ -4,6 +4,8 @@ import type {
   Cell,
   Cursor,
   EffectiveTimeouts,
+  LocatorStage,
+  LocatorStyle,
   MouseClickOptions,
   OpenOptions,
   OpenResult,
@@ -29,6 +31,10 @@ type RuntimeRunOptions = Omit<RunOptions, "backend"> & { backend?: string };
 type RuntimeRecordingOptions = Omit<RecordingOptions, "format"> & {
   format?: "apng" | "gif" | "mp4" | "cast";
 };
+export type RuntimeLocatorStage = Omit<LocatorStage, "kind"> & {
+  kind: "text" | "style";
+};
+export type RuntimeLocatorStyle = LocatorStyle;
 
 const ERROR_PREFIX = "__tui_test_native_error__:";
 const USAGE_NAPI_CODES = new Set([
@@ -170,43 +176,55 @@ export class NativeRuntime {
     return this.#call((session) => session.text(full));
   }
 
-  findLocator(queryJson: string): Promise<TextMatch[]> {
-    return this.#call((session) => session.findLocator(queryJson));
+  findLocator(stages: RuntimeLocatorStage[]): Promise<TextMatch[]> {
+    return this.#call((session) =>
+      session.findLocator(stages as LocatorStage[]),
+    );
   }
 
   waitLocator(
-    queryJson: string,
+    stages: RuntimeLocatorStage[],
     not = false,
     timeoutMs?: number,
   ): Promise<void> {
     return this.#call((session) =>
-      session.waitLocator(queryJson, not, timeoutMs),
+      session.waitLocator(stages as LocatorStage[], not, timeoutMs),
     );
   }
 
   clickLocator(
-    queryJson: string,
+    stages: RuntimeLocatorStage[],
     button = 0,
     clicks = 1,
     timeoutMs?: number,
   ): Promise<void> {
     return this.#call((session) =>
-      session.clickLocator(queryJson, button, clicks, timeoutMs),
+      session.clickLocator(stages as LocatorStage[], button, clicks, timeoutMs),
     );
   }
 
   highlightLocator(
-    queryJson: string,
+    stages: RuntimeLocatorStage[],
     timeoutMs?: number,
   ): Promise<TextMatch[]> {
     return this.#call((session) =>
-      session.highlightLocator(queryJson, timeoutMs),
+      session.highlightLocator(stages as LocatorStage[], timeoutMs),
     );
   }
 
-  expectLocator(requestJson: string, timeoutMs?: number): Promise<void> {
+  expectLocator(
+    stages: RuntimeLocatorStage[],
+    style: RuntimeLocatorStyle | undefined,
+    not = false,
+    timeoutMs?: number,
+  ): Promise<void> {
     return this.#call((session) =>
-      session.expectLocator(requestJson, timeoutMs),
+      session.expectLocator(
+        stages as LocatorStage[],
+        style,
+        not,
+        timeoutMs,
+      ),
     );
   }
 

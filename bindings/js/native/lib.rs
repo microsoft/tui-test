@@ -11,12 +11,15 @@ use tui_test::shell::Shell as CoreShell;
 use tui_test::{
     global_registry, Backend as CoreBackend, BellEvent as CoreBellEvent, Cell as CoreCell,
     CellColor, Cursor as CoreCursor, EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind,
-    KeyAction, LocatorQuery as CoreLocatorQuery, MouseAction, OpenOptions as CoreOpenOptions,
+    KeyAction, LocatorQuery as CoreLocatorQuery, LocatorSelector as CoreLocatorSelector,
+    MatchOccurrence as CoreMatchOccurrence, MouseAction, OpenOptions as CoreOpenOptions,
     OpenResult as CoreOpenResult, Operation, OperationResult,
     RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
     ScreenshotResult as CoreScreenshotResult, SessionHandle, Size as CoreSize,
-    SnapshotResult as CoreSnapshotResult, State as CoreState, TextMatch as CoreTextMatch,
-    TextStyle as CoreTextStyle, Timeouts as CoreTimeouts, TuiTestError,
+    SnapshotResult as CoreSnapshotResult, State as CoreState, StyleSelector as CoreStyleSelector,
+    TextAnchor as CoreTextAnchor, TextMatch as CoreTextMatch, TextScope as CoreTextScope,
+    TextSelector as CoreTextSelector, TextStyle as CoreTextStyle, Timeouts as CoreTimeouts,
+    TuiTestError, WhitespaceMode as CoreWhitespaceMode,
 };
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
@@ -410,6 +413,48 @@ pub struct MouseClickOptions {
     pub clicks: Option<f64>,
 }
 
+#[napi(string_enum = "lowercase")]
+pub enum LocatorStageKind {
+    Text,
+    Style,
+}
+
+#[derive(Default)]
+#[napi(object)]
+pub struct LocatorStyle {
+    pub foreground: Option<String>,
+    pub background: Option<String>,
+    pub bold: Option<bool>,
+    pub dim: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline_style: Option<String>,
+    pub underline_color: Option<String>,
+    pub inverse: Option<bool>,
+    pub hidden: Option<bool>,
+    pub strikethrough: Option<bool>,
+    pub blink: Option<bool>,
+}
+
+#[napi(object)]
+pub struct LocatorStage {
+    pub kind: LocatorStageKind,
+    pub text: Option<String>,
+    pub regex: Option<bool>,
+    pub full: Option<bool>,
+    pub whitespace: Option<String>,
+    pub occurrence: Option<String>,
+    pub nth: Option<f64>,
+    pub after_text: Option<String>,
+    pub after_regex: Option<bool>,
+    pub after_occurrence: Option<String>,
+    pub after_nth: Option<f64>,
+    pub before_text: Option<String>,
+    pub before_regex: Option<bool>,
+    pub before_occurrence: Option<String>,
+    pub before_nth: Option<f64>,
+    pub style: Option<LocatorStyle>,
+}
+
 #[napi(object)]
 pub struct TitleOptions {
     pub regex: Option<bool>,
@@ -525,6 +570,151 @@ fn u16_value(value: f64, name: &str) -> std::result::Result<u16, TuiTestError> {
 
 fn u8_value(value: f64, name: &str) -> std::result::Result<u8, TuiTestError> {
     Ok(integer(value, name, u64::from(u8::MAX))? as u8)
+}
+
+fn core_occurrence(
+    value: Option<String>,
+    nth: Option<f64>,
+    default: CoreMatchOccurrence,
+    name: &str,
+) -> std::result::Result<CoreMatchOccurrence, TuiTestError> {
+    if let Some(index) = nth {
+        if let Some(value) = value.as_deref().filter(|value| *value != "nth") {
+            return Err(TuiTestError::usage(format!(
+                "{name} cannot combine occurrence '{value}' with nth"
+            )));
+        }
+        return Ok(CoreMatchOccurrence::Nth(
+            integer(index, name, usize::MAX as u64)? as usize,
+        ));
+    }
+    match value.as_deref() {
+        None => Ok(default),
+        Some("any") => Ok(CoreMatchOccurrence::Any),
+        Some("unique") => Ok(CoreMatchOccurrence::Unique),
+        Some("first") => Ok(CoreMatchOccurrence::First),
+        Some("last") => Ok(CoreMatchOccurrence::Last),
+        Some("nth") => Err(TuiTestError::usage(format!("{name} requires an nth index"))),
+        Some(value) => Err(TuiTestError::usage(format!(
+            "{name} must be any, unique, first, last, or nth (got '{value}')"
+        ))),
+    }
+}
+
+fn core_anchor(
+    text: Option<String>,
+    regex: Option<bool>,
+    occurrence: Option<String>,
+    nth: Option<f64>,
+    name: &str,
+) -> std::result::Result<Option<CoreTextAnchor>, TuiTestError> {
+    match text {
+        Some(text) => Ok(Some(CoreTextAnchor {
+            text,
+            regex: regex.unwrap_or(false),
+            occurrence: core_occurrence(occurrence, nth, CoreMatchOccurrence::Unique, name)?,
+        })),
+        None if regex.unwrap_or(false) || occurrence.is_some() || nth.is_some() => Err(
+            TuiTestError::usage(format!("{name} options require anchor text")),
+        ),
+        None => Ok(None),
+    }
+}
+
+fn core_style(style: LocatorStyle) -> CoreTextStyle {
+    CoreTextStyle {
+        foreground: style.foreground,
+        background: style.background,
+        bold: style.bold,
+        dim: style.dim,
+        italic: style.italic,
+        underline_style: style.underline_style,
+        underline_color: style.underline_color,
+        inverse: style.inverse,
+        hidden: style.hidden,
+        strikethrough: style.strikethrough,
+        blink: style.blink,
+    }
+}
+
+fn core_query(stages: Vec<LocatorStage>) -> std::result::Result<CoreLocatorQuery, TuiTestError> {
+    let mut parent = None;
+    for (index, stage) in stages.into_iter().enumerate() {
+        let occurrence = core_occurrence(
+            stage.occurrence,
+            stage.nth,
+            CoreMatchOccurrence::Any,
+            &format!("stages[{index}].nth"),
+        )?;
+        let selector = match stage.kind {
+            LocatorStageKind::Text => {
+                if stage.style.is_some() {
+                    return Err(TuiTestError::usage(
+                        "text locator stage cannot include style selector parameters",
+                    ));
+                }
+                let whitespace = match stage.whitespace.as_deref() {
+                    None | Some("exact") => CoreWhitespaceMode::Exact,
+                    Some("normalize") => CoreWhitespaceMode::Normalize,
+                    Some(value) => {
+                        return Err(TuiTestError::usage(format!(
+                            "whitespace must be exact or normalize (got '{value}')"
+                        )))
+                    }
+                };
+                CoreLocatorSelector::Text(CoreTextSelector {
+                    text: stage
+                        .text
+                        .ok_or_else(|| TuiTestError::usage("text locator stage requires text"))?,
+                    regex: stage.regex.unwrap_or(false),
+                    full: stage.full.unwrap_or(false),
+                    whitespace,
+                    scope: CoreTextScope {
+                        after: core_anchor(
+                            stage.after_text,
+                            stage.after_regex,
+                            stage.after_occurrence,
+                            stage.after_nth,
+                            "afterNth",
+                        )?,
+                        before: core_anchor(
+                            stage.before_text,
+                            stage.before_regex,
+                            stage.before_occurrence,
+                            stage.before_nth,
+                            "beforeNth",
+                        )?,
+                    },
+                    occurrence,
+                })
+            }
+            LocatorStageKind::Style => {
+                if stage.text.is_some()
+                    || stage.regex.unwrap_or(false)
+                    || stage.whitespace.is_some()
+                    || stage.after_text.is_some()
+                    || stage.before_text.is_some()
+                {
+                    return Err(TuiTestError::usage(
+                        "style locator stage cannot include text selector parameters",
+                    ));
+                }
+                CoreLocatorSelector::Style(CoreStyleSelector {
+                    style: core_style(stage.style.ok_or_else(|| {
+                        TuiTestError::usage("style locator stage requires style")
+                    })?),
+                    full: stage.full.unwrap_or(false),
+                    occurrence,
+                })
+            }
+        };
+        parent = Some(CoreLocatorQuery {
+            selector,
+            within: parent.map(Box::new),
+            style: CoreTextStyle::default(),
+        });
+    }
+    parent.ok_or_else(|| TuiTestError::usage("locator requires at least one stage"))
 }
 
 fn i32_value(value: f64, name: &str) -> std::result::Result<i32, TuiTestError> {
@@ -742,11 +932,10 @@ impl NativeSession {
     }
 
     #[napi]
-    pub async fn find_locator(&self, query_json: String) -> Result<Vec<TextMatch>> {
+    pub async fn find_locator(&self, stages: Vec<LocatorStage>) -> Result<Vec<TextMatch>> {
         let handle = self.handle.clone();
         blocking("findLocator", move || {
-            let query: CoreLocatorQuery = serde_json::from_str(&query_json)
-                .map_err(|error| TuiTestError::usage(error.to_string()))?;
+            let query = core_query(stages)?;
             match handle.execute(Operation::FindLocator { query })? {
                 OperationResult::Matches(matches) => {
                     Ok(matches.into_iter().map(TextMatch::from).collect())
@@ -760,14 +949,13 @@ impl NativeSession {
     #[napi]
     pub async fn wait_locator(
         &self,
-        query_json: String,
+        stages: Vec<LocatorStage>,
         not: Option<bool>,
         timeout_ms: Option<f64>,
     ) -> Result<()> {
         let handle = self.handle.clone();
         blocking("waitLocator", move || {
-            let query: CoreLocatorQuery = serde_json::from_str(&query_json)
-                .map_err(|error| TuiTestError::usage(error.to_string()))?;
+            let query = core_query(stages)?;
             match handle.execute(Operation::WaitLocator {
                 query,
                 not: not.unwrap_or(false),
@@ -783,15 +971,14 @@ impl NativeSession {
     #[napi]
     pub async fn click_locator(
         &self,
-        query_json: String,
+        stages: Vec<LocatorStage>,
         button: Option<f64>,
         clicks: Option<f64>,
         timeout_ms: Option<f64>,
     ) -> Result<()> {
         let handle = self.handle.clone();
         blocking("clickLocator", move || {
-            let query: CoreLocatorQuery = serde_json::from_str(&query_json)
-                .map_err(|error| TuiTestError::usage(error.to_string()))?;
+            let query = core_query(stages)?;
             match handle.execute(Operation::ClickLocator {
                 query,
                 button: u8_value(button.unwrap_or(0.0), "button")?,
@@ -808,13 +995,12 @@ impl NativeSession {
     #[napi]
     pub async fn highlight_locator(
         &self,
-        query_json: String,
+        stages: Vec<LocatorStage>,
         timeout_ms: Option<f64>,
     ) -> Result<Vec<TextMatch>> {
         let handle = self.handle.clone();
         blocking("highlightLocator", move || {
-            let query: CoreLocatorQuery = serde_json::from_str(&query_json)
-                .map_err(|error| TuiTestError::usage(error.to_string()))?;
+            let query = core_query(stages)?;
             match handle.execute(Operation::HighlightLocator {
                 query,
                 timeout_ms: timeout(timeout_ms, "timeoutMs")?,
@@ -831,18 +1017,18 @@ impl NativeSession {
     #[napi]
     pub async fn expect_locator(
         &self,
-        request_json: String,
+        stages: Vec<LocatorStage>,
+        style: Option<LocatorStyle>,
+        not: Option<bool>,
         timeout_ms: Option<f64>,
     ) -> Result<()> {
         let handle = self.handle.clone();
         blocking("expectLocator", move || {
-            let (query, style, not): (CoreLocatorQuery, CoreTextStyle, bool) =
-                serde_json::from_str(&request_json)
-                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+            let query = core_query(stages)?;
             match handle.execute(Operation::ExpectLocator {
                 query,
-                not,
-                style,
+                not: not.unwrap_or(false),
+                style: style.map(core_style).unwrap_or_default(),
                 timeout_ms: timeout(timeout_ms, "timeoutMs")?,
             })? {
                 OperationResult::Unit => Ok(()),

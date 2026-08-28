@@ -330,9 +330,8 @@ pub enum Command {
     },
     /// Kill the session's child process.
     Kill,
-    /// Block until a condition holds: text on screen, screen idle, command
-    /// done, or session exit. See `wait <subcommand> --help` for the
-    /// differences (notably idle vs command).
+    /// Block until the title changes, the screen is idle, a command finishes,
+    /// the shell is ready, a bell rings, or the session exits.
     Wait {
         #[command(subcommand)]
         what: WaitCmd,
@@ -1181,6 +1180,7 @@ pub enum HighlightCmd {
 #[derive(Subcommand)]
 pub enum WaitCmd {
     /// Wait until text/regex appears on screen (the most precise wait).
+    #[command(hide = true)]
     Text {
         #[command(flatten)]
         query: TextQueryArgs,

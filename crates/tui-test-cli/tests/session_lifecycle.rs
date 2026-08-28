@@ -417,7 +417,7 @@ fn text_actions_share_one_selector_contract() {
         response["data"]["matches"]
             .as_array()
             .is_some_and(|matches| !matches.is_empty()),
-        "find should return match locations: {response}"
+        "find text should return match locations: {response}"
     );
 
     let before = sandbox.home.join("before-highlight.svg");

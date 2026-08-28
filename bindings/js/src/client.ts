@@ -17,6 +17,10 @@ import { uniqueSession } from "./ephemeral.js";
 import { ExpectationError, TuiTestError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
 import type {
+  RuntimeLocatorStage,
+  RuntimeLocatorStyle,
+} from "./native.js";
+import type {
   BellEvent,
   Cell,
   ClientOptions,
@@ -228,83 +232,60 @@ function occurrenceOptions(occurrence?: TextOccurrence): {
   return { occurrence: "nth", nth: occurrence.nth };
 }
 
-type CoreOccurrence = string | { nth: number };
+type LocatorQueryValue = RuntimeLocatorStage[];
 
-interface CoreSelectorValue {
-  occurrence: CoreOccurrence;
-  [key: string]: unknown;
-}
-
-interface LocatorQueryValue {
-  selector: {
-    kind: "text" | "style";
-    selector: CoreSelectorValue;
-  };
-  within: LocatorQueryValue | null;
-}
-
-function textSelectorValue(
+function textStageValue(
   text: string,
   opts: TextSelectorOptions,
-): CoreSelectorValue {
+): RuntimeLocatorStage {
   const occurrence = occurrenceOptions(opts.occurrence);
-  const anchor = (value: TextAnchor | undefined): object | null => {
-    if (!value) {
-      return null;
-    }
-    const selected = occurrenceOptions(value.occurrence);
-    return {
-      text: value.text,
-      regex: value.regex ?? false,
-      occurrence:
-        selected.nth === undefined
-          ? selected.occurrence ?? "unique"
-          : { nth: selected.nth },
-    };
-  };
+  const after = opts.scope?.after;
+  const before = opts.scope?.before;
+  const afterOccurrence = occurrenceOptions(after?.occurrence);
+  const beforeOccurrence = occurrenceOptions(before?.occurrence);
   return {
+    kind: "text",
     text,
     regex: opts.regex ?? false,
     full: opts.full ?? false,
     whitespace: opts.whitespace ?? "exact",
-    scope: {
-      after: anchor(opts.scope?.after),
-      before: anchor(opts.scope?.before),
-    },
-    occurrence:
-      occurrence.nth === undefined
-        ? occurrence.occurrence ?? "any"
-        : { nth: occurrence.nth },
+    ...occurrence,
+    afterText: after?.text,
+    afterRegex: after?.regex,
+    afterOccurrence: afterOccurrence.occurrence,
+    afterNth: afterOccurrence.nth,
+    beforeText: before?.text,
+    beforeRegex: before?.regex,
+    beforeOccurrence: beforeOccurrence.occurrence,
+    beforeNth: beforeOccurrence.nth,
   };
 }
 
-function styleSelectorValue(
+function styleStageValue(
   style: TextStyleExpectation,
   opts: StyleSelectorOptions,
-): CoreSelectorValue {
+): RuntimeLocatorStage {
   if (!Object.values(style).some((value) => value !== undefined)) {
     throw new TypeError("getByStyle requires at least one style property");
   }
   const occurrence = occurrenceOptions(opts.occurrence);
   return {
+    kind: "style",
     style: textStyleValue(style),
     full: opts.full ?? false,
-    occurrence:
-      occurrence.nth === undefined
-        ? occurrence.occurrence ?? "any"
-        : { nth: occurrence.nth },
+    ...occurrence,
   };
 }
 
-function textStyleValue(style: TextStyleExpectation): object {
+function textStyleValue(style: TextStyleExpectation): RuntimeLocatorStyle {
   return {
     foreground: style.foreground,
     background: style.background,
     bold: style.bold,
     dim: style.dim,
     italic: style.italic,
-    underline_style: style.underlineStyle,
-    underline_color: style.underlineColor,
+    underlineStyle: style.underlineStyle,
+    underlineColor: style.underlineColor,
     inverse: style.inverse,
     hidden: style.hidden,
     strikethrough: style.strikethrough,
@@ -315,27 +296,32 @@ function textStyleValue(style: TextStyleExpectation): object {
 function textQuery(
   text: string,
   opts: TextSelectorOptions,
-  within: LocatorQueryValue | null = null,
+  within: LocatorQueryValue = [],
 ): LocatorQueryValue {
-  return {
-    selector: { kind: "text", selector: textSelectorValue(text, opts) },
-    within,
-  };
+  return [...within, textStageValue(text, opts)];
 }
 
 function styleQuery(
   style: TextStyleExpectation,
   opts: StyleSelectorOptions,
-  within: LocatorQueryValue | null = null,
+  within: LocatorQueryValue = [],
 ): LocatorQueryValue {
-  return {
-    selector: { kind: "style", selector: styleSelectorValue(style, opts) },
-    within,
-  };
+  return [...within, styleStageValue(style, opts)];
 }
 
 function cloneQuery(query: LocatorQueryValue): LocatorQueryValue {
-  return JSON.parse(JSON.stringify(query)) as LocatorQueryValue;
+  return query.map((stage) => ({
+    ...stage,
+    style: stage.style ? { ...stage.style } : undefined,
+  }));
+}
+
+function currentStage(query: LocatorQueryValue): RuntimeLocatorStage {
+  const stage = query.at(-1);
+  if (!stage) {
+    throw new TypeError("locator requires at least one stage");
+  }
+  return stage;
 }
 
 interface LocatorActions {
@@ -371,17 +357,20 @@ class LocatorImpl implements Locator {
   #withOccurrence(occurrence: TextOccurrence): LocatorImpl {
     const query = cloneQuery(this.#query);
     const selected = occurrenceOptions(occurrence);
-    query.selector.selector.occurrence =
+    const stage = currentStage(query);
+    stage.occurrence =
       selected.nth === undefined
         ? selected.occurrence ?? "any"
-        : { nth: selected.nth };
+        : "nth";
+    stage.nth = selected.nth;
     return new LocatorImpl(query, this.#actions);
   }
 
   #strictQuery(): LocatorQueryValue {
     const query = cloneQuery(this.#query);
-    if (query.selector.selector.occurrence === "any") {
-      query.selector.selector.occurrence = "unique";
+    const stage = currentStage(query);
+    if (stage.occurrence === "any") {
+      stage.occurrence = "unique";
     }
     return query;
   }
@@ -448,10 +437,10 @@ class LocatorImpl implements Locator {
       "locator.location",
     );
     if (matches.length !== 1) {
-      const current = this.#query.selector;
+      const current = currentStage(this.#query);
       const description =
         current.kind === "text"
-          ? JSON.stringify(current.selector.text)
+          ? JSON.stringify(current.text)
           : "style";
       return this.#actions.fail(
         "locator.location",
@@ -467,7 +456,7 @@ class LocatorImpl implements Locator {
 
   async all(): Promise<Locator[]> {
     const matches = await this.locations();
-    if (this.#query.selector.selector.occurrence === "any") {
+    if (currentStage(this.#query).occurrence === "any") {
       return matches.map((_, index) => this.nth(index));
     }
     return matches.map(() => new LocatorImpl(this.#query, this.#actions));
@@ -606,12 +595,12 @@ export class TuiTest {
     const actions: LocatorActions = {
       locations: (value, operation) =>
         this.#guard(operation, () =>
-          this.#runtime.findLocator(JSON.stringify(value)),
+          this.#runtime.findLocator(value),
         ),
       wait: (value, hidden, timeout, operation) =>
         this.#guard(operation, () =>
           this.#runtime.waitLocator(
-            JSON.stringify(value),
+            value,
             hidden,
             this.#timeout("text", timeout),
           ),
@@ -619,7 +608,7 @@ export class TuiTest {
       click: (value, action) =>
         this.#guard("locator.click", () =>
           this.#runtime.clickLocator(
-            JSON.stringify(value),
+            value,
             action.button ?? 0,
             action.clicks ?? 1,
             this.#timeout("text", action.timeout),
@@ -628,7 +617,7 @@ export class TuiTest {
       highlight: (value, timeout) =>
         this.#guard("locator.highlight", async () => {
           await this.#runtime.highlightLocator(
-            JSON.stringify(value),
+            value,
             this.#timeout("text", timeout),
           );
         }),
@@ -636,11 +625,9 @@ export class TuiTest {
         const style = expectation.style ?? {};
         return this.#guard(operation, () =>
           this.#runtime.expectLocator(
-            JSON.stringify([
-              value,
-              textStyleValue(style),
-              expectation.not ?? false,
-            ]),
+            value,
+            textStyleValue(style),
+            expectation.not ?? false,
             this.#timeout("text", expectation.timeout),
           ),
         );

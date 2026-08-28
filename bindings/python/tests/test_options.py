@@ -1,5 +1,4 @@
 import asyncio
-import json
 import re
 import unittest
 
@@ -401,10 +400,10 @@ class LocatorTests(unittest.TestCase):
         )
         name, args = terminal.fake.calls[0]
         self.assertEqual(name, "find_locator")
-        query = json.loads(args[0])
-        selector = query["selector"]["selector"]
-        self.assertEqual(selector["scope"]["after"]["text"], "Settings")
-        self.assertEqual(selector["occurrence"], {"nth": 1})
+        selector = args[0][-1]
+        self.assertEqual(selector["after_text"], "Settings")
+        self.assertEqual(selector["occurrence"], "nth")
+        self.assertEqual(selector["nth"], 1)
 
         run(
             terminal.expect_text(
@@ -415,10 +414,8 @@ class LocatorTests(unittest.TestCase):
         )
         name, args = terminal.fake.calls[1]
         self.assertEqual(name, "expect_locator")
-        query, style, not_ = json.loads(args[0])
-        self.assertEqual(
-            query["selector"]["selector"]["occurrence"], "first"
-        )
+        query, style, not_ = args[:3]
+        self.assertEqual(query[-1]["occurrence"], "first")
         self.assertTrue(style["bold"])
         self.assertEqual(style["underline_style"], "curly")
         self.assertFalse(not_)
@@ -436,21 +433,16 @@ class LocatorTests(unittest.TestCase):
         terminal.fake.reply = [self._match(row=1)]
         match = run(items[1].location())
         self.assertEqual(match.start.row, 1)
-        query = json.loads(terminal.fake.calls[-1][1][0])
-        self.assertEqual(
-            query["selector"]["selector"]["occurrence"], {"nth": 1}
-        )
+        query = terminal.fake.calls[-1][1][0]
+        self.assertEqual(query[-1]["occurrence"], "nth")
+        self.assertEqual(query[-1]["nth"], 1)
 
         run(locator.first().locations())
-        selected = json.loads(terminal.fake.calls[-1][1][0])
-        self.assertEqual(
-            selected["selector"]["selector"]["occurrence"], "first"
-        )
+        selected = terminal.fake.calls[-1][1][0]
+        self.assertEqual(selected[-1]["occurrence"], "first")
         run(locator.locations())
-        original = json.loads(terminal.fake.calls[-1][1][0])
-        self.assertEqual(
-            original["selector"]["selector"]["occurrence"], "any"
-        )
+        original = terminal.fake.calls[-1][1][0]
+        self.assertEqual(original[-1]["occurrence"], "any")
 
         run(
             terminal.get_by_text("Save Save")
@@ -458,26 +450,22 @@ class LocatorTests(unittest.TestCase):
             .get_by_text("av")
             .locations()
         )
-        nested = json.loads(terminal.fake.calls[-1][1][0])
-        self.assertEqual(
-            nested["within"]["selector"]["selector"]["text"], "Save"
-        )
-        self.assertEqual(
-            nested["within"]["within"]["selector"]["selector"]["text"],
+        nested = terminal.fake.calls[-1][1][0]
+        self.assertEqual([stage["text"] for stage in nested], [
             "Save Save",
-        )
+            "Save",
+            "av",
+        ])
 
         run(
             terminal.get_by_style(TextStyle(bold=True))
             .get_by_text("Save")
             .locations()
         )
-        styled = json.loads(terminal.fake.calls[-1][1][0])
-        self.assertEqual(styled["selector"]["kind"], "text")
-        self.assertEqual(styled["within"]["selector"]["kind"], "style")
-        self.assertTrue(
-            styled["within"]["selector"]["selector"]["style"]["bold"]
-        )
+        styled = terminal.fake.calls[-1][1][0]
+        self.assertEqual(styled[-1]["kind"], "text")
+        self.assertEqual(styled[-2]["kind"], "style")
+        self.assertTrue(styled[-2]["style"]["bold"])
 
     def test_locator_actions_use_selector_aware_native_operations(self):
         terminal = _CapturingClient("s", timeouts=Timeouts(text=1234))
@@ -494,27 +482,19 @@ class LocatorTests(unittest.TestCase):
         run(locator.click(clicks=2, timeout=50))
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "click_locator")
-        self.assertEqual(
-            json.loads(args[0])["selector"]["selector"]["occurrence"],
-            "unique",
-        )
+        self.assertEqual(args[0][-1]["occurrence"], "unique")
         self.assertEqual(args[1:], (0, 2, 50))
 
         run(locator.highlight())
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "highlight_locator")
-        self.assertEqual(
-            json.loads(args[0])["selector"]["selector"]["occurrence"],
-            "any",
-        )
+        self.assertEqual(args[0][-1]["occurrence"], "any")
 
         run(locator.last().expect(style=TextStyle(bold=True)))
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "expect_locator")
-        query, style, not_ = json.loads(args[0])
-        self.assertEqual(
-            query["selector"]["selector"]["occurrence"], "last"
-        )
+        query, style, not_ = args[:3]
+        self.assertEqual(query[-1]["occurrence"], "last")
         self.assertTrue(style["bold"])
         self.assertFalse(not_)
 
@@ -530,11 +510,8 @@ class LocatorTests(unittest.TestCase):
         self.assertIsInstance(locator, client.Locator)
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "wait_locator")
-        query = json.loads(args[0])
-        self.assertEqual(
-            query["selector"]["selector"]["scope"]["after"]["text"],
-            "Settings",
-        )
+        query = args[0]
+        self.assertEqual(query[-1]["after_text"], "Settings")
 
     def test_locator_rejects_invalid_selection_and_state(self):
         terminal = _CapturingClient("s")
