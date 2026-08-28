@@ -136,8 +136,11 @@ export function recordingPayload(
       `unknown recording mode "${String(raw.mode)}"; expected disabled, on-failure, or always`,
     );
   }
-  if (raw.directory !== undefined && typeof raw.directory !== "string") {
-    throw new TypeError("recording.directory must be a string");
+  if (
+    raw.directory !== undefined &&
+    (typeof raw.directory !== "string" || raw.directory.length === 0)
+  ) {
+    throw new TypeError("recording.directory must be a non-empty string");
   }
   return raw as AutomaticRecording;
 }

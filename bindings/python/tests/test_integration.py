@@ -99,6 +99,27 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
+    def test_failed_open_recording_is_readable_before_close(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as root:
+                name = unique_session("recording-failed-open")
+                su = TuiTest(
+                    name,
+                    recording={"mode": "on-failure", "directory": root},
+                )
+                with self.assertRaises(ExpectationError):
+                    await su.run(
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(2)",
+                        wait_ready=True,
+                        timeouts=Timeouts(ready=50),
+                    )
+                self.assertIn('"version":2', await get_recording(name))
+                await su.close()
+
+        run(scenario())
+
     def test_recording_api_exports_styled_unicode_to_apng_and_gif(self):
         async def scenario():
             command = (

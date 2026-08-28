@@ -810,21 +810,36 @@ fn get_recording(session: String, explicit_config: Option<&Path>) -> i32 {
     };
     let path = match live_path {
         Some(path) => path,
-        None => {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let recording = match tui_test::profile::resolve_recording(explicit_config, &cwd) {
-                Ok(recording) => recording,
-                Err(error) => {
-                    eprintln!("{error}");
-                    return 2;
-                }
-            };
-            if recording.mode == tui_test::AutomaticRecordingMode::Disabled {
-                eprintln!("automatic recording is disabled for session '{session}'");
+        None => match std::fs::read_to_string(config::recording_pointer_file(&session)) {
+            Ok(path) if path.is_empty() => {
+                eprintln!("no recording for session '{session}'");
                 return 3;
             }
-            config::configured_recording_file(&session, &recording)
-        }
+            Ok(path) => std::path::PathBuf::from(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let recording = match tui_test::profile::resolve_recording(explicit_config, &cwd) {
+                    Ok(recording) => recording,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return 2;
+                    }
+                };
+                if recording.mode == tui_test::AutomaticRecordingMode::Disabled {
+                    eprintln!("automatic recording is disabled for session '{session}'");
+                    return 3;
+                }
+                if recording.directory.is_some() {
+                    eprintln!("no recording for session '{session}'");
+                    return 3;
+                }
+                config::recording_file(&session)
+            }
+            Err(error) => {
+                eprintln!("failed to read recording metadata: {error}");
+                return 5;
+            }
+        },
     };
     match std::fs::read(&path) {
         Ok(bytes) => {

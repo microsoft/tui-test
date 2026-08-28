@@ -131,6 +131,7 @@ test("recordingPayload accepts only mode and directory", () => {
     directory: "casts",
   });
   assert.throws(() => recordingPayload({ mode: "sometimes" }), /recording mode/);
+  assert.throws(() => recordingPayload({ directory: "" }), /non-empty/);
   assert.throws(() => recordingPayload({ other: 1 }), /other/);
 });
 

@@ -21,6 +21,21 @@ pub struct AutomaticRecording {
     pub directory: Option<PathBuf>,
 }
 
+impl AutomaticRecording {
+    pub fn validate(&self) -> Result<(), TuiTestError> {
+        if self
+            .directory
+            .as_ref()
+            .is_some_and(|directory| directory.as_os_str().is_empty())
+        {
+            return Err(TuiTestError::usage(
+                "automatic recording directory must not be empty",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Timeouts {

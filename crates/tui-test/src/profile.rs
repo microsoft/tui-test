@@ -379,7 +379,9 @@ pub struct ConfigFile {
 
 impl ConfigFile {
     pub fn parse(toml_text: &str) -> anyhow::Result<Self> {
-        Ok(toml::from_str(toml_text)?)
+        let config: Self = toml::from_str(toml_text)?;
+        config.recording.validate()?;
+        Ok(config)
     }
 
     pub fn load(path: &Path) -> anyhow::Result<Self> {
@@ -625,6 +627,11 @@ mod tests {
             crate::api::AutomaticRecordingMode::OnFailure
         );
         assert_eq!(recording.directory, Some(PathBuf::from("artifacts")));
+    }
+
+    #[test]
+    fn empty_recording_directory_is_rejected() {
+        assert!(ConfigFile::parse("[recording]\ndirectory = \"\"\n").is_err());
     }
 
     #[test]

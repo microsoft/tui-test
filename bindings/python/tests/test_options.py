@@ -111,6 +111,8 @@ class RecordingResolutionTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             cfg.normalize_recording({"mode": "sometimes"})
+        with self.assertRaises(TypeError):
+            cfg.normalize_recording({"directory": ""})
         with self.assertRaises(ValueError):
             cfg.normalize_recording({"other": 1})
 

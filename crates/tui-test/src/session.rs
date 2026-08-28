@@ -69,37 +69,6 @@ impl Session {
         recording_path: Option<PathBuf>,
         recording_required: bool,
     ) -> anyhow::Result<Self> {
-        let mut rec_env = vec![("TERM".to_string(), "xterm-256color".to_string())];
-        if let Some(sh) = shell {
-            rec_env.push(("SHELL".to_string(), sh.as_str().to_string()));
-        }
-        let recorder = Recorder::create(
-            recording_path,
-            cols,
-            rows,
-            &rec_env,
-            recording_required,
-            logger.clone(),
-        )?;
-
-        let (pty, reader) = if let Some(program) = &program {
-            let (target, args) = program
-                .split_first()
-                .ok_or_else(|| anyhow::anyhow!("empty program"))?;
-            let opts = SpawnOptions {
-                cols,
-                rows,
-                cwd,
-                env,
-            };
-            Pty::spawn(target, args, &opts)?
-        } else {
-            let sh = shell.unwrap_or_else(shell::default_shell);
-            let mut launch = shell::shell_launch(sh)?;
-            launch.env.extend(env);
-            Pty::spawn_launch(&launch, cols, rows, cwd)?
-        };
-
         let started_at = Instant::now();
         let bells = BellTracker::new(started_at);
         let state = Arc::new(Mutex::new(TermState {
@@ -110,6 +79,52 @@ impl Session {
             exited: None,
             exit_error: None,
         }));
+
+        let mut rec_env = vec![("TERM".to_string(), "xterm-256color".to_string())];
+        if let Some(sh) = shell {
+            rec_env.push(("SHELL".to_string(), sh.as_str().to_string()));
+        }
+        let recorder = Recorder::create(
+            recording_path.clone(),
+            cols,
+            rows,
+            &rec_env,
+            recording_required,
+            logger.clone(),
+        )?;
+        let spawned = (|| {
+            if let Some(program) = &program {
+                let (target, args) = program
+                    .split_first()
+                    .ok_or_else(|| anyhow::anyhow!("empty program"))?;
+                let opts = SpawnOptions {
+                    cols,
+                    rows,
+                    cwd,
+                    env,
+                };
+                Pty::spawn(target, args, &opts)
+            } else {
+                let sh = shell.unwrap_or_else(shell::default_shell);
+                let mut launch = shell::shell_launch(sh)?;
+                launch.env.extend(env);
+                Pty::spawn_launch(&launch, cols, rows, cwd)
+            }
+        })();
+        let (pty, reader) = match spawned {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                let remove = recorder.automatic_enabled();
+                drop(recorder);
+                if remove {
+                    if let Some(path) = recording_path {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+                return Err(error);
+            }
+        };
+
         let pty = Arc::new(Mutex::new(pty));
         let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -472,6 +487,10 @@ impl Session {
 
     pub fn flush_recording(&self) -> Result<(), crate::api::TuiTestError> {
         self.recorder.flush().map_err(capture_error)
+    }
+
+    pub fn automatic_recording_enabled(&self) -> bool {
+        self.recorder.automatic_enabled()
     }
 }
 

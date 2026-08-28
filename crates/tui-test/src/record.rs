@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -17,12 +17,15 @@ use worker::worker_loop;
 pub(crate) struct Capture {
     sender: mpsc::Sender<Message>,
     active_sources: Arc<AtomicUsize>,
+    boundary: Arc<Mutex<cast::IncrementalDecoder>>,
 }
 
 pub(crate) struct Recorder {
     sender: mpsc::Sender<Message>,
     worker: Option<JoinHandle<()>>,
     active_sources: Arc<AtomicUsize>,
+    boundary: Arc<Mutex<cast::IncrementalDecoder>>,
+    automatic: bool,
 }
 
 pub(crate) struct StartRecording {
@@ -43,6 +46,7 @@ pub(crate) struct StartRecording {
 
 pub(crate) struct StoppedRecording {
     pub target_path: PathBuf,
+    boundary: cast::IncrementalDecoder,
     #[cfg(feature = "recording-raster")]
     pub capture_path: PathBuf,
     pub format: RecordingFormat,
@@ -86,31 +90,46 @@ impl Recorder {
             },
             None => None,
         };
-        let active_sources = Arc::new(AtomicUsize::new(usize::from(writer.is_some())));
+        let automatic = writer.is_some();
+        let active_sources = Arc::new(AtomicUsize::new(usize::from(automatic)));
+        let boundary = Arc::new(Mutex::new(cast::IncrementalDecoder::default()));
         let (sender, receiver) = mpsc::channel();
         let worker = std::thread::spawn(move || worker_loop(receiver, writer, logger));
         Ok(Self {
             sender,
             worker: Some(worker),
             active_sources,
+            boundary,
+            automatic,
         })
+    }
+
+    pub fn automatic_enabled(&self) -> bool {
+        self.automatic
     }
 
     pub fn capture(&self) -> Capture {
         Capture {
             sender: self.sender.clone(),
             active_sources: Arc::clone(&self.active_sources),
+            boundary: Arc::clone(&self.boundary),
         }
     }
 
     pub fn start(&self, request: StartRecording) -> Result<(), CaptureError> {
-        self.active_sources.fetch_add(1, Ordering::AcqRel);
+        let decoder = (self.active_sources.fetch_add(1, Ordering::AcqRel) == 0).then(|| {
+            self.boundary
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        });
         let (reply, response) = mpsc::sync_channel(0);
         let result = self
             .sender
             .send(Message::Start {
                 at: Instant::now(),
-                request,
+                request: Box::new(request),
+                decoder,
                 reply,
             })
             .map_err(|_| CaptureError::WorkerStopped)
@@ -127,8 +146,16 @@ impl Recorder {
             .send(Message::Stop { reply })
             .map_err(|_| CaptureError::WorkerStopped)?;
         let result = response.recv().unwrap_or(Err(CaptureError::WorkerStopped));
-        if matches!(&result, Ok(_) | Err(CaptureError::Io(_))) {
-            self.active_sources.fetch_sub(1, Ordering::AcqRel);
+        if matches!(&result, Ok(_) | Err(CaptureError::Io(_)))
+            && self.active_sources.fetch_sub(1, Ordering::AcqRel) == 1
+        {
+            *self
+                .boundary
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = result
+                .as_ref()
+                .map(|stopped| stopped.boundary.clone())
+                .unwrap_or_default();
         }
         result
     }
@@ -163,6 +190,11 @@ impl Recorder {
 impl Capture {
     pub fn on_data(&self, data: &[u8]) {
         if self.active_sources.load(Ordering::Acquire) == 0 {
+            let _ = self
+                .boundary
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(data);
             return;
         }
         let _ = self.sender.send(Message::Data {
@@ -190,7 +222,8 @@ enum Message {
     },
     Start {
         at: Instant,
-        request: StartRecording,
+        request: Box<StartRecording>,
+        decoder: Option<cast::IncrementalDecoder>,
         reply: mpsc::SyncSender<Result<(), CaptureError>>,
     },
     Stop {
@@ -239,6 +272,87 @@ mod tests {
             .contains("flush-marker"));
         drop(recorder);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn manual_recording_preserves_a_disabled_capture_boundary() {
+        let target = temp_path("manual-boundary");
+        let recorder = Recorder::create(
+            None,
+            80,
+            30,
+            &[],
+            false,
+            Arc::new(crate::logger::Logger::disabled()),
+        )
+        .unwrap();
+        let capture = recorder.capture();
+        capture.on_data(&[0xc3]);
+        recorder
+            .start(StartRecording {
+                target_path: target.clone(),
+                capture_path: target.clone(),
+                format: RecordingFormat::Cast,
+                cols: 80,
+                rows: 30,
+                env: Vec::new(),
+                initial_output: String::new(),
+                #[cfg(feature = "recording-raster")]
+                zoom: 1.0,
+                #[cfg(feature = "recording-raster")]
+                timeline: frames::TimelineOptions::default(),
+                #[cfg(feature = "recording-raster")]
+                ffmpeg_path: None,
+            })
+            .unwrap();
+        capture.on_data(&[0xa9]);
+        recorder.stop().unwrap();
+
+        assert!(std::fs::read_to_string(&target).unwrap().contains('é'));
+        drop(recorder);
+        std::fs::remove_file(target).unwrap();
+    }
+
+    #[test]
+    fn manual_recording_preserves_boundary_across_stop_and_start() {
+        let first = temp_path("manual-first");
+        let second = temp_path("manual-second");
+        let recorder = Recorder::create(
+            None,
+            80,
+            30,
+            &[],
+            false,
+            Arc::new(crate::logger::Logger::disabled()),
+        )
+        .unwrap();
+        let request = |path: &PathBuf| StartRecording {
+            target_path: path.clone(),
+            capture_path: path.clone(),
+            format: RecordingFormat::Cast,
+            cols: 80,
+            rows: 30,
+            env: Vec::new(),
+            initial_output: String::new(),
+            #[cfg(feature = "recording-raster")]
+            zoom: 1.0,
+            #[cfg(feature = "recording-raster")]
+            timeline: frames::TimelineOptions::default(),
+            #[cfg(feature = "recording-raster")]
+            ffmpeg_path: None,
+        };
+        let capture = recorder.capture();
+        recorder.start(request(&first)).unwrap();
+        capture.on_data(&[0xc3]);
+        recorder.stop().unwrap();
+        recorder.start(request(&second)).unwrap();
+        capture.on_data(&[0xa9]);
+        recorder.stop().unwrap();
+
+        assert!(std::fs::read_to_string(&second).unwrap().contains('é'));
+        drop(recorder);
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_file(second).unwrap();
     }
 
     #[test]

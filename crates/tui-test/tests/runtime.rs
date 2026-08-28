@@ -189,6 +189,138 @@ fn on_failure_recording_is_kept_only_after_an_operation_failure() {
 }
 
 #[test]
+fn failed_open_recording_is_readable_before_close() {
+    let registry = SessionRegistry::default();
+    let session = registry.session("recording-failed-open");
+    let root = std::env::temp_dir().join(format!("tui-test-failed-open-{}", std::process::id()));
+    let (program, args) = if cfg!(windows) {
+        (
+            "powershell",
+            vec![
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "Start-Sleep -Seconds 2",
+            ],
+        )
+    } else {
+        ("sh", vec!["-c", "sleep 2"])
+    };
+    let mut options = run_options(program, &args);
+    options.wait_ready = Some(true);
+    options.timeouts.ready = Some(50);
+    options.recording = AutomaticRecording {
+        mode: AutomaticRecordingMode::OnFailure,
+        directory: Some(root.clone()),
+    };
+
+    assert_eq!(session.run(options).unwrap_err().kind, ErrorKind::Assertion);
+    assert!(session.recording().unwrap().contains("\"version\":2"));
+    session.close().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn restart_discards_the_previous_recording_path() {
+    let registry = SessionRegistry::default();
+    let session = registry.session("recording-restart");
+    let root =
+        std::env::temp_dir().join(format!("tui-test-recording-restart-{}", std::process::id()));
+    let first = session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Always,
+                directory: Some(root.join("first")),
+            },
+            ..OpenOptions::default()
+        })
+        .unwrap();
+    let first = std::path::PathBuf::from(first.recording);
+    assert!(first.is_file());
+
+    let second = session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            restart: true,
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Always,
+                directory: Some(root.join("second")),
+            },
+            ..OpenOptions::default()
+        })
+        .unwrap();
+    assert!(!first.exists());
+    assert!(std::path::Path::new(&second.recording).is_file());
+    session.close().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn failed_recorder_initialization_does_not_claim_a_stale_file() {
+    let session = Session::new("recording-stale-file");
+    let root =
+        std::env::temp_dir().join(format!("tui-test-recording-stale-{}", std::process::id()));
+    let first = session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Always,
+                directory: Some(root.join("first")),
+            },
+            ..OpenOptions::default()
+        })
+        .unwrap();
+    session.close().unwrap();
+
+    let blocked = root.join("blocked");
+    std::fs::create_dir_all(&blocked).unwrap();
+    let stale = blocked.join(std::path::Path::new(&first.recording).file_name().unwrap());
+    std::fs::write(&stale, "stale").unwrap();
+    let original_permissions = std::fs::metadata(&stale).unwrap().permissions();
+    let mut read_only = original_permissions.clone();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&stale, read_only).unwrap();
+
+    assert!(session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::OnFailure,
+                directory: Some(blocked),
+            },
+            ..OpenOptions::default()
+        })
+        .is_err());
+    assert!(session.recording().is_err());
+    assert_eq!(std::fs::read_to_string(&stale).unwrap(), "stale");
+
+    std::fs::set_permissions(&stale, original_permissions).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn failed_process_spawn_does_not_publish_a_recording() {
+    let session = Session::new("recording-failed-spawn");
+    let root = std::env::temp_dir().join(format!(
+        "tui-test-recording-failed-spawn-{}",
+        std::process::id()
+    ));
+    let mut options = run_options("tui-test-program-that-does-not-exist", &[]);
+    options.recording = AutomaticRecording {
+        mode: AutomaticRecordingMode::OnFailure,
+        directory: Some(root.clone()),
+    };
+
+    assert!(session.run(options).is_err());
+    assert!(session.recording().is_err());
+    assert!(std::fs::read_dir(&root)
+        .map(|entries| entries.flatten().next().is_none())
+        .unwrap_or(true));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn opening_a_live_named_session_reuses_it_unless_restart_is_requested() {
     let registry = SessionRegistry::default();
     let session = registry.session("native-reuse");

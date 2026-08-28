@@ -134,8 +134,10 @@ def normalize_recording(recording: object) -> Optional[Dict[str, Any]]:
             )
         )
     directory = raw.get("directory")
-    if directory is not None and not isinstance(directory, str):
-        raise TypeError("recording.directory must be a string")
+    if directory is not None and (
+        not isinstance(directory, str) or not directory
+    ):
+        raise TypeError("recording.directory must be a non-empty string")
     return raw
 
 

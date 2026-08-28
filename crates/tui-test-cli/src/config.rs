@@ -29,6 +29,10 @@ pub fn log_file(session: &str) -> PathBuf {
     home_dir().join(format!("{session}.log"))
 }
 
+pub fn recording_pointer_file(session: &str) -> PathBuf {
+    home_dir().join(format!("{session}.recording"))
+}
+
 pub fn recording_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("TUI_TEST_HOME") {
         return PathBuf::from(dir).join("recordings");
@@ -40,17 +44,6 @@ pub fn recording_dir() -> PathBuf {
 
 pub fn recording_file(session: &str) -> PathBuf {
     recording_dir().join(format!("{session}.cast"))
-}
-
-pub fn configured_recording_file(
-    session: &str,
-    recording: &tui_test::AutomaticRecording,
-) -> PathBuf {
-    recording
-        .directory
-        .clone()
-        .unwrap_or_else(recording_dir)
-        .join(format!("{session}.cast"))
 }
 
 const SOCKET_PATH_MAX: usize = 100;
