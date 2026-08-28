@@ -661,43 +661,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn open_round_trips_automatic_recording_configuration() {
-        let recording = AutomaticRecording {
-            mode: tui_test::AutomaticRecordingMode::OnFailure,
-            directory: Some("artifacts".into()),
-            retention_count: Some(10),
-            retention_age_seconds: Some(60),
-            retention_size_bytes: Some(1024),
-        };
-        let mut request = make_open_req(None, Timeouts::default());
-        if let Request::Open {
-            recording: configured,
-            ..
-        } = &mut request
-        {
-            **configured = recording.clone();
-        }
-        let encoded = serde_json::to_string(&request).expect("serialize open");
-        match serde_json::from_str::<Request>(&encoded).expect("deserialize open") {
-            Request::Open { recording: got, .. } => assert_eq!(*got, recording),
-            other => panic!("expected Open, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn legacy_open_requests_keep_default_recording() {
-        let mut value = serde_json::to_value(make_open_req(None, Timeouts::default())).unwrap();
-        value
-            .as_object_mut()
-            .expect("open request is an object")
-            .remove("recording");
-        match serde_json::from_value::<Request>(value).expect("deserialize legacy open") {
-            Request::Open { recording, .. } => {
-                assert_eq!(*recording, AutomaticRecording::default())
-            }
-            other => panic!("expected Open, got {other:?}"),
-        }
-    }
 }

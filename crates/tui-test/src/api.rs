@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::shell::Shell;
 
-pub const DEFAULT_RECORDING_RETENTION_COUNT: usize = 1024;
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AutomaticRecordingMode {
@@ -16,46 +14,11 @@ pub enum AutomaticRecordingMode {
     Always,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AutomaticRecording {
     pub mode: AutomaticRecordingMode,
     pub directory: Option<PathBuf>,
-    #[serde(default = "default_recording_retention_count")]
-    pub retention_count: Option<usize>,
-    pub retention_age_seconds: Option<u64>,
-    pub retention_size_bytes: Option<u64>,
-}
-
-impl Default for AutomaticRecording {
-    fn default() -> Self {
-        Self {
-            mode: AutomaticRecordingMode::Always,
-            directory: None,
-            retention_count: default_recording_retention_count(),
-            retention_age_seconds: None,
-            retention_size_bytes: None,
-        }
-    }
-}
-
-impl AutomaticRecording {
-    pub fn validate(&self) -> Result<(), TuiTestError> {
-        if self
-            .directory
-            .as_ref()
-            .is_some_and(|directory| directory.as_os_str().is_empty())
-        {
-            return Err(TuiTestError::usage(
-                "automatic recording directory must not be empty",
-            ));
-        }
-        Ok(())
-    }
-}
-
-fn default_recording_retention_count() -> Option<usize> {
-    Some(DEFAULT_RECORDING_RETENTION_COUNT)
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -587,33 +550,6 @@ pub enum MouseAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn automatic_recording_defaults_preserve_existing_behavior() {
-        let recording = AutomaticRecording::default();
-        assert_eq!(recording.mode, AutomaticRecordingMode::Always);
-        assert_eq!(
-            recording.retention_count,
-            Some(DEFAULT_RECORDING_RETENTION_COUNT)
-        );
-        assert_eq!(recording.retention_age_seconds, None);
-        assert_eq!(recording.retention_size_bytes, None);
-    }
-
-    #[test]
-    fn automatic_recording_modes_use_config_names() {
-        for (mode, name) in [
-            (AutomaticRecordingMode::Disabled, "disabled"),
-            (AutomaticRecordingMode::OnFailure, "on-failure"),
-            (AutomaticRecordingMode::Always, "always"),
-        ] {
-            assert_eq!(serde_json::to_string(&mode).unwrap(), format!("\"{name}\""));
-            assert_eq!(
-                serde_json::from_str::<AutomaticRecordingMode>(&format!("\"{name}\"")).unwrap(),
-                mode
-            );
-        }
-    }
 
     #[test]
     fn recording_format_is_inferred_from_supported_extensions() {

@@ -79,66 +79,23 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
-    def test_automatic_recording_modes(self):
+    def test_automatic_recording_mode_and_directory(self):
         async def scenario():
             with tempfile.TemporaryDirectory() as root:
-                disabled_name = unique_session("recording-disabled")
-                disabled = TuiTest(
-                    disabled_name,
-                    recording={"mode": "disabled", "directory": root},
+                disabled = self._client(
+                    recording={"mode": "disabled", "directory": root}
                 )
-                disabled_result = await disabled.open(
-                    shell=SHELL, wait_ready=False
-                )
-                self.assertEqual(disabled_result["recording"], "")
+                result = await disabled.open(shell=SHELL, wait_ready=False)
+                self.assertEqual(result["recording"], "")
                 await disabled.close()
-                with self.assertRaises(NoSessionError):
-                    await get_recording(disabled_name)
 
-                success_name = unique_session("recording-success")
-                success = TuiTest(
-                    success_name,
-                    recording={"mode": "on-failure", "directory": root},
+                always = self._client(
+                    recording={"mode": "always", "directory": root}
                 )
-                success_result = await success.open(
-                    shell=SHELL, wait_ready=False
-                )
-                success_path = Path(success_result["recording"])
-                self.assertTrue(success_path.is_file())
-                await success.close()
-                self.assertFalse(success_path.exists())
-
-                failure_name = unique_session("recording-failure")
-                failure = TuiTest(
-                    failure_name,
-                    recording={"mode": "on-failure", "directory": root},
-                )
-                failure_result = await failure.open(
-                    shell=SHELL, wait_ready=False
-                )
-                with self.assertRaises(ExpectationError):
-                    await failure.expect_text(
-                        "text-that-will-never-appear", timeout=1
-                    )
-                await failure.close()
-                self.assertTrue(Path(failure_result["recording"]).is_file())
-                self.assertIn('"version":2', await get_recording(failure_name))
-
-        run(scenario())
-
-    def test_on_failure_recording_can_be_retained_explicitly(self):
-        async def scenario():
-            with tempfile.TemporaryDirectory() as root:
-                name = unique_session("recording-explicit")
-                su = TuiTest(
-                    name,
-                    recording={"mode": "on-failure", "directory": root},
-                )
-                opened = await su.open(shell=SHELL, wait_ready=False)
-                await su.retain_recording()
-                await su.close()
-                self.assertTrue(Path(opened["recording"]).is_file())
-                self.assertIn('"version":2', await get_recording(name))
+                result = await always.open(shell=SHELL, wait_ready=False)
+                self.assertTrue(result["recording"].startswith(root))
+                self.assertTrue(Path(result["recording"]).is_file())
+                await always.close()
 
         run(scenario())
 

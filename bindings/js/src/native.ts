@@ -167,10 +167,6 @@ export class NativeRuntime {
     return this.#call((session) => session.close());
   }
 
-  retainRecording(): Promise<void> {
-    return this.#call((session) => session.retainRecording());
-  }
-
   state(): Promise<State> {
     return this.#call((session) => session.state());
   }

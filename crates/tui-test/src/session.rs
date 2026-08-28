@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use crate::event::BellTracker;
 use crate::logger::Logger;
 use crate::profile::Profile;
-use crate::record::{self, AutomaticRecordingGuard, CaptureError, Recorder, StartRecording};
+use crate::record::{self, CaptureError, Recorder, StartRecording};
 #[cfg(feature = "recording-raster")]
 use crate::render::raster::GridRenderer;
 use crate::shell::{self, Shell};
@@ -41,7 +41,6 @@ pub struct Session {
     pub cancelled: Arc<AtomicBool>,
     pub(crate) bells: BellTracker,
     recorder: Recorder,
-    _automatic_recording: Option<AutomaticRecordingGuard>,
     logger: Arc<Logger>,
     reader: Option<JoinHandle<()>>,
     _process_watcher: JoinHandle<()>,
@@ -70,10 +69,6 @@ impl Session {
         recording_path: Option<PathBuf>,
         recording_required: bool,
     ) -> anyhow::Result<Self> {
-        let automatic_recording = recording_path
-            .as_ref()
-            .cloned()
-            .map(AutomaticRecordingGuard::register);
         let mut rec_env = vec![("TERM".to_string(), "xterm-256color".to_string())];
         if let Some(sh) = shell {
             rec_env.push(("SHELL".to_string(), sh.as_str().to_string()));
@@ -214,7 +209,6 @@ impl Session {
             cancelled,
             bells,
             recorder,
-            _automatic_recording: automatic_recording,
             logger,
             reader: Some(reader_handle),
             _process_watcher: process_watcher,

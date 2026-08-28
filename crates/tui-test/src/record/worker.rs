@@ -58,17 +58,11 @@ pub(super) fn worker_loop(
                     remember_error(recording, result);
                 }
             }
-            Message::Start {
-                at,
-                request,
-                decoder,
-                reply,
-            } => {
+            Message::Start { at, request, reply } => {
                 if active.is_some() {
                     let _ = reply.send(Err(CaptureError::AlreadyActive));
                     continue;
                 }
-                let request = *request;
                 let writer = cast::CastWriter::create(
                     &request.capture_path,
                     request.cols,
@@ -89,7 +83,7 @@ pub(super) fn worker_loop(
                 }
                 active = Some(ActiveRecording {
                     writer,
-                    decoder: decoder.unwrap_or_else(|| primary_decoder.clone()),
+                    decoder: primary_decoder.clone(),
                     request,
                     started: at,
                     last_at: at,

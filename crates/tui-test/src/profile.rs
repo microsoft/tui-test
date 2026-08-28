@@ -369,7 +369,7 @@ impl From<ConfigProfile> for Settings {
     }
 }
 
-/// A parsed config file: named terminal profiles and automatic recording.
+/// A parsed config file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ConfigFile {
@@ -379,13 +379,15 @@ pub struct ConfigFile {
 
 impl ConfigFile {
     pub fn parse(toml_text: &str) -> anyhow::Result<Self> {
-        let config: Self = toml::from_str(toml_text)?;
-        config.recording.validate()?;
-        Ok(config)
+        Ok(toml::from_str(toml_text)?)
     }
 
     pub fn load(path: &Path) -> anyhow::Result<Self> {
-        let path = absolute_config_path(path)?;
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
         let text = std::fs::read_to_string(&path)
             .map_err(|e| anyhow::anyhow!("could not read {}: {e}", path.display()))?;
         let mut config =
@@ -398,7 +400,6 @@ impl ConfigFile {
                     .join(&*directory);
             }
         }
-
         Ok(config)
     }
 
@@ -429,15 +430,6 @@ impl ConfigFile {
         settings.recording = self.recording.clone();
         Ok(settings)
     }
-}
-
-fn absolute_config_path(path: &Path) -> anyhow::Result<PathBuf> {
-    if path.is_absolute() {
-        return Ok(path.to_path_buf());
-    }
-    Ok(std::env::current_dir()
-        .map_err(|error| anyhow::anyhow!("could not resolve {}: {error}", path.display()))?
-        .join(path))
 }
 
 /// Where a config file is looked for, nearest first.
@@ -515,7 +507,6 @@ pub fn resolve_settings(
     }
 }
 
-/// Resolve only automatic recording configuration.
 pub fn resolve_recording(
     explicit_config: Option<&Path>,
     cwd: &Path,
@@ -537,7 +528,6 @@ pub fn resolve_recording(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::SystemTime;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -625,68 +615,16 @@ mod tests {
     }
 
     #[test]
-    fn automatic_recording_configuration_is_loaded_with_profiles() {
-        let cfg = ConfigFile::parse(
-            r#"
-            [recording]
-            mode = "on-failure"
-            directory = "artifacts"
-            retention_count = 12
-            retention_age_seconds = 3600
-            retention_size_bytes = 1048576
-
-            [profiles.ci]
-            scrollback = 50
-            "#,
-        )
-        .unwrap();
-        let settings = cfg.settings(Some("ci")).unwrap();
+    fn automatic_recording_configuration_is_loaded() {
+        let config =
+            ConfigFile::parse("[recording]\nmode = \"on-failure\"\ndirectory = \"artifacts\"\n")
+                .unwrap();
+        let recording = config.settings(None).unwrap().recording;
         assert_eq!(
-            settings.recording.mode,
+            recording.mode,
             crate::api::AutomaticRecordingMode::OnFailure
         );
-        assert_eq!(
-            settings.recording.directory,
-            Some(PathBuf::from("artifacts"))
-        );
-        assert_eq!(settings.recording.retention_count, Some(12));
-        assert_eq!(settings.recording.retention_age_seconds, Some(3600));
-        assert_eq!(settings.recording.retention_size_bytes, Some(1_048_576));
-    }
-
-    #[test]
-    fn recording_directories_are_relative_to_the_config_file() {
-        let root = std::env::temp_dir().join(format!(
-            "tui-test-recording-config-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        let path = root.join(CONFIG_FILE);
-        std::fs::write(&path, "[recording]\ndirectory = \"casts\"\n").unwrap();
-
-        let config = ConfigFile::load(&path).unwrap();
-        assert_eq!(config.recording.directory, Some(root.join("casts")));
-
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn relative_config_paths_are_absolutized_before_loading() {
-        let path = absolute_config_path(Path::new("relative-config.toml")).unwrap();
-        assert!(path.is_absolute());
-        assert!(path.ends_with("relative-config.toml"));
-    }
-
-    #[test]
-    fn an_empty_recording_directory_is_rejected() {
-        let error = ConfigFile::parse("[recording]\ndirectory = \"\"\n")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("must not be empty"), "{error}");
+        assert_eq!(recording.directory, Some(PathBuf::from("artifacts")));
     }
 
     #[test]

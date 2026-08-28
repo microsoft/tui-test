@@ -422,13 +422,7 @@ tui-test wait command
 tui-test record stop
 ```
 
-Automatic casts default to `always`; `[recording]` can disable them or keep
-them only after a failed assertion/internal operation. `--zoom` scales SVG
-screenshots and APNG/GIF/MP4 output without changing the terminal's rows or
-columns, and MP4 export requires `ffmpeg` on `PATH`. The
-`recording-font-jetbrains-mono*` features bundle JetBrains Mono for raster
-exports; set `TUI_TEST_RECORDING_FONT_FAMILIES=Family One,Family Two` to prefer
-installed font families.
+`--zoom` scales SVG screenshots and APNG/GIF/MP4 output without changing the terminal's rows or columns, and MP4 export requires `ffmpeg` on `PATH`. The `recording-font-jetbrains-mono*` features bundle JetBrains Mono for raster exports; set `TUI_TEST_RECORDING_FONT_FAMILIES=Family One,Family Two` to prefer installed font families.
 
 <p align="center">
   <img alt="animated APNG terminal recording produced by tui-test" src="static/recording.png" width="400">
@@ -499,9 +493,6 @@ scrollback = 500              # other fields use built-in defaults
 [recording]
 mode = "on-failure"           # "disabled", "on-failure", or "always"
 directory = "./artifacts"     # relative to this config file
-retention_count = 100         # default: 1024; zero retains none
-retention_age_seconds = 86400
-retention_size_bytes = 1073741824
 ```
 
 ```bash
@@ -513,14 +504,10 @@ tui-test open --config ./other.toml --profile ci
 By default, `tui-test` checks `./tui-test.toml` first, then `$XDG_CONFIG_HOME/tui-test/tui-test.toml` on Unix, and finally `~/.tui-test/tui-test.toml`. `--config` or `TUI_TEST_CONFIG` skips that search and uses the specified file.
 
 Named profiles do not inherit from `[profiles.default]`; every omitted field
-uses tui-test's built-in default. Automatic recordings are stored under the
-configured root's `cli` or `native` subdirectory; CLI storage is further
-namespaced by `TUI_TEST_HOME` so independent daemon groups cannot prune each
-other. The oldest completed casts
-are removed whenever a count, age, or total-size limit is exceeded. In
-`on-failure` mode, the cast is written while the session runs and deleted on a
-successful close. `tui-test.toml` affects only the CLI. The libraries accept
-the same recording policy through their client options.
+uses tui-test's built-in default. Automatic recording defaults to `always`;
+`on-failure` keeps casts after assertion/internal operation failures and
+deletes them after a successful close. `tui-test.toml` affects only the CLI.
+The libraries accept the same recording options through their clients.
 
 ### Colors
 

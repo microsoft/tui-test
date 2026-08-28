@@ -50,34 +50,29 @@ struct NativeSession {
 #[pymethods]
 impl NativeSession {
     #[new]
-    #[pyo3(signature = (
-        name,
-        recording_mode = None,
-        recording_directory = None,
-        retention_count = None,
-        retention_age_seconds = None,
-        retention_size_bytes = None
-    ))]
-    fn new<'py>(
+    #[pyo3(signature = (name, recording_mode = None, recording_directory = None))]
+    fn new(
         name: String,
         recording_mode: Option<String>,
         recording_directory: Option<String>,
-        retention_count: Option<Bound<'py, PyAny>>,
-        retention_age_seconds: Option<Bound<'py, PyAny>>,
-        retention_size_bytes: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
-        let retention_count = capture_optional_integer(retention_count);
-        let retention_age_seconds = capture_optional_integer(retention_age_seconds);
-        let retention_size_bytes = capture_optional_integer(retention_size_bytes);
-        let recording = automatic_recording_from_parts(
-            recording_mode.as_deref(),
-            recording_directory,
-            retention_count.as_ref(),
-            retention_age_seconds.as_ref(),
-            retention_size_bytes.as_ref(),
-        )
-        .map_err(shell_error_to_py)?;
-        Ok(Self { name, recording })
+        let mode = match recording_mode.as_deref().unwrap_or("always") {
+            "disabled" => CoreAutomaticRecordingMode::Disabled,
+            "on-failure" => CoreAutomaticRecordingMode::OnFailure,
+            "always" => CoreAutomaticRecordingMode::Always,
+            other => {
+                return Err(shell_error_to_py(TuiTestError::usage(format!(
+                    "unknown automatic recording mode {other:?}; expected disabled, on-failure, or always"
+                ))))
+            }
+        };
+        Ok(Self {
+            name,
+            recording: CoreAutomaticRecording {
+                mode,
+                directory: recording_directory.map(Into::into),
+            },
+        })
     }
 
     #[pyo3(signature = (
@@ -242,15 +237,6 @@ impl NativeSession {
         future_blocking(
             py,
             move || execute_unit(&name, Operation::Close),
-            unit_to_py,
-        )
-    }
-
-    fn retain_recording<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
-        future_blocking(
-            py,
-            move || global_registry().retain_recording(&name),
             unit_to_py,
         )
     }
@@ -1277,47 +1263,6 @@ fn integer_u64(value: &IntegerInput, name: &str) -> Result<u64, TuiTestError> {
 
 fn optional_u64(value: Option<&IntegerInput>, name: &str) -> Result<Option<u64>, TuiTestError> {
     value.map(|value| integer_u64(value, name)).transpose()
-}
-
-fn automatic_recording_from_parts(
-    mode: Option<&str>,
-    directory: Option<String>,
-    retention_count: Option<&IntegerInput>,
-    retention_age_seconds: Option<&IntegerInput>,
-    retention_size_bytes: Option<&IntegerInput>,
-) -> Result<CoreAutomaticRecording, TuiTestError> {
-    let mut recording = CoreAutomaticRecording::default();
-    if let Some(mode) = mode {
-        recording.mode = match mode {
-            "disabled" => CoreAutomaticRecordingMode::Disabled,
-            "on-failure" => CoreAutomaticRecordingMode::OnFailure,
-            "always" => CoreAutomaticRecordingMode::Always,
-            other => {
-                return Err(TuiTestError::usage(format!(
-                    "unknown automatic recording mode {other:?}; expected disabled, on-failure, or always"
-                )))
-            }
-        };
-    }
-    if let Some(directory) = directory {
-        if directory.is_empty() {
-            return Err(TuiTestError::usage(
-                "automatic recording directory must not be empty",
-            ));
-        }
-        recording.directory = Some(directory.into());
-    }
-    if let Some(count) = retention_count {
-        recording.retention_count =
-            Some(
-                integer_unsigned(count, "recording.retention_count", usize::MAX as u128)? as usize,
-            );
-    }
-    recording.retention_age_seconds =
-        optional_u64(retention_age_seconds, "recording.retention_age_seconds")?;
-    recording.retention_size_bytes =
-        optional_u64(retention_size_bytes, "recording.retention_size_bytes")?;
-    Ok(recording)
 }
 
 fn profile_from_parts(

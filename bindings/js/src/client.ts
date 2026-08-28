@@ -302,10 +302,6 @@ export class TuiTest {
     await this.#runtime.close();
   }
 
-  async retainRecording(): Promise<void> {
-    await this.#runtime.retainRecording();
-  }
-
   async closeQuiet(): Promise<void> {
     try {
       await this.close();

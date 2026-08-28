@@ -86,15 +86,9 @@ export interface Profile {
   colors?: Colors;
 }
 
-export type AutomaticRecordingMode = "disabled" | "on-failure" | "always";
-
 export interface AutomaticRecording {
-  mode?: AutomaticRecordingMode;
-  /** Root directory; automatic casts are stored below its `cli` or `native` subdirectory. */
+  mode?: "disabled" | "on-failure" | "always";
   directory?: string;
-  retentionCount?: number;
-  retentionAgeSeconds?: number;
-  retentionSizeBytes?: number;
 }
 
 export interface SpawnOptions {

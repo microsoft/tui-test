@@ -135,15 +135,6 @@ export async function withTerminal<T>(
   const terminal = await createTerminal(options);
   try {
     return await fn(terminal);
-  } catch (error) {
-    try {
-      await terminal.retainRecording();
-    } catch (retentionError) {
-      if (error instanceof Error && error.cause === undefined) {
-        error.cause = retentionError;
-      }
-    }
-    throw error;
   } finally {
     await terminal.closeQuiet();
     untrackTerminal(terminal);

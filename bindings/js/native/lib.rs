@@ -103,9 +103,6 @@ pub struct Timeouts {
 pub struct AutomaticRecordingOptions {
     pub mode: Option<String>,
     pub directory: Option<String>,
-    pub retention_count: Option<f64>,
-    pub retention_age_seconds: Option<f64>,
-    pub retention_size_bytes: Option<f64>,
 }
 
 #[napi(object)]
@@ -538,46 +535,26 @@ fn core_timeouts(value: Option<Timeouts>) -> std::result::Result<CoreTimeouts, T
     })
 }
 
-fn core_automatic_recording(
+fn core_recording(
     value: Option<AutomaticRecordingOptions>,
 ) -> std::result::Result<CoreAutomaticRecording, TuiTestError> {
     let Some(value) = value else {
         return Ok(CoreAutomaticRecording::default());
     };
-    let mut recording = CoreAutomaticRecording::default();
-    if let Some(mode) = value.mode.as_deref() {
-        recording.mode = match mode {
-            "disabled" => CoreAutomaticRecordingMode::Disabled,
-            "on-failure" => CoreAutomaticRecordingMode::OnFailure,
-            "always" => CoreAutomaticRecordingMode::Always,
-            other => {
-                return Err(TuiTestError::usage(format!(
-                    "unknown automatic recording mode {other:?}; expected disabled, on-failure, or always"
-                )))
-            }
-        };
-    }
-    if let Some(directory) = value.directory {
-        if directory.is_empty() {
-            return Err(TuiTestError::usage(
-                "automatic recording directory must not be empty",
-            ));
+    let mode = match value.mode.as_deref().unwrap_or("always") {
+        "disabled" => CoreAutomaticRecordingMode::Disabled,
+        "on-failure" => CoreAutomaticRecordingMode::OnFailure,
+        "always" => CoreAutomaticRecordingMode::Always,
+        other => {
+            return Err(TuiTestError::usage(format!(
+            "unknown automatic recording mode {other:?}; expected disabled, on-failure, or always"
+        )))
         }
-        recording.directory = Some(directory.into());
-    }
-    if let Some(count) = value.retention_count {
-        recording.retention_count =
-            Some(integer(count, "recording.retentionCount", usize::MAX as u64)? as usize);
-    }
-    if let Some(age) = value.retention_age_seconds {
-        recording.retention_age_seconds =
-            Some(integer(age, "recording.retentionAgeSeconds", u64::MAX)?);
-    }
-    if let Some(size) = value.retention_size_bytes {
-        recording.retention_size_bytes =
-            Some(integer(size, "recording.retentionSizeBytes", u64::MAX)?);
-    }
-    Ok(recording)
+    };
+    Ok(CoreAutomaticRecording {
+        mode,
+        directory: value.directory.map(Into::into),
+    })
 }
 
 fn core_profile(
@@ -700,7 +677,7 @@ impl NativeSession {
     pub fn new(name: String, recording: Option<AutomaticRecordingOptions>) -> Result<Self> {
         Ok(Self {
             handle: global_registry().session(name),
-            recording: core_automatic_recording(recording).map_err(native_error)?,
+            recording: core_recording(recording).map_err(native_error)?,
         })
     }
 
@@ -749,12 +726,6 @@ impl NativeSession {
             },
         )
         .await
-    }
-
-    #[napi]
-    pub async fn retain_recording(&self) -> Result<()> {
-        let handle = self.handle.clone();
-        blocking("retainRecording", move || handle.retain_recording()).await
     }
 
     #[napi]

@@ -116,6 +116,7 @@ test("profilePayload validates profile and color fields", () => {
     scrollback: 50,
     colors: [["red", "#010203"]],
   });
+
   assert.throws(() => profilePayload({ scrollbacks: 50 }), /scrollbacks/);
   assert.throws(
     () => profilePayload({ colors: { chartreuse: "#010203" } }),
@@ -124,28 +125,13 @@ test("profilePayload validates profile and color fields", () => {
   assert.throws(() => profilePayload({ colors: { red: 123 } }), /must be a string/);
 });
 
-test("recordingPayload validates automatic recording options", () => {
-  assert.equal(recordingPayload(), undefined);
-  assert.deepEqual(
-    recordingPayload({
-      mode: "on-failure",
-      directory: "artifacts",
-      retentionCount: 10,
-      retentionAgeSeconds: 60,
-      retentionSizeBytes: 1024,
-    }),
-    {
-      mode: "on-failure",
-      directory: "artifacts",
-      retentionCount: 10,
-      retentionAgeSeconds: 60,
-      retentionSizeBytes: 1024,
-    },
-  );
+test("recordingPayload accepts only mode and directory", () => {
+  assert.deepEqual(recordingPayload({ mode: "on-failure", directory: "casts" }), {
+    mode: "on-failure",
+    directory: "casts",
+  });
   assert.throws(() => recordingPayload({ mode: "sometimes" }), /recording mode/);
-  assert.throws(() => recordingPayload({ directory: "" }), /non-empty string/);
-  assert.throws(() => recordingPayload({ retentionCount: -1 }), /non-negative/);
-  assert.throws(() => recordingPayload({ retainCount: 1 }), /retainCount/);
+  assert.throws(() => recordingPayload({ other: 1 }), /other/);
 });
 
 test("unknown timeout classes are rejected before native dispatch", async () => {

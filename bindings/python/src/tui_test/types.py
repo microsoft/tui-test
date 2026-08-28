@@ -52,11 +52,7 @@ class Timeouts:
 @dataclass
 class AutomaticRecording:
     mode: Optional[AutomaticRecordingMode] = None
-    #: Root directory; automatic casts are stored below ``cli`` or ``native``.
     directory: Optional[str] = None
-    retention_count: Optional[int] = None
-    retention_age_seconds: Optional[int] = None
-    retention_size_bytes: Optional[int] = None
 
 
 @dataclass

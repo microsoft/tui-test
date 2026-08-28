@@ -22,7 +22,6 @@ export { VERSION } from "./version.js";
 export type {
   ArtifactOptions,
   AutomaticRecording,
-  AutomaticRecordingMode,
   Backend,
   BellEvent,
   Cell,

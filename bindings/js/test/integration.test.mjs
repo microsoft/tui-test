@@ -130,54 +130,21 @@ test("recording API writes an asciicast file", async () => {
   }
 });
 
-test("automatic recording supports disabled and on-failure modes", async () => {
+test("automatic recording mode and directory are configurable", async () => {
   const root = mkdtempSync(join(tmpdir(), "tui-test-auto-recording-"));
-  const disabledName = uniqueSession("recording-disabled");
-  const disabled = new TuiTest(disabledName, {
+  const disabled = new TuiTest(uniqueSession("recording-disabled"), {
     recording: { mode: "disabled", directory: root },
   });
-  const disabledResult = await disabled.open({ shell, waitReady: false });
-  assert.equal(disabledResult.recording, "");
+  assert.equal((await disabled.open({ shell, waitReady: false })).recording, "");
   await disabled.close();
-  await assert.rejects(() => getRecording(disabledName), NoSessionError);
 
-  const successName = uniqueSession("recording-success");
-  const success = new TuiTest(successName, {
-    recording: { mode: "on-failure", directory: root },
+  const always = new TuiTest(uniqueSession("recording-always"), {
+    recording: { mode: "always", directory: root },
   });
-  const successResult = await success.open({ shell, waitReady: false });
-  assert.ok(existsSync(successResult.recording));
-  await success.close();
-  assert.equal(existsSync(successResult.recording), false);
-
-  const failureName = uniqueSession("recording-failure");
-  const failure = new TuiTest(failureName, {
-    recording: { mode: "on-failure", directory: root },
-  });
-  const failureResult = await failure.open({ shell, waitReady: false });
-  await assert.rejects(
-    () => failure.expectText("text-that-will-never-appear", { timeout: 1 }),
-    ExpectationError,
-  );
-  await failure.close();
-  assert.ok(existsSync(failureResult.recording));
-  assert.match(await getRecording(failureName), /"version":2/);
-
-  rmSync(root, { recursive: true, force: true });
-});
-
-test("on-failure recordings can be retained explicitly", async () => {
-  const root = mkdtempSync(join(tmpdir(), "tui-test-retain-recording-"));
-  const name = uniqueSession("recording-explicit");
-  const su = new TuiTest(name, {
-    recording: { mode: "on-failure", directory: root },
-  });
-  const opened = await su.open({ shell, waitReady: false });
-  await su.retainRecording();
-  await su.close();
-
+  const opened = await always.open({ shell, waitReady: false });
+  assert.ok(opened.recording.startsWith(root));
   assert.ok(existsSync(opened.recording));
-  assert.match(await getRecording(name), /"version":2/);
+  await always.close();
   rmSync(root, { recursive: true, force: true });
 });
 

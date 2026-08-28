@@ -102,40 +102,17 @@ class ProfileResolutionTests(unittest.TestCase):
 
 
 class RecordingResolutionTests(unittest.TestCase):
-    def test_normalize_accepts_dataclass_and_mapping(self):
-        self.assertIsNone(cfg.normalize_recording(None))
+    def test_accepts_only_mode_and_directory(self):
         self.assertEqual(
             cfg.normalize_recording(
-                AutomaticRecording(
-                    mode="on-failure",
-                    directory="artifacts",
-                    retention_count=10,
-                    retention_age_seconds=60,
-                    retention_size_bytes=1024,
-                )
+                AutomaticRecording(mode="on-failure", directory="casts")
             ),
-            {
-                "mode": "on-failure",
-                "directory": "artifacts",
-                "retention_count": 10,
-                "retention_age_seconds": 60,
-                "retention_size_bytes": 1024,
-            },
+            {"mode": "on-failure", "directory": "casts"},
         )
-        self.assertEqual(
-            cfg.normalize_recording({"mode": "disabled"}),
-            {"mode": "disabled"},
-        )
-
-    def test_invalid_recording_fields_are_rejected(self):
         with self.assertRaises(ValueError):
             cfg.normalize_recording({"mode": "sometimes"})
-        with self.assertRaises(TypeError):
-            cfg.normalize_recording({"directory": ""})
-        with self.assertRaises(TypeError):
-            cfg.normalize_recording({"retention_count": -1})
         with self.assertRaises(ValueError):
-            cfg.normalize_recording({"retain_count": 1})
+            cfg.normalize_recording({"other": 1})
 
 
 class BackendResolutionTests(unittest.TestCase):

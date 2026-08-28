@@ -106,25 +106,6 @@ test(
   },
 );
 
-test("withTerminal preserves a callback failure when retention fails", async () => {
-  const expected = new Error("callback failed");
-  await assert.rejects(
-    () =>
-      withTerminal(
-        { prefix: "helpers-retain-failure", recording: { mode: "on-failure" } },
-        async (terminal) => {
-          await terminal.close();
-          throw expected;
-        },
-      ),
-    (error) => {
-      assert.equal(error, expected);
-      assert.ok(error.cause instanceof Error);
-      return true;
-    },
-  );
-});
-
 test(
   "createTerminal registers the terminal for automatic cleanup",
   async () => {

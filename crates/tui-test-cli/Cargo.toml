@@ -18,7 +18,6 @@ clap = { workspace = true, features = ["env"] }
 crossterm.workspace = true
 dialoguer.workspace = true
 dirs.workspace = true
-fs2.workspace = true
 interprocess.workspace = true
 serde.workspace = true
 serde_json.workspace = true

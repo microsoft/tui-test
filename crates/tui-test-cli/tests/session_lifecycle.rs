@@ -166,27 +166,6 @@ fn sandbox_paths_fit_in_a_unix_socket_address() {
     );
 }
 
-#[test]
-fn close_is_idempotent_with_a_missing_runtime_directory() {
-    let root = std::env::temp_dir().join(format!(
-        "tui-test-missing-home-{}-{}",
-        std::process::id(),
-        SANDBOX_SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
-    let _ = std::fs::remove_dir_all(&root);
-    let output = Command::new(BIN)
-        .args(["--session", "fresh-close", "close"])
-        .env("TUI_TEST_HOME", &root)
-        .output()
-        .expect("run close");
-    assert!(
-        output.status.success(),
-        "close failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let _ = std::fs::remove_dir_all(root);
-}
-
 /// Repeats `close` to catch the final-response drain race.
 #[test]
 fn close_always_reports_success() {
@@ -686,143 +665,19 @@ fn state_reports_effective_timeouts() {
 }
 
 #[test]
-fn daemon_shutdown_finalizes_on_failure_recording() {
-    let sandbox = Sandbox::new("recording-shutdown");
+fn automatic_recording_mode_and_directory_come_from_config() {
+    let sandbox = Sandbox::new("recording-config");
     let config = sandbox.home.join("recording.toml");
     std::fs::write(
         &config,
-        "[recording]\nmode = \"on-failure\"\ndirectory = \"casts\"\n",
+        "[recording]\nmode = \"disabled\"\ndirectory = \"casts\"\n",
     )
-    .expect("write config");
-    let config = config.to_str().expect("utf-8 path");
-    let raw = sandbox.ok_as(
-        "shutdown",
-        &["--json", "open", "--config", config, "--no-wait-ready"],
-    );
-    let payload: serde_json::Value = serde_json::from_str(&raw).expect("open json");
-    let path = PathBuf::from(
-        payload["data"]["recording"]
-            .as_str()
-            .expect("recording path"),
-    );
-    assert!(path.is_file());
-
-    sandbox.ok_as("shutdown", &["daemon", "stop"]);
-    assert!(!path.exists());
-}
-
-#[test]
-fn cli_retention_is_enforced_after_recording_completion() {
-    let sandbox = Sandbox::new("recording-retention");
-    let config = sandbox.home.join("recording.toml");
-    std::fs::write(
-        &config,
-        "[recording]\ndirectory = \"casts\"\nretention_count = 1\n",
-    )
-    .expect("write config");
-    let config = config.to_str().expect("utf-8 path");
-
-    let open = |suffix| {
-        let raw = sandbox.ok_as(
-            suffix,
-            &["--json", "open", "--config", config, "--no-wait-ready"],
-        );
-        let payload: serde_json::Value = serde_json::from_str(&raw).expect("open json");
-        PathBuf::from(
-            payload["data"]["recording"]
-                .as_str()
-                .expect("recording path"),
-        )
-    };
-    let first = open("first");
-    sandbox.ok_as("first", &["close"]);
-    assert!(first.is_file());
-
-    let second = open("second");
-    sandbox.ok_as("second", &["close"]);
-    assert!(!first.exists());
-    assert!(second.is_file());
-}
-
-#[test]
-fn concurrent_cli_closes_still_enforce_retention() {
-    let sandbox = Sandbox::new("recording-concurrent-retention");
-    let config = sandbox.home.join("recording.toml");
-    std::fs::write(
-        &config,
-        "[recording]\ndirectory = \"casts\"\nretention_count = 1\n",
-    )
-    .expect("write config");
-    let config_path = config.to_str().expect("utf-8 path");
-    let mut namespace = None;
-    for suffix in ["first", "second"] {
-        let raw = sandbox.ok_as(
-            suffix,
-            &["--json", "open", "--config", config_path, "--no-wait-ready"],
-        );
-        let payload: serde_json::Value = serde_json::from_str(&raw).expect("open json");
-        let parent = PathBuf::from(
-            payload["data"]["recording"]
-                .as_str()
-                .expect("recording path"),
-        )
-        .parent()
-        .expect("recording parent")
-        .to_path_buf();
-        if let Some(expected) = &namespace {
-            assert_eq!(&parent, expected);
-        } else {
-            namespace = Some(parent);
-        }
-    }
-
-    let barrier = Arc::new(Barrier::new(3));
-    let workers = ["first", "second"].map(|suffix| {
-        let barrier = Arc::clone(&barrier);
-        let home = sandbox.home.clone();
-        let session = format!("{}-{suffix}", sandbox.session);
-        std::thread::spawn(move || {
-            barrier.wait();
-            Command::new(BIN)
-                .args(["--session", &session, "close"])
-                .env("TUI_TEST_HOME", home)
-                .output()
-                .expect("close concurrent recording")
-        })
-    });
-    barrier.wait();
-    for worker in workers {
-        let output = worker.join().unwrap();
-        assert!(
-            output.status.success(),
-            "concurrent close failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let paths = std::fs::read_dir(namespace.expect("runtime recording namespace"))
-        .unwrap()
-        .flatten()
-        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("cast"))
-        .map(|entry| entry.path())
-        .collect::<Vec<_>>();
-    assert_eq!(paths.len(), 1, "retained recordings: {paths:?}");
-}
-
-#[test]
-fn get_recording_uses_config_when_an_idle_daemon_exists() {
-    let sandbox = Sandbox::new("recording-idle-daemon");
-    let config = sandbox.home.join("recording.toml");
-    std::fs::write(&config, "[recording]\ndirectory = \"casts\"\n").expect("write config");
-    let config = config.to_str().expect("utf-8 path");
-
-    sandbox.ok_as("retained", &["open", "--config", config, "--no-wait-ready"]);
-    sandbox.ok_as("retained", &["close"]);
-    sandbox.ok_as("retained", &["daemon", "start"]);
-
-    let recording = sandbox.ok_as("retained", &["get-recording", "--config", config]);
-    assert!(recording.contains("\"version\":2"));
-    sandbox.ok_as("retained", &["daemon", "stop"]);
+    .unwrap();
+    let config = config.to_str().unwrap();
+    let raw = sandbox.ok(&["--json", "open", "--config", config, "--no-wait-ready"]);
+    let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(payload["data"]["recording"], "");
+    sandbox.ok(&["close"]);
 }
 
 #[test]

@@ -196,12 +196,6 @@ async def terminal(**options: Any) -> AsyncIterator[TuiTest]:
     term = await create_terminal(**options)
     try:
         yield term
-    except BaseException as error:
-        try:
-            await term.retain_recording()
-        except Exception as retention_error:
-            error.__cause__ = retention_error
-        raise
     finally:
         await term.close_quiet()
         untrack_terminal(term)

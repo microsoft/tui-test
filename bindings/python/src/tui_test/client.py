@@ -168,9 +168,6 @@ class TuiTest:
             self._session,
             recording_values.get("mode"),
             recording_values.get("directory"),
-            recording_values.get("retention_count"),
-            recording_values.get("retention_age_seconds"),
-            recording_values.get("retention_size_bytes"),
         )
         self._backend = cfg.normalize_backend(backend)
         self._timeouts = cfg.normalize_timeouts(timeouts)
@@ -339,9 +336,6 @@ class TuiTest:
 
     async def close(self) -> None:
         await self._await(self._native.close())
-
-    async def retain_recording(self) -> None:
-        await self._await(self._native.retain_recording())
 
     async def close_quiet(self) -> None:
         try:

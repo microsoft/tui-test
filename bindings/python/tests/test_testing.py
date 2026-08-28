@@ -3,7 +3,7 @@ import unittest
 from unittest import mock
 
 from tui_test import testing
-from tui_test.types import AutomaticRecording, Colors, Profile
+from tui_test.types import Colors, Profile
 
 
 def run(coro):
@@ -141,12 +141,10 @@ class OptionPlumbingTests(unittest.TestCase):
                 pass
 
         profile = Profile(colors=Colors(red="#010203"))
-        recording = AutomaticRecording(mode="on-failure")
         testing.set_terminal_defaults(
             cols=100,
             profile=profile,
             artifacts={"dir": "from-defaults"},
-            recording=recording,
         )
         with mock.patch.object(testing, "TuiTest", FakeTuiTest), \
              mock.patch.object(testing, "track_terminal"):
@@ -154,27 +152,6 @@ class OptionPlumbingTests(unittest.TestCase):
         self.assertEqual(created[0].open_kwargs["cols"], 42)
         self.assertEqual(created[0].kwargs["profile"], profile)
         self.assertEqual(created[0].kwargs["artifacts"], {"dir": "from-defaults"})
-        self.assertEqual(created[0].kwargs["recording"], recording)
-
-    def test_terminal_preserves_body_error_when_retention_fails(self):
-        class FakeTuiTest:
-            async def retain_recording(self):
-                raise RuntimeError("retention failed")
-
-            async def close_quiet(self):
-                pass
-
-        async def scenario():
-            fake = FakeTuiTest()
-            with mock.patch.object(
-                testing, "create_terminal", mock.AsyncMock(return_value=fake)
-            ):
-                async with testing.terminal():
-                    raise ValueError("body failed")
-
-        with self.assertRaisesRegex(ValueError, "body failed") as caught:
-            run(scenario())
-        self.assertIsInstance(caught.exception.__cause__, RuntimeError)
 
     def test_unknown_create_option_is_rejected(self):
         with self.assertRaises(TypeError):

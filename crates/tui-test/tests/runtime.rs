@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(unix)]
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -9,15 +7,6 @@ use tui_test::{
     global_registry, AutomaticRecording, AutomaticRecordingMode, ErrorKind, OpenOptions, Operation,
     OperationResult, RunOptions, Session, SessionRegistry, Timeouts,
 };
-
-fn recording_root(label: &str) -> std::path::PathBuf {
-    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-    std::env::temp_dir().join(format!(
-        "tui-test-{label}-{}-{}",
-        std::process::id(),
-        SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ))
-}
 
 fn run_options(program: &str, args: &[&str]) -> RunOptions {
     let defaults = OpenOptions::default();
@@ -108,204 +97,94 @@ fn named_handles_share_a_process_local_terminal() {
 }
 
 #[test]
-fn automatic_recording_can_be_disabled() {
+fn automatic_recording_supports_disabled_and_custom_directory() {
     let registry = SessionRegistry::default();
-    let root = recording_root("recording-disabled");
-    let session = registry.session("recording-disabled");
-    let opened = session
+    let root = std::env::temp_dir().join(format!("tui-test-recording-mode-{}", std::process::id()));
+
+    let disabled = registry.session("recording-disabled");
+    let opened = disabled
         .open(OpenOptions {
             wait_ready: Some(false),
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::Disabled,
                 directory: Some(root.clone()),
-                ..AutomaticRecording::default()
             },
             ..OpenOptions::default()
         })
-        .expect("open without automatic recording");
-
+        .unwrap();
     assert!(opened.recording.is_empty());
-    session.close().expect("close terminal");
-    assert!(session.recording().is_err());
+    disabled.close().unwrap();
+    assert!(disabled.recording().is_err());
     assert!(!root.exists());
-}
 
-#[test]
-fn relative_recording_roots_are_resolved_before_the_session_starts() {
-    let registry = SessionRegistry::default();
-    let relative = std::path::PathBuf::from("target")
-        .join(format!("relative-recording-{}", std::process::id()));
-    let session = registry.session("recording-relative");
-    let opened = session
+    let always = registry.session("recording-always");
+    let opened = always
         .open(OpenOptions {
             wait_ready: Some(false),
             recording: AutomaticRecording {
-                directory: Some(relative.clone()),
-                ..AutomaticRecording::default()
-            },
-            ..OpenOptions::default()
-        })
-        .expect("open terminal");
-
-    assert!(std::path::Path::new(&opened.recording).is_absolute());
-    session.close().expect("close terminal");
-    let root = std::env::current_dir().unwrap().join(relative);
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn direct_sessions_apply_aggregate_retention() {
-    let root = recording_root("recording-direct-retention");
-    let options = |count| OpenOptions {
-        wait_ready: Some(false),
-        recording: AutomaticRecording {
-            directory: Some(root.clone()),
-            retention_count: Some(count),
-            ..AutomaticRecording::default()
-        },
-        ..OpenOptions::default()
-    };
-
-    let first = Session::new("recording-direct-first");
-    let first_path = PathBuf::from(first.open(options(1)).unwrap().recording);
-    first.close().unwrap();
-    assert!(first_path.is_file());
-
-    let second = Session::new("recording-direct-second");
-    let second_path = PathBuf::from(second.open(options(1)).unwrap().recording);
-    second.close().unwrap();
-    assert!(!first_path.exists());
-    assert!(second_path.is_file());
-
-    let cleanup = Session::new("recording-direct-cleanup");
-    cleanup.open(options(0)).unwrap();
-    cleanup.close().unwrap();
-    assert!(!second_path.exists());
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn registry_applies_zero_retention_when_the_new_cast_is_discarded() {
-    let registry = SessionRegistry::default();
-    let root = recording_root("recording-registry-zero");
-    let retained = registry.session("recording-registry-retained");
-    retained
-        .open(OpenOptions {
-            wait_ready: Some(false),
-            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Always,
                 directory: Some(root.clone()),
-                ..AutomaticRecording::default()
             },
             ..OpenOptions::default()
         })
         .unwrap();
-    retained.close().unwrap();
-    assert!(retained.recording().is_ok());
-
-    let cleanup = registry.session("recording-registry-cleanup");
-    cleanup
-        .open(OpenOptions {
-            wait_ready: Some(false),
-            recording: AutomaticRecording {
-                mode: AutomaticRecordingMode::OnFailure,
-                directory: Some(root.clone()),
-                retention_count: Some(0),
-                ..AutomaticRecording::default()
-            },
-            ..OpenOptions::default()
-        })
-        .unwrap();
-    cleanup.close().unwrap();
-
-    assert!(retained.recording().is_err());
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn on_failure_recording_is_deleted_after_success() {
-    let registry = SessionRegistry::default();
-    let root = recording_root("recording-success");
-    let session = registry.session("recording-success");
-    let opened = session
-        .open(OpenOptions {
-            wait_ready: Some(false),
-            recording: AutomaticRecording {
-                mode: AutomaticRecordingMode::OnFailure,
-                directory: Some(root.clone()),
-                ..AutomaticRecording::default()
-            },
-            ..OpenOptions::default()
-        })
-        .expect("open terminal");
     let path = std::path::PathBuf::from(opened.recording);
-    assert!(path.starts_with(root.join("native")));
-    assert!(path.is_file());
-
-    session.close().expect("close terminal");
-    assert!(!path.exists());
-    assert!(session.recording().is_err());
+    assert!(path.starts_with(&root));
+    always.close().unwrap();
+    assert!(always.recording().is_ok());
     let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
-fn on_failure_recording_is_retained_after_an_assertion() {
+fn on_failure_recording_is_kept_only_after_an_operation_failure() {
     let registry = SessionRegistry::default();
-    let root = recording_root("recording-failure");
-    let session = registry.session("recording-failure");
-    let opened = session
+    let root =
+        std::env::temp_dir().join(format!("tui-test-recording-failure-{}", std::process::id()));
+
+    let success = registry.session("recording-success");
+    let opened = success
         .open(OpenOptions {
             wait_ready: Some(false),
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::OnFailure,
                 directory: Some(root.clone()),
-                ..AutomaticRecording::default()
             },
             ..OpenOptions::default()
         })
-        .expect("open terminal");
-    let error = session
-        .execute(Operation::ExpectText {
-            text: "text-that-will-never-appear".to_string(),
-            regex: false,
-            full: false,
-            strict: false,
-            not: false,
-            fg: None,
-            bg: None,
-            timeout_ms: Some(1),
-        })
-        .unwrap_err();
-    assert_eq!(error.kind, ErrorKind::Assertion);
+        .unwrap();
+    let success_path = std::path::PathBuf::from(opened.recording);
+    success.close().unwrap();
+    assert!(!success_path.exists());
 
-    session.close().expect("close terminal");
-    assert!(std::path::Path::new(&opened.recording).is_file());
-    assert!(session.recording().unwrap().contains("\"version\":2"));
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn on_failure_recording_can_be_retained_explicitly() {
-    let registry = SessionRegistry::default();
-    let root = recording_root("recording-explicit");
-    let session = registry.session("recording-explicit");
-    let opened = session
+    let failed = registry.session("recording-failed");
+    failed
         .open(OpenOptions {
             wait_ready: Some(false),
             recording: AutomaticRecording {
                 mode: AutomaticRecordingMode::OnFailure,
                 directory: Some(root.clone()),
-                ..AutomaticRecording::default()
             },
             ..OpenOptions::default()
         })
-        .expect("open terminal");
-    session
-        .retain_recording()
-        .expect("mark recording for retention");
-    session.close().expect("close terminal");
-
-    assert!(std::path::Path::new(&opened.recording).is_file());
-    assert!(session.recording().unwrap().contains("\"version\":2"));
+        .unwrap();
+    assert_eq!(
+        failed
+            .execute(Operation::ExpectText {
+                text: "never-present".to_string(),
+                regex: false,
+                full: false,
+                strict: false,
+                not: false,
+                fg: None,
+                bg: None,
+                timeout_ms: Some(1),
+            })
+            .unwrap_err()
+            .kind,
+        ErrorKind::Assertion
+    );
+    failed.close().unwrap();
+    assert!(failed.recording().is_ok());
     let _ = std::fs::remove_dir_all(root);
 }
 

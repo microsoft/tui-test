@@ -6,7 +6,6 @@ export declare class NativeSession {
   open(options?: OpenOptions | undefined | null): Promise<OpenResult>
   run(options: RunOptions): Promise<OpenResult>
   close(): Promise<void>
-  retainRecording(): Promise<void>
   state(): Promise<State>
   text(full?: boolean | undefined | null): Promise<string>
   packedScreen(full?: boolean | undefined | null): Promise<PackedScreen>
@@ -57,9 +56,6 @@ export declare class NativeSession {
 export interface AutomaticRecordingOptions {
   mode?: string
   directory?: string
-  retentionCount?: number
-  retentionAgeSeconds?: number
-  retentionSizeBytes?: number
 }
 
 export declare const enum Backend {
