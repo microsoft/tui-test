@@ -123,6 +123,18 @@ impl Sandbox {
         self.ok_in(None, args)
     }
 
+    fn wait_for_text(&self, text: &str, timeout: &str) {
+        self.ok(&[
+            "expect",
+            "text",
+            text,
+            "--match",
+            "first",
+            "--timeout",
+            timeout,
+        ]);
+    }
+
     fn ok_in(&self, cwd: Option<&std::path::Path>, args: &[&str]) -> String {
         let out = self.run_in(cwd, args);
         assert!(
@@ -357,7 +369,13 @@ fn a_session_timeout_default_applies_to_later_commands() {
     sandbox.ok(&["open", "--timeout-text", "300"]);
 
     let started = Instant::now();
-    let out = sandbox.run(&["wait", "text", "text-that-never-appears"]);
+    let out = sandbox.run(&[
+        "expect",
+        "text",
+        "text-that-never-appears",
+        "--match",
+        "first",
+    ]);
     let elapsed = started.elapsed();
 
     assert_eq!(
@@ -392,12 +410,14 @@ fn text_actions_share_one_selector_contract() {
     };
     sandbox.ok(&["submit", command]);
     sandbox.ok(&[
-        "wait",
+        "expect",
         "text",
         "locator target",
         "--whitespace",
         "normalize",
         "--bold",
+        "--match",
+        "first",
         "--timeout",
         "5000",
     ]);
@@ -680,7 +700,7 @@ print("\r\nRESULT %s %s %s %s %s\r" % (
     // no shell integration, so `wait command` falls back to "the prompt came
     // back and the screen is idle", and on a loaded machine an idle screen
     // arrives long before the report does.
-    sandbox.ok(&["wait", "text", "RESULT", "--timeout", "30000"]);
+    sandbox.wait_for_text("RESULT", "30000");
     let text = sandbox.ok(&["text", "--full"]);
 
     let line = text
@@ -920,7 +940,7 @@ fn ghostty_backend_is_used_end_to_end() {
     ];
     args.extend(blinking_program());
     sandbox.ok(&args);
-    sandbox.ok(&["wait", "text", "X"]);
+    sandbox.wait_for_text("X", "5000");
 
     let raw = sandbox.ok(&["--json", "cells", "0", "0"]);
     let payload: serde_json::Value = serde_json::from_str(&raw).expect("cells json");
@@ -944,7 +964,7 @@ fn start_command_with_stale_exit(sandbox: &Sandbox) {
     sandbox.ok(&["submit", &exit_with(3)]);
     sandbox.ok(&["wait", "command"]);
     sandbox.ok(&["submit", &slow_exit_with(9)]);
-    sandbox.ok(&["wait", "text", RUN_MARKER, "--timeout", "15000"]);
+    sandbox.wait_for_text(RUN_MARKER, "15000");
 }
 
 /// Must wait for the current command instead of accepting a stale exit code.
@@ -1021,7 +1041,7 @@ fn input_consumed_by_a_running_command_does_not_stall_completion_waits() {
     let sandbox = Sandbox::new("running-input");
     sandbox.ok(&["open"]);
     sandbox.ok(&["submit", interactive_reader()]);
-    sandbox.ok(&["wait", "text", "reader-ready", "--timeout", "15000"]);
+    sandbox.wait_for_text("reader-ready", "15000");
 
     sandbox.ok(&["submit", "typed-answer"]);
     sandbox.ok(&["wait", "command", "--timeout", "5000"]);
@@ -1057,7 +1077,7 @@ fn expect_exit_code_is_immediate_once_the_command_has_finished() {
     sandbox.ok(&["open"]);
     sandbox.ok(&["submit", "echo settled-marker"]);
     sandbox.ok(&["wait", "command"]);
-    sandbox.ok(&["wait", "text", "settled-marker", "--timeout", "15000"]);
+    sandbox.wait_for_text("settled-marker", "15000");
 
     let mut baseline = Duration::ZERO;
     for _ in 0..3 {
@@ -1282,7 +1302,7 @@ fn daemon_start_is_idempotent_and_makes_status_answer() {
     let status = sandbox.ok(&["--json", "daemon", "status"]);
     let status: serde_json::Value = serde_json::from_str(&status).expect("daemon status json");
     assert!(
-        status["data"]["version"].is_string() && status["data"]["protocol_version"].is_u64(),
+        status["data"]["version"].is_string(),
         "a started daemon should answer status: {status}"
     );
 
@@ -1338,7 +1358,7 @@ fn daemon_start_leaves_the_socket_ready() {
     sandbox.ok(&["open"]);
     sandbox.ok(&["submit", "echo started-ok"]);
     sandbox.ok(&["wait", "command"]);
-    sandbox.ok(&["expect", "text", "started-ok", "--no-strict"]);
+    sandbox.wait_for_text("started-ok", "5000");
 }
 
 /// Status `pid` is the daemon, not the child, so idle daemons are not `pid: null`.
@@ -1532,7 +1552,7 @@ fn terminal_backends_match_end_to_end_for_cells_state_and_snapshots() {
         ];
         args.extend(backend_parity_program());
         sandbox.ok(&args);
-        sandbox.ok(&["wait", "text", "line two", "--timeout", "10000"]);
+        sandbox.wait_for_text("line two", "10000");
         sandbox.ok(&["expect", "title", "backend parity", "--timeout", "5000"]);
 
         let cells: serde_json::Value =
@@ -1693,7 +1713,7 @@ fn shell_integration_is_identical_across_terminal_backends() {
             "printf '%s\\n' backend-shell-ok"
         };
         sandbox.ok(&["submit", command]);
-        sandbox.ok(&["wait", "text", "backend-shell-ok", "--timeout", "10000"]);
+        sandbox.wait_for_text("backend-shell-ok", "10000");
         sandbox.ok(&["wait", "command"]);
         sandbox.ok(&["expect", "exit-code", "0"]);
         sandbox.ok(&["expect", "output", "backend-shell-ok"]);

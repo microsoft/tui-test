@@ -28,7 +28,8 @@ import { TuiTest } from "@microsoft/tui-test";
 const su = new TuiTest();
 await su.open();
 await su.submit("echo hello");
-const hello = await su.waitText("hello");
+const hello = su.getByText("hello");
+await hello.wait();
 await hello.last().highlight();
 await su.expectExitCode(0);
 await su.close();
@@ -45,11 +46,14 @@ Every failure maps to one of the engine's error kinds:
 | `NoSessionError`   | 3          | no active session                        |
 | `InternalError`    | 5          | internal engine error                    |
 
-All derive from `TuiTestError` and carry `kind` and `exitCode`. `waitX` and `expectX` reject with `ExpectationError` on failure. Assertion errors include the current visible terminal content.
+All derive from `TuiTestError` and carry `kind` and `exitCode`. Locator waits
+and expectations, along with the `waitX` and `expectX` methods, reject with
+`ExpectationError` on failure. Assertion errors include the current visible
+terminal content.
 
 ## API
 
-`new TuiTest(session?, { backend?, profile?, timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `getByText`, `getByStyle`, `findText`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle` / `getBellCount` / `getBellEvents`, `screenshot`, `startRecording` / `stopRecording`, `waitText` / `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady` / `waitBell`, `expectText` / `expectTitle` / `expectExitCode` / `expectOutput` / `expectBellCount` / `expectSnapshot`, `close`, and `closeQuiet`.
+`new TuiTest(session?, { backend?, profile?, timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `getByText`, `getByStyle`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle` / `getBellCount` / `getBellEvents`, `screenshot`, `startRecording` / `stopRecording`, `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady` / `waitBell`, `expectTitle` / `expectExitCode` / `expectOutput` / `expectBellCount` / `expectSnapshot`, `close`, and `closeQuiet`.
 
 `keyboard.press()` simulates key presses: it sends the normal press input and
 adds a release only when the negotiated Kitty mode can represent it.
@@ -64,8 +68,8 @@ on:
 ```js
 const terminal = new TuiTest();
 await terminal
-  .getByText("Settings Save", { whitespace: "normalize" })
-  .getByText("Save")
+  .getByText("Settings")
+  .getByText("Save", { whitespace: "normalize", direction: "after" })
   .click();
 
 const items = terminal.getByText(String.raw`item \d+`, { regex: true });
@@ -88,12 +92,9 @@ chain is re-resolved for each action. Clicks target the middle cell and require
 one match unless a positional selector narrows the locator. Highlights appear
 in the live monitor and SVG screenshots until the terminal redraws. Like
 Playwright, `all()` captures the current list without waiting and returns lazy
-`nth()` locators; wait first when the list is still loading. `findText()`
-remains a one-shot locations helper. `waitText()` returns the `getByText()`
-locator it waited on, so it can be clicked or highlighted next.
-
-`expectText` accepts the same selector options plus `style` checks for colors,
-bold, dim, italic, underline, inverse, hidden, strikethrough, and blink.
+`nth()` locators; wait first when the list is still loading. Chained searches
+default to `direction: "within"` and can use `"after"` or `"before"` for
+relative terminal regions.
 
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 
@@ -101,8 +102,8 @@ Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSessi
 `{ backend, cols, rows, cwd, env, waitReady, restart, retries, profile, timeouts }`.
 They reuse a live named session unless `restart: true` is passed. The
 constructor also accepts `backend` and `profile` as defaults for later opens
-and runs. Backend values are `"alacritty"` (default), `"ghostty"`, and
-`"rio"`, and `"xtermjs"`:
+and runs. Backend values are `"alacritty"` (default), `"ghostty"`, `"rio"`,
+and `"xtermjs"`:
 
 ```js
 const terminal = new TuiTest("work", { backend: "ghostty" });
@@ -139,7 +140,7 @@ import { withTerminal } from "@microsoft/tui-test/test";
 await withTerminal({}, async (t) => {
   await t.submit("echo hi");
   await t.waitCommand();
-  await t.expectText("hi");
+  await t.getByText("hi").first().expect();
 });
 ```
 

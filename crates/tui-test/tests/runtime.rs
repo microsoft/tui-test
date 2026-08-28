@@ -4,8 +4,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tui_test::{
-    global_registry, ErrorKind, MatchOccurrence, OpenOptions, Operation, OperationResult,
-    RunOptions, Session, SessionRegistry, TextSelector, TextStyle, Timeouts,
+    global_registry, ErrorKind, LocatorDirection, LocatorQuery, MatchOccurrence, OpenOptions,
+    Operation, OperationResult, RunOptions, Session, SessionRegistry, TextSelector, TextStyle,
+    Timeouts,
 };
 
 fn run_options(program: &str, args: &[&str]) -> RunOptions {
@@ -60,14 +61,10 @@ fn named_handles_share_a_process_local_terminal() {
         })
         .expect("wait for command");
     second
-        .execute(Operation::ExpectText {
-            text: "native-runtime".to_string(),
-            regex: false,
-            full: false,
-            strict: false,
+        .execute(Operation::ExpectLocator {
+            query: LocatorQuery::text("native-runtime"),
             not: false,
-            fg: None,
-            bg: None,
+            style: TextStyle::default(),
             timeout_ms: Some(5_000),
         })
         .expect("find command output");
@@ -143,12 +140,10 @@ fn unrelated_session_state_does_not_wait_behind_another_session() {
     let wait = std::thread::spawn(move || {
         waiting.execute(
             "waiting",
-            Operation::WaitText {
-                text: "text-that-will-never-appear".to_string(),
-                regex: false,
-                full: false,
-                timeout_ms: Some(700),
+            Operation::WaitLocator {
+                query: LocatorQuery::text("text-that-will-never-appear"),
                 not: false,
+                timeout_ms: Some(700),
             },
         )
     });
@@ -217,6 +212,15 @@ fn text_locators_are_lazy_reusable_queries() {
         .wait_with_timeout(Some(5_000))
         .expect("wait with the same locator");
     assert_eq!(locator.count().expect("count current matches"), 2);
+    assert!(locator.expect().is_err());
+    locator.first().expect().expect("expect one selected match");
+    let relative = locator
+        .first()
+        .get_by_text_relative(TextSelector::new("locator-target"), LocatorDirection::After);
+    assert_eq!(
+        relative.first().location().unwrap().start,
+        locator.nth(1).location().unwrap().start
+    );
     let nested = session
         .get_by_text("locator-target locator-target")
         .get_by_text("locator-target")
@@ -338,12 +342,10 @@ fn close_all_interrupts_in_flight_waits() {
     let wait = std::thread::spawn(move || {
         waiting.execute(
             "interrupt-wait",
-            Operation::WaitText {
-                text: "never-appears".to_string(),
-                regex: false,
-                full: false,
-                timeout_ms: Some(30_000),
+            Operation::WaitLocator {
+                query: LocatorQuery::text("never-appears"),
                 not: false,
+                timeout_ms: Some(30_000),
             },
         )
     });

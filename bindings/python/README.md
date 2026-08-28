@@ -21,7 +21,7 @@ async def main():
         await su.open()
         await su.submit("echo hello")
         await su.wait_command()
-        await su.expect_text("hello")
+        await su.get_by_text("hello").first().expect()
         await su.expect_exit_code(0)
 
 asyncio.run(main())
@@ -50,11 +50,13 @@ Every failure maps to one of the engine's error kinds:
 | `NoSessionError`   | 3         | no active session                        |
 | `InternalError`    | 5         | internal engine error                    |
 
-All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError` on failure. Assertion errors include the current visible terminal content.
+All derive from `TuiTestError`. Locator waits and expectations, along with the
+`wait_*` and `expect_*` methods, raise `ExpectationError` on failure. Assertion
+errors include the current visible terminal content.
 
 ## API
 
-`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `get_by_text`, `get_by_style`, `find_text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count` / `get_bell_events`, `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
+`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `get_by_text`, `get_by_style`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count` / `get_bell_events`, `screenshot`, `start_recording` / `stop_recording`, `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
 
 `keyboard.press()` simulates key presses: it sends the normal press input and
 adds a release only when the negotiated Kitty mode can represent it.
@@ -71,8 +73,8 @@ from tui_test import TextStyle, TuiTest
 terminal = TuiTest()
 await (
     terminal
-    .get_by_text("Settings Save", whitespace="normalize")
-    .get_by_text("Save")
+    .get_by_text("Settings")
+    .get_by_text("Save", whitespace="normalize", direction="after")
     .click()
 )
 
@@ -93,17 +95,14 @@ Locators support `any()`, `unique()`, `first()`, `last()`, `nth()`, `all()`,
 `count()`, `locations()`, `location()`, `wait()`, `expect()`, `click()`, and
 `highlight()`, plus chainable `get_by_text()` and `get_by_style()`. A style
 locator matches contiguous per-row cell runs with the requested colors or
-attributes. Each chained stage searches inside every selected parent match,
-and the whole chain is re-resolved for each action. Clicks target the middle
-cell and require one match unless a positional selector narrows the locator.
-Highlights appear in the live monitor and SVG screenshots until the terminal
-redraws. Like Playwright, `all()` captures the current list without waiting and
-returns lazy `nth()` locators; wait first when the list is still loading.
-`find_text()` remains a one-shot locations helper. `wait_text()` returns the
-`get_by_text()` locator it waited on, so it can be clicked or highlighted next.
-
-`expect_text()` accepts the same selector options plus `TextStyle` checks for
-colors, bold, dim, italic, underline, inverse, hidden, strikethrough, and blink.
+attributes. Chained stages default to searching `within` every selected parent
+match and can use `direction="after"` or `direction="before"` for relative
+terminal regions. The whole chain is re-resolved for each action. Clicks target
+the middle cell and require one match unless a positional selector narrows the
+locator. Highlights appear in the live monitor and SVG screenshots until the
+terminal redraws. Like Playwright, `all()` captures the current list without
+waiting and returns lazy `nth()` locators; wait first when the list is still
+loading.
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
 
@@ -151,7 +150,7 @@ async def test_echo():
     async with terminal() as t:
         await t.submit("echo hi")
         await t.wait_command()
-        await t.expect_text("hi")
+        await t.get_by_text("hi").first().expect()
 ```
 
 Each terminal is uniquely named, so parallel workers don't collide. `set_terminal_defaults(...)` sets suite-wide options (`profile`, `timeouts`, `artifacts`, ...).

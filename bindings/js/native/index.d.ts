@@ -108,21 +108,20 @@ export interface EffectiveTimeouts {
 
 export interface LocatorStage {
   kind: LocatorStageKind
+  direction?: LocatorStageDirection
   text?: string
   regex?: boolean
   full?: boolean
   whitespace?: string
   occurrence?: string
   nth?: number
-  afterText?: string
-  afterRegex?: boolean
-  afterOccurrence?: string
-  afterNth?: number
-  beforeText?: string
-  beforeRegex?: boolean
-  beforeOccurrence?: string
-  beforeNth?: number
   style?: LocatorStyle
+}
+
+export declare const enum LocatorStageDirection {
+  Within = 'within',
+  After = 'after',
+  Before = 'before'
 }
 
 export declare const enum LocatorStageKind {

@@ -11,15 +11,14 @@ use tui_test::shell::Shell as CoreShell;
 use tui_test::{
     global_registry, Backend as CoreBackend, BellEvent as CoreBellEvent, Cell as CoreCell,
     CellColor, Cursor as CoreCursor, EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind,
-    KeyAction, LocatorQuery as CoreLocatorQuery, LocatorSelector as CoreLocatorSelector,
-    MatchOccurrence as CoreMatchOccurrence, MouseAction, OpenOptions as CoreOpenOptions,
-    OpenResult as CoreOpenResult, Operation, OperationResult,
+    KeyAction, LocatorDirection as CoreLocatorDirection, LocatorQuery as CoreLocatorQuery,
+    LocatorSelector as CoreLocatorSelector, MatchOccurrence as CoreMatchOccurrence, MouseAction,
+    OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation, OperationResult,
     RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
     ScreenshotResult as CoreScreenshotResult, SessionHandle, Size as CoreSize,
     SnapshotResult as CoreSnapshotResult, State as CoreState, StyleSelector as CoreStyleSelector,
-    TextAnchor as CoreTextAnchor, TextMatch as CoreTextMatch, TextScope as CoreTextScope,
-    TextSelector as CoreTextSelector, TextStyle as CoreTextStyle, Timeouts as CoreTimeouts,
-    TuiTestError, WhitespaceMode as CoreWhitespaceMode,
+    TextMatch as CoreTextMatch, TextSelector as CoreTextSelector, TextStyle as CoreTextStyle,
+    Timeouts as CoreTimeouts, TuiTestError, WhitespaceMode as CoreWhitespaceMode,
 };
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
@@ -419,6 +418,13 @@ pub enum LocatorStageKind {
     Style,
 }
 
+#[napi(string_enum = "lowercase")]
+pub enum LocatorStageDirection {
+    Within,
+    After,
+    Before,
+}
+
 #[derive(Default)]
 #[napi(object)]
 pub struct LocatorStyle {
@@ -438,20 +444,13 @@ pub struct LocatorStyle {
 #[napi(object)]
 pub struct LocatorStage {
     pub kind: LocatorStageKind,
+    pub direction: Option<LocatorStageDirection>,
     pub text: Option<String>,
     pub regex: Option<bool>,
     pub full: Option<bool>,
     pub whitespace: Option<String>,
     pub occurrence: Option<String>,
     pub nth: Option<f64>,
-    pub after_text: Option<String>,
-    pub after_regex: Option<bool>,
-    pub after_occurrence: Option<String>,
-    pub after_nth: Option<f64>,
-    pub before_text: Option<String>,
-    pub before_regex: Option<bool>,
-    pub before_occurrence: Option<String>,
-    pub before_nth: Option<f64>,
     pub style: Option<LocatorStyle>,
 }
 
@@ -601,26 +600,6 @@ fn core_occurrence(
     }
 }
 
-fn core_anchor(
-    text: Option<String>,
-    regex: Option<bool>,
-    occurrence: Option<String>,
-    nth: Option<f64>,
-    name: &str,
-) -> std::result::Result<Option<CoreTextAnchor>, TuiTestError> {
-    match text {
-        Some(text) => Ok(Some(CoreTextAnchor {
-            text,
-            regex: regex.unwrap_or(false),
-            occurrence: core_occurrence(occurrence, nth, CoreMatchOccurrence::Unique, name)?,
-        })),
-        None if regex.unwrap_or(false) || occurrence.is_some() || nth.is_some() => Err(
-            TuiTestError::usage(format!("{name} options require anchor text")),
-        ),
-        None => Ok(None),
-    }
-}
-
 fn core_style(style: LocatorStyle) -> CoreTextStyle {
     CoreTextStyle {
         foreground: style.foreground,
@@ -669,22 +648,7 @@ fn core_query(stages: Vec<LocatorStage>) -> std::result::Result<CoreLocatorQuery
                     regex: stage.regex.unwrap_or(false),
                     full: stage.full.unwrap_or(false),
                     whitespace,
-                    scope: CoreTextScope {
-                        after: core_anchor(
-                            stage.after_text,
-                            stage.after_regex,
-                            stage.after_occurrence,
-                            stage.after_nth,
-                            "afterNth",
-                        )?,
-                        before: core_anchor(
-                            stage.before_text,
-                            stage.before_regex,
-                            stage.before_occurrence,
-                            stage.before_nth,
-                            "beforeNth",
-                        )?,
-                    },
+                    scope: Default::default(),
                     occurrence,
                 })
             }
@@ -692,8 +656,6 @@ fn core_query(stages: Vec<LocatorStage>) -> std::result::Result<CoreLocatorQuery
                 if stage.text.is_some()
                     || stage.regex.unwrap_or(false)
                     || stage.whitespace.is_some()
-                    || stage.after_text.is_some()
-                    || stage.before_text.is_some()
                 {
                     return Err(TuiTestError::usage(
                         "style locator stage cannot include text selector parameters",
@@ -711,6 +673,11 @@ fn core_query(stages: Vec<LocatorStage>) -> std::result::Result<CoreLocatorQuery
         parent = Some(CoreLocatorQuery {
             selector,
             within: parent.map(Box::new),
+            direction: match stage.direction {
+                None | Some(LocatorStageDirection::Within) => CoreLocatorDirection::Within,
+                Some(LocatorStageDirection::After) => CoreLocatorDirection::After,
+                Some(LocatorStageDirection::Before) => CoreLocatorDirection::Before,
+            },
             style: CoreTextStyle::default(),
         });
     }

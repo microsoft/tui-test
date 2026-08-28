@@ -3,8 +3,7 @@ import inspect
 import unittest
 from pathlib import Path
 
-from tui_test import _native
-from tui_test import unique_session
+from tui_test import TuiTest, _native, unique_session
 
 
 class _IndexValue:
@@ -16,6 +15,10 @@ class _IndexValue:
 
 
 class NativeSurfaceTests(unittest.TestCase):
+    def test_public_client_omits_one_shot_text_methods(self):
+        for name in ("find_text", "wait_text", "expect_text"):
+            self.assertFalse(hasattr(TuiTest, name), name)
+
     def test_native_session_has_only_typed_terminal_methods(self):
         session = _native.NativeSession(unique_session("surface"))
         self.assertFalse(hasattr(session, "request"))
@@ -90,6 +93,18 @@ class NativeSurfaceTests(unittest.TestCase):
             self.assertTrue(inspect.isawaitable(awaitable))
             with self.assertRaises(_native.NativeUsageError):
                 await awaitable
+
+        asyncio.run(scenario())
+
+    def test_locator_stages_reject_cross_kind_fields(self):
+        async def scenario():
+            session = _native.NativeSession(unique_session("native-locator"))
+            for stage in (
+                {"kind": "text", "text": "x", "style": {"bold": True}},
+                {"kind": "style", "style": {"bold": True}, "text": "x"},
+            ):
+                with self.assertRaises(_native.NativeUsageError):
+                    await session.find_locator([stage])
 
         asyncio.run(scenario())
 

@@ -33,11 +33,6 @@ import type {
   TextMatch,
 } from "./types.js";
 
-export interface WaitTextOptions extends TextSelectorOptions {
-  not?: boolean;
-  timeout?: number;
-}
-
 export interface TitleOptions {
   regex?: boolean;
   not?: boolean;
@@ -51,21 +46,17 @@ export type TextOccurrence =
   | "last"
   | { nth: number };
 
-export interface TextAnchor {
-  text: string;
-  regex?: boolean;
-  occurrence?: TextOccurrence;
-}
+export type LocatorDirection = "within" | "after" | "before";
 
 export interface TextSelectorOptions {
   regex?: boolean;
   full?: boolean;
   whitespace?: "exact" | "normalize";
-  scope?: {
-    after?: TextAnchor;
-    before?: TextAnchor;
-  };
   occurrence?: TextOccurrence;
+}
+
+export interface RelativeTextSelectorOptions extends TextSelectorOptions {
+  direction?: LocatorDirection;
 }
 
 export interface TextStyleExpectation {
@@ -108,9 +99,13 @@ export interface StyleSelectorOptions {
   occurrence?: TextOccurrence;
 }
 
+export interface RelativeStyleSelectorOptions extends StyleSelectorOptions {
+  direction?: LocatorDirection;
+}
+
 export interface Locator {
-  getByText(text: string, opts?: TextSelectorOptions): Locator;
-  getByStyle(style: TextStyleExpectation, opts?: StyleSelectorOptions): Locator;
+  getByText(text: string, opts?: RelativeTextSelectorOptions): Locator;
+  getByStyle(style: TextStyleExpectation, opts?: RelativeStyleSelectorOptions): Locator;
   any(): Locator;
   unique(): Locator;
   first(): Locator;
@@ -124,15 +119,6 @@ export interface Locator {
   click(opts?: LocatorClickOptions): Promise<void>;
   highlight(opts?: LocatorHighlightOptions): Promise<void>;
   expect(opts?: LocatorExpectOptions): Promise<void>;
-}
-
-export interface ExpectTextOptions extends TextSelectorOptions {
-  strict?: boolean;
-  not?: boolean;
-  fg?: string;
-  bg?: string;
-  style?: TextStyleExpectation;
-  timeout?: number;
 }
 
 export interface MouseButtonOptions {
@@ -234,36 +220,37 @@ function occurrenceOptions(occurrence?: TextOccurrence): {
 
 type LocatorQueryValue = RuntimeLocatorStage[];
 
+function directionValue(direction?: LocatorDirection): LocatorDirection {
+  if (
+    direction === undefined ||
+    direction === "within" ||
+    direction === "after" ||
+    direction === "before"
+  ) {
+    return direction ?? "within";
+  }
+  throw new TypeError("locator direction must be within, after, or before");
+}
+
 function textStageValue(
   text: string,
-  opts: TextSelectorOptions,
+  opts: RelativeTextSelectorOptions,
 ): RuntimeLocatorStage {
   const occurrence = occurrenceOptions(opts.occurrence);
-  const after = opts.scope?.after;
-  const before = opts.scope?.before;
-  const afterOccurrence = occurrenceOptions(after?.occurrence);
-  const beforeOccurrence = occurrenceOptions(before?.occurrence);
   return {
     kind: "text",
+    direction: opts.direction ?? "within",
     text,
     regex: opts.regex ?? false,
     full: opts.full ?? false,
     whitespace: opts.whitespace ?? "exact",
     ...occurrence,
-    afterText: after?.text,
-    afterRegex: after?.regex,
-    afterOccurrence: afterOccurrence.occurrence,
-    afterNth: afterOccurrence.nth,
-    beforeText: before?.text,
-    beforeRegex: before?.regex,
-    beforeOccurrence: beforeOccurrence.occurrence,
-    beforeNth: beforeOccurrence.nth,
   };
 }
 
 function styleStageValue(
   style: TextStyleExpectation,
-  opts: StyleSelectorOptions,
+  opts: RelativeStyleSelectorOptions,
 ): RuntimeLocatorStage {
   if (!Object.values(style).some((value) => value !== undefined)) {
     throw new TypeError("getByStyle requires at least one style property");
@@ -271,6 +258,7 @@ function styleStageValue(
   const occurrence = occurrenceOptions(opts.occurrence);
   return {
     kind: "style",
+    direction: opts.direction ?? "within",
     style: textStyleValue(style),
     full: opts.full ?? false,
     ...occurrence,
@@ -295,18 +283,26 @@ function textStyleValue(style: TextStyleExpectation): RuntimeLocatorStyle {
 
 function textQuery(
   text: string,
-  opts: TextSelectorOptions,
+  opts: RelativeTextSelectorOptions,
   within: LocatorQueryValue = [],
 ): LocatorQueryValue {
-  return [...within, textStageValue(text, opts)];
+  const direction = directionValue(opts.direction);
+  if (within.length === 0 && direction !== "within") {
+    throw new TypeError("locator direction requires a parent locator");
+  }
+  return [...within, textStageValue(text, { ...opts, direction })];
 }
 
 function styleQuery(
   style: TextStyleExpectation,
-  opts: StyleSelectorOptions,
+  opts: RelativeStyleSelectorOptions,
   within: LocatorQueryValue = [],
 ): LocatorQueryValue {
-  return [...within, styleStageValue(style, opts)];
+  const direction = directionValue(opts.direction);
+  if (within.length === 0 && direction !== "within") {
+    throw new TypeError("locator direction requires a parent locator");
+  }
+  return [...within, styleStageValue(style, { ...opts, direction })];
 }
 
 function cloneQuery(query: LocatorQueryValue): LocatorQueryValue {
@@ -398,7 +394,7 @@ class LocatorImpl implements Locator {
     return this.#withOccurrence({ nth: index });
   }
 
-  getByText(text: string, opts: TextSelectorOptions = {}): Locator {
+  getByText(text: string, opts: RelativeTextSelectorOptions = {}): Locator {
     return new LocatorImpl(
       textQuery(
         text,
@@ -411,7 +407,7 @@ class LocatorImpl implements Locator {
 
   getByStyle(
     style: TextStyleExpectation,
-    opts: StyleSelectorOptions = {},
+    opts: RelativeStyleSelectorOptions = {},
   ): Locator {
     return new LocatorImpl(
       styleQuery(
@@ -423,12 +419,8 @@ class LocatorImpl implements Locator {
     );
   }
 
-  locationsWithOperation(operation: string): Promise<TextMatch[]> {
-    return this.#actions.locations(this.#query, operation);
-  }
-
   locations(): Promise<TextMatch[]> {
-    return this.locationsWithOperation("locator.locations");
+    return this.#actions.locations(this.#query, "locator.locations");
   }
 
   async location(): Promise<TextMatch> {
@@ -462,17 +454,7 @@ class LocatorImpl implements Locator {
     return matches.map(() => new LocatorImpl(this.#query, this.#actions));
   }
 
-  waitWithOperation(
-    opts: LocatorWaitOptions,
-    operation: string,
-  ): Promise<Locator> {
-    return this.#wait(opts, operation);
-  }
-
-  async #wait(
-    opts: LocatorWaitOptions,
-    operation: string,
-  ): Promise<Locator> {
+  async wait(opts: LocatorWaitOptions = {}): Promise<Locator> {
     const state = opts.state ?? "visible";
     if (state !== "visible" && state !== "hidden") {
       throw new TypeError("locator state must be 'visible' or 'hidden'");
@@ -481,13 +463,9 @@ class LocatorImpl implements Locator {
       this.#query,
       state === "hidden",
       opts.timeout,
-      operation,
+      "locator.wait",
     );
     return this;
-  }
-
-  wait(opts: LocatorWaitOptions = {}): Promise<Locator> {
-    return this.#wait(opts, "locator.wait");
   }
 
   click(opts: LocatorClickOptions = {}): Promise<void> {
@@ -499,18 +477,7 @@ class LocatorImpl implements Locator {
   }
 
   expect(opts: LocatorExpectOptions = {}): Promise<void> {
-    return this.#expect(opts, "locator.expect");
-  }
-
-  expectWithOperation(
-    opts: LocatorExpectOptions,
-    operation: string,
-  ): Promise<void> {
-    return this.#expect(opts, operation);
-  }
-
-  #expect(opts: LocatorExpectOptions, operation: string): Promise<void> {
-    return this.#actions.expect(this.#query, opts, operation);
+    return this.#actions.expect(this.#strictQuery(), opts, "locator.expect");
   }
 }
 
@@ -877,21 +844,6 @@ export class TuiTest {
     );
   }
 
-  async waitText(text: string, opts: WaitTextOptions = {}): Promise<Locator> {
-    const { not = false, timeout, ...selector } = opts;
-    const locator = this.#makeLocator(
-      textQuery(text, {
-        ...selector,
-        occurrence: selector.occurrence ?? "any",
-      }),
-    );
-    await locator.waitWithOperation(
-      { state: not ? "hidden" : "visible", timeout },
-      "waitText",
-    );
-    return locator;
-  }
-
   async waitTitle(text: string, opts: TitleOptions = {}): Promise<void> {
     await this.#guard("waitTitle", () =>
       this.#runtime.waitTitle(text, {
@@ -900,12 +852,6 @@ export class TuiTest {
         timeoutMs: this.#timeout("text", opts.timeout),
       }),
     );
-  }
-
-  async findText(text: string, opts: TextSelectorOptions = {}): Promise<TextMatch[]> {
-    return this.#makeLocator(
-      textQuery(text, { ...opts, occurrence: opts.occurrence ?? "any" }),
-    ).locationsWithOperation("findText");
   }
 
   async waitIdle(opts: { timeout?: number } = {}): Promise<void> {
@@ -945,37 +891,6 @@ export class TuiTest {
         not: opts.not ?? false,
         timeoutMs: this.#timeout("text", opts.timeout),
       }),
-    );
-  }
-
-  async expectText(text: string, opts: ExpectTextOptions = {}): Promise<void> {
-    const {
-      strict = true,
-      not = false,
-      fg,
-      bg,
-      style = {},
-      timeout,
-      ...selector
-    } = opts;
-    const locator = this.#makeLocator(
-      textQuery(text, {
-        ...selector,
-        occurrence:
-          selector.occurrence ?? (strict ? "unique" : "first"),
-      }),
-    );
-    await locator.expectWithOperation(
-      {
-        not,
-        style: {
-          ...style,
-          foreground: style.foreground ?? fg,
-          background: style.background ?? bg,
-        },
-        timeout,
-      },
-      "expectText",
     );
   }
 

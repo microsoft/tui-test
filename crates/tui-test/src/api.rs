@@ -269,12 +269,26 @@ impl LocatorSelector {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocatorDirection {
+    /// Search inside each selected parent match.
+    #[default]
+    Within,
+    /// Search after each parent, stopping at the next selected parent.
+    After,
+    /// Search before each parent, starting after the previous selected parent.
+    Before,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-/// One lazy locator stage plus the parent region that constrains it.
+/// One lazy locator stage plus the parent query that positions it.
 pub struct LocatorQuery {
     pub selector: LocatorSelector,
     #[serde(default)]
     pub within: Option<Box<LocatorQuery>>,
+    #[serde(default)]
+    pub direction: LocatorDirection,
     #[serde(default)]
     pub style: TextStyle,
 }
@@ -284,6 +298,7 @@ impl LocatorQuery {
         Self {
             selector: LocatorSelector::Text(selector.into()),
             within: None,
+            direction: LocatorDirection::Within,
             style: TextStyle::default(),
         }
     }
@@ -292,6 +307,7 @@ impl LocatorQuery {
         Self {
             selector: LocatorSelector::Style(selector.into()),
             within: None,
+            direction: LocatorDirection::Within,
             style: TextStyle::default(),
         }
     }
@@ -352,13 +368,6 @@ pub enum Operation {
     Signal {
         name: String,
     },
-    WaitText {
-        text: String,
-        regex: bool,
-        full: bool,
-        timeout_ms: Option<u64>,
-        not: bool,
-    },
     WaitTitle {
         text: String,
         regex: bool,
@@ -402,16 +411,6 @@ pub enum Operation {
         query: LocatorQuery,
         not: bool,
         style: TextStyle,
-        timeout_ms: Option<u64>,
-    },
-    ExpectText {
-        text: String,
-        regex: bool,
-        full: bool,
-        strict: bool,
-        not: bool,
-        fg: Option<String>,
-        bg: Option<String>,
         timeout_ms: Option<u64>,
     },
     ExpectTitle {
@@ -823,6 +822,7 @@ mod tests {
         let child = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("child")),
             within: Some(Box::new(LocatorQuery::text(parent))),
+            direction: LocatorDirection::Within,
             style: Default::default(),
         };
         assert!(child.uses_full_grid());
@@ -832,6 +832,7 @@ mod tests {
         let query = LocatorQuery {
             selector: LocatorSelector::Text(full_child),
             within: Some(Box::new(LocatorQuery::text("parent"))),
+            direction: LocatorDirection::Within,
             style: Default::default(),
         };
         assert!(query.uses_full_grid());

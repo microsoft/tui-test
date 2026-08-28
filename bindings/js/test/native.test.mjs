@@ -100,7 +100,7 @@ test("public declarations expose reusable get-by locators", async () => {
   }
   assert.match(declarations, /\bgetByText\(text: string/);
   assert.match(declarations, /\bgetByStyle\(/);
-  assert.match(declarations, /waitText\([\s\S]*Promise<Locator>/);
+  assert.doesNotMatch(declarations, /\b(?:findText|waitText|expectText)\(/);
 });
 
 test("public facade omits generic request dispatchers", async () => {

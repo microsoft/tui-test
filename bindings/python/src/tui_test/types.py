@@ -8,6 +8,7 @@ Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
+LocatorDirection = Literal["within", "after", "before"]
 TextOccurrence = Union[Literal["any", "unique", "first", "last"], int]
 
 
@@ -79,13 +80,6 @@ class Cell:
 class BellEvent:
     sequence: int
     elapsed_ms: int
-
-
-@dataclass
-class TextAnchor:
-    text: str
-    regex: bool = False
-    occurrence: TextOccurrence = "unique"
 
 
 @dataclass

@@ -8,11 +8,11 @@ use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
-    Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, KeyAction, LocatorQuery,
-    LocatorSelector, MatchOccurrence, MouseAction, OpenOptions, OpenResult, Operation,
-    OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
-    SnapshotResult, State, StyleSelector, TextAnchor, TextMatch, TextScope, TextSelector,
-    TextStyle, Timeouts, TuiTestError, WhitespaceMode,
+    Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, KeyAction, LocatorDirection,
+    LocatorQuery, LocatorSelector, MatchOccurrence, MouseAction, OpenOptions, OpenResult,
+    Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
+    SnapshotResult, State, StyleSelector, TextMatch, TextSelector, TextStyle, Timeouts,
+    TuiTestError, WhitespaceMode,
 };
 
 pyo3::create_exception!(
@@ -1367,24 +1367,6 @@ fn core_occurrence(
     }
 }
 
-fn core_anchor(dict: &Bound<'_, PyDict>, prefix: &str) -> Result<Option<TextAnchor>, TuiTestError> {
-    let text = py_string(dict, &format!("{prefix}_text"))?;
-    let regex = py_bool(dict, &format!("{prefix}_regex"))?;
-    let occurrence = py_string(dict, &format!("{prefix}_occurrence"))?;
-    let nth = py_usize(dict, &format!("{prefix}_nth"))?;
-    match text {
-        Some(text) => Ok(Some(TextAnchor {
-            text,
-            regex: regex.unwrap_or(false),
-            occurrence: core_occurrence(occurrence, nth, &format!("{prefix}_nth"))?,
-        })),
-        None if regex.unwrap_or(false) || occurrence.is_some() || nth.is_some() => Err(
-            TuiTestError::usage(format!("{prefix} options require anchor text")),
-        ),
-        None => Ok(None),
-    }
-}
-
 fn core_style(dict: &Bound<'_, PyDict>) -> Result<TextStyle, TuiTestError> {
     Ok(TextStyle {
         foreground: py_string(dict, "foreground")?,
@@ -1412,8 +1394,23 @@ fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, Tu
             py_usize(dict, "nth")?,
             &format!("stages[{index}].nth"),
         )?;
+        let direction = match py_string(dict, "direction")?.as_deref() {
+            None | Some("within") => LocatorDirection::Within,
+            Some("after") => LocatorDirection::After,
+            Some("before") => LocatorDirection::Before,
+            Some(value) => {
+                return Err(TuiTestError::usage(format!(
+                    "locator direction must be within, after, or before (got '{value}')"
+                )))
+            }
+        };
         let selector = match py_string(dict, "kind")?.as_deref() {
             Some("text") => {
+                if py_item(dict, "style")?.is_some() {
+                    return Err(TuiTestError::usage(
+                        "text locator stage cannot include style selector parameters",
+                    ));
+                }
                 let whitespace = match py_string(dict, "whitespace")?.as_deref() {
                     None | Some("exact") => WhitespaceMode::Exact,
                     Some("normalize") => WhitespaceMode::Normalize,
@@ -1429,14 +1426,19 @@ fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, Tu
                     regex: py_bool(dict, "regex")?.unwrap_or(false),
                     full: py_bool(dict, "full")?.unwrap_or(false),
                     whitespace,
-                    scope: TextScope {
-                        after: core_anchor(dict, "after")?,
-                        before: core_anchor(dict, "before")?,
-                    },
+                    scope: Default::default(),
                     occurrence,
                 })
             }
             Some("style") => {
+                if py_item(dict, "text")?.is_some()
+                    || py_bool(dict, "regex")?.unwrap_or(false)
+                    || py_item(dict, "whitespace")?.is_some()
+                {
+                    return Err(TuiTestError::usage(
+                        "style locator stage cannot include text selector parameters",
+                    ));
+                }
                 let style = py_item(dict, "style")?
                     .ok_or_else(|| TuiTestError::usage("style locator stage requires style"))?;
                 let style = style
@@ -1458,6 +1460,7 @@ fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, Tu
         parent = Some(LocatorQuery {
             selector,
             within: parent.map(Box::new),
+            direction,
             style: TextStyle::default(),
         });
     }

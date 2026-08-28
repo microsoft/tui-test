@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, Weak};
 use sha2::{Digest, Sha256};
 
 use crate::api::{
-    LocatorQuery, LocatorSelector, MatchOccurrence, OpenOptions, OpenResult, Operation,
-    OperationResult, RunOptions, StyleSelector, TextMatch, TextSelector, TuiTestError,
+    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, OpenOptions, OpenResult,
+    Operation, OperationResult, RunOptions, StyleSelector, TextMatch, TextSelector, TextStyle,
+    TuiTestError,
 };
 use crate::engine::Engine;
 use crate::logger::Logger;
@@ -35,6 +36,13 @@ impl Default for LocatorClickOptions {
             timeout_ms: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LocatorExpectOptions {
+    pub not: bool,
+    pub style: TextStyle,
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -70,22 +78,40 @@ impl Locator {
     }
 
     pub fn get_by_text(&self, selector: impl Into<TextSelector>) -> Self {
+        self.get_by_text_relative(selector, LocatorDirection::Within)
+    }
+
+    pub fn get_by_text_relative(
+        &self,
+        selector: impl Into<TextSelector>,
+        direction: LocatorDirection,
+    ) -> Self {
         Self {
             target: self.target.clone(),
             query: LocatorQuery {
                 selector: LocatorSelector::Text(selector.into()),
                 within: Some(Box::new(self.query.clone())),
+                direction,
                 style: Default::default(),
             },
         }
     }
 
     pub fn get_by_style(&self, selector: impl Into<StyleSelector>) -> Self {
+        self.get_by_style_relative(selector, LocatorDirection::Within)
+    }
+
+    pub fn get_by_style_relative(
+        &self,
+        selector: impl Into<StyleSelector>,
+        direction: LocatorDirection,
+    ) -> Self {
         Self {
             target: self.target.clone(),
             query: LocatorQuery {
                 selector: LocatorSelector::Style(selector.into()),
                 within: Some(Box::new(self.query.clone())),
+                direction,
                 style: Default::default(),
             },
         }
@@ -218,6 +244,21 @@ impl Locator {
             .execute(Operation::HighlightLocator {
                 query: self.query.clone(),
                 timeout_ms,
+            })
+            .map(|_| ())
+    }
+
+    pub fn expect(&self) -> Result<(), TuiTestError> {
+        self.expect_with(LocatorExpectOptions::default())
+    }
+
+    pub fn expect_with(&self, options: LocatorExpectOptions) -> Result<(), TuiTestError> {
+        self.target
+            .execute(Operation::ExpectLocator {
+                query: self.strict_query(),
+                not: options.not,
+                style: options.style,
+                timeout_ms: options.timeout_ms,
             })
             .map(|_| ())
     }

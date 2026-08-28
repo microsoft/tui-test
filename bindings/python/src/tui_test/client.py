@@ -35,10 +35,10 @@ from .types import (
     Backend,
     BellEvent,
     Cell,
+    LocatorDirection,
     Profile,
     RecordingFormat,
     State,
-    TextAnchor,
     TextMatch,
     TextOccurrence,
     TextStyle,
@@ -107,39 +107,25 @@ def _occurrence_fields(value: TextOccurrence) -> Dict[str, object]:
     return {"occurrence": value, "nth": None}
 
 
-def _anchor_fields(
-    prefix: str, anchor: Optional[TextAnchor]
-) -> Dict[str, object]:
-    if anchor is None:
-        return {}
-    occurrence = _occurrence_fields(anchor.occurrence)
-    return {
-        "{}_text".format(prefix): anchor.text,
-        "{}_regex".format(prefix): anchor.regex,
-        "{}_occurrence".format(prefix): occurrence["occurrence"],
-        "{}_nth".format(prefix): occurrence["nth"],
-    }
-
-
 def _text_stage_value(
     text: str,
     *,
     regex: bool,
     full: bool,
     whitespace: str,
-    after: Optional[TextAnchor],
-    before: Optional[TextAnchor],
     occurrence: TextOccurrence,
+    direction: LocatorDirection,
 ) -> Dict[str, object]:
+    if direction not in ("within", "after", "before"):
+        raise ValueError("locator direction must be within, after, or before")
     return {
         "kind": "text",
+        "direction": direction,
         "text": text,
         "regex": regex,
         "full": full,
         "whitespace": whitespace,
         **_occurrence_fields(occurrence),
-        **_anchor_fields("after", after),
-        **_anchor_fields("before", before),
     }
 
 
@@ -149,9 +135,8 @@ def _text_query_value(
     regex: bool,
     full: bool,
     whitespace: str,
-    after: Optional[TextAnchor],
-    before: Optional[TextAnchor],
     occurrence: TextOccurrence,
+    direction: LocatorDirection,
     within: Optional[List[Dict[str, object]]],
 ) -> List[Dict[str, object]]:
     stages = copy.deepcopy(within) if within is not None else []
@@ -161,9 +146,8 @@ def _text_query_value(
             regex=regex,
             full=full,
             whitespace=whitespace,
-            after=after,
-            before=before,
             occurrence=occurrence,
+            direction=direction,
         )
     )
     return stages
@@ -174,15 +158,19 @@ def _style_query_value(
     *,
     full: bool,
     occurrence: TextOccurrence,
+    direction: LocatorDirection,
     within: Optional[List[Dict[str, object]]],
 ) -> List[Dict[str, object]]:
     style_value = asdict(style)
     if not any(value is not None for value in style_value.values()):
         raise ValueError("get_by_style requires at least one style property")
+    if direction not in ("within", "after", "before"):
+        raise ValueError("locator direction must be within, after, or before")
     stages = copy.deepcopy(within) if within is not None else []
     stages.append(
         {
             "kind": "style",
+            "direction": direction,
             "style": style_value,
             "full": full,
             **_occurrence_fields(occurrence),
@@ -298,18 +286,16 @@ class Locator:
         regex: bool = False,
         full: bool = False,
         whitespace: str = "exact",
-        after: Optional[TextAnchor] = None,
-        before: Optional[TextAnchor] = None,
         occurrence: TextOccurrence = "any",
+        direction: LocatorDirection = "within",
     ) -> "Locator":
         return self._client._make_text_locator(
             text,
             regex=regex,
             full=full,
             whitespace=whitespace,
-            after=after,
-            before=before,
             occurrence=occurrence,
+            direction=direction,
             within=self._query,
         )
 
@@ -319,20 +305,19 @@ class Locator:
         *,
         full: bool = False,
         occurrence: TextOccurrence = "any",
+        direction: LocatorDirection = "within",
     ) -> "Locator":
         return self._client._make_style_locator(
             style,
             full=full,
             occurrence=occurrence,
+            direction=direction,
             within=self._query,
         )
 
     async def locations(self) -> List[TextMatch]:
-        return await self._locations("locator.locations")
-
-    async def _locations(self, op_name: str) -> List[TextMatch]:
         values = await self._client._guarded(
-            op_name,
+            "locator.locations",
             self._client._native.find_locator(self._query),
         )
         return [TextMatch.from_dict(value) for value in values]
@@ -381,19 +366,10 @@ class Locator:
         state: Literal["visible", "hidden"] = "visible",
         timeout: Optional[int] = None,
     ) -> "Locator":
-        return await self._wait(state=state, timeout=timeout, op_name="locator.wait")
-
-    async def _wait(
-        self,
-        *,
-        state: Literal["visible", "hidden"],
-        timeout: Optional[int],
-        op_name: str,
-    ) -> "Locator":
         if state not in ("visible", "hidden"):
             raise ValueError("locator state must be 'visible' or 'hidden'")
         await self._client._guarded(
-            op_name,
+            "locator.wait",
             self._client._native.wait_locator(
                 self._query,
                 state == "hidden",
@@ -435,25 +411,10 @@ class Locator:
         style: Optional[TextStyle] = None,
         timeout: Optional[int] = None,
     ) -> None:
-        await self._expect(
-            not_=not_,
-            style=style,
-            timeout=timeout,
-            op_name="locator.expect",
-        )
-
-    async def _expect(
-        self,
-        *,
-        not_: bool,
-        style: Optional[TextStyle],
-        timeout: Optional[int],
-        op_name: str,
-    ) -> None:
         await self._client._guarded(
-            op_name,
+            "locator.expect",
             self._client._native.expect_locator(
-                self._query,
+                self._strict_query(),
                 asdict(style or TextStyle()),
                 not_,
                 self._client._timeout("text", timeout),
@@ -681,8 +642,6 @@ class TuiTest:
         regex: bool = False,
         full: bool = False,
         whitespace: str = "exact",
-        after: Optional[TextAnchor] = None,
-        before: Optional[TextAnchor] = None,
         occurrence: TextOccurrence = "any",
     ) -> Locator:
         return self._make_text_locator(
@@ -690,9 +649,8 @@ class TuiTest:
             regex=regex,
             full=full,
             whitespace=whitespace,
-            after=after,
-            before=before,
             occurrence=occurrence,
+            direction="within",
             within=None,
         )
 
@@ -703,9 +661,8 @@ class TuiTest:
         regex: bool,
         full: bool,
         whitespace: str,
-        after: Optional[TextAnchor],
-        before: Optional[TextAnchor],
         occurrence: TextOccurrence,
+        direction: LocatorDirection,
         within: Optional[List[Dict[str, object]]],
     ) -> Locator:
         return Locator(
@@ -715,9 +672,8 @@ class TuiTest:
                 regex=regex,
                 full=full,
                 whitespace=whitespace,
-                after=after,
-                before=before,
                 occurrence=occurrence,
+                direction=direction,
                 within=within,
             ),
         )
@@ -733,6 +689,7 @@ class TuiTest:
             style,
             full=full,
             occurrence=occurrence,
+            direction="within",
             within=None,
         )
 
@@ -742,6 +699,7 @@ class TuiTest:
         *,
         full: bool,
         occurrence: TextOccurrence,
+        direction: LocatorDirection,
         within: Optional[List[Dict[str, object]]],
     ) -> Locator:
         return Locator(
@@ -750,30 +708,10 @@ class TuiTest:
                 style,
                 full=full,
                 occurrence=occurrence,
+                direction=direction,
                 within=within,
             ),
         )
-
-    async def find_text(
-        self,
-        text: str,
-        *,
-        regex: bool = False,
-        full: bool = False,
-        whitespace: str = "exact",
-        after: Optional[TextAnchor] = None,
-        before: Optional[TextAnchor] = None,
-        occurrence: TextOccurrence = "any",
-    ) -> List[TextMatch]:
-        return await self.get_by_text(
-            text,
-            regex=regex,
-            full=full,
-            whitespace=whitespace,
-            after=after,
-            before=before,
-            occurrence=occurrence,
-        )._locations("find_text")
 
     async def _packed_screen(
         self, *, full: bool = False
@@ -849,34 +787,6 @@ class TuiTest:
     async def stop_recording(self) -> str:
         return await self._await(self._native.stop_recording())
 
-    async def wait_text(
-        self,
-        text: str,
-        *,
-        regex: bool = False,
-        full: bool = False,
-        whitespace: str = "exact",
-        after: Optional[TextAnchor] = None,
-        before: Optional[TextAnchor] = None,
-        occurrence: TextOccurrence = "any",
-        not_: bool = False,
-        timeout: Optional[int] = None,
-    ) -> Locator:
-        locator = self.get_by_text(
-            text,
-            regex=regex,
-            full=full,
-            whitespace=whitespace,
-            after=after,
-            before=before,
-            occurrence=occurrence,
-        )
-        return await locator._wait(
-            state="hidden" if not_ else "visible",
-            timeout=timeout,
-            op_name="wait_text",
-        )
-
     async def wait_title(
         self,
         text: str,
@@ -935,48 +845,6 @@ class TuiTest:
             self._native.expect_title(
                 text, regex, not_, self._timeout("text", timeout)
             ),
-        )
-
-    async def expect_text(
-        self,
-        text: str,
-        *,
-        regex: bool = False,
-        full: bool = False,
-        strict: bool = True,
-        whitespace: str = "exact",
-        after: Optional[TextAnchor] = None,
-        before: Optional[TextAnchor] = None,
-        occurrence: Optional[TextOccurrence] = None,
-        not_: bool = False,
-        fg: Optional[str] = None,
-        bg: Optional[str] = None,
-        style: Optional[TextStyle] = None,
-        timeout: Optional[int] = None,
-    ) -> None:
-        locator = self.get_by_text(
-            text,
-            regex=regex,
-            full=full,
-            whitespace=whitespace,
-            after=after,
-            before=before,
-            occurrence=(
-                occurrence
-                if occurrence is not None
-                else ("unique" if strict else "first")
-            ),
-        )
-        style_value = asdict(style or TextStyle())
-        if style_value["foreground"] is None:
-            style_value["foreground"] = fg
-        if style_value["background"] is None:
-            style_value["background"] = bg
-        await locator._expect(
-            not_=not_,
-            style=TextStyle(**style_value),
-            timeout=timeout,
-            op_name="expect_text",
         )
 
     async def expect_exit_code(

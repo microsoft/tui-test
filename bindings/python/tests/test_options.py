@@ -6,7 +6,7 @@ from tui_test import _config as cfg
 from tui_test import _ephemeral as ephemeral
 from tui_test import client
 from tui_test.errors import ExpectationError, InternalError, TerminalArtifact
-from tui_test.types import Colors, Profile, TextAnchor, TextStyle, Timeouts
+from tui_test.types import Colors, Profile, TextStyle, Timeouts
 
 
 def run(coro):
@@ -293,7 +293,7 @@ class ClientTimeoutTests(unittest.TestCase):
         terminal = _CapturingClient(
             "s", timeouts=Timeouts(text=1234, command=2222, idle=1500)
         )
-        run(terminal.wait_text("x"))
+        run(terminal.get_by_text("x").wait())
         run(terminal.wait_idle(timeout=50))
         run(terminal.expect_exit_code(0))
         self.assertEqual(terminal.fake.calls[0][1][-1], 1234)
@@ -355,12 +355,10 @@ class MessagePrefixTests(unittest.TestCase):
 
     def test_all_wait_and_expect_methods_prefix(self):
         cases = {
-            "wait_text": ("x",),
             "wait_idle": (),
             "wait_command": (),
             "wait_exit": (),
             "wait_ready": (),
-            "expect_text": ("x",),
             "expect_exit_code": (0,),
             "expect_output": ("x",),
             "expect_snapshot": ("x",),
@@ -369,6 +367,16 @@ class MessagePrefixTests(unittest.TestCase):
             self.assertTrue(
                 self._prefix_for(name, *args).startswith(name + ": ")
             )
+
+        terminal = _CapturingClient("s")
+        terminal.fake.error = ExpectationError("boom")
+        for name, operation in (
+            ("locator.wait", terminal.get_by_text("x").wait),
+            ("locator.expect", terminal.get_by_text("x").expect),
+        ):
+            with self.assertRaises(ExpectationError) as raised:
+                run(operation())
+            self.assertTrue(str(raised.exception).startswith(name + ": "))
 
 
 class LocatorTests(unittest.TestCase):
@@ -391,26 +399,28 @@ class LocatorTests(unittest.TestCase):
         terminal = _CapturingClient("s")
         terminal.fake.reply = []
         run(
-            terminal.find_text(
+            terminal.get_by_text("Settings")
+            .get_by_text(
                 "Save",
                 whitespace="normalize",
-                after=TextAnchor("Settings", occurrence="last"),
-                occurrence=1,
+                direction="after",
             )
+            .nth(1)
+            .locations()
         )
         name, args = terminal.fake.calls[0]
         self.assertEqual(name, "find_locator")
-        selector = args[0][-1]
-        self.assertEqual(selector["after_text"], "Settings")
+        stages = args[0]
+        self.assertEqual(stages[0]["text"], "Settings")
+        selector = stages[-1]
+        self.assertEqual(selector["direction"], "after")
         self.assertEqual(selector["occurrence"], "nth")
         self.assertEqual(selector["nth"], 1)
 
         run(
-            terminal.expect_text(
-                "Warning",
-                occurrence="first",
-                style=TextStyle(bold=True, underline_style="curly"),
-            )
+            terminal.get_by_text("Warning")
+            .first()
+            .expect(style=TextStyle(bold=True, underline_style="curly"))
         )
         name, args = terminal.fake.calls[1]
         self.assertEqual(name, "expect_locator")
@@ -490,28 +500,29 @@ class LocatorTests(unittest.TestCase):
         self.assertEqual(name, "highlight_locator")
         self.assertEqual(args[0][-1]["occurrence"], "any")
 
-        run(locator.last().expect(style=TextStyle(bold=True)))
+        run(locator.expect(style=TextStyle(bold=True)))
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "expect_locator")
         query, style, not_ = args[:3]
-        self.assertEqual(query[-1]["occurrence"], "last")
+        self.assertEqual(query[-1]["occurrence"], "unique")
         self.assertTrue(style["bold"])
         self.assertFalse(not_)
 
-    def test_wait_text_returns_a_reusable_locator(self):
+    def test_relative_locator_wait_returns_the_same_locator(self):
         terminal = _CapturingClient("s")
-        locator = run(
-            terminal.wait_text(
+        locator = (
+            terminal.get_by_text("Settings")
+            .get_by_text(
                 "Save",
                 whitespace="normalize",
-                after=TextAnchor("Settings"),
+                direction="after",
             )
         )
-        self.assertIsInstance(locator, client.Locator)
+        self.assertIs(run(locator.wait()), locator)
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "wait_locator")
         query = args[0]
-        self.assertEqual(query[-1]["after_text"], "Settings")
+        self.assertEqual(query[-1]["direction"], "after")
 
     def test_locator_rejects_invalid_selection_and_state(self):
         terminal = _CapturingClient("s")
@@ -520,6 +531,8 @@ class LocatorTests(unittest.TestCase):
             locator.nth(-1)
         with self.assertRaisesRegex(ValueError, "locator state"):
             run(locator.wait(state="gone"))
+        with self.assertRaisesRegex(ValueError, "locator direction"):
+            locator.get_by_text("child", direction="sideways")
         with self.assertRaisesRegex(ValueError, "at least one style"):
             terminal.get_by_style(TextStyle())
 
@@ -554,7 +567,7 @@ class ArtifactCaptureTests(unittest.TestCase):
             "nope\n\nTerminal content:\n╭──╮\n╰──╯"
         )
         with self.assertRaises(ExpectationError) as raised:
-            run(terminal.wait_text("x"))
+            run(terminal.get_by_text("x").wait())
         artifact = raised.exception.terminal
         self.assertIsInstance(artifact, TerminalArtifact)
         self.assertIn("╭──╮", artifact.text)
@@ -573,7 +586,7 @@ class ArtifactCaptureTests(unittest.TestCase):
 
         terminal.screenshot = boom
         with self.assertRaises(ExpectationError):
-            run(terminal.wait_text("x"))
+            run(terminal.get_by_text("x").wait())
 
 
 class UniqueSessionTests(unittest.TestCase):

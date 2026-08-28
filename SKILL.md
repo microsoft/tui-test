@@ -129,7 +129,7 @@ and `Meta`. Top-level `press` remains a compatibility alias for `key press`.
 
 | Command                                                                         | Description                                                                   |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `expect text "T" [selector/style options]`                                      | Visibility plus optional color and cell styles. `--no-strict` selects the first match. |
+| `expect text "T" [selector/style options]`                                      | Visibility plus optional color and cell styles. |
 | `expect title "T" [--regex --not --timeout MS]`                                 | The window title set with `OSC 0`/`OSC 2`. An unset title matches nothing.    |
 | `expect exit-code N [--timeout MS]`                                             | The last command's exit code. Waits for the command to finish first.          |
 | `expect output "T" [--regex]`                                                   | The last command's captured output.                                           |
@@ -313,6 +313,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let hello = session.get_by_text("hello");
     hello.wait_with_timeout(Some(5_000))?;
+    hello.last().expect()?;
     hello.last().highlight()?;
     session.execute(Operation::ExpectExitCode {
         code: 0,
@@ -333,7 +334,8 @@ async def main():
     async with TuiTest() as su:                     # closes the session on exit
         await su.open()
         await su.submit("echo hello")
-        hello = await su.wait_text("hello")
+        hello = su.get_by_text("hello")
+        await hello.wait()
         await hello.last().highlight()               # command echo + output both match
         await su.expect_exit_code(0)
 
@@ -348,7 +350,8 @@ import { TuiTest } from "@microsoft/tui-test";
 const su = new TuiTest();
 await su.open();
 await su.submit("echo hello");
-const hello = await su.waitText("hello");
+const hello = su.getByText("hello");
+await hello.wait();
 await hello.last().highlight();
 await su.expectExitCode(0);
 await su.close();
@@ -366,13 +369,13 @@ Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
 `cells`, the dedicated
 `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` /
 `get_size` / `get_title` / `get_bell_count` / `get_bell_events` methods,
-`screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` /
-`wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` /
+`screenshot`, `start_recording` / `stop_recording`, `wait_title` / `wait_idle` / `wait_command` /
+`wait_exit` / `wait_ready` / `wait_bell`, `expect_title` /
 `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`,
 and `close`. Python module-level helpers are `sessions`,
 `close_all`, and `get_recording`; JavaScript exports `sessions`, `closeAll`,
 and `getRecording`. The JavaScript client otherwise uses the same names in
-camelCase (`startRecording`, `stopRecording`, `waitCommand`, `expectText`,
+camelCase (`startRecording`, `stopRecording`, `waitCommand`,
 `getExitCode`, etc.).
 
 `get_by_text()` / `getByText()` and `get_by_style()` / `getByStyle()` return
@@ -380,8 +383,8 @@ lazy locators in the three languages. Every text or contiguous style-run stage
 can be chained and is resolved again for each read or action, so the same
 locator can wait and then click the current match. Locators support `any`,
 `unique`, `first`, `last`, `nth`, `all`, match locations, click-at-center, and
-highlighting. Python `wait_text()` and JavaScript `waitText()` return the
-`get_by_text` locator they waited on.
+highlighting and expectations. Chained stages search `within`, `after`, or `before` the
+dynamically resolved parent match.
 
 The constructors accept a session name plus backend, profile, timeout, and
 artifact options: `TuiTest(session="default", *, backend=None, timeouts=None,

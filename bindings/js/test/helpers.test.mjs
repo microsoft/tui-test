@@ -97,7 +97,7 @@ test(
     const result = await withTerminal({ prefix: "helpers-e2e" }, async (terminal) => {
       await terminal.submit(`echo ${marker}`);
       await terminal.waitCommand();
-      await terminal.expectText(marker, { strict: false });
+      await terminal.getByText(marker).first().expect();
       await terminal.expectExitCode(0);
       return "done";
     });
@@ -133,7 +133,7 @@ test(
     await withTerminal(
       { prefix: "helpers-prog", program: [process.execPath, ...evalArgs] },
       async (terminal) => {
-        await terminal.waitText("prog-ready", { timeout: 5000 });
+        await terminal.getByText("prog-ready").wait({ timeout: 5000 });
       },
     );
     assert.equal(trackedCount(), 0);
@@ -159,8 +159,11 @@ test(
         profile: { colors: { red: "#010203" } },
       },
       async (terminal) => {
-        await terminal.waitText(marker, { timeout: 5000 });
-        await terminal.expectText(marker, { fg: "#010203" });
+        await terminal.getByText(marker).wait({ timeout: 5000 });
+        await terminal
+          .getByText(marker)
+          .unique()
+          .expect({ style: { foreground: "#010203" } });
       },
     );
     assert.equal(trackedCount(), 0);

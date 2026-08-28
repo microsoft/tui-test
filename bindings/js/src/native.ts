@@ -31,8 +31,9 @@ type RuntimeRunOptions = Omit<RunOptions, "backend"> & { backend?: string };
 type RuntimeRecordingOptions = Omit<RecordingOptions, "format"> & {
   format?: "apng" | "gif" | "mp4" | "cast";
 };
-export type RuntimeLocatorStage = Omit<LocatorStage, "kind"> & {
+export type RuntimeLocatorStage = Omit<LocatorStage, "kind" | "direction"> & {
   kind: "text" | "style";
+  direction?: "within" | "after" | "before";
 };
 export type RuntimeLocatorStyle = LocatorStyle;
 

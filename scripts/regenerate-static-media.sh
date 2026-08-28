@@ -126,7 +126,7 @@ record_set() {
         prepare_recording_session "$session"
         tui "$session" record start "$static_dir/$output" --fps 20 >/dev/null
         tui "$session" submit "$command" >/dev/null
-        tui "$session" wait text "done" --timeout 10000 >/dev/null
+        tui "$session" expect text "done" --match first --timeout 10000 >/dev/null
         tui "$session" wait command --timeout 10000 >/dev/null
         tui "$session" record stop >/dev/null
     done
@@ -154,7 +154,7 @@ record_zoom_set() {
         prepare_recording_session "$session"
         tui "$session" record start "$static_dir/$output" --fps 20 --zoom "$zoom" >/dev/null
         tui "$session" submit "$command" >/dev/null
-        tui "$session" wait text "done" --timeout 10000 >/dev/null
+        tui "$session" expect text "done" --match first --timeout 10000 >/dev/null
         tui "$session" wait command --timeout 10000 >/dev/null
         tui "$session" record stop >/dev/null
     done
@@ -277,7 +277,7 @@ echo "Regenerating static/screen.svg..."
 screen_session="$session_prefix-screen"
 register_session "$screen_session"
 tui "$screen_session" run --cols 60 --rows 20 -- bash --noprofile --norc "$screen_script" >/dev/null
-tui "$screen_session" wait text "recording APNG" --timeout 10000 >/dev/null
+tui "$screen_session" expect text "recording APNG" --match first --timeout 10000 >/dev/null
 tui "$screen_session" screenshot --out "$static_dir/screen.svg" >/dev/null
 close_session "$screen_session"
 
@@ -298,7 +298,7 @@ tui "$resize_session" open --shell bash --cols 60 --rows 16 >/dev/null
 prepare_recording_session "$resize_session"
 tui "$resize_session" record start "$static_dir/resize-demo.gif" --fps 20 >/dev/null
 tui "$resize_session" submit "$(shell_command "$resize_script")" >/dev/null
-tui "$resize_session" wait text "Watch the same words" --timeout 10000 >/dev/null
+tui "$resize_session" expect text "Watch the same words" --match first --timeout 10000 >/dev/null
 sleep 0.3
 tui "$resize_session" resize 42 10 >/dev/null
 sleep 0.9

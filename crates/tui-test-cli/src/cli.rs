@@ -99,7 +99,7 @@ impl From<RecordingFormatArg> for RecordingFormat {
 /// Per-class default timeouts for a session, in milliseconds.
 #[derive(Args, Clone, Copy, Default)]
 pub struct TimeoutArgs {
-    /// Default timeout for `expect text` / `wait text` (default 5000).
+    /// Default timeout for text actions and assertions (default 5000).
     #[arg(long = "timeout-text", value_name = "MS")]
     pub text: Option<u64>,
     /// Default timeout for `wait idle` (default 5000).
@@ -1179,18 +1179,6 @@ pub enum HighlightCmd {
 
 #[derive(Subcommand)]
 pub enum WaitCmd {
-    /// Wait until text/regex appears on screen (the most precise wait).
-    #[command(hide = true)]
-    Text {
-        #[command(flatten)]
-        query: TextQueryArgs,
-        /// Invert: wait until the text is NOT present.
-        #[arg(long)]
-        not: bool,
-        /// Timeout in milliseconds.
-        #[arg(long, value_name = "MS")]
-        timeout: Option<u64>,
-    },
     /// Wait until the window title (set with OSC 0/2) matches text/regex.
     ///
     /// Programs set the title to announce what they are doing, so this is how
@@ -1255,12 +1243,6 @@ pub enum ExpectCmd {
     Text {
         #[command(flatten)]
         query: TextQueryArgs,
-        /// Allow multiple matches instead of requiring exactly one.
-        #[arg(
-            long = "no-strict",
-            conflicts_with_all = ["match_mode", "nth"]
-        )]
-        no_strict: bool,
         /// Invert: assert the text is NOT present.
         #[arg(long)]
         not: bool,

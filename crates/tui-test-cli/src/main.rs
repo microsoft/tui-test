@@ -16,11 +16,10 @@ use cli::{
     Cli, ClickCmd, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, HighlightCmd, KeyCmd, MatchArg,
     MouseCmd, RecordCmd, TextQueryArgs, TextSelectorArgs, TextStyleArgs, WaitCmd, WhitespaceArg,
 };
-use protocol::DAEMON_PROTOCOL_VERSION;
 use protocol::{GetField, MouseAction, Request, Response};
 use tui_test::{
-    LocatorQuery, LocatorSelector, MatchOccurrence, TextAnchor, TextScope, TextSelector, TextStyle,
-    WhitespaceMode,
+    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, TextAnchor, TextScope,
+    TextSelector, TextStyle, WhitespaceMode,
 };
 /// Long-form agent skill manifest, printed by `tui-test skill`.
 const SKILL_MD: &str = include_str!("../../../SKILL.md");
@@ -365,15 +364,6 @@ fn map_mouse(action: MouseCmd) -> MouseAction {
 
 fn map_wait(what: WaitCmd) -> Request {
     match what {
-        WaitCmd::Text {
-            query,
-            not,
-            timeout,
-        } => Request::WaitLocator {
-            query: map_query(query, MatchOccurrence::Any),
-            timeout_ms: timeout,
-            not,
-        },
         WaitCmd::Title {
             text,
             regex,
@@ -480,6 +470,7 @@ fn map_query(args: TextQueryArgs, default: MatchOccurrence) -> LocatorQuery {
     LocatorQuery {
         selector: LocatorSelector::Text(map_selector(args.text, args.selector, default)),
         within: None,
+        direction: LocatorDirection::Within,
         style: map_style(*args.style),
     }
 }
@@ -521,18 +512,10 @@ fn map_expect(what: ExpectCmd) -> Request {
     match what {
         ExpectCmd::Text {
             query,
-            no_strict,
             not,
             timeout,
         } => Request::ExpectLocator {
-            query: map_query(
-                query,
-                if no_strict {
-                    MatchOccurrence::First
-                } else {
-                    MatchOccurrence::Unique
-                },
-            ),
+            query: map_query(query, MatchOccurrence::Unique),
             not,
             timeout_ms: timeout,
         },
@@ -665,8 +648,8 @@ fn daemon_lock_is_stale(path: &Path, stale_after: Duration) -> bool {
 /// Spawn or replace the daemon for this session when necessary.
 fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     let socket = config::socket_name(session);
-    if let Some(identity) = running_daemon_identity(session, &socket)? {
-        if identity.is_current() {
+    if let Some(version) = running_daemon_identity(session, &socket)? {
+        if version == env!("CARGO_PKG_VERSION") {
             report_existing_daemon(session, verbose);
             return Ok(DaemonStart::AlreadyRunning);
         }
@@ -676,12 +659,12 @@ fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     let _lock = DaemonLock::acquire(session)?;
 
     match running_daemon_identity(session, &socket)? {
-        Some(identity) if identity.is_current() => {
+        Some(version) if version == env!("CARGO_PKG_VERSION") => {
             report_existing_daemon(session, verbose);
             Ok(DaemonStart::AlreadyRunning)
         }
-        Some(identity) => {
-            restart_daemon(session, &socket, &identity.label(), verbose)?;
+        Some(version) => {
+            restart_daemon(session, &socket, &version, verbose)?;
             Ok(DaemonStart::Restarted)
         }
         None => {
@@ -691,25 +674,9 @@ fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DaemonIdentity {
-    version: String,
-    protocol: u32,
-}
-
-impl DaemonIdentity {
-    fn is_current(&self) -> bool {
-        self.version == env!("CARGO_PKG_VERSION") && self.protocol == DAEMON_PROTOCOL_VERSION
-    }
-
-    fn label(&self) -> String {
-        format!("{} (protocol {})", self.version, self.protocol)
-    }
-}
-
-fn running_daemon_identity(session: &str, socket: &str) -> anyhow::Result<Option<DaemonIdentity>> {
+fn running_daemon_identity(session: &str, socket: &str) -> anyhow::Result<Option<String>> {
     match ipc::send(socket, &Request::Status) {
-        Ok(status) => Ok(Some(daemon_identity(&status))),
+        Ok(status) => Ok(Some(daemon_version(&status))),
         Err(error) if ipc::is_running(socket) => anyhow::bail!(
             "could not verify the daemon for session '{session}': {error}; run \
              `tui-test --session {session} close`, then retry"
@@ -718,22 +685,14 @@ fn running_daemon_identity(session: &str, socket: &str) -> anyhow::Result<Option
     }
 }
 
-fn daemon_identity(status: &Response) -> DaemonIdentity {
-    let version = status
+fn daemon_version(status: &Response) -> String {
+    status
         .data
         .as_ref()
         .and_then(|data| data.get("version"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or("unknown")
-        .to_string();
-    let protocol = status
-        .data
-        .as_ref()
-        .and_then(|data| data.get("protocol_version"))
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
-        .unwrap_or(0);
-    DaemonIdentity { version, protocol }
+        .to_string()
 }
 
 fn report_existing_daemon(session: &str, verbose: bool) {
@@ -1314,22 +1273,8 @@ mod tests {
     }
 
     #[test]
-    fn wait_text_defaults_to_all_matches_and_supports_styles_and_not() {
-        let cli = Cli::try_parse_from([
-            "tui-test", "wait", "text", "Saving", "--fg", "yellow", "--not",
-        ])
-        .unwrap();
-        let Request::WaitLocator { query, not, .. } =
-            build_request(cli.command.expect("command")).unwrap()
-        else {
-            panic!("expected wait locator request");
-        };
-        let LocatorSelector::Text(selector) = &query.selector else {
-            panic!("expected text locator");
-        };
-        assert_eq!(selector.occurrence, MatchOccurrence::Any);
-        assert_eq!(query.style.foreground.as_deref(), Some("yellow"));
-        assert!(not);
+    fn removed_wait_text_command_is_rejected() {
+        assert!(Cli::try_parse_from(["tui-test", "wait", "text", "Saving"]).is_err());
     }
 
     #[test]
@@ -1365,26 +1310,14 @@ mod tests {
     }
 
     #[test]
-    fn daemon_identity_rejects_stale_or_unversioned_protocols() {
-        let current = Response::with(json!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "protocol_version": DAEMON_PROTOCOL_VERSION,
-        }));
-        assert!(daemon_identity(&current).is_current());
-
-        let stale = Response::with(json!({
-            "version": "0.0.0-old",
-            "protocol_version": DAEMON_PROTOCOL_VERSION,
-        }));
-        assert!(!daemon_identity(&stale).is_current());
-
-        let legacy_same_version = Response::with(json!({ "version": env!("CARGO_PKG_VERSION") }));
-        assert!(!daemon_identity(&legacy_same_version).is_current());
-        assert_eq!(daemon_identity(&legacy_same_version).protocol, 0);
-
-        let unversioned = daemon_identity(&Response::with(json!({})));
-        assert_eq!(unversioned.version, "unknown");
-        assert_eq!(unversioned.protocol, 0);
+    fn daemon_identity_uses_package_version() {
+        assert_eq!(
+            daemon_version(&Response::with(
+                json!({ "version": env!("CARGO_PKG_VERSION") })
+            )),
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(daemon_version(&Response::with(json!({}))), "unknown");
     }
 
     #[test]

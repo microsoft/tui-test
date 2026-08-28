@@ -4,8 +4,8 @@
 use regex::Regex;
 
 use crate::api::{
-    LocatorQuery, LocatorSelector, MatchOccurrence, StyleSelector, TextAnchor, TextMatch,
-    TextPosition, TextSelector, TextSpan, TextStyle, WhitespaceMode,
+    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, StyleSelector, TextAnchor,
+    TextMatch, TextPosition, TextSelector, TextSpan, TextStyle, WhitespaceMode,
 };
 
 use super::cell::EmuCell;
@@ -95,16 +95,17 @@ where
 {
     let allowed = match query.within.as_deref() {
         Some(parent) => {
-            let parents = locate_query(rows, parent, style_matches)?;
+            let mut parents = locate_query(rows, parent, style_matches)?;
             if parents.is_empty() {
                 return Ok(Vec::new());
             }
-            Some(
-                parents
-                    .into_iter()
-                    .map(|matched| (matched.source_start, matched.source_end))
-                    .collect::<Vec<_>>(),
-            )
+            parents.sort_by_key(|matched| matched.source_start);
+            let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+            Some(relative_regions(
+                &parents,
+                query.direction,
+                width.saturating_mul(rows.len()),
+            ))
         }
         None => None,
     };
@@ -141,6 +142,36 @@ where
         });
     }
     select_items(matches, &occurrence, &query.selector.description())
+}
+
+fn relative_regions(
+    parents: &[LocatedMatch],
+    direction: LocatorDirection,
+    source_len: usize,
+) -> Vec<(usize, usize)> {
+    parents
+        .iter()
+        .enumerate()
+        .filter_map(|(index, parent)| {
+            let range = match direction {
+                LocatorDirection::Within => (parent.source_start, parent.source_end),
+                LocatorDirection::After => (
+                    parent.source_end,
+                    parents
+                        .get(index + 1)
+                        .map_or(source_len, |next| next.source_start),
+                ),
+                LocatorDirection::Before => (
+                    index
+                        .checked_sub(1)
+                        .and_then(|previous| parents.get(previous))
+                        .map_or(0, |previous| previous.source_end),
+                    parent.source_start,
+                ),
+            };
+            (range.0 <= range.1).then_some(range)
+        })
+        .collect()
 }
 
 fn locate_text_within(
@@ -246,7 +277,7 @@ fn source_range(flat: &FlatGrid, (start, end): (usize, usize)) -> Option<(usize,
     ))
 }
 
-/// Compatibility helper for the simple text waits and mouse text lookup.
+/// Resolve the simple lookup used by coordinate-based mouse input.
 pub fn find(
     rows: &[Vec<EmuCell>],
     pattern: &Pattern,
@@ -550,6 +581,7 @@ mod tests {
         let child = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("Save")),
             within: Some(Box::new(LocatorQuery::text(parent))),
+            direction: LocatorDirection::Within,
             style: Default::default(),
         };
 
@@ -567,6 +599,7 @@ mod tests {
         let child = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("Save")),
             within: Some(Box::new(LocatorQuery::text(parent))),
+            direction: LocatorDirection::Within,
             style: Default::default(),
         };
 
@@ -581,11 +614,13 @@ mod tests {
         let middle = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("[Save]")),
             within: Some(Box::new(LocatorQuery::text(outer))),
+            direction: LocatorDirection::Within,
             style: Default::default(),
         };
         let inner = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("Save")),
             within: Some(Box::new(middle)),
+            direction: LocatorDirection::Within,
             style: Default::default(),
         };
 
@@ -602,6 +637,7 @@ mod tests {
         let query = |child| LocatorQuery {
             selector: LocatorSelector::Text(child),
             within: Some(Box::new(LocatorQuery::text(parent.clone()))),
+            direction: LocatorDirection::Within,
             style: Default::default(),
         };
         assert_eq!(
@@ -626,6 +662,88 @@ mod tests {
     }
 
     #[test]
+    fn relative_directions_segment_multiple_parent_matches() {
+        let rows = grid(&["Section One", "Save 1", "Section Two", "Save 2"]);
+        let query = |parent, text, direction, occurrence| LocatorQuery {
+            selector: LocatorSelector::Text(TextSelector {
+                occurrence,
+                ..TextSelector::new(text)
+            }),
+            within: Some(Box::new(LocatorQuery::text(parent))),
+            direction,
+            style: Default::default(),
+        };
+
+        let after = locate_query_text(
+            &rows,
+            &query(
+                "Section",
+                "Save",
+                LocatorDirection::After,
+                MatchOccurrence::Any,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            after
+                .iter()
+                .map(|matched| matched.value.start.row)
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+
+        let before = locate_query_text(
+            &rows,
+            &query(
+                "Save",
+                "Section",
+                LocatorDirection::Before,
+                MatchOccurrence::Any,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            before
+                .iter()
+                .map(|matched| matched.value.start.row)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+
+        let second = locate_query_text(
+            &rows,
+            &query(
+                "Section",
+                "Save",
+                LocatorDirection::After,
+                MatchOccurrence::Nth(1),
+            ),
+        )
+        .unwrap();
+        assert_eq!(second[0].value.start.row, 3);
+    }
+
+    #[test]
+    fn relative_text_search_can_follow_a_style_locator() {
+        let mut rows = grid(&["RED status OK"]);
+        for cell in &mut rows[0][..3] {
+            cell.attrs.insert(Attrs::BOLD);
+        }
+        let query = LocatorQuery {
+            selector: LocatorSelector::Text(TextSelector::new("OK")),
+            within: Some(Box::new(LocatorQuery::style(TextStyle {
+                bold: Some(true),
+                ..TextStyle::default()
+            }))),
+            direction: LocatorDirection::After,
+            style: Default::default(),
+        };
+
+        let found = locate_query_text(&rows, &query).unwrap();
+        assert_eq!(found[0].value.start, TextPosition { row: 0, column: 11 });
+    }
+
+    #[test]
     fn child_matches_cannot_span_separate_parent_regions() {
         let rows = grid(&["ab  ", "  ab"]);
         let parent = TextSelector::new("ab");
@@ -634,6 +752,7 @@ mod tests {
         let query = LocatorQuery {
             selector: LocatorSelector::Text(child),
             within: Some(Box::new(LocatorQuery::text(parent))),
+            direction: LocatorDirection::Within,
             style: Default::default(),
         };
         assert!(locate_query_text(&rows, &query).unwrap().is_empty());
@@ -653,6 +772,7 @@ mod tests {
         let styled_text = LocatorQuery {
             selector: LocatorSelector::Text(TextSelector::new("OL")),
             within: Some(Box::new(LocatorQuery::style(style.clone()))),
+            direction: LocatorDirection::Within,
             style: Default::default(),
         };
         let found = locate_query_text(&rows, &styled_text).unwrap();
@@ -661,6 +781,7 @@ mod tests {
         let text_style = LocatorQuery {
             selector: LocatorSelector::Style(style),
             within: Some(Box::new(LocatorQuery::text("BOLD"))),
+            direction: LocatorDirection::Within,
             style: Default::default(),
         };
         let found = locate_query_text(&rows, &text_style).unwrap();
@@ -684,6 +805,7 @@ mod tests {
                 ..StyleSelector::default()
             }),
             within: Some(Box::new(parent.clone())),
+            direction: LocatorDirection::Within,
             style: Default::default(),
         };
 
@@ -712,6 +834,7 @@ mod tests {
         let query = LocatorQuery {
             selector: LocatorSelector::Text(selector),
             within: None,
+            direction: LocatorDirection::Within,
             style: TextStyle {
                 bold: Some(true),
                 ..TextStyle::default()

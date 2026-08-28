@@ -156,6 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let hello = session.get_by_text("hello");
     hello.wait_with_timeout(Some(5_000))?;
+    hello.last().expect()?;
     hello.last().highlight()?;
     session.execute(Operation::ExpectExitCode {
         code: 0,
@@ -179,7 +180,8 @@ async def main():
     async with TuiTest() as su:
         await su.open()
         await su.submit("echo hello")
-        hello = await su.wait_text("hello")
+        hello = su.get_by_text("hello")
+        await hello.wait()
         await hello.last().highlight()
         await su.expect_exit_code(0)
 
@@ -197,7 +199,8 @@ import { TuiTest } from "@microsoft/tui-test";
 const su = new TuiTest();
 await su.open();
 await su.submit("echo hello");
-const hello = await su.waitText("hello");
+const hello = su.getByText("hello");
+await hello.wait();
 await hello.last().highlight();
 await su.expectExitCode(0);
 await su.close();
@@ -255,7 +258,7 @@ Waits and assertions use five timeout classes:
 
 | Class | Applies to | Default |
 | --- | --- | --- |
-| `text` | text find/wait/expect/click/highlight, title, and bell operations | 5000 ms |
+| `text` | text find/expect/click/highlight, locator waits, title, and bell operations | 5000 ms |
 | `idle` | `wait idle` | 5000 ms |
 | `command` | `wait command`, `expect exit-code` | 30000 ms |
 | `exit` | `wait exit` | 30000 ms |
@@ -368,7 +371,9 @@ and SVG screenshots until the terminal redraws.
 
 The Rust, Python, and JavaScript APIs expose chainable `get_by_text` /
 `getByText` and `get_by_style` / `getByStyle` locators. Each stage searches
-inside the dynamically resolved parent match.
+`within`, `after`, or `before` the dynamically resolved parent match. Rust
+uses `get_by_text_relative(..., LocatorDirection::After)`; Python and
+JavaScript pass `direction="after"` / `{ direction: "after" }`.
 
 #### PTY control
 
@@ -395,7 +400,7 @@ inside the dynamically resolved parent match.
 
 | Command                                                                         | Description                                |
 | ------------------------------------------------------------------------------- | ------------------------------------------ |
-| `expect text "T" [selector/style options] [--no-strict --not --timeout MS]` | Retry a text-and-style assertion.           |
+| `expect text "T" [selector/style options] [--not --timeout MS]` | Retry a text-and-style assertion.           |
 | `expect title "T" [--regex --not --timeout MS]`                                 | Window title set with OSC 0/2.             |
 | `expect exit-code N [--timeout MS]`                                             | Last command's exit code.                  |
 | `expect output "T" [--regex]`                                                   | Last command's captured output.            |

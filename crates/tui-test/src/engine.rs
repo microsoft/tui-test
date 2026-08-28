@@ -622,23 +622,6 @@ fn dispatch(
                 .signal(&name))?;
             Ok(OperationResult::Unit)
         }
-        Operation::WaitText {
-            text,
-            regex,
-            full,
-            timeout_ms,
-            not,
-        } => {
-            wait_text(
-                session,
-                &text,
-                regex,
-                full,
-                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
-                not,
-            )?;
-            Ok(OperationResult::Unit)
-        }
         Operation::WaitTitle {
             text,
             regex,
@@ -738,29 +721,6 @@ fn dispatch(
                 &query,
                 not,
                 &style,
-                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
-            )?;
-            Ok(OperationResult::Unit)
-        }
-        Operation::ExpectText {
-            text,
-            regex,
-            full,
-            strict,
-            not,
-            fg,
-            bg,
-            timeout_ms,
-        } => {
-            expect_text(
-                session,
-                &text,
-                regex,
-                full,
-                strict,
-                not,
-                fg,
-                bg,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?;
             Ok(OperationResult::Unit)
@@ -1022,15 +982,6 @@ fn poll_until<F: FnMut() -> bool>(mut predicate: F, timeout_ms: u64) -> bool {
     }
 }
 
-fn matches_now(
-    session: &TerminalSession,
-    pattern: &Pattern,
-    full: bool,
-    strict: bool,
-) -> anyhow::Result<bool> {
-    Ok(locator::find(&grid(session, full), pattern, strict)?.is_some())
-}
-
 fn session_stopped(session: &TerminalSession) -> bool {
     session.cancelled.load(std::sync::atomic::Ordering::Acquire)
         || session
@@ -1039,41 +990,6 @@ fn session_stopped(session: &TerminalSession) -> bool {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .exited
             .is_some()
-}
-
-fn wait_text(
-    session: &TerminalSession,
-    text: &str,
-    regex: bool,
-    full: bool,
-    timeout_ms: u64,
-    not: bool,
-) -> Result<(), TuiTestError> {
-    let pattern = Pattern::new(text, regex)
-        .map_err(|error| TuiTestError::usage(format!("invalid regex: {error}")))?;
-    let mut matched = false;
-    poll_until(
-        || {
-            matched = matches_now(session, &pattern, full, false).unwrap_or(false) != not;
-            matched || session_stopped(session)
-        },
-        timeout_ms,
-    );
-    if matched {
-        Ok(())
-    } else if session_stopped(session) {
-        Err(TuiTestError::assertion(format!(
-            "session exited before '{}' became {}",
-            pattern.describe(),
-            if not { "hidden" } else { "visible" }
-        )))
-    } else {
-        Err(TuiTestError::assertion(timeout_message(
-            &pattern.describe(),
-            timeout_ms,
-            not,
-        )))
-    }
 }
 
 /// The window title the terminal is currently reporting.
@@ -1324,104 +1240,12 @@ fn wait_bell(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestEr
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn expect_text(
-    session: &TerminalSession,
-    text: &str,
-    regex: bool,
-    full: bool,
-    strict: bool,
-    not: bool,
-    fg: Option<String>,
-    bg: Option<String>,
-    timeout_ms: u64,
-) -> Result<(), TuiTestError> {
-    let pattern = Pattern::new(text, regex)
-        .map_err(|error| TuiTestError::usage(format!("invalid regex: {error}")))?;
-
-    for spec in [&fg, &bg].into_iter().flatten() {
-        Expected::parse(spec).map_err(|error| TuiTestError::usage(error.to_string()))?;
-    }
-
-    if fg.is_none() && bg.is_none() && not {
-        let mut gone = false;
-        poll_until(
-            || {
-                gone = !matches_now(session, &pattern, full, false).unwrap_or(true);
-                gone || session_stopped(session)
-            },
-            timeout_ms,
-        );
-        return if gone {
-            Ok(())
-        } else if session_stopped(session) {
-            Err(TuiTestError::assertion(format!(
-                "session exited before '{}' became hidden",
-                pattern.describe()
-            )))
-        } else {
-            Err(TuiTestError::assertion(timeout_message(
-                &pattern.describe(),
-                timeout_ms,
-                true,
-            )))
-        };
-    }
-
-    let mut last_error = None;
-    let mut matched = false;
-    poll_until(
-        || {
-            matched = match locator::find(&grid(session, full), &pattern, strict) {
-                Ok(Some(cells)) if !cells.is_empty() => {
-                    if let Some(error) = check_colors(
-                        &cells,
-                        &fg,
-                        &bg,
-                        not,
-                        session
-                            .state
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .emu
-                            .as_ref(),
-                    ) {
-                        last_error = Some(error);
-                        false
-                    } else {
-                        true
-                    }
-                }
-                Ok(_) => false,
-                Err(error) => {
-                    last_error = Some(error.to_string());
-                    false
-                }
-            };
-            matched || session_stopped(session)
-        },
-        timeout_ms,
-    );
-
-    if matched {
-        Ok(())
-    } else if let Some(error) = last_error {
-        Err(TuiTestError::assertion(error))
-    } else if session_stopped(session) {
-        Err(TuiTestError::assertion(format!(
-            "session exited before '{}' matched",
-            pattern.describe()
-        )))
-    } else {
-        Err(TuiTestError::assertion(timeout_message(
-            &pattern.describe(),
-            timeout_ms,
-            false,
-        )))
-    }
-}
-
 fn validate_locator_query(query: &LocatorQuery) -> Result<(), TuiTestError> {
+    if query.within.is_none() && query.direction != crate::api::LocatorDirection::Within {
+        return Err(TuiTestError::usage(
+            "locator direction requires a preceding locator",
+        ));
+    }
     match &query.selector {
         LocatorSelector::Text(selector) => validate_selector(selector)?,
         LocatorSelector::Style(selector) => {
@@ -1976,49 +1800,6 @@ fn check_style_with_emulator(
     None
 }
 
-fn check_colors(
-    cells: &[locator::MatchedCell],
-    fg: &Option<String>,
-    bg: &Option<String>,
-    not: bool,
-    colors: &dyn crate::terminal::emu::Emulator,
-) -> Option<String> {
-    let want = !not;
-    if let Some(spec) = fg {
-        let expected = Expected::parse(spec).ok()?;
-        for cell in cells {
-            if color::matches(cell.cell.fg, &expected, colors, true) != want {
-                return Some(format!(
-                    "expected fg {} {}, found {} in cell '{}' at {},{}",
-                    if not { "absent" } else { "present" },
-                    expected.describe(),
-                    color::describe_cell(cell.cell.fg, &expected, colors, true),
-                    cell.cell.ch,
-                    cell.x,
-                    cell.y
-                ));
-            }
-        }
-    }
-    if let Some(spec) = bg {
-        let expected = Expected::parse(spec).ok()?;
-        for cell in cells {
-            if color::matches(cell.cell.bg, &expected, colors, false) != want {
-                return Some(format!(
-                    "expected bg {} {}, found {} in cell '{}' at {},{}",
-                    if not { "absent" } else { "present" },
-                    expected.describe(),
-                    color::describe_cell(cell.cell.bg, &expected, colors, false),
-                    cell.cell.ch,
-                    cell.x,
-                    cell.y
-                ));
-            }
-        }
-    }
-    None
-}
-
 fn expect_exit_code(
     session: &TerminalSession,
     code: i32,
@@ -2473,6 +2254,7 @@ mod tests {
         let query = LocatorQuery {
             selector: LocatorSelector::Text(selector),
             within: Some(Box::new(LocatorQuery::text(parent))),
+            direction: crate::api::LocatorDirection::Within,
             style: Default::default(),
         };
         let candidates = locator::locate_query(&rows, &query, &mut |_, _| false).unwrap();

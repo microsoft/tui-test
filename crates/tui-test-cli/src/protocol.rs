@@ -8,10 +8,6 @@ use tui_test::{
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
-/// Bump when a client and same-package-version daemon can no longer exchange
-/// every request and response.
-pub const DAEMON_PROTOCOL_VERSION: u32 = 2;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Request {
@@ -77,14 +73,6 @@ pub enum Request {
     Signal {
         name: String,
     },
-    WaitText {
-        text: String,
-        regex: bool,
-        full: bool,
-        #[serde(default)]
-        timeout_ms: Option<u64>,
-        not: bool,
-    },
     WaitTitle {
         text: String,
         regex: bool,
@@ -112,25 +100,8 @@ pub enum Request {
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
-    ExpectText {
-        text: String,
-        regex: bool,
-        full: bool,
-        strict: bool,
-        not: bool,
-        fg: Option<String>,
-        bg: Option<String>,
-        #[serde(default)]
-        timeout_ms: Option<u64>,
-    },
     FindLocator {
         query: LocatorQuery,
-    },
-    WaitLocator {
-        query: LocatorQuery,
-        not: bool,
-        #[serde(default)]
-        timeout_ms: Option<u64>,
     },
     ClickLocator {
         query: LocatorQuery,
@@ -285,19 +256,6 @@ impl Request {
             Request::Mouse { action } => Ok(Operation::Mouse { action }),
             Request::Resize { cols, rows } => Ok(Operation::Resize { cols, rows }),
             Request::Signal { name } => Ok(Operation::Signal { name }),
-            Request::WaitText {
-                text,
-                regex,
-                full,
-                timeout_ms,
-                not,
-            } => Ok(Operation::WaitText {
-                text,
-                regex,
-                full,
-                timeout_ms,
-                not,
-            }),
             Request::WaitTitle {
                 text,
                 regex,
@@ -315,15 +273,6 @@ impl Request {
             Request::WaitReady { timeout_ms } => Ok(Operation::WaitReady { timeout_ms }),
             Request::WaitBell { timeout_ms } => Ok(Operation::WaitBell { timeout_ms }),
             Request::FindLocator { query } => Ok(Operation::FindLocator { query }),
-            Request::WaitLocator {
-                query,
-                not,
-                timeout_ms,
-            } => Ok(Operation::WaitLocator {
-                query,
-                not,
-                timeout_ms,
-            }),
             Request::ClickLocator {
                 query,
                 button,
@@ -338,25 +287,6 @@ impl Request {
             Request::HighlightLocator { query, timeout_ms } => {
                 Ok(Operation::HighlightLocator { query, timeout_ms })
             }
-            Request::ExpectText {
-                text,
-                regex,
-                full,
-                strict,
-                not,
-                fg,
-                bg,
-                timeout_ms,
-            } => Ok(Operation::ExpectText {
-                text,
-                regex,
-                full,
-                strict,
-                not,
-                fg,
-                bg,
-                timeout_ms,
-            }),
             Request::ExpectLocator {
                 query,
                 not,
