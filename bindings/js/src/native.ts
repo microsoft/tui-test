@@ -5,7 +5,8 @@ import type {
   Cell,
   Cursor,
   EffectiveTimeouts,
-  ExpectTextOptions,
+  LocatorStage,
+  LocatorStyle,
   MouseClickOptions,
   OpenOptions,
   OpenResult,
@@ -16,9 +17,9 @@ import type {
   Size,
   SnapshotOptions,
   State,
+  TextMatch,
   Timeouts,
   TitleOptions,
-  WaitTextOptions,
 } from "../native/index.js";
 
 type NativeBinding = typeof import("../native/index.js");
@@ -31,6 +32,11 @@ type RuntimeRunOptions = Omit<RunOptions, "backend"> & { backend?: string };
 type RuntimeRecordingOptions = Omit<RecordingOptions, "format"> & {
   format?: "apng" | "gif" | "mp4" | "cast";
 };
+export type RuntimeLocatorStage = Omit<LocatorStage, "kind" | "direction"> & {
+  kind: "text" | "style";
+  direction?: "within" | "after" | "before";
+};
+export type RuntimeLocatorStyle = LocatorStyle;
 
 const ERROR_PREFIX = "__tui_test_native_error__:";
 const USAGE_NAPI_CODES = new Set([
@@ -175,6 +181,52 @@ export class NativeRuntime {
     return this.#call((session) => session.text(full));
   }
 
+  findLocator(stages: RuntimeLocatorStage[]): Promise<TextMatch[]> {
+    return this.#call((session) =>
+      session.findLocator(stages as LocatorStage[]),
+    );
+  }
+
+  waitLocator(
+    stages: RuntimeLocatorStage[],
+    not = false,
+    timeoutMs?: number,
+  ): Promise<void> {
+    return this.#call((session) =>
+      session.waitLocator(stages as LocatorStage[], not, timeoutMs),
+    );
+  }
+
+  clickLocator(
+    stages: RuntimeLocatorStage[],
+    button = 0,
+    clicks = 1,
+    timeoutMs?: number,
+  ): Promise<void> {
+    return this.#call((session) =>
+      session.clickLocator(stages as LocatorStage[], button, clicks, timeoutMs),
+    );
+  }
+
+  highlightLocator(
+    stages: RuntimeLocatorStage[],
+    timeoutMs?: number,
+  ): Promise<TextMatch[]> {
+    return this.#call((session) =>
+      session.highlightLocator(stages as LocatorStage[], timeoutMs),
+    );
+  }
+
+  expectLocator(
+    stages: RuntimeLocatorStage[],
+    not = false,
+    timeoutMs?: number,
+  ): Promise<void> {
+    return this.#call((session) =>
+      session.expectLocator(stages as LocatorStage[], not, timeoutMs),
+    );
+  }
+
   /**
    * Private packed snapshot. The detached Uint8Array is read-only by contract
    * and contains newline-delimited full logical rows, including trailing spaces
@@ -291,10 +343,6 @@ export class NativeRuntime {
     return this.#call((session) => session.signal(name));
   }
 
-  waitText(text: string, options?: WaitTextOptions): Promise<void> {
-    return this.#call((session) => session.waitText(text, options));
-  }
-
   waitTitle(text: string, options?: TitleOptions): Promise<void> {
     return this.#call((session) => session.waitTitle(text, options));
   }
@@ -321,10 +369,6 @@ export class NativeRuntime {
 
   expectTitle(text: string, options?: TitleOptions): Promise<void> {
     return this.#call((session) => session.expectTitle(text, options));
-  }
-
-  expectText(text: string, options?: ExpectTextOptions): Promise<void> {
-    return this.#call((session) => session.expectText(text, options));
   }
 
   expectExitCode(code: number, timeoutMs?: number): Promise<void> {
@@ -379,7 +423,6 @@ export type {
   Cell as NativeCell,
   Cursor as NativeCursor,
   EffectiveTimeouts as NativeEffectiveTimeouts,
-  ExpectTextOptions as NativeExpectTextOptions,
   MouseClickOptions as NativeMouseClickOptions,
   OpenOptions as NativeOpenOptions,
   OpenResult as NativeOpenResult,
@@ -390,6 +433,6 @@ export type {
   Size as NativeSize,
   SnapshotOptions as NativeSnapshotOptions,
   State as NativeState,
+  TextMatch as NativeTextMatch,
   Timeouts as NativeTimeouts,
-  WaitTextOptions as NativeWaitTextOptions,
 };

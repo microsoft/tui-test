@@ -137,6 +137,206 @@ pub enum KeyAction {
     Up,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WhitespaceMode {
+    #[default]
+    Exact,
+    Normalize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchOccurrence {
+    Any,
+    #[default]
+    Unique,
+    First,
+    Last,
+    Nth(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextAnchor {
+    pub text: String,
+    #[serde(default)]
+    pub regex: bool,
+    #[serde(default)]
+    pub occurrence: MatchOccurrence,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextScope {
+    pub after: Option<TextAnchor>,
+    pub before: Option<TextAnchor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextSelector {
+    pub text: String,
+    pub regex: bool,
+    pub full: bool,
+    pub whitespace: WhitespaceMode,
+    pub scope: TextScope,
+}
+
+impl Default for TextSelector {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            regex: false,
+            full: false,
+            whitespace: WhitespaceMode::Exact,
+            scope: TextScope::default(),
+        }
+    }
+}
+
+impl TextSelector {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            ..Self::default()
+        }
+    }
+}
+
+impl From<&str> for TextSelector {
+    fn from(text: &str) -> Self {
+        Self::new(text)
+    }
+}
+
+impl From<String> for TextSelector {
+    fn from(text: String) -> Self {
+        Self::new(text)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextStyle {
+    pub foreground: Option<String>,
+    pub background: Option<String>,
+    pub bold: Option<bool>,
+    pub dim: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline_style: Option<String>,
+    pub underline_color: Option<String>,
+    pub inverse: Option<bool>,
+    pub hidden: Option<bool>,
+    pub strikethrough: Option<bool>,
+    pub blink: Option<bool>,
+}
+
+impl TextStyle {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+/// Select contiguous per-row runs whose cells match every requested style.
+pub struct StyleSelector {
+    pub style: TextStyle,
+    pub full: bool,
+}
+
+impl From<TextStyle> for StyleSelector {
+    fn from(style: TextStyle) -> Self {
+        Self {
+            style,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "selector", rename_all = "snake_case")]
+pub enum LocatorSelector {
+    Text(TextSelector),
+    Style(StyleSelector),
+}
+
+impl LocatorSelector {
+    pub fn full(&self) -> bool {
+        match self {
+            Self::Text(selector) => selector.full,
+            Self::Style(selector) => selector.full,
+        }
+    }
+
+    pub fn description(&self) -> String {
+        match self {
+            Self::Text(selector) => selector.text.clone(),
+            Self::Style(_) => "style".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocatorDirection {
+    /// Search inside each selected parent match.
+    #[default]
+    Within,
+    /// Search after each parent, stopping at the next selected parent.
+    After,
+    /// Search before each parent, starting after the previous selected parent.
+    Before,
+}
+
+fn default_locator_occurrence() -> MatchOccurrence {
+    MatchOccurrence::Any
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A lazy locator stage and the parent query that defines its search region.
+pub struct LocatorQuery {
+    pub selector: LocatorSelector,
+    #[serde(default = "default_locator_occurrence")]
+    pub occurrence: MatchOccurrence,
+    #[serde(default)]
+    pub within: Option<Box<LocatorQuery>>,
+    #[serde(default)]
+    pub direction: LocatorDirection,
+    #[serde(default)]
+    pub style: TextStyle,
+}
+
+impl LocatorQuery {
+    pub fn text(selector: impl Into<TextSelector>) -> Self {
+        Self {
+            selector: LocatorSelector::Text(selector.into()),
+            occurrence: MatchOccurrence::Any,
+            within: None,
+            direction: LocatorDirection::Within,
+            style: TextStyle::default(),
+        }
+    }
+
+    pub fn style(selector: impl Into<StyleSelector>) -> Self {
+        Self {
+            selector: LocatorSelector::Style(selector.into()),
+            occurrence: MatchOccurrence::Any,
+            within: None,
+            direction: LocatorDirection::Within,
+            style: TextStyle::default(),
+        }
+    }
+
+    pub fn uses_full_grid(&self) -> bool {
+        self.selector.full()
+            || self
+                .within
+                .as_deref()
+                .is_some_and(LocatorQuery::uses_full_grid)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Operation {
     Open(OpenOptions),
@@ -184,13 +384,6 @@ pub enum Operation {
     Signal {
         name: String,
     },
-    WaitText {
-        text: String,
-        regex: bool,
-        full: bool,
-        timeout_ms: Option<u64>,
-        not: bool,
-    },
     WaitTitle {
         text: String,
         regex: bool,
@@ -212,14 +405,22 @@ pub enum Operation {
     WaitBell {
         timeout_ms: Option<u64>,
     },
-    ExpectText {
-        text: String,
-        regex: bool,
-        full: bool,
-        strict: bool,
+    FindLocator {
+        query: LocatorQuery,
+    },
+    WaitLocator {
+        query: LocatorQuery,
         not: bool,
-        fg: Option<String>,
-        bg: Option<String>,
+        timeout_ms: Option<u64>,
+    },
+    ClickLocator {
+        query: LocatorQuery,
+        button: u8,
+        clicks: u8,
+        timeout_ms: Option<u64>,
+    },
+    HighlightLocator {
+        query: LocatorQuery,
         timeout_ms: Option<u64>,
     },
     ExpectTitle {
@@ -271,6 +472,7 @@ pub enum OperationResult {
     Text(String),
     PackedScreen(PackedScreen),
     Cells(Vec<Cell>),
+    Matches(Vec<TextMatch>),
     Command(Option<String>),
     Output(Option<String>),
     ExitCode(Option<i32>),
@@ -380,6 +582,29 @@ pub struct Size {
 pub struct BellEvent {
     pub sequence: u64,
     pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TextPosition {
+    pub row: u32,
+    pub column: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TextSpan {
+    pub row: u32,
+    pub start: u16,
+    pub end: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TextMatch {
+    pub text: String,
+    pub start: TextPosition,
+    /// Exclusive end position.
+    pub end: TextPosition,
+    /// Per-row column ranges with exclusive ends.
+    pub spans: Vec<TextSpan>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -598,5 +823,30 @@ mod tests {
         for zoom in [0.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
             assert!(resolve_zoom(Some(zoom)).is_err());
         }
+    }
+
+    #[test]
+    fn nested_selectors_use_full_grid_when_any_stage_requests_it() {
+        let mut parent = TextSelector::new("parent");
+        parent.full = true;
+        let child = LocatorQuery {
+            selector: LocatorSelector::Text(TextSelector::new("child")),
+            occurrence: MatchOccurrence::Any,
+            within: Some(Box::new(LocatorQuery::text(parent))),
+            direction: LocatorDirection::Within,
+            style: Default::default(),
+        };
+        assert!(child.uses_full_grid());
+
+        let mut full_child = TextSelector::new("child");
+        full_child.full = true;
+        let query = LocatorQuery {
+            selector: LocatorSelector::Text(full_child),
+            occurrence: MatchOccurrence::Any,
+            within: Some(Box::new(LocatorQuery::text("parent"))),
+            direction: LocatorDirection::Within,
+            style: Default::default(),
+        };
+        assert!(query.uses_full_grid());
     }
 }

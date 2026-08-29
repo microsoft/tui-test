@@ -8,6 +8,11 @@ export declare class NativeSession {
   close(): Promise<void>
   state(): Promise<State>
   text(full?: boolean | undefined | null): Promise<string>
+  findLocator(stages: Array<LocatorStage>): Promise<Array<TextMatch>>
+  waitLocator(stages: Array<LocatorStage>, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  clickLocator(stages: Array<LocatorStage>, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  highlightLocator(stages: Array<LocatorStage>, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
+  expectLocator(stages: Array<LocatorStage>, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
   packedScreen(full?: boolean | undefined | null): Promise<PackedScreen>
   cells(x: number, y: number, w?: number | undefined | null, h?: number | undefined | null): Promise<Array<Cell>>
   getCommand(): Promise<string | null>
@@ -36,13 +41,11 @@ export declare class NativeSession {
   getTitle(): Promise<string | null>
   waitTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
   expectTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
-  waitText(text: string, options?: WaitTextOptions | undefined | null): Promise<void>
   waitIdle(timeoutMs?: number | undefined | null): Promise<void>
   waitCommand(timeoutMs?: number | undefined | null): Promise<void>
   waitExit(timeoutMs?: number | undefined | null): Promise<void>
   waitReady(timeoutMs?: number | undefined | null): Promise<void>
   waitBell(timeoutMs?: number | undefined | null): Promise<void>
-  expectText(text: string, options?: ExpectTextOptions | undefined | null): Promise<void>
   expectExitCode(code: number, timeoutMs?: number | undefined | null): Promise<void>
   expectOutput(text: string, regex?: boolean | undefined | null): Promise<void>
   expectBellCount(count: number, timeoutMs?: number | undefined | null): Promise<void>
@@ -108,14 +111,41 @@ export interface EffectiveTimeouts {
   ready: number
 }
 
-export interface ExpectTextOptions {
+export interface LocatorStage {
+  kind: LocatorStageKind
+  direction?: LocatorStageDirection
+  text?: string
   regex?: boolean
   full?: boolean
-  strict?: boolean
-  not?: boolean
-  fg?: string
-  bg?: string
-  timeoutMs?: number
+  whitespace?: string
+  occurrence?: string
+  nth?: number
+  style?: LocatorStyle
+}
+
+export declare const enum LocatorStageDirection {
+  Within = 'within',
+  After = 'after',
+  Before = 'before'
+}
+
+export declare const enum LocatorStageKind {
+  Text = 'text',
+  Style = 'style'
+}
+
+export interface LocatorStyle {
+  foreground?: string
+  background?: string
+  bold?: boolean
+  dim?: boolean
+  italic?: boolean
+  underlineStyle?: string
+  underlineColor?: string
+  inverse?: boolean
+  hidden?: boolean
+  strikethrough?: boolean
+  blink?: boolean
 }
 
 export interface MouseClickOptions {
@@ -250,6 +280,24 @@ export interface State {
   text: string
 }
 
+export interface TextMatch {
+  text: string
+  start: TextPosition
+  end: TextPosition
+  spans: Array<TextSpan>
+}
+
+export interface TextPosition {
+  row: number
+  column: number
+}
+
+export interface TextSpan {
+  row: number
+  start: number
+  end: number
+}
+
 export interface Timeouts {
   text?: number
   idle?: number
@@ -271,11 +319,4 @@ export declare const enum UnderlineStyle {
   Curly = 'curly',
   Dotted = 'dotted',
   Dashed = 'dashed'
-}
-
-export interface WaitTextOptions {
-  regex?: boolean
-  full?: boolean
-  not?: boolean
-  timeoutMs?: number
 }

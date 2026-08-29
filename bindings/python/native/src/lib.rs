@@ -10,9 +10,10 @@ use tui_test::shell::Shell;
 use tui_test::{
     AutomaticRecording as CoreAutomaticRecording,
     AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend, BellEvent, Cell, CellColor,
-    Cursor, ErrorKind, KeyAction, MouseAction, OpenOptions, OpenResult, Operation, OperationResult,
-    PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size, SnapshotResult, State,
-    Timeouts, TuiTestError,
+    Cursor, ErrorKind, KeyAction, LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence,
+    MouseAction, OpenOptions, OpenResult, Operation, OperationResult, PackedScreen,
+    RecordingFormat, RunOptions, ScreenshotResult, Size, SnapshotResult, State, StyleSelector,
+    TextMatch, TextSelector, TextStyle, Timeouts, TuiTestError, WhitespaceMode,
 };
 
 pyo3::create_exception!(
@@ -256,6 +257,130 @@ impl NativeSession {
             py,
             move || execute_text(&name, Operation::Text { full }),
             string_to_py,
+        )
+    }
+
+    fn find_locator<'py>(
+        &self,
+        py: Python<'py>,
+        stages: Vec<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query = capture_locator_query(&stages);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || execute_matches(&name, Operation::FindLocator { query: query? }),
+            matches_to_py,
+        )
+    }
+
+    #[pyo3(signature = (stages, not_, timeout_ms))]
+    fn wait_locator<'py>(
+        &self,
+        py: Python<'py>,
+        stages: Vec<Bound<'py, PyAny>>,
+        not_: bool,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query = capture_locator_query(&stages);
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::WaitLocator {
+                        query: query?,
+                        not: not_,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    #[pyo3(signature = (stages, button, clicks, timeout_ms))]
+    fn click_locator<'py>(
+        &self,
+        py: Python<'py>,
+        stages: Vec<Bound<'py, PyAny>>,
+        button: Bound<'py, PyAny>,
+        clicks: Bound<'py, PyAny>,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query = capture_locator_query(&stages);
+        let button = capture_integer(&button);
+        let clicks = capture_integer(&clicks);
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::ClickLocator {
+                        query: query?,
+                        button: integer_u8(&button, "button")?,
+                        clicks: integer_u8(&clicks, "clicks")?,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    #[pyo3(signature = (stages, timeout_ms))]
+    fn highlight_locator<'py>(
+        &self,
+        py: Python<'py>,
+        stages: Vec<Bound<'py, PyAny>>,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query = capture_locator_query(&stages);
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_matches(
+                    &name,
+                    Operation::HighlightLocator {
+                        query: query?,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            matches_to_py,
+        )
+    }
+
+    #[pyo3(signature = (stages, not_, timeout_ms))]
+    fn expect_locator<'py>(
+        &self,
+        py: Python<'py>,
+        stages: Vec<Bound<'py, PyAny>>,
+        not_: bool,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query = capture_locator_query(&stages);
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &name,
+                    Operation::WaitLocator {
+                        query: query?,
+                        not: not_,
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                )
+            },
+            unit_to_py,
         )
     }
 
@@ -704,36 +829,6 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (text, regex, full, not_, timeout_ms))]
-    fn wait_text<'py>(
-        &self,
-        py: Python<'py>,
-        text: String,
-        regex: bool,
-        full: bool,
-        not_: bool,
-        timeout_ms: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
-        future_blocking(
-            py,
-            move || {
-                execute_unit(
-                    &name,
-                    Operation::WaitText {
-                        text,
-                        regex,
-                        full,
-                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
-                        not: not_,
-                    },
-                )
-            },
-            unit_to_py,
-        )
-    }
-
     #[pyo3(signature = (text, regex, not_, timeout_ms))]
     fn wait_title<'py>(
         &self,
@@ -892,43 +987,6 @@ impl NativeSession {
                         text,
                         regex,
                         not: not_,
-                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
-                    },
-                )
-            },
-            unit_to_py,
-        )
-    }
-
-    #[pyo3(signature = (text, regex, full, strict, not_, fg, bg, timeout_ms))]
-    #[allow(clippy::too_many_arguments)]
-    fn expect_text<'py>(
-        &self,
-        py: Python<'py>,
-        text: String,
-        regex: bool,
-        full: bool,
-        strict: bool,
-        not_: bool,
-        fg: Option<String>,
-        bg: Option<String>,
-        timeout_ms: Option<Bound<'py, PyAny>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
-        future_blocking(
-            py,
-            move || {
-                execute_unit(
-                    &name,
-                    Operation::ExpectText {
-                        text,
-                        regex,
-                        full,
-                        strict,
-                        not: not_,
-                        fg,
-                        bg,
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
                 )
@@ -1265,6 +1323,170 @@ fn optional_u64(value: Option<&IntegerInput>, name: &str) -> Result<Option<u64>,
     value.map(|value| integer_u64(value, name)).transpose()
 }
 
+fn py_item<'py>(
+    dict: &Bound<'py, PyDict>,
+    key: &str,
+) -> Result<Option<Bound<'py, PyAny>>, TuiTestError> {
+    dict.get_item(key)
+        .map_err(|error| TuiTestError::usage(error.to_string()))
+        .map(|value| value.filter(|value| !value.is_none()))
+}
+
+fn py_string(dict: &Bound<'_, PyDict>, key: &str) -> Result<Option<String>, TuiTestError> {
+    py_item(dict, key)?
+        .map(|value| {
+            value
+                .extract::<String>()
+                .map_err(|error| TuiTestError::usage(format!("{key}: {error}")))
+        })
+        .transpose()
+}
+
+fn py_bool(dict: &Bound<'_, PyDict>, key: &str) -> Result<Option<bool>, TuiTestError> {
+    py_item(dict, key)?
+        .map(|value| {
+            value
+                .extract::<bool>()
+                .map_err(|error| TuiTestError::usage(format!("{key}: {error}")))
+        })
+        .transpose()
+}
+
+fn py_usize(dict: &Bound<'_, PyDict>, key: &str) -> Result<Option<usize>, TuiTestError> {
+    py_item(dict, key)?
+        .map(|value| {
+            integer_u64(&capture_integer(&value), key).and_then(|value| {
+                usize::try_from(value)
+                    .map_err(|_| TuiTestError::usage(format!("{key} is too large")))
+            })
+        })
+        .transpose()
+}
+
+fn core_occurrence(
+    value: Option<String>,
+    nth: Option<usize>,
+    name: &str,
+) -> Result<MatchOccurrence, TuiTestError> {
+    if let Some(index) = nth {
+        if let Some(value) = value.as_deref().filter(|value| *value != "nth") {
+            return Err(TuiTestError::usage(format!(
+                "{name} cannot be used with occurrence '{value}'"
+            )));
+        }
+        return Ok(MatchOccurrence::Nth(index));
+    }
+    match value.as_deref() {
+        None | Some("any") => Ok(MatchOccurrence::Any),
+        Some("unique") => Ok(MatchOccurrence::Unique),
+        Some("first") => Ok(MatchOccurrence::First),
+        Some("last") => Ok(MatchOccurrence::Last),
+        Some("nth") => Err(TuiTestError::usage(format!("{name} requires an nth index"))),
+        Some(value) => Err(TuiTestError::usage(format!(
+            "{name} must be any, unique, first, last, or nth (got '{value}')"
+        ))),
+    }
+}
+
+fn core_style(dict: &Bound<'_, PyDict>) -> Result<TextStyle, TuiTestError> {
+    Ok(TextStyle {
+        foreground: py_string(dict, "foreground")?,
+        background: py_string(dict, "background")?,
+        bold: py_bool(dict, "bold")?,
+        dim: py_bool(dict, "dim")?,
+        italic: py_bool(dict, "italic")?,
+        underline_style: py_string(dict, "underline_style")?,
+        underline_color: py_string(dict, "underline_color")?,
+        inverse: py_bool(dict, "inverse")?,
+        hidden: py_bool(dict, "hidden")?,
+        strikethrough: py_bool(dict, "strikethrough")?,
+        blink: py_bool(dict, "blink")?,
+    })
+}
+
+fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, TuiTestError> {
+    let mut parent = None;
+    for (index, stage) in stages.iter().enumerate() {
+        let dict = stage
+            .cast::<PyDict>()
+            .map_err(|error| TuiTestError::usage(format!("stages[{index}]: {error}")))?;
+        let occurrence = core_occurrence(
+            py_string(dict, "occurrence")?,
+            py_usize(dict, "nth")?,
+            &format!("stages[{index}].nth"),
+        )?;
+        let direction = match py_string(dict, "direction")?.as_deref() {
+            None | Some("within") => LocatorDirection::Within,
+            Some("after") => LocatorDirection::After,
+            Some("before") => LocatorDirection::Before,
+            Some(value) => {
+                return Err(TuiTestError::usage(format!(
+                    "locator direction must be within, after, or before (got '{value}')"
+                )))
+            }
+        };
+        let selector = match py_string(dict, "kind")?.as_deref() {
+            Some("text") => {
+                if py_item(dict, "style")?.is_some() {
+                    return Err(TuiTestError::usage(
+                        "text locator stages do not accept style parameters",
+                    ));
+                }
+                let whitespace = match py_string(dict, "whitespace")?.as_deref() {
+                    None | Some("exact") => WhitespaceMode::Exact,
+                    Some("normalize") => WhitespaceMode::Normalize,
+                    Some(value) => {
+                        return Err(TuiTestError::usage(format!(
+                            "whitespace must be exact or normalize (got '{value}')"
+                        )))
+                    }
+                };
+                LocatorSelector::Text(TextSelector {
+                    text: py_string(dict, "text")?
+                        .ok_or_else(|| TuiTestError::usage("text locator stage requires text"))?,
+                    regex: py_bool(dict, "regex")?.unwrap_or(false),
+                    full: py_bool(dict, "full")?.unwrap_or(false),
+                    whitespace,
+                    scope: Default::default(),
+                })
+            }
+            Some("style") => {
+                if py_item(dict, "text")?.is_some()
+                    || py_bool(dict, "regex")?.unwrap_or(false)
+                    || py_item(dict, "whitespace")?.is_some()
+                {
+                    return Err(TuiTestError::usage(
+                        "style locator stages do not accept text parameters",
+                    ));
+                }
+                let style = py_item(dict, "style")?
+                    .ok_or_else(|| TuiTestError::usage("style locator stage requires style"))?;
+                let style = style
+                    .cast::<PyDict>()
+                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                LocatorSelector::Style(StyleSelector {
+                    style: core_style(style)?,
+                    full: py_bool(dict, "full")?.unwrap_or(false),
+                })
+            }
+            Some(value) => {
+                return Err(TuiTestError::usage(format!(
+                    "unknown locator stage kind '{value}'"
+                )))
+            }
+            None => return Err(TuiTestError::usage("locator stage requires kind")),
+        };
+        parent = Some(LocatorQuery {
+            selector,
+            occurrence,
+            within: parent.map(Box::new),
+            direction,
+            style: TextStyle::default(),
+        });
+    }
+    parent.ok_or_else(|| TuiTestError::usage("locator requires at least one stage"))
+}
+
 fn profile_from_parts(
     scrollback: Option<&IntegerInput>,
     colors: &[(String, String)],
@@ -1406,6 +1628,13 @@ fn execute_cells(name: &str, operation: Operation) -> Result<Vec<Cell>, TuiTestE
     match global_registry().execute(name, operation)? {
         OperationResult::Cells(value) => Ok(value),
         _ => Err(unexpected_result("terminal cells")),
+    }
+}
+
+fn execute_matches(name: &str, operation: Operation) -> Result<Vec<TextMatch>, TuiTestError> {
+    match global_registry().execute(name, operation)? {
+        OperationResult::Matches(value) => Ok(value),
+        _ => Err(unexpected_result("text matches")),
     }
 }
 
@@ -1613,6 +1842,33 @@ fn cells_to_py(py: Python<'_>, cells: Vec<Cell>) -> PyResult<Py<PyAny>> {
     let values = PyList::empty(py);
     for cell in cells {
         values.append(cell_to_py(py, cell)?)?;
+    }
+    Ok(values.into_any().unbind())
+}
+
+fn matches_to_py(py: Python<'_>, matches: Vec<TextMatch>) -> PyResult<Py<PyAny>> {
+    let values = PyList::empty(py);
+    for matched in matches {
+        let value = PyDict::new(py);
+        value.set_item("text", matched.text)?;
+        let start = PyDict::new(py);
+        start.set_item("row", matched.start.row)?;
+        start.set_item("column", matched.start.column)?;
+        value.set_item("start", start)?;
+        let end = PyDict::new(py);
+        end.set_item("row", matched.end.row)?;
+        end.set_item("column", matched.end.column)?;
+        value.set_item("end", end)?;
+        let spans = PyList::empty(py);
+        for span in matched.spans {
+            let item = PyDict::new(py);
+            item.set_item("row", span.row)?;
+            item.set_item("start", span.start)?;
+            item.set_item("end", span.end)?;
+            spans.append(item)?;
+        }
+        value.set_item("spans", spans)?;
+        values.append(value)?;
     }
     Ok(values.into_any().unbind())
 }

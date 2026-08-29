@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 Color = Union[str, int]
 Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
@@ -9,6 +9,7 @@ Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
 AutomaticRecordingMode = Literal["disabled", "on-failure", "always"]
+LocatorDirection = Literal["within", "after", "before"]
 
 
 @dataclass
@@ -85,6 +86,51 @@ class Cell:
 class BellEvent:
     sequence: int
     elapsed_ms: int
+
+
+@dataclass
+class TextStyle:
+    foreground: Optional[str] = None
+    background: Optional[str] = None
+    bold: Optional[bool] = None
+    dim: Optional[bool] = None
+    italic: Optional[bool] = None
+    underline_style: Optional[UnderlineStyle] = None
+    underline_color: Optional[str] = None
+    inverse: Optional[bool] = None
+    hidden: Optional[bool] = None
+    strikethrough: Optional[bool] = None
+    blink: Optional[bool] = None
+
+
+@dataclass
+class TextPosition:
+    row: int
+    column: int
+
+
+@dataclass
+class TextSpan:
+    row: int
+    start: int
+    end: int
+
+
+@dataclass
+class TextMatch:
+    text: str
+    start: TextPosition
+    end: TextPosition
+    spans: List[TextSpan]
+
+    @classmethod
+    def from_dict(cls, value: Dict[str, Any]) -> "TextMatch":
+        return cls(
+            text=value["text"],
+            start=TextPosition(**value["start"]),
+            end=TextPosition(**value["end"]),
+            spans=[TextSpan(**span) for span in value["spans"]],
+        )
 
 
 @dataclass

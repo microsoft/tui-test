@@ -80,6 +80,7 @@ without parsing text:
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, timeouts, and a text snapshot. |
 | `text [--full]`                                     | Rendered viewport text, or full scrollback with `--full`.                                                           |
+| `find text "T" [selector/style options]`            | Current matches with zero-based row/column spans.                                                                   |
 | `screenshot [PATH] [-o FILE] [--full] [--zoom N]`   | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.                           |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags) for a region.                                                             |
 | `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | One structured field.                                                                                        |
@@ -93,6 +94,7 @@ without parsing text:
 | `key press <Key...>`                                                       | Simulate key presses, e.g. `key press Ctrl+C`.                               |
 | `key down <Key...>` / `key up <Key...>`                                    | Simulate explicit keydown and keyup events.                                  |
 | `key repeat <Key...>`                                                      | Send repeat events (press-equivalent in legacy mode).                        |
+| `click text "T" [selector/style options]`                                  | Auto-wait for one match and click its middle cell.                           |
 | `mouse click X Y` / `mouse click --on-text "OK" [--button N] [--clicks N]` | Click by coordinates or by visible label.                                    |
 | `mouse move\|down\|up\|drag\|scroll ...`                                   | Full mouse control (`--button` default 0=left, `scroll --amount` default 3). |
 
@@ -116,7 +118,6 @@ and `Meta`. Top-level `press` remains a compatibility alias for `key press`.
 
 | Command                                             | Description                                                                                |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `wait text "T" [--regex --full --not --timeout MS]` | Until text/regex is (with `--not`, is not) visible. Most precise wait.                     |
 | `wait title "T" [--regex --not --timeout MS]`       | Until the window title (`OSC 0`/`OSC 2`) matches. Programs announce progress there.        |
 | `wait idle [--timeout MS]`                          | Until the screen stops repainting (~250ms quiet).                                          |
 | `wait command [--timeout MS]`                       | Until the current foreground command finishes (needs shell integration).                   |
@@ -128,7 +129,7 @@ and `Meta`. Top-level `press` remains a compatibility alias for `key press`.
 
 | Command                                                                         | Description                                                                   |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility plus optional color. `--no-strict` relaxes a strict single-match.  |
+| `expect text "T" [selector/style options]`                                      | Visibility plus optional color and cell styles. |
 | `expect title "T" [--regex --not --timeout MS]`                                 | The window title set with `OSC 0`/`OSC 2`. An unset title matches nothing.    |
 | `expect exit-code N [--timeout MS]`                                             | The last command's exit code. Waits for the command to finish first.          |
 | `expect output "T" [--regex]`                                                   | The last command's captured output.                                           |
@@ -136,6 +137,19 @@ and `Meta`. Top-level `press` remains a compatibility alias for `key press`.
 | `expect snapshot NAME [-u] [--include-colors --include-title]`                                  | Compare the screen against `__snapshots__/NAME.snap`; `-u` writes/updates it. `--include-title` records the window title in the frame; off by default because a prompt often sets it to a host and path. |
 
 Colors accept ansi-256 (`9`), hex (`#ff0000`), or rgb (`255,0,0`).
+
+Selector options include `--after-text`, `--before-text`, `--whitespace
+normalize`, `--match any|unique|first|last`, and zero-based `--nth`. Anchors
+also accept `--after-match` / `--before-match` and `--after-nth` /
+`--before-nth`. Styles include `--fg`, `--bg`, boolean SGR attributes such as
+`--bold[=false]`, and underline style/color.
+
+`find`, `expect`, `click`, and `highlight` text commands accept the same
+selector and style flags. `click text` auto-waits for one match and clicks its
+middle cell. `highlight text` marks every selected match in the live
+monitor and SVG screenshots until the terminal redraws. Use
+`--match first|last|unique` or `--nth N` to narrow repeated text. `find`,
+`expect`, and `highlight` default to any match.
 
 ### Recording, monitor & self-docs
 
@@ -204,8 +218,8 @@ Snapshots live in `__snapshots__/<NAME>.snap` next to where you run the command.
 
 ## Waiting: pick the right one
 
-- `wait text "T"`: waits until text/regex is visible. The most precise wait; use
-  it whenever you know what output to look for. `--not` waits for it to disappear.
+- `expect text "T"`: retries the text-and-style query until it matches.
+  `--not` waits for it to disappear.
 - `wait command`: waits until the current command finishes, via the shell's OSC
   integration markers. Use it after `submit`. Without shell integration it falls
   back to "screen idle". Bump `--timeout` for long commands (default 30s).
@@ -297,19 +311,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session.execute(Operation::Submit {
         data: Some("echo hello".into()),
     })?;
-    session.execute(Operation::WaitCommand {
-        timeout_ms: Some(30_000),
-    })?;
-    session.execute(Operation::ExpectText {
-        text: "hello".into(),
-        regex: false,
-        full: false,
-        strict: false,
-        not: false,
-        fg: None,
-        bg: None,
-        timeout_ms: Some(5_000),
-    })?;
+    let hello = session.get_by_text("hello");
+    hello.wait_with_timeout(Some(5_000))?;
+    hello.last().expect()?;
+    hello.last().highlight()?;
     session.execute(Operation::ExpectExitCode {
         code: 0,
         timeout_ms: Some(5_000),
@@ -329,8 +334,9 @@ async def main():
     async with TuiTest() as su:                     # closes the session on exit
         await su.open()
         await su.submit("echo hello")
-        await su.wait_command()
-        await su.expect_text("hello", strict=False)  # command echo + output both match
+        hello = su.get_by_text("hello")
+        await hello.wait()
+        await hello.last().highlight()               # command echo + output both match
         await su.expect_exit_code(0)
 
 asyncio.run(main())
@@ -344,30 +350,55 @@ import { TuiTest } from "@microsoft/tui-test";
 const su = new TuiTest();
 await su.open();
 await su.submit("echo hello");
-await su.waitCommand();
-await su.expectText("hello", { strict: false });
+const hello = su.getByText("hello");
+await hello.wait();
+await hello.last().highlight();
 await su.expectExitCode(0);
 await su.close();
 ```
 
 The Rust crate exposes `Session` and `SessionRegistry` for terminal ownership,
-plus the `Operation` and `OperationResult` enums for the command surface.
+`Locator` for lazy text/style queries and actions, plus the `Operation` and
+`OperationResult` enums for the command surface.
 
 Python and JavaScript methods mirror the cli commands: `open` / `run`, `submit`
 / `type` / `write`, `keyboard.press|down|repeat|up`, compatibility
 `press`,
 `mouse.click|move|down|up|drag|scroll`,
-`resize`, `signal` / `kill`, `state`, `text`, `cells`, the dedicated
+`resize`, `signal` / `kill`, `state`, `text`, `get_by_text` / `get_by_style`,
+`cells`, the dedicated
 `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` /
 `get_size` / `get_title` / `get_bell_count` / `get_bell_events` methods,
-`screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` /
-`wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` /
+`screenshot`, `start_recording` / `stop_recording`, `wait_title` / `wait_idle` / `wait_command` /
+`wait_exit` / `wait_ready` / `wait_bell`, `expect_title` /
 `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`,
 and `close`. Python module-level helpers are `sessions`,
 `close_all`, and `get_recording`; JavaScript exports `sessions`, `closeAll`,
 and `getRecording`. The JavaScript client otherwise uses the same names in
-camelCase (`startRecording`, `stopRecording`, `waitCommand`, `expectText`,
+camelCase (`startRecording`, `stopRecording`, `waitCommand`,
 `getExitCode`, etc.).
+
+`get_by_text()` / `getByText()` and `get_by_style()` / `getByStyle()` return
+lazy locators in all three languages. Text and contiguous style-run stages can
+be chained. The chain resolves again before every read or action, so the same
+locator can wait and then click the current match.
+
+Locators provide the `any`, `unique`, `first`, `last`, and `nth` occurrence
+selectors, along with `all`, match locations, centered clicks, highlighting,
+and expectations. Chained stages search `within`, `after`, or `before` each
+dynamically resolved parent match.
+
+Programmatic locators begin with all matches. Narrow them only by chaining
+`any`, `unique`, `first`, `last`, or `nth`. `expect` succeeds when at least
+one selected match exists; `unique().expect()` requires exactly one. To check
+style, chain a nested `get_by_style` / `getByStyle` stage. In the default
+`within` direction, it keeps a parent match only when all its visible cells
+satisfy the style.
+
+Negation applies to an expectation. A negated `unique` locator passes with
+zero matches and fails if one match is present. If multiple matches exist, it
+fails because the locator is not unique. `count()` returns the exact current
+match count for assertions in the host test framework.
 
 The constructors accept a session name plus backend, profile, timeout, and
 artifact options: `TuiTest(session="default", *, backend=None, timeouts=None,
