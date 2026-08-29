@@ -99,7 +99,7 @@ impl From<RecordingFormatArg> for RecordingFormat {
 /// Per-class default timeouts for a session, in milliseconds.
 #[derive(Args, Clone, Copy, Default)]
 pub struct TimeoutArgs {
-    /// Default timeout for `expect text` / `wait text` (default 5000).
+    /// Default timeout for text actions and assertions (default 5000).
     #[arg(long = "timeout-text", value_name = "MS")]
     pub text: Option<u64>,
     /// Default timeout for `wait idle` (default 5000).
@@ -330,9 +330,8 @@ pub enum Command {
     },
     /// Kill the session's child process.
     Kill,
-    /// Block until a condition holds: text on screen, screen idle, command
-    /// done, or session exit. See `wait <subcommand> --help` for the
-    /// differences (notably idle vs command).
+    /// Block until the title changes, the screen is idle, a command finishes,
+    /// the shell is ready, a bell rings, or the session exits.
     Wait {
         #[command(subcommand)]
         what: WaitCmd,
@@ -341,6 +340,21 @@ pub enum Command {
     Expect {
         #[command(subcommand)]
         what: ExpectCmd,
+    },
+    /// Find current terminal matches and return their locations.
+    Find {
+        #[command(subcommand)]
+        what: FindCmd,
+    },
+    /// Wait for a text match, then click its middle cell.
+    Click {
+        #[command(subcommand)]
+        what: ClickCmd,
+    },
+    /// Highlight text matching the query and optional style constraints.
+    Highlight {
+        #[command(subcommand)]
+        what: HighlightCmd,
     },
     /// Print the session's recording (asciinema v2 cast) to stdout.
     ///
@@ -719,6 +733,91 @@ mod tests {
     }
 
     #[test]
+    fn find_text_accepts_scope_and_occurrence() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "find",
+            "text",
+            "Save",
+            "--after-text",
+            "Settings",
+            "--after-match",
+            "last",
+            "--whitespace",
+            "normalize",
+            "--nth",
+            "1",
+        ])
+        .expect("parse find text");
+        let Some(Command::Find {
+            what: FindCmd::Text { query },
+        }) = cli.command
+        else {
+            panic!("expected Find text");
+        };
+        assert_eq!(query.selector.after_text.as_deref(), Some("Settings"));
+        assert_eq!(query.selector.after_match, Some(MatchArg::Last));
+        assert_eq!(query.selector.whitespace, WhitespaceArg::Normalize);
+        assert_eq!(query.selector.nth, Some(1));
+    }
+
+    #[test]
+    fn click_text_accepts_selector_style_and_action_options() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "click",
+            "text",
+            "Save",
+            "--after-text",
+            "Settings",
+            "--whitespace",
+            "normalize",
+            "--nth",
+            "1",
+            "--fg",
+            "2",
+            "--clicks",
+            "2",
+        ])
+        .expect("parse click text");
+        let Some(Command::Click {
+            what: ClickCmd::Text { query, clicks, .. },
+        }) = cli.command
+        else {
+            panic!("expected click text");
+        };
+        assert_eq!(query.selector.after_text.as_deref(), Some("Settings"));
+        assert_eq!(query.selector.whitespace, WhitespaceArg::Normalize);
+        assert_eq!(query.selector.nth, Some(1));
+        assert_eq!(query.style.fg.as_deref(), Some("2"));
+        assert_eq!(clicks, 2);
+    }
+
+    #[test]
+    fn expect_text_accepts_generic_styles() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "expect",
+            "text",
+            "Warning",
+            "--bold",
+            "--italic=false",
+            "--underline-style",
+            "curly",
+        ])
+        .expect("parse styled expectation");
+        let Some(Command::Expect {
+            what: ExpectCmd::Text { query, .. },
+        }) = cli.command
+        else {
+            panic!("expected Expect text");
+        };
+        assert_eq!(query.style.bold, Some(true));
+        assert_eq!(query.style.italic, Some(false));
+        assert_eq!(query.style.underline_style.as_deref(), Some("curly"));
+    }
+
+    #[test]
     fn expect_exit_code_accepts_a_timeout() {
         let cli =
             Cli::try_parse_from(["tui-test", "expect", "exit-code", "0", "--timeout", "1234"])
@@ -932,25 +1031,154 @@ impl ScrollDir {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "lower")]
+pub enum WhitespaceArg {
+    Exact,
+    Normalize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "lower")]
+pub enum MatchArg {
+    Any,
+    Unique,
+    First,
+    Last,
+}
+
+#[derive(Args)]
+pub struct TextSelectorArgs {
+    /// Treat the target text as a regular expression.
+    #[arg(long)]
+    pub regex: bool,
+    /// Search the full scrollback, not just the visible viewport.
+    #[arg(long)]
+    pub full: bool,
+    /// Compare whitespace exactly or collapse runs and line breaks.
+    #[arg(long, value_enum, default_value_t = WhitespaceArg::Exact)]
+    pub whitespace: WhitespaceArg,
+    /// Search only after this literal anchor.
+    #[arg(long)]
+    pub after_text: Option<String>,
+    /// Treat --after-text as a regular expression.
+    #[arg(long, requires = "after_text")]
+    pub after_regex: bool,
+    /// Select the anchor occurrence used by --after-text.
+    #[arg(
+        long,
+        value_enum,
+        requires = "after_text",
+        conflicts_with = "after_nth"
+    )]
+    pub after_match: Option<MatchArg>,
+    /// Use the zero-based nth --after-text occurrence.
+    #[arg(long, requires = "after_text", conflicts_with = "after_match")]
+    pub after_nth: Option<usize>,
+    /// Search only before this literal anchor.
+    #[arg(long)]
+    pub before_text: Option<String>,
+    /// Treat --before-text as a regular expression.
+    #[arg(long, requires = "before_text")]
+    pub before_regex: bool,
+    /// Select the anchor occurrence used by --before-text.
+    #[arg(
+        long,
+        value_enum,
+        requires = "before_text",
+        conflicts_with = "before_nth"
+    )]
+    pub before_match: Option<MatchArg>,
+    /// Use the zero-based nth --before-text occurrence.
+    #[arg(long, requires = "before_text", conflicts_with = "before_match")]
+    pub before_nth: Option<usize>,
+    /// Select all, unique, first, or last target occurrences.
+    #[arg(long = "match", value_enum, conflicts_with = "nth")]
+    pub match_mode: Option<MatchArg>,
+    /// Select the zero-based nth target occurrence.
+    #[arg(long, conflicts_with = "match_mode")]
+    pub nth: Option<usize>,
+}
+
+#[derive(Args)]
+pub struct TextStyleArgs {
+    /// Required foreground color.
+    #[arg(long)]
+    pub fg: Option<String>,
+    /// Required background color.
+    #[arg(long)]
+    pub bg: Option<String>,
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+    pub bold: Option<bool>,
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+    pub dim: Option<bool>,
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+    pub italic: Option<bool>,
+    #[arg(long)]
+    pub underline_style: Option<String>,
+    #[arg(long)]
+    pub underline_color: Option<String>,
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+    pub inverse: Option<bool>,
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+    pub hidden: Option<bool>,
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+    pub strikethrough: Option<bool>,
+    #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+    pub blink: Option<bool>,
+}
+
+#[derive(Args)]
+pub struct TextQueryArgs {
+    /// Text or regular expression to match.
+    pub text: String,
+    #[command(flatten)]
+    pub selector: TextSelectorArgs,
+    #[command(flatten)]
+    pub style: Box<TextStyleArgs>,
+}
+
 #[derive(Subcommand)]
-pub enum WaitCmd {
-    /// Wait until text/regex appears on screen (the most precise wait).
+pub enum FindCmd {
+    /// Find text and return its row/column spans.
     Text {
-        /// Text or regex to wait for.
-        text: String,
-        /// Treat <text> as a regular expression.
-        #[arg(long)]
-        regex: bool,
-        /// Search the full scrollback, not just the visible viewport.
-        #[arg(long)]
-        full: bool,
-        /// Invert: wait until the text is NOT present.
-        #[arg(long)]
-        not: bool,
+        #[command(flatten)]
+        query: TextQueryArgs,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ClickCmd {
+    /// Wait for matching text, then click its middle cell.
+    Text {
+        #[command(flatten)]
+        query: TextQueryArgs,
+        /// Mouse button: 0 left, 1 middle, 2 right.
+        #[arg(long, default_value_t = 0)]
+        button: u8,
+        /// Number of clicks.
+        #[arg(long, default_value_t = 1)]
+        clicks: u8,
         /// Timeout in milliseconds.
         #[arg(long, value_name = "MS")]
         timeout: Option<u64>,
     },
+}
+
+#[derive(Subcommand)]
+pub enum HighlightCmd {
+    /// Wait for matching text, then highlight every selected occurrence.
+    Text {
+        #[command(flatten)]
+        query: TextQueryArgs,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum WaitCmd {
     /// Wait until the window title (set with OSC 0/2) matches text/regex.
     ///
     /// Programs set the title to announce what they are doing, so this is how
@@ -1013,28 +1241,11 @@ pub enum WaitCmd {
 pub enum ExpectCmd {
     /// Assert text is visible, optionally with a required color.
     Text {
-        /// Text or regex to match.
-        text: String,
-        /// Treat <text> as a regular expression.
-        #[arg(long)]
-        regex: bool,
-        /// Search the full scrollback, not just the visible viewport.
-        #[arg(long)]
-        full: bool,
-        /// Allow multiple matches instead of requiring exactly one.
-        #[arg(long = "no-strict")]
-        no_strict: bool,
+        #[command(flatten)]
+        query: TextQueryArgs,
         /// Invert: assert the text is NOT present.
         #[arg(long)]
         not: bool,
-        /// Require this foreground color on the match: `default`, an ansi256
-        /// index (0-255), hex (#rrggbb), or rgb (r,g,b).
-        #[arg(long)]
-        fg: Option<String>,
-        /// Require this background color on the match: `default`, an ansi256
-        /// index (0-255), hex (#rrggbb), or rgb (r,g,b).
-        #[arg(long)]
-        bg: Option<String>,
         /// Timeout in milliseconds.
         #[arg(long, value_name = "MS")]
         timeout: Option<u64>,

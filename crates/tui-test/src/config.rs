@@ -9,7 +9,7 @@ pub const OPEN_READY_CAP_MS: u64 = 8_000;
 /// The kind of thing a wait or assertion is blocking on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeoutClass {
-    /// Text appearing on (or leaving) the screen: `expect text`, `wait text`.
+    /// Text queries, actions, and assertions.
     Text,
     /// The screen going quiet: `wait idle`.
     Idle,

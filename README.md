@@ -154,19 +154,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     session.execute(Operation::Submit {
         data: Some("echo hello".into()),
     })?;
-    session.execute(Operation::WaitCommand {
-        timeout_ms: Some(30_000),
-    })?;
-    session.execute(Operation::ExpectText {
-        text: "hello".into(),
-        regex: false,
-        full: false,
-        strict: false,
-        not: false,
-        fg: None,
-        bg: None,
-        timeout_ms: Some(5_000),
-    })?;
+    let hello = session.get_by_text("hello");
+    hello.wait_with_timeout(Some(5_000))?;
+    hello.last().expect()?;
+    hello.last().highlight()?;
     session.execute(Operation::ExpectExitCode {
         code: 0,
         timeout_ms: Some(5_000),
@@ -189,8 +180,9 @@ async def main():
     async with TuiTest() as su:
         await su.open()
         await su.submit("echo hello")
-        await su.wait_command()
-        await su.expect_text("hello")
+        hello = su.get_by_text("hello")
+        await hello.wait()
+        await hello.last().highlight()
         await su.expect_exit_code(0)
 
 asyncio.run(main())
@@ -207,8 +199,9 @@ import { TuiTest } from "@microsoft/tui-test";
 const su = new TuiTest();
 await su.open();
 await su.submit("echo hello");
-await su.waitCommand();
-await su.expectText("hello");
+const hello = su.getByText("hello");
+await hello.wait();
+await hello.last().highlight();
 await su.expectExitCode(0);
 await su.close();
 ```
@@ -222,9 +215,9 @@ await su.close();
 | Task | Commands |
 | --- | --- |
 | Start or reuse a terminal | `open`, `run`, `sessions` |
-| Inspect what happened | `state`, `text`, `cells`, `get`, `screenshot` |
-| Interact with the program | `submit`, `type`, `key`, `mouse`, `resize`, `signal` |
-| Wait for real terminal state | `wait command`, `wait ready`, `wait idle`, `wait text`, `wait title`, `wait bell` |
+| Inspect what happened | `state`, `text`, `find text`, `cells`, `get`, `screenshot` |
+| Interact with the program | `click text`, `submit`, `type`, `key`, `mouse`, `resize`, `signal` |
+| Wait for real terminal state | `expect text`, `wait command`, `wait ready`, `wait idle`, `wait title`, `wait bell` |
 | Check the result | `expect text`, `expect output`, `expect exit-code`, `expect snapshot` |
 | Hand the session to a person | `monitor`, `screenshot`, `record` |
 
@@ -265,7 +258,7 @@ Waits and assertions use five timeout classes:
 
 | Class | Applies to | Default |
 | --- | --- | --- |
-| `text` | `expect text`, `wait text`, `expect title`, `wait title`, `wait bell`, `expect bell` | 5000 ms |
+| `text` | text find/expect/click/highlight, locator waits, title, and bell operations | 5000 ms |
 | `idle` | `wait idle` | 5000 ms |
 | `command` | `wait command`, `expect exit-code` | 30000 ms |
 | `exit` | `wait exit` | 30000 ms |
@@ -277,7 +270,7 @@ Configure timeouts directly via cli falgs or within [profiles](#profiles) in the
 
 ```sh
 tui-test open --timeout-text 30000 --timeout-idle 15000 --timeout-ready 20000
-tui-test wait text "done" --timeout 60000   # just this call
+tui-test expect text "done" --timeout 60000 # just this call
 ```
 
 #### Lifecycle
@@ -337,6 +330,7 @@ The default Rust features include only Alacritty and do not require Zig. The `gh
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `state`                                             | cwd, size, cursor, window title, last command + exit code, bell count, effective timeouts, text snapshot. |
 | `text [--full]`                                     | Plain text of the viewport (or scrollback).                                                 |
+| `find text "T" [selector/style options]`            | Return current matches with zero-based row/column spans.                                    |
 | `screenshot [-o file.svg] [--full] [--zoom N]`      | Terminal text to stdout, or a full-color SVG scaled without changing its terminal cells.   |
 | `cells X Y [W H]`                                   | Per-cell attributes (char, fg, bg, flags).                                                  |
 | `get command\|output\|exit-code\|cwd\|cursor\|size\|title\|bells\|bell-events` | Structured getters.                                                                   |
@@ -352,10 +346,50 @@ The default Rust features include only Alacritty and do not require Zig. The `gh
 | `key press <Key...>`                                          | Simulate key presses, e.g. `key press Ctrl+C`.             |
 | `key down <Key...>` / `key up <Key...>`                       | Simulate explicit keydown and keyup events.                |
 | `key repeat <Key...>`                                         | Send repeat events (press-equivalent in legacy mode).      |
+| `click text "T" [selector/style options]`                      | Auto-wait for one match and click its middle cell.         |
 | `mouse click X Y` / `mouse click --on-text "OK" [--clicks N]` | Click by coords or label.                                  |
 | `mouse move\|down\|up\|drag\|scroll ...`                      | Full mouse control.                                        |
 
 Key input follows the Kitty keyboard protocol negotiated by the child. A `key press` sends the normal press input and adds a release only when the child requests Kitty event-type reporting. Text-producing keys also require report-all-keys mode before repeat and release events can be represented. Modifiers are `Ctrl`, `Alt` / `Option`, `Shift`, `Super`, `Hyper`, and `Meta`; the top-level `press` command remains a compatibility alias for `key press`.
+
+#### Text queries and actions
+
+Text commands share the same selector and optional style flags:
+
+```sh
+tui-test find text "Save"                                    # current locations
+tui-test expect text "Save" --fg green                       # assert green Save
+tui-test click text "Save" --fg green --timeout 5000         # auto-wait, then click
+tui-test highlight text 'item\s+\d+' --regex                 # highlight every match
+```
+
+Selectors can match literal text or regular expressions, use exact or
+normalized whitespace, search the viewport or full scrollback, and anchor
+matches with `after` or `before`. Choose an occurrence with
+`any|unique|first|last|nth`. A click requires one match unless the selector
+chooses an occurrence. Highlighted cells remain visible in the live monitor
+and SVG screenshots until the terminal redraws. `find`, `expect`, and
+`highlight` use any match by default; pass `--match unique` to require exactly
+one.
+
+The Rust, Python, and JavaScript APIs provide chainable `get_by_text` /
+`getByText` and `get_by_style` / `getByStyle` locators. Each stage resolves
+again before every read or action and searches `within`, `after`, or `before`
+its parent match. Rust uses
+`get_by_text_relative(..., LocatorDirection::After)`; Python and JavaScript
+pass `direction="after"` / `{ direction: "after" }`.
+
+Programmatic locators begin with all matches. Narrow them only by chaining
+`any`, `unique`, `first`, `last`, or `nth`. `expect` succeeds when at least
+one selected match exists; add `unique` to require exactly one. To check
+style, chain a nested `get_by_style` / `getByStyle` locator. In the default
+`within` direction, it keeps a parent match only when all its visible cells
+satisfy the style.
+
+Negation applies to an expectation, not a locator. A negated `unique`
+expectation passes with zero matches and fails if one match is present. If
+multiple matches exist, it fails because the locator is not unique. Use
+`count()` with the host test framework to assert the exact current count.
 
 #### PTY control
 
@@ -371,7 +405,6 @@ Key input follows the Kitty keyboard protocol negotiated by the child. A `key pr
 
 | Command                                             | Description                         |
 | --------------------------------------------------- | ----------------------------------- |
-| `wait text "T" [--regex --full --not --timeout MS]` | Until text is (not) visible.        |
 | `wait title "T" [--regex --not --timeout MS]`       | Until the window title (OSC 0/2) matches. |
 | `wait idle`                                         | Until the screen stops changing.    |
 | `wait command`                                      | Until the current command finishes. |
@@ -383,7 +416,7 @@ Key input follows the Kitty keyboard protocol negotiated by the child. A `key pr
 
 | Command                                                                         | Description                                |
 | ------------------------------------------------------------------------------- | ------------------------------------------ |
-| `expect text "T" [--regex --full --no-strict --not --fg C --bg C --timeout MS]` | Visibility + optional color.               |
+| `expect text "T" [selector/style options] [--not --timeout MS]` | Retry a text-and-style assertion.           |
 | `expect title "T" [--regex --not --timeout MS]`                                 | Window title set with OSC 0/2.             |
 | `expect exit-code N [--timeout MS]`                                             | Last command's exit code.                  |
 | `expect output "T" [--regex]`                                                   | Last command's captured output.            |

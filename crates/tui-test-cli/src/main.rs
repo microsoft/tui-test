@@ -12,8 +12,15 @@ use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
 
-use cli::{Cli, Command, DaemonCmd, ExpectCmd, GetArg, KeyCmd, MouseCmd, RecordCmd, WaitCmd};
+use cli::{
+    Cli, ClickCmd, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, HighlightCmd, KeyCmd, MatchArg,
+    MouseCmd, RecordCmd, TextQueryArgs, TextSelectorArgs, TextStyleArgs, WaitCmd, WhitespaceArg,
+};
 use protocol::{GetField, MouseAction, Request, Response};
+use tui_test::{
+    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, TextAnchor, TextScope,
+    TextSelector, TextStyle, WhitespaceMode,
+};
 /// Long-form agent skill manifest, printed by `tui-test skill`.
 const SKILL_MD: &str = include_str!("../../../SKILL.md");
 
@@ -271,6 +278,9 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             name: "KILL".to_string(),
         },
         Command::Wait { what } => map_wait(what),
+        Command::Find { what } => map_find(what),
+        Command::Click { what } => map_click(what),
+        Command::Highlight { what } => map_highlight(what),
         Command::Expect { what } => map_expect(what),
         _ => anyhow::bail!("unsupported command"),
     };
@@ -290,8 +300,8 @@ fn resolve_client_path(path: String) -> anyhow::Result<String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
-fn map_field(f: GetArg) -> GetField {
-    match f {
+fn map_field(field: GetArg) -> GetField {
+    match field {
         GetArg::Command => GetField::Command,
         GetArg::Output => GetField::Output,
         GetArg::ExitCode => GetField::ExitCode,
@@ -354,19 +364,6 @@ fn map_mouse(action: MouseCmd) -> MouseAction {
 
 fn map_wait(what: WaitCmd) -> Request {
     match what {
-        WaitCmd::Text {
-            text,
-            regex,
-            full,
-            not,
-            timeout,
-        } => Request::WaitText {
-            text,
-            regex,
-            full,
-            timeout_ms: timeout,
-            not,
-        },
         WaitCmd::Title {
             text,
             regex,
@@ -396,25 +393,131 @@ fn map_wait(what: WaitCmd) -> Request {
     }
 }
 
+fn map_occurrence(
+    mode: Option<MatchArg>,
+    nth: Option<usize>,
+    default: MatchOccurrence,
+) -> MatchOccurrence {
+    if let Some(index) = nth {
+        return MatchOccurrence::Nth(index);
+    }
+    match mode {
+        Some(MatchArg::Any) => MatchOccurrence::Any,
+        Some(MatchArg::Unique) => MatchOccurrence::Unique,
+        Some(MatchArg::First) => MatchOccurrence::First,
+        Some(MatchArg::Last) => MatchOccurrence::Last,
+        None => default,
+    }
+}
+
+fn map_anchor(
+    text: Option<String>,
+    regex: bool,
+    mode: Option<MatchArg>,
+    nth: Option<usize>,
+) -> Option<TextAnchor> {
+    text.map(|text| TextAnchor {
+        text,
+        regex,
+        occurrence: map_occurrence(mode, nth, MatchOccurrence::Unique),
+    })
+}
+
+fn map_selector(text: String, args: TextSelectorArgs) -> TextSelector {
+    TextSelector {
+        text,
+        regex: args.regex,
+        full: args.full,
+        whitespace: match args.whitespace {
+            WhitespaceArg::Exact => WhitespaceMode::Exact,
+            WhitespaceArg::Normalize => WhitespaceMode::Normalize,
+        },
+        scope: TextScope {
+            after: map_anchor(
+                args.after_text,
+                args.after_regex,
+                args.after_match,
+                args.after_nth,
+            ),
+            before: map_anchor(
+                args.before_text,
+                args.before_regex,
+                args.before_match,
+                args.before_nth,
+            ),
+        },
+    }
+}
+
+fn map_style(args: TextStyleArgs) -> TextStyle {
+    TextStyle {
+        foreground: args.fg,
+        background: args.bg,
+        bold: args.bold,
+        dim: args.dim,
+        italic: args.italic,
+        underline_style: args.underline_style,
+        underline_color: args.underline_color,
+        inverse: args.inverse,
+        hidden: args.hidden,
+        strikethrough: args.strikethrough,
+        blink: args.blink,
+    }
+}
+
+fn map_query(args: TextQueryArgs, default: MatchOccurrence) -> LocatorQuery {
+    let occurrence = map_occurrence(args.selector.match_mode, args.selector.nth, default);
+    LocatorQuery {
+        selector: LocatorSelector::Text(map_selector(args.text, args.selector)),
+        occurrence,
+        within: None,
+        direction: LocatorDirection::Within,
+        style: map_style(*args.style),
+    }
+}
+
+fn map_find(what: FindCmd) -> Request {
+    match what {
+        FindCmd::Text { query } => Request::FindLocator {
+            query: map_query(query, MatchOccurrence::Any),
+        },
+    }
+}
+
+fn map_click(what: ClickCmd) -> Request {
+    match what {
+        ClickCmd::Text {
+            query,
+            button,
+            clicks,
+            timeout,
+        } => Request::ClickLocator {
+            query: map_query(query, MatchOccurrence::Unique),
+            button,
+            clicks,
+            timeout_ms: timeout,
+        },
+    }
+}
+
+fn map_highlight(what: HighlightCmd) -> Request {
+    match what {
+        HighlightCmd::Text { query, timeout } => Request::HighlightLocator {
+            query: map_query(query, MatchOccurrence::Any),
+            timeout_ms: timeout,
+        },
+    }
+}
+
 fn map_expect(what: ExpectCmd) -> Request {
     match what {
         ExpectCmd::Text {
-            text,
-            regex,
-            full,
-            no_strict,
+            query,
             not,
-            fg,
-            bg,
             timeout,
-        } => Request::ExpectText {
-            text,
-            regex,
-            full,
-            strict: !no_strict,
+        } => Request::ExpectLocator {
+            query: map_query(query, MatchOccurrence::Any),
             not,
-            fg,
-            bg,
             timeout_ms: timeout,
         },
         ExpectCmd::Title {
@@ -546,7 +649,7 @@ fn daemon_lock_is_stale(path: &Path, stale_after: Duration) -> bool {
 /// Spawn or replace the daemon for this session when necessary.
 fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     let socket = config::socket_name(session);
-    if let Some(version) = running_daemon_version(session, &socket)? {
+    if let Some(version) = running_daemon_identity(session, &socket)? {
         if version == env!("CARGO_PKG_VERSION") {
             report_existing_daemon(session, verbose);
             return Ok(DaemonStart::AlreadyRunning);
@@ -556,7 +659,7 @@ fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     config::ensure_home()?;
     let _lock = DaemonLock::acquire(session)?;
 
-    match running_daemon_version(session, &socket)? {
+    match running_daemon_identity(session, &socket)? {
         Some(version) if version == env!("CARGO_PKG_VERSION") => {
             report_existing_daemon(session, verbose);
             Ok(DaemonStart::AlreadyRunning)
@@ -572,9 +675,9 @@ fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     }
 }
 
-fn running_daemon_version(session: &str, socket: &str) -> anyhow::Result<Option<String>> {
+fn running_daemon_identity(session: &str, socket: &str) -> anyhow::Result<Option<String>> {
     match ipc::send(socket, &Request::Status) {
-        Ok(status) => Ok(Some(daemon_version(&status).to_string())),
+        Ok(status) => Ok(Some(daemon_version(&status))),
         Err(error) if ipc::is_running(socket) => anyhow::bail!(
             "could not verify the daemon for session '{session}': {error}; run \
              `tui-test --session {session} close`, then retry"
@@ -583,13 +686,14 @@ fn running_daemon_version(session: &str, socket: &str) -> anyhow::Result<Option<
     }
 }
 
-fn daemon_version(status: &Response) -> &str {
+fn daemon_version(status: &Response) -> String {
     status
         .data
         .as_ref()
         .and_then(|data| data.get("version"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or("unknown")
+        .to_string()
 }
 
 fn report_existing_daemon(session: &str, verbose: bool) {
@@ -1012,18 +1116,20 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           run [--config F] [--profile P] [--restart] <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
-          cells X Y [W H] | get command|output|exit-code|cwd|cursor|size|title|bells|bell-events\n\
+          find text \"T\" [selector/style options] | cells X Y [W H]\n\
+          get command|output|exit-code|cwd|cursor|size|title|bells|bell-events\n\
 INPUT     type \"text\" | submit [\"text\"]\n\
           key press|down|repeat|up <Key...>\n\
+          click text \"T\" [selector/style options] [--button N --clicks N]\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
-WAIT      wait text \"T\" [--regex --full --not --timeout MS]\n\
-          wait title \"T\" [--regex --not --timeout MS]\n\
+WAIT      wait title \"T\" [--regex --not --timeout MS]\n\
           wait idle | wait command | wait exit | wait ready | wait bell\n\
-EXPECT    expect text \"T\" [--regex --full --not --fg C --bg C --timeout MS]\n\
+EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex] | expect bell N\n\
           expect snapshot NAME [-u] [--include-colors --include-title]\n\
+DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
 WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
@@ -1109,15 +1215,106 @@ mod tests {
     }
 
     #[test]
-    fn daemon_version_identifies_stale_or_unversioned_daemons() {
-        let current = Response::with(json!({ "version": env!("CARGO_PKG_VERSION") }));
-        assert_eq!(daemon_version(&current), env!("CARGO_PKG_VERSION"));
+    fn find_text_maps_selector_options_to_the_protocol() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "find",
+            "text",
+            "Save",
+            "--after-text",
+            "Settings",
+            "--whitespace",
+            "normalize",
+            "--nth",
+            "1",
+        ])
+        .unwrap();
+        let Request::FindLocator { query } = build_request(cli.command.expect("command")).unwrap()
+        else {
+            panic!("expected find text request");
+        };
+        let LocatorSelector::Text(selector) = &query.selector else {
+            panic!("expected text locator");
+        };
+        assert_eq!(selector.scope.after.as_ref().unwrap().text, "Settings");
+        assert_eq!(selector.whitespace, WhitespaceMode::Normalize);
+        assert_eq!(query.occurrence, MatchOccurrence::Nth(1));
+    }
 
-        let stale = Response::with(json!({ "version": "0.0.0-old" }));
-        assert_eq!(daemon_version(&stale), "0.0.0-old");
+    #[test]
+    fn click_text_maps_to_one_strict_action_request() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "click",
+            "text",
+            "Save",
+            "--after-text",
+            "Settings",
+            "--fg",
+            "2",
+        ])
+        .unwrap();
+        let Request::ClickLocator {
+            query,
+            button,
+            clicks,
+            ..
+        } = build_request(cli.command.expect("command")).unwrap()
+        else {
+            panic!("expected click locator request");
+        };
+        let LocatorSelector::Text(selector) = &query.selector else {
+            panic!("expected text locator");
+        };
+        assert_eq!(selector.scope.after.as_ref().unwrap().text, "Settings");
+        assert_eq!(query.occurrence, MatchOccurrence::Unique);
+        assert_eq!(query.style.foreground.as_deref(), Some("2"));
+        assert_eq!(button, 0);
+        assert_eq!(clicks, 1);
+    }
 
-        let unversioned = Response::with(json!({}));
-        assert_eq!(daemon_version(&unversioned), "unknown");
+    #[test]
+    fn removed_wait_text_command_is_rejected() {
+        assert!(Cli::try_parse_from(["tui-test", "wait", "text", "Saving"]).is_err());
+    }
+
+    #[test]
+    fn removed_locator_command_is_rejected() {
+        assert!(Cli::try_parse_from(["tui-test", "locator", "Save"]).is_err());
+    }
+
+    #[test]
+    fn expect_text_maps_style_options_to_the_protocol() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "expect",
+            "text",
+            "Warning",
+            "--bold",
+            "--underline-style",
+            "curly",
+        ])
+        .unwrap();
+        let Request::ExpectLocator { query, .. } =
+            build_request(cli.command.expect("command")).unwrap()
+        else {
+            panic!("expected styled text request");
+        };
+        assert!(matches!(&query.selector, LocatorSelector::Text(_)));
+        assert_eq!(query.occurrence, MatchOccurrence::Any);
+        assert_eq!(query.style.bold, Some(true));
+        assert_eq!(query.style.underline_style.as_deref(), Some("curly"));
+    }
+
+    #[test]
+    fn daemon_identity_uses_package_version() {
+        assert_eq!(
+            daemon_version(&Response::with(
+                json!({ "version": env!("CARGO_PKG_VERSION") })
+            )),
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(daemon_version(&Response::with(json!({}))), "unknown");
     }
 
     #[test]

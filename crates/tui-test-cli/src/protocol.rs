@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use tui_test::{
-    Backend, Engine, KeyAction, OpenOptions, Operation, OperationResult, RecordingFormat,
-    RunOptions, ScreenshotResult, TuiTestError,
+    Backend, Engine, KeyAction, LocatorQuery, OpenOptions, Operation, OperationResult,
+    RecordingFormat, RunOptions, ScreenshotResult, TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
@@ -73,14 +73,6 @@ pub enum Request {
     Signal {
         name: String,
     },
-    WaitText {
-        text: String,
-        regex: bool,
-        full: bool,
-        #[serde(default)]
-        timeout_ms: Option<u64>,
-        not: bool,
-    },
     WaitTitle {
         text: String,
         regex: bool,
@@ -108,14 +100,24 @@ pub enum Request {
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
-    ExpectText {
-        text: String,
-        regex: bool,
-        full: bool,
-        strict: bool,
+    FindLocator {
+        query: LocatorQuery,
+    },
+    ClickLocator {
+        query: LocatorQuery,
+        button: u8,
+        clicks: u8,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    HighlightLocator {
+        query: LocatorQuery,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    ExpectLocator {
+        query: LocatorQuery,
         not: bool,
-        fg: Option<String>,
-        bg: Option<String>,
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
@@ -254,19 +256,6 @@ impl Request {
             Request::Mouse { action } => Ok(Operation::Mouse { action }),
             Request::Resize { cols, rows } => Ok(Operation::Resize { cols, rows }),
             Request::Signal { name } => Ok(Operation::Signal { name }),
-            Request::WaitText {
-                text,
-                regex,
-                full,
-                timeout_ms,
-                not,
-            } => Ok(Operation::WaitText {
-                text,
-                regex,
-                full,
-                timeout_ms,
-                not,
-            }),
             Request::WaitTitle {
                 text,
                 regex,
@@ -283,23 +272,28 @@ impl Request {
             Request::WaitExit { timeout_ms } => Ok(Operation::WaitExit { timeout_ms }),
             Request::WaitReady { timeout_ms } => Ok(Operation::WaitReady { timeout_ms }),
             Request::WaitBell { timeout_ms } => Ok(Operation::WaitBell { timeout_ms }),
-            Request::ExpectText {
-                text,
-                regex,
-                full,
-                strict,
-                not,
-                fg,
-                bg,
+            Request::FindLocator { query } => Ok(Operation::FindLocator { query }),
+            Request::ClickLocator {
+                query,
+                button,
+                clicks,
                 timeout_ms,
-            } => Ok(Operation::ExpectText {
-                text,
-                regex,
-                full,
-                strict,
+            } => Ok(Operation::ClickLocator {
+                query,
+                button,
+                clicks,
+                timeout_ms,
+            }),
+            Request::HighlightLocator { query, timeout_ms } => {
+                Ok(Operation::HighlightLocator { query, timeout_ms })
+            }
+            Request::ExpectLocator {
+                query,
                 not,
-                fg,
-                bg,
+                timeout_ms,
+            } => Ok(Operation::WaitLocator {
+                query,
+                not,
                 timeout_ms,
             }),
             Request::ExpectTitle {
@@ -440,6 +434,7 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
             "text": String::from_utf8_lossy(&screen.utf8),
         })),
         OperationResult::Cells(cells) => Ok(json!({ "cells": cells })),
+        OperationResult::Matches(matches) => Ok(json!({ "matches": matches })),
         OperationResult::Command(value) => Ok(json!({ "value": value })),
         OperationResult::Output(value) => Ok(json!({ "value": value })),
         OperationResult::ExitCode(value) => Ok(json!({ "value": value })),
