@@ -163,15 +163,23 @@ test("constructor and per-run profile objects recolor the terminal", async () =>
         ];
   try {
     await su.run(process.execPath, argsFor("constructor-profile"));
-    await su.waitText("constructor-profile", { timeout: 5000 });
-    await su.expectText("constructor-profile", { fg: "#010203" });
+    await su.getByText("constructor-profile").wait({ timeout: 5000 });
+    await su
+      .getByText("constructor-profile")
+      .getByStyle({ foreground: "#010203" })
+      .unique()
+      .expect();
 
     await su.run(process.execPath, argsFor("call-profile"), {
       restart: true,
       profile: { colors: { red: "#040506" } },
     });
-    await su.waitText("call-profile", { timeout: 5000 });
-    await su.expectText("call-profile", { fg: "#040506" });
+    await su.getByText("call-profile").wait({ timeout: 5000 });
+    await su
+      .getByText("call-profile")
+      .getByStyle({ foreground: "#040506" })
+      .unique()
+      .expect();
   } finally {
     await su.closeQuiet();
   }
@@ -183,10 +191,10 @@ test("constructor and per-call backends reach native sessions", async () => {
   });
   try {
     await su.run(process.execPath, evalArgs);
-    await su.waitText("ready", { timeout: 2000 });
+    await su.getByText("ready").wait({ timeout: 2000 });
 
     await su.run(process.execPath, evalArgs, { backend: "alacritty" });
-    await su.waitText("ready", { timeout: 2000 });
+    await su.getByText("ready").wait({ timeout: 2000 });
   } finally {
     await su.closeQuiet();
   }
@@ -198,15 +206,15 @@ test("client and per-call timeout precedence reaches native waits", async () => 
   });
   try {
     await su.run(process.execPath, evalArgs, { timeouts: { text: 2000 } });
-    await su.waitText("ready", { timeout: 2000 });
+    await su.getByText("ready").wait({ timeout: 2000 });
     await assert.rejects(
-      su.waitText("missing-client-timeout"),
+      su.getByText("missing-client-timeout").wait(),
       (error) =>
         error instanceof ExpectationError &&
         error.message.includes("timed out after 120ms"),
     );
     await assert.rejects(
-      su.waitText("missing-call-timeout", { timeout: 30 }),
+      su.getByText("missing-call-timeout").wait({ timeout: 30 }),
       (error) =>
         error instanceof ExpectationError &&
         error.message.includes("timed out after 30ms"),
@@ -220,18 +228,18 @@ test("wait and expectation failures retain operation names", async () => {
   const su = new TuiTest(uniqueSession("typed-operation-errors"));
   try {
     await su.run(process.execPath, evalArgs);
-    await su.waitText("ready", { timeout: 2000 });
+    await su.getByText("ready").wait({ timeout: 2000 });
     await assert.rejects(
-      su.waitText("missing-wait", { timeout: 20 }),
+      su.getByText("missing-wait").wait({ timeout: 20 }),
       (error) =>
         error instanceof ExpectationError &&
-        error.message.startsWith("waitText: "),
+        error.message.startsWith("locator.wait: "),
     );
     await assert.rejects(
-      su.expectText("missing-expect", { timeout: 20 }),
+      su.getByText("missing-expect").unique().expect({ timeout: 20 }),
       (error) =>
         error instanceof ExpectationError &&
-        error.message.startsWith("expectText: "),
+        error.message.startsWith("locator.expect: "),
     );
   } finally {
     await su.closeQuiet();
@@ -239,6 +247,16 @@ test("wait and expectation failures retain operation names", async () => {
 });
 
 test("typed validation and engine usage errors map to UsageError", async () => {
+  const locator = new TuiTest(uniqueSession("invalid-locator-direction"));
+  assert.throws(
+    () => locator.getByText("parent").getByText("child", { direction: "sideways" }),
+    /locator direction must be within, after, or before/,
+  );
+  assert.throws(
+    () => locator.getByText("root", { direction: "after" }),
+    /locator direction requires a parent locator/,
+  );
+
   const invalid = new TuiTest(uniqueSession("typed-invalid-size"));
   await assert.rejects(
     invalid.open({ cols: -1 }),
@@ -257,7 +275,7 @@ test("typed validation and engine usage errors map to UsageError", async () => {
   try {
     await su.run(process.execPath, evalArgs);
     await assert.rejects(
-      su.expectText("(", { regex: true, timeout: 20 }),
+      su.getByText("(", { regex: true }).unique().expect({ timeout: 20 }),
       (error) => error instanceof UsageError && error.kind === "usage",
     );
   } finally {

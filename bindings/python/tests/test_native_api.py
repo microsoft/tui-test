@@ -3,8 +3,7 @@ import inspect
 import unittest
 from pathlib import Path
 
-from tui_test import _native
-from tui_test import unique_session
+from tui_test import Locator, TuiTest, _native, unique_session
 
 
 class _IndexValue:
@@ -16,6 +15,20 @@ class _IndexValue:
 
 
 class NativeSurfaceTests(unittest.TestCase):
+    def test_public_client_omits_one_shot_text_methods(self):
+        for name in ("find_text", "wait_text", "expect_text"):
+            self.assertFalse(hasattr(TuiTest, name), name)
+        for method in (
+            TuiTest.get_by_text,
+            TuiTest.get_by_style,
+            Locator.get_by_text,
+            Locator.get_by_style,
+        ):
+            self.assertNotIn("occurrence", inspect.signature(method).parameters)
+        self.assertNotIn(
+            "style", inspect.signature(Locator.expect).parameters
+        )
+
     def test_native_session_has_only_typed_terminal_methods(self):
         session = _native.NativeSession(unique_session("surface"))
         self.assertFalse(hasattr(session, "request"))
@@ -25,6 +38,11 @@ class NativeSurfaceTests(unittest.TestCase):
             "close",
             "state",
             "text",
+            "find_locator",
+            "wait_locator",
+            "click_locator",
+            "highlight_locator",
+            "expect_locator",
             "packed_screen",
             "cells",
             "get_command",
@@ -51,13 +69,11 @@ class NativeSurfaceTests(unittest.TestCase):
             "resize",
             "signal",
             "kill",
-            "wait_text",
             "wait_idle",
             "wait_command",
             "wait_exit",
             "wait_ready",
             "wait_bell",
-            "expect_text",
             "expect_exit_code",
             "expect_output",
             "expect_bell_count",
@@ -90,6 +106,18 @@ class NativeSurfaceTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_locator_stages_reject_cross_kind_fields(self):
+        async def scenario():
+            session = _native.NativeSession(unique_session("native-locator"))
+            for stage in (
+                {"kind": "text", "text": "x", "style": {"bold": True}},
+                {"kind": "style", "style": {"bold": True}, "text": "x"},
+            ):
+                with self.assertRaises(_native.NativeUsageError):
+                    await session.find_locator([stage])
+
+        asyncio.run(scenario())
+
     def test_index_objects_are_accepted_before_range_validation(self):
         async def scenario():
             session = _native.NativeSession(unique_session("native-index"))
@@ -116,7 +144,13 @@ class NativeStubTests(unittest.TestCase):
             / "_native.pyi"
         ).read_text(encoding="utf-8")
         self.assertNotIn("async def ", stub)
+        self.assertNotIn("query_json", stub)
+        self.assertNotIn("request_json", stub)
         self.assertIn("def open(", stub)
+        self.assertIn(
+            "def find_locator(self, stages: typing.List[typing.Dict[str, typing.Any]])",
+            stub,
+        )
         self.assertIn("typing.Awaitable[", stub)
 
 

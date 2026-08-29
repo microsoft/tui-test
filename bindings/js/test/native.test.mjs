@@ -19,6 +19,7 @@ test("generated native declarations expose typed operations", async () => {
     "Cell",
     "PackedScreen",
     "RecordingOptions",
+    "TextMatch",
   ]) {
     assert.match(declarations, new RegExp(`export (?:interface|type) ${type}\\b`));
   }
@@ -28,6 +29,11 @@ test("generated native declarations expose typed operations", async () => {
     "close",
     "state",
     "text",
+    "findLocator",
+    "waitLocator",
+    "clickLocator",
+    "highlightLocator",
+    "expectLocator",
     "cells",
     "getCommand",
     "getBellCount",
@@ -42,9 +48,7 @@ test("generated native declarations expose typed operations", async () => {
     "mouseClick",
     "resize",
     "signal",
-    "waitText",
     "waitBell",
-    "expectText",
     "expectBellCount",
     "snapshot",
     "screenshot",
@@ -59,10 +63,56 @@ test("generated native declarations expose typed operations", async () => {
   assert.doesNotMatch(declarations, /Promise<unknown>/);
   assert.match(
     declarations,
+    /findLocator\(stages: Array<LocatorStage>\)/,
+  );
+  assert.doesNotMatch(declarations, /(?:queryJson|requestJson): string/);
+  assert.match(
+    declarations,
     /interface PackedScreen \{[\s\S]*readonly cols: number[\s\S]*readonly rows: number[\s\S]*readonly utf8: Uint8Array[\s\S]*\}/,
   );
   assert.doesNotMatch(declarations, /\bBuffer\b/);
   assert.doesNotMatch(declarations, /interface PackedScreen \{[\s\S]*\bbuffer:/);
+});
+
+test("public declarations expose reusable get-by locators", async () => {
+  const declarations = await readFile(
+    new URL("../dist/client.d.ts", import.meta.url),
+    "utf8",
+  );
+  for (const method of [
+    "getByText",
+    "getByStyle",
+    "any",
+    "unique",
+    "first",
+    "last",
+    "nth",
+    "locations",
+    "location",
+    "count",
+    "all",
+    "wait",
+    "click",
+    "highlight",
+    "expect",
+  ]) {
+    assert.match(declarations, new RegExp(`\\b${method}\\(`));
+  }
+  assert.match(declarations, /\bgetByText\(text: string/);
+  assert.match(declarations, /\bgetByStyle\(/);
+  assert.doesNotMatch(declarations, /\b(?:findText|waitText|expectText)\(/);
+  const textOptions = declarations.match(
+    /export interface TextSelectorOptions \{([^}]*)\}/s,
+  )?.[1];
+  const styleOptions = declarations.match(
+    /export interface StyleSelectorOptions \{([^}]*)\}/s,
+  )?.[1];
+  const expectOptions = declarations.match(
+    /export interface LocatorExpectOptions \{([^}]*)\}/s,
+  )?.[1];
+  assert.doesNotMatch(textOptions ?? "", /occurrence/);
+  assert.doesNotMatch(styleOptions ?? "", /occurrence/);
+  assert.doesNotMatch(expectOptions ?? "", /style/);
 });
 
 test("public facade omits generic request dispatchers", async () => {
