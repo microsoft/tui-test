@@ -184,7 +184,7 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
-    def test_text_locators_scope_matches_and_assert_styles(self):
+    def test_locators_support_scoped_text_matches_and_style_assertions(self):
         async def scenario():
             script = (
                 "import sys,time; "

@@ -98,11 +98,11 @@ def _profile_values(
 def _occurrence_fields(value: _Occurrence) -> Dict[str, object]:
     if isinstance(value, int) and not isinstance(value, bool):
         if value < 0:
-            raise ValueError("text occurrence index must be non-negative")
+            raise ValueError("occurrence index must be non-negative")
         return {"occurrence": "nth", "nth": value}
     if value not in ("any", "unique", "first", "last"):
         raise ValueError(
-            "text occurrence must be any, unique, first, last, or a non-negative integer"
+            "occurrence must be any, unique, first, last, or a non-negative index"
         )
     return {"occurrence": value, "nth": None}
 

@@ -549,7 +549,7 @@ class LocatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least one style"):
             terminal.get_by_style(TextStyle())
 
-    def test_location_diagnostic_failure_does_not_mask_no_match(self):
+    def test_location_diagnostic_failure_does_not_mask_no_match_error(self):
         terminal = _CapturingClient("s")
         terminal.fake.reply = []
 

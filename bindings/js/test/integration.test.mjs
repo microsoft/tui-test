@@ -379,7 +379,7 @@ test("private packed screens retain full UTF-8 logical rows and own their bytes"
   }
 });
 
-test("text locators scope matches and assert styles", async () => {
+test("locators support scoped text matches and style assertions", async () => {
   const su = new TuiTest(uniqueSession("text-locators"));
   const script =
     "process.stdout.write('Settings One\\n  Save\\nSettings Two\\n  Save\\n\\x1b[1mWarning\\x1b[0m\\n\\x1b[1mPart\\x1b[0mial\\n');" +

@@ -1344,7 +1344,7 @@ fn core_occurrence(
     if let Some(index) = nth {
         if let Some(value) = value.as_deref().filter(|value| *value != "nth") {
             return Err(TuiTestError::usage(format!(
-                "{name} cannot combine occurrence '{value}' with nth"
+                "{name} cannot be used with occurrence '{value}'"
             )));
         }
         return Ok(MatchOccurrence::Nth(index));
@@ -1402,7 +1402,7 @@ fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, Tu
             Some("text") => {
                 if py_item(dict, "style")?.is_some() {
                     return Err(TuiTestError::usage(
-                        "text locator stage cannot include style selector parameters",
+                        "text locator stages do not accept style parameters",
                     ));
                 }
                 let whitespace = match py_string(dict, "whitespace")?.as_deref() {
@@ -1429,7 +1429,7 @@ fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, Tu
                     || py_item(dict, "whitespace")?.is_some()
                 {
                     return Err(TuiTestError::usage(
-                        "style locator stage cannot include text selector parameters",
+                        "style locator stages do not accept text parameters",
                     ));
                 }
                 let style = py_item(dict, "style")?

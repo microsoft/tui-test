@@ -363,29 +363,33 @@ tui-test click text "Save" --fg green --timeout 5000         # auto-wait, then c
 tui-test highlight text 'item\s+\d+' --regex                 # highlight every match
 ```
 
-Selectors support exact or normalized whitespace, full scrollback, regular
-expressions, `after` / `before` anchors, and
-`any|unique|first|last|nth` occurrence selection. Click is strict unless the
-selector chooses one occurrence. Highlighted cells appear in the live monitor
+Selectors can match literal text or regular expressions, use exact or
+normalized whitespace, search the viewport or full scrollback, and anchor
+matches with `after` or `before`. Choose an occurrence with
+`any|unique|first|last|nth`. A click requires one match unless the selector
+chooses an occurrence. Highlighted cells remain visible in the live monitor
 and SVG screenshots until the terminal redraws. `find`, `expect`, and
-`highlight` default to any match; use `--match unique` when exactly one is
-required.
+`highlight` use any match by default; pass `--match unique` to require exactly
+one.
 
-The Rust, Python, and JavaScript APIs expose chainable `get_by_text` /
-`getByText` and `get_by_style` / `getByStyle` locators. Each stage searches
-`within`, `after`, or `before` the dynamically resolved parent match. Rust
-uses `get_by_text_relative(..., LocatorDirection::After)`; Python and
-JavaScript pass `direction="after"` / `{ direction: "after" }`.
-Programmatic selectors always start with all matches, and occurrence selection
-is expressed only by chaining `any`, `unique`, `first`, `last`, or `nth`.
-`expect` succeeds when any selected match exists; add `unique` to require
-exactly one. Style expectations are composed with a nested `get_by_style` /
-`getByStyle` locator. With the default `within` direction, that stage filters
-and preserves parent matches whose visible cells all satisfy the style.
-Negation is an expectation option, not a locator selector; combining it with
-`unique` means zero matches pass, one present match fails, and multiple matches
-remain ambiguous. Use `count()` with the host test framework to assert an
-exact current count.
+The Rust, Python, and JavaScript APIs provide chainable `get_by_text` /
+`getByText` and `get_by_style` / `getByStyle` locators. Each stage resolves
+again before every read or action and searches `within`, `after`, or `before`
+its parent match. Rust uses
+`get_by_text_relative(..., LocatorDirection::After)`; Python and JavaScript
+pass `direction="after"` / `{ direction: "after" }`.
+
+Programmatic locators begin with all matches. Narrow them only by chaining
+`any`, `unique`, `first`, `last`, or `nth`. `expect` succeeds when at least
+one selected match exists; add `unique` to require exactly one. To check
+style, chain a nested `get_by_style` / `getByStyle` locator. In the default
+`within` direction, it keeps a parent match only when all its visible cells
+satisfy the style.
+
+Negation applies to an expectation, not a locator. A negated `unique`
+expectation passes with zero matches and fails if one match is present. If
+multiple matches exist, it fails because the locator is not unique. Use
+`count()` with the host test framework to assert the exact current count.
 
 #### PTY control
 

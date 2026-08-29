@@ -346,7 +346,7 @@ pub enum Command {
         #[command(subcommand)]
         what: FindCmd,
     },
-    /// Wait for one text query, then click its middle cell.
+    /// Wait for a text match, then click its middle cell.
     Click {
         #[command(subcommand)]
         what: ClickCmd,

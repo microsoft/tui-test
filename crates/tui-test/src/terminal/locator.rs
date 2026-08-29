@@ -451,9 +451,9 @@ fn select_items<T>(
     let count = items.len();
     match occurrence {
         MatchOccurrence::Any => Ok(items),
-        MatchOccurrence::Unique if count > 1 => anyhow::bail!(
-            "unique match expected one occurrence of '{description}', but found {count}"
-        ),
+        MatchOccurrence::Unique if count > 1 => {
+            anyhow::bail!("expected '{description}' to match once, but found {count} matches")
+        }
         MatchOccurrence::Unique | MatchOccurrence::First => {
             Ok(items.into_iter().next().into_iter().collect())
         }

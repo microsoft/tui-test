@@ -84,27 +84,34 @@ await terminal
   .expect();
 ```
 
-Locators support `any()`, `unique()`, `first()`, `last()`, `nth()`, `all()`,
-`count()`, `locations()`, `location()`, `wait()`, `expect()`, `click()`, and
-`highlight()`, plus chainable `getByText()` and `getByStyle()`. A style locator
-matches contiguous per-row cell runs with the requested colors or attributes.
-When chained with the default `within` direction, `getByStyle()` filters and
-preserves each parent match, requiring all of its visible cells to match the
-style. Each chain is re-resolved for every action. Clicks target the middle
-cell and require one match unless a positional selector narrows the locator.
-Highlights appear in the live monitor and SVG screenshots until the terminal
-redraws. Like Playwright, `all()` captures the current list without waiting and returns lazy
-`nth()` locators; wait first when the list is still loading. Chained searches
-default to `direction: "within"` and can use `"after"` or `"before"` for
-relative terminal regions. `getByText()` and `getByStyle()` always begin with
-all matches; select an occurrence only with `any()`, `unique()`, `first()`,
-`last()`, or `nth()`. An unselected locator's `expect()` succeeds when at
-least one match exists, while `unique().expect()` requires exactly one.
-`click()` and `location()` require one target and therefore treat an
-unselected locator as unique. Negation belongs to the assertion:
-`unique().expect({ not: true })` passes for zero matches, fails when one is
-present, and reports ambiguity for multiple matches. `count()` returns the
-current number of selected matches for an exact test-framework assertion.
+Locators provide chainable `getByText()` and `getByStyle()` stages and support
+`any()`, `unique()`, `first()`, `last()`, `nth()`, `all()`, `count()`,
+`locations()`, `location()`, `wait()`, `expect()`, `click()`, and
+`highlight()`.
+
+A style locator matches contiguous per-row cell runs with the requested colors
+or attributes. In the default `within` direction, a chained `getByStyle()`
+keeps a parent match only when all its visible cells satisfy the style. Other
+chained searches also default to `direction: "within"` and can use `"after"`
+or `"before"` for relative terminal regions.
+
+The chain resolves again before every action. A click targets the middle cell
+and requires one match unless a positional selector narrows the locator.
+Highlights remain visible in the live monitor and SVG screenshots until the
+terminal redraws. `all()` captures the current list without waiting and
+returns lazy `nth()` locators, so wait first if the list is still loading.
+
+`getByText()` and `getByStyle()` begin with all matches. Narrow them only with
+`any()`, `unique()`, `first()`, `last()`, or `nth()`. A plain `expect()`
+succeeds when at least one match exists; `unique().expect()` requires exactly
+one. Because `click()` and `location()` require one target, they treat an
+unselected locator as unique.
+
+Negation applies to the assertion. `unique().expect({ not: true })` passes
+with zero matches and fails if one match is present. If multiple matches
+exist, it fails because the locator is not unique. `count()` returns the
+current number of selected matches for an exact assertion in the test
+framework.
 
 Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
 

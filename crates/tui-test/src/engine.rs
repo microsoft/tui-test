@@ -1393,7 +1393,7 @@ fn resolve_locator_click_point(
         )))
     } else {
         Err(TuiTestError::assertion(format!(
-            "timed out after {} waiting for one '{description}' match to click",
+            "timed out after {} waiting for exactly one '{description}' match",
             format_timeout(timeout_ms),
         )))
     }
@@ -1536,7 +1536,7 @@ fn highlight_locator(
         )))
     } else {
         Err(TuiTestError::assertion(format!(
-            "timed out after {} waiting for '{description}' to highlight",
+            "timed out after {} waiting for a '{description}' match to highlight",
             format_timeout(timeout_ms),
         )))
     }

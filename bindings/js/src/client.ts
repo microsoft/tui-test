@@ -200,7 +200,7 @@ function occurrenceOptions(occurrence?: TextOccurrence): {
   if (typeof occurrence === "string") {
     if (!["any", "unique", "first", "last"].includes(occurrence)) {
       throw new TypeError(
-        "text occurrence must be any, unique, first, last, or a non-negative integer",
+        "occurrence must be any, unique, first, last, or { nth: index }",
       );
     }
     return { occurrence };
@@ -210,7 +210,7 @@ function occurrenceOptions(occurrence?: TextOccurrence): {
     !Number.isSafeInteger(occurrence.nth) ||
     occurrence.nth < 0
   ) {
-    throw new TypeError("text occurrence nth must be a non-negative integer");
+    throw new TypeError("nth index must be a non-negative integer");
   }
   return { occurrence: "nth", nth: occurrence.nth };
 }

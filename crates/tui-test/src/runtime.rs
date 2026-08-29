@@ -58,8 +58,8 @@ impl LocatorTarget {
     }
 }
 
-/// A lazy query that is resolved against the current terminal grid for
-/// every read, wait, or action.
+/// A lazy query resolved against the current terminal grid before every read,
+/// wait, or action.
 #[derive(Clone)]
 pub struct Locator {
     target: LocatorTarget,

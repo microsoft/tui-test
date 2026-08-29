@@ -380,21 +380,26 @@ camelCase (`startRecording`, `stopRecording`, `waitCommand`,
 `getExitCode`, etc.).
 
 `get_by_text()` / `getByText()` and `get_by_style()` / `getByStyle()` return
-lazy locators in the three languages. Every text or contiguous style-run stage
-can be chained and is resolved again for each read or action, so the same
-locator can wait and then click the current match. Locators support `any`,
-`unique`, `first`, `last`, `nth`, `all`, match locations, click-at-center, and
-highlighting, and expectations. Chained stages search `within`, `after`, or
-`before` the dynamically resolved parent match. Programmatic selectors always
-start with all matches; select occurrences only by chaining `any`, `unique`,
-`first`, `last`, or `nth`. `expect` succeeds when any selected match exists;
-`unique().expect()` requires exactly one. Compose style expectations as a
-nested `get_by_style` / `getByStyle` stage. With the default `within`
-direction, it filters and preserves parent matches whose visible cells all
-satisfy the style. Negation is an expectation option: a negated `unique`
-locator passes with zero matches, fails with one present match, and remains
-ambiguous with multiple matches. `count()` returns the exact current match
-count for an assertion in the host test framework.
+lazy locators in all three languages. Text and contiguous style-run stages can
+be chained. The chain resolves again before every read or action, so the same
+locator can wait and then click the current match.
+
+Locators provide the `any`, `unique`, `first`, `last`, and `nth` occurrence
+selectors, along with `all`, match locations, centered clicks, highlighting,
+and expectations. Chained stages search `within`, `after`, or `before` each
+dynamically resolved parent match.
+
+Programmatic locators begin with all matches. Narrow them only by chaining
+`any`, `unique`, `first`, `last`, or `nth`. `expect` succeeds when at least
+one selected match exists; `unique().expect()` requires exactly one. To check
+style, chain a nested `get_by_style` / `getByStyle` stage. In the default
+`within` direction, it keeps a parent match only when all its visible cells
+satisfy the style.
+
+Negation applies to an expectation. A negated `unique` locator passes with
+zero matches and fails if one match is present. If multiple matches exist, it
+fails because the locator is not unique. `count()` returns the exact current
+match count for assertions in the host test framework.
 
 The constructors accept a session name plus backend, profile, timeout, and
 artifact options: `TuiTest(session="default", *, backend=None, timeouts=None,

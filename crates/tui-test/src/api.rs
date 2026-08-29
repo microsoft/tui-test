@@ -259,7 +259,7 @@ fn default_locator_occurrence() -> MatchOccurrence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-/// One lazy locator stage plus the parent query that positions it.
+/// A lazy locator stage and the parent query that defines its search region.
 pub struct LocatorQuery {
     pub selector: LocatorSelector,
     #[serde(default = "default_locator_occurrence")]
