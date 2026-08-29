@@ -59,12 +59,44 @@ pub(super) fn draw_glyph(
     }
 }
 
-pub(super) fn fill_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color: Rgb) {
+pub(super) fn fill_antialiased_rect(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    color: Rgb,
+) {
     let Some(rect) = Rect::from_xywh(x, y, width, height) else {
         return;
     };
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.r, color.g, color.b, 255);
+    pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+}
+
+pub(super) fn fill_pixel_rect(
+    pixmap: &mut Pixmap,
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+    color: Rgb,
+) {
+    if left >= right || top >= bottom {
+        return;
+    }
+    let Some(rect) = Rect::from_xywh(
+        left as f32,
+        top as f32,
+        (right - left) as f32,
+        (bottom - top) as f32,
+    ) else {
+        return;
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, 255);
+    paint.anti_alias = false;
     pixmap.fill_rect(rect, &paint, Transform::identity(), None);
 }
 

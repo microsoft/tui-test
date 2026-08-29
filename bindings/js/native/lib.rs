@@ -11,12 +11,15 @@ use tui_test::shell::Shell as CoreShell;
 use tui_test::{
     global_registry, Backend as CoreBackend, BellEvent as CoreBellEvent, Cell as CoreCell,
     CellColor, Cursor as CoreCursor, EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind,
-    KeyAction, MouseAction, MouseOptions as CoreMouseOptions, OpenOptions as CoreOpenOptions,
-    OpenResult as CoreOpenResult, Operation, OperationResult,
-    RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
-    ScreenshotResult as CoreScreenshotResult, SessionHandle, Size as CoreSize,
-    SnapshotResult as CoreSnapshotResult, State as CoreState, Timeouts as CoreTimeouts,
-    TuiTestError,
+    KeyAction, LocatorDirection as CoreLocatorDirection, LocatorQuery as CoreLocatorQuery,
+    LocatorSelector as CoreLocatorSelector, MatchOccurrence as CoreMatchOccurrence, MouseAction,
+    MouseOptions as CoreMouseOptions, OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult,
+    Operation, OperationResult, RecordingFormat as CoreRecordingFormat,
+    RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
+    Size as CoreSize, SnapshotResult as CoreSnapshotResult, State as CoreState,
+    StyleSelector as CoreStyleSelector, TextMatch as CoreTextMatch,
+    TextSelector as CoreTextSelector, TextStyle as CoreTextStyle, Timeouts as CoreTimeouts,
+    TuiTestError, WhitespaceMode as CoreWhitespaceMode,
 };
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
@@ -338,6 +341,52 @@ impl TryFrom<CoreCell> for Cell {
 }
 
 #[napi(object)]
+pub struct TextPosition {
+    pub row: u32,
+    pub column: u16,
+}
+
+#[napi(object)]
+pub struct TextSpan {
+    pub row: u32,
+    pub start: u16,
+    pub end: u16,
+}
+
+#[napi(object)]
+pub struct TextMatch {
+    pub text: String,
+    pub start: TextPosition,
+    pub end: TextPosition,
+    pub spans: Vec<TextSpan>,
+}
+
+impl From<CoreTextMatch> for TextMatch {
+    fn from(value: CoreTextMatch) -> Self {
+        Self {
+            text: value.text,
+            start: TextPosition {
+                row: value.start.row,
+                column: value.start.column,
+            },
+            end: TextPosition {
+                row: value.end.row,
+                column: value.end.column,
+            },
+            spans: value
+                .spans
+                .into_iter()
+                .map(|span| TextSpan {
+                    row: span.row,
+                    start: span.start,
+                    end: span.end,
+                })
+                .collect(),
+        }
+    }
+}
+
+#[napi(object)]
 /// Private native-owned packed screen snapshot.
 ///
 /// `utf8` decodes to exactly `rows` newline-delimited logical rows. Trailing
@@ -364,29 +413,52 @@ pub struct MouseClickOptions {
     pub clicks: Option<f64>,
 }
 
+#[napi(string_enum = "lowercase")]
+pub enum LocatorStageKind {
+    Text,
+    Style,
+}
+
+#[napi(string_enum = "lowercase")]
+pub enum LocatorStageDirection {
+    Within,
+    After,
+    Before,
+}
+
+#[derive(Default)]
 #[napi(object)]
-pub struct WaitTextOptions {
+pub struct LocatorStyle {
+    pub foreground: Option<String>,
+    pub background: Option<String>,
+    pub bold: Option<bool>,
+    pub dim: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline_style: Option<String>,
+    pub underline_color: Option<String>,
+    pub inverse: Option<bool>,
+    pub hidden: Option<bool>,
+    pub strikethrough: Option<bool>,
+    pub blink: Option<bool>,
+}
+
+#[napi(object)]
+pub struct LocatorStage {
+    pub kind: LocatorStageKind,
+    pub direction: Option<LocatorStageDirection>,
+    pub text: Option<String>,
     pub regex: Option<bool>,
     pub full: Option<bool>,
-    pub not: Option<bool>,
-    pub timeout_ms: Option<f64>,
+    pub whitespace: Option<String>,
+    pub occurrence: Option<String>,
+    pub nth: Option<f64>,
+    pub style: Option<LocatorStyle>,
 }
 
 #[napi(object)]
 pub struct TitleOptions {
     pub regex: Option<bool>,
     pub not: Option<bool>,
-    pub timeout_ms: Option<f64>,
-}
-
-#[napi(object)]
-pub struct ExpectTextOptions {
-    pub regex: Option<bool>,
-    pub full: Option<bool>,
-    pub strict: Option<bool>,
-    pub not: Option<bool>,
-    pub fg: Option<String>,
-    pub bg: Option<String>,
     pub timeout_ms: Option<f64>,
 }
 
@@ -504,6 +576,118 @@ fn mouse_options(value: f64) -> std::result::Result<CoreMouseOptions, TuiTestErr
     let code = u8_value(value, "button")?;
     CoreMouseOptions::from_sgr_code(code)
         .ok_or_else(|| TuiTestError::usage(format!("invalid mouse button code {code}")))
+}
+
+fn core_occurrence(
+    value: Option<String>,
+    nth: Option<f64>,
+    default: CoreMatchOccurrence,
+    name: &str,
+) -> std::result::Result<CoreMatchOccurrence, TuiTestError> {
+    if let Some(index) = nth {
+        if let Some(value) = value.as_deref().filter(|value| *value != "nth") {
+            return Err(TuiTestError::usage(format!(
+                "{name} cannot be used with occurrence '{value}'"
+            )));
+        }
+        return Ok(CoreMatchOccurrence::Nth(
+            integer(index, name, usize::MAX as u64)? as usize,
+        ));
+    }
+    match value.as_deref() {
+        None => Ok(default),
+        Some("any") => Ok(CoreMatchOccurrence::Any),
+        Some("unique") => Ok(CoreMatchOccurrence::Unique),
+        Some("first") => Ok(CoreMatchOccurrence::First),
+        Some("last") => Ok(CoreMatchOccurrence::Last),
+        Some("nth") => Err(TuiTestError::usage(format!("{name} requires an nth index"))),
+        Some(value) => Err(TuiTestError::usage(format!(
+            "{name} must be any, unique, first, last, or nth (got '{value}')"
+        ))),
+    }
+}
+
+fn core_style(style: LocatorStyle) -> CoreTextStyle {
+    CoreTextStyle {
+        foreground: style.foreground,
+        background: style.background,
+        bold: style.bold,
+        dim: style.dim,
+        italic: style.italic,
+        underline_style: style.underline_style,
+        underline_color: style.underline_color,
+        inverse: style.inverse,
+        hidden: style.hidden,
+        strikethrough: style.strikethrough,
+        blink: style.blink,
+    }
+}
+
+fn core_query(stages: Vec<LocatorStage>) -> std::result::Result<CoreLocatorQuery, TuiTestError> {
+    let mut parent = None;
+    for (index, stage) in stages.into_iter().enumerate() {
+        let occurrence = core_occurrence(
+            stage.occurrence,
+            stage.nth,
+            CoreMatchOccurrence::Any,
+            &format!("stages[{index}].nth"),
+        )?;
+        let selector = match stage.kind {
+            LocatorStageKind::Text => {
+                if stage.style.is_some() {
+                    return Err(TuiTestError::usage(
+                        "text locator stages do not accept style parameters",
+                    ));
+                }
+                let whitespace = match stage.whitespace.as_deref() {
+                    None | Some("exact") => CoreWhitespaceMode::Exact,
+                    Some("normalize") => CoreWhitespaceMode::Normalize,
+                    Some(value) => {
+                        return Err(TuiTestError::usage(format!(
+                            "whitespace must be exact or normalize (got '{value}')"
+                        )))
+                    }
+                };
+                CoreLocatorSelector::Text(CoreTextSelector {
+                    text: stage
+                        .text
+                        .ok_or_else(|| TuiTestError::usage("text locator stage requires text"))?,
+                    regex: stage.regex.unwrap_or(false),
+                    full: stage.full.unwrap_or(false),
+                    whitespace,
+                    scope: Default::default(),
+                })
+            }
+            LocatorStageKind::Style => {
+                if stage.text.is_some()
+                    || stage.regex.unwrap_or(false)
+                    || stage.whitespace.is_some()
+                {
+                    return Err(TuiTestError::usage(
+                        "style locator stages do not accept text parameters",
+                    ));
+                }
+                CoreLocatorSelector::Style(CoreStyleSelector {
+                    style: core_style(stage.style.ok_or_else(|| {
+                        TuiTestError::usage("style locator stage requires style")
+                    })?),
+                    full: stage.full.unwrap_or(false),
+                })
+            }
+        };
+        parent = Some(CoreLocatorQuery {
+            selector,
+            occurrence,
+            within: parent.map(Box::new),
+            direction: match stage.direction {
+                None | Some(LocatorStageDirection::Within) => CoreLocatorDirection::Within,
+                Some(LocatorStageDirection::After) => CoreLocatorDirection::After,
+                Some(LocatorStageDirection::Before) => CoreLocatorDirection::Before,
+            },
+            style: CoreTextStyle::default(),
+        });
+    }
+    parent.ok_or_else(|| TuiTestError::usage("locator requires at least one stage"))
 }
 
 fn i32_value(value: f64, name: &str) -> std::result::Result<i32, TuiTestError> {
@@ -717,6 +901,111 @@ impl NativeSession {
                 _ => Err(unexpected("text")),
             },
         )
+        .await
+    }
+
+    #[napi]
+    pub async fn find_locator(&self, stages: Vec<LocatorStage>) -> Result<Vec<TextMatch>> {
+        let handle = self.handle.clone();
+        blocking("findLocator", move || {
+            let query = core_query(stages)?;
+            match handle.execute(Operation::FindLocator { query })? {
+                OperationResult::Matches(matches) => {
+                    Ok(matches.into_iter().map(TextMatch::from).collect())
+                }
+                _ => Err(unexpected("findLocator")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn wait_locator(
+        &self,
+        stages: Vec<LocatorStage>,
+        not: Option<bool>,
+        timeout_ms: Option<f64>,
+    ) -> Result<()> {
+        let handle = self.handle.clone();
+        blocking("waitLocator", move || {
+            let query = core_query(stages)?;
+            match handle.execute(Operation::WaitLocator {
+                query,
+                not: not.unwrap_or(false),
+                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+            })? {
+                OperationResult::Unit => Ok(()),
+                _ => Err(unexpected("waitLocator")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn click_locator(
+        &self,
+        stages: Vec<LocatorStage>,
+        button: Option<f64>,
+        clicks: Option<f64>,
+        timeout_ms: Option<f64>,
+    ) -> Result<()> {
+        let handle = self.handle.clone();
+        blocking("clickLocator", move || {
+            let query = core_query(stages)?;
+            match handle.execute(Operation::ClickLocator {
+                query,
+                options: mouse_options(button.unwrap_or(0.0))?,
+                clicks: u8_value(clicks.unwrap_or(1.0), "clicks")?,
+                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+            })? {
+                OperationResult::Unit => Ok(()),
+                _ => Err(unexpected("clickLocator")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn highlight_locator(
+        &self,
+        stages: Vec<LocatorStage>,
+        timeout_ms: Option<f64>,
+    ) -> Result<Vec<TextMatch>> {
+        let handle = self.handle.clone();
+        blocking("highlightLocator", move || {
+            let query = core_query(stages)?;
+            match handle.execute(Operation::HighlightLocator {
+                query,
+                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+            })? {
+                OperationResult::Matches(matches) => {
+                    Ok(matches.into_iter().map(TextMatch::from).collect())
+                }
+                _ => Err(unexpected("highlightLocator")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn expect_locator(
+        &self,
+        stages: Vec<LocatorStage>,
+        not: Option<bool>,
+        timeout_ms: Option<f64>,
+    ) -> Result<()> {
+        let handle = self.handle.clone();
+        blocking("expectLocator", move || {
+            let query = core_query(stages)?;
+            match handle.execute(Operation::WaitLocator {
+                query,
+                not: not.unwrap_or(false),
+                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+            })? {
+                OperationResult::Unit => Ok(()),
+                _ => Err(unexpected("expectLocator")),
+            }
+        })
         .await
     }
 
@@ -1135,31 +1424,6 @@ impl NativeSession {
     }
 
     #[napi]
-    pub async fn wait_text(&self, text: String, options: Option<WaitTextOptions>) -> Result<()> {
-        let options = options.unwrap_or(WaitTextOptions {
-            regex: None,
-            full: None,
-            not: None,
-            timeout_ms: None,
-        });
-        let handle = self.handle.clone();
-        blocking("waitText", move || {
-            let operation = Operation::WaitText {
-                text,
-                regex: options.regex.unwrap_or(false),
-                full: options.full.unwrap_or(false),
-                timeout_ms: timeout(options.timeout_ms, "timeoutMs")?,
-                not: options.not.unwrap_or(false),
-            };
-            match handle.execute(operation)? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("waitText")),
-            }
-        })
-        .await
-    }
-
-    #[napi]
     pub async fn wait_idle(&self, timeout_ms: Option<f64>) -> Result<()> {
         self.timeout_unit("waitIdle", timeout_ms, |timeout_ms| Operation::WaitIdle {
             timeout_ms,
@@ -1195,41 +1459,6 @@ impl NativeSession {
     pub async fn wait_bell(&self, timeout_ms: Option<f64>) -> Result<()> {
         self.timeout_unit("waitBell", timeout_ms, |timeout_ms| Operation::WaitBell {
             timeout_ms,
-        })
-        .await
-    }
-
-    #[napi]
-    pub async fn expect_text(
-        &self,
-        text: String,
-        options: Option<ExpectTextOptions>,
-    ) -> Result<()> {
-        let options = options.unwrap_or(ExpectTextOptions {
-            regex: None,
-            full: None,
-            strict: None,
-            not: None,
-            fg: None,
-            bg: None,
-            timeout_ms: None,
-        });
-        let handle = self.handle.clone();
-        blocking("expectText", move || {
-            let operation = Operation::ExpectText {
-                text,
-                regex: options.regex.unwrap_or(false),
-                full: options.full.unwrap_or(false),
-                strict: options.strict.unwrap_or(true),
-                not: options.not.unwrap_or(false),
-                fg: options.fg,
-                bg: options.bg,
-                timeout_ms: timeout(options.timeout_ms, "timeoutMs")?,
-            };
-            match handle.execute(operation)? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("expectText")),
-            }
         })
         .await
     }

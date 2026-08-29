@@ -21,7 +21,7 @@ async def main():
         await su.open()
         await su.submit("echo hello")
         await su.wait_command()
-        await su.expect_text("hello")
+        await su.get_by_text("hello").first().expect()
         await su.expect_exit_code(0)
 
 asyncio.run(main())
@@ -50,11 +50,13 @@ Every failure maps to one of the engine's error kinds:
 | `NoSessionError`   | 3         | no active session                        |
 | `InternalError`    | 5         | internal engine error                    |
 
-All derive from `TuiTestError`. `wait_*` and `expect_*` raise `ExpectationError` on failure. Assertion errors include the current visible terminal content.
+All derive from `TuiTestError`. Locator waits and expectations, along with the
+`wait_*` and `expect_*` methods, raise `ExpectationError` on failure. Assertion
+errors include the current visible terminal content.
 
 ## API
 
-`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count` / `get_bell_events`, `screenshot`, `start_recording` / `stop_recording`, `wait_text` / `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_text` / `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
+`TuiTest(session="default", *, backend=None, timeouts=None, profile=None, artifacts=None)` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, compatibility `press`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `get_by_text`, `get_by_style`, `cells`, `get_command` / `get_output` / `get_exit_code` / `get_cwd` / `get_cursor` / `get_size` / `get_title` / `get_bell_count` / `get_bell_events`, `screenshot`, `start_recording` / `stop_recording`, `wait_title` / `wait_idle` / `wait_command` / `wait_exit` / `wait_ready` / `wait_bell`, `expect_title` / `expect_exit_code` / `expect_output` / `expect_bell_count` / `expect_snapshot`, `close`, and `close_quiet`.
 
 `keyboard.press()` simulates key presses: it sends the normal press input and
 adds a release only when the negotiated Kitty mode can represent it.
@@ -71,6 +73,72 @@ await terminal.mouse.click(10, 5, button="right", ctrl=True)
 await terminal.mouse.down(10, 5, button="middle")
 await terminal.mouse.up(10, 5, button="middle")
 await terminal.mouse.drag(1, 2, 20, 2, button="left", shift=True)
+```
+
+`get_by_text()` and `get_by_style()` create lazy locators. They resolve against
+the latest terminal grid whenever read or acted on:
+
+```python
+from tui_test import TextStyle, TuiTest
+
+terminal = TuiTest()
+await (
+    terminal
+    .get_by_text("Settings")
+    .get_by_text("Save", whitespace="normalize", direction="after")
+    .click()
+)
+
+items = terminal.get_by_text(r"item \d+", regex=True)
+await items.highlight()  # highlights every match
+second = items.nth(1)
+print(await second.location())
+
+await (
+    terminal
+    .get_by_text("Warning")
+    .get_by_style(TextStyle(bold=True))
+    .unique()
+    .expect()
+)
+```
+
+Locators provide chainable `get_by_text()` and `get_by_style()` stages and
+support `any()`, `unique()`, `first()`, `last()`, `nth()`, `all()`, `count()`,
+`locations()`, `location()`, `wait()`, `expect()`, `click()`, and
+`highlight()`.
+
+A style locator matches contiguous per-row cell runs with the requested colors
+or attributes. In the default `within` direction, a chained `get_by_style()`
+keeps a parent match only when all its visible cells satisfy the style. Other
+stages also search `within` each parent by default and can use
+`direction="after"` or `direction="before"` for relative terminal regions.
+
+The chain resolves again before every action. A click targets the middle cell
+and requires one match unless a positional selector narrows the locator.
+Highlights remain visible in the live monitor and SVG screenshots until the
+terminal redraws. `all()` captures the current list without waiting and
+returns lazy `nth()` locators, so wait first if the list is still loading.
+
+`get_by_text()` and `get_by_style()` begin with all matches. Narrow them only
+with `any()`, `unique()`, `first()`, `last()`, or `nth()`. A plain `expect()`
+succeeds when at least one match exists; `unique().expect()` requires exactly
+one. Because `click()` and `location()` require one target, they treat an
+unselected locator as unique.
+
+Negation applies to the assertion. `unique().expect(not_=True)` passes with
+zero matches and fails if one match is present. If multiple matches exist, it
+fails because the locator is not unique. `count()` returns the current number
+of selected matches for an exact assertion in the test framework.
+
+Locator clicks accept the same named buttons and modifier booleans as
+`mouse.click()`:
+
+```python
+await terminal.get_by_text("Open").unique().click(
+    button="middle",
+    ctrl=True,
+)
 ```
 
 Module-level helpers: `sessions()`, `close_all()`, `get_recording()`, `unique_session()`.
@@ -119,7 +187,7 @@ async def test_echo():
     async with terminal() as t:
         await t.submit("echo hi")
         await t.wait_command()
-        await t.expect_text("hi")
+        await t.get_by_text("hi").first().expect()
 ```
 
 Each terminal is uniquely named, so parallel workers don't collide. `set_terminal_defaults(...)` sets suite-wide options (`profile`, `timeouts`, `artifacts`, ...).
