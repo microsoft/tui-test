@@ -1,13 +1,23 @@
 # tui-test
 
-> 💻 Control, record, and test any TUI app or CLI in a real terminal emulator. Give tests and AI direct access to the terminal.
+`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. Use it from the CLI or call the same engine from Rust, Python, or JavaScript. It works for AI agents that need structured access to terminal state, terminal automation, and terminal ui application testing.
 
-`tui-test` runs on Windows, Linux, and macOS. Use the CLI from a terminal or the Rust, Python, and JavaScript packages from code.
+<p align="center">
+  <a href="#installation">Installation</a>
+  ·
+  <a href="#quick-start">Quick start</a>
+  ·
+  <a href="#agent-commands">AI agents</a>
+  ·
+  <a href="#api-references">API references</a>
+  ·
+  <a href="#configuration">Configuration</a>
+</p>
 
 > [!IMPORTANT]
-> `tui-test` is in beta.
+> `tui-test` is undergoing a major rewrite. These docs cover the beta releases.
 
-## Install
+## Installation
 
 ### CLI
 
@@ -61,7 +71,7 @@ tui-test click text "Save" --match unique
 tui-test highlight text 'item \d+' --regex
 ```
 
-## API
+## API references
 
 | Surface | Reference |
 | --- | --- |
