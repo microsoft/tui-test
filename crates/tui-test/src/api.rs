@@ -1,8 +1,40 @@
 use std::fmt;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::shell::Shell;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AutomaticRecordingMode {
+    Disabled,
+    OnFailure,
+    #[default]
+    Always,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AutomaticRecording {
+    pub mode: AutomaticRecordingMode,
+    pub directory: Option<PathBuf>,
+}
+
+impl AutomaticRecording {
+    pub fn validate(&self) -> Result<(), TuiTestError> {
+        if self
+            .directory
+            .as_ref()
+            .is_some_and(|directory| directory.as_os_str().is_empty())
+        {
+            return Err(TuiTestError::usage(
+                "automatic recording directory must not be empty",
+            ));
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -54,6 +86,7 @@ pub struct OpenOptions {
     pub wait_ready: Option<bool>,
     pub restart: bool,
     pub timeouts: Timeouts,
+    pub recording: AutomaticRecording,
 }
 
 impl Default for OpenOptions {
@@ -69,6 +102,7 @@ impl Default for OpenOptions {
             wait_ready: None,
             restart: false,
             timeouts: Timeouts::default(),
+            recording: AutomaticRecording::default(),
         }
     }
 }
@@ -90,6 +124,7 @@ pub struct RunOptions {
     pub wait_ready: Option<bool>,
     pub restart: bool,
     pub timeouts: Timeouts,
+    pub recording: AutomaticRecording,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

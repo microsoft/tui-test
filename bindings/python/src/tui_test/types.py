@@ -8,6 +8,7 @@ Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
+AutomaticRecordingMode = Literal["disabled", "on-failure", "always"]
 LocatorDirection = Literal["within", "after", "before"]
 
 
@@ -47,6 +48,12 @@ class Timeouts:
     command: Optional[int] = None
     exit: Optional[int] = None
     ready: Optional[int] = None
+
+
+@dataclass
+class AutomaticRecording:
+    mode: Optional[AutomaticRecordingMode] = None
+    directory: Optional[str] = None
 
 
 @dataclass

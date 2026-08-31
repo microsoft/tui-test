@@ -756,6 +756,81 @@ fn state_reports_effective_timeouts() {
 }
 
 #[test]
+fn automatic_recording_mode_and_directory_come_from_config() {
+    let sandbox = Sandbox::new("recording-config");
+    let config = sandbox.home.join("recording.toml");
+    std::fs::write(
+        &config,
+        "[recording]\nmode = \"disabled\"\ndirectory = \"casts\"\n",
+    )
+    .unwrap();
+    let config = config.to_str().unwrap();
+    let raw = sandbox.ok(&["--json", "open", "--config", config, "--no-wait-ready"]);
+    let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(payload["data"]["recording"], "");
+    sandbox.ok(&["close"]);
+}
+
+#[test]
+fn failed_open_recording_is_readable_before_close() {
+    let sandbox = Sandbox::new("recording-failed-open");
+    let config = sandbox.home.join("recording.toml");
+    std::fs::write(
+        &config,
+        "[recording]\nmode = \"on-failure\"\ndirectory = \"casts\"\n",
+    )
+    .unwrap();
+    let config = config.to_str().unwrap();
+    let mut args = vec![
+        "run",
+        "--config",
+        config,
+        "--wait-ready",
+        "--timeout-ready",
+        "100",
+    ];
+    args.extend(sleeper());
+    assert_eq!(sandbox.run(&args).status.code(), Some(1));
+
+    let recording = sandbox.ok(&["get-recording", "--config", config]);
+    assert!(recording.contains("\"version\":2"));
+    sandbox.ok(&["close"]);
+}
+
+#[test]
+fn failed_spawn_does_not_expose_a_previous_custom_recording() {
+    let sandbox = Sandbox::new("recording-failed-spawn");
+    let config = sandbox.home.join("recording.toml");
+    std::fs::write(&config, "[recording]\ndirectory = \"casts\"\n").unwrap();
+    let config = config.to_str().unwrap();
+    sandbox.ok(&["open", "--config", config, "--no-wait-ready"]);
+    sandbox.ok(&["close"]);
+
+    std::fs::write(
+        config,
+        "[recording]\nmode = \"on-failure\"\ndirectory = \"casts\"\n",
+    )
+    .unwrap();
+    assert!(!sandbox
+        .run(&[
+            "run",
+            "--config",
+            config,
+            "tui-test-program-that-does-not-exist",
+        ])
+        .status
+        .success());
+    sandbox.ok(&["daemon", "stop"]);
+    assert_eq!(
+        sandbox
+            .run(&["get-recording", "--config", config])
+            .status
+            .code(),
+        Some(3)
+    );
+}
+
+#[test]
 fn open_reports_the_daemon_pid_the_child_and_readiness() {
     let sandbox = Sandbox::new("open-payload");
     let raw = sandbox.ok(&["--json", "open"]);

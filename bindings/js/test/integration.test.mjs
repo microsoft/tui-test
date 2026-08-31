@@ -130,6 +130,43 @@ test("recording API writes an asciicast file", async () => {
   }
 });
 
+test("automatic recording mode and directory are configurable", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-test-auto-recording-"));
+  const disabled = new TuiTest(uniqueSession("recording-disabled"), {
+    recording: { mode: "disabled", directory: root },
+  });
+  assert.equal((await disabled.open({ shell, waitReady: false })).recording, "");
+  await disabled.close();
+
+  const always = new TuiTest(uniqueSession("recording-always"), {
+    recording: { mode: "always", directory: root },
+  });
+  const opened = await always.open({ shell, waitReady: false });
+  assert.ok(opened.recording.startsWith(root));
+  assert.ok(existsSync(opened.recording));
+  await always.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("failed open recording is readable before close", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-test-failed-open-"));
+  const name = uniqueSession("recording-failed-open");
+  const su = new TuiTest(name, {
+    recording: { mode: "on-failure", directory: root },
+  });
+  await assert.rejects(
+    () =>
+      su.run(process.execPath, evalArgs, {
+        waitReady: true,
+        timeouts: { ready: 50 },
+      }),
+    ExpectationError,
+  );
+  assert.match(await getRecording(name), /"version":2/);
+  await su.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("recording API exports styled Unicode to APNG and GIF", async () => {
   const root = mkdtempSync(join(tmpdir(), "tui-test-raster-recording-"));
   const command =

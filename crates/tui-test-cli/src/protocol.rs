@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use tui_test::{
-    Backend, Engine, KeyAction, LocatorQuery, OpenOptions, Operation, OperationResult,
-    RecordingFormat, RunOptions, ScreenshotResult, TuiTestError,
+    AutomaticRecording, Backend, Engine, KeyAction, LocatorQuery, OpenOptions, Operation,
+    OperationResult, RecordingFormat, RunOptions, ScreenshotResult, TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
@@ -33,6 +33,8 @@ pub enum Request {
         restart: bool,
         #[serde(default)]
         timeouts: Timeouts,
+        #[serde(default)]
+        recording: Box<AutomaticRecording>,
     },
     Close,
     Status,
@@ -197,6 +199,7 @@ impl Request {
                 wait_ready,
                 restart,
                 timeouts,
+                recording,
             } => {
                 if let Some(program) = program {
                     let mut parts = program.into_iter();
@@ -215,6 +218,7 @@ impl Request {
                         wait_ready,
                         restart,
                         timeouts,
+                        recording: *recording,
                     }))
                 } else {
                     Ok(Operation::Open(OpenOptions {
@@ -228,6 +232,7 @@ impl Request {
                         wait_ready,
                         restart,
                         timeouts,
+                        recording: *recording,
                     }))
                 }
             }
@@ -470,6 +475,7 @@ mod tests {
             wait_ready,
             restart: false,
             timeouts,
+            recording: Box::new(AutomaticRecording::default()),
         }
     }
 
