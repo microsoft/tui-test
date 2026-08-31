@@ -9,9 +9,11 @@ use napi_derive::napi;
 use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::shell::Shell as CoreShell;
 use tui_test::{
-    global_registry, Backend as CoreBackend, BellEvent as CoreBellEvent, Cell as CoreCell,
-    CellColor, Cursor as CoreCursor, EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind,
-    KeyAction, LocatorDirection as CoreLocatorDirection, LocatorQuery as CoreLocatorQuery,
+    global_registry, AutomaticRecording as CoreAutomaticRecording,
+    AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend as CoreBackend,
+    BellEvent as CoreBellEvent, Cell as CoreCell, CellColor, Cursor as CoreCursor,
+    EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, KeyAction,
+    LocatorDirection as CoreLocatorDirection, LocatorQuery as CoreLocatorQuery,
     LocatorSelector as CoreLocatorSelector, MatchOccurrence as CoreMatchOccurrence, MouseAction,
     MouseOptions as CoreMouseOptions, OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult,
     Operation, OperationResult, RecordingFormat as CoreRecordingFormat,
@@ -99,6 +101,12 @@ pub struct Timeouts {
     pub command: Option<f64>,
     pub exit: Option<f64>,
     pub ready: Option<f64>,
+}
+
+#[napi(object)]
+pub struct AutomaticRecordingOptions {
+    pub mode: Option<String>,
+    pub directory: Option<String>,
 }
 
 #[napi(object)]
@@ -718,6 +726,28 @@ fn core_timeouts(value: Option<Timeouts>) -> std::result::Result<CoreTimeouts, T
     })
 }
 
+fn core_recording(
+    value: Option<AutomaticRecordingOptions>,
+) -> std::result::Result<CoreAutomaticRecording, TuiTestError> {
+    let Some(value) = value else {
+        return Ok(CoreAutomaticRecording::default());
+    };
+    let mode = match value.mode.as_deref().unwrap_or("always") {
+        "disabled" => CoreAutomaticRecordingMode::Disabled,
+        "on-failure" => CoreAutomaticRecordingMode::OnFailure,
+        "always" => CoreAutomaticRecordingMode::Always,
+        other => {
+            return Err(TuiTestError::usage(format!(
+            "unknown automatic recording mode {other:?}; expected disabled, on-failure, or always"
+        )))
+        }
+    };
+    Ok(CoreAutomaticRecording {
+        mode,
+        directory: value.directory.map(Into::into),
+    })
+}
+
 fn core_profile(
     scrollback: Option<f64>,
     colors: &[(String, String)],
@@ -738,9 +768,15 @@ fn core_profile(
     Ok(profile)
 }
 
-fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptions, TuiTestError> {
+fn open_options(
+    value: Option<OpenOptions>,
+    recording: CoreAutomaticRecording,
+) -> std::result::Result<CoreOpenOptions, TuiTestError> {
     let Some(value) = value else {
-        return Ok(CoreOpenOptions::default());
+        return Ok(CoreOpenOptions {
+            recording,
+            ..CoreOpenOptions::default()
+        });
     };
     let profile = core_profile(
         value.profile_scrollback,
@@ -763,10 +799,14 @@ fn open_options(value: Option<OpenOptions>) -> std::result::Result<CoreOpenOptio
         wait_ready: value.wait_ready,
         restart: value.restart.unwrap_or(false),
         timeouts: core_timeouts(value.timeouts)?,
+        recording,
     })
 }
 
-fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, TuiTestError> {
+fn run_options(
+    value: RunOptions,
+    recording: CoreAutomaticRecording,
+) -> std::result::Result<CoreRunOptions, TuiTestError> {
     if value.program.is_empty() {
         return Err(TuiTestError::usage("program must not be empty"));
     }
@@ -792,6 +832,7 @@ fn run_options(value: RunOptions) -> std::result::Result<CoreRunOptions, TuiTest
         wait_ready: value.wait_ready,
         restart: value.restart.unwrap_or(false),
         timeouts: core_timeouts(value.timeouts)?,
+        recording,
     })
 }
 
@@ -818,15 +859,17 @@ where
 #[napi]
 pub struct NativeSession {
     handle: SessionHandle,
+    recording: CoreAutomaticRecording,
 }
 
 #[napi]
 impl NativeSession {
     #[napi(constructor)]
-    pub fn new(name: String) -> Self {
-        Self {
+    pub fn new(name: String, recording: Option<AutomaticRecordingOptions>) -> Result<Self> {
+        Ok(Self {
             handle: global_registry().session(name),
-        }
+            recording: core_recording(recording).map_err(native_error)?,
+        })
     }
 
     #[napi]
@@ -837,8 +880,9 @@ impl NativeSession {
     #[napi]
     pub async fn open(&self, options: Option<OpenOptions>) -> Result<OpenResult> {
         let handle = self.handle.clone();
+        let recording = self.recording.clone();
         blocking("open", move || {
-            let result = handle.execute(Operation::Open(open_options(options)?))?;
+            let result = handle.execute(Operation::Open(open_options(options, recording)?))?;
             match result {
                 OperationResult::Open(value) => Ok(value.into()),
                 _ => Err(unexpected("open")),
@@ -850,8 +894,9 @@ impl NativeSession {
     #[napi]
     pub async fn run(&self, options: RunOptions) -> Result<OpenResult> {
         let handle = self.handle.clone();
+        let recording = self.recording.clone();
         blocking("run", move || {
-            let result = handle.execute(Operation::Run(run_options(options)?))?;
+            let result = handle.execute(Operation::Run(run_options(options, recording)?))?;
             match result {
                 OperationResult::Open(value) => Ok(value.into()),
                 _ => Err(unexpected("run")),

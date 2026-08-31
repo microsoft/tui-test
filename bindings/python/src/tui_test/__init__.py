@@ -12,6 +12,8 @@ from .errors import (
     UsageError,
 )
 from .types import (
+    AutomaticRecording,
+    AutomaticRecordingMode,
     Backend,
     BellEvent,
     Cell,
@@ -41,6 +43,8 @@ __all__ = [
     "NoSessionError",
     "InternalError",
     "TerminalArtifact",
+    "AutomaticRecording",
+    "AutomaticRecordingMode",
     "BellEvent",
     "Cell",
     "Backend",

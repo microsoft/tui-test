@@ -89,6 +89,11 @@ export interface Profile {
   colors?: Colors;
 }
 
+export interface AutomaticRecording {
+  mode?: "disabled" | "on-failure" | "always";
+  directory?: string;
+}
+
 export interface SpawnOptions {
   backend?: Backend;
   cols?: number;
@@ -119,4 +124,5 @@ export interface ClientOptions {
   profile?: Profile;
   timeouts?: Timeouts;
   artifacts?: ArtifactOptions;
+  recording?: AutomaticRecording;
 }

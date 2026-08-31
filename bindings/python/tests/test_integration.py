@@ -80,6 +80,47 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
+    def test_automatic_recording_mode_and_directory(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as root:
+                disabled = self._client(
+                    recording={"mode": "disabled", "directory": root}
+                )
+                result = await disabled.open(shell=SHELL, wait_ready=False)
+                self.assertEqual(result["recording"], "")
+                await disabled.close()
+
+                always = self._client(
+                    recording={"mode": "always", "directory": root}
+                )
+                result = await always.open(shell=SHELL, wait_ready=False)
+                self.assertTrue(result["recording"].startswith(root))
+                self.assertTrue(Path(result["recording"]).is_file())
+                await always.close()
+
+        run(scenario())
+
+    def test_failed_open_recording_is_readable_before_close(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as root:
+                name = unique_session("recording-failed-open")
+                su = TuiTest(
+                    name,
+                    recording={"mode": "on-failure", "directory": root},
+                )
+                with self.assertRaises(ExpectationError):
+                    await su.run(
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(2)",
+                        wait_ready=True,
+                        timeouts=Timeouts(ready=50),
+                    )
+                self.assertIn('"version":2', await get_recording(name))
+                await su.close()
+
+        run(scenario())
+
     def test_recording_api_exports_styled_unicode_to_apng_and_gif(self):
         async def scenario():
             command = (

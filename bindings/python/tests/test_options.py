@@ -6,7 +6,7 @@ from tui_test import _config as cfg
 from tui_test import _ephemeral as ephemeral
 from tui_test import client
 from tui_test.errors import ExpectationError, InternalError, TerminalArtifact
-from tui_test.types import Colors, Profile, TextStyle, Timeouts
+from tui_test.types import AutomaticRecording, Colors, Profile, TextStyle, Timeouts
 
 
 def run(coro):
@@ -99,6 +99,22 @@ class ProfileResolutionTests(unittest.TestCase):
             cfg.normalize_profile({"scrollbacks": 10})
         with self.assertRaises(ValueError):
             cfg.normalize_profile({"colors": {"chartreuse": "#123456"}})
+
+
+class RecordingResolutionTests(unittest.TestCase):
+    def test_accepts_only_mode_and_directory(self):
+        self.assertEqual(
+            cfg.normalize_recording(
+                AutomaticRecording(mode="on-failure", directory="casts")
+            ),
+            {"mode": "on-failure", "directory": "casts"},
+        )
+        with self.assertRaises(ValueError):
+            cfg.normalize_recording({"mode": "sometimes"})
+        with self.assertRaises(TypeError):
+            cfg.normalize_recording({"directory": ""})
+        with self.assertRaises(ValueError):
+            cfg.normalize_recording({"other": 1})
 
 
 class BackendResolutionTests(unittest.TestCase):

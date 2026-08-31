@@ -89,7 +89,12 @@ mod stubs {
             import typing
 
             class NativeSession:
-                def __new__(cls, name: str) -> NativeSession: ...
+                def __new__(
+                    cls,
+                    name: str,
+                    recording_mode: typing.Optional[str] = None,
+                    recording_directory: typing.Optional[str] = None,
+                ) -> NativeSession: ...
 
                 def open(
                     self,

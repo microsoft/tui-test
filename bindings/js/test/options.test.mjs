@@ -11,6 +11,7 @@ import {
   backendPayload,
   envPairs,
   profilePayload,
+  recordingPayload,
   resolveTimeout,
   timeoutsPayload,
 } from "../dist/config.js";
@@ -115,6 +116,7 @@ test("profilePayload validates profile and color fields", () => {
     scrollback: 50,
     colors: [["red", "#010203"]],
   });
+
   assert.throws(() => profilePayload({ scrollbacks: 50 }), /scrollbacks/);
   assert.throws(
     () => profilePayload({ colors: { chartreuse: "#010203" } }),
@@ -206,6 +208,16 @@ test("mouse helpers encode named buttons and modifiers", async () => {
   } finally {
     Object.assign(NativeRuntime.prototype, originals);
   }
+});
+
+test("recordingPayload accepts only mode and directory", () => {
+  assert.deepEqual(recordingPayload({ mode: "on-failure", directory: "casts" }), {
+    mode: "on-failure",
+    directory: "casts",
+  });
+  assert.throws(() => recordingPayload({ mode: "sometimes" }), /recording mode/);
+  assert.throws(() => recordingPayload({ directory: "" }), /non-empty/);
+  assert.throws(() => recordingPayload({ other: 1 }), /other/);
 });
 
 test("unknown timeout classes are rejected before native dispatch", async () => {

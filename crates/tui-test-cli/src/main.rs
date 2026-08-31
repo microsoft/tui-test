@@ -78,7 +78,10 @@ fn main() {
             print!("{}", skill::render(SKILL_MD, SKILL_REFERENCES));
             0
         }
-        Command::GetRecording { session: target } => get_recording(target.unwrap_or(session)),
+        Command::GetRecording {
+            session: target,
+            config,
+        } => get_recording(target.unwrap_or(session), config.as_deref()),
         Command::Sessions => list_sessions(cli.json),
         Command::Close { all } if all => close_all(cli.json),
         Command::Daemon {
@@ -204,6 +207,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 wait_ready: ready_flag(wait_ready, no_wait_ready),
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
+                recording: Box::new(settings.recording),
             }
         }
         Command::Run {
@@ -235,6 +239,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 wait_ready: ready_flag(wait_ready, no_wait_ready),
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
+                recording: Box::new(settings.recording),
             }
         }
         Command::Close { .. } => Request::Close,
@@ -894,9 +899,9 @@ fn spawn_detached(exe: &Path, session: &str, verbose: bool) -> anyhow::Result<()
 }
 
 /// Stream a session's recording (asciinema v2 cast) to stdout.
-fn get_recording(session: String) -> i32 {
+fn get_recording(session: String, explicit_config: Option<&Path>) -> i32 {
     let socket = config::socket_name(&session);
-    if ipc::is_running(&socket) {
+    let live_path = if ipc::is_running(&socket) {
         let response = match ipc::connect(&socket) {
             Ok(connection) => match ipc::exchange(connection, &Request::FlushRecording) {
                 Ok(response) => response,
@@ -920,8 +925,58 @@ fn get_recording(session: String) -> i32 {
             );
             return response.kind.map_or(5, tui_test::ErrorKind::exit_code);
         }
-    }
-    let path = config::recording_file(&session);
+        let disabled = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("disabled"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if disabled {
+            eprintln!("automatic recording is disabled for session '{session}'");
+            return 3;
+        }
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("recording"))
+            .and_then(serde_json::Value::as_str)
+            .map(std::path::PathBuf::from)
+    } else {
+        None
+    };
+    let path = match live_path {
+        Some(path) => path,
+        None => match std::fs::read_to_string(config::recording_pointer_file(&session)) {
+            Ok(path) if path.is_empty() => {
+                eprintln!("no recording for session '{session}'");
+                return 3;
+            }
+            Ok(path) => std::path::PathBuf::from(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let recording = match tui_test::profile::resolve_recording(explicit_config, &cwd) {
+                    Ok(recording) => recording,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return 2;
+                    }
+                };
+                if recording.mode == tui_test::AutomaticRecordingMode::Disabled {
+                    eprintln!("automatic recording is disabled for session '{session}'");
+                    return 3;
+                }
+                if recording.directory.is_some() {
+                    eprintln!("no recording for session '{session}'");
+                    return 3;
+                }
+                config::recording_file(&session)
+            }
+            Err(error) => {
+                eprintln!("failed to read recording metadata: {error}");
+                return 5;
+            }
+        },
+    };
     match std::fs::read(&path) {
         Ok(bytes) => {
             use std::io::Write;

@@ -32,6 +32,7 @@ from .errors import (
     UsageError,
 )
 from .types import (
+    AutomaticRecording,
     Backend,
     BellEvent,
     Cell,
@@ -515,9 +516,15 @@ class TuiTest:
         timeouts: Optional[Timeouts] = None,
         profile: Optional[Profile] = None,
         artifacts: Optional[Dict[str, Any]] = None,
+        recording: Optional[AutomaticRecording] = None,
     ) -> None:
         self._session = cfg.resolve_session(session)
-        self._native = native.NativeSession(self._session)
+        recording_values = cfg.normalize_recording(recording) or {}
+        self._native = native.NativeSession(
+            self._session,
+            recording_values.get("mode"),
+            recording_values.get("directory"),
+        )
         self._backend = cfg.normalize_backend(backend)
         self._timeouts = cfg.normalize_timeouts(timeouts)
         self._profile = cfg.normalize_profile(profile)

@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::api::{
-    Cell, CellColor, Cursor, EffectiveTimeouts, ErrorKind, LocatorQuery, LocatorSelector,
-    OpenOptions, OpenResult, Operation, OperationResult, PackedScreen, RunOptions, RuntimeStatus,
-    ScreenshotResult, Size, SnapshotResult, TextAnchor, TextMatch, TextSelector, TextStyle,
-    TuiTestError,
+    AutomaticRecording, AutomaticRecordingMode, Cell, CellColor, Cursor, EffectiveTimeouts,
+    ErrorKind, LocatorQuery, LocatorSelector, OpenOptions, OpenResult, Operation, OperationResult,
+    PackedScreen, RunOptions, RuntimeStatus, ScreenshotResult, Size, SnapshotResult, TextAnchor,
+    TextMatch, TextSelector, TextStyle, TuiTestError,
 };
 use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
@@ -27,7 +27,15 @@ pub struct Engine {
     live: Arc<Mutex<Option<LiveTarget>>>,
     interrupt: Mutex<Option<InterruptTarget>>,
     logger: Arc<Logger>,
-    recording_path: PathBuf,
+    default_recording_path: PathBuf,
+    recording: Mutex<RecordingState>,
+}
+
+#[derive(Clone)]
+struct RecordingState {
+    path: Option<PathBuf>,
+    mode: AutomaticRecordingMode,
+    failed: bool,
 }
 
 #[derive(Clone)]
@@ -93,23 +101,16 @@ impl Engine {
             live: Arc::new(Mutex::new(None)),
             interrupt: Mutex::new(None),
             logger,
-            recording_path,
+            default_recording_path: recording_path.clone(),
+            recording: Mutex::new(RecordingState {
+                path: None,
+                mode: AutomaticRecordingMode::Always,
+                failed: false,
+            }),
         }
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute_inner(operation)
-        }))
-        .unwrap_or_else(|payload| {
-            Err(TuiTestError::internal(format!(
-                "native terminal operation panicked: {}",
-                panic_message(payload.as_ref())
-            )))
-        })
-    }
-
-    fn execute_inner(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
         let _operation = self
             .operations
             .lock()
@@ -118,6 +119,28 @@ impl Engine {
             self.logger
                 .event(&format!("operation {}", operation_summary(&operation)));
         }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.execute_inner(operation)
+        }))
+        .unwrap_or_else(|payload| {
+            Err(TuiTestError::internal(format!(
+                "native terminal operation panicked: {}",
+                panic_message(payload.as_ref())
+            )))
+        });
+        if result
+            .as_ref()
+            .is_err_and(|error| matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal))
+        {
+            self.recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed = true;
+        }
+        result
+    }
+
+    fn execute_inner(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
         match operation {
             Operation::Open(options) => self.open(options).map(OperationResult::Open),
             Operation::Run(options) => self.run(options).map(OperationResult::Open),
@@ -132,7 +155,9 @@ impl Engine {
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 if let Some(session) = self.lock_session().take() {
                     session.kill();
+                    drop(session);
                 }
+                self.cleanup_recording();
                 Ok(OperationResult::Unit)
             }
             other => self.with_session(|session| dispatch(session, other)),
@@ -152,6 +177,7 @@ impl Engine {
             options.wait_ready,
             options.restart,
             options.timeouts,
+            options.recording,
         )
     }
 
@@ -171,6 +197,7 @@ impl Engine {
             options.wait_ready,
             options.restart,
             options.timeouts,
+            options.recording,
         )
     }
 
@@ -188,7 +215,9 @@ impl Engine {
         wait_ready: Option<bool>,
         restart: bool,
         timeouts: crate::api::Timeouts,
+        recording: AutomaticRecording,
     ) -> Result<OpenResult, TuiTestError> {
+        recording.validate()?;
         let mut current = self.lock_session();
         if let Some(previous) = current.as_ref() {
             if !restart && previous.is_alive()? {
@@ -196,10 +225,12 @@ impl Engine {
                     shell_pid: previous.pid(),
                     session: self.name.clone(),
                     ready: previous.is_ready(),
-                    recording: self.recording_path.to_string_lossy().into_owned(),
+                    recording: self.recording_path_string(),
                 });
             }
         }
+        let recording_required = recording.directory.is_some();
+        let recording_path = self.resolve_recording_path(&recording)?;
 
         *self
             .live
@@ -211,8 +242,18 @@ impl Engine {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         if let Some(previous) = current.take() {
             previous.kill();
+            drop(previous);
         }
         drop(current);
+        self.discard_recording();
+        *self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = RecordingState {
+            path: None,
+            mode: recording.mode,
+            failed: false,
+        };
         let session = TerminalSession::open(
             shell,
             program.clone(),
@@ -224,9 +265,17 @@ impl Engine {
             env,
             timeouts,
             self.logger.clone(),
-            self.recording_path.clone(),
+            recording_path.clone(),
+            recording_required,
         )
         .map_err(|error| TuiTestError::internal(format!("failed to open session: {error}")))?;
+        self.recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .path = session
+            .automatic_recording_enabled()
+            .then_some(recording_path)
+            .flatten();
 
         let shell_pid = session.pid();
         let ready_timeout = open_ready_timeout(&session);
@@ -272,7 +321,7 @@ impl Engine {
             shell_pid,
             session: self.name.clone(),
             ready,
-            recording: self.recording_path.to_string_lossy().into_owned(),
+            recording: self.recording_path_string(),
         })
     }
 
@@ -375,8 +424,28 @@ impl Engine {
         self.lock_session().is_some()
     }
 
-    pub fn recording_path(&self) -> &PathBuf {
-        &self.recording_path
+    pub fn recording_path(&self) -> Option<PathBuf> {
+        self.recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .path
+            .clone()
+    }
+
+    pub(crate) fn retained_recording_path(&self) -> Option<PathBuf> {
+        let recording = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let retain = match recording.mode {
+            AutomaticRecordingMode::Disabled => false,
+            AutomaticRecordingMode::OnFailure => recording.failed,
+            AutomaticRecordingMode::Always => true,
+        };
+        retain
+            .then(|| recording.path.clone())
+            .flatten()
+            .filter(|path| path.is_file())
     }
 
     pub fn flush_recording(&self) -> Result<(), TuiTestError> {
@@ -384,9 +453,86 @@ impl Engine {
             .operations
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.recording_path().is_none() {
+            return Err(TuiTestError::usage("automatic recording is disabled"));
+        }
         let guard = self.lock_session();
-        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
-        session.flush_recording()
+        if let Some(session) = guard.as_ref() {
+            return session.flush_recording();
+        }
+        if self.recording_path().is_some_and(|path| path.is_file()) {
+            Ok(())
+        } else {
+            Err(TuiTestError::no_session())
+        }
+    }
+
+    fn resolve_recording_path(
+        &self,
+        recording: &AutomaticRecording,
+    ) -> Result<Option<PathBuf>, TuiTestError> {
+        if recording.mode == AutomaticRecordingMode::Disabled {
+            return Ok(None);
+        }
+        let Some(directory) = &recording.directory else {
+            return Ok(Some(self.default_recording_path.clone()));
+        };
+        if directory.as_os_str().is_empty() {
+            return Err(TuiTestError::usage(
+                "automatic recording directory must not be empty",
+            ));
+        }
+        let directory = if directory.is_absolute() {
+            directory.clone()
+        } else {
+            std::env::current_dir()
+                .map_err(|error| {
+                    TuiTestError::internal(format!(
+                        "failed to resolve automatic recording directory: {error}"
+                    ))
+                })?
+                .join(directory)
+        };
+        let name = self
+            .default_recording_path
+            .file_name()
+            .ok_or_else(|| TuiTestError::internal("automatic recording path has no file name"))?;
+        Ok(Some(directory.join(name)))
+    }
+
+    fn recording_path_string(&self) -> String {
+        self.recording_path()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    fn cleanup_recording(&self) {
+        let recording = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let keep = match recording.mode {
+            AutomaticRecordingMode::Disabled => false,
+            AutomaticRecordingMode::OnFailure => recording.failed,
+            AutomaticRecordingMode::Always => true,
+        };
+        if !keep {
+            if let Some(path) = &recording.path {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    fn discard_recording(&self) {
+        if let Some(path) = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .path
+            .as_ref()
+        {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     fn lock_session(&self) -> MutexGuard<'_, Option<TerminalSession>> {
@@ -401,8 +547,10 @@ impl Drop for Engine {
         if let Ok(session) = self.session.get_mut() {
             if let Some(session) = session.take() {
                 session.kill();
+                drop(session);
             }
         }
+        self.cleanup_recording();
     }
 }
 

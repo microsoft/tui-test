@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, Weak};
 
@@ -330,15 +330,25 @@ impl Session {
         self.engine.is_open()
     }
 
-    pub fn recording_path(&self) -> &Path {
+    pub fn recording_path(&self) -> Option<PathBuf> {
         self.engine.recording_path()
     }
 
     pub fn recording(&self) -> std::io::Result<String> {
+        let path = self.recording_path().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "automatic recording is disabled",
+            )
+        })?;
         self.engine
             .flush_recording()
             .map_err(tui_test_error_to_io_error)?;
-        std::fs::read_to_string(self.recording_path())
+        std::fs::read_to_string(path)
+    }
+
+    fn retained_recording_path(&self) -> Option<PathBuf> {
+        self.engine.retained_recording_path()
     }
 }
 
@@ -503,34 +513,28 @@ impl SessionRegistry {
     }
 
     pub fn close_all(&self) {
-        let (sessions, removed) = {
+        let mut removed = Vec::new();
+        {
             let _lifecycle = self
                 .inner
                 .lifecycle
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut recordings = self.lock_recordings();
             let sessions = std::mem::take(&mut *self.lock_sessions());
-            let mut removed = Vec::new();
-            for (name, session) in &sessions {
-                let path = session.recording_path();
-                if path.is_file() {
-                    removed.extend(Self::cache_recording(
-                        &mut recordings,
-                        name.clone(),
-                        path.to_path_buf(),
-                    ));
-                }
+            for session in sessions.values() {
+                session.interrupt();
             }
-            (sessions, removed)
-        };
+            let mut recordings = self.lock_recordings();
+            for (name, session) in sessions {
+                let _ = session.close();
+                removed.extend(Self::replace_recording(
+                    &mut recordings,
+                    name,
+                    session.retained_recording_path(),
+                ));
+            }
+        }
         Self::remove_recording_files(removed);
-        for session in sessions.values() {
-            session.interrupt();
-        }
-        for session in sessions.into_values() {
-            let _ = session.close();
-        }
     }
 
     pub fn recording(&self, name: &str) -> std::io::Result<String> {
@@ -559,26 +563,22 @@ impl SessionRegistry {
     }
 
     fn close_locked(&self, name: &str) -> Result<(), TuiTestError> {
-        let (session, removed) = {
-            let _lifecycle = self
-                .inner
-                .lifecycle
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut recordings = self.lock_recordings();
-            let Some(session) = self.lock_sessions().remove(name) else {
-                return Ok(());
-            };
-            let path = session.recording_path();
-            let removed = if path.is_file() {
-                Self::cache_recording(&mut recordings, name.to_string(), path.to_path_buf())
-            } else {
-                Vec::new()
-            };
-            (session, removed)
+        let _lifecycle = self
+            .inner
+            .lifecycle
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(session) = self.lock_sessions().remove(name) else {
+            return Ok(());
         };
+        let result = session.close();
+        let removed = Self::replace_recording(
+            &mut self.lock_recordings(),
+            name.to_string(),
+            session.retained_recording_path(),
+        );
         Self::remove_recording_files(removed);
-        session.close()
+        result
     }
 
     fn lock_sessions(&self) -> MutexGuard<'_, HashMap<String, Session>> {
@@ -640,6 +640,20 @@ impl SessionRegistry {
         removed
     }
 
+    fn replace_recording(
+        recordings: &mut CompletedRecordings,
+        name: String,
+        path: Option<PathBuf>,
+    ) -> Vec<PathBuf> {
+        match path {
+            Some(path) => Self::cache_recording(recordings, name, path),
+            None => {
+                recordings.order.retain(|entry| entry != &name);
+                recordings.paths.remove(&name).into_iter().collect()
+            }
+        }
+    }
+
     fn remove_recording_files(paths: Vec<PathBuf>) {
         for path in paths {
             let _ = std::fs::remove_file(path);
@@ -661,7 +675,11 @@ fn native_recording_path(name: &str) -> PathBuf {
         .join("tui-test")
         .join("native")
         .join(std::process::id().to_string())
-        .join(format!("{}-{sequence}.cast", &digest[..16]))
+        .join(format!(
+            "{}-{}-{sequence}.cast",
+            &digest[..16],
+            std::process::id()
+        ))
 }
 
 fn tui_test_error_to_io_error(error: TuiTestError) -> std::io::Error {

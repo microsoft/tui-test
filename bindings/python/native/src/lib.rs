@@ -8,11 +8,12 @@ use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
-    Backend, BellEvent, Cell, CellColor, Cursor, ErrorKind, KeyAction, LocatorDirection,
-    LocatorQuery, LocatorSelector, MatchOccurrence, MouseAction, MouseOptions, OpenOptions,
-    OpenResult, Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions,
-    ScreenshotResult, Size, SnapshotResult, State, StyleSelector, TextMatch, TextSelector,
-    TextStyle, Timeouts, TuiTestError, WhitespaceMode,
+    AutomaticRecording as CoreAutomaticRecording,
+    AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend, BellEvent, Cell, CellColor,
+    Cursor, ErrorKind, KeyAction, LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence,
+    MouseAction, MouseOptions, OpenOptions, OpenResult, Operation, OperationResult, PackedScreen,
+    RecordingFormat, RunOptions, ScreenshotResult, Size, SnapshotResult, State, StyleSelector,
+    TextMatch, TextSelector, TextStyle, Timeouts, TuiTestError, WhitespaceMode,
 };
 
 pyo3::create_exception!(
@@ -44,13 +45,35 @@ pyo3::create_exception!(
 struct NativeSession {
     #[pyo3(get)]
     name: String,
+    recording: CoreAutomaticRecording,
 }
 
 #[pymethods]
 impl NativeSession {
     #[new]
-    fn new(name: String) -> Self {
-        Self { name }
+    #[pyo3(signature = (name, recording_mode = None, recording_directory = None))]
+    fn new(
+        name: String,
+        recording_mode: Option<String>,
+        recording_directory: Option<String>,
+    ) -> PyResult<Self> {
+        let mode = match recording_mode.as_deref().unwrap_or("always") {
+            "disabled" => CoreAutomaticRecordingMode::Disabled,
+            "on-failure" => CoreAutomaticRecordingMode::OnFailure,
+            "always" => CoreAutomaticRecordingMode::Always,
+            other => {
+                return Err(shell_error_to_py(TuiTestError::usage(format!(
+                    "unknown automatic recording mode {other:?}; expected disabled, on-failure, or always"
+                ))))
+            }
+        };
+        Ok(Self {
+            name,
+            recording: CoreAutomaticRecording {
+                mode,
+                directory: recording_directory.map(Into::into),
+            },
+        })
     }
 
     #[pyo3(signature = (
@@ -99,6 +122,7 @@ impl NativeSession {
         let exit_timeout = capture_optional_integer(exit_timeout);
         let ready_timeout = capture_optional_integer(ready_timeout);
         let name = self.name.clone();
+        let recording = self.recording.clone();
         future_blocking(
             py,
             move || {
@@ -121,6 +145,7 @@ impl NativeSession {
                             exit: optional_u64(exit_timeout.as_ref(), "exit_timeout")?,
                             ready: optional_u64(ready_timeout.as_ref(), "ready_timeout")?,
                         },
+                        recording,
                     }),
                 )
             },
@@ -176,6 +201,7 @@ impl NativeSession {
         let exit_timeout = capture_optional_integer(exit_timeout);
         let ready_timeout = capture_optional_integer(ready_timeout);
         let name = self.name.clone();
+        let recording = self.recording.clone();
         future_blocking(
             py,
             move || {
@@ -199,6 +225,7 @@ impl NativeSession {
                             exit: optional_u64(exit_timeout.as_ref(), "exit_timeout")?,
                             ready: optional_u64(ready_timeout.as_ref(), "ready_timeout")?,
                         },
+                        recording,
                     }),
                 )
             },
