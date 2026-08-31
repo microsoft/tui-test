@@ -290,7 +290,7 @@ The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`.
 
 #### Live monitor
 
-| Commands | Live monitor |
+| input | monitor |
 | :---: | :---: |
 | <img alt="tui-test commands controlling a terminal session" src="static/tui-test-demo-controller.gif" width="420"> | <img alt="tui-test monitor showing the controlled terminal session" src="static/tui-test-demo-monitor.gif" width="420"> |
 
