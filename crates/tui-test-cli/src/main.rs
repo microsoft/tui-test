@@ -21,8 +21,32 @@ use tui_test::{
     LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, TextAnchor, TextScope,
     TextSelector, TextStyle, WhitespaceMode,
 };
-/// Long-form agent skill manifest, printed by `tui-test skill`.
+
+/// Agent skill router, installed as `SKILL.md`.
 const SKILL_MD: &str = include_str!("../../../SKILL.md");
+/// Version-matched references installed beside the skill router.
+const SKILL_REFERENCES: &[(&str, &str)] = &[
+    (
+        "references/cli.md",
+        include_str!("../../../references/cli.md"),
+    ),
+    (
+        "references/python.md",
+        include_str!("../../../references/python.md"),
+    ),
+    (
+        "references/javascript.md",
+        include_str!("../../../references/javascript.md"),
+    ),
+    (
+        "references/rust.md",
+        include_str!("../../../references/rust.md"),
+    ),
+    (
+        "references/recipes.md",
+        include_str!("../../../references/recipes.md"),
+    ),
+];
 
 fn main() {
     let cli = Cli::parse();
@@ -49,9 +73,9 @@ fn main() {
             println!("{}", agent_context::render());
             0
         }
-        Command::Skill { add: true } => skill::add(SKILL_MD),
+        Command::Skill { add: true } => skill::add(SKILL_MD, SKILL_REFERENCES),
         Command::Skill { add: false } => {
-            print!("{SKILL_MD}");
+            print!("{}", skill::render(SKILL_MD, SKILL_REFERENCES));
             0
         }
         Command::GetRecording { session: target } => get_recording(target.unwrap_or(session)),
