@@ -21,12 +21,16 @@
 
 ### CLI
 
-macOS and Linux:
+#### Homebrew
 
 ```sh
 brew tap microsoft/tui-test https://github.com/microsoft/tui-test
 brew install tui-test
 ```
+
+#### Install script
+
+macOS and Linux:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | TUI_TEST_VERSION=beta sh
@@ -121,15 +125,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 [Rust API reference](https://docs.rs/tui-test-rs/latest/tui_test/)
-
-`expect`, `click`, and `highlight` retry until they match. `find` reads the current screen.
-
-```sh
-tui-test find text "Save" --after-text "Settings"
-tui-test expect text "Save" --fg green
-tui-test click text "Save" --match unique
-tui-test highlight text 'item \d+' --regex
-```
 
 ## API references
 
@@ -286,6 +281,18 @@ Timeout defaults:
 `record start` accepts `--format`, `--fps`, `--speed`, `--idle-time-limit`, and `--zoom`. MP4 output requires `ffmpeg`.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `--format` overrides it.
+
+#### Record
+
+<p align="center">
+  <img alt="animated terminal recording created by tui-test" src="static/recording.gif" width="400">
+</p>
+
+#### Live monitor
+
+| Commands | Live monitor |
+| :---: | :---: |
+| <img alt="tui-test commands controlling a terminal session" src="static/tui-test-demo-controller.gif" width="420"> | <img alt="tui-test monitor showing the controlled terminal session" src="static/tui-test-demo-monitor.gif" width="420"> |
 
 ### Configuration
 
