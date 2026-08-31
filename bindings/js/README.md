@@ -1,213 +1,305 @@
 # @microsoft/tui-test
 
-Node bindings for [`tui-test`](https://github.com/microsoft/tui-test); a terminal engine for driving and asserting on real shells and TUI programs.
+Control, inspect, and test terminal apps from JavaScript or TypeScript.
 
 ## Install
 
 ```sh
-npm install @microsoft/tui-test@beta # Node 20+
-
-bun add @microsoft/tui-test@beta # Bun (best effort)
-
-deno add npm:@microsoft/tui-test@beta # Deno 2 (best effort)
+npm install @microsoft/tui-test@beta
 ```
 
-The package is ESM only.
-
-## Runtime Requirements
-
-- Node: 20+
-- Bun: treated as best effort
-- Deno: 2, treated as best effort. Requires a local `node_modules` directory (`deno install` / `--node-modules-dir`) and `--allow-ffi` (in addition to `--allow-read --allow-write`)
+Node 20+ is supported. The package is ESM only. Bun and Deno support is best effort. Deno 2 needs local `node_modules` and `--allow-ffi`.
 
 ## Quick start
 
 ```js
 import { TuiTest } from "@microsoft/tui-test";
 
-const su = new TuiTest();
-await su.open();
-await su.submit("echo hello");
-const hello = su.getByText("hello");
-await hello.wait();
-await hello.last().highlight();
-await su.expectExitCode(0);
-await su.close();
+const terminal = TuiTest.ephemeral();
+
+try {
+  await terminal.run("my-app");
+  await terminal.getByText("Ready").expect();
+  await terminal.getByText("Continue").click();
+  await terminal.getByText("Done").expect();
+} finally {
+  await terminal.closeQuiet();
+}
 ```
-
-## Errors
-
-Every failure maps to one of the engine's error kinds:
-
-| Class              | `exitCode` | Meaning                                  |
-| ------------------ | ---------- | ---------------------------------------- |
-| `ExpectationError` | 1          | an `expect`/`wait` condition was not met |
-| `UsageError`       | 2          | invalid argument (e.g. a bad regex)      |
-| `NoSessionError`   | 3          | no active session                        |
-| `InternalError`    | 5          | internal engine error                    |
-
-All derive from `TuiTestError` and carry `kind` and `exitCode`. Locator waits
-and expectations, along with the `waitX` and `expectX` methods, reject with
-`ExpectationError` on failure. Assertion errors include the current visible
-terminal content.
 
 ## API
 
-`new TuiTest(session?, { backend?, profile?, timeouts?, artifacts? })` mirrors the cli: `open` / `run`, `type` / `write`, `submit`, `keyboard.press|down|repeat|up`, `mouse.click|move|down|up|drag|scroll`, `resize`, `signal` / `kill`, `state`, `text`, `getByText`, `getByStyle`, `cells`, `getCommand` / `getOutput` / `getExitCode` / `getCwd` / `getCursor` / `getSize` / `getTitle` / `getBellCount` / `getBellEvents`, `screenshot`, `startRecording` / `stopRecording`, `waitTitle` / `waitIdle` / `waitCommand` / `waitExit` / `waitReady` / `waitBell`, `expectTitle` / `expectExitCode` / `expectOutput` / `expectBellCount` / `expectSnapshot`, `close`, and `closeQuiet`.
+### `TuiTest`
 
-`keyboard.press()` simulates key presses: it sends the normal press input and
-adds a release only when the negotiated Kitty mode can represent it.
-`keyboard.down()` and `keyboard.up()` simulate explicit keydown and keyup
-events; `keyboard.repeat()` simulates repeats. Top-level `press()` remains a
-compatibility alias.
+```ts
+new TuiTest(session?: string, options?: ClientOptions)
+```
 
-Mouse actions use zero-based terminal cell coordinates. `click()`, `down()`,
-`up()`, and `drag()` accept Playwright-style `"left"`, `"middle"`, or
-`"right"` buttons plus `alt`, `ctrl`, and `shift` modifiers:
+| Option | Type | Default |
+| --- | --- | --- |
+| `session` | `string` | `TUI_TEST_SESSION` or `"default"` |
+| `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs"` | `"alacritty"` |
+| `timeouts` | `Timeouts` | built-in defaults |
+| `profile` | `Profile` | built-in profile |
+| `artifacts` | `{ dir, onFailure? }` | off |
+| `recording` | `{ mode?, directory? }` | `{ mode: "always" }` |
+
+`artifacts.onFailure` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+
+#### Properties
+
+| Property | Type |
+| --- | --- |
+| `session` | `string` |
+| `keyboard` | `Keyboard` |
+| `mouse` | `Mouse` |
+
+#### Lifecycle
+
+| Method | Description |
+| --- | --- |
+| `TuiTest.ephemeral(prefix?, options?)` | Create a unique session. |
+| `open(options?)` | Open a shell. |
+| `run(program, args?, options?)` | Run a program. |
+| `close()` | Close the session. |
+| `closeQuiet()` | Close without throwing. |
+| `[Symbol.asyncDispose]()` | Close from `await using`. |
+
+`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
+
+The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
+
+#### Input
+
+| Method | Description |
+| --- | --- |
+| `submit(text?)` | Type text and press Enter. |
+| `type(text)` | Type text. |
+| `write(data)` | Write raw bytes. |
+| `press(...keys)` | Alias for `keyboard.press()`. |
+| `resize(cols, rows)` | Resize the terminal. |
+| `signal(name)` | Send `INT`, `TERM`, `KILL`, or `QUIT`. |
+| `kill()` | Kill the child process. |
+
+#### State
+
+| Method | Returns |
+| --- | --- |
+| `state()` | `State` |
+| `text({ full? })` | `string` |
+| `cells(x, y, w?, h?)` | `Cell[]` |
+| `getCommand()` | `string \| null` |
+| `getOutput()` | `string \| null` |
+| `getExitCode()` | `number \| null` |
+| `getCwd()` | `string \| null` |
+| `getCursor()` | `Cursor` |
+| `getSize()` | `Size` |
+| `getTitle()` | `string \| null` |
+| `getClipboard()` | `string` |
+| `getBellCount()` | `number` |
+| `getBellEvents()` | `BellEvent[]` |
+
+#### Waits and assertions
+
+| Method | Description |
+| --- | --- |
+| `waitTitle(text, { regex?, not?, timeout? })` | Wait for a title. |
+| `waitClipboard(pattern?, { timeout? })` | Wait for a clipboard change or match. |
+| `waitIdle({ timeout? })` | Wait for the screen to stop changing. |
+| `waitCommand({ timeout? })` | Wait for a submitted command. |
+| `waitExit({ timeout? })` | Wait for the program to exit. |
+| `waitReady({ timeout? })` | Wait for a shell prompt. |
+| `waitBell({ timeout? })` | Wait for a bell. |
+| `expectTitle(text, { regex?, not?, timeout? })` | Assert the title. |
+| `expectExitCode(code, { timeout? })` | Assert the last exit code. |
+| `expectOutput(text, { regex? })` | Assert command output. |
+| `expectBellCount(count, { timeout? })` | Wait until the cumulative bell count reaches `count`. |
+| `expectSnapshot(name, options?)` | Assert or update a snapshot. |
+
+`waitClipboard()` waits for the next change. A string matches text. A `RegExp` keeps its JavaScript flags.
+
+Snapshot options are `update`, `includeColors`, and `includeTitle`.
+
+#### Capture
+
+| Method | Description |
+| --- | --- |
+| `screenshot(path?, { full?, zoom? })` | Return text or save SVG. |
+| `startRecording(path, options?)` | Start APNG, GIF, MP4, or asciinema recording. |
+| `stopRecording()` | Finish the recording and return its path. |
+
+Recording options are `format`, `fps`, `speed`, `idleTimeLimit`, and `zoom`. MP4 requires `ffmpeg`.
+
+The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
+
+### `Locator`
+
+Locators resolve against the latest terminal screen before every read or action.
+
+```js
+const save = terminal
+  .getByText("Settings")
+  .getByText("Save", { direction: "after" })
+  .getByStyle({ foreground: "green" })
+  .unique();
+
+await save.click();
+```
+
+#### Create a locator
+
+| Method | Options |
+| --- | --- |
+| `terminal.getByText(text, options?)` | `regex`, `full`, `whitespace` |
+| `terminal.getByStyle(style, options?)` | `full` |
+| `locator.getByText(text, options?)` | `regex`, `full`, `whitespace`, `direction` |
+| `locator.getByStyle(style, options?)` | `full`, `direction` |
+
+`whitespace` is `"exact"` or `"normalize"`. `direction` is `"within"`, `"after"`, or `"before"`.
+
+Style fields are `foreground`, `background`, `bold`, `dim`, `italic`, `underlineStyle`, `underlineColor`, `inverse`, `hidden`, `strikethrough`, and `blink`.
+
+#### Select matches
+
+| Method | Description |
+| --- | --- |
+| `any()` | Keep all matches. |
+| `unique()` | Require one match. |
+| `first()` | Select the first match. |
+| `last()` | Select the last match. |
+| `nth(index)` | Select a zero-based match. |
+
+#### Read and act
+
+| Method | Description |
+| --- | --- |
+| `locations()` | Return all selected locations. |
+| `location()` | Return one location. |
+| `count()` | Return the current count. |
+| `all()` | Return one locator per current match. |
+| `wait({ state?, timeout? })` | Wait for `"visible"` or `"hidden"`. |
+| `expect({ not?, timeout? })` | Assert the locator. |
+| `click(options?)` | Click the middle cell. |
+| `highlight({ timeout? })` | Highlight matches. |
+
+`click()` accepts `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`. `button` is `"left"`, `"middle"`, or `"right"`.
+
+`location()` and `click()` require one match. `all()` does not wait.
+
+### `Keyboard`
+
+| Method | Description |
+| --- | --- |
+| `press(...keys)` | Press keys. |
+| `down(...keys)` | Send keydown events. |
+| `repeat(...keys)` | Send repeat events. |
+| `up(...keys)` | Send keyup events. |
+
+```js
+await terminal.keyboard.press("Ctrl+C");
+await terminal.keyboard.press("Escape", ":", "w", "q", "Enter");
+```
+
+Named keys include `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Delete`, `Backspace`, `Tab`, `Enter`, `Space`, `Escape`, and `F1` through `F12`. Join modifiers such as `Ctrl`, `Alt`, `Shift`, `Super`, `Meta`, or `Hyper` with `+`.
+
+### `Mouse`
+
+Coordinates are zero-based terminal cells.
+
+| Method | Description |
+| --- | --- |
+| `click(x?, y?, options?)` | Click a cell or `onText`. |
+| `move(x, y)` | Move the pointer. |
+| `down(x, y, options?)` | Press a button. |
+| `up(x, y, options?)` | Release a button. |
+| `drag(x1, y1, x2, y2, options?)` | Drag between cells. |
+| `scroll("up" \| "down", { amount? })` | Scroll. |
+
+Button options are `button`, `alt`, `ctrl`, and `shift`. Click also accepts `onText` and `clicks`.
 
 ```js
 await terminal.mouse.click(10, 5, { button: "right", ctrl: true });
-await terminal.mouse.down(10, 5, { button: "middle" });
-await terminal.mouse.up(10, 5, { button: "middle" });
-await terminal.mouse.drag(1, 2, 20, 2, { button: "left", shift: true });
 ```
 
-`getByText(text, options)` and `getByStyle(style, options)` create lazy
-locators. They resolve against the latest terminal grid whenever read or acted
-on:
+### Module functions
 
-```js
-const terminal = new TuiTest();
-await terminal
-  .getByText("Settings")
-  .getByText("Save", { whitespace: "normalize", direction: "after" })
-  .click();
+| Function | Description |
+| --- | --- |
+| `sessions()` | List sessions in this process. |
+| `closeAll()` | Close all sessions in this process. |
+| `getRecording(session?)` | Return an automatic asciinema recording. |
+| `uniqueSession(prefix?)` | Create a unique session name. |
 
-const items = terminal.getByText(String.raw`item \d+`, { regex: true });
-await items.highlight(); // highlights every match
-const second = items.nth(1);
-console.log(await second.location());
+### Test helpers
 
-await terminal
-  .getByText("Warning")
-  .getByStyle({ bold: true })
-  .unique()
-  .expect();
-```
+Import from `@microsoft/tui-test/test`.
 
-Locators provide chainable `getByText()` and `getByStyle()` stages and support
-`any()`, `unique()`, `first()`, `last()`, `nth()`, `all()`, `count()`,
-`locations()`, `location()`, `wait()`, `expect()`, `click()`, and
-`highlight()`.
+| Function | Description |
+| --- | --- |
+| `createTerminal(options?)` | Create, open, and track a terminal. |
+| `withTerminal(options, callback)` | Run a callback and close the terminal. |
+| `closeAllTracked()` | Close tracked terminals. |
+| `setTerminalDefaults(options)` | Set suite defaults. |
+| `resetTerminalDefaults()` | Reset suite defaults. |
+| `trackTerminal(terminal)` | Track a terminal. |
+| `untrackTerminal(terminal)` | Stop tracking a terminal. |
+| `trackedCount()` | Count tracked terminals. |
+| `terminalSnapshot(text)` | Normalize text for snapshots. |
 
-A style locator matches contiguous per-row cell runs with the requested colors
-or attributes. In the default `within` direction, a chained `getByStyle()`
-keeps a parent match only when all its visible cells satisfy the style. Other
-chained searches also default to `direction: "within"` and can use `"after"`
-or `"before"` for relative terminal regions.
+`CreateTerminalOptions` adds `shell`, `program`, `session`, and `prefix` to the client and spawn options.
 
-The chain resolves again before every action. A click targets the middle cell
-and requires one match unless a positional selector narrows the locator.
-Highlights remain visible in the live monitor and SVG screenshots until the
-terminal redraws. `all()` captures the current list without waiting and
-returns lazy `nth()` locators, so wait first if the list is still loading.
-
-`getByText()` and `getByStyle()` begin with all matches. Narrow them only with
-`any()`, `unique()`, `first()`, `last()`, or `nth()`. A plain `expect()`
-succeeds when at least one match exists; `unique().expect()` requires exactly
-one. Because `click()` and `location()` require one target, they treat an
-unselected locator as unique.
-
-Negation applies to the assertion. `unique().expect({ not: true })` passes
-with zero matches and fails if one match is present. If multiple matches
-exist, it fails because the locator is not unique. `count()` returns the
-current number of selected matches for an exact assertion in the test
-framework.
-
-Locator clicks accept the same named buttons and modifier booleans as
-`mouse.click()`:
-
-```js
-await terminal.getByText("Open").unique().click({
-  button: "middle",
-  ctrl: true,
-});
-```
-
-Module-level helpers: `sessions()`, `closeAll()`, `getRecording()`, `uniqueSession()`.
-
-`open` and `run` accept
-`{ backend, cols, rows, cwd, env, waitReady, restart, retries, profile, timeouts }`.
-They reuse a live named session unless `restart: true` is passed. The
-constructor also accepts `backend` and `profile` as defaults for later opens
-and runs. Backend values are `"alacritty"` (default), `"ghostty"`, `"rio"`,
-and `"xtermjs"`:
-
-```js
-const terminal = new TuiTest("work", { backend: "ghostty" });
-await terminal.open();
-await terminal.run("vim", ["file.txt"], { backend: "xtermjs" });
-```
-
-The native package includes every supported emulator. Profiles are partial;
-omitted fields use the built-in defaults:
-
-```js
-const terminal = new TuiTest("work", {
-  profile: {
-    scrollback: 500,
-    colors: { red: "#ff0000", brightBlue: "#3366ff" },
-  },
-});
-```
-
-The timeout classes are `text`, `idle`, `command`, `exit`, and `ready`;
-`timeouts` sets session defaults, and the constructor sets client-wide ones.
-Unknown fields throw.
-
-`TuiTest.ephemeral(prefix?, opts?)` creates a client bound to a unique session
-name (via `uniqueSession()`), useful for parallel test workers that should not
-collide. All sessions are process-local. `artifacts: { dir, onFailure }`
-attaches the terminal contents to an `ExpectationError`.
-
-`@microsoft/tui-test/test` has helpers for terminal tests: `createTerminal`, `withTerminal`, `closeAllTracked`, `defaultShell`, and `terminalSnapshot`.
+`defaultShell` is the platform default.
 
 ```js
 import { withTerminal } from "@microsoft/tui-test/test";
 
-await withTerminal({}, async (t) => {
-  await t.submit("echo hi");
-  await t.waitCommand();
-  await t.getByText("hi").first().expect();
+await withTerminal({ program: ["my-app"] }, async (terminal) => {
+  await terminal.getByText("Ready").expect();
 });
 ```
 
-Each terminal has a unique name, so parallel workers do not collide.
-`setTerminalDefaults(...)` sets suite-wide options (`profile`, `artifacts`,
-`timeouts`, ...).
-
-## Cancellation and recordings
-
-Cancelling a promise does not cancel the underlying Rust operation. Operations for single sessions wait for completion (ex: `close()`, `closeAll()`).
-
-Closing a session removes it from `sessions()`, but keeps its recording. `getRecording()` can read that recording for the rest of the process. The 1024 most recently closed sessions have their recordings retained.
+### Configuration
 
 ```js
-await su.startRecording("demo.png", { fps: 30, speed: 1, zoom: 0.5 });
-await su.submit("echo hello");
-await su.waitCommand();
-const path = await su.stopRecording();
+const terminal = new TuiTest("test", {
+  profile: {
+    scrollback: 500,
+    colors: { foreground: "#ffffff", background: "#000000" },
+  },
+  timeouts: { text: 10_000, command: 60_000 },
+  artifacts: { dir: "artifacts", onFailure: "svg" },
+  recording: { mode: "on-failure", directory: "artifacts" },
+});
 ```
 
-`.png`/`.apng` selects lossless APNG, `.gif` selects GIF, `.mp4` selects MP4,
-and `.cast` selects asciicast v2. The `format` option can override extension
-inference. `zoom` scales SVG screenshots and image/video recordings without
-changing terminal rows or columns. MP4 recording requires `ffmpeg` to be
-available on `PATH`.
+### Types
 
-## Configuration
+| Type | Description |
+| --- | --- |
+| `State` | Session state and visible text. |
+| `Cell` | One terminal cell and its style. |
+| `TextMatch` | Matched text, positions, and spans. |
+| `TextStyleExpectation` | Locator style fields. |
+| `Profile`, `Colors` | Scrollback and colors. |
+| `Timeouts` | Text, idle, command, exit, and ready timeouts. |
+| `AutomaticRecording` | Automatic recording mode and directory. |
+| `MouseButton` | `"left"`, `"middle"`, or `"right"`. |
+| `MouseClickOptions` | Button, modifiers, target text, and click count. |
+| `MouseButtonOptions` | Button and modifiers. |
+| `LocatorClickOptions` | Button, modifiers, click count, and timeout. |
+| `OpenResult` | Session start result. |
 
-| Variable                       | Purpose                                                                     |
-| ------------------------------ | --------------------------------------------------------------------------- |
-| `TUI_TEST_SESSION`            | default session name                                                        |
-| `TUI_TEST_TIMEOUT_<CLASS>_MS` | fallback timeout for one class (`TEXT`, `IDLE`, `COMMAND`, `EXIT`, `READY`) |
+`VERSION` contains the package version.
+
+### Errors
+
+| Error | `exitCode` |
+| --- | --- |
+| `ExpectationError` | `1` |
+| `UsageError` | `2` |
+| `NoSessionError` | `3` |
+| `InternalError` | `5` |
+
+All errors extend `TuiTestError` and include `kind` and `exitCode`. Expectation errors can include `terminal.text` and `terminal.screenshot`.
+
+Sessions are local to the current process and cannot be controlled by the CLI. Cancelling a promise does not stop an active terminal operation.

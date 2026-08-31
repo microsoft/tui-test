@@ -375,7 +375,7 @@ pub enum Command {
     /// Versioned via `schema_version`; lists every command, flag, type, enum,
     /// default, and the exit-code taxonomy. Generated from the cli definition.
     AgentContext,
-    /// Print or install the long-form agent skill manifest (SKILL.md).
+    /// Print the complete agent guide or install its routed, multi-file skill.
     Skill {
         /// Interactively install the skill by choosing its scope and agent directory.
         #[arg(long)]

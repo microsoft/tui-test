@@ -25,8 +25,8 @@ impl AgentDirectory {
     }
 }
 
-pub fn add(manifest: &str) -> i32 {
-    match add_interactive(manifest) {
+pub fn add(manifest: &str, references: &[(&str, &str)]) -> i32 {
+    match add_interactive(manifest, references) {
         Ok(()) => 0,
         Err(message) => {
             eprintln!("tui-test skill: {message}");
@@ -35,7 +35,47 @@ pub fn add(manifest: &str) -> i32 {
     }
 }
 
-fn add_interactive(manifest: &str) -> Result<(), String> {
+pub fn render(manifest: &str, references: &[(&str, &str)]) -> String {
+    let manifest = localize_links(manifest, references);
+    let mut output = manifest.trim_end().to_string();
+    for (_, contents) in references {
+        let contents = localize_links(contents, references);
+        output.push_str("\n\n---\n\n");
+        output.push_str(contents.trim());
+    }
+    output.push('\n');
+    output
+}
+
+fn localize_links(document: &str, references: &[(&str, &str)]) -> String {
+    let mut output = document.replace("](../SKILL.md)", "](#tui-test)");
+    for (path, contents) in references {
+        output = output.replace(&format!("]({path}#"), "](#");
+        if let Some(anchor) = first_heading_anchor(contents) {
+            output = output.replace(&format!("]({path})"), &format!("](#{anchor})"));
+        }
+    }
+    output
+}
+
+fn first_heading_anchor(document: &str) -> Option<String> {
+    let heading = document.lines().find_map(|line| line.strip_prefix("# "))?;
+    let anchor = heading
+        .chars()
+        .filter_map(|character| {
+            if character.is_ascii_alphanumeric() {
+                Some(character.to_ascii_lowercase())
+            } else if matches!(character, ' ' | '-') {
+                Some('-')
+            } else {
+                None
+            }
+        })
+        .collect::<String>();
+    (!anchor.is_empty()).then_some(anchor)
+}
+
+fn add_interactive(manifest: &str, references: &[(&str, &str)]) -> Result<(), String> {
     let theme = ColorfulTheme::default();
     let scope_items = [
         "Repository local (current project)",
@@ -72,7 +112,7 @@ fn add_interactive(manifest: &str) -> Result<(), String> {
         .map_err(|error| format!("could not resolve current directory: {error}"))?;
     let home = dirs::home_dir();
     let path = install_path(scope, directory, &current_dir, home.as_deref())?;
-    write_manifest(&path, manifest)?;
+    write_skill(&path, manifest, references)?;
     println!("Installed {SKILL_NAME} skill at {}", path.display());
     Ok(())
 }
@@ -109,6 +149,21 @@ fn write_manifest(path: &Path, manifest: &str) -> Result<(), String> {
         .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
     std::fs::write(path, manifest)
         .map_err(|error| format!("could not write {}: {error}", path.display()))
+}
+
+fn write_skill(
+    manifest_path: &Path,
+    manifest: &str,
+    references: &[(&str, &str)],
+) -> Result<(), String> {
+    write_manifest(manifest_path, manifest)?;
+    let root = manifest_path
+        .parent()
+        .ok_or_else(|| format!("invalid skill path: {}", manifest_path.display()))?;
+    for (relative_path, contents) in references {
+        write_manifest(&root.join(relative_path), contents)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -189,5 +244,68 @@ mod tests {
         write_manifest(&path, "new").expect("replacement write");
         assert_eq!(std::fs::read_to_string(&path).expect("read skill"), "new");
         std::fs::remove_dir_all(root).expect("remove temp directory");
+    }
+
+    #[test]
+    fn writing_skill_installs_manifest_and_references() {
+        let root = unique_dir("references");
+        let path = root
+            .join(".agents")
+            .join("skills")
+            .join("tui-test")
+            .join("SKILL.md");
+        let references = [
+            ("references/python.md", "python"),
+            ("references/javascript.md", "javascript"),
+        ];
+
+        write_skill(&path, "router", &references).expect("write complete skill");
+
+        let skill_root = path.parent().expect("skill root");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read skill"),
+            "router"
+        );
+        assert_eq!(
+            std::fs::read_to_string(skill_root.join("references/python.md"))
+                .expect("read Python reference"),
+            "python"
+        );
+        assert_eq!(
+            std::fs::read_to_string(skill_root.join("references/javascript.md"))
+                .expect("read JavaScript reference"),
+            "javascript"
+        );
+        std::fs::remove_dir_all(root).expect("remove temp directory");
+    }
+
+    #[test]
+    fn rendering_skill_includes_the_router_and_all_references() {
+        let references = [
+            (
+                "references/cli.md",
+                "# CLI reference\n\n[Router](../SKILL.md)",
+            ),
+            (
+                "references/python.md",
+                "# Python reference\n\n## Testing helpers\n",
+            ),
+        ];
+
+        let rendered = render(
+            "---\nname: tui-test\n---\n\n# tui-test\n\n\
+             [CLI](references/cli.md)\n\
+             [Testing](references/python.md#testing-helpers)\n",
+            &references,
+        );
+
+        assert_eq!(
+            rendered,
+            "---\nname: tui-test\n---\n\n# tui-test\n\n\
+             [CLI](#cli-reference)\n\
+             [Testing](#testing-helpers)\n\n---\n\n\
+             # CLI reference\n\n[Router](#tui-test)\n\n---\n\n\
+             # Python reference\n\n## Testing helpers\n"
+        );
     }
 }
