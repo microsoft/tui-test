@@ -127,6 +127,55 @@ pub struct RunOptions {
     pub recording: AutomaticRecording,
 }
 
+/// Clipboard text or regex.
+#[derive(Debug, Clone)]
+pub enum ClipboardPattern {
+    Text(String),
+    Regex(regex::Regex),
+}
+
+impl ClipboardPattern {
+    pub fn text(text: impl Into<String>) -> Self {
+        Self::Text(text.into())
+    }
+
+    pub fn regex(pattern: &str) -> Result<Self, regex::Error> {
+        regex::Regex::new(pattern).map(Self::Regex)
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Text(text) => text,
+            Self::Regex(regex) => regex.as_str(),
+        }
+    }
+
+    pub(crate) fn matches(&self, value: &str) -> bool {
+        match self {
+            Self::Text(text) => value.contains(text),
+            Self::Regex(regex) => regex.is_match(value),
+        }
+    }
+}
+
+impl From<String> for ClipboardPattern {
+    fn from(text: String) -> Self {
+        Self::Text(text)
+    }
+}
+
+impl From<&str> for ClipboardPattern {
+    fn from(text: &str) -> Self {
+        Self::Text(text.to_string())
+    }
+}
+
+impl From<regex::Regex> for ClipboardPattern {
+    fn from(regex: regex::Regex) -> Self {
+        Self::Regex(regex)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyAction {
@@ -468,6 +517,7 @@ pub enum Operation {
     GetCursor,
     GetSize,
     GetTitle,
+    GetClipboard,
     GetBellCount,
     GetBellEvents,
     Write {
@@ -495,6 +545,13 @@ pub enum Operation {
         regex: bool,
         timeout_ms: Option<u64>,
         not: bool,
+    },
+    WaitClipboard {
+        timeout_ms: Option<u64>,
+    },
+    WaitClipboardMatch {
+        pattern: ClipboardPattern,
+        timeout_ms: Option<u64>,
     },
     WaitIdle {
         timeout_ms: Option<u64>,
@@ -570,6 +627,19 @@ pub enum Operation {
     StopRecording,
 }
 
+impl Operation {
+    /// Wait for clipboard text or a regex.
+    pub fn wait_clipboard_match(
+        pattern: impl Into<ClipboardPattern>,
+        timeout_ms: Option<u64>,
+    ) -> Self {
+        Self::WaitClipboardMatch {
+            pattern: pattern.into(),
+            timeout_ms,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum OperationResult {
     Unit,
@@ -584,6 +654,7 @@ pub enum OperationResult {
     ExitCode(Option<i32>),
     Cwd(Option<String>),
     Title(Option<String>),
+    Clipboard(String),
     Cursor(Cursor),
     Size(Size),
     BellCount(u64),
@@ -900,6 +971,21 @@ pub enum MouseAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_patterns_infer_matching_from_the_rust_type() {
+        let literal: ClipboardPattern = "ready".into();
+        assert!(literal.matches("prefix-ready-suffix"));
+
+        let regex: ClipboardPattern = regex::Regex::new(r"^build-[0-9]+$").unwrap().into();
+        assert!(regex.matches("build-123"));
+        assert!(!regex.matches("prefix-build-123"));
+
+        assert!(matches!(
+            Operation::wait_clipboard_match("ready", Some(5_000)),
+            Operation::WaitClipboardMatch { .. }
+        ));
+    }
 
     #[test]
     fn recording_format_is_inferred_from_supported_extensions() {

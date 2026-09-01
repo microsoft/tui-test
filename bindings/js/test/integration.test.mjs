@@ -10,6 +10,7 @@ import {
   InternalError,
   NoSessionError,
   TuiTest,
+  UsageError,
   closeAll,
   getRecording,
   sessions,
@@ -31,6 +32,10 @@ const delayedBellCommand =
   process.platform === "win32"
     ? "Start-Sleep -Seconds 1; [Console]::Out.Write([char]7)"
     : "sleep 1; printf '\\a'";
+const clipboardCommand = (base64) =>
+  process.platform === "win32"
+    ? `[Console]::Out.Write(([char]27).ToString() + ']52;c;${base64}' + ([char]7).ToString())`
+    : `printf '\\033]52;c;${base64}\\a'`;
 const nonzeroExitArgs =
   typeof globalThis.Deno === "undefined"
     ? ["-e", "process.exit(7)"]
@@ -102,6 +107,78 @@ test("bell state, waits, and expectations stay consistent", async () => {
       [1, 2, 3],
     );
     assert.ok(finalEvents[2].elapsed_ms >= finalEvents[1].elapsed_ms);
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("clipboard getter and change wait stay consistent", async () => {
+  await withTerminal({ shell }, async (su) => {
+    assert.equal(await su.getClipboard(), "");
+
+    await su.submit(clipboardCommand("Y2hhbmdlZA=="));
+    await su.waitCommand();
+    await su.waitClipboard({ timeout: 5000 });
+    assert.equal(await su.getClipboard(), "changed");
+
+    await su.submit(clipboardCommand("cHJlZml4LXJlYWR5LTQy"));
+    await su.waitCommand();
+    await su.waitClipboard("ready", { timeout: 5000 });
+    await assert.rejects(
+      () => su.waitClipboard("ready", { regex: true, timeout: 100 }),
+      (error) => error instanceof UsageError,
+    );
+
+    await su.submit(clipboardCommand("YnVpbGQtMTIz"));
+    await su.waitCommand();
+    await su.waitClipboard(/^BUILD-[0-9]+$/i, { timeout: 5000 });
+
+    await su.submit(clipboardCommand("eApmb28="));
+    await su.waitCommand();
+    await assert.rejects(
+      () => su.waitClipboard(/foo/my, { timeout: 100 }),
+      (error) => error instanceof ExpectationError,
+    );
+    await su.submit(clipboardCommand("Zm9vCng="));
+    await su.waitCommand();
+    await su.waitClipboard(/foo/my, { timeout: 5000 });
+
+    await su.submit(clipboardCommand("8J+YgA=="));
+    await su.waitCommand();
+    await assert.rejects(
+      () => su.waitClipboard(/^..$/u, { timeout: 100 }),
+      (error) => error instanceof ExpectationError,
+    );
+    await su.waitClipboard(/^..$/, { timeout: 5000 });
+
+    await su.submit(clipboardCommand("eGZvbw=="));
+    await su.waitCommand();
+    const sticky = /foo/y;
+    sticky.lastIndex = 1;
+    await su.waitClipboard(sticky, { timeout: 5000 });
+    assert.equal(sticky.lastIndex, 1);
+
+    const globalAfterMatch = /foo/g;
+    globalAfterMatch.lastIndex = 2;
+    await assert.rejects(
+      () => su.waitClipboard(globalAfterMatch, { timeout: 100 }),
+      (error) => error instanceof ExpectationError,
+    );
+    assert.equal(globalAfterMatch.lastIndex, 2);
+  });
+});
+
+test("xterm.js clipboard rejects as InternalError", async () => {
+  const su = new TuiTest(uniqueSession("xtermjs-clipboard"), {
+    backend: "xtermjs",
+  });
+  try {
+    await su.open({ shell });
+    await assert.rejects(
+      () => su.getClipboard(),
+      (error) =>
+        error instanceof InternalError && error.message.includes("unavailable"),
+    );
   } finally {
     await su.closeQuiet();
   }

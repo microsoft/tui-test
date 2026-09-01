@@ -338,6 +338,7 @@ fn map_field(field: GetArg) -> GetField {
         GetArg::Cursor => GetField::Cursor,
         GetArg::Size => GetField::Size,
         GetArg::Title => GetField::Title,
+        GetArg::Clipboard => GetField::Clipboard,
         GetArg::Bells => GetField::BellCount,
         GetArg::BellEvents => GetField::BellEvents,
     }
@@ -411,6 +412,15 @@ fn map_wait(what: WaitCmd) -> Request {
             regex,
             timeout_ms: timeout,
             not,
+        },
+        WaitCmd::Clipboard {
+            text,
+            regex,
+            timeout,
+        } => Request::WaitClipboard {
+            text,
+            regex,
+            timeout_ms: timeout,
         },
         WaitCmd::Idle { timeout } => Request::WaitIdle {
             timeout_ms: timeout,
@@ -1204,14 +1214,14 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
           find text \"T\" [selector/style options] | cells X Y [W H]\n\
-          get command|output|exit-code|cwd|cursor|size|title|bells|bell-events\n\
+          get command|output|exit-code|cwd|cursor|size|title|clipboard|bells|bell-events\n\
 INPUT     type \"text\" | submit [\"text\"]\n\
           key press|down|repeat|up <Key...>\n\
           click text \"T\" [selector/style options] [--button left|middle|right] [--alt --ctrl --shift]\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
 WAIT      wait title \"T\" [--regex --not --timeout MS]\n\
-          wait idle | wait command | wait exit | wait ready | wait bell\n\
+          wait clipboard [TEXT] [--regex] | wait idle | wait command | wait exit | wait ready | wait bell\n\
 EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex] | expect bell N\n\

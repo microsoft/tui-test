@@ -10,10 +10,11 @@ use tui_test::shell::Shell;
 use tui_test::{
     AutomaticRecording as CoreAutomaticRecording,
     AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend, BellEvent, Cell, CellColor,
-    Cursor, ErrorKind, KeyAction, LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence,
-    MouseAction, MouseOptions, OpenOptions, OpenResult, Operation, OperationResult, PackedScreen,
-    RecordingFormat, RunOptions, ScreenshotResult, Size, SnapshotResult, State, StyleSelector,
-    TextMatch, TextSelector, TextStyle, Timeouts, TuiTestError, WhitespaceMode,
+    ClipboardPattern, Cursor, ErrorKind, KeyAction, LocatorDirection, LocatorQuery,
+    LocatorSelector, MatchOccurrence, MouseAction, MouseOptions, OpenOptions, OpenResult,
+    Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
+    SnapshotResult, State, StyleSelector, TextMatch, TextSelector, TextStyle, Timeouts,
+    TuiTestError, WhitespaceMode,
 };
 
 pyo3::create_exception!(
@@ -468,6 +469,15 @@ impl NativeSession {
         )
     }
 
+    fn get_clipboard<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || execute_clipboard(&name, Operation::GetClipboard),
+            string_to_py,
+        )
+    }
+
     fn get_cursor<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let name = self.name.clone();
         future_blocking(
@@ -852,6 +862,46 @@ impl NativeSession {
                         not: not_,
                     },
                 )
+            },
+            unit_to_py,
+        )
+    }
+
+    #[pyo3(signature = (text, regex, timeout_ms))]
+    fn wait_clipboard<'py>(
+        &self,
+        py: Python<'py>,
+        text: Option<String>,
+        regex: bool,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let operation = match text {
+                    Some(text) => {
+                        let pattern = if regex {
+                            ClipboardPattern::regex(&text).map_err(|error| {
+                                TuiTestError::usage(format!("invalid regex: {error}"))
+                            })?
+                        } else {
+                            text.into()
+                        };
+                        Operation::WaitClipboardMatch {
+                            pattern,
+                            timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                        }
+                    }
+                    None if regex => {
+                        return Err(TuiTestError::usage("clipboard regex requires text"))
+                    }
+                    None => Operation::WaitClipboard {
+                        timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
+                    },
+                };
+                execute_unit(&name, operation)
             },
             unit_to_py,
         )
@@ -1676,6 +1726,13 @@ fn execute_title(name: &str, operation: Operation) -> Result<Option<String>, Tui
     match global_registry().execute(name, operation)? {
         OperationResult::Title(value) => Ok(value),
         _ => Err(unexpected_result("the window title")),
+    }
+}
+
+fn execute_clipboard(name: &str, operation: Operation) -> Result<String, TuiTestError> {
+    match global_registry().execute(name, operation)? {
+        OperationResult::Clipboard(value) => Ok(value),
+        _ => Err(unexpected_result("the clipboard content")),
     }
 }
 

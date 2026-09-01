@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit
 import copy
 import os
+import re
 import time
 from dataclasses import asdict
 from typing import (
@@ -15,6 +16,7 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Pattern,
     Tuple,
     TypeVar,
     Union,
@@ -50,6 +52,92 @@ _TERMINAL_MARKER = "Terminal content:\n"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
 
 _T = TypeVar("_T")
+
+
+def _unsupported_scoped_regex_flag(source: str) -> Optional[str]:
+    escaped = False
+    in_class = False
+    class_can_close = False
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if escaped:
+            escaped = False
+            index += 1
+            continue
+        if char == "\\":
+            escaped = True
+            index += 1
+            continue
+        if in_class:
+            if char == "]" and class_can_close:
+                in_class = False
+            elif char != "^" or class_can_close:
+                class_can_close = True
+            index += 1
+            continue
+        if char == "[":
+            in_class = True
+            class_can_close = False
+            index += 1
+            continue
+        if source.startswith("(?#", index):
+            end = source.find(")", index + 3)
+            index = len(source) if end < 0 else end + 1
+            continue
+        if source.startswith("(?", index):
+            cursor = index + 2
+            added = ""
+            while cursor < len(source) and source[cursor] in "aiLmsux":
+                added += source[cursor]
+                cursor += 1
+            if cursor < len(source) and source[cursor] == "-":
+                cursor += 1
+                while cursor < len(source) and source[cursor] in "imsx":
+                    cursor += 1
+            if cursor < len(source) and source[cursor] in ":)":
+                for flag in "aLx":
+                    if flag in added:
+                        return flag
+        index += 1
+    return None
+
+
+def _clipboard_pattern(
+    value: Optional[Union[str, Pattern[str]]],
+) -> Tuple[Optional[str], bool]:
+    if value is None:
+        return None, False
+    if isinstance(value, str):
+        return value, False
+    if not isinstance(value, re.Pattern) or not isinstance(value.pattern, str):
+        raise TypeError("clipboard pattern must be a string or compiled regex")
+
+    allowed_flags = re.UNICODE | re.IGNORECASE | re.MULTILINE | re.DOTALL | re.DEBUG
+    unsupported_flags = value.flags & ~allowed_flags
+    if unsupported_flags:
+        raise ValueError(
+            "unsupported clipboard regex flags: "
+            f"{re.RegexFlag(unsupported_flags)!s}"
+        )
+    scoped_flag = _unsupported_scoped_regex_flag(value.pattern)
+    if scoped_flag:
+        raise ValueError(
+            f"unsupported clipboard regex flag: {scoped_flag}"
+        )
+
+    enabled = ""
+    for flag, modifier in (
+        (re.IGNORECASE, "i"),
+        (re.MULTILINE, "m"),
+        (re.DOTALL, "s"),
+    ):
+        if value.flags & flag:
+            enabled += modifier
+    source = value.pattern
+    return (f"(?{enabled}:{source})" if enabled else source), True
+
+
 EnvLike = Union[Mapping[str, str], Iterable[Tuple[str, str]], None]
 _Occurrence = Union[Literal["any", "unique", "first", "last"], int]
 
@@ -821,6 +909,9 @@ class TuiTest:
     async def get_title(self) -> Optional[str]:
         return await self._await(self._native.get_title())
 
+    async def get_clipboard(self) -> str:
+        return await self._await(self._native.get_clipboard())
+
     async def get_cursor(self) -> Dict[str, int]:
         return await self._await(self._native.get_cursor())
 
@@ -882,6 +973,20 @@ class TuiTest:
             "wait_title",
             self._native.wait_title(
                 text, regex, not_, self._timeout("text", timeout)
+            ),
+        )
+
+    async def wait_clipboard(
+        self,
+        text: Optional[Union[str, Pattern[str]]] = None,
+        *,
+        timeout: Optional[int] = None,
+    ) -> None:
+        pattern, regex = _clipboard_pattern(text)
+        await self._guarded(
+            "wait_clipboard",
+            self._native.wait_clipboard(
+                pattern, regex, self._timeout("text", timeout)
             ),
         )
 

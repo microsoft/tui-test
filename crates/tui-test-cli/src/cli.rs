@@ -944,6 +944,8 @@ pub enum GetArg {
     Size,
     /// Window title, as set with OSC 0/2.
     Title,
+    /// Current clipboard.
+    Clipboard,
     /// Cumulative terminal bell count.
     Bells,
     /// Recorded terminal bell events (sequence + elapsed time).
@@ -1272,6 +1274,17 @@ pub enum WaitCmd {
         /// Invert: wait until the title does NOT match.
         #[arg(long)]
         not: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
+    /// Wait for a clipboard change or match.
+    Clipboard {
+        /// Literal text or regex to wait for; omit to wait for any change.
+        text: Option<String>,
+        /// Treat <text> as a regular expression.
+        #[arg(long, requires = "text")]
+        regex: bool,
         /// Timeout in milliseconds.
         #[arg(long, value_name = "MS")]
         timeout: Option<u64>,

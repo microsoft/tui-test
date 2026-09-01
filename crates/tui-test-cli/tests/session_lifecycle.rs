@@ -362,6 +362,43 @@ fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
     }
 }
 
+#[test]
+fn clipboard_getter_and_change_wait_are_exposed_over_the_cli() {
+    let sandbox = Sandbox::new("clipboard");
+    sandbox.ok(&["open"]);
+
+    let initial: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "get", "clipboard"]))
+            .expect("parse initial clipboard response");
+    assert_eq!(initial["data"]["value"], "");
+
+    let timeout = sandbox.run(&["wait", "clipboard", "--timeout", "100"]);
+    assert_eq!(timeout.status.code(), Some(1));
+
+    sandbox.ok(&["submit", &clipboard_command("Y2hhbmdlZA==")]);
+    sandbox.ok(&["wait", "command"]);
+    sandbox.ok(&["wait", "clipboard", "--timeout", "5000"]);
+    let changed: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "get", "clipboard"]))
+            .expect("parse changed clipboard response");
+    assert_eq!(changed["data"]["value"], "changed");
+
+    sandbox.ok(&["submit", &clipboard_command("cHJlZml4LXJlYWR5LTQy")]);
+    sandbox.ok(&["wait", "command"]);
+    sandbox.ok(&["wait", "clipboard", "ready", "--timeout", "5000"]);
+
+    sandbox.ok(&["submit", &clipboard_command("YnVpbGQtMTIz")]);
+    sandbox.ok(&["wait", "command"]);
+    sandbox.ok(&[
+        "wait",
+        "clipboard",
+        "^build-[0-9]+$",
+        "--regex",
+        "--timeout",
+        "5000",
+    ]);
+}
+
 /// A session timeout default must apply to later commands without `--timeout`.
 #[test]
 fn a_session_timeout_default_applies_to_later_commands() {
@@ -965,6 +1002,17 @@ fn delayed_bell_command() -> String {
         "Start-Sleep -Seconds 1; [Console]::Out.Write([char]7)".to_string()
     } else {
         "sleep 1; printf '\\a'".to_string()
+    }
+}
+
+fn clipboard_command(base64: &str) -> String {
+    if cfg!(windows) {
+        format!(
+            "[Console]::Out.Write(([char]27).ToString() + ']52;c;{base64}' + \
+             ([char]7).ToString())"
+        )
+    } else {
+        format!("printf '\\033]52;c;{base64}\\a'")
     }
 }
 

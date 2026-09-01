@@ -14,7 +14,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
-ghostty = ["dep:ghostty-vt"]
+ghostty = ["dep:base64", "dep:ghostty-vt"]
 rio = ["dep:rio-vt"]
 xtermjs = ["dep:rquickjs"]
 recording-raster = ["dep:fontdb", "dep:gif", "dep:png", "dep:tiny-skia"]
@@ -25,6 +25,7 @@ recording-font-jetbrains-mono-full = ["recording-font-jetbrains-mono-styles"]
 [dependencies]
 alacritty_terminal.workspace = true
 anyhow.workspace = true
+base64 = { workspace = true, optional = true }
 bitflags.workspace = true
 compact_str.workspace = true
 dirs.workspace = true

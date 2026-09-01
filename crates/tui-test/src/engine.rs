@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::api::{
-    AutomaticRecording, AutomaticRecordingMode, Cell, CellColor, Cursor, EffectiveTimeouts,
-    ErrorKind, LocatorQuery, LocatorSelector, OpenOptions, OpenResult, Operation, OperationResult,
-    PackedScreen, RunOptions, RuntimeStatus, ScreenshotResult, Size, SnapshotResult, TextAnchor,
-    TextMatch, TextSelector, TextStyle, TuiTestError,
+    AutomaticRecording, AutomaticRecordingMode, Cell, CellColor, ClipboardPattern, Cursor,
+    EffectiveTimeouts, ErrorKind, LocatorQuery, LocatorSelector, OpenOptions, OpenResult,
+    Operation, OperationResult, PackedScreen, RunOptions, RuntimeStatus, ScreenshotResult, Size,
+    SnapshotResult, TextAnchor, TextMatch, TextSelector, TextStyle, TuiTestError,
 };
 use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
@@ -17,7 +17,7 @@ use crate::input::{keys, mouse};
 use crate::logger::Logger;
 use crate::session::{Session as TerminalSession, TermState, TextHighlight};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
-use crate::terminal::emu::Emulator;
+use crate::terminal::emu::{ClipboardType, Emulator};
 use crate::terminal::locator::{self, Pattern};
 
 pub struct Engine {
@@ -720,6 +720,7 @@ fn dispatch(
                 .map(str::to_string),
         )),
         Operation::GetTitle => Ok(OperationResult::Title(title_of(session))),
+        Operation::GetClipboard => Ok(OperationResult::Clipboard(get_clipboard(session)?)),
         Operation::GetCursor => {
             let (x, y) = session
                 .state
@@ -782,6 +783,24 @@ fn dispatch(
                 regex,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
                 not,
+            )?;
+            Ok(OperationResult::Unit)
+        }
+        Operation::WaitClipboard { timeout_ms } => {
+            wait_clipboard_change(
+                session,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
+        Operation::WaitClipboardMatch {
+            pattern,
+            timeout_ms,
+        } => {
+            wait_clipboard_match(
+                session,
+                &pattern,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?;
             Ok(OperationResult::Unit)
         }
@@ -1133,6 +1152,135 @@ fn title_of(session: &TerminalSession) -> Option<String> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .emu
         .title()
+}
+
+fn clipboard_error(error: anyhow::Error) -> TuiTestError {
+    TuiTestError::internal(error.to_string())
+}
+
+fn get_clipboard(session: &TerminalSession) -> Result<String, TuiTestError> {
+    let mut state = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let value = state
+        .emu
+        .clipboard(ClipboardType::Clipboard)
+        .map_err(clipboard_error)?;
+    state.observed_clipboard_revision = state
+        .emu
+        .clipboard_revision(ClipboardType::Clipboard)
+        .map_err(clipboard_error)?;
+    Ok(value)
+}
+
+fn wait_clipboard_match(
+    session: &TerminalSession,
+    pattern: &ClipboardPattern,
+    timeout_ms: u64,
+) -> Result<(), TuiTestError> {
+    let mut matched = false;
+    let mut read_error = None;
+    poll_until(
+        || {
+            let mut state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let value = state
+                .emu
+                .clipboard(ClipboardType::Clipboard)
+                .map_err(clipboard_error);
+            let revision = state
+                .emu
+                .clipboard_revision(ClipboardType::Clipboard)
+                .map_err(clipboard_error);
+            match (value, revision) {
+                (Ok(value), Ok(revision)) if pattern.matches(&value) => {
+                    state.observed_clipboard_revision = revision;
+                    matched = true;
+                }
+                (Err(error), _) | (_, Err(error)) => read_error = Some(error),
+                _ => {}
+            }
+            drop(state);
+            matched || read_error.is_some() || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if let Some(error) = read_error {
+        Err(error)
+    } else if matched {
+        Ok(())
+    } else if session_stopped(session) {
+        Err(TuiTestError::assertion(format!(
+            "session exited before the clipboard matched '{}'",
+            pattern.as_str()
+        )))
+    } else {
+        Err(TuiTestError::assertion(format!(
+            "wait clipboard: timed out after {} waiting for '{}'",
+            format_timeout(timeout_ms),
+            pattern.as_str()
+        )))
+    }
+}
+
+fn wait_clipboard_change(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+    let baseline = {
+        let mut state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let current = state
+            .emu
+            .clipboard_revision(ClipboardType::Clipboard)
+            .map_err(clipboard_error)?;
+        if current != state.observed_clipboard_revision {
+            state.observed_clipboard_revision = current;
+            return Ok(());
+        }
+        current
+    };
+    let mut changed = false;
+    let mut read_error = None;
+    poll_until(
+        || {
+            let mut state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match state
+                .emu
+                .clipboard_revision(ClipboardType::Clipboard)
+                .map_err(clipboard_error)
+            {
+                Ok(current) if current != baseline => {
+                    state.observed_clipboard_revision = current;
+                    changed = true;
+                }
+                Ok(_) => {}
+                Err(error) => read_error = Some(error),
+            }
+            drop(state);
+            changed || read_error.is_some() || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if let Some(error) = read_error {
+        Err(error)
+    } else if changed {
+        Ok(())
+    } else if session_stopped(session) {
+        Err(TuiTestError::assertion(
+            "session exited before the clipboard changed",
+        ))
+    } else {
+        Err(TuiTestError::assertion(format!(
+            "wait clipboard: timed out after {} without a change",
+            format_timeout(timeout_ms)
+        )))
+    }
 }
 
 /// Whether the title matches now. An unset title matches nothing, so `--not`
