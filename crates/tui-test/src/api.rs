@@ -137,6 +137,112 @@ pub enum KeyAction {
     Up,
 }
 
+/// A terminal mouse button.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MouseButton {
+    #[default]
+    Left,
+    Middle,
+    Right,
+}
+
+/// Button and modifier state for a mouse action.
+///
+/// The default is an unmodified left button.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MouseOptions {
+    pub button: MouseButton,
+    pub alt: bool,
+    pub ctrl: bool,
+    pub shift: bool,
+}
+
+impl MouseOptions {
+    pub const fn new(button: MouseButton) -> Self {
+        Self {
+            button,
+            alt: false,
+            ctrl: false,
+            shift: false,
+        }
+    }
+
+    pub const fn with_alt(mut self) -> Self {
+        self.alt = true;
+        self
+    }
+
+    pub const fn with_ctrl(mut self) -> Self {
+        self.ctrl = true;
+        self
+    }
+
+    pub const fn with_shift(mut self) -> Self {
+        self.shift = true;
+        self
+    }
+
+    /// Return the SGR mouse button code used by terminal protocols.
+    pub const fn sgr_code(self) -> u8 {
+        let button = match self.button {
+            MouseButton::Left => 0,
+            MouseButton::Middle => 1,
+            MouseButton::Right => 2,
+        };
+        button + 4 * self.shift as u8 + 8 * self.alt as u8 + 16 * self.ctrl as u8
+    }
+
+    /// Decode an SGR mouse button code used by protocol adapters.
+    pub const fn from_sgr_code(code: u8) -> Option<Self> {
+        if code & !0b1_1111 != 0 {
+            return None;
+        }
+        let button = match code & 0b11 {
+            0 => MouseButton::Left,
+            1 => MouseButton::Middle,
+            2 => MouseButton::Right,
+            _ => return None,
+        };
+        Some(Self {
+            button,
+            shift: code & 4 != 0,
+            alt: code & 8 != 0,
+            ctrl: code & 16 != 0,
+        })
+    }
+}
+
+impl From<MouseButton> for MouseOptions {
+    fn from(button: MouseButton) -> Self {
+        Self::new(button)
+    }
+}
+
+mod mouse_options_code {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use super::MouseOptions;
+
+    pub fn serialize<S>(options: &MouseOptions, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u8(options.sgr_code())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<MouseOptions, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let code = u8::deserialize(deserializer)?;
+        MouseOptions::from_sgr_code(code).ok_or_else(|| {
+            serde::de::Error::custom(format!("invalid SGR mouse button code {code}"))
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WhitespaceMode {
@@ -415,7 +521,7 @@ pub enum Operation {
     },
     ClickLocator {
         query: LocatorQuery,
-        button: u8,
+        options: MouseOptions,
         clicks: u8,
         timeout_ms: Option<u64>,
     },
@@ -750,14 +856,15 @@ pub struct RuntimeStatus {
     pub timeouts: Option<EffectiveTimeouts>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum MouseAction {
     Click {
         x: Option<u16>,
         y: Option<u16>,
         on_text: Option<String>,
-        button: u8,
+        #[serde(default, rename = "button", with = "mouse_options_code")]
+        options: MouseOptions,
         clicks: u8,
     },
     Move {
@@ -767,19 +874,22 @@ pub enum MouseAction {
     Down {
         x: u16,
         y: u16,
-        button: u8,
+        #[serde(default, rename = "button", with = "mouse_options_code")]
+        options: MouseOptions,
     },
     Up {
         x: u16,
         y: u16,
-        button: u8,
+        #[serde(default, rename = "button", with = "mouse_options_code")]
+        options: MouseOptions,
     },
     Drag {
         x1: u16,
         y1: u16,
         x2: u16,
         y2: u16,
-        button: u8,
+        #[serde(default, rename = "button", with = "mouse_options_code")]
+        options: MouseOptions,
     },
     Scroll {
         direction: String,
@@ -814,6 +924,40 @@ mod tests {
             Some(RecordingFormat::Cast)
         );
         assert_eq!(RecordingFormat::infer("demo.webm"), None);
+    }
+
+    #[test]
+    fn mouse_options_are_semantic_and_wire_compatible() {
+        let options = MouseOptions::new(MouseButton::Middle)
+            .with_ctrl()
+            .with_shift();
+        assert_eq!(options.sgr_code(), 21);
+        assert_eq!(MouseOptions::from_sgr_code(21), Some(options));
+        assert_eq!(MouseOptions::from_sgr_code(3), None);
+        assert_eq!(MouseOptions::from_sgr_code(32), None);
+        assert_eq!(serde_json::to_value(options).unwrap()["button"], "middle");
+
+        let action = MouseAction::Down {
+            x: 4,
+            y: 7,
+            options,
+        };
+        let value = serde_json::to_value(&action).unwrap();
+        assert_eq!(value["button"], 21);
+        assert_eq!(
+            serde_json::from_value::<MouseAction>(value).unwrap(),
+            action
+        );
+
+        let defaulted: MouseAction = serde_json::from_str(r#"{"op":"down","x":4,"y":7}"#).unwrap();
+        assert_eq!(
+            defaulted,
+            MouseAction::Down {
+                x: 4,
+                y: 7,
+                options: MouseOptions::default(),
+            }
+        );
     }
 
     #[test]

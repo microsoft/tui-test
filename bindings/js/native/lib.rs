@@ -15,12 +15,13 @@ use tui_test::{
     EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, KeyAction,
     LocatorDirection as CoreLocatorDirection, LocatorQuery as CoreLocatorQuery,
     LocatorSelector as CoreLocatorSelector, MatchOccurrence as CoreMatchOccurrence, MouseAction,
-    OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation, OperationResult,
-    RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
-    ScreenshotResult as CoreScreenshotResult, SessionHandle, Size as CoreSize,
-    SnapshotResult as CoreSnapshotResult, State as CoreState, StyleSelector as CoreStyleSelector,
-    TextMatch as CoreTextMatch, TextSelector as CoreTextSelector, TextStyle as CoreTextStyle,
-    Timeouts as CoreTimeouts, TuiTestError, WhitespaceMode as CoreWhitespaceMode,
+    MouseOptions as CoreMouseOptions, OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult,
+    Operation, OperationResult, RecordingFormat as CoreRecordingFormat,
+    RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
+    Size as CoreSize, SnapshotResult as CoreSnapshotResult, State as CoreState,
+    StyleSelector as CoreStyleSelector, TextMatch as CoreTextMatch,
+    TextSelector as CoreTextSelector, TextStyle as CoreTextStyle, Timeouts as CoreTimeouts,
+    TuiTestError, WhitespaceMode as CoreWhitespaceMode,
 };
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
@@ -579,6 +580,12 @@ fn u8_value(value: f64, name: &str) -> std::result::Result<u8, TuiTestError> {
     Ok(integer(value, name, u64::from(u8::MAX))? as u8)
 }
 
+fn mouse_options(value: f64) -> std::result::Result<CoreMouseOptions, TuiTestError> {
+    let code = u8_value(value, "button")?;
+    CoreMouseOptions::from_sgr_code(code)
+        .ok_or_else(|| TuiTestError::usage(format!("invalid mouse button code {code}")))
+}
+
 fn core_occurrence(
     value: Option<String>,
     nth: Option<f64>,
@@ -992,7 +999,7 @@ impl NativeSession {
             let query = core_query(stages)?;
             match handle.execute(Operation::ClickLocator {
                 query,
-                button: u8_value(button.unwrap_or(0.0), "button")?,
+                options: mouse_options(button.unwrap_or(0.0))?,
                 clicks: u8_value(clicks.unwrap_or(1.0), "clicks")?,
                 timeout_ms: timeout(timeout_ms, "timeoutMs")?,
             })? {
@@ -1277,7 +1284,7 @@ impl NativeSession {
                 x: options.x.map(|value| u16_value(value, "x")).transpose()?,
                 y: options.y.map(|value| u16_value(value, "y")).transpose()?,
                 on_text: options.on_text,
-                button: u8_value(options.button.unwrap_or(0.0), "button")?,
+                options: mouse_options(options.button.unwrap_or(0.0))?,
                 clicks: u8_value(options.clicks.unwrap_or(1.0), "clicks")?,
             };
             match handle.execute(Operation::Mouse { action })? {
@@ -1311,7 +1318,7 @@ impl NativeSession {
             let action = MouseAction::Down {
                 x: u16_value(x, "x")?,
                 y: u16_value(y, "y")?,
-                button: u8_value(button.unwrap_or(0.0), "button")?,
+                options: mouse_options(button.unwrap_or(0.0))?,
             };
             match handle.execute(Operation::Mouse { action })? {
                 OperationResult::Unit => Ok(()),
@@ -1328,7 +1335,7 @@ impl NativeSession {
             let action = MouseAction::Up {
                 x: u16_value(x, "x")?,
                 y: u16_value(y, "y")?,
-                button: u8_value(button.unwrap_or(0.0), "button")?,
+                options: mouse_options(button.unwrap_or(0.0))?,
             };
             match handle.execute(Operation::Mouse { action })? {
                 OperationResult::Unit => Ok(()),
@@ -1354,7 +1361,7 @@ impl NativeSession {
                 y1: u16_value(y1, "y1")?,
                 x2: u16_value(x2, "x2")?,
                 y2: u16_value(y2, "y2")?,
-                button: u8_value(button.unwrap_or(0.0), "button")?,
+                options: mouse_options(button.unwrap_or(0.0))?,
             };
             match handle.execute(Operation::Mouse { action })? {
                 OperationResult::Unit => Ok(()),

@@ -18,8 +18,8 @@ use cli::{
 };
 use protocol::{GetField, MouseAction, Request, Response};
 use tui_test::{
-    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, TextAnchor, TextScope,
-    TextSelector, TextStyle, WhitespaceMode,
+    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, MouseOptions, TextAnchor,
+    TextScope, TextSelector, TextStyle, WhitespaceMode,
 };
 
 /// Agent skill router, installed as `SKILL.md`.
@@ -359,30 +359,38 @@ fn map_mouse(action: MouseCmd) -> MouseAction {
             x,
             y,
             on_text,
-            button,
+            options,
             clicks,
         } => MouseAction::Click {
             x,
             y,
             on_text,
-            button,
+            options: options.into(),
             clicks,
         },
         MouseCmd::Move { x, y } => MouseAction::Move { x, y },
-        MouseCmd::Down { x, y, button } => MouseAction::Down { x, y, button },
-        MouseCmd::Up { x, y, button } => MouseAction::Up { x, y, button },
+        MouseCmd::Down { x, y, options } => MouseAction::Down {
+            x,
+            y,
+            options: options.into(),
+        },
+        MouseCmd::Up { x, y, options } => MouseAction::Up {
+            x,
+            y,
+            options: options.into(),
+        },
         MouseCmd::Drag {
             x1,
             y1,
             x2,
             y2,
-            button,
+            options,
         } => MouseAction::Drag {
             x1,
             y1,
             x2,
             y2,
-            button,
+            options: options.into(),
         },
         MouseCmd::Scroll { direction, amount } => MouseAction::Scroll {
             direction: direction.as_str().to_string(),
@@ -517,12 +525,12 @@ fn map_click(what: ClickCmd) -> Request {
     match what {
         ClickCmd::Text {
             query,
-            button,
+            options,
             clicks,
             timeout,
         } => Request::ClickLocator {
             query: map_query(query, MatchOccurrence::Unique),
-            button,
+            button: MouseOptions::from(options).sgr_code(),
             clicks,
             timeout_ms: timeout,
         },
@@ -1199,7 +1207,7 @@ INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n
           get command|output|exit-code|cwd|cursor|size|title|bells|bell-events\n\
 INPUT     type \"text\" | submit [\"text\"]\n\
           key press|down|repeat|up <Key...>\n\
-          click text \"T\" [selector/style options] [--button N --clicks N]\n\
+          click text \"T\" [selector/style options] [--button left|middle|right] [--alt --ctrl --shift]\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
 WAIT      wait title \"T\" [--regex --not --timeout MS]\n\
@@ -1331,6 +1339,10 @@ mod tests {
             "Settings",
             "--fg",
             "2",
+            "--button",
+            "right",
+            "--ctrl",
+            "--shift",
         ])
         .unwrap();
         let Request::ClickLocator {
@@ -1348,7 +1360,7 @@ mod tests {
         assert_eq!(selector.scope.after.as_ref().unwrap().text, "Settings");
         assert_eq!(query.occurrence, MatchOccurrence::Unique);
         assert_eq!(query.style.foreground.as_deref(), Some("2"));
-        assert_eq!(button, 0);
+        assert_eq!(button, 22);
         assert_eq!(clicks, 1);
     }
 

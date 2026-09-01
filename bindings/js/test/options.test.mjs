@@ -125,6 +125,91 @@ test("profilePayload validates profile and color fields", () => {
   assert.throws(() => profilePayload({ colors: { red: 123 } }), /must be a string/);
 });
 
+test("mouse helpers encode named buttons and modifiers", async () => {
+  const calls = [];
+  const originals = {
+    clickLocator: NativeRuntime.prototype.clickLocator,
+    mouseClick: NativeRuntime.prototype.mouseClick,
+    mouseDown: NativeRuntime.prototype.mouseDown,
+    mouseUp: NativeRuntime.prototype.mouseUp,
+    mouseDrag: NativeRuntime.prototype.mouseDrag,
+  };
+  NativeRuntime.prototype.clickLocator = async (stages, button, clicks, timeout) => {
+    calls.push(["locator", stages, button, clicks, timeout]);
+  };
+  NativeRuntime.prototype.mouseClick = async (options) => {
+    calls.push(["click", options]);
+  };
+  NativeRuntime.prototype.mouseDown = async (x, y, button) => {
+    calls.push(["down", x, y, button]);
+  };
+  NativeRuntime.prototype.mouseUp = async (x, y, button) => {
+    calls.push(["up", x, y, button]);
+  };
+  NativeRuntime.prototype.mouseDrag = async (x1, y1, x2, y2, button) => {
+    calls.push(["drag", x1, y1, x2, y2, button]);
+  };
+
+  try {
+    const su = new TuiTest("mouse-options");
+    await su.mouse.click(null, null, {
+      onText: "OK",
+      button: "right",
+      alt: true,
+      ctrl: true,
+      shift: true,
+      clicks: 2,
+    });
+    await su.mouse.down(1, 2, { button: "middle", ctrl: true });
+    await su.mouse.up(3, 4, { button: "right", alt: true });
+    await su.mouse.drag(5, 6, 7, 8, { shift: true });
+
+    assert.deepEqual(calls, [
+      [
+        "click",
+        {
+          x: undefined,
+          y: undefined,
+          onText: "OK",
+          button: 30,
+          clicks: 2,
+        },
+      ],
+      ["down", 1, 2, 17],
+      ["up", 3, 4, 10],
+      ["drag", 5, 6, 7, 8, 4],
+    ]);
+
+    await su.getByText("Open").unique().click({
+      button: "middle",
+      alt: true,
+      ctrl: true,
+      shift: true,
+      clicks: 2,
+      timeout: 50,
+    });
+    const locatorCall = calls.at(-1);
+    assert.equal(locatorCall[0], "locator");
+    assert.equal(locatorCall[1].at(-1).occurrence, "unique");
+    assert.deepEqual(locatorCall.slice(2), [29, 2, 50]);
+
+    await assert.rejects(
+      su.mouse.click(0, 0, { button: "primary" }),
+      /unknown mouse button "primary"/,
+    );
+    await assert.rejects(
+      su.mouse.click(0, 0, { ctrl: "yes" }),
+      /ctrl must be a boolean/,
+    );
+    await assert.rejects(
+      su.getByText("Open").click({ button: "primary" }),
+      /unknown mouse button "primary"/,
+    );
+  } finally {
+    Object.assign(NativeRuntime.prototype, originals);
+  }
+});
+
 test("recordingPayload accepts only mode and directory", () => {
   assert.deepEqual(recordingPayload({ mode: "on-failure", directory: "casts" }), {
     mode: "on-failure",

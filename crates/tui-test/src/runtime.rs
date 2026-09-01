@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, Weak};
 use sha2::{Digest, Sha256};
 
 use crate::api::{
-    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, OpenOptions, OpenResult,
-    Operation, OperationResult, RunOptions, StyleSelector, TextMatch, TextSelector, TuiTestError,
+    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, MouseOptions, OpenOptions,
+    OpenResult, Operation, OperationResult, RunOptions, StyleSelector, TextMatch, TextSelector,
+    TuiTestError,
 };
 use crate::engine::Engine;
 use crate::logger::Logger;
@@ -22,7 +23,7 @@ pub struct Session {
 
 #[derive(Debug, Clone, Copy)]
 pub struct LocatorClickOptions {
-    pub button: u8,
+    pub mouse: MouseOptions,
     pub clicks: u8,
     pub timeout_ms: Option<u64>,
 }
@@ -30,7 +31,7 @@ pub struct LocatorClickOptions {
 impl Default for LocatorClickOptions {
     fn default() -> Self {
         Self {
-            button: 0,
+            mouse: MouseOptions::default(),
             clicks: 1,
             timeout_ms: None,
         }
@@ -228,7 +229,7 @@ impl Locator {
         self.target
             .execute(Operation::ClickLocator {
                 query: self.strict_query(),
-                button: options.button,
+                options: options.mouse,
                 clicks: options.clicks,
                 timeout_ms: options.timeout_ms,
             })

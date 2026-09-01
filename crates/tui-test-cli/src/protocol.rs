@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use tui_test::{
-    AutomaticRecording, Backend, Engine, KeyAction, LocatorQuery, OpenOptions, Operation,
-    OperationResult, RecordingFormat, RunOptions, ScreenshotResult, TuiTestError,
+    AutomaticRecording, Backend, Engine, KeyAction, LocatorQuery, MouseOptions, OpenOptions,
+    Operation, OperationResult, RecordingFormat, RunOptions, ScreenshotResult, TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
@@ -285,7 +285,9 @@ impl Request {
                 timeout_ms,
             } => Ok(Operation::ClickLocator {
                 query,
-                button,
+                options: MouseOptions::from_sgr_code(button).ok_or_else(|| {
+                    TuiTestError::usage(format!("invalid mouse button code {button}"))
+                })?,
                 clicks,
                 timeout_ms,
             }),
@@ -515,6 +517,45 @@ mod tests {
             Operation::Key { action, .. } => assert_eq!(action, KeyAction::Press),
             other => panic!("expected key operation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn locator_click_button_codes_map_to_mouse_options() {
+        let request = Request::ClickLocator {
+            query: LocatorQuery::text("Save"),
+            button: 22,
+            clicks: 2,
+            timeout_ms: Some(500),
+        };
+        match request.into_operation().unwrap() {
+            Operation::ClickLocator {
+                options,
+                clicks,
+                timeout_ms,
+                ..
+            } => {
+                assert_eq!(
+                    options,
+                    MouseOptions {
+                        button: tui_test::MouseButton::Right,
+                        ctrl: true,
+                        shift: true,
+                        ..MouseOptions::default()
+                    }
+                );
+                assert_eq!(clicks, 2);
+                assert_eq!(timeout_ms, Some(500));
+            }
+            other => panic!("expected locator click operation, got {other:?}"),
+        }
+
+        let invalid = Request::ClickLocator {
+            query: LocatorQuery::text("Save"),
+            button: 3,
+            clicks: 1,
+            timeout_ms: None,
+        };
+        assert_eq!(invalid.into_operation().unwrap_err().kind, ErrorKind::Usage);
     }
 
     #[test]

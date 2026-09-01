@@ -207,23 +207,43 @@ class TypedCallTests(unittest.TestCase):
 
     def test_mouse_helpers_use_typed_methods(self):
         terminal = _CapturingClient("s")
-        run(terminal.mouse.click(on_text="OK", clicks=2))
+        run(
+            terminal.mouse.click(
+                on_text="OK",
+                button="right",
+                alt=True,
+                ctrl=True,
+                shift=True,
+                clicks=2,
+            )
+        )
         run(terminal.mouse.move(1, 2))
-        run(terminal.mouse.down(1, 2, button=1))
-        run(terminal.mouse.up(1, 2, button=1))
-        run(terminal.mouse.drag(1, 2, 3, 4, button=1))
+        run(terminal.mouse.down(1, 2, button="middle", ctrl=True))
+        run(terminal.mouse.up(1, 2, button="right", alt=True))
+        run(terminal.mouse.drag(1, 2, 3, 4, shift=True))
         run(terminal.mouse.scroll("down", amount=4))
         self.assertEqual(
             terminal.fake.calls,
             [
-                ("mouse_click", (None, None, "OK", 0, 2)),
+                ("mouse_click", (None, None, "OK", 30, 2)),
                 ("mouse_move", (1, 2)),
-                ("mouse_down", (1, 2, 1)),
-                ("mouse_up", (1, 2, 1)),
-                ("mouse_drag", (1, 2, 3, 4, 1)),
+                ("mouse_down", (1, 2, 17)),
+                ("mouse_up", (1, 2, 10)),
+                ("mouse_drag", (1, 2, 3, 4, 4)),
                 ("mouse_scroll", ("down", 4)),
             ],
         )
+
+    def test_mouse_helpers_reject_invalid_options(self):
+        terminal = _CapturingClient("s")
+        with self.assertRaisesRegex(ValueError, "unknown mouse button"):
+            run(terminal.mouse.click(0, 0, button="primary"))
+        with self.assertRaisesRegex(TypeError, "button must be a string"):
+            run(terminal.mouse.click(0, 0, button=1))
+        with self.assertRaisesRegex(TypeError, "ctrl must be a bool"):
+            run(terminal.mouse.click(0, 0, ctrl=1))
+        with self.assertRaisesRegex(ValueError, "unknown mouse button"):
+            run(terminal.get_by_text("Open").click(button="primary"))
 
     def test_typed_getters_use_distinct_native_methods(self):
         terminal = _CapturingClient("s")
@@ -510,11 +530,20 @@ class LocatorTests(unittest.TestCase):
         self.assertFalse(args[1])
         self.assertEqual(args[2], 1234)
 
-        run(locator.click(clicks=2, timeout=50))
+        run(
+            locator.click(
+                button="middle",
+                alt=True,
+                ctrl=True,
+                shift=True,
+                clicks=2,
+                timeout=50,
+            )
+        )
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "click_locator")
         self.assertEqual(args[0][-1]["occurrence"], "unique")
-        self.assertEqual(args[1:], (0, 2, 50))
+        self.assertEqual(args[1:], (29, 2, 50))
 
         run(locator.highlight())
         name, args = terminal.fake.calls[-1]
