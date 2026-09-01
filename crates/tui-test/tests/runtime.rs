@@ -4,8 +4,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tui_test::{
-    global_registry, ErrorKind, OpenOptions, Operation, OperationResult, RunOptions, Session,
-    SessionRegistry, Timeouts,
+    global_registry, AutomaticRecording, AutomaticRecordingMode, ErrorKind, LocatorDirection,
+    LocatorExpectOptions, LocatorQuery, MatchOccurrence, OpenOptions, Operation, OperationResult,
+    RunOptions, Session, SessionRegistry, TextSelector, TextStyle, Timeouts,
 };
 
 fn run_options(program: &str, args: &[&str]) -> RunOptions {
@@ -22,6 +23,7 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
         wait_ready: Some(false),
         restart: defaults.restart,
         timeouts: defaults.timeouts,
+        recording: defaults.recording,
     }
 }
 
@@ -60,14 +62,9 @@ fn named_handles_share_a_process_local_terminal() {
         })
         .expect("wait for command");
     second
-        .execute(Operation::ExpectText {
-            text: "native-runtime".to_string(),
-            regex: false,
-            full: false,
-            strict: false,
+        .execute(Operation::WaitLocator {
+            query: LocatorQuery::text("native-runtime"),
             not: false,
-            fg: None,
-            bg: None,
             timeout_ms: Some(5_000),
         })
         .expect("find command output");
@@ -93,6 +90,225 @@ fn named_handles_share_a_process_local_terminal() {
     first
         .close()
         .expect("close replacement through first handle");
+}
+
+#[test]
+fn automatic_recording_supports_disabled_and_custom_directory() {
+    let registry = SessionRegistry::default();
+    let root = std::env::temp_dir().join(format!("tui-test-recording-mode-{}", std::process::id()));
+
+    let disabled = registry.session("recording-disabled");
+    let opened = disabled
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Disabled,
+                directory: Some(root.clone()),
+            },
+            ..OpenOptions::default()
+        })
+        .unwrap();
+    assert!(opened.recording.is_empty());
+    disabled.close().unwrap();
+    assert!(disabled.recording().is_err());
+    assert!(!root.exists());
+
+    let always = registry.session("recording-always");
+    let opened = always
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Always,
+                directory: Some(root.clone()),
+            },
+            ..OpenOptions::default()
+        })
+        .unwrap();
+    let path = std::path::PathBuf::from(opened.recording);
+    assert!(path.starts_with(&root));
+    always.close().unwrap();
+    assert!(always.recording().is_ok());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn on_failure_recording_is_kept_only_after_an_operation_failure() {
+    let registry = SessionRegistry::default();
+    let root =
+        std::env::temp_dir().join(format!("tui-test-recording-failure-{}", std::process::id()));
+
+    let success = registry.session("recording-success");
+    let opened = success
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::OnFailure,
+                directory: Some(root.clone()),
+            },
+            ..OpenOptions::default()
+        })
+        .unwrap();
+    let success_path = std::path::PathBuf::from(opened.recording);
+    success.close().unwrap();
+    assert!(!success_path.exists());
+
+    let failed = registry.session("recording-failed");
+    failed
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::OnFailure,
+                directory: Some(root.clone()),
+            },
+            ..OpenOptions::default()
+        })
+        .unwrap();
+    assert_eq!(
+        failed
+            .execute(Operation::WaitLocator {
+                query: LocatorQuery::text("never-present"),
+                not: false,
+                timeout_ms: Some(1),
+            })
+            .unwrap_err()
+            .kind,
+        ErrorKind::Assertion
+    );
+    failed.close().unwrap();
+    assert!(failed.recording().is_ok());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn failed_open_recording_is_readable_before_close() {
+    let registry = SessionRegistry::default();
+    let session = registry.session("recording-failed-open");
+    let root = std::env::temp_dir().join(format!("tui-test-failed-open-{}", std::process::id()));
+    let (program, args) = if cfg!(windows) {
+        (
+            "powershell",
+            vec![
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "Start-Sleep -Seconds 2",
+            ],
+        )
+    } else {
+        ("sh", vec!["-c", "sleep 2"])
+    };
+    let mut options = run_options(program, &args);
+    options.wait_ready = Some(true);
+    options.timeouts.ready = Some(50);
+    options.recording = AutomaticRecording {
+        mode: AutomaticRecordingMode::OnFailure,
+        directory: Some(root.clone()),
+    };
+
+    assert_eq!(session.run(options).unwrap_err().kind, ErrorKind::Assertion);
+    assert!(session.recording().unwrap().contains("\"version\":2"));
+    session.close().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn restart_discards_the_previous_recording_path() {
+    let registry = SessionRegistry::default();
+    let session = registry.session("recording-restart");
+    let root =
+        std::env::temp_dir().join(format!("tui-test-recording-restart-{}", std::process::id()));
+    let first = session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Always,
+                directory: Some(root.join("first")),
+            },
+            ..OpenOptions::default()
+        })
+        .unwrap();
+    let first = std::path::PathBuf::from(first.recording);
+    assert!(first.is_file());
+
+    let second = session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            restart: true,
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Always,
+                directory: Some(root.join("second")),
+            },
+            ..OpenOptions::default()
+        })
+        .unwrap();
+    assert!(!first.exists());
+    assert!(std::path::Path::new(&second.recording).is_file());
+    session.close().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn failed_recorder_initialization_does_not_claim_a_stale_file() {
+    let session = Session::new("recording-stale-file");
+    let root =
+        std::env::temp_dir().join(format!("tui-test-recording-stale-{}", std::process::id()));
+    let first = session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Always,
+                directory: Some(root.join("first")),
+            },
+            ..OpenOptions::default()
+        })
+        .unwrap();
+    session.close().unwrap();
+
+    let blocked = root.join("blocked");
+    std::fs::create_dir_all(&blocked).unwrap();
+    let stale = blocked.join(std::path::Path::new(&first.recording).file_name().unwrap());
+    std::fs::write(&stale, "stale").unwrap();
+    let original_permissions = std::fs::metadata(&stale).unwrap().permissions();
+    let mut read_only = original_permissions.clone();
+    read_only.set_readonly(true);
+    std::fs::set_permissions(&stale, read_only).unwrap();
+
+    assert!(session
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::OnFailure,
+                directory: Some(blocked),
+            },
+            ..OpenOptions::default()
+        })
+        .is_err());
+    assert!(session.recording().is_err());
+    assert_eq!(std::fs::read_to_string(&stale).unwrap(), "stale");
+
+    std::fs::set_permissions(&stale, original_permissions).unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn failed_process_spawn_does_not_publish_a_recording() {
+    let session = Session::new("recording-failed-spawn");
+    let root = std::env::temp_dir().join(format!(
+        "tui-test-recording-failed-spawn-{}",
+        std::process::id()
+    ));
+    let mut options = run_options("tui-test-program-that-does-not-exist", &[]);
+    options.recording = AutomaticRecording {
+        mode: AutomaticRecordingMode::OnFailure,
+        directory: Some(root.clone()),
+    };
+
+    assert!(session.run(options).is_err());
+    assert!(session.recording().is_err());
+    assert!(std::fs::read_dir(&root)
+        .map(|entries| entries.flatten().next().is_none())
+        .unwrap_or(true));
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -143,12 +359,10 @@ fn unrelated_session_state_does_not_wait_behind_another_session() {
     let wait = std::thread::spawn(move || {
         waiting.execute(
             "waiting",
-            Operation::WaitText {
-                text: "text-that-will-never-appear".to_string(),
-                regex: false,
-                full: false,
-                timeout_ms: Some(700),
+            Operation::WaitLocator {
+                query: LocatorQuery::text("text-that-will-never-appear"),
                 not: false,
+                timeout_ms: Some(700),
             },
         )
     });
@@ -187,6 +401,184 @@ fn packed_screen_is_native_owned_utf8() {
 }
 
 #[test]
+fn text_locators_are_lazy_reusable_queries() {
+    let session = Session::new(format!("native-locator-{}", std::process::id()));
+    session
+        .open(OpenOptions {
+            wait_ready: Some(true),
+            ..OpenOptions::default()
+        })
+        .expect("open terminal");
+
+    let locator = session.get_by_text(TextSelector::new("locator-target"));
+    assert_eq!(locator.count().expect("count initial matches"), 0);
+    assert!(locator
+        .location()
+        .unwrap_err()
+        .message
+        .contains("Terminal content:"));
+    let command = if cfg!(windows) {
+        "Write-Output ('locator-'+'target locator-'+'target')"
+    } else {
+        "printf 'locator-%s locator-%s\\n' target target"
+    };
+    session
+        .execute(Operation::Submit {
+            data: Some(command.to_string()),
+        })
+        .expect("submit locator output");
+    locator
+        .wait_with_timeout(Some(5_000))
+        .expect("wait with the same locator");
+    assert_eq!(locator.count().expect("count current matches"), 2);
+    locator.expect().expect("expect any matching result");
+    locator.any().expect().expect("expect explicit any match");
+    locator.first().expect().expect("expect first match");
+    locator.last().expect().expect("expect last match");
+    locator.nth(1).expect().expect("expect second match");
+    assert!(locator
+        .unique()
+        .expect_with(LocatorExpectOptions {
+            timeout_ms: Some(20),
+            ..LocatorExpectOptions::default()
+        })
+        .is_err());
+    let hidden = LocatorExpectOptions {
+        not: true,
+        timeout_ms: Some(20),
+    };
+    session
+        .get_by_text("missing-locator-target")
+        .unique()
+        .expect_with(hidden)
+        .expect("expect an absent unique locator");
+    locator
+        .nth(2)
+        .expect_with(hidden)
+        .expect("expect an absent third match");
+    assert!(locator
+        .unique()
+        .expect_with(hidden)
+        .unwrap_err()
+        .message
+        .contains("found 2"));
+    assert!(locator.first().expect_with(hidden).is_err());
+    locator.first().expect().expect("expect one selected match");
+    let relative = locator
+        .first()
+        .get_by_text_relative(TextSelector::new("locator-target"), LocatorDirection::After);
+    assert_eq!(
+        relative.first().location().unwrap().start,
+        locator.nth(1).location().unwrap().start
+    );
+    let nested = session
+        .get_by_text("locator-target locator-target")
+        .get_by_text("locator-target")
+        .get_by_text("target");
+    assert_eq!(nested.count().expect("count nested matches"), 2);
+    nested.highlight().expect("highlight nested matches");
+    locator.highlight().expect("highlight all current matches");
+    assert_eq!(locator.all().expect("materialize locators").len(), 2);
+    assert_eq!(
+        locator
+            .nth(1)
+            .location()
+            .expect("resolve second match")
+            .start
+            .column,
+        locator
+            .last()
+            .location()
+            .expect("resolve last match")
+            .start
+            .column
+    );
+    assert_eq!(
+        &locator.unique().query().occurrence,
+        &MatchOccurrence::Unique
+    );
+    session.close().expect("close terminal");
+}
+
+#[test]
+fn text_locator_highlight_marks_the_current_grid() {
+    let session = Session::new(format!("native-highlight-{}", std::process::id()));
+    session
+        .open(OpenOptions {
+            wait_ready: Some(true),
+            ..OpenOptions::default()
+        })
+        .expect("open terminal");
+    session
+        .execute(Operation::Submit {
+            data: Some("echo highlight-target".to_string()),
+        })
+        .expect("submit highlighted output");
+
+    let locator = session.get_by_text("highlight-target").last();
+    locator
+        .wait_with_timeout(Some(5_000))
+        .expect("wait for highlighted text");
+    session
+        .execute(Operation::WaitIdle {
+            timeout_ms: Some(5_000),
+        })
+        .expect("wait for idle before highlighting");
+    let location = locator.location().expect("resolve highlighted location");
+    locator.highlight().expect("highlight locator");
+    session
+        .execute(Operation::WaitIdle {
+            timeout_ms: Some(10),
+        })
+        .expect("highlight must not reset terminal idle timing");
+    assert_eq!(
+        locator.location().expect("resolve locator after highlight"),
+        location
+    );
+    session.close().expect("close terminal");
+}
+
+#[test]
+fn text_and_style_locators_chain_against_the_live_grid() {
+    let session = Session::new(format!("native-style-locator-{}", std::process::id()));
+    session
+        .open(OpenOptions {
+            wait_ready: Some(true),
+            ..OpenOptions::default()
+        })
+        .expect("open terminal");
+    let command = if cfg!(windows) {
+        "[Console]::Write(('plain '+[char]27+'[1mBOLD'+[char]27+'[0m'+[Environment]::NewLine))"
+    } else {
+        "printf 'plain \\033[1mBOLD\\033[0m\\n'"
+    };
+    session
+        .execute(Operation::Submit {
+            data: Some(command.to_string()),
+        })
+        .expect("submit styled output");
+
+    let bold = TextStyle {
+        bold: Some(true),
+        ..TextStyle::default()
+    };
+    let styled_text = session
+        .get_by_style(bold.clone())
+        .get_by_text("BOLD")
+        .unique();
+    styled_text
+        .wait_with_timeout(Some(5_000))
+        .expect("wait for text inside bold run");
+    assert_eq!(styled_text.location().unwrap().text, "BOLD");
+
+    let text_style = session.get_by_text("BOLD").get_by_style(bold).unique();
+    assert_eq!(text_style.location().unwrap().text, "BOLD");
+    text_style.expect().expect("expect styled text");
+    text_style.highlight().expect("highlight styled text");
+    session.close().expect("close terminal");
+}
+
+#[test]
 fn close_all_interrupts_in_flight_waits() {
     let registry = Arc::new(SessionRegistry::default());
     registry
@@ -201,12 +593,10 @@ fn close_all_interrupts_in_flight_waits() {
     let wait = std::thread::spawn(move || {
         waiting.execute(
             "interrupt-wait",
-            Operation::WaitText {
-                text: "never-appears".to_string(),
-                regex: false,
-                full: false,
-                timeout_ms: Some(30_000),
+            Operation::WaitLocator {
+                query: LocatorQuery::text("never-appears"),
                 not: false,
+                timeout_ms: Some(30_000),
             },
         )
     });

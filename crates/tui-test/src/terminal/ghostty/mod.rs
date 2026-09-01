@@ -10,6 +10,7 @@ use std::thread::{self, JoinHandle};
 use alacritty_terminal::vte::{Params, Parser, Perform};
 use anyhow::{anyhow, Context, Result};
 
+use crate::event::BellTracker;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::{CursorShape, Emulator};
@@ -87,12 +88,21 @@ pub struct GhosttyEmu {
 
 impl GhosttyEmu {
     pub fn new(cols: u16, rows: u16, profile: &Profile) -> Result<Self> {
+        Self::with_bell_tracker(cols, rows, profile, BellTracker::default())
+    }
+
+    pub(crate) fn with_bell_tracker(
+        cols: u16,
+        rows: u16,
+        profile: &Profile,
+        bells: BellTracker,
+    ) -> Result<Self> {
         let (jobs, receiver) = mpsc::channel::<Job>();
         let (ready, started) = mpsc::sync_channel(1);
         let profile = *profile;
         let worker = thread::Builder::new()
             .name("tui-test-ghostty".to_string())
-            .spawn(move || match GhosttyCore::new(cols, rows, profile) {
+            .spawn(move || match GhosttyCore::new(cols, rows, profile, bells) {
                 Ok(mut core) => {
                     let _ = ready.send(Ok(()));
                     while let Ok(job) = receiver.recv() {
@@ -214,6 +224,19 @@ mod tests {
     crate::emulator_conformance_tests!(|cols, rows, profile| {
         Box::new(GhosttyEmu::new(cols, rows, profile).expect("create Ghostty emulator"))
     });
+
+    #[test]
+    fn bells_are_counted_without_counting_osc_terminators() {
+        let bells = BellTracker::default();
+        let mut emulator =
+            GhosttyEmu::with_bell_tracker(80, 24, &Profile::default(), bells.clone())
+                .expect("create emulator");
+
+        emulator.process(b"\x07\x1b]0;window title\x07\x07");
+
+        assert_eq!(bells.count(), 2);
+        assert_eq!(bells.sequence(), 2);
+    }
 
     #[test]
     fn title_sequences_can_span_process_calls() {

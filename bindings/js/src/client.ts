@@ -8,14 +8,19 @@ import {
   backendPayload,
   envPairs,
   profilePayload,
+  recordingPayload,
   resolveSession,
   resolveTimeout,
   timeoutsPayload,
 } from "./config.js";
 import type { TimeoutClass } from "./config.js";
 import { uniqueSession } from "./ephemeral.js";
-import { ExpectationError } from "./errors.js";
+import { ExpectationError, TuiTestError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
+import type {
+  RuntimeLocatorStage,
+  RuntimeLocatorStyle,
+} from "./native.js";
 import type {
   BellEvent,
   Cell,
@@ -26,14 +31,8 @@ import type {
   Size,
   SpawnOptions,
   State,
+  TextMatch,
 } from "./types.js";
-
-export interface WaitTextOptions {
-  regex?: boolean;
-  full?: boolean;
-  not?: boolean;
-  timeout?: number;
-}
 
 export interface TitleOptions {
   regex?: boolean;
@@ -41,18 +40,96 @@ export interface TitleOptions {
   timeout?: number;
 }
 
-export interface ExpectTextOptions {
+type TextOccurrence =
+  | "any"
+  | "unique"
+  | "first"
+  | "last"
+  | { nth: number };
+
+export type LocatorDirection = "within" | "after" | "before";
+
+export interface TextSelectorOptions {
   regex?: boolean;
   full?: boolean;
-  strict?: boolean;
-  not?: boolean;
-  fg?: string;
-  bg?: string;
+  whitespace?: "exact" | "normalize";
+}
+
+export interface RelativeTextSelectorOptions extends TextSelectorOptions {
+  direction?: LocatorDirection;
+}
+
+export interface TextStyleExpectation {
+  foreground?: string;
+  background?: string;
+  bold?: boolean;
+  dim?: boolean;
+  italic?: boolean;
+  underlineStyle?: "none" | "single" | "double" | "curly" | "dotted" | "dashed";
+  underlineColor?: string;
+  inverse?: boolean;
+  hidden?: boolean;
+  strikethrough?: boolean;
+  blink?: boolean;
+}
+
+export interface LocatorWaitOptions {
+  state?: "visible" | "hidden";
   timeout?: number;
 }
 
+export type MouseButton = "left" | "middle" | "right";
+
 export interface MouseButtonOptions {
-  button?: number;
+  button?: MouseButton;
+  alt?: boolean;
+  ctrl?: boolean;
+  shift?: boolean;
+}
+
+export interface MouseClickOptions extends MouseButtonOptions {
+  onText?: string;
+  clicks?: number;
+}
+
+export interface LocatorClickOptions extends MouseButtonOptions {
+  clicks?: number;
+  timeout?: number;
+}
+
+export interface LocatorHighlightOptions {
+  timeout?: number;
+}
+
+export interface LocatorExpectOptions {
+  not?: boolean;
+  timeout?: number;
+}
+
+export interface StyleSelectorOptions {
+  full?: boolean;
+}
+
+export interface RelativeStyleSelectorOptions extends StyleSelectorOptions {
+  direction?: LocatorDirection;
+}
+
+export interface Locator {
+  getByText(text: string, opts?: RelativeTextSelectorOptions): Locator;
+  getByStyle(style: TextStyleExpectation, opts?: RelativeStyleSelectorOptions): Locator;
+  any(): Locator;
+  unique(): Locator;
+  first(): Locator;
+  last(): Locator;
+  nth(index: number): Locator;
+  locations(): Promise<TextMatch[]>;
+  location(): Promise<TextMatch>;
+  count(): Promise<number>;
+  all(): Promise<Locator[]>;
+  wait(opts?: LocatorWaitOptions): Promise<Locator>;
+  click(opts?: LocatorClickOptions): Promise<void>;
+  highlight(opts?: LocatorHighlightOptions): Promise<void>;
+  expect(opts?: LocatorExpectOptions): Promise<void>;
 }
 
 export type RecordingFormat = "apng" | "gif" | "mp4" | "cast";
@@ -99,6 +176,33 @@ function optional<T>(value: T | null | undefined): T | undefined {
   return value ?? undefined;
 }
 
+function isMouseButton(value: unknown): value is MouseButton {
+  return value === "left" || value === "middle" || value === "right";
+}
+
+function mouseModifier(value: boolean | undefined, name: string, bit: number): number {
+  if (value !== undefined && typeof value !== "boolean") {
+    throw new TypeError(`${name} must be a boolean`);
+  }
+  return value ? bit : 0;
+}
+
+function mouseButtonCode(opts: MouseButtonOptions): number {
+  const button = opts.button ?? "left";
+  if (!isMouseButton(button)) {
+    throw new TypeError(
+      `unknown mouse button "${String(button)}"; expected one of left, middle, right`,
+    );
+  }
+  const base = { left: 0, middle: 1, right: 2 }[button];
+  return (
+    base +
+    mouseModifier(opts.shift, "shift", 4) +
+    mouseModifier(opts.alt, "alt", 8) +
+    mouseModifier(opts.ctrl, "ctrl", 16)
+  );
+}
+
 class Keyboard {
   #runtime: NativeRuntime;
 
@@ -123,6 +227,301 @@ class Keyboard {
   }
 }
 
+function occurrenceOptions(occurrence?: TextOccurrence): {
+  occurrence?: string;
+  nth?: number;
+} {
+  if (occurrence === undefined) {
+    return {};
+  }
+  if (typeof occurrence === "string") {
+    if (!["any", "unique", "first", "last"].includes(occurrence)) {
+      throw new TypeError(
+        "occurrence must be any, unique, first, last, or { nth: index }",
+      );
+    }
+    return { occurrence };
+  }
+  if (
+    occurrence === null ||
+    !Number.isSafeInteger(occurrence.nth) ||
+    occurrence.nth < 0
+  ) {
+    throw new TypeError("nth index must be a non-negative integer");
+  }
+  return { occurrence: "nth", nth: occurrence.nth };
+}
+
+type LocatorQueryValue = RuntimeLocatorStage[];
+
+function directionValue(direction?: LocatorDirection): LocatorDirection {
+  if (
+    direction === undefined ||
+    direction === "within" ||
+    direction === "after" ||
+    direction === "before"
+  ) {
+    return direction ?? "within";
+  }
+  throw new TypeError("locator direction must be within, after, or before");
+}
+
+function textStageValue(
+  text: string,
+  opts: RelativeTextSelectorOptions,
+  occurrence: TextOccurrence = "any",
+): RuntimeLocatorStage {
+  return {
+    kind: "text",
+    direction: opts.direction ?? "within",
+    text,
+    regex: opts.regex ?? false,
+    full: opts.full ?? false,
+    whitespace: opts.whitespace ?? "exact",
+    ...occurrenceOptions(occurrence),
+  };
+}
+
+function styleStageValue(
+  style: TextStyleExpectation,
+  opts: RelativeStyleSelectorOptions,
+  occurrence: TextOccurrence = "any",
+): RuntimeLocatorStage {
+  if (!Object.values(style).some((value) => value !== undefined)) {
+    throw new TypeError("getByStyle requires at least one style property");
+  }
+  return {
+    kind: "style",
+    direction: opts.direction ?? "within",
+    style: textStyleValue(style),
+    full: opts.full ?? false,
+    ...occurrenceOptions(occurrence),
+  };
+}
+
+function textStyleValue(style: TextStyleExpectation): RuntimeLocatorStyle {
+  return {
+    foreground: style.foreground,
+    background: style.background,
+    bold: style.bold,
+    dim: style.dim,
+    italic: style.italic,
+    underlineStyle: style.underlineStyle,
+    underlineColor: style.underlineColor,
+    inverse: style.inverse,
+    hidden: style.hidden,
+    strikethrough: style.strikethrough,
+    blink: style.blink,
+  };
+}
+
+function textQuery(
+  text: string,
+  opts: RelativeTextSelectorOptions,
+  within: LocatorQueryValue = [],
+): LocatorQueryValue {
+  rejectOccurrenceOption(opts);
+  const direction = directionValue(opts.direction);
+  if (within.length === 0 && direction !== "within") {
+    throw new TypeError("locator direction requires a parent locator");
+  }
+  return [...within, textStageValue(text, { ...opts, direction })];
+}
+
+function styleQuery(
+  style: TextStyleExpectation,
+  opts: RelativeStyleSelectorOptions,
+  within: LocatorQueryValue = [],
+): LocatorQueryValue {
+  rejectOccurrenceOption(opts);
+  const direction = directionValue(opts.direction);
+  if (within.length === 0 && direction !== "within") {
+    throw new TypeError("locator direction requires a parent locator");
+  }
+  return [...within, styleStageValue(style, { ...opts, direction })];
+}
+
+function rejectOccurrenceOption(opts: object): void {
+  if ("occurrence" in opts) {
+    throw new TypeError(
+      "select locator occurrences with any(), unique(), first(), last(), or nth()",
+    );
+  }
+}
+
+function cloneQuery(query: LocatorQueryValue): LocatorQueryValue {
+  return query.map((stage) => ({
+    ...stage,
+    style: stage.style ? { ...stage.style } : undefined,
+  }));
+}
+
+function currentStage(query: LocatorQueryValue): RuntimeLocatorStage {
+  const stage = query.at(-1);
+  if (!stage) {
+    throw new TypeError("locator requires at least one stage");
+  }
+  return stage;
+}
+
+interface LocatorActions {
+  locations(query: LocatorQueryValue, operation: string): Promise<TextMatch[]>;
+  wait(
+    query: LocatorQueryValue,
+    hidden: boolean,
+    timeout: number | undefined,
+    operation: string,
+  ): Promise<void>;
+  click(query: LocatorQueryValue, action: LocatorClickOptions): Promise<void>;
+  highlight(
+    query: LocatorQueryValue,
+    timeout: number | undefined,
+  ): Promise<void>;
+  expect(
+    query: LocatorQueryValue,
+    expectation: LocatorExpectOptions,
+    operation: string,
+  ): Promise<void>;
+  fail(operation: string, message: string): Promise<never>;
+}
+
+class LocatorImpl implements Locator {
+  readonly #query: LocatorQueryValue;
+  readonly #actions: LocatorActions;
+
+  constructor(query: LocatorQueryValue, actions: LocatorActions) {
+    this.#query = cloneQuery(query);
+    this.#actions = actions;
+  }
+
+  #withOccurrence(occurrence: TextOccurrence): LocatorImpl {
+    const query = cloneQuery(this.#query);
+    const selected = occurrenceOptions(occurrence);
+    const stage = currentStage(query);
+    stage.occurrence =
+      selected.nth === undefined
+        ? selected.occurrence ?? "any"
+        : "nth";
+    stage.nth = selected.nth;
+    return new LocatorImpl(query, this.#actions);
+  }
+
+  #strictQuery(): LocatorQueryValue {
+    const query = cloneQuery(this.#query);
+    const stage = currentStage(query);
+    if (stage.occurrence === "any") {
+      stage.occurrence = "unique";
+    }
+    return query;
+  }
+
+  any(): Locator {
+    return this.#withOccurrence("any");
+  }
+
+  unique(): Locator {
+    return this.#withOccurrence("unique");
+  }
+
+  first(): Locator {
+    return this.#withOccurrence("first");
+  }
+
+  last(): Locator {
+    return this.#withOccurrence("last");
+  }
+
+  nth(index: number): Locator {
+    if (!Number.isSafeInteger(index) || index < 0) {
+      throw new TypeError("locator nth index must be a non-negative integer");
+    }
+    return this.#withOccurrence({ nth: index });
+  }
+
+  getByText(text: string, opts: RelativeTextSelectorOptions = {}): Locator {
+    return new LocatorImpl(
+      textQuery(text, opts, this.#query),
+      this.#actions,
+    );
+  }
+
+  getByStyle(
+    style: TextStyleExpectation,
+    opts: RelativeStyleSelectorOptions = {},
+  ): Locator {
+    return new LocatorImpl(
+      styleQuery(style, opts, this.#query),
+      this.#actions,
+    );
+  }
+
+  locations(): Promise<TextMatch[]> {
+    return this.#actions.locations(this.#query, "locator.locations");
+  }
+
+  async location(): Promise<TextMatch> {
+    const matches = await this.#actions.locations(
+      this.#strictQuery(),
+      "locator.location",
+    );
+    if (matches.length !== 1) {
+      const current = currentStage(this.#query);
+      const description =
+        current.kind === "text"
+          ? JSON.stringify(current.text)
+          : "style";
+      return this.#actions.fail(
+        "locator.location",
+        `no match found for ${description}`,
+      );
+    }
+    return matches[0];
+  }
+
+  async count(): Promise<number> {
+    return (await this.locations()).length;
+  }
+
+  async all(): Promise<Locator[]> {
+    const matches = await this.locations();
+    if (currentStage(this.#query).occurrence === "any") {
+      return matches.map((_, index) => this.nth(index));
+    }
+    return matches.map(() => new LocatorImpl(this.#query, this.#actions));
+  }
+
+  async wait(opts: LocatorWaitOptions = {}): Promise<Locator> {
+    const state = opts.state ?? "visible";
+    if (state !== "visible" && state !== "hidden") {
+      throw new TypeError("locator state must be 'visible' or 'hidden'");
+    }
+    await this.#actions.wait(
+      this.#query,
+      state === "hidden",
+      opts.timeout,
+      "locator.wait",
+    );
+    return this;
+  }
+
+  click(opts: LocatorClickOptions = {}): Promise<void> {
+    return this.#actions.click(this.#strictQuery(), opts);
+  }
+
+  highlight(opts: LocatorHighlightOptions = {}): Promise<void> {
+    return this.#actions.highlight(this.#query, opts.timeout);
+  }
+
+  expect(opts: LocatorExpectOptions = {}): Promise<void> {
+    if ("style" in opts) {
+      throw new TypeError(
+        "refine the locator with getByStyle() before calling expect()",
+      );
+    }
+    return this.#actions.expect(this.#query, opts, "locator.expect");
+  }
+}
+
 class Mouse {
   #runtime: NativeRuntime;
 
@@ -133,13 +532,13 @@ class Mouse {
   async click(
     x: number | null = null,
     y: number | null = null,
-    opts: { onText?: string; button?: number; clicks?: number } = {},
+    opts: MouseClickOptions = {},
   ): Promise<void> {
     await this.#runtime.mouseClick({
       x: optional(x),
       y: optional(y),
       onText: opts.onText,
-      button: opts.button ?? 0,
+      button: mouseButtonCode(opts),
       clicks: opts.clicks ?? 1,
     });
   }
@@ -149,11 +548,11 @@ class Mouse {
   }
 
   async down(x: number, y: number, opts: MouseButtonOptions = {}): Promise<void> {
-    await this.#runtime.mouseDown(x, y, opts.button ?? 0);
+    await this.#runtime.mouseDown(x, y, mouseButtonCode(opts));
   }
 
   async up(x: number, y: number, opts: MouseButtonOptions = {}): Promise<void> {
-    await this.#runtime.mouseUp(x, y, opts.button ?? 0);
+    await this.#runtime.mouseUp(x, y, mouseButtonCode(opts));
   }
 
   async drag(
@@ -163,7 +562,7 @@ class Mouse {
     y2: number,
     opts: MouseButtonOptions = {},
   ): Promise<void> {
-    await this.#runtime.mouseDrag(x1, y1, x2, y2, opts.button ?? 0);
+    await this.#runtime.mouseDrag(x1, y1, x2, y2, mouseButtonCode(opts));
   }
 
   async scroll(direction: "up" | "down", opts: { amount?: number } = {}): Promise<void> {
@@ -187,7 +586,7 @@ export class TuiTest {
     backendPayload(opts.backend);
     profilePayload(opts.profile);
     this.#options = opts;
-    this.#runtime = new NativeRuntime(this.session);
+    this.#runtime = new NativeRuntime(this.session, recordingPayload(opts.recording));
     this.keyboard = new Keyboard(this.#runtime);
     this.mouse = new Mouse(this.#runtime);
   }
@@ -198,6 +597,63 @@ export class TuiTest {
 
   #timeout(cls: TimeoutClass, callTimeout?: number): number | undefined {
     return resolveTimeout(cls, callTimeout, this.#options);
+  }
+
+  #makeLocator(query: LocatorQueryValue): LocatorImpl {
+    const actions: LocatorActions = {
+      locations: (value, operation) =>
+        this.#guard(operation, () =>
+          this.#runtime.findLocator(value),
+        ),
+      wait: (value, hidden, timeout, operation) =>
+        this.#guard(operation, () =>
+          this.#runtime.waitLocator(
+            value,
+            hidden,
+            this.#timeout("text", timeout),
+          ),
+        ),
+      click: (value, action) =>
+        this.#guard("locator.click", () =>
+          this.#runtime.clickLocator(
+            value,
+            mouseButtonCode(action),
+            action.clicks ?? 1,
+            this.#timeout("text", action.timeout),
+          ),
+        ),
+      highlight: (value, timeout) =>
+        this.#guard("locator.highlight", async () => {
+          await this.#runtime.highlightLocator(
+            value,
+            this.#timeout("text", timeout),
+          );
+        }),
+      expect: (value, expectation, operation) => {
+        return this.#guard(operation, () =>
+          this.#runtime.expectLocator(
+            value,
+            expectation.not ?? false,
+            this.#timeout("text", expectation.timeout),
+          ),
+        );
+      },
+      fail: async (operation, message) => {
+        let diagnostic = message;
+        try {
+          diagnostic += `\n\nTerminal content:\n${await this.text()}`;
+        } catch (error) {
+          if (!(error instanceof TuiTestError)) {
+            throw error;
+          }
+          diagnostic += `\n\nTerminal content unavailable: ${error.message}`;
+        }
+        return this.#guard(operation, async () => {
+          throw new ExpectationError(diagnostic);
+        });
+      },
+    };
+    return new LocatorImpl(query, actions);
   }
 
   async #guard<T>(operation: string, action: () => Promise<T>): Promise<T> {
@@ -409,15 +865,15 @@ export class TuiTest {
     return this.#runtime.stopRecording();
   }
 
-  async waitText(text: string, opts: WaitTextOptions = {}): Promise<void> {
-    await this.#guard("waitText", () =>
-      this.#runtime.waitText(text, {
-        regex: opts.regex ?? false,
-        full: opts.full ?? false,
-        not: opts.not ?? false,
-        timeoutMs: this.#timeout("text", opts.timeout),
-      }),
-    );
+  getByText(text: string, opts: TextSelectorOptions = {}): Locator {
+    return this.#makeLocator(textQuery(text, opts));
+  }
+
+  getByStyle(
+    style: TextStyleExpectation,
+    opts: StyleSelectorOptions = {},
+  ): Locator {
+    return this.#makeLocator(styleQuery(style, opts));
   }
 
   async waitTitle(text: string, opts: TitleOptions = {}): Promise<void> {
@@ -465,20 +921,6 @@ export class TuiTest {
       this.#runtime.expectTitle(text, {
         regex: opts.regex ?? false,
         not: opts.not ?? false,
-        timeoutMs: this.#timeout("text", opts.timeout),
-      }),
-    );
-  }
-
-  async expectText(text: string, opts: ExpectTextOptions = {}): Promise<void> {
-    await this.#guard("expectText", () =>
-      this.#runtime.expectText(text, {
-        regex: opts.regex ?? false,
-        full: opts.full ?? false,
-        strict: opts.strict ?? true,
-        not: opts.not ?? false,
-        fg: opts.fg,
-        bg: opts.bg,
         timeoutMs: this.#timeout("text", opts.timeout),
       }),
     );

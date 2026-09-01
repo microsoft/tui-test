@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ._config import VERSION as __version__
 from ._ephemeral import unique_session
-from .client import TuiTest, close_all, get_recording, sessions
+from .client import Locator, TuiTest, close_all, get_recording, sessions
 from .errors import (
     ExpectationError,
     InternalError,
@@ -11,10 +11,28 @@ from .errors import (
     TerminalArtifact,
     UsageError,
 )
-from .types import Backend, BellEvent, Cell, Colors, Profile, RecordingFormat, State, Timeouts
+from .types import (
+    AutomaticRecording,
+    AutomaticRecordingMode,
+    Backend,
+    BellEvent,
+    Cell,
+    Colors,
+    LocatorDirection,
+    MouseButton,
+    Profile,
+    RecordingFormat,
+    State,
+    TextMatch,
+    TextPosition,
+    TextSpan,
+    TextStyle,
+    Timeouts,
+)
 
 __all__ = [
     "TuiTest",
+    "Locator",
     "sessions",
     "close_all",
     "get_recording",
@@ -25,13 +43,21 @@ __all__ = [
     "NoSessionError",
     "InternalError",
     "TerminalArtifact",
+    "AutomaticRecording",
+    "AutomaticRecordingMode",
     "BellEvent",
     "Cell",
     "Backend",
     "Colors",
+    "MouseButton",
+    "LocatorDirection",
     "Profile",
     "RecordingFormat",
     "State",
+    "TextMatch",
+    "TextPosition",
+    "TextSpan",
+    "TextStyle",
     "Timeouts",
     "__version__",
 ]

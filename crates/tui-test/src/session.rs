@@ -19,6 +19,14 @@ use crate::terminal::emu::Emulator;
 use crate::terminal::integration::CommandTracker;
 use crate::terminal::pty::{Pty, SpawnOptions};
 
+#[derive(Debug, Clone)]
+pub(crate) struct TextHighlight {
+    /// Match cells in full-grid coordinates.
+    pub cells: Vec<(usize, usize)>,
+    /// Full-grid row where the viewport began when the highlight was created.
+    pub viewport_offset: usize,
+}
+
 pub struct TermState {
     pub emu: Box<dyn Emulator>,
     /// Shell-integration state, derived from the raw PTY stream rather than
@@ -28,6 +36,7 @@ pub struct TermState {
     pub awaiting_start: Option<u64>,
     pub exited: Option<i32>,
     pub exit_error: Option<String>,
+    pub highlight: Option<TextHighlight>,
 }
 
 pub struct Session {
@@ -66,26 +75,9 @@ impl Session {
         env: Vec<(String, String)>,
         timeouts: crate::api::Timeouts,
         logger: Arc<Logger>,
-        recording_path: PathBuf,
+        recording_path: Option<PathBuf>,
+        recording_required: bool,
     ) -> anyhow::Result<Self> {
-        let (pty, reader) = if let Some(program) = &program {
-            let (target, args) = program
-                .split_first()
-                .ok_or_else(|| anyhow::anyhow!("empty program"))?;
-            let opts = SpawnOptions {
-                cols,
-                rows,
-                cwd,
-                env,
-            };
-            Pty::spawn(target, args, &opts)?
-        } else {
-            let sh = shell.unwrap_or_else(shell::default_shell);
-            let mut launch = shell::shell_launch(sh)?;
-            launch.env.extend(env);
-            Pty::spawn_launch(&launch, cols, rows, cwd)?
-        };
-
         let started_at = Instant::now();
         let bells = BellTracker::new(started_at);
         let state = Arc::new(Mutex::new(TermState {
@@ -95,15 +87,56 @@ impl Session {
             awaiting_start: None,
             exited: None,
             exit_error: None,
+            highlight: None,
         }));
-        let pty = Arc::new(Mutex::new(pty));
-        let cancelled = Arc::new(AtomicBool::new(false));
 
         let mut rec_env = vec![("TERM".to_string(), "xterm-256color".to_string())];
         if let Some(sh) = shell {
             rec_env.push(("SHELL".to_string(), sh.as_str().to_string()));
         }
-        let recorder = Recorder::create(recording_path, cols, rows, &rec_env, logger.clone());
+        let recorder = Recorder::create(
+            recording_path.clone(),
+            cols,
+            rows,
+            &rec_env,
+            recording_required,
+            logger.clone(),
+        )?;
+        let spawned = (|| {
+            if let Some(program) = &program {
+                let (target, args) = program
+                    .split_first()
+                    .ok_or_else(|| anyhow::anyhow!("empty program"))?;
+                let opts = SpawnOptions {
+                    cols,
+                    rows,
+                    cwd,
+                    env,
+                };
+                Pty::spawn(target, args, &opts)
+            } else {
+                let sh = shell.unwrap_or_else(shell::default_shell);
+                let mut launch = shell::shell_launch(sh)?;
+                launch.env.extend(env);
+                Pty::spawn_launch(&launch, cols, rows, cwd)
+            }
+        })();
+        let (pty, reader) = match spawned {
+            Ok(spawned) => spawned,
+            Err(error) => {
+                let remove = recorder.automatic_enabled();
+                drop(recorder);
+                if remove {
+                    if let Some(path) = recording_path {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+                return Err(error);
+            }
+        };
+
+        let pty = Arc::new(Mutex::new(pty));
+        let cancelled = Arc::new(AtomicBool::new(false));
 
         let reader_state = state.clone();
         let reader_pty = pty.clone();
@@ -132,6 +165,7 @@ impl Session {
                             st.emu.process(&buf[..n]);
                             st.tracker.feed(&buf[..n]);
                             st.last_change = Instant::now();
+                            st.highlight = None;
                             reader_recorder.on_data(&buf[..n]);
                             st.emu.take_pending_writes()
                         };
@@ -465,6 +499,10 @@ impl Session {
     pub fn flush_recording(&self) -> Result<(), crate::api::TuiTestError> {
         self.recorder.flush().map_err(capture_error)
     }
+
+    pub fn automatic_recording_enabled(&self) -> bool {
+        self.recorder.automatic_enabled()
+    }
 }
 
 fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, cols: u16, rows: u16) {
@@ -474,6 +512,7 @@ fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, col
     recorder.on_resize(cols, rows);
     state.emu.resize(cols, rows);
     state.last_change = Instant::now();
+    state.highlight = None;
 }
 
 fn drain_reader_and_recorder(reader: &mut Option<JoinHandle<()>>, recorder: &mut Recorder) {
@@ -608,7 +647,15 @@ mod tests {
     #[test]
     fn resize_is_queued_after_old_output_and_starts_a_new_idle_period() {
         let path = test_path("resize-order");
-        let mut recorder = Recorder::create(path.clone(), 1, 1, &[], Arc::new(Logger::disabled()));
+        let mut recorder = Recorder::create(
+            Some(path.clone()),
+            1,
+            1,
+            &[],
+            false,
+            Arc::new(Logger::disabled()),
+        )
+        .unwrap();
         let state = Arc::new(Mutex::new(TermState {
             emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
             tracker: CommandTracker::new(),
@@ -616,6 +663,7 @@ mod tests {
             awaiting_start: None,
             exited: None,
             exit_error: None,
+            highlight: None,
         }));
         let capture = recorder.capture();
         let output_state = Arc::clone(&state);
@@ -680,7 +728,15 @@ mod tests {
     #[test]
     fn shutdown_drains_reader_tail_before_stopping_recorder() {
         let path = test_path("reader-tail");
-        let mut recorder = Recorder::create(path.clone(), 1, 1, &[], Arc::new(Logger::disabled()));
+        let mut recorder = Recorder::create(
+            Some(path.clone()),
+            1,
+            1,
+            &[],
+            false,
+            Arc::new(Logger::disabled()),
+        )
+        .unwrap();
         let capture = recorder.capture();
         let mut reader = Some(std::thread::spawn(move || {
             capture.on_data(b"reader-tail-marker");

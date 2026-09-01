@@ -15,6 +15,7 @@ from tui_test import (
     NoSessionError,
     Profile,
     TuiTest,
+    TextStyle,
     Timeouts,
     UsageError,
     get_recording,
@@ -50,7 +51,7 @@ class IntegrationTests(unittest.TestCase):
                 await su.open(shell=SHELL)
                 await su.submit("echo hello-sdk")
                 await su.wait_command()
-                await su.expect_text("hello-sdk", strict=False)
+                await su.get_by_text("hello-sdk").first().expect()
                 await su.expect_exit_code(0)
                 st = await su.state()
                 self.assertGreater(st.cols, 0)
@@ -76,6 +77,47 @@ class IntegrationTests(unittest.TestCase):
                 cast = path.read_text(encoding="utf-8")
                 self.assertIn('"version":2', cast)
                 self.assertIn("sdk-recording", cast)
+
+        run(scenario())
+
+    def test_automatic_recording_mode_and_directory(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as root:
+                disabled = self._client(
+                    recording={"mode": "disabled", "directory": root}
+                )
+                result = await disabled.open(shell=SHELL, wait_ready=False)
+                self.assertEqual(result["recording"], "")
+                await disabled.close()
+
+                always = self._client(
+                    recording={"mode": "always", "directory": root}
+                )
+                result = await always.open(shell=SHELL, wait_ready=False)
+                self.assertTrue(result["recording"].startswith(root))
+                self.assertTrue(Path(result["recording"]).is_file())
+                await always.close()
+
+        run(scenario())
+
+    def test_failed_open_recording_is_readable_before_close(self):
+        async def scenario():
+            with tempfile.TemporaryDirectory() as root:
+                name = unique_session("recording-failed-open")
+                su = TuiTest(
+                    name,
+                    recording={"mode": "on-failure", "directory": root},
+                )
+                with self.assertRaises(ExpectationError):
+                    await su.run(
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(2)",
+                        wait_ready=True,
+                        timeouts=Timeouts(ready=50),
+                    )
+                self.assertIn('"version":2', await get_recording(name))
+                await su.close()
 
         run(scenario())
 
@@ -183,6 +225,171 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
+    def test_locators_support_scoped_text_matches_and_style_assertions(self):
+        async def scenario():
+            script = (
+                "import sys,time; "
+                "sys.stdout.write("
+                "'Settings One\\n  Save\\nSettings Two\\n  Save\\n"
+                "\\x1b[1mWarning\\x1b[0m\\n"
+                "\\x1b[1mPart\\x1b[0mial\\n'"
+                "); "
+                "sys.stdout.flush(); time.sleep(30)"
+            )
+            async with self._client() as su:
+                await su.run(sys.executable, "-c", script)
+                await su.get_by_text("Warning").wait(timeout=2000)
+                matches = await (
+                    su.get_by_text("Settings")
+                    .get_by_text(
+                        "Save",
+                        whitespace="normalize",
+                        direction="after",
+                    )
+                    .locations()
+                )
+                self.assertEqual(len(matches), 2)
+                self.assertEqual(matches[0].start.row, 1)
+                self.assertEqual(matches[0].start.column, 2)
+                self.assertEqual(matches[1].start.row, 3)
+                before = await (
+                    su.get_by_text("Save")
+                    .first()
+                    .get_by_text("Settings", direction="before")
+                    .unique()
+                    .location()
+                )
+                self.assertEqual(before.start.row, 0)
+                from_style = await (
+                    su.get_by_style(TextStyle(bold=True))
+                    .get_by_text("Save", direction="before")
+                    .last()
+                    .location()
+                )
+                self.assertEqual(from_style.start.row, 3)
+                await (
+                    su.get_by_text("Warning")
+                    .get_by_style(TextStyle(bold=True))
+                    .unique()
+                    .expect()
+                )
+                with self.assertRaises(ExpectationError) as raised:
+                    await (
+                        su.get_by_text("Warning")
+                        .get_by_style(TextStyle(bold=False))
+                        .unique()
+                        .expect(timeout=20)
+                    )
+                self.assertIn(
+                    "waiting for 'style' to be visible",
+                    str(raised.exception),
+                )
+                await (
+                    su.get_by_style(TextStyle(bold=True))
+                    .get_by_text("Part")
+                    .unique()
+                    .expect()
+                )
+                with self.assertRaises(ExpectationError):
+                    await (
+                        su.get_by_text("Partial")
+                        .get_by_style(TextStyle(bold=True))
+                        .expect(timeout=20)
+                    )
+
+        run(scenario())
+
+    def test_get_by_locators_are_lazy_selectable_and_actionable(self):
+        async def scenario():
+            script = (
+                "import sys,time; "
+                "time.sleep(.2); "
+                "sys.stdout.write("
+                "'item outside\\n\\x1b[1mitem item\\x1b[0m\\n'"
+                "); "
+                "sys.stdout.flush(); time.sleep(30)"
+            )
+            async with self._client() as su:
+                await su.run(sys.executable, "-c", script)
+                locator = su.get_by_text("item")
+                waited = await locator.wait(timeout=2000)
+                self.assertIs(waited, locator)
+                self.assertEqual(await locator.count(), 3)
+                await locator.any().expect(timeout=20)
+                await locator.expect(timeout=20)
+                await locator.first().expect(timeout=20)
+                await locator.last().expect(timeout=20)
+                await locator.nth(2).expect(timeout=20)
+                await locator.nth(3).expect(not_=True, timeout=20)
+                await su.get_by_text("missing-item").unique().expect(
+                    not_=True,
+                    timeout=20,
+                )
+                with self.assertRaises(ExpectationError):
+                    await locator.unique().expect(timeout=20)
+                with self.assertRaises(ExpectationError) as raised:
+                    await locator.unique().expect(not_=True, timeout=20)
+                self.assertIn("found 3", str(raised.exception))
+                with self.assertRaises(ExpectationError):
+                    await locator.first().expect(not_=True, timeout=20)
+                nested = (
+                    su.get_by_text("item item")
+                    .get_by_style(TextStyle(bold=True))
+                    .get_by_text("tem")
+                )
+                await nested.wait(timeout=2000)
+                self.assertEqual(await nested.count(), 2)
+                self.assertEqual(
+                    await su.get_by_style(
+                        TextStyle(bold=True)
+                    ).get_by_text("item").count(),
+                    2,
+                )
+
+                items = await locator.all()
+                self.assertEqual(len(items), 3)
+                self.assertEqual((await items[0].location()).start.column, 0)
+                self.assertEqual((await items[1].location()).start.row, 1)
+                self.assertEqual(
+                    (await locator.last().location()).start.column, 5
+                )
+
+                with self.assertRaises(ExpectationError):
+                    await locator.unique().locations()
+
+                with tempfile.TemporaryDirectory() as root:
+                    su._artifacts = {
+                        "dir": root,
+                        "on_failure": "text",
+                    }
+                    with self.assertRaises(ExpectationError) as raised:
+                        await su.get_by_text("missing-item").location()
+                    self.assertIn("Terminal content:", str(raised.exception))
+                    self.assertIsNotNone(raised.exception.terminal)
+                    self.assertIn("item item", raised.exception.terminal.text)
+
+                await nested.highlight()
+                await nested.first().click(timeout=2000)
+                await nested.first().expect()
+
+        run(scenario())
+
+    def test_wait_returns_the_actionable_locator(self):
+        async def scenario():
+            script = (
+                "import sys,time; "
+                "sys.stdout.write('clickable\\n'); "
+                "sys.stdout.flush(); time.sleep(30)"
+            )
+            async with self._client() as su:
+                await su.run(sys.executable, "-c", script)
+                locator = su.get_by_text("clickable")
+                self.assertIs(await locator.wait(timeout=2000), locator)
+                await locator.click(timeout=2000)
+                await locator.highlight(timeout=2000)
+
+        run(scenario())
+
     def test_effective_timeouts_are_exposed_in_typed_state(self):
         async def scenario():
             expected = Timeouts(
@@ -213,8 +420,13 @@ class IntegrationTests(unittest.TestCase):
                     script,
                     profile=Profile(colors=Colors(red="#010203")),
                 )
-                await su.wait_text(marker, timeout=5000)
-                await su.expect_text(marker, fg="#010203")
+                await su.get_by_text(marker).wait(timeout=5000)
+                await (
+                    su.get_by_text(marker)
+                    .get_by_style(TextStyle(foreground="#010203"))
+                    .unique()
+                    .expect()
+                )
 
         run(scenario())
 
@@ -225,9 +437,6 @@ class IntegrationTests(unittest.TestCase):
                 ("u16-negative", lambda: su.resize(-1, 24)),
                 ("u16-too-large", lambda: su.cells(2**16, 0)),
                 ("u16-bool", lambda: su.resize(True, 24)),
-                ("u8-negative", lambda: su.mouse.down(0, 0, button=-1)),
-                ("u8-too-large", lambda: su.mouse.down(0, 0, button=2**8)),
-                ("u8-bool", lambda: su.mouse.down(0, 0, button=True)),
                 ("u64-negative", lambda: su.wait_idle(timeout=-1)),
                 ("u64-too-large", lambda: su.wait_idle(timeout=2**64)),
                 ("u64-huge", lambda: su.wait_idle(timeout=10**1000)),
@@ -248,7 +457,7 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
-    def test_expect_text_error_includes_terminal(self):
+    def test_locator_expect_error_includes_terminal(self):
         async def scenario():
             async with self._client() as su:
                 await su.run(
@@ -257,12 +466,14 @@ class IntegrationTests(unittest.TestCase):
                     "import sys,time; sys.stdout.write('ready'); "
                     "sys.stdout.flush(); time.sleep(60)",
                 )
-                await su.wait_text("ready", timeout=2000)
+                await su.get_by_text("ready").wait(timeout=2000)
                 with self.assertRaises(ExpectationError) as raised:
-                    await su.expect_text("text-that-is-not-on-screen", timeout=50)
+                    await su.get_by_text(
+                        "text-that-is-not-on-screen"
+                    ).unique().expect(timeout=50)
                 message = str(raised.exception)
                 self.assertIn(
-                    "expect_text: timed out after 50ms waiting for "
+                    "locator.expect: timed out after 50ms waiting for "
                     "'text-that-is-not-on-screen' to be visible",
                     message,
                 )
@@ -287,9 +498,9 @@ class IntegrationTests(unittest.TestCase):
                 heartbeat_task = asyncio.create_task(heartbeat())
                 try:
                     with self.assertRaises(ExpectationError):
-                        await su.wait_text(
-                            "text-that-will-never-appear-on-screen", timeout=300
-                        )
+                        await su.get_by_text(
+                            "text-that-will-never-appear-on-screen"
+                        ).wait(timeout=300)
                 finally:
                     stop.set()
                     await heartbeat_task
@@ -366,7 +577,7 @@ class IntegrationTests(unittest.TestCase):
             su = self._client()
             await su.open(shell=SHELL)
             wait = asyncio.create_task(
-                su.wait_text("never-visible", timeout=60_000)
+                su.get_by_text("never-visible").wait(timeout=60_000)
             )
             await asyncio.sleep(0.05)
 
@@ -389,7 +600,7 @@ class IntegrationTests(unittest.TestCase):
                 await su.keyboard.press("Enter")
                 await su.wait_command()
                 await su.expect_output("typed-input", regex=False)
-                await su.expect_text("typed-input", strict=False)
+                await su.get_by_text("typed-input").first().expect()
                 self.assertEqual(await su.get_exit_code(), 0)
                 self.assertIn("echo typed-input", await su.get_command())
                 self.assertIn("typed-input", await su.get_output())
@@ -419,7 +630,7 @@ class IntegrationTests(unittest.TestCase):
                     "-c",
                     "import time; print('signal-ready', flush=True); time.sleep(60)",
                 )
-                await su.wait_text("signal-ready", timeout=5000)
+                await su.get_by_text("signal-ready").wait(timeout=5000)
                 with self.assertRaises(ExpectationError):
                     await su.wait_exit(timeout=30)
                 await su.signal("KILL")
@@ -440,7 +651,7 @@ class IntegrationTests(unittest.TestCase):
                 rows=4,
                 wait_ready=False,
             )
-            await su.wait_text("X", timeout=5000)
+            await su.get_by_text("X").wait(timeout=5000)
             view, cols, rows = await su._packed_screen()
             self.assertIsInstance(view, memoryview)
             self.assertTrue(view.readonly)
@@ -482,7 +693,7 @@ class IntegrationTests(unittest.TestCase):
                     cols=10,
                     rows=2,
                 )
-                await su.wait_text("X", timeout=5000)
+                await su.get_by_text("X").wait(timeout=5000)
                 self.assertTrue((await su.cells(0, 0))[0].blink)
 
         run(scenario())
@@ -506,9 +717,9 @@ class IntegrationTests(unittest.TestCase):
                     "-c",
                     "import time; print('cancel-ready', flush=True); time.sleep(60)",
                 )
-                await su.wait_text("cancel-ready", timeout=5000)
+                await su.get_by_text("cancel-ready").wait(timeout=5000)
                 wait = asyncio.create_task(
-                    su.wait_text("never-visible", timeout=350)
+                    su.get_by_text("never-visible").wait(timeout=350)
                 )
                 await asyncio.sleep(0.05)
                 wait.cancel()
@@ -578,7 +789,7 @@ class TestingHelperTests(unittest.TestCase):
                 session = t.session
                 await t.submit("echo helper-sdk")
                 await t.wait_command()
-                await t.expect_text("helper-sdk", strict=False)
+                await t.get_by_text("helper-sdk").first().expect()
                 await t.expect_exit_code(0)
                 self.assertEqual(testing.tracked_count(), 1)
             self.assertEqual(testing.tracked_count(), 0)
@@ -603,7 +814,7 @@ class TestingHelperTests(unittest.TestCase):
                     self.assertNotEqual(a.session, b.session)
                     await a.submit("echo only-in-a")
                     await a.wait_command()
-                    await b.expect_text("only-in-a", not_=True)
+                    await b.get_by_text("only-in-a").expect(not_=True)
 
         run(scenario())
 
@@ -617,7 +828,7 @@ class TestingHelperTests(unittest.TestCase):
                     "sys.stdout.flush(); time.sleep(60)",
                 ]
             ) as t:
-                await t.wait_text("from-run", timeout=5000)
+                await t.get_by_text("from-run").wait(timeout=5000)
 
         run(scenario())
 
