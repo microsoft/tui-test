@@ -5,7 +5,7 @@ Use `tui-test-rs` from Rust code and tests.
 [Back to the skill](../SKILL.md)
 
 ```sh
-cargo add tui-test-rs@0.1.0-beta.2
+cargo add tui-test-rs@0.1.0-beta.3
 ```
 
 ```rust

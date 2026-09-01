@@ -49,7 +49,7 @@ You can also download a binary from [GitHub Releases](https://github.com/microso
 
 | Language | Install | Reference |
 | --- | --- | --- |
-| Rust 1.90+ | `cargo add tui-test-rs@0.1.0-beta.2` | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
+| Rust 1.90+ | `cargo add tui-test-rs@0.1.0-beta.3` | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
 | Python 3.8+ | `pip install --pre tui-test` | [Python API](bindings/python/README.md) |
 | Node 20+ | `npm install @microsoft/tui-test@beta` | [JavaScript API](bindings/js/README.md) |
 
