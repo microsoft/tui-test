@@ -1,6 +1,7 @@
 pub mod api;
 pub mod assert;
 pub mod config;
+pub mod diagnostics;
 pub mod engine;
 pub mod input;
 pub mod logger;
@@ -16,6 +17,7 @@ mod event;
 mod session;
 
 pub use api::*;
+pub use diagnostics::*;
 pub use engine::Engine;
 pub use runtime::{
     global_registry, Locator, LocatorClickOptions, LocatorExpectOptions, Session, SessionHandle,

@@ -1,11 +1,26 @@
 import asyncio
+import json
+import os
 import re
+import tempfile
 import unittest
+from unittest import mock
 
-from tui_test import _config as cfg
+from tui_test import (
+    FailureArtifactRef,
+    FailureArtifactStatus,
+    FailureDetails,
+    FailureReason,
+    _config as cfg,
+)
 from tui_test import _ephemeral as ephemeral
 from tui_test import client
-from tui_test.errors import ExpectationError, InternalError, TerminalArtifact
+from tui_test.errors import (
+    ExpectationError,
+    InternalError,
+    TerminalArtifact,
+    UsageError,
+)
 from tui_test.types import AutomaticRecording, Colors, Profile, TextStyle, Timeouts
 
 
@@ -144,6 +159,71 @@ class RecordingResolutionTests(unittest.TestCase):
             cfg.normalize_recording({"other": 1})
 
 
+class FailureDiagnosticsTests(unittest.TestCase):
+    def test_native_envelope_is_decoded_and_preserves_cause(self):
+        native_error = client.native.NativeAssertionError("native message")
+        native_error._tui_test_error_json = json.dumps(
+            {
+                "kind": "assertion",
+                "message": "structured message",
+                "details": {
+                    "schema_version": 1,
+                    "signature": "sha256:test",
+                    "operation": {"name": "locator.location"},
+                    "reason": "locator_no_match",
+                    "summary": "missing",
+                    "unknown_additive_field": True,
+                },
+                "artifact": {
+                    "status": "partial",
+                    "directory": "artifacts/failure",
+                    "screen_svg": "artifacts/failure/current.svg",
+                    "errors": ["recording omitted"],
+                    "unknown_additive_field": True,
+                },
+            }
+        )
+
+        async def fail():
+            raise native_error
+
+        with self.assertRaises(ExpectationError) as raised:
+            run(client._await_native(fail()))
+        error = raised.exception
+        self.assertEqual(error.message, "structured message")
+        self.assertIs(error.__cause__, native_error)
+        self.assertIsInstance(error.details, FailureDetails)
+        self.assertEqual(error.details.reason, FailureReason.LOCATOR_NO_MATCH)
+        self.assertIsInstance(error.artifact, FailureArtifactRef)
+        self.assertEqual(
+            error.artifact.status, FailureArtifactStatus.PARTIAL
+        )
+        self.assertEqual(error.artifact.errors, ("recording omitted",))
+
+    def test_native_error_without_envelope_uses_legacy_message(self):
+        native_error = client.native.NativeUsageError("legacy message")
+
+        async def fail():
+            raise native_error
+
+        with self.assertRaises(UsageError) as raised:
+            run(client._await_native(fail()))
+        self.assertEqual(raised.exception.message, "legacy message")
+        self.assertIsNone(raised.exception.details)
+        self.assertIsNone(raised.exception.artifact)
+
+    def test_malformed_native_envelope_is_an_internal_transport_error(self):
+        native_error = client.native.NativeAssertionError("native message")
+        native_error._tui_test_error_json = "{not-json"
+
+        async def fail():
+            raise native_error
+
+        with self.assertRaises(InternalError) as raised:
+            run(client._await_native(fail()))
+        self.assertIn("malformed native error envelope", raised.exception.message)
+
+
 class BackendResolutionTests(unittest.TestCase):
     def test_normalizes_backend_names(self):
         self.assertIsNone(cfg.normalize_backend(None))
@@ -181,7 +261,7 @@ class TypedCallTests(unittest.TestCase):
         self.assertTrue(args[7])
         self.assertEqual(args[8], 321)
         self.assertEqual(args[9], [("red", "#010203")])
-        self.assertEqual(args[10:], (100, None, None, None, 200))
+        self.assertEqual(args[10:], (100, None, None, None, 200, None))
 
     def test_run_uses_program_and_argv(self):
         terminal = _CapturingClient("s")
@@ -207,6 +287,40 @@ class TypedCallTests(unittest.TestCase):
         run(terminal.run("vim", backend="alacritty"))
         self.assertEqual(terminal.fake.calls[0][1][1], "ghostty")
         self.assertEqual(terminal.fake.calls[1][1][2], "alacritty")
+
+    def test_constructor_screen_history_limit_reaches_open_and_run(self):
+        terminal = _CapturingClient("s", screen_history_limit=17)
+        run(terminal.open())
+        run(terminal.run("vim"))
+        self.assertEqual(terminal.fake.calls[0][1][-1], 17)
+        self.assertEqual(terminal.fake.calls[1][1][-1], 17)
+
+    def test_legacy_native_open_and_run_omit_screen_history_argument(self):
+        calls = []
+
+        class LegacyNativeSession:
+            def __init__(self, name, recording_mode, recording_directory):
+                pass
+
+            async def open(self, *args):
+                calls.append(("open", args))
+                return {}
+
+            async def run(self, *args):
+                calls.append(("run", args))
+                return {}
+
+        with mock.patch.object(
+            client.native, "NativeSession", LegacyNativeSession
+        ):
+            terminal = client.TuiTest("s", screen_history_limit=17)
+            run(terminal.open())
+            run(terminal.run("vim"))
+
+        self.assertEqual(len(calls[0][1]), 15)
+        self.assertEqual(len(calls[1][1]), 16)
+        self.assertNotEqual(calls[0][1][-1], 17)
+        self.assertNotEqual(calls[1][1][-1], 17)
 
     def test_input_helpers_use_distinct_typed_methods(self):
         terminal = _CapturingClient("s")
@@ -370,10 +484,12 @@ class ClientTimeoutTests(unittest.TestCase):
         run(terminal.open(timeouts=Timeouts(text=1000, ready=2000)))
         run(terminal.run("vim", timeouts=Timeouts(idle=1500)))
         self.assertEqual(
-            terminal.fake.calls[0][1][-5:], (1000, None, None, None, 2000)
+            terminal.fake.calls[0][1][-6:-1],
+            (1000, None, None, None, 2000),
         )
         self.assertEqual(
-            terminal.fake.calls[1][1][-5:], (None, 1500, None, None, None)
+            terminal.fake.calls[1][1][-6:-1],
+            (None, 1500, None, None, None),
         )
 
 
@@ -511,7 +627,10 @@ class LocatorTests(unittest.TestCase):
         terminal.fake.reply = [self._match(row=1)]
         match = run(items[1].location())
         self.assertEqual(match.start.row, 1)
-        query = terminal.fake.calls[-1][1][0]
+        name, args = terminal.fake.calls[-1]
+        self.assertEqual(name, "find_locator")
+        query = args[0]
+        self.assertTrue(args[1])
         self.assertEqual(query[-1]["occurrence"], "nth")
         self.assertEqual(query[-1]["nth"], 1)
 
@@ -569,7 +688,7 @@ class LocatorTests(unittest.TestCase):
         )
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "click_locator")
-        self.assertEqual(args[0][-1]["occurrence"], "unique")
+        self.assertEqual(args[0][-1]["occurrence"], "any")
         self.assertEqual(args[1:], (29, 2, 50))
 
         run(locator.highlight())
@@ -623,7 +742,18 @@ class LocatorTests(unittest.TestCase):
 
     def test_location_diagnostic_failure_does_not_mask_no_match_error(self):
         terminal = _CapturingClient("s")
-        terminal.fake.reply = []
+
+        def legacy_find(stages, *extra):
+            if extra:
+                raise TypeError("legacy native signature")
+            terminal.fake.calls.append(("find_locator", (stages,)))
+
+            async def complete():
+                return []
+
+            return complete()
+
+        terminal.fake.find_locator = legacy_find
 
         def fail_text(*args):
             terminal.fake.calls.append(("text", args))
@@ -644,6 +774,42 @@ class LocatorTests(unittest.TestCase):
 
 
 class ArtifactCaptureTests(unittest.TestCase):
+    def test_artifact_options_are_absolute_and_passed_native(self):
+        native_session = mock.Mock()
+        with mock.patch.object(
+            client.native, "NativeSession", return_value=native_session
+        ) as constructor:
+            terminal = client.TuiTest(
+                "s",
+                artifacts={
+                    "dir": os.path.join("relative", "artifacts"),
+                    "on_failure": "bundle",
+                    "include_recording": True,
+                },
+            )
+        args = constructor.call_args.args
+        self.assertEqual(args[3], os.path.abspath("relative\\artifacts"))
+        self.assertEqual(args[4], "bundle")
+        self.assertTrue(args[5])
+        self.assertEqual(terminal._artifacts["dir"], args[3])
+
+    def test_none_artifact_mode_does_not_require_directory(self):
+        with mock.patch.object(client.native, "NativeSession") as constructor:
+            client.TuiTest("s", artifacts={"on_failure": "none"})
+        self.assertIsNone(constructor.call_args.args[3])
+        self.assertEqual(constructor.call_args.args[4], "none")
+
+    def test_all_failure_artifact_modes_are_mapped(self):
+        for mode in ("bundle", "svg", "text", "json"):
+            with self.subTest(mode=mode), mock.patch.object(
+                client.native, "NativeSession"
+            ) as constructor:
+                client.TuiTest(
+                    "s",
+                    artifacts={"dir": "artifacts", "on_failure": mode},
+                )
+            self.assertEqual(constructor.call_args.args[4], mode)
+
     def test_text_mode_captures_terminal_text_only(self):
         terminal = _CapturingClient(
             "s", artifacts={"dir": "unused", "on_failure": "text"}
@@ -670,8 +836,39 @@ class ArtifactCaptureTests(unittest.TestCase):
             raise RuntimeError("screenshot exploded")
 
         terminal.screenshot = boom
-        with self.assertRaises(ExpectationError):
+        with self.assertRaises(ExpectationError) as raised:
             run(terminal.get_by_text("x").wait())
+        self.assertIn("screenshot exploded", raised.exception.terminal.errors[0])
+
+    def test_core_artifact_populates_compatibility_fields_without_capture(self):
+        with tempfile.TemporaryDirectory() as root:
+            text_path = os.path.join(root, "current.txt")
+            with open(text_path, "w", encoding="utf-8") as artifact_file:
+                artifact_file.write("core terminal")
+            svg_path = os.path.join(root, "current.svg")
+            terminal = _CapturingClient(
+                "s", artifacts={"dir": root, "on_failure": "svg"}
+            )
+            terminal.fake.error = ExpectationError(
+                "structured",
+                artifact=FailureArtifactRef(
+                    status=FailureArtifactStatus.WRITTEN,
+                    directory=root,
+                    screen_text=text_path,
+                    screen_svg=svg_path,
+                ),
+            )
+
+            async def boom(*args, **kwargs):
+                raise AssertionError("legacy screenshot capture was called")
+
+            terminal.screenshot = boom
+            with self.assertRaises(ExpectationError) as raised:
+                run(terminal.get_by_text("x").wait())
+            self.assertEqual(raised.exception.terminal.text, "core terminal")
+            self.assertEqual(
+                raised.exception.terminal.screenshot, svg_path
+            )
 
 
 class UniqueSessionTests(unittest.TestCase):

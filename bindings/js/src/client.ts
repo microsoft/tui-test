@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
+  artifactPayload,
   assertTimeoutClasses,
   backendPayload,
   envPairs,
@@ -373,7 +374,11 @@ function currentStage(query: LocatorQueryValue): RuntimeLocatorStage {
 }
 
 interface LocatorActions {
-  locations(query: LocatorQueryValue, operation: string): Promise<TextMatch[]>;
+  locations(
+    query: LocatorQueryValue,
+    operation: string,
+    requireOne?: boolean,
+  ): Promise<TextMatch[]>;
   wait(
     query: LocatorQueryValue,
     hidden: boolean,
@@ -469,9 +474,11 @@ class LocatorImpl implements Locator {
 
   async location(): Promise<TextMatch> {
     const matches = await this.#actions.locations(
-      this.#strictQuery(),
+      this.#query,
       "locator.location",
+      true,
     );
+    // Older native addons ignore the requireOne argument.
     if (matches.length !== 1) {
       const current = currentStage(this.#query);
       const description =
@@ -513,7 +520,7 @@ class LocatorImpl implements Locator {
   }
 
   click(opts: LocatorClickOptions = {}): Promise<void> {
-    return this.#actions.click(this.#strictQuery(), opts);
+    return this.#actions.click(this.#query, opts);
   }
 
   highlight(opts: LocatorHighlightOptions = {}): Promise<void> {
@@ -593,8 +600,22 @@ export class TuiTest {
     }
     backendPayload(opts.backend);
     profilePayload(opts.profile);
-    this.#options = opts;
-    this.#runtime = new NativeRuntime(this.session, recordingPayload(opts.recording));
+    const artifacts = artifactPayload(opts.artifacts);
+    this.#options = {
+      ...opts,
+      artifacts:
+        artifacts === undefined
+          ? undefined
+          : {
+              ...opts.artifacts!,
+              dir: artifacts.directory,
+            },
+    };
+    this.#runtime = new NativeRuntime(
+      this.session,
+      recordingPayload(opts.recording),
+      artifacts,
+    );
     this.keyboard = new Keyboard(this.#runtime);
     this.mouse = new Mouse(this.#runtime);
   }
@@ -609,9 +630,9 @@ export class TuiTest {
 
   #makeLocator(query: LocatorQueryValue): LocatorImpl {
     const actions: LocatorActions = {
-      locations: (value, operation) =>
+      locations: (value, operation, requireOne = false) =>
         this.#guard(operation, () =>
-          this.#runtime.findLocator(value),
+          this.#runtime.findLocator(value, requireOne),
         ),
       wait: (value, hidden, timeout, operation) =>
         this.#guard(operation, () =>
@@ -710,28 +731,42 @@ export class TuiTest {
     if (!artifacts || !(error instanceof ExpectationError)) {
       return;
     }
+    if (error.details !== undefined || error.artifact !== undefined) {
+      return;
+    }
     const mode = artifacts.onFailure ?? "svg";
     if (mode === "none") {
       return;
     }
+    const terminal = error.terminal ?? {};
     try {
-      const terminal = error.terminal ?? {};
       const text = extractTerminalContent(error.message);
       if (text !== undefined) {
         terminal.text = text;
+        error.terminal = terminal;
       }
-      if (mode === "svg") {
+      if (mode === "svg" || mode === "bundle") {
         await mkdir(artifacts.dir, { recursive: true });
         const file = path.join(
           artifacts.dir,
           `${this.session}-${Date.now()}-${this.#artifactCounter++}.svg`,
         );
         terminal.screenshot = await this.screenshot(file);
-      }
-      if (terminal.text !== undefined || terminal.screenshot !== undefined) {
         error.terminal = terminal;
       }
-    } catch {}
+    } catch (captureError) {
+      const message =
+        captureError instanceof Error ? captureError.message : String(captureError);
+      Object.defineProperty(error, "artifact", {
+        configurable: true,
+        enumerable: true,
+        value: {
+          status: "failed",
+          directory: artifacts.dir,
+          errors: [`fallback capture failed: ${message.slice(0, 1024)}`],
+        },
+      });
+    }
   }
 
   async #spawn(action: () => Promise<OpenResult>, retries: number): Promise<OpenResult> {
@@ -766,6 +801,7 @@ export class TuiTest {
       profileScrollback: profile?.scrollback,
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
+      screenHistoryLimit: this.#options.screenHistoryLimit,
     };
     return this.#spawn(() => this.#runtime.open(options), opts.retries ?? 0);
   }
@@ -788,6 +824,7 @@ export class TuiTest {
       profileScrollback: profile?.scrollback,
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
+      screenHistoryLimit: this.#options.screenHistoryLimit,
     };
     return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0);
   }

@@ -58,6 +58,13 @@ pub(crate) struct StoppedRecording {
     pub ffmpeg_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AutomaticRecordingSnapshot {
+    pub bytes: u64,
+    pub sha256: String,
+    pub last_committed_ms: Option<u64>,
+}
+
 #[derive(Debug)]
 pub(crate) enum CaptureError {
     AlreadyActive,
@@ -67,6 +74,7 @@ pub(crate) enum CaptureError {
 }
 
 impl Recorder {
+    #[cfg(test)]
     pub fn create(
         path: Option<PathBuf>,
         cols: u16,
@@ -75,7 +83,18 @@ impl Recorder {
         required: bool,
         logger: Arc<crate::logger::Logger>,
     ) -> std::io::Result<Self> {
-        let started = Instant::now();
+        Self::create_at(path, cols, rows, env, required, logger, Instant::now())
+    }
+
+    pub fn create_at(
+        path: Option<PathBuf>,
+        cols: u16,
+        rows: u16,
+        env: &[(String, String)],
+        required: bool,
+        logger: Arc<crate::logger::Logger>,
+        started: Instant,
+    ) -> std::io::Result<Self> {
         let writer = match path {
             Some(path) => match cast::CastWriter::create(&path, cols, rows, env, started) {
                 Ok(writer) => Some(writer),
@@ -168,6 +187,22 @@ impl Recorder {
         response.recv().unwrap_or(Err(CaptureError::WorkerStopped))
     }
 
+    pub fn snapshot_automatic(
+        &self,
+        target_path: PathBuf,
+        max_bytes: u64,
+    ) -> Result<AutomaticRecordingSnapshot, CaptureError> {
+        let (reply, response) = mpsc::sync_channel(0);
+        self.sender
+            .send(Message::SnapshotAutomatic {
+                target_path,
+                max_bytes,
+                reply,
+            })
+            .map_err(|_| CaptureError::WorkerStopped)?;
+        response.recv().unwrap_or(Err(CaptureError::WorkerStopped))
+    }
+
     pub fn on_resize(&self, cols: u16, rows: u16) {
         if self.active_sources.load(Ordering::Acquire) == 0 {
             return;
@@ -232,6 +267,11 @@ enum Message {
     Flush {
         reply: mpsc::SyncSender<Result<(), CaptureError>>,
     },
+    SnapshotAutomatic {
+        target_path: PathBuf,
+        max_bytes: u64,
+        reply: mpsc::SyncSender<Result<AutomaticRecordingSnapshot, CaptureError>>,
+    },
     Shutdown,
 }
 
@@ -247,6 +287,7 @@ pub(crate) fn sidecar_path(target: &std::path::Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
@@ -272,6 +313,107 @@ mod tests {
             .contains("flush-marker"));
         drop(recorder);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn automatic_snapshot_observes_queue_boundary_and_recording_continues() {
+        let source = temp_path("snapshot-source");
+        let target = temp_path("snapshot-target");
+        remove_if_present(&source);
+        remove_if_present(&target);
+        let recorder = Recorder::create(
+            Some(source.clone()),
+            80,
+            30,
+            &[],
+            false,
+            Arc::new(crate::logger::Logger::disabled()),
+        )
+        .unwrap();
+        let capture = recorder.capture();
+        capture.on_data(b"before-snapshot");
+
+        let (reply, response) = mpsc::sync_channel(0);
+        recorder
+            .sender
+            .send(Message::SnapshotAutomatic {
+                target_path: target.clone(),
+                max_bytes: u64::MAX,
+                reply,
+            })
+            .unwrap();
+        capture.on_data(b"after-snapshot");
+
+        let snapshot = response.recv().unwrap().unwrap();
+        let copied = std::fs::read(&target).unwrap();
+        let copied_text = String::from_utf8_lossy(&copied);
+        assert!(copied_text.contains("before-snapshot"));
+        assert!(!copied_text.contains("after-snapshot"));
+        assert_eq!(snapshot.bytes, copied.len() as u64);
+        assert_eq!(
+            snapshot.sha256,
+            format!("sha256:{:x}", Sha256::digest(&copied))
+        );
+        assert!(snapshot.last_committed_ms.is_some());
+
+        recorder.flush().unwrap();
+        let source_text = std::fs::read_to_string(&source).unwrap();
+        assert!(source_text.contains("before-snapshot"));
+        assert!(source_text.contains("after-snapshot"));
+
+        drop(recorder);
+        std::fs::remove_file(source).unwrap();
+        std::fs::remove_file(target).unwrap();
+    }
+
+    #[test]
+    fn automatic_snapshot_rejects_oversize_without_target() {
+        let source = temp_path("snapshot-oversize-source");
+        let target = temp_path("snapshot-oversize-target");
+        remove_if_present(&source);
+        remove_if_present(&target);
+        let recorder = Recorder::create(
+            Some(source.clone()),
+            80,
+            30,
+            &[],
+            false,
+            Arc::new(crate::logger::Logger::disabled()),
+        )
+        .unwrap();
+        recorder.capture().on_data(b"oversize");
+
+        let error = recorder.snapshot_automatic(target.clone(), 1).unwrap_err();
+        assert!(
+            matches!(error, CaptureError::Io(message) if message.contains("exceeds maximum byte limit"))
+        );
+        assert!(!target.exists());
+
+        drop(recorder);
+        std::fs::remove_file(source).unwrap();
+    }
+
+    #[test]
+    fn automatic_snapshot_reports_unavailable_without_target() {
+        let target = temp_path("snapshot-unavailable-target");
+        remove_if_present(&target);
+        let recorder = Recorder::create(
+            None,
+            80,
+            30,
+            &[],
+            false,
+            Arc::new(crate::logger::Logger::disabled()),
+        )
+        .unwrap();
+
+        let error = recorder
+            .snapshot_automatic(target.clone(), u64::MAX)
+            .unwrap_err();
+        assert!(
+            matches!(error, CaptureError::Io(message) if message == "automatic recording is unavailable")
+        );
+        assert!(!target.exists());
     }
 
     #[test]
@@ -425,5 +567,13 @@ mod tests {
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    fn remove_if_present(path: &std::path::Path) {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to remove {}: {error}", path.display()),
+        }
     }
 }

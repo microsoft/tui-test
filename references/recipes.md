@@ -79,16 +79,32 @@ await terminal.waitClipboard(/copied/i);
 
 ## Keep failure artifacts
 
+```sh
+tui-test --failure-artifacts artifacts/failures \
+  --failure-artifact-recording \
+  expect text "Ready" --timeout 5000
+```
+
 ```python
 terminal = TuiTest(
-    artifacts={"dir": "artifacts"},
+    artifacts={
+        "dir": "artifacts/failures",
+        "on_failure": "bundle",
+        "include_recording": True,
+    },
     recording={"mode": "on-failure", "directory": "artifacts"},
 )
 ```
 
 ```js
 const terminal = new TuiTest("test", {
-  artifacts: { dir: "artifacts" },
+  artifacts: {
+    dir: "artifacts/failures",
+    onFailure: "bundle",
+    includeRecording: true,
+  },
   recording: { mode: "on-failure", directory: "artifacts" },
 });
 ```
+
+Read `report.md` first. The bundle also includes machine-readable `failure.json`, the pinned terminal screen, and the cast when explicitly requested. Review terminal evidence before uploading it.

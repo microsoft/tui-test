@@ -15,6 +15,8 @@ Use the CLI for terminal work split across separate commands.
 
 Use `--session NAME` to select a session. `open` and `run` reuse it unless `--restart` is set.
 
+`open` and `run` accept `--screen-history-limit COUNT` to control how many distinct recent screens are retained for failures.
+
 ## Locate text
 
 ```sh
@@ -105,6 +107,23 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
 | `monitor` | Watch a session live. |
 
+## Failure diagnostics
+
+Assertion failures always include structured `details` in `--json` output. The details identify the operation, final reason, locator stages and candidate counts, style mismatches, process/runtime state, recent operations, and a bounded history of distinct screens.
+
+Write an offline artifact bundle:
+
+```sh
+tui-test --json \
+  --failure-artifacts ./artifacts/failures \
+  --diagnostic-context test=settings-save \
+  expect text "Save" --fg green --timeout 5000
+```
+
+Bundle mode writes `failure.json`, `report.md`, `current.txt`, and `current.svg`. Add `--failure-artifact-recording` to copy an immutable prefix of the automatic asciicast through the failure boundary. Other modes are `json`, `svg`, `text`, and `none`.
+
+Failure bundles can contain locator operands, terminal output, titles, screenshots, snapshot evidence, diagnostic context, and recordings. Review them before uploading.
+
 ## Configure
 
 ```toml
@@ -114,6 +133,9 @@ scrollback = 10000
 [recording]
 mode = "on-failure"
 directory = "./artifacts"
+
+[diagnostics]
+screen-history-limit = 10
 ```
 
 Recording modes: `disabled`, `on-failure`, and `always`.

@@ -12,7 +12,10 @@ use tui_test::{
     global_registry, AutomaticRecording as CoreAutomaticRecording,
     AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend as CoreBackend,
     BellEvent as CoreBellEvent, Cell as CoreCell, CellColor, ClipboardPattern,
-    Cursor as CoreCursor, EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, KeyAction,
+    Cursor as CoreCursor, DiagnosticRetentionOptions as CoreDiagnosticRetentionOptions,
+    EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind,
+    ExecutionContext as CoreExecutionContext, FailureArtifactMode as CoreFailureArtifactMode,
+    FailureArtifactOptions as CoreFailureArtifactOptions, KeyAction,
     LocatorDirection as CoreLocatorDirection, LocatorQuery as CoreLocatorQuery,
     LocatorSelector as CoreLocatorSelector, MatchOccurrence as CoreMatchOccurrence, MouseAction,
     MouseOptions as CoreMouseOptions, OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult,
@@ -110,6 +113,13 @@ pub struct AutomaticRecordingOptions {
 }
 
 #[napi(object)]
+pub struct FailureArtifactOptions {
+    pub directory: String,
+    pub mode: Option<String>,
+    pub include_recording: Option<bool>,
+}
+
+#[napi(object)]
 pub struct OpenOptions {
     pub backend: Option<Backend>,
     pub shell: Option<Shell>,
@@ -122,6 +132,7 @@ pub struct OpenOptions {
     pub profile_scrollback: Option<f64>,
     pub profile_colors: Option<Vec<(String, String)>>,
     pub timeouts: Option<Timeouts>,
+    pub screen_history_limit: Option<f64>,
 }
 
 #[napi(object)]
@@ -138,6 +149,7 @@ pub struct RunOptions {
     pub profile_scrollback: Option<f64>,
     pub profile_colors: Option<Vec<(String, String)>>,
     pub timeouts: Option<Timeouts>,
+    pub screen_history_limit: Option<f64>,
 }
 
 #[napi(object, use_nullable = true)]
@@ -519,10 +531,30 @@ impl From<CoreSnapshotResult> for SnapshotResult {
 }
 
 fn native_error(error: TuiTestError) -> Error {
-    Error::new(
-        Status::GenericFailure,
-        format!("{ERROR_PREFIX}{}\n{}", error.kind.as_str(), error.message),
-    )
+    #[derive(serde::Serialize)]
+    struct ErrorEnvelope<'a> {
+        kind: &'a str,
+        message: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<&'a tui_test::FailureDetails>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifact: Option<&'a tui_test::FailureArtifactRef>,
+    }
+
+    let envelope = ErrorEnvelope {
+        kind: error.kind.as_str(),
+        message: &error.message,
+        details: error.details.as_deref(),
+        artifact: error.artifact.as_deref(),
+    };
+    let body = serde_json::to_string(&envelope).unwrap_or_else(|serialization_error| {
+        serde_json::json!({
+            "kind": "internal",
+            "message": format!("failed to serialize native error: {serialization_error}"),
+        })
+        .to_string()
+    });
+    Error::new(Status::GenericFailure, format!("{ERROR_PREFIX}{body}"))
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> String {
@@ -754,6 +786,44 @@ fn core_recording(
     })
 }
 
+fn core_failure_artifact(
+    value: Option<FailureArtifactOptions>,
+) -> std::result::Result<Option<CoreFailureArtifactOptions>, TuiTestError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let mode = match value.mode.as_deref().unwrap_or("bundle") {
+        "bundle" => CoreFailureArtifactMode::Bundle,
+        "json" => CoreFailureArtifactMode::Json,
+        "svg" => CoreFailureArtifactMode::Svg,
+        "text" => CoreFailureArtifactMode::Text,
+        "none" => CoreFailureArtifactMode::None,
+        other => {
+            return Err(TuiTestError::usage(format!(
+                "unknown failure artifact mode {other:?}; expected bundle, json, svg, text, or none"
+            )))
+        }
+    };
+    let options = CoreFailureArtifactOptions {
+        directory: value.directory.into(),
+        mode,
+        include_recording: value.include_recording.unwrap_or(false),
+    };
+    options.validate().map_err(TuiTestError::usage)?;
+    Ok(Some(options))
+}
+
+fn core_diagnostics(
+    screen_history_limit: Option<f64>,
+) -> std::result::Result<CoreDiagnosticRetentionOptions, TuiTestError> {
+    let mut diagnostics = CoreDiagnosticRetentionOptions::default();
+    if let Some(limit) = screen_history_limit {
+        diagnostics.screen_history_limit = u16_value(limit, "screenHistoryLimit")?;
+    }
+    diagnostics.validate().map_err(TuiTestError::usage)?;
+    Ok(diagnostics)
+}
+
 fn core_profile(
     scrollback: Option<f64>,
     colors: &[(String, String)],
@@ -846,8 +916,18 @@ fn unexpected(operation: &str) -> TuiTestError {
     TuiTestError::internal(format!("{operation} returned an unexpected result type"))
 }
 
+fn execute_core(
+    handle: &SessionHandle,
+    context: &CoreExecutionContext,
+    operation_name: &'static str,
+    operation: Operation,
+) -> std::result::Result<OperationResult, TuiTestError> {
+    handle.execute_with_context(operation, context.clone().with_operation(operation_name))
+}
+
 async fn execute<T>(
     handle: SessionHandle,
+    context: CoreExecutionContext,
     operation_name: &'static str,
     operation: Operation,
     convert: impl FnOnce(OperationResult) -> std::result::Result<T, TuiTestError> + Send + 'static,
@@ -856,7 +936,7 @@ where
     T: Send + 'static,
 {
     blocking(operation_name, move || {
-        let result = handle.execute(operation)?;
+        let result = execute_core(&handle, &context, operation_name, operation)?;
         convert(result)
     })
     .await
@@ -866,15 +946,24 @@ where
 pub struct NativeSession {
     handle: SessionHandle,
     recording: CoreAutomaticRecording,
+    context: CoreExecutionContext,
 }
 
 #[napi]
 impl NativeSession {
     #[napi(constructor)]
-    pub fn new(name: String, recording: Option<AutomaticRecordingOptions>) -> Result<Self> {
+    pub fn new(
+        name: String,
+        recording: Option<AutomaticRecordingOptions>,
+        artifacts: Option<FailureArtifactOptions>,
+    ) -> Result<Self> {
         Ok(Self {
             handle: global_registry().session(name),
             recording: core_recording(recording).map_err(native_error)?,
+            context: CoreExecutionContext {
+                artifact: core_failure_artifact(artifacts).map_err(native_error)?,
+                ..CoreExecutionContext::default()
+            },
         })
     }
 
@@ -887,8 +976,21 @@ impl NativeSession {
     pub async fn open(&self, options: Option<OpenOptions>) -> Result<OpenResult> {
         let handle = self.handle.clone();
         let recording = self.recording.clone();
+        let context = self.context.clone();
         blocking("open", move || {
-            let result = handle.execute(Operation::Open(open_options(options, recording)?))?;
+            let diagnostics = core_diagnostics(
+                options
+                    .as_ref()
+                    .and_then(|value| value.screen_history_limit),
+            )?;
+            let mut context = context;
+            context.retention = diagnostics;
+            let result = execute_core(
+                &handle,
+                &context,
+                "open",
+                Operation::Open(open_options(options, recording)?),
+            )?;
             match result {
                 OperationResult::Open(value) => Ok(value.into()),
                 _ => Err(unexpected("open")),
@@ -901,8 +1003,17 @@ impl NativeSession {
     pub async fn run(&self, options: RunOptions) -> Result<OpenResult> {
         let handle = self.handle.clone();
         let recording = self.recording.clone();
+        let context = self.context.clone();
         blocking("run", move || {
-            let result = handle.execute(Operation::Run(run_options(options, recording)?))?;
+            let diagnostics = core_diagnostics(options.screen_history_limit)?;
+            let mut context = context;
+            context.retention = diagnostics;
+            let result = execute_core(
+                &handle,
+                &context,
+                "run",
+                Operation::Run(run_options(options, recording)?),
+            )?;
             match result {
                 OperationResult::Open(value) => Ok(value.into()),
                 _ => Err(unexpected("run")),
@@ -915,6 +1026,7 @@ impl NativeSession {
     pub async fn close(&self) -> Result<()> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "close",
             Operation::Close,
             |result| match result {
@@ -929,6 +1041,7 @@ impl NativeSession {
     pub async fn state(&self) -> Result<State> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "state",
             Operation::State,
             |result| match result {
@@ -943,6 +1056,7 @@ impl NativeSession {
     pub async fn text(&self, full: Option<bool>) -> Result<String> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "text",
             Operation::Text {
                 full: full.unwrap_or(false),
@@ -956,11 +1070,31 @@ impl NativeSession {
     }
 
     #[napi]
-    pub async fn find_locator(&self, stages: Vec<LocatorStage>) -> Result<Vec<TextMatch>> {
+    pub async fn find_locator(
+        &self,
+        stages: Vec<LocatorStage>,
+        require_one: Option<bool>,
+    ) -> Result<Vec<TextMatch>> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("findLocator", move || {
             let query = core_query(stages)?;
-            match handle.execute(Operation::FindLocator { query })? {
+            let require_one = require_one.unwrap_or(false);
+            let operation = if require_one {
+                Operation::ResolveLocator { query }
+            } else {
+                Operation::FindLocator { query }
+            };
+            match execute_core(
+                &handle,
+                &context,
+                if require_one {
+                    "locator.location"
+                } else {
+                    "locator.locations"
+                },
+                operation,
+            )? {
                 OperationResult::Matches(matches) => {
                     Ok(matches.into_iter().map(TextMatch::from).collect())
                 }
@@ -978,13 +1112,19 @@ impl NativeSession {
         timeout_ms: Option<f64>,
     ) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("waitLocator", move || {
             let query = core_query(stages)?;
-            match handle.execute(Operation::WaitLocator {
-                query,
-                not: not.unwrap_or(false),
-                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
-            })? {
+            match execute_core(
+                &handle,
+                &context,
+                "locator.wait",
+                Operation::WaitLocator {
+                    query,
+                    not: not.unwrap_or(false),
+                    timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+                },
+            )? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("waitLocator")),
             }
@@ -1001,14 +1141,20 @@ impl NativeSession {
         timeout_ms: Option<f64>,
     ) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("clickLocator", move || {
             let query = core_query(stages)?;
-            match handle.execute(Operation::ClickLocator {
-                query,
-                options: mouse_options(button.unwrap_or(0.0))?,
-                clicks: u8_value(clicks.unwrap_or(1.0), "clicks")?,
-                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
-            })? {
+            match execute_core(
+                &handle,
+                &context,
+                "locator.click",
+                Operation::ClickLocator {
+                    query,
+                    options: mouse_options(button.unwrap_or(0.0))?,
+                    clicks: u8_value(clicks.unwrap_or(1.0), "clicks")?,
+                    timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+                },
+            )? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("clickLocator")),
             }
@@ -1023,12 +1169,18 @@ impl NativeSession {
         timeout_ms: Option<f64>,
     ) -> Result<Vec<TextMatch>> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("highlightLocator", move || {
             let query = core_query(stages)?;
-            match handle.execute(Operation::HighlightLocator {
-                query,
-                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
-            })? {
+            match execute_core(
+                &handle,
+                &context,
+                "locator.highlight",
+                Operation::HighlightLocator {
+                    query,
+                    timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+                },
+            )? {
                 OperationResult::Matches(matches) => {
                     Ok(matches.into_iter().map(TextMatch::from).collect())
                 }
@@ -1046,13 +1198,19 @@ impl NativeSession {
         timeout_ms: Option<f64>,
     ) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("expectLocator", move || {
             let query = core_query(stages)?;
-            match handle.execute(Operation::WaitLocator {
-                query,
-                not: not.unwrap_or(false),
-                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
-            })? {
+            match execute_core(
+                &handle,
+                &context,
+                "locator.expect",
+                Operation::WaitLocator {
+                    query,
+                    not: not.unwrap_or(false),
+                    timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+                },
+            )? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("expectLocator")),
             }
@@ -1064,6 +1222,7 @@ impl NativeSession {
     pub async fn packed_screen(&self, full: Option<bool>) -> Result<PackedScreen> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "packedScreen",
             Operation::PackedScreen {
                 full: full.unwrap_or(false),
@@ -1083,6 +1242,7 @@ impl NativeSession {
     #[napi]
     pub async fn cells(&self, x: f64, y: f64, w: Option<f64>, h: Option<f64>) -> Result<Vec<Cell>> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("cells", move || {
             let operation = Operation::Cells {
                 x: u16_value(x, "x")?,
@@ -1090,7 +1250,7 @@ impl NativeSession {
                 w: u16_value(w.unwrap_or(1.0), "w")?,
                 h: u16_value(h.unwrap_or(1.0), "h")?,
             };
-            match handle.execute(operation)? {
+            match execute_core(&handle, &context, "cells", operation)? {
                 OperationResult::Cells(values) => values.into_iter().map(Cell::try_from).collect(),
                 _ => Err(unexpected("cells")),
             }
@@ -1102,6 +1262,7 @@ impl NativeSession {
     pub async fn get_command(&self) -> Result<Option<String>> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "getCommand",
             Operation::GetCommand,
             |result| match result {
@@ -1116,6 +1277,7 @@ impl NativeSession {
     pub async fn get_output(&self) -> Result<Option<String>> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "getOutput",
             Operation::GetOutput,
             |result| match result {
@@ -1130,6 +1292,7 @@ impl NativeSession {
     pub async fn get_exit_code(&self) -> Result<Option<i32>> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "getExitCode",
             Operation::GetExitCode,
             |result| match result {
@@ -1144,6 +1307,7 @@ impl NativeSession {
     pub async fn get_cwd(&self) -> Result<Option<String>> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "getCwd",
             Operation::GetCwd,
             |result| match result {
@@ -1158,6 +1322,7 @@ impl NativeSession {
     pub async fn get_cursor(&self) -> Result<Cursor> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "getCursor",
             Operation::GetCursor,
             |result| match result {
@@ -1172,6 +1337,7 @@ impl NativeSession {
     pub async fn get_size(&self) -> Result<Size> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "getSize",
             Operation::GetSize,
             |result| match result {
@@ -1186,6 +1352,7 @@ impl NativeSession {
     pub async fn get_bell_count(&self) -> Result<f64> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "getBellCount",
             Operation::GetBellCount,
             |result| match result {
@@ -1200,6 +1367,7 @@ impl NativeSession {
     pub async fn get_bell_events(&self) -> Result<Vec<BellEvent>> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "getBellEvents",
             Operation::GetBellEvents,
             |result| match result {
@@ -1285,6 +1453,7 @@ impl NativeSession {
             clicks: None,
         });
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("mouseClick", move || {
             let action = MouseAction::Click {
                 x: options.x.map(|value| u16_value(value, "x")).transpose()?,
@@ -1293,7 +1462,12 @@ impl NativeSession {
                 options: mouse_options(options.button.unwrap_or(0.0))?,
                 clicks: u8_value(options.clicks.unwrap_or(1.0), "clicks")?,
             };
-            match handle.execute(Operation::Mouse { action })? {
+            match execute_core(
+                &handle,
+                &context,
+                "mouse.click",
+                Operation::Mouse { action },
+            )? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("mouseClick")),
             }
@@ -1304,12 +1478,13 @@ impl NativeSession {
     #[napi]
     pub async fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("mouseMove", move || {
             let action = MouseAction::Move {
                 x: u16_value(x, "x")?,
                 y: u16_value(y, "y")?,
             };
-            match handle.execute(Operation::Mouse { action })? {
+            match execute_core(&handle, &context, "mouse.move", Operation::Mouse { action })? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("mouseMove")),
             }
@@ -1320,13 +1495,14 @@ impl NativeSession {
     #[napi]
     pub async fn mouse_down(&self, x: f64, y: f64, button: Option<f64>) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("mouseDown", move || {
             let action = MouseAction::Down {
                 x: u16_value(x, "x")?,
                 y: u16_value(y, "y")?,
                 options: mouse_options(button.unwrap_or(0.0))?,
             };
-            match handle.execute(Operation::Mouse { action })? {
+            match execute_core(&handle, &context, "mouse.down", Operation::Mouse { action })? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("mouseDown")),
             }
@@ -1337,13 +1513,14 @@ impl NativeSession {
     #[napi]
     pub async fn mouse_up(&self, x: f64, y: f64, button: Option<f64>) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("mouseUp", move || {
             let action = MouseAction::Up {
                 x: u16_value(x, "x")?,
                 y: u16_value(y, "y")?,
                 options: mouse_options(button.unwrap_or(0.0))?,
             };
-            match handle.execute(Operation::Mouse { action })? {
+            match execute_core(&handle, &context, "mouse.up", Operation::Mouse { action })? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("mouseUp")),
             }
@@ -1361,6 +1538,7 @@ impl NativeSession {
         button: Option<f64>,
     ) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("mouseDrag", move || {
             let action = MouseAction::Drag {
                 x1: u16_value(x1, "x1")?,
@@ -1369,7 +1547,7 @@ impl NativeSession {
                 y2: u16_value(y2, "y2")?,
                 options: mouse_options(button.unwrap_or(0.0))?,
             };
-            match handle.execute(Operation::Mouse { action })? {
+            match execute_core(&handle, &context, "mouse.drag", Operation::Mouse { action })? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("mouseDrag")),
             }
@@ -1380,12 +1558,18 @@ impl NativeSession {
     #[napi]
     pub async fn mouse_scroll(&self, direction: String, amount: Option<f64>) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("mouseScroll", move || {
             let action = MouseAction::Scroll {
                 direction,
                 amount: u16_value(amount.unwrap_or(3.0), "amount")?,
             };
-            match handle.execute(Operation::Mouse { action })? {
+            match execute_core(
+                &handle,
+                &context,
+                "mouse.scroll",
+                Operation::Mouse { action },
+            )? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("mouseScroll")),
             }
@@ -1396,12 +1580,13 @@ impl NativeSession {
     #[napi]
     pub async fn resize(&self, cols: f64, rows: f64) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("resize", move || {
             let operation = Operation::Resize {
                 cols: u16_value(cols, "cols")?,
                 rows: u16_value(rows, "rows")?,
             };
-            match handle.execute(operation)? {
+            match execute_core(&handle, &context, "resize", operation)? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("resize")),
             }
@@ -1418,6 +1603,7 @@ impl NativeSession {
     pub async fn get_title(&self) -> Result<Option<String>> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "getTitle",
             Operation::GetTitle,
             |result| match result {
@@ -1432,6 +1618,7 @@ impl NativeSession {
     pub async fn get_clipboard(&self) -> Result<String> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "getClipboard",
             Operation::GetClipboard,
             |result| match result {
@@ -1450,6 +1637,7 @@ impl NativeSession {
             timeout_ms: None,
         });
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("waitTitle", move || {
             let operation = Operation::WaitTitle {
                 text,
@@ -1457,7 +1645,7 @@ impl NativeSession {
                 timeout_ms: timeout(options.timeout_ms, "timeoutMs")?,
                 not: options.not.unwrap_or(false),
             };
-            match handle.execute(operation)? {
+            match execute_core(&handle, &context, "waitTitle", operation)? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("waitTitle")),
             }
@@ -1476,6 +1664,7 @@ impl NativeSession {
             timeout_ms: None,
         });
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("waitClipboard", move || {
             let regex = options.regex.unwrap_or(false);
             let timeout_ms = timeout(options.timeout_ms, "timeoutMs")?;
@@ -1496,7 +1685,7 @@ impl NativeSession {
                 None if regex => return Err(TuiTestError::usage("clipboard regex requires text")),
                 None => Operation::WaitClipboard { timeout_ms },
             };
-            match handle.execute(operation)? {
+            match execute_core(&handle, &context, "waitClipboard", operation)? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("waitClipboard")),
             }
@@ -1512,6 +1701,7 @@ impl NativeSession {
             timeout_ms: None,
         });
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("expectTitle", move || {
             let operation = Operation::ExpectTitle {
                 text,
@@ -1519,7 +1709,7 @@ impl NativeSession {
                 not: options.not.unwrap_or(false),
                 timeout_ms: timeout(options.timeout_ms, "timeoutMs")?,
             };
-            match handle.execute(operation)? {
+            match execute_core(&handle, &context, "expectTitle", operation)? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("expectTitle")),
             }
@@ -1570,12 +1760,13 @@ impl NativeSession {
     #[napi]
     pub async fn expect_exit_code(&self, code: f64, timeout_ms: Option<f64>) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("expectExitCode", move || {
             let operation = Operation::ExpectExitCode {
                 code: i32_value(code, "code")?,
                 timeout_ms: timeout(timeout_ms, "timeoutMs")?,
             };
-            match handle.execute(operation)? {
+            match execute_core(&handle, &context, "expectExitCode", operation)? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("expectExitCode")),
             }
@@ -1598,12 +1789,13 @@ impl NativeSession {
     #[napi]
     pub async fn expect_bell_count(&self, count: f64, timeout_ms: Option<f64>) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking("expectBellCount", move || {
             let operation = Operation::ExpectBellCount {
                 count: integer(count, "count", u64::MAX)?,
                 timeout_ms: timeout(timeout_ms, "timeoutMs")?,
             };
-            match handle.execute(operation)? {
+            match execute_core(&handle, &context, "expectBellCount", operation)? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected("expectBellCount")),
             }
@@ -1625,6 +1817,7 @@ impl NativeSession {
         });
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "snapshot",
             Operation::Snapshot {
                 name,
@@ -1650,6 +1843,7 @@ impl NativeSession {
         });
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "screenshot",
             Operation::Screenshot {
                 full: options.full.unwrap_or(false),
@@ -1690,6 +1884,7 @@ impl NativeSession {
     pub async fn stop_recording(&self) -> Result<String> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             "stopRecording",
             Operation::StopRecording,
             |result| match result {
@@ -1713,6 +1908,7 @@ impl NativeSession {
     async fn unit(&self, operation_name: &'static str, operation: Operation) -> Result<()> {
         execute(
             self.handle.clone(),
+            self.context.clone(),
             operation_name,
             operation,
             move |result| match result {
@@ -1730,9 +1926,10 @@ impl NativeSession {
         operation: impl FnOnce(Option<u64>) -> Operation + Send + 'static,
     ) -> Result<()> {
         let handle = self.handle.clone();
+        let context = self.context.clone();
         blocking(operation_name, move || {
             let operation = operation(timeout(timeout_ms, "timeoutMs")?);
-            match handle.execute(operation)? {
+            match execute_core(&handle, &context, operation_name, operation)? {
                 OperationResult::Unit => Ok(()),
                 _ => Err(unexpected(operation_name)),
             }

@@ -7,6 +7,10 @@ use crate::api::{
     LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, StyleSelector, TextAnchor,
     TextMatch, TextPosition, TextSelector, TextSpan, TextStyle, WhitespaceMode,
 };
+use crate::diagnostics::{
+    CellMismatch, CellStyleEvaluation, LocatorDiagnostics, LocatorFailureReason,
+    LocatorStageDiagnostics, LocatorStageMode, OccurrenceSource,
+};
 
 use super::cell::EmuCell;
 
@@ -81,6 +85,12 @@ pub struct LocatedMatch {
     pub(crate) source_end: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct LocatorEvaluation {
+    pub matches: Vec<LocatedMatch>,
+    pub diagnostics: LocatorDiagnostics,
+}
+
 struct FlatGrid {
     chars: Vec<char>,
     sources: Vec<usize>,
@@ -100,9 +110,85 @@ pub fn locate_query<F>(
 where
     F: FnMut(&EmuCell, &TextStyle) -> bool,
 {
+    let evaluation = evaluate_query(rows, query, false, &mut |cell, style, _, _| {
+        CellStyleEvaluation {
+            matched: style_matches(cell, style),
+            mismatches: Vec::new(),
+        }
+    })?;
+    if evaluation.diagnostics.failure_reason == Some(LocatorFailureReason::Ambiguous) {
+        let stage = evaluation
+            .diagnostics
+            .failure_stage
+            .and_then(|index| evaluation.diagnostics.stages.get(index));
+        let count = stage.map_or(0, |stage| stage.style_candidate_count);
+        anyhow::bail!(
+            "expected '{}' to match once, but found {count} matches",
+            query.selector.description()
+        );
+    }
+    if evaluation.diagnostics.failure_reason == Some(LocatorFailureReason::AnchorAmbiguous) {
+        anyhow::bail!("locator anchor must select one match");
+    }
+    Ok(evaluation.matches)
+}
+
+pub(crate) fn evaluate_query<F>(
+    rows: &[Vec<EmuCell>],
+    query: &LocatorQuery,
+    require_one: bool,
+    style_evaluate: &mut F,
+) -> anyhow::Result<LocatorEvaluation>
+where
+    F: FnMut(&EmuCell, &TextStyle, usize, usize) -> CellStyleEvaluation,
+{
+    let mut stages = Vec::new();
+    let mut failure = None;
+    let matches = evaluate_stage(
+        rows,
+        query,
+        require_one,
+        style_evaluate,
+        &mut stages,
+        &mut failure,
+    )?;
+    let search_scope = if query.uses_full_grid() {
+        "full_grid"
+    } else {
+        "viewport"
+    };
+    let final_candidate_count = stages.last().map_or(0, |stage| stage.style_candidate_count);
+    Ok(LocatorEvaluation {
+        diagnostics: LocatorDiagnostics {
+            search_scope: search_scope.to_string(),
+            viewport_origin_y: 0,
+            stages,
+            final_candidate_count,
+            selected: matches
+                .iter()
+                .map(|matched| diagnostic_match(&matched.value))
+                .collect(),
+            failure_stage: failure.map(|value| value.0),
+            failure_reason: failure.map(|value| value.1),
+        },
+        matches,
+    })
+}
+
+fn evaluate_stage<F>(
+    rows: &[Vec<EmuCell>],
+    query: &LocatorQuery,
+    require_one: bool,
+    style_evaluate: &mut F,
+    stages: &mut Vec<LocatorStageDiagnostics>,
+    failure: &mut Option<(usize, LocatorFailureReason)>,
+) -> anyhow::Result<Vec<LocatedMatch>>
+where
+    F: FnMut(&EmuCell, &TextStyle, usize, usize) -> CellStyleEvaluation,
+{
     let mut parents = match query.within.as_deref() {
         Some(parent) => {
-            let mut parents = locate_query(rows, parent, style_matches)?;
+            let mut parents = evaluate_stage(rows, parent, false, style_evaluate, stages, failure)?;
             if parents.is_empty() {
                 return Ok(Vec::new());
             }
@@ -111,69 +197,238 @@ where
         }
         None => None,
     };
+    let input_candidate_count = parents.as_ref().map_or(1, Vec::len);
     let allowed = parents.as_ref().map(|parents| {
         let width = rows.iter().map(Vec::len).max().unwrap_or(0);
         relative_regions(parents, query.direction, width.saturating_mul(rows.len()))
     });
-    let occurrence = query.occurrence.clone();
-    let select_early = query.style.is_empty();
-    let mut selected_early = false;
-    let mut matches = match &query.selector {
+    let stage_index = stages.len();
+    let requested_occurrence = query.occurrence.clone();
+    let (effective_occurrence, occurrence_source) =
+        if require_one && requested_occurrence == MatchOccurrence::Any {
+            (MatchOccurrence::Unique, OccurrenceSource::ActionDefault)
+        } else {
+            (requested_occurrence.clone(), OccurrenceSource::Explicit)
+        };
+
+    let mode = match &query.selector {
+        LocatorSelector::Text(_) => LocatorStageMode::Text,
+        LocatorSelector::Style(_)
+            if query.direction == LocatorDirection::Within && parents.is_some() =>
+        {
+            LocatorStageMode::ParentStyleFilter
+        }
+        LocatorSelector::Style(_) => LocatorStageMode::ContiguousStyleRuns,
+    };
+
+    let mut mismatches = Vec::new();
+    let mut intrinsic_failure = None;
+    let (mut raw_matches, raw_candidate_count) = match &query.selector {
         LocatorSelector::Text(selector) => {
-            selected_early = select_early;
-            locate_text_within(
-                rows,
-                selector,
-                allowed.as_deref(),
-                select_early.then_some(&occurrence),
-            )?
+            intrinsic_failure = text_anchor_failure(rows, selector)?;
+            let matches = if intrinsic_failure.is_some() {
+                Vec::new()
+            } else {
+                locate_text_within(rows, selector, allowed.as_deref(), None)?
+            };
+            let count = matches.len();
+            (matches, count)
         }
         LocatorSelector::Style(selector)
             if query.direction == LocatorDirection::Within && parents.is_some() =>
         {
-            let mut matches = parents.take().expect("parent matches are present");
-            matches
-                .retain(|matched| located_match_has_style(matched, &selector.style, style_matches));
-            matches
+            let source = parents.take().expect("parent matches are present");
+            let count = source.len();
+            (
+                filter_matches_by_style(source, &selector.style, style_evaluate, &mut mismatches),
+                count,
+            )
         }
         LocatorSelector::Style(selector) => {
-            selected_early = select_early;
-            locate_style_within(
-                rows,
-                selector,
-                allowed.as_deref(),
-                select_early.then_some(&occurrence),
-                style_matches,
-            )?
+            let matches =
+                locate_style_within(rows, selector, allowed.as_deref(), None, style_evaluate)?;
+            let count = matches.len();
+            (matches, count)
         }
     };
+
     if !query.style.is_empty() {
-        matches.retain(|matched| located_match_has_style(matched, &query.style, style_matches));
+        raw_matches =
+            filter_matches_by_style(raw_matches, &query.style, style_evaluate, &mut mismatches);
     }
-    if selected_early {
-        Ok(matches)
-    } else {
-        select_items(matches, &occurrence, &query.selector.description())
+    let style_candidate_count = raw_matches.len();
+    let candidate_sample = raw_matches
+        .iter()
+        .map(|matched| diagnostic_match(&matched.value))
+        .collect::<Vec<_>>();
+    let (selected, selection_failure) = select_with_diagnostics(raw_matches, &effective_occurrence);
+    let selected_count = selected.len();
+    let stage_failure = selection_failure.or(intrinsic_failure).or_else(|| {
+        (selected.is_empty()).then_some(if style_candidate_count == 0 && raw_candidate_count > 0 {
+            LocatorFailureReason::StyleFilterRemovedAll
+        } else {
+            LocatorFailureReason::NoMatch
+        })
+    });
+    if failure.is_none() {
+        if let Some(reason) = stage_failure {
+            *failure = Some((stage_index, reason));
+        }
     }
+
+    let mut diagnostics = LocatorStageDiagnostics {
+        stage_index,
+        mode,
+        selector: diagnostic_selector(&query.selector),
+        direction: query.direction,
+        requested_occurrence,
+        effective_occurrence,
+        occurrence_source,
+        input_candidate_count,
+        raw_candidate_count,
+        style_candidate_count,
+        selected_count,
+        candidates: candidate_sample,
+        candidates_truncated: false,
+        mismatches,
+        mismatches_truncated: false,
+    };
+    diagnostics.truncate();
+    stages.push(diagnostics);
+    Ok(selected)
 }
 
-fn located_match_has_style<F>(
+fn diagnostic_selector(selector: &LocatorSelector) -> LocatorSelector {
+    let mut selector = selector.clone();
+    if let LocatorSelector::Text(text) = &mut selector {
+        truncate_string(&mut text.text, 4_096);
+        if let Some(anchor) = text.scope.after.as_mut() {
+            truncate_string(&mut anchor.text, 4_096);
+        }
+        if let Some(anchor) = text.scope.before.as_mut() {
+            truncate_string(&mut anchor.text, 4_096);
+        }
+    }
+    selector
+}
+
+fn diagnostic_match(value: &TextMatch) -> TextMatch {
+    let mut value = value.clone();
+    truncate_string(&mut value.text, 4_096);
+    if value.spans.len() > 256 {
+        value.spans.truncate(256);
+    }
+    value
+}
+
+fn truncate_string(value: &mut String, limit: usize) {
+    if value.len() <= limit {
+        return;
+    }
+    let mut end = limit;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    value.push_str("...");
+}
+
+fn text_anchor_failure(
+    rows: &[Vec<EmuCell>],
+    selector: &TextSelector,
+) -> anyhow::Result<Option<LocatorFailureReason>> {
+    if rows.is_empty() {
+        return Ok(selector
+            .scope
+            .after
+            .as_ref()
+            .or(selector.scope.before.as_ref())
+            .map(|_| LocatorFailureReason::AnchorNotFound));
+    }
+    let flat = flatten(rows, selector.whitespace);
+    for anchor in [
+        selector.scope.after.as_ref(),
+        selector.scope.before.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let pattern = selector_pattern(&anchor.text, anchor.regex, selector.whitespace)?;
+        let count = pattern.ranges(&flat.chars).len();
+        let failure = match &anchor.occurrence {
+            MatchOccurrence::Any | MatchOccurrence::Unique if count > 1 => {
+                Some(LocatorFailureReason::AnchorAmbiguous)
+            }
+            MatchOccurrence::Nth(index) if *index >= count => {
+                Some(LocatorFailureReason::AnchorNotFound)
+            }
+            MatchOccurrence::First
+            | MatchOccurrence::Last
+            | MatchOccurrence::Unique
+            | MatchOccurrence::Any
+                if count == 0 =>
+            {
+                Some(LocatorFailureReason::AnchorNotFound)
+            }
+            _ => None,
+        };
+        if failure.is_some() {
+            return Ok(failure);
+        }
+    }
+    Ok(None)
+}
+
+fn filter_matches_by_style<F>(
+    matches: Vec<LocatedMatch>,
+    style: &TextStyle,
+    style_evaluate: &mut F,
+    mismatches: &mut Vec<CellMismatch>,
+) -> Vec<LocatedMatch>
+where
+    F: FnMut(&EmuCell, &TextStyle, usize, usize) -> CellStyleEvaluation,
+{
+    matches
+        .into_iter()
+        .filter(|matched| {
+            let evaluation = located_match_style_evaluation(matched, style, style_evaluate);
+            if !evaluation.matched {
+                mismatches.extend(evaluation.mismatches);
+            }
+            evaluation.matched
+        })
+        .collect()
+}
+
+fn located_match_style_evaluation<F>(
     matched: &LocatedMatch,
     style: &TextStyle,
-    style_matches: &mut F,
-) -> bool
+    style_evaluate: &mut F,
+) -> CellStyleEvaluation
 where
-    F: FnMut(&EmuCell, &TextStyle) -> bool,
+    F: FnMut(&EmuCell, &TextStyle, usize, usize) -> CellStyleEvaluation,
 {
     let visible = |cell: &MatchedCell| {
         !cell.cell.ch.is_empty() && !cell.cell.ch.chars().all(char::is_whitespace)
     };
     let has_visible = matched.cells.iter().any(&visible);
-    matched
+    let mut all_matched = true;
+    let mut mismatches = Vec::new();
+    for cell in matched
         .cells
         .iter()
         .filter(|cell| !has_visible || visible(cell))
-        .all(|cell| style_matches(&cell.cell, style))
+    {
+        let evaluation = style_evaluate(&cell.cell, style, cell.x, cell.y);
+        if !evaluation.matched {
+            all_matched = false;
+            mismatches.extend(evaluation.mismatches);
+        }
+    }
+    CellStyleEvaluation {
+        matched: all_matched,
+        mismatches,
+    }
 }
 
 fn relative_regions(
@@ -253,7 +508,7 @@ fn locate_style_within<F>(
     style_matches: &mut F,
 ) -> anyhow::Result<Vec<LocatedMatch>>
 where
-    F: FnMut(&EmuCell, &TextStyle) -> bool,
+    F: FnMut(&EmuCell, &TextStyle, usize, usize) -> CellStyleEvaluation,
 {
     if rows.is_empty() {
         return Ok(Vec::new());
@@ -275,7 +530,7 @@ where
                     .collect::<Vec<_>>(),
                 None => vec![0],
             };
-            if !cell_regions.is_empty() && style_matches(cell, &selector.style) {
+            if !cell_regions.is_empty() && style_matches(cell, &selector.style, x, y).matched {
                 if start.is_none() {
                     start = Some(position);
                     containing_regions = cell_regions;
@@ -462,6 +717,25 @@ fn select_items<T>(
     }
 }
 
+fn select_with_diagnostics<T>(
+    items: Vec<T>,
+    occurrence: &MatchOccurrence,
+) -> (Vec<T>, Option<LocatorFailureReason>) {
+    let count = items.len();
+    match occurrence {
+        MatchOccurrence::Any => (items, None),
+        MatchOccurrence::Unique if count > 1 => (Vec::new(), Some(LocatorFailureReason::Ambiguous)),
+        MatchOccurrence::Unique | MatchOccurrence::First => {
+            (items.into_iter().next().into_iter().collect(), None)
+        }
+        MatchOccurrence::Last => (items.into_iter().last().into_iter().collect(), None),
+        MatchOccurrence::Nth(index) if *index >= count => {
+            (Vec::new(), Some(LocatorFailureReason::NthOutOfRange))
+        }
+        MatchOccurrence::Nth(index) => (items.into_iter().nth(*index).into_iter().collect(), None),
+    }
+}
+
 fn materialize(
     rows: &[Vec<EmuCell>],
     flat: &FlatGrid,
@@ -610,6 +884,32 @@ mod tests {
         };
         let found = locate(&grid(&["Save", "Settings", "Save"]), &selector).unwrap();
         assert_eq!(found[0].value.start, TextPosition { row: 2, column: 0 });
+    }
+
+    #[test]
+    fn anchor_failures_are_typed_in_evaluations() {
+        let mut selector = TextSelector::new("target");
+        selector.scope.after = Some(TextAnchor {
+            text: "anchor".to_string(),
+            regex: false,
+            occurrence: MatchOccurrence::Unique,
+        });
+        let query = LocatorQuery::text(selector);
+        let evaluation = evaluate_query(
+            &grid(&["anchor anchor target"]),
+            &query,
+            false,
+            &mut |_, _, _, _| CellStyleEvaluation {
+                matched: true,
+                mismatches: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            evaluation.diagnostics.failure_reason,
+            Some(LocatorFailureReason::AnchorAmbiguous)
+        );
+        assert!(evaluation.matches.is_empty());
     }
 
     #[test]

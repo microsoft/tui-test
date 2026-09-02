@@ -1,4 +1,12 @@
-import type { AutomaticRecording, Backend, Profile, Timeouts } from "./types.js";
+import path from "node:path";
+
+import type {
+  ArtifactOptions,
+  AutomaticRecording,
+  Backend,
+  Profile,
+  Timeouts,
+} from "./types.js";
 
 export const DEFAULT_COLS = 80;
 export const DEFAULT_ROWS = 30;
@@ -22,6 +30,13 @@ const TIMEOUT_CLASSES: readonly TimeoutClass[] = [
 const BACKENDS: readonly Backend[] = ["alacritty", "ghostty", "rio", "xtermjs"];
 const PROFILE_FIELDS = new Set(["scrollback", "colors"]);
 const RECORDING_MODES = new Set(["disabled", "on-failure", "always"]);
+const FAILURE_ARTIFACT_MODES = new Set([
+  "bundle",
+  "svg",
+  "text",
+  "json",
+  "none",
+]);
 const COLOR_FIELDS = new Map([
   ["foreground", "foreground"],
   ["background", "background"],
@@ -143,6 +158,47 @@ export function recordingPayload(
     throw new TypeError("recording.directory must be a non-empty string");
   }
   return raw as AutomaticRecording;
+}
+
+export interface FailureArtifactPayload {
+  directory: string;
+  mode: "bundle" | "svg" | "text" | "json" | "none";
+  includeRecording: boolean;
+}
+
+export function artifactPayload(
+  artifacts?: ArtifactOptions,
+): FailureArtifactPayload | undefined {
+  if (artifacts === undefined) {
+    return undefined;
+  }
+  const raw = profileObject(artifacts, "artifacts");
+  const unknown = Object.keys(raw).filter(
+    (key) => key !== "dir" && key !== "onFailure" && key !== "includeRecording",
+  );
+  if (unknown.length > 0) {
+    throw new TypeError(`unknown artifacts field ${unknown.join(", ")}`);
+  }
+  if (typeof raw.dir !== "string" || raw.dir.length === 0) {
+    throw new TypeError("artifacts.dir must be a non-empty string");
+  }
+  const mode = raw.onFailure ?? "svg";
+  if (!FAILURE_ARTIFACT_MODES.has(String(mode))) {
+    throw new TypeError(
+      `unknown artifacts.onFailure "${String(mode)}"; expected bundle, svg, text, json, or none`,
+    );
+  }
+  if (
+    raw.includeRecording !== undefined &&
+    typeof raw.includeRecording !== "boolean"
+  ) {
+    throw new TypeError("artifacts.includeRecording must be a boolean");
+  }
+  return {
+    directory: path.resolve(raw.dir),
+    mode: mode as FailureArtifactPayload["mode"],
+    includeRecording: raw.includeRecording ?? false,
+  };
 }
 
 export function profilePayload(profile?: Profile): ProfilePayload | undefined {

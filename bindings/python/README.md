@@ -27,7 +27,7 @@ async with TuiTest.ephemeral() as terminal:
 ### `TuiTest`
 
 ```python
-TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=None, recording=None)
+TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_history_limit=None, artifacts=None, recording=None)
 ```
 
 | Option | Type | Default |
@@ -36,10 +36,11 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=No
 | `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs"` | `"alacritty"` |
 | `timeouts` | `Timeouts \| dict` | built-in defaults |
 | `profile` | `Profile \| dict` | built-in profile |
+| `screen_history_limit` | `int \| None` | core default |
 | `artifacts` | `dict` | off |
 | `recording` | `AutomaticRecording \| dict` | `{"mode": "always"}` |
 
-`artifacts["on_failure"]` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+`artifacts["on_failure"]` is `"bundle"`, `"json"`, `"svg"`, `"text"`, or `"none"`. Bundle mode writes `failure.json`, `report.md`, `current.txt`, and `current.svg`. `include_recording=True` also copies an immutable prefix of the automatic cast. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
 
 #### Properties
 
@@ -286,6 +287,8 @@ terminal = TuiTest(
 | `Colors` | Terminal palette. |
 | `MouseButton` | `"left"`, `"middle"`, or `"right"`. |
 | `TextPosition`, `TextSpan` | Match coordinates. |
+| `FailureDetails` | Structured operation, locator, process, runtime, and screen evidence. |
+| `FailureArtifactRef` | Paths and write status for a failure artifact. |
 
 `__version__` contains the package version.
 
@@ -298,6 +301,6 @@ terminal = TuiTest(
 | `NoSessionError` | `3` |
 | `InternalError` | `5` |
 
-All errors extend `TuiTestError`. Expectation errors can include `terminal.text` and `terminal.screenshot`.
+All errors extend `TuiTestError`. Structured native failures expose `details` and `artifact`; expectation errors continue to populate compatibility `terminal.text` and `terminal.screenshot` fields. Failure artifacts can contain terminal output, titles, locator operands, and recordings, so review them before uploading.
 
 Sessions are local to the current process and cannot be controlled by the CLI. Cancelling a task does not stop an active terminal operation.

@@ -937,6 +937,55 @@ fn explicit_wait_ready_fails_when_no_prompt_is_reported() {
 }
 
 #[test]
+fn json_failure_writes_and_reports_a_diagnostic_bundle() {
+    let sandbox = Sandbox::new("failure-artifact");
+    sandbox.ok(&["open", "--no-wait-ready"]);
+    let plain = sandbox.run(&[
+        "--json",
+        "expect",
+        "text",
+        "never-present",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(plain.status.code(), Some(1));
+    let plain: serde_json::Value =
+        serde_json::from_slice(&plain.stdout).expect("plain failure json response");
+    assert_eq!(plain["details"]["operation"]["name"], "locator.expect");
+
+    let artifacts = sandbox.home.join("failure-artifacts");
+    let artifacts = artifacts.to_str().unwrap();
+
+    let out = sandbox.run(&[
+        "--json",
+        "--failure-artifacts",
+        artifacts,
+        "--diagnostic-context",
+        "test=cli-bundle",
+        "expect",
+        "text",
+        "never-present",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let payload: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("failure json response");
+    assert_eq!(payload["details"]["schema_version"], 1);
+    assert_eq!(payload["details"]["operation"]["name"], "locator.expect");
+    assert_eq!(payload["details"]["context"]["test"], "cli-bundle");
+    let manifest = payload["artifact"]["manifest"]
+        .as_str()
+        .expect("failure manifest path");
+    assert!(std::path::Path::new(manifest).is_file());
+    assert!(payload["artifact"]["report"]
+        .as_str()
+        .is_some_and(|path| std::path::Path::new(path).is_file()));
+
+    sandbox.ok(&["close"]);
+}
+
+#[test]
 fn run_without_wait_ready_returns_immediately() {
     let sandbox = Sandbox::new("run-no-wait");
     let mut args = vec!["--json", "run"];

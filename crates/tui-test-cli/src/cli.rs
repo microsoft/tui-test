@@ -129,6 +129,13 @@ impl From<TimeoutArgs> for Timeouts {
     }
 }
 
+#[derive(Args, Clone, Copy)]
+pub struct DiagnosticRetentionArgs {
+    /// Number of distinct recent screens retained for failure diagnostics.
+    #[arg(long, value_name = "COUNT")]
+    pub screen_history_limit: Option<u16>,
+}
+
 #[derive(Parser)]
 #[command(name = "tui-test", version, about = "Headless terminal cli + daemon")]
 pub struct Cli {
@@ -145,8 +152,52 @@ pub struct Cli {
     #[arg(long, short = 'v', global = true)]
     pub verbose: bool,
 
+    /// Write a structured failure artifact under this directory.
+    #[arg(long, global = true, value_name = "DIR")]
+    pub failure_artifacts: Option<std::path::PathBuf>,
+
+    /// Failure artifact contents.
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value_t = FailureArtifactModeArg::Bundle
+    )]
+    pub failure_artifact_mode: FailureArtifactModeArg,
+
+    /// Copy the automatic asciicast into failure artifacts.
+    #[arg(long, global = true, requires = "failure_artifacts")]
+    pub failure_artifact_recording: bool,
+
+    /// Add a safe KEY=VALUE field to structured failure diagnostics.
+    #[arg(long, global = true, value_name = "KEY=VALUE")]
+    pub diagnostic_context: Vec<String>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum FailureArtifactModeArg {
+    #[default]
+    Bundle,
+    Json,
+    Svg,
+    Text,
+    None,
+}
+
+impl From<FailureArtifactModeArg> for tui_test::FailureArtifactMode {
+    fn from(value: FailureArtifactModeArg) -> Self {
+        match value {
+            FailureArtifactModeArg::Bundle => Self::Bundle,
+            FailureArtifactModeArg::Json => Self::Json,
+            FailureArtifactModeArg::Svg => Self::Svg,
+            FailureArtifactModeArg::Text => Self::Text,
+            FailureArtifactModeArg::None => Self::None,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -185,6 +236,8 @@ pub enum Command {
         profile: ProfileArgs,
         #[command(flatten)]
         timeouts: TimeoutArgs,
+        #[command(flatten)]
+        diagnostics: DiagnosticRetentionArgs,
     },
     /// Spawn a session running a program directly.
     Run {
@@ -222,6 +275,8 @@ pub enum Command {
         profile: ProfileArgs,
         #[command(flatten)]
         timeouts: TimeoutArgs,
+        #[command(flatten)]
+        diagnostics: DiagnosticRetentionArgs,
     },
     /// Close the current session (or all sessions).
     Close {

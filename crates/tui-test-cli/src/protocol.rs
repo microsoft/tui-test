@@ -2,16 +2,23 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use tui_test::{
-    AutomaticRecording, Backend, ClipboardPattern, Engine, KeyAction, LocatorQuery, MouseOptions,
+    AutomaticRecording, Backend, ClipboardPattern, DiagnosticRetentionOptions, Engine,
+    ExecutionContext, FailureArtifactRef, FailureDetails, KeyAction, LocatorQuery, MouseOptions,
     OpenOptions, Operation, OperationResult, RecordingFormat, RunOptions, ScreenshotResult,
     TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
+pub const PROTOCOL_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Request {
+    WithContext {
+        request: Box<Request>,
+        context: ExecutionContext,
+    },
     Ping,
     Open {
         shell: Option<tui_test::shell::Shell>,
@@ -36,6 +43,8 @@ pub enum Request {
         timeouts: Timeouts,
         #[serde(default)]
         recording: Box<AutomaticRecording>,
+        #[serde(default)]
+        diagnostics: DiagnosticRetentionOptions,
     },
     Close,
     Status,
@@ -188,14 +197,153 @@ pub enum Request {
 
 impl Request {
     pub fn execute(self, engine: &Engine) -> Response {
+        if let Request::WithContext {
+            request,
+            mut context,
+        } = self
+        {
+            if context.operation_name.is_none() {
+                context.operation_name = Some(request.diagnostic_operation_name().to_string());
+            }
+            let request_retention = request.diagnostic_retention();
+            if request_retention != DiagnosticRetentionOptions::default() {
+                context.retention = request_retention;
+            }
+            return match request.into_operation() {
+                Ok(operation) => {
+                    Response::from_result(engine.execute_with_context(operation, context))
+                }
+                Err(error) => Response::from_error(error),
+            };
+        }
+        let operation_name = self.diagnostic_operation_name().to_string();
+        let retention = self.diagnostic_retention();
         match self.into_operation() {
-            Ok(operation) => Response::from_result(engine.execute(operation)),
+            Ok(operation) => Response::from_result(engine.execute_with_context(
+                operation,
+                ExecutionContext {
+                    operation_name: Some(operation_name),
+                    retention,
+                    ..ExecutionContext::default()
+                },
+            )),
             Err(error) => Response::from_error(error),
+        }
+    }
+
+    pub fn with_context(self, mut context: ExecutionContext) -> Self {
+        if self.is_close() || self.is_shutdown() {
+            return self;
+        }
+        if context.artifact.is_none()
+            && context.diagnostic_context.is_empty()
+            && context.retention == DiagnosticRetentionOptions::default()
+        {
+            return self;
+        }
+        if context.operation_name.is_none() {
+            context.operation_name = Some(self.diagnostic_operation_name().to_string());
+        }
+        Self::WithContext {
+            request: Box::new(self),
+            context,
+        }
+    }
+
+    fn diagnostic_operation_name(&self) -> &'static str {
+        match self {
+            Self::WithContext { request, .. } => request.diagnostic_operation_name(),
+            Self::Open {
+                program: Some(_), ..
+            } => "run",
+            Self::Open { .. } => "open",
+            Self::Close => "close",
+            Self::Status => "status",
+            Self::State => "state",
+            Self::Text { .. } => "text",
+            Self::Cells { .. } => "cells",
+            Self::Get { field } => match field {
+                GetField::Command => "get.command",
+                GetField::Output => "get.output",
+                GetField::ExitCode => "get.exit_code",
+                GetField::Cwd => "get.cwd",
+                GetField::Cursor => "get.cursor",
+                GetField::Size => "get.size",
+                GetField::Title => "get.title",
+                GetField::Clipboard => "get.clipboard",
+                GetField::BellCount => "get.bell_count",
+                GetField::BellEvents => "get.bell_events",
+            },
+            Self::Write { .. } => "write",
+            Self::Submit { .. } => "submit",
+            Self::Key { .. } | Self::Press { .. } => "key",
+            Self::Mouse { .. } => "mouse",
+            Self::Resize { .. } => "resize",
+            Self::Signal { .. } => "signal",
+            Self::WaitTitle { .. } => "wait.title",
+            Self::WaitClipboard { text: Some(_), .. } => "wait.clipboard_match",
+            Self::WaitClipboard { .. } => "wait.clipboard",
+            Self::WaitIdle { .. } => "wait.idle",
+            Self::WaitCommand { .. } => "wait.command",
+            Self::WaitExit { .. } => "wait.exit",
+            Self::WaitReady { .. } => "wait.ready",
+            Self::WaitBell { .. } => "wait.bell",
+            Self::FindLocator { .. } => "locator.find",
+            Self::ClickLocator { .. } => "locator.click",
+            Self::HighlightLocator { .. } => "locator.highlight",
+            Self::ExpectLocator { .. } => "locator.expect",
+            Self::ExpectTitle { .. } => "expect.title",
+            Self::ExpectExitCode { .. } => "expect.exit_code",
+            Self::ExpectOutput { .. } => "expect.output",
+            Self::ExpectBellCount { .. } => "expect.bell_count",
+            Self::Snapshot { .. } => "expect.snapshot",
+            Self::Screenshot { .. } => "screenshot",
+            Self::StartRecording { .. } => "record.start",
+            Self::StopRecording => "record.stop",
+            Self::Ping => "ping",
+            Self::FlushRecording => "record.flush",
+            Self::Monitor { .. } => "monitor",
+            Self::Shutdown => "shutdown",
+        }
+    }
+
+    pub fn is_open(&self) -> bool {
+        match self {
+            Self::WithContext { request, .. } => request.is_open(),
+            Self::Open { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_close(&self) -> bool {
+        match self {
+            Self::WithContext { request, .. } => request.is_close(),
+            Self::Close => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_shutdown(&self) -> bool {
+        match self {
+            Self::WithContext { request, .. } => request.is_shutdown(),
+            Self::Shutdown => true,
+            _ => false,
+        }
+    }
+
+    fn diagnostic_retention(&self) -> DiagnosticRetentionOptions {
+        match self {
+            Self::WithContext { request, .. } => request.diagnostic_retention(),
+            Self::Open { diagnostics, .. } => *diagnostics,
+            _ => DiagnosticRetentionOptions::default(),
         }
     }
 
     fn into_operation(self) -> Result<Operation, TuiTestError> {
         match self {
+            Request::WithContext { .. } => {
+                Err(TuiTestError::internal("nested execution context request"))
+            }
             Request::Open {
                 shell,
                 program,
@@ -209,6 +357,7 @@ impl Request {
                 restart,
                 timeouts,
                 recording,
+                diagnostics: _,
             } => {
                 if let Some(program) = program {
                     let mut parts = program.into_iter();
@@ -419,6 +568,10 @@ pub struct Response {
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<ErrorKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<FailureDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<FailureArtifactRef>,
 }
 
 impl Response {
@@ -428,6 +581,8 @@ impl Response {
             data: None,
             message: None,
             kind: None,
+            details: None,
+            artifact: None,
         }
     }
 
@@ -437,6 +592,8 @@ impl Response {
             data: Some(data),
             message: None,
             kind: None,
+            details: None,
+            artifact: None,
         }
     }
 
@@ -457,6 +614,8 @@ impl Response {
             data: None,
             message: Some(error.message),
             kind: Some(error.kind),
+            details: error.details.map(|details| *details),
+            artifact: error.artifact.map(|artifact| *artifact),
         }
     }
 }
@@ -496,6 +655,7 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tui_test::FailureReason;
 
     fn make_open_req(wait_ready: Option<bool>, timeouts: Timeouts) -> Request {
         Request::Open {
@@ -511,7 +671,62 @@ mod tests {
             restart: false,
             timeouts,
             recording: Box::new(AutomaticRecording::default()),
+            diagnostics: Default::default(),
         }
+    }
+
+    #[test]
+    fn responses_preserve_structured_failure_details() {
+        let details = FailureDetails::new(
+            "locator.expect",
+            Some(25),
+            FailureReason::LocatorNoMatch,
+            "missing",
+        );
+        let response =
+            Response::from_error(TuiTestError::assertion("missing").with_details(details.clone()));
+        assert_eq!(response.details, Some(details));
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["details"]["operation"]["name"], "locator.expect");
+    }
+
+    #[test]
+    fn execution_context_wrapper_is_additive() {
+        let plain = Request::State.with_context(ExecutionContext::default());
+        assert!(matches!(plain, Request::State));
+
+        let mut context = ExecutionContext::default();
+        context
+            .diagnostic_context
+            .insert("test".to_string(), "value".to_string());
+        let wrapped = Request::ExpectLocator {
+            query: LocatorQuery::text("missing"),
+            not: false,
+            timeout_ms: Some(1),
+        }
+        .with_context(context);
+        let Request::WithContext { context, .. } = wrapped else {
+            panic!("expected execution context wrapper");
+        };
+        assert_eq!(context.operation_name.as_deref(), Some("locator.expect"));
+    }
+
+    #[test]
+    fn get_requests_keep_field_specific_operation_names() {
+        assert_eq!(
+            Request::Get {
+                field: GetField::Title,
+            }
+            .diagnostic_operation_name(),
+            "get.title"
+        );
+        assert_eq!(
+            Request::Get {
+                field: GetField::Output,
+            }
+            .diagnostic_operation_name(),
+            "get.output"
+        );
     }
 
     #[test]
