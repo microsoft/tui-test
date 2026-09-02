@@ -14,6 +14,10 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 static SANDBOX_SEQ: AtomicU32 = AtomicU32::new(0);
 
+fn contains_rgba(pixels: &[u8], expected: [u8; 4]) -> bool {
+    pixels.chunks(4).any(|pixel| pixel == expected)
+}
+
 struct Sandbox {
     label: &'static str,
     home: PathBuf,
@@ -194,21 +198,15 @@ fn screenshots_dispatch_by_extension_without_changing_svg_output() {
     assert_eq!((info.width, info.height), (236, 326));
     let pixels = &pixels[..info.buffer_size()];
     assert!(
-        pixels
-            .chunks_exact(4)
-            .any(|pixel| pixel == [128, 0, 0, 255]),
+        contains_rgba(pixels, [128, 0, 0, 255]),
         "styled red background cell was not rendered"
     );
     assert!(
-        pixels
-            .chunks_exact(4)
-            .any(|pixel| pixel == [0, 255, 0, 255]),
+        contains_rgba(pixels, [0, 255, 0, 255]),
         "non-empty green glyph was not rendered"
     );
     assert!(
-        pixels
-            .chunks_exact(4)
-            .any(|pixel| pixel == [255, 0, 255, 255]),
+        contains_rgba(pixels, [255, 0, 255, 255]),
         "magenta cursor was not rendered"
     );
 
