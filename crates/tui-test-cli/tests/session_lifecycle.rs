@@ -1134,8 +1134,8 @@ fn restart_helper(root: &std::path::Path) -> (String, Vec<String>) {
         r#"param([string]$RestartArgument)
 $line = "arg=$RestartArgument;token=$env:TUI_RESTART_TOKEN;cwd=$((Get-Location).Path);size=$([Console]::WindowWidth)x$([Console]::WindowHeight)"
 [IO.File]::AppendAllText($env:TUI_RESTART_STARTS, $line + [Environment]::NewLine)
-[Console]::WriteLine("restart-ready")
 [Console]::TreatControlCAsInput = $true
+[Console]::WriteLine("restart-ready")
 while ($true) {
     $key = [Console]::ReadKey($true)
     if ($key.Key -eq [ConsoleKey]::C -and
@@ -1170,8 +1170,8 @@ fn restart_helper(root: &std::path::Path) -> (String, Vec<String>) {
 set -eu
 size="$(stty size)"
 printf 'arg=%s;token=%s;cwd=%s;size=%s\n' "$1" "$TUI_RESTART_TOKEN" "$PWD" "$size" >> "$TUI_RESTART_STARTS"
-printf 'restart-ready\n'
 stty -isig
+printf 'restart-ready\n'
 while IFS= read -r -n 1 key; do
     if [[ "$key" == $'\003' ]]; then
         printf 'graceful' > "$TUI_RESTART_MARKER"
