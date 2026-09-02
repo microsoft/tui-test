@@ -234,6 +234,30 @@ impl NativeSession {
         )
     }
 
+    fn restart<'py>(
+        &self,
+        py: Python<'py>,
+        graceful_timeout_ms: Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let graceful_timeout_ms = capture_integer(&graceful_timeout_ms);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_open(
+                    &name,
+                    Operation::Restart {
+                        graceful_timeout_ms: integer_u64(
+                            &graceful_timeout_ms,
+                            "graceful_timeout_ms",
+                        )?,
+                    },
+                )
+            },
+            open_to_py,
+        )
+    }
+
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let name = self.name.clone();
         future_blocking(

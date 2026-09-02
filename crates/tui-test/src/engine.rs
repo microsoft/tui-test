@@ -24,11 +24,41 @@ pub struct Engine {
     name: String,
     operations: Mutex<()>,
     session: Mutex<Option<TerminalSession>>,
+    spawn_spec: Mutex<Option<SpawnSpec>>,
     live: Arc<Mutex<Option<LiveTarget>>>,
     interrupt: Mutex<Option<InterruptTarget>>,
     logger: Arc<Logger>,
     default_recording_path: PathBuf,
     recording: Mutex<RecordingState>,
+}
+
+#[derive(Clone)]
+enum SpawnSpec {
+    Open(OpenOptions),
+    Run(RunOptions),
+}
+
+impl SpawnSpec {
+    fn restart(mut self) -> Self {
+        match &mut self {
+            Self::Open(options) => options.restart = true,
+            Self::Run(options) => options.restart = true,
+        }
+        self
+    }
+
+    fn resize(&mut self, cols: u16, rows: u16) {
+        match self {
+            Self::Open(options) => {
+                options.cols = cols;
+                options.rows = rows;
+            }
+            Self::Run(options) => {
+                options.cols = cols;
+                options.rows = rows;
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -98,6 +128,7 @@ impl Engine {
             name,
             operations: Mutex::new(()),
             session: Mutex::new(None),
+            spawn_spec: Mutex::new(None),
             live: Arc::new(Mutex::new(None)),
             interrupt: Mutex::new(None),
             logger,
@@ -144,6 +175,9 @@ impl Engine {
         match operation {
             Operation::Open(options) => self.open(options).map(OperationResult::Open),
             Operation::Run(options) => self.run(options).map(OperationResult::Open),
+            Operation::Restart {
+                graceful_timeout_ms,
+            } => self.restart(graceful_timeout_ms).map(OperationResult::Open),
             Operation::Close => {
                 *self
                     .live
@@ -157,66 +191,119 @@ impl Engine {
                     session.kill();
                     drop(session);
                 }
+                *self
+                    .spawn_spec
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 self.cleanup_recording();
                 Ok(OperationResult::Unit)
+            }
+            Operation::Resize { cols, rows } => {
+                let result = self
+                    .with_session(|session| dispatch(session, Operation::Resize { cols, rows }));
+                if result.is_ok() {
+                    if let Some(spec) = self
+                        .spawn_spec
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .as_mut()
+                    {
+                        spec.resize(cols, rows);
+                    }
+                }
+                result
             }
             other => self.with_session(|session| dispatch(session, other)),
         }
     }
 
     fn open(&self, options: OpenOptions) -> Result<OpenResult, TuiTestError> {
-        self.spawn(
-            options.shell,
-            None,
-            options.backend,
-            options.profile,
-            options.cols,
-            options.rows,
-            options.cwd,
-            options.env,
-            options.wait_ready,
-            options.restart,
-            options.timeouts,
-            options.recording,
-        )
+        self.spawn(SpawnSpec::Open(options))
     }
 
     fn run(&self, options: RunOptions) -> Result<OpenResult, TuiTestError> {
-        let mut program = Vec::with_capacity(options.args.len() + 1);
-        program.push(options.program);
-        program.extend(options.args);
-        self.spawn(
-            None,
-            Some(program),
-            options.backend,
-            options.profile,
-            options.cols,
-            options.rows,
-            options.cwd,
-            options.env,
-            options.wait_ready,
-            options.restart,
-            options.timeouts,
-            options.recording,
-        )
+        self.spawn(SpawnSpec::Run(options))
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn spawn(
-        &self,
-        shell: Option<crate::shell::Shell>,
-        program: Option<Vec<String>>,
-        backend: crate::terminal::backend::Backend,
-        profile: crate::profile::Profile,
-        cols: u16,
-        rows: u16,
-        cwd: Option<String>,
-        env: Vec<(String, String)>,
-        wait_ready: Option<bool>,
-        restart: bool,
-        timeouts: crate::api::Timeouts,
-        recording: AutomaticRecording,
-    ) -> Result<OpenResult, TuiTestError> {
+    fn restart(&self, graceful_timeout_ms: u64) -> Result<OpenResult, TuiTestError> {
+        let spec = self
+            .spawn_spec
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .ok_or_else(TuiTestError::no_restart_metadata)?;
+
+        if let Some(session) = self.lock_session().as_ref() {
+            if session.is_alive()? {
+                if let Err(error) = session
+                    .pty
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .signal("INT")
+                {
+                    self.logger
+                        .event(&format!("restart interrupt failed error={error}"));
+                }
+                let start = Instant::now();
+                let timeout = Duration::from_millis(graceful_timeout_ms);
+                while session.is_alive()? && start.elapsed() < timeout {
+                    std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
+                }
+            }
+        }
+
+        self.spawn(spec.restart())
+    }
+
+    fn spawn(&self, spec: SpawnSpec) -> Result<OpenResult, TuiTestError> {
+        let (
+            shell,
+            program,
+            backend,
+            profile,
+            cols,
+            rows,
+            cwd,
+            env,
+            wait_ready,
+            restart,
+            timeouts,
+            recording,
+        ) = match &spec {
+            SpawnSpec::Open(options) => (
+                options.shell,
+                None,
+                options.backend,
+                options.profile,
+                options.cols,
+                options.rows,
+                options.cwd.clone(),
+                options.env.clone(),
+                options.wait_ready,
+                options.restart,
+                options.timeouts,
+                options.recording.clone(),
+            ),
+            SpawnSpec::Run(options) => {
+                let mut program = Vec::with_capacity(options.args.len() + 1);
+                program.push(options.program.clone());
+                program.extend(options.args.clone());
+                (
+                    None,
+                    Some(program),
+                    options.backend,
+                    options.profile,
+                    options.cols,
+                    options.rows,
+                    options.cwd.clone(),
+                    options.env.clone(),
+                    options.wait_ready,
+                    options.restart,
+                    options.timeouts,
+                    options.recording.clone(),
+                )
+            }
+        };
         recording.validate()?;
         let mut current = self.lock_session();
         if let Some(previous) = current.as_ref() {
@@ -317,6 +404,10 @@ impl Engine {
             .live
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(live);
+        *self
+            .spawn_spec
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(spec);
         Ok(OpenResult {
             shell_pid,
             session: self.name.clone(),
@@ -941,7 +1032,7 @@ fn dispatch(
             Ok(OperationResult::Unit)
         }
         Operation::StopRecording => Ok(OperationResult::Recording(session.stop_recording()?)),
-        Operation::Open(_) | Operation::Run(_) | Operation::Close => {
+        Operation::Open(_) | Operation::Run(_) | Operation::Restart { .. } | Operation::Close => {
             Err(TuiTestError::internal("unsupported nested operation"))
         }
     }
@@ -2146,11 +2237,86 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{TextPosition, TextSpan};
+    use crate::api::{
+        AutomaticRecording, AutomaticRecordingMode, TextPosition, TextSpan, Timeouts,
+    };
     use crate::profile::Profile;
     use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::cell::{NamedColor, UnderlineStyle};
     use crate::terminal::emu::Emulator;
+
+    #[test]
+    fn successful_open_stores_the_complete_spawn_spec_and_tracks_resize() {
+        let recording_path = std::env::current_dir()
+            .unwrap()
+            .join(format!("restart-spec-{}.cast", std::process::id()));
+        let engine = Engine::new(
+            "restart-spec".to_string(),
+            Arc::new(Logger::disabled()),
+            recording_path,
+        );
+        let cwd = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let profile = Profile {
+            scrollback: 321,
+            colors: crate::profile::Colors {
+                foreground: crate::profile::Rgb::new(1, 2, 3),
+                ..crate::profile::Colors::default()
+            },
+        };
+        let options = OpenOptions {
+            backend: crate::Backend::Alacritty,
+            shell: None,
+            profile,
+            cols: 87,
+            rows: 29,
+            cwd: Some(cwd.clone()),
+            env: vec![("RESTART_SPEC".to_string(), "preserved".to_string())],
+            wait_ready: Some(false),
+            restart: false,
+            timeouts: Timeouts {
+                text: Some(11),
+                idle: Some(12),
+                command: Some(13),
+                exit: Some(14),
+                ready: Some(15),
+            },
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Disabled,
+                directory: None,
+            },
+        };
+
+        engine
+            .execute(Operation::Open(options.clone()))
+            .expect("open session");
+        engine
+            .execute(Operation::Resize { cols: 99, rows: 31 })
+            .expect("resize session");
+
+        let stored = engine
+            .spawn_spec
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .expect("stored spawn spec");
+        let SpawnSpec::Open(stored) = stored else {
+            panic!("expected stored open options");
+        };
+        assert_eq!(stored.backend, options.backend);
+        assert_eq!(stored.shell, options.shell);
+        assert_eq!(stored.profile, options.profile);
+        assert_eq!((stored.cols, stored.rows), (99, 31));
+        assert_eq!(stored.cwd, Some(cwd));
+        assert_eq!(stored.env, options.env);
+        assert_eq!(stored.wait_ready, options.wait_ready);
+        assert_eq!(stored.timeouts, options.timeouts);
+        assert_eq!(stored.recording, options.recording);
+
+        engine.execute(Operation::Close).expect("close session");
+    }
 
     #[test]
     fn an_svg_snapshot_freezes_grid_palette_and_cursor_together() {

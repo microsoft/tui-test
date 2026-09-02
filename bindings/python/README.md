@@ -56,6 +56,7 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=No
 | `TuiTest.ephemeral(prefix=None, **options)` | Create a unique session. |
 | `await open(**options)` | Open a shell. |
 | `await run(program, *args, **options)` | Run a program. |
+| `await restart(graceful_timeout=5000)` | Restart the session. |
 | `await close()` | Close the session. |
 | `await close_quiet()` | Close without raising. |
 | `async with TuiTest()` | Close on exit. |

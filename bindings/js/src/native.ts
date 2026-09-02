@@ -170,6 +170,10 @@ export class NativeRuntime {
     return this.#call((session) => session.run(options as RunOptions));
   }
 
+  restart(gracefulTimeoutMs: number): Promise<OpenResult> {
+    return this.#call((session) => session.restart(gracefulTimeoutMs));
+  }
+
   close(): Promise<void> {
     return this.#call((session) => session.close());
   }

@@ -75,6 +75,25 @@ test("echo roundtrip drives a real session", async () => {
   });
 });
 
+test("restart recreates a named session with an open result", async () => {
+  const su = new TuiTest(uniqueSession("restart-binding"));
+  try {
+    const opened = await su.run(process.execPath, evalArgs);
+    await su.getByText("ready").wait({ timeout: 2000 });
+    const restarted = await su.restart({ gracefulTimeout: 0 });
+    assert.deepEqual(Object.keys(restarted).sort(), Object.keys(opened).sort());
+    assert.equal(restarted.session, su.session);
+    await su.getByText("ready").wait({ timeout: 2000 });
+    await su.close();
+    await assert.rejects(
+      () => su.restart({ gracefulTimeout: 0 }),
+      (error) => error instanceof NoSessionError,
+    );
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
 test("bell state, waits, and expectations stay consistent", async () => {
   const su = TuiTest.ephemeral("bell-events");
 

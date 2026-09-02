@@ -35,6 +35,7 @@ class NativeSurfaceTests(unittest.TestCase):
         for name in (
             "open",
             "run",
+            "restart",
             "close",
             "state",
             "text",
@@ -136,6 +137,22 @@ class NativeSurfaceTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_restart_validates_timeout_before_session_lookup(self):
+        async def scenario():
+            session = _native.NativeSession(unique_session("native-restart-number"))
+            with self.assertRaises(_native.NativeUsageError):
+                await session.restart(-1)
+
+        asyncio.run(scenario())
+
+    def test_restart_without_spawn_metadata_is_no_session(self):
+        async def scenario():
+            session = _native.NativeSession(unique_session("native-restart-missing"))
+            with self.assertRaises(_native.NativeNoSessionError):
+                await session.restart(0)
+
+        asyncio.run(scenario())
+
 
 class NativeStubTests(unittest.TestCase):
     def test_native_futures_are_annotated_as_awaitables(self):
@@ -149,6 +166,7 @@ class NativeStubTests(unittest.TestCase):
         self.assertNotIn("query_json", stub)
         self.assertNotIn("request_json", stub)
         self.assertIn("def open(", stub)
+        self.assertIn("def restart(self, graceful_timeout_ms: int)", stub)
         self.assertIn(
             "def find_locator(self, stages: typing.List[typing.Dict[str, typing.Any]])",
             stub,

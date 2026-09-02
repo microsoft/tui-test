@@ -674,6 +674,27 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
+    def test_restart_recreates_session_with_open_result(self):
+        async def scenario():
+            su = self._client()
+            try:
+                opened = await su.run(
+                    sys.executable,
+                    "-c",
+                    "import time; print('restart-ready', flush=True); time.sleep(60)",
+                )
+                restarted = await su.restart(graceful_timeout=0)
+                self.assertEqual(set(restarted), set(opened))
+                self.assertEqual(restarted["session"], su.session)
+                await su.get_by_text("restart-ready").wait(timeout=5000)
+                await su.close()
+                with self.assertRaises(NoSessionError):
+                    await su.restart(graceful_timeout=0)
+            finally:
+                await su.close_quiet()
+
+        run(scenario())
+
     def test_signal_and_wait_exit_are_typed_operations(self):
         async def scenario():
             async with self._client() as su:

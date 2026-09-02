@@ -22,6 +22,7 @@ try {
 const MAPPING = {
   open: [["client", "open"]],
   run: [["client", "run"]],
+  restart: [["client", "restart"]],
   close: [["client", "close"], ["module", "closeAll"]],
   sessions: [["module", "sessions"]],
   state: [["client", "state"]],

@@ -37,6 +37,9 @@ pub enum Request {
         #[serde(default)]
         recording: Box<AutomaticRecording>,
     },
+    Restart {
+        graceful_timeout_ms: u64,
+    },
     Close,
     Status,
     State,
@@ -245,6 +248,11 @@ impl Request {
                     }))
                 }
             }
+            Request::Restart {
+                graceful_timeout_ms,
+            } => Ok(Operation::Restart {
+                graceful_timeout_ms,
+            }),
             Request::Close => Ok(Operation::Close),
             Request::State => Ok(Operation::State),
             Request::Text { full } => Ok(Operation::Text { full }),

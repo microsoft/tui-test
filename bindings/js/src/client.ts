@@ -155,6 +155,10 @@ export interface ScreenshotOptions {
   zoom?: number;
 }
 
+export interface RestartOptions {
+  gracefulTimeout?: number;
+}
+
 const TERMINAL_MARKER = "Terminal content:\n";
 
 function extractTerminalContent(message: string): string | undefined {
@@ -790,6 +794,10 @@ export class TuiTest {
       timeouts: timeoutsPayload(opts.timeouts),
     };
     return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0);
+  }
+
+  async restart(opts: RestartOptions = {}): Promise<OpenResult> {
+    return this.#runtime.restart(opts.gracefulTimeout ?? 5_000);
   }
 
   async close(): Promise<void> {

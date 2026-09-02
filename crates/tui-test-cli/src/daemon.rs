@@ -68,16 +68,16 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
             continue;
         }
         let enrich = match &req {
-            Request::Open { .. } => Some(false),
+            Request::Open { .. } | Request::Restart { .. } => Some(false),
             Request::Status => Some(true),
             _ => None,
         };
         let shutdown = matches!(&req, Request::Close | Request::Shutdown);
         let recording_lifecycle = matches!(
             &req,
-            Request::Open { .. } | Request::Close | Request::Shutdown
+            Request::Open { .. } | Request::Restart { .. } | Request::Close | Request::Shutdown
         );
-        if matches!(&req, Request::Open { .. }) {
+        if matches!(&req, Request::Open { .. } | Request::Restart { .. }) {
             let _ = std::fs::write(config::recording_pointer_file(&session_name), "");
         }
         let mut response = match req {

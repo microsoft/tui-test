@@ -55,6 +55,7 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | --- | --- |
 | `open(options?)` | Open a shell. |
 | `run(program, args?, options?)` | Run an app. |
+| `restart(options?)` | Restart the session. |
 | `submit(text?)` | Type and press Enter. |
 | `type(text)`, `write(data)` | Send text or bytes. |
 | `resize(cols, rows)` | Resize. |
