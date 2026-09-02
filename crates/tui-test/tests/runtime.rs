@@ -354,6 +354,37 @@ fn restart_without_spawn_metadata_is_a_specific_no_session_error() {
 }
 
 #[test]
+fn named_restart_without_spawn_metadata_reports_the_specific_error() {
+    let registry = SessionRegistry::default();
+    let never_opened = registry.session("native-never-opened-restart");
+
+    let error = never_opened
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 10,
+        })
+        .expect_err("restart must require metadata");
+    assert_eq!(error.kind, ErrorKind::NoSession);
+    assert!(error.message.contains("no restart metadata"));
+
+    let removed = registry.session("native-removed-restart");
+    removed
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            ..OpenOptions::default()
+        })
+        .expect("open terminal before removal");
+    removed.close().expect("remove named terminal");
+
+    let error = removed
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 10,
+        })
+        .expect_err("restart after removal must require metadata");
+    assert_eq!(error.kind, ErrorKind::NoSession);
+    assert!(error.message.contains("no restart metadata"));
+}
+
+#[test]
 fn restarting_a_shell_changes_pid_and_restores_prompt_integration() {
     let session = Session::new("native-shell-restart");
     let first = session

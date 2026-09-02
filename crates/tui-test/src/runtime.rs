@@ -466,7 +466,7 @@ impl SessionRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         match operation {
-            Operation::Open(_) | Operation::Run(_) => {
+            Operation::Open(_) | Operation::Run(_) | Operation::Restart { .. } => {
                 let _lifecycle = self
                     .inner
                     .lifecycle
