@@ -413,7 +413,14 @@ fn restart_gracefully_recreates_a_run_with_its_metadata() {
     assert_eq!(lines[0], lines[1], "spawn metadata changed across restart");
     assert!(lines[0].contains("arg=restart-argument"));
     assert!(lines[0].contains("token=metadata-preserved"));
-    assert!(lines[0].contains(&format!("cwd={}", cwd.to_string_lossy())));
+    let recorded_cwd = lines[0]
+        .split(';')
+        .find_map(|field| field.strip_prefix("cwd="))
+        .expect("recorded working directory");
+    assert_eq!(
+        std::fs::canonicalize(recorded_cwd).unwrap(),
+        std::fs::canonicalize(&cwd).unwrap()
+    );
 }
 
 #[test]
