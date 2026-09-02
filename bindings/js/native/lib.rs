@@ -912,6 +912,21 @@ impl NativeSession {
     }
 
     #[napi]
+    pub async fn restart(&self, graceful_timeout_ms: f64) -> Result<OpenResult> {
+        let handle = self.handle.clone();
+        blocking("restart", move || {
+            let result = handle.execute(Operation::Restart {
+                graceful_timeout_ms: integer(graceful_timeout_ms, "gracefulTimeoutMs", u64::MAX)?,
+            })?;
+            match result {
+                OperationResult::Open(value) => Ok(value.into()),
+                _ => Err(unexpected("restart")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
     pub async fn close(&self) -> Result<()> {
         execute(
             self.handle.clone(),

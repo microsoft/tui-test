@@ -61,11 +61,14 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `TuiTest.ephemeral(prefix?, options?)` | Create a unique session. |
 | `open(options?)` | Open a shell. |
 | `run(program, args?, options?)` | Run a program. |
+| `restart(options?)` | Gracefully stop and recreate the session from its last successful open or run. |
 | `close()` | Close the session. |
 | `closeQuiet()` | Close without throwing. |
 | `[Symbol.asyncDispose]()` | Close from `await using`. |
 
 `open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
+
+`restart()` accepts `gracefulTimeout`, the time in milliseconds to wait after interrupting the child before forcibly killing it. The default is 5000.
 
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
 

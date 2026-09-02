@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
 Color = Union[str, int]
 Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
@@ -11,6 +11,13 @@ UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
 AutomaticRecordingMode = Literal["disabled", "on-failure", "always"]
 LocatorDirection = Literal["within", "after", "before"]
+
+
+class OpenResult(TypedDict):
+    shell_pid: Optional[int]
+    session: str
+    ready: bool
+    recording: str
 
 
 @dataclass

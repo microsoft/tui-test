@@ -220,6 +220,37 @@ test("recordingPayload accepts only mode and directory", () => {
   assert.throws(() => recordingPayload({ other: 1 }), /other/);
 });
 
+test("restart forwards timeout and preserves result and errors", async () => {
+  const original = NativeRuntime.prototype.restart;
+  const calls = [];
+  const result = {
+    shell_pid: 42,
+    session: "restart-options",
+    ready: true,
+    recording: "",
+  };
+  NativeRuntime.prototype.restart = async (gracefulTimeoutMs) => {
+    calls.push(gracefulTimeoutMs);
+    if (gracefulTimeoutMs === 456) {
+      throw new UsageError("restart failed");
+    }
+    return result;
+  };
+
+  try {
+    const su = new TuiTest("restart-options");
+    assert.equal(await su.restart(), result);
+    assert.equal(await su.restart({ gracefulTimeout: 123 }), result);
+    await assert.rejects(
+      () => su.restart({ gracefulTimeout: 456 }),
+      (error) => error instanceof UsageError && error.message === "restart failed",
+    );
+    assert.deepEqual(calls, [5000, 123, 456]);
+  } finally {
+    NativeRuntime.prototype.restart = original;
+  }
+});
+
 test("unknown timeout classes are rejected before native dispatch", async () => {
   assert.throws(() => timeoutsPayload({ comand: 100 }), /comand/);
   assert.throws(() => new TuiTest("s", { timeouts: { txt: 100 } }), /txt/);

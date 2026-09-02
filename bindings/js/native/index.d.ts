@@ -5,6 +5,7 @@ export declare class NativeSession {
   name(): string
   open(options?: OpenOptions | undefined | null): Promise<OpenResult>
   run(options: RunOptions): Promise<OpenResult>
+  restart(gracefulTimeoutMs: number): Promise<OpenResult>
   close(): Promise<void>
   state(): Promise<State>
   text(full?: boolean | undefined | null): Promise<string>

@@ -53,6 +53,7 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | --- | --- |
 | `open(**options)` | Open a shell. |
 | `run(program, *args, **options)` | Run an app. |
+| `restart(graceful_timeout=5000)` | Gracefully stop and recreate the session from its last successful open or run. |
 | `submit(text=None)` | Type and press Enter. |
 | `type(text)`, `write(data)` | Send text or bytes. |
 | `resize(cols, rows)` | Resize. |
@@ -71,6 +72,8 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `close()`, `close_quiet()` | Close. |
 
 Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
+
+`restart()` waits up to `graceful_timeout` milliseconds after interrupting the child before forcibly killing it.
 
 Recording modes: `disabled`, `on-failure`, and `always`.
 

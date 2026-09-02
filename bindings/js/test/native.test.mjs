@@ -26,6 +26,7 @@ test("generated native declarations expose typed operations", async () => {
   for (const method of [
     "open",
     "run",
+    "restart",
     "close",
     "state",
     "text",
