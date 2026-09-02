@@ -428,21 +428,6 @@ pub(crate) fn render_svg_with_zoom(
     zoom: f64,
     background: Option<CaptureBackground>,
 ) -> String {
-    render_svg_with_font(
-        rows, cols, colors, cursor, title, FONT_STACK, zoom, background,
-    )
-}
-
-pub(crate) fn render_svg_with_font(
-    rows: &[Vec<EmuCell>],
-    cols: u16,
-    colors: &dyn RenderColors,
-    cursor: Option<(u16, usize)>,
-    title: Option<&str>,
-    font_family: &str,
-    zoom: f64,
-    background: Option<CaptureBackground>,
-) -> String {
     let nerd_font = NerdFont::new(rows, FONT_SIZE);
     let cols = cols as usize;
     let x0 = MARGIN_X;
@@ -459,7 +444,7 @@ pub(crate) fn render_svg_with_font(
     let mut out = String::new();
     let _ = write!(
         out,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{FONT_SIZE}px">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{FONT_STACK}" font-size="{FONT_SIZE}px">"#
     );
     nerd_font.write_defs(&mut out);
     match background {

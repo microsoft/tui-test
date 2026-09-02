@@ -27,6 +27,16 @@ pub(crate) struct TextHighlight {
     pub viewport_offset: usize,
 }
 
+pub(crate) struct ManualRecordingOptions {
+    pub path: String,
+    pub format: Option<crate::api::RecordingFormat>,
+    pub fps: Option<u8>,
+    pub speed: Option<f64>,
+    pub idle_time_limit: Option<f64>,
+    pub zoom: Option<f64>,
+    pub background: Option<crate::api::CaptureBackground>,
+}
+
 pub struct TermState {
     pub emu: Box<dyn Emulator>,
     /// Shell-integration state, derived from the raw PTY stream rather than
@@ -283,14 +293,17 @@ impl Session {
 
     pub fn start_recording(
         &self,
-        path: String,
-        format: Option<crate::api::RecordingFormat>,
-        fps: Option<u8>,
-        speed: Option<f64>,
-        idle_time_limit: Option<f64>,
-        zoom: Option<f64>,
-        background: Option<crate::api::CaptureBackground>,
+        options: ManualRecordingOptions,
     ) -> Result<(), crate::api::TuiTestError> {
+        let ManualRecordingOptions {
+            path,
+            format,
+            fps,
+            speed,
+            idle_time_limit,
+            zoom,
+            background,
+        } = options;
         if path.trim().is_empty() {
             return Err(crate::api::TuiTestError::usage(
                 "recording path must not be empty",

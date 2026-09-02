@@ -943,7 +943,15 @@ fn dispatch(
             zoom,
             background,
         } => {
-            session.start_recording(path, format, fps, speed, idle_time_limit, zoom, background)?;
+            session.start_recording(crate::session::ManualRecordingOptions {
+                path,
+                format,
+                fps,
+                speed,
+                idle_time_limit,
+                zoom,
+                background,
+            })?;
             Ok(OperationResult::Unit)
         }
         Operation::StopRecording => Ok(OperationResult::Recording(session.stop_recording()?)),
