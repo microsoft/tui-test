@@ -23,7 +23,10 @@ use crate::diagnostics::{
 };
 use crate::input::{keys, mouse};
 use crate::logger::Logger;
-use crate::session::{capture_visual_state, Session as TerminalSession, TermState, TextHighlight};
+use crate::session::{
+    capture_visual_state, try_capture_visual_state, Session as TerminalSession, TermState,
+    TextHighlight,
+};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::emu::{ClipboardType, Emulator};
 use crate::terminal::locator::{self, Pattern};
@@ -218,7 +221,9 @@ impl Engine {
                 result_name,
             );
         if let Err(error) = &mut result {
-            self.finalize_failure(error, &context, &metadata);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.finalize_failure(error, &context, &metadata);
+            }));
         }
         result
     }
@@ -471,7 +476,7 @@ impl Engine {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        capture_visual_state(&mut state, force)
+        try_capture_visual_state(&mut state, force).unwrap_or(0)
     }
 
     fn current_session_elapsed_ms(&self) -> u64 {
@@ -493,7 +498,7 @@ impl Engine {
         }
         let guard = self.lock_session();
         if let Some(session) = guard.as_ref() {
-            error.observation = Some(Box::new(capture_failure_observation(session)));
+            error.observation = safe_capture_failure_observation(session).map(Box::new);
         }
     }
 
@@ -503,6 +508,9 @@ impl Engine {
         context: &ExecutionContext,
         metadata: &OperationMetadata,
     ) {
+        if !matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal) {
+            return;
+        }
         if error
             .details
             .as_ref()
@@ -522,6 +530,9 @@ impl Engine {
         session: Option<&TerminalSession>,
         include_pending_operation: bool,
     ) {
+        if !matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal) {
+            return;
+        }
         if error
             .details
             .as_ref()
@@ -533,7 +544,7 @@ impl Engine {
             .observation
             .as_deref()
             .cloned()
-            .or_else(|| session.map(capture_failure_observation));
+            .or_else(|| session.and_then(safe_capture_failure_observation));
         let (summary, summary_truncated) =
             truncate_diagnostic_value(base_error_message(&error.message), 64 * 1024);
         let mut details = FailureDetails::new(
@@ -952,6 +963,28 @@ fn capture_failure_observation(session: &TerminalSession) -> FailureObservation 
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     capture_failure_observation_locked(session, &mut state)
+}
+
+fn safe_capture_failure_observation(session: &TerminalSession) -> Option<FailureObservation> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        capture_failure_observation(session)
+    })) {
+        Ok(observation) => Some(observation),
+        Err(payload) => {
+            let message = format!(
+                "terminal diagnostic capture panicked: {}",
+                panic_message(payload.as_ref())
+            );
+            let mut state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.diagnostic_error.is_none() {
+                state.diagnostic_error = Some(message);
+            }
+            None
+        }
+    }
 }
 
 fn capture_failure_observation_locked(

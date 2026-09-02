@@ -40,6 +40,7 @@ pub struct TermState {
     pub screen_dirty: bool,
     pub last_screen_sample: Instant,
     pub last_visual_change_ms: u64,
+    pub diagnostic_error: Option<String>,
     pub last_change: Instant,
     pub awaiting_start: Option<u64>,
     pub exited: Option<i32>,
@@ -104,13 +105,14 @@ impl Session {
             screen_dirty: true,
             last_screen_sample: started_at,
             last_visual_change_ms: 0,
+            diagnostic_error: None,
             last_change: Instant::now(),
             awaiting_start: None,
             exited: None,
             exit_error: None,
             highlight: None,
         };
-        capture_visual_state(&mut initial_state, true);
+        let _ = try_capture_visual_state(&mut initial_state, true);
         let state = Arc::new(Mutex::new(initial_state));
 
         let mut rec_env = vec![("TERM".to_string(), "xterm-256color".to_string())];
@@ -194,7 +196,7 @@ impl Session {
                             st.last_change = Instant::now();
                             st.highlight = None;
                             reader_recorder.on_data(&buf[..n]);
-                            capture_visual_state(&mut st, false);
+                            let _ = try_capture_visual_state(&mut st, false);
                             st.emu.take_pending_writes()
                         };
                         if !pending.is_empty() {
@@ -476,11 +478,11 @@ impl Session {
     /// return an error to, so the failure is recorded there and reported by
     /// whichever operation runs next.
     pub fn fault(&self) -> Option<String> {
-        self.state
+        let state = self
+            .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .emu
-            .fault()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.emu.fault().or_else(|| state.diagnostic_error.clone())
     }
 
     pub fn is_alive(&self) -> Result<bool, crate::api::TuiTestError> {
@@ -551,7 +553,7 @@ fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, col
     state.screen_dirty = true;
     state.last_change = Instant::now();
     state.highlight = None;
-    capture_visual_state(&mut state, true);
+    let _ = try_capture_visual_state(&mut state, true);
 }
 
 pub(crate) fn capture_visual_state(state: &mut TermState, force: bool) -> u64 {
@@ -586,6 +588,34 @@ pub(crate) fn capture_visual_state(state: &mut TermState, force: bool) -> u64 {
     state.screen_dirty = false;
     state.last_screen_sample = Instant::now();
     sequence
+}
+
+pub(crate) fn try_capture_visual_state(state: &mut TermState, force: bool) -> Result<u64, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        capture_visual_state(state, force)
+    })) {
+        Ok(sequence) => Ok(sequence),
+        Err(payload) => {
+            let message = format!(
+                "terminal diagnostic capture panicked: {}",
+                diagnostic_panic_message(payload.as_ref())
+            );
+            if state.diagnostic_error.is_none() {
+                state.diagnostic_error = Some(message.clone());
+            }
+            Err(message)
+        }
+    }
+}
+
+fn diagnostic_panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        message
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.as_str()
+    } else {
+        "unknown panic"
+    }
 }
 
 fn drain_reader_and_recorder(reader: &mut Option<JoinHandle<()>>, recorder: &mut Recorder) {
@@ -740,6 +770,7 @@ mod tests {
             screen_dirty: true,
             last_screen_sample: started_at,
             last_visual_change_ms: 0,
+            diagnostic_error: None,
             last_change: Instant::now(),
             awaiting_start: None,
             exited: None,

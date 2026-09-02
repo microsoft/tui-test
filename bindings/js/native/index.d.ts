@@ -63,12 +63,6 @@ export interface AutomaticRecordingOptions {
   directory?: string
 }
 
-export interface FailureArtifactOptions {
-  directory: string
-  mode?: string
-  includeRecording?: boolean
-}
-
 export declare const enum Backend {
   Alacritty = 'alacritty',
   Ghostty = 'ghostty',
@@ -122,6 +116,12 @@ export interface EffectiveTimeouts {
   command: number
   exit: number
   ready: number
+}
+
+export interface FailureArtifactOptions {
+  directory: string
+  mode?: string
+  includeRecording?: boolean
 }
 
 export interface LocatorStage {

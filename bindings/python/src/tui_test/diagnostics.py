@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Tuple, Union
@@ -61,7 +61,9 @@ class FailureDetails:
     runtime: Optional[Mapping[str, Any]] = None
     recording: Optional[Mapping[str, Any]] = None
     hints: Tuple[Mapping[str, Any], ...] = ()
-    context: Mapping[str, str] = MappingProxyType({})
+    context: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     truncated: bool = False
 
     @classmethod

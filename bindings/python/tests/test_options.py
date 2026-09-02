@@ -788,7 +788,9 @@ class ArtifactCaptureTests(unittest.TestCase):
                 },
             )
         args = constructor.call_args.args
-        self.assertEqual(args[3], os.path.abspath("relative\\artifacts"))
+        self.assertEqual(
+            args[3], os.path.abspath(os.path.join("relative", "artifacts"))
+        )
         self.assertEqual(args[4], "bundle")
         self.assertTrue(args[5])
         self.assertEqual(terminal._artifacts["dir"], args[3])
