@@ -7,6 +7,7 @@ mod monitor;
 mod protocol;
 mod skill;
 
+use std::ffi::OsString;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -49,7 +50,7 @@ const SKILL_REFERENCES: &[(&str, &str)] = &[
 ];
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(command_line_args());
     let session = config::session_name_from_env(cli.session.clone());
 
     let Some(command) = cli.command else {
@@ -102,6 +103,44 @@ fn main() {
         command => run_remote(&session, command, cli.json, cli.verbose),
     };
     std::process::exit(code);
+}
+
+fn command_line_args() -> Vec<OsString> {
+    command_line_args_from(std::env::args_os())
+}
+
+fn command_line_args_from(args: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    let mut args = args.into_iter().collect::<Vec<_>>();
+    let Some(separator) = args.iter().position(|arg| arg == "--") else {
+        return args;
+    };
+    if has_command_before_separator(&args[1..separator]) {
+        return args;
+    }
+    args.insert(separator, OsString::from("run"));
+    args
+}
+
+fn has_command_before_separator(args: &[OsString]) -> bool {
+    let mut skip_value = false;
+    for arg in args {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        let value = arg.to_string_lossy();
+        if value == "--session" {
+            skip_value = true;
+        } else if value == "--json"
+            || value == "--verbose"
+            || value == "-v"
+            || value.starts_with("--session=")
+        {
+        } else if !value.starts_with('-') {
+            return true;
+        }
+    }
+    false
 }
 
 /// Build the request for a daemon-backed command, then send it.
@@ -1211,6 +1250,7 @@ fn usage_text() -> &'static str {
 SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
                   [--config F] [--profile P] [--restart]\n\
           run [--config F] [--profile P] [--restart] <program> [args...]\n\
+          [global options] -- <program> [args...]  (direct run shorthand)\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
           find text \"T\" [selector/style options] | cells X Y [W H]\n\
@@ -1275,6 +1315,42 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("requires --out"));
+    }
+
+    #[test]
+    fn top_level_separator_expands_to_run() {
+        let args = command_line_args_from(
+            ["tui-test", "--session", "demo", "--", "vim", "--clean"]
+                .into_iter()
+                .map(OsString::from),
+        );
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Run {
+                program,
+                args,
+                ..
+            }) if program == "vim" && args == ["--clean"]
+        ));
+    }
+
+    #[test]
+    fn separator_after_a_subcommand_is_not_rewritten() {
+        let args = command_line_args_from(
+            ["tui-test", "run", "--", "vim", "--clean"]
+                .into_iter()
+                .map(OsString::from),
+        );
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Run {
+                program,
+                args,
+                ..
+            }) if program == "vim" && args == ["--clean"]
+        ));
     }
 
     #[test]
