@@ -51,6 +51,7 @@ pub trait FrameRenderer {
 pub struct GridRenderer {
     max_cols: u16,
     max_rows: usize,
+    exact_size: bool,
     scale: f32,
     width: u32,
     height: u32,
@@ -69,10 +70,27 @@ impl GridRenderer {
     }
 
     pub fn with_zoom(cols: u16, rows: usize, zoom: f64) -> anyhow::Result<Self> {
+        Self::with_zoom_and_size(cols, rows, zoom, false)
+    }
+
+    pub(crate) fn for_screenshot(cols: u16, rows: usize, zoom: f64) -> anyhow::Result<Self> {
+        Self::with_zoom_and_size(cols, rows, zoom, true)
+    }
+
+    fn with_zoom_and_size(
+        cols: u16,
+        rows: usize,
+        zoom: f64,
+        exact_size: bool,
+    ) -> anyhow::Result<Self> {
         if !zoom.is_finite() || zoom <= 0.0 || zoom > f64::from(f32::MAX) {
             anyhow::bail!("recording zoom must be finite and greater than zero");
         }
-        let (base_width, base_height) = svg::pixel_size(cols, rows);
+        let (base_width, base_height) = if exact_size {
+            svg::exact_pixel_size(cols, rows)
+        } else {
+            svg::pixel_size(cols, rows)
+        };
         let padding = CANVAS_PADDING
             .checked_mul(2)
             .expect("recording canvas padding must fit in u32");
@@ -87,6 +105,7 @@ impl GridRenderer {
         Ok(Self {
             max_cols: cols,
             max_rows: rows,
+            exact_size,
             scale: zoom as f32,
             width,
             height,
@@ -115,7 +134,11 @@ impl FrameRenderer for GridRenderer {
 
         let scale = self.scale;
         let colors = &frame.render_state;
-        let (base_width, base_height) = svg::pixel_size(cols, rows);
+        let (base_width, base_height) = if self.exact_size {
+            svg::exact_pixel_size(cols, rows)
+        } else {
+            svg::pixel_size(cols, rows)
+        };
         let panel_width = scaled_dimension(base_width, f64::from(self.scale), "frame width")?;
         let panel_height = scaled_dimension(base_height, f64::from(self.scale), "frame height")?;
         let origin_x = (self.width - panel_width) as f32 / 2.0;

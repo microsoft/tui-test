@@ -14,6 +14,10 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 static SANDBOX_SEQ: AtomicU32 = AtomicU32::new(0);
 
+fn contains_rgba(pixels: &[u8], expected: [u8; 4]) -> bool {
+    pixels.chunks(4).any(|pixel| pixel == expected)
+}
+
 struct Sandbox {
     label: &'static str,
     home: PathBuf,
@@ -156,6 +160,63 @@ impl Drop for Sandbox {
         let _ = self.try_run(&["close"]);
         let _ = std::fs::remove_dir_all(&self.home);
     }
+}
+
+#[test]
+fn screenshots_dispatch_by_extension_without_changing_svg_output() {
+    let sandbox = Sandbox::new("screenshot-formats");
+    let program = r#"printf "\033[41m \033[0m\033[38;2;0;255;0mX\033[0m\033]12;#ff00ff\007\033[1;4H"; sleep 30"#;
+    sandbox.ok(&[
+        "run", "--cols", "4", "--rows", "3", "--", "bash", "--norc", "-c", program,
+    ]);
+    sandbox.wait_for_text("X", "5000");
+
+    let svg = sandbox.home.join("screen.svg");
+    let extensionless = sandbox.home.join("screen");
+    sandbox.ok(&["screenshot", svg.to_str().unwrap()]);
+    sandbox.ok(&["screenshot", extensionless.to_str().unwrap()]);
+    let svg_bytes = std::fs::read(&svg).unwrap();
+    assert!(svg_bytes.starts_with(b"<svg "));
+    assert_eq!(svg_bytes, std::fs::read(&extensionless).unwrap());
+
+    let zoomed_svg = sandbox.home.join("screen-zoomed.svg");
+    sandbox.ok(&["screenshot", zoomed_svg.to_str().unwrap(), "--zoom", "2"]);
+    let zoomed_svg = std::fs::read_to_string(zoomed_svg).unwrap();
+    assert!(
+        zoomed_svg.contains(r#"width="236" height="326" viewBox="0 0 118 163""#),
+        "unexpected zoomed SVG dimensions: {zoomed_svg}"
+    );
+
+    let png = sandbox.home.join("screen.PNG");
+    sandbox.ok(&["screenshot", png.to_str().unwrap(), "--zoom", "2"]);
+    let png_bytes = std::fs::read(&png).unwrap();
+    assert_eq!(&png_bytes[..8], b"\x89PNG\r\n\x1a\n");
+    let decoder = png::Decoder::new(std::io::Cursor::new(&png_bytes));
+    let mut reader = decoder.read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut pixels).unwrap();
+    assert_eq!((info.width, info.height), (236, 326));
+    let pixels = &pixels[..info.buffer_size()];
+    assert!(
+        contains_rgba(pixels, [128, 0, 0, 255]),
+        "styled red background cell was not rendered"
+    );
+    assert!(
+        contains_rgba(pixels, [0, 255, 0, 255]),
+        "non-empty green glyph was not rendered"
+    );
+    assert!(
+        contains_rgba(pixels, [255, 0, 255, 255]),
+        "magenta cursor was not rendered"
+    );
+
+    let unsupported = sandbox.home.join("screen.gif");
+    let output = sandbox.run(&["screenshot", unsupported.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unsupported screenshot extension '.gif'")
+    );
+    assert!(!unsupported.exists());
 }
 
 #[test]

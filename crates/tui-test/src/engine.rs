@@ -2082,6 +2082,28 @@ fn svg_snapshot(session: &TerminalSession, full: bool) -> SvgSnapshot {
     snapshot
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScreenshotFormat {
+    Svg,
+    Png,
+}
+
+impl ScreenshotFormat {
+    fn infer(path: &str) -> Result<Self, TuiTestError> {
+        let extension = std::path::Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase);
+        match extension.as_deref() {
+            None | Some("svg") => Ok(Self::Svg),
+            Some("png") => Ok(Self::Png),
+            Some(extension) => Err(TuiTestError::usage(format!(
+                "unsupported screenshot extension '.{extension}'; use .svg or .png"
+            ))),
+        }
+    }
+}
+
 fn screenshot(
     session: &TerminalSession,
     full: bool,
@@ -2091,17 +2113,53 @@ fn screenshot(
     match path {
         Some(path) => {
             let zoom = crate::api::resolve_zoom(zoom)?;
+            let format = ScreenshotFormat::infer(&path)?;
             let snapshot = svg_snapshot(session, full);
-            let svg = crate::render::svg::render_svg_with_zoom(
-                &snapshot.rows,
-                snapshot.cols,
-                &snapshot.render_state,
-                snapshot.cursor,
-                snapshot.title.as_deref(),
-                zoom,
-            );
-            std::fs::write(&path, svg)
-                .map_err(|error| TuiTestError::internal(error.to_string()))?;
+            match format {
+                ScreenshotFormat::Svg => {
+                    let svg = crate::render::svg::render_svg_with_zoom(
+                        &snapshot.rows,
+                        snapshot.cols,
+                        &snapshot.render_state,
+                        snapshot.cursor,
+                        snapshot.title.as_deref(),
+                        zoom,
+                    );
+                    std::fs::write(&path, svg)
+                        .map_err(|error| TuiTestError::internal(error.to_string()))?;
+                }
+                ScreenshotFormat::Png => {
+                    #[cfg(feature = "recording-raster")]
+                    {
+                        let rows = snapshot.rows.len();
+                        let frame = crate::record::frames::Frame {
+                            grid: snapshot.rows,
+                            title: snapshot.title,
+                            duration: Duration::ZERO,
+                            render_state: snapshot.render_state,
+                            cursor: snapshot.cursor,
+                        };
+                        let mut renderer = crate::render::raster::GridRenderer::for_screenshot(
+                            snapshot.cols,
+                            rows,
+                            zoom,
+                        )
+                        .map_err(|error| TuiTestError::internal(error.to_string()))?;
+                        crate::render::encode::encode_png(
+                            std::path::Path::new(&path),
+                            &frame,
+                            &mut renderer,
+                        )
+                        .map_err(|error| TuiTestError::internal(error.to_string()))?;
+                    }
+                    #[cfg(not(feature = "recording-raster"))]
+                    {
+                        return Err(TuiTestError::usage(
+                            "PNG screenshots require the tui-test 'recording-raster' feature",
+                        ));
+                    }
+                }
+            }
             Ok(ScreenshotResult::Path(path))
         }
         None if zoom.is_some() => Err(TuiTestError::usage(
@@ -2180,6 +2238,27 @@ mod tests {
             !svg.contains("#ff00ff"),
             "later cursor state must not leak in: {svg}"
         );
+    }
+
+    #[test]
+    fn screenshot_format_defaults_to_svg_and_rejects_unknown_extensions() {
+        assert_eq!(
+            ScreenshotFormat::infer("screen").unwrap(),
+            ScreenshotFormat::Svg
+        );
+        assert_eq!(
+            ScreenshotFormat::infer("screen.SVG").unwrap(),
+            ScreenshotFormat::Svg
+        );
+        assert_eq!(
+            ScreenshotFormat::infer("screen.PNG").unwrap(),
+            ScreenshotFormat::Png
+        );
+        let error = ScreenshotFormat::infer("screen.gif").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Usage);
+        assert!(error.message.contains(".gif"));
+        assert!(error.message.contains(".svg"));
+        assert!(error.message.contains(".png"));
     }
 
     #[test]

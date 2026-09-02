@@ -28,3 +28,6 @@ tui-test = { workspace = true, features = [
     "xtermjs",
     "recording-font-jetbrains-mono-styles",
 ] }
+
+[dev-dependencies]
+png.workspace = true

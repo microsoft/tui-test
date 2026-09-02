@@ -244,18 +244,18 @@ pub enum Command {
         #[arg(long)]
         full: bool,
     },
-    /// Capture a screenshot: terminal text to stdout, or a full-color SVG image
-    /// when an output path is given (crisp at any zoom).
+    /// Capture a screenshot: terminal text to stdout, or a full-color SVG/PNG
+    /// image selected by the output extension (SVG is the default).
     Screenshot {
-        /// Write an SVG image to this path (alias for --out).
+        /// Write an SVG or PNG image to this path (alias for --out).
         path: Option<String>,
-        /// Write an SVG image to this path.
+        /// Write an SVG or PNG image to this path.
         #[arg(short, long)]
         out: Option<String>,
         /// Include scrollback, not just the visible viewport.
         #[arg(long)]
         full: bool,
-        /// Scale the SVG dimensions while keeping the same terminal cells.
+        /// Scale image dimensions while keeping the same terminal cells.
         #[arg(long)]
         zoom: Option<f64>,
     },
