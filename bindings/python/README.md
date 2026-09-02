@@ -123,7 +123,7 @@ Snapshot options are `update`, `include_colors`, and `include_title`.
 | `await start_recording(path, **options)` | Start APNG, GIF, MP4, or asciinema recording. |
 | `await stop_recording()` | Finish the recording and return its path. |
 
-Recording options are `format`, `fps`, `speed`, `idle_time_limit`, `zoom`, `background`, and `transparent`. Set `background="#rrggbb"` or `transparent=True` to customize the screenshot or raster recording canvas. Transparency is supported for SVG, APNG, and GIF; MP4 supports custom opaque backgrounds and requires `ffmpeg`.
+Recording options: `format`, `fps`, `speed`, `idle_time_limit`, `zoom`, `background`, and `transparent`. MP4 requires `ffmpeg` and does not support transparency.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
 

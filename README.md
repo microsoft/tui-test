@@ -273,12 +273,12 @@ Timeout defaults:
 | Command | Description |
 | --- | --- |
 | `screenshot [PATH] [-o PATH] [--full] [--zoom N] [--background COLOR \| --transparent]` | Print text or save SVG. |
-| `record start PATH [options]` | Start APNG, GIF, MP4, or asciinema recording. |
+| `record start PATH [options] [--background COLOR \| --transparent]` | Start APNG, GIF, MP4, or asciinema recording. |
 | `record stop` | Finish the recording. |
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
 | `monitor` | Watch a CLI session live. |
 
-`record start` accepts `--format`, `--fps`, `--speed`, `--idle-time-limit`, `--zoom`, and either `--background COLOR` or `--transparent`. Transparency is supported by SVG, APNG, and GIF; MP4 and cast recordings reject it. MP4 output requires `ffmpeg`.
+`record start` options: `--format`, `--fps`, `--speed`, `--idle-time-limit`, `--zoom`, `--background`, and `--transparent`. MP4 requires `ffmpeg` and does not support transparency. Cast recordings do not support canvas options.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `--format` overrides it.
 
