@@ -163,7 +163,7 @@ fn screenshots_dispatch_by_extension_without_changing_svg_output() {
     let sandbox = Sandbox::new("screenshot-formats");
     let program = r#"printf "\033[41m \033[0m\033[38;2;0;255;0mX\033[0m\033]12;#ff00ff\007\033[1;4H"; sleep 30"#;
     sandbox.ok(&[
-        "run", "--cols", "4", "--rows", "2", "--", "bash", "--norc", "-c", program,
+        "run", "--cols", "4", "--rows", "3", "--", "bash", "--norc", "-c", program,
     ]);
     sandbox.wait_for_text("X", "5000");
 
@@ -175,6 +175,14 @@ fn screenshots_dispatch_by_extension_without_changing_svg_output() {
     assert!(svg_bytes.starts_with(b"<svg "));
     assert_eq!(svg_bytes, std::fs::read(&extensionless).unwrap());
 
+    let zoomed_svg = sandbox.home.join("screen-zoomed.svg");
+    sandbox.ok(&["screenshot", zoomed_svg.to_str().unwrap(), "--zoom", "2"]);
+    let zoomed_svg = std::fs::read_to_string(zoomed_svg).unwrap();
+    assert!(
+        zoomed_svg.contains(r#"width="236" height="326" viewBox="0 0 118 163""#),
+        "unexpected zoomed SVG dimensions: {zoomed_svg}"
+    );
+
     let png = sandbox.home.join("screen.PNG");
     sandbox.ok(&["screenshot", png.to_str().unwrap(), "--zoom", "2"]);
     let png_bytes = std::fs::read(&png).unwrap();
@@ -183,7 +191,7 @@ fn screenshots_dispatch_by_extension_without_changing_svg_output() {
     let mut reader = decoder.read_info().unwrap();
     let mut pixels = vec![0; reader.output_buffer_size()];
     let info = reader.next_frame(&mut pixels).unwrap();
-    assert_eq!((info.width, info.height), (236, 284));
+    assert_eq!((info.width, info.height), (236, 326));
     let pixels = &pixels[..info.buffer_size()];
     assert!(
         pixels

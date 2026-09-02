@@ -58,6 +58,19 @@ fn scaled_renderers_multiply_output_dimensions() {
 }
 
 #[test]
+fn static_screenshots_keep_odd_svg_dimensions_at_zoom() {
+    for (zoom, recording_size, screenshot_size) in
+        [(1.0, (88, 122), (88, 121)), (2.0, (176, 244), (176, 242))]
+    {
+        let recording = GridRenderer::with_zoom(1, 1, zoom).unwrap();
+        let screenshot = GridRenderer::for_screenshot(1, 1, zoom).unwrap();
+
+        assert_eq!(recording.pixel_size(), recording_size);
+        assert_eq!(screenshot.pixel_size(), screenshot_size);
+    }
+}
+
+#[test]
 fn fractional_zoom_shrinks_output_without_changing_grid_dimensions() {
     let standard = GridRenderer::new(80, 30);
     let half = GridRenderer::with_zoom(80, 30, 0.5).unwrap();

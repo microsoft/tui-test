@@ -2139,7 +2139,7 @@ fn screenshot(
                             render_state: snapshot.render_state,
                             cursor: snapshot.cursor,
                         };
-                        let mut renderer = crate::render::raster::GridRenderer::with_zoom(
+                        let mut renderer = crate::render::raster::GridRenderer::for_screenshot(
                             snapshot.cols,
                             rows,
                             zoom,
