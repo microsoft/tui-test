@@ -153,7 +153,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run a program. |
-| `[global options] -- PROGRAM [ARGS...]` | Run a program without spelling `run`. |
+| `[global options] -- PROGRAM [ARGS...]` | Alias for `run`. |
 | `sessions` | List sessions. |
 | `close [--all]` | Close one or all sessions. |
 | `daemon start` | Start the session daemon. |
