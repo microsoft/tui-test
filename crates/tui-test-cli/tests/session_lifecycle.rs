@@ -1170,13 +1170,10 @@ fn restart_helper(root: &std::path::Path) -> (String, Vec<String>) {
 set -eu
 size="$(stty size)"
 printf 'arg=%s;token=%s;cwd=%s;size=%s\n' "$1" "$TUI_RESTART_TOKEN" "$PWD" "$size" >> "$TUI_RESTART_STARTS"
-stty -isig
+trap 'printf "graceful" > "$TUI_RESTART_MARKER"; exit 0' INT
 printf 'restart-ready\n'
-while IFS= read -r -n 1 key; do
-    if [[ "$key" == $'\003' ]]; then
-        printf 'graceful' > "$TUI_RESTART_MARKER"
-        exit 0
-    fi
+while :; do
+    IFS= read -r _ || :
 done
 "#,
     )
