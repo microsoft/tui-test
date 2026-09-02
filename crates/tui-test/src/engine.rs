@@ -926,8 +926,13 @@ fn dispatch(
             include_title,
             cwd,
         )?)),
-        Operation::Screenshot { full, path, zoom } => Ok(OperationResult::Screenshot(screenshot(
-            session, full, path, zoom,
+        Operation::Screenshot {
+            full,
+            path,
+            zoom,
+            background,
+        } => Ok(OperationResult::Screenshot(screenshot(
+            session, full, path, zoom, background,
         )?)),
         Operation::StartRecording {
             path,
@@ -936,8 +941,9 @@ fn dispatch(
             speed,
             idle_time_limit,
             zoom,
+            background,
         } => {
-            session.start_recording(path, format, fps, speed, idle_time_limit, zoom)?;
+            session.start_recording(path, format, fps, speed, idle_time_limit, zoom, background)?;
             Ok(OperationResult::Unit)
         }
         Operation::StopRecording => Ok(OperationResult::Recording(session.stop_recording()?)),
@@ -2087,6 +2093,7 @@ fn screenshot(
     full: bool,
     path: Option<String>,
     zoom: Option<f64>,
+    background: Option<crate::api::CaptureBackground>,
 ) -> Result<ScreenshotResult, TuiTestError> {
     match path {
         Some(path) => {
@@ -2099,13 +2106,14 @@ fn screenshot(
                 snapshot.cursor,
                 snapshot.title.as_deref(),
                 zoom,
+                background,
             );
             std::fs::write(&path, svg)
                 .map_err(|error| TuiTestError::internal(error.to_string()))?;
             Ok(ScreenshotResult::Path(path))
         }
-        None if zoom.is_some() => Err(TuiTestError::usage(
-            "screenshot zoom requires an output path",
+        None if zoom.is_some() || background.is_some() => Err(TuiTestError::usage(
+            "screenshot zoom and background options require an output path",
         )),
         None => Ok(ScreenshotResult::Text(text_of(&grid(session, full)))),
     }

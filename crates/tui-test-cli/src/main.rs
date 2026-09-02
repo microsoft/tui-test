@@ -18,8 +18,8 @@ use cli::{
 };
 use protocol::{GetField, MouseAction, Request, Response};
 use tui_test::{
-    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, MouseOptions, TextAnchor,
-    TextScope, TextSelector, TextStyle, WhitespaceMode,
+    CaptureBackground, LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence,
+    MouseOptions, TextAnchor, TextScope, TextSelector, TextStyle, WhitespaceMode,
 };
 
 /// Agent skill router, installed as `SKILL.md`.
@@ -256,12 +256,21 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             out,
             full,
             zoom,
+            background,
+            transparent,
         } => {
             let path = out.or(path);
-            if zoom.is_some() && path.is_none() {
-                anyhow::bail!("screenshot --zoom requires --out or a path");
+            if (zoom.is_some() || background.is_some() || transparent) && path.is_none() {
+                anyhow::bail!(
+                    "screenshot --zoom, --background, and --transparent require --out or a path"
+                );
             }
-            Request::Screenshot { full, path, zoom }
+            Request::Screenshot {
+                full,
+                path,
+                zoom,
+                background: capture_background(background, transparent)?,
+            }
         }
         Command::Record {
             cmd:
@@ -272,6 +281,8 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                     speed,
                     idle_time_limit,
                     zoom,
+                    background,
+                    transparent,
                 },
         } => Request::StartRecording {
             path: resolve_client_path(path)?,
@@ -280,6 +291,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             speed,
             idle_time_limit,
             zoom,
+            background: capture_background(background, transparent)?,
         },
         Command::Record {
             cmd: RecordCmd::Stop,
@@ -314,6 +326,18 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         _ => anyhow::bail!("unsupported command"),
     };
     Ok(req)
+}
+
+fn capture_background(
+    background: Option<String>,
+    transparent: bool,
+) -> anyhow::Result<Option<CaptureBackground>> {
+    if transparent {
+        return Ok(Some(CaptureBackground::Transparent));
+    }
+    background
+        .map(|value| CaptureBackground::parse(&value).map_err(anyhow::Error::msg))
+        .transpose()
 }
 
 fn resolve_client_path(path: String) -> anyhow::Result<String> {
@@ -1213,6 +1237,7 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           run [--config F] [--profile P] [--restart] <program> [args...]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
+          [--background COLOR | --transparent]\n\
           find text \"T\" [selector/style options] | cells X Y [W H]\n\
           get command|output|exit-code|cwd|cursor|size|title|clipboard|bells|bell-events\n\
 INPUT     type \"text\" | submit [\"text\"]\n\
@@ -1228,6 +1253,7 @@ EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
           expect snapshot NAME [-u] [--include-colors --include-title]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
+          [--background COLOR | --transparent]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
 WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
@@ -1274,7 +1300,37 @@ mod tests {
         assert!(build_request(command)
             .unwrap_err()
             .to_string()
-            .contains("requires --out"));
+            .contains("require --out"));
+    }
+
+    #[test]
+    fn capture_background_flags_map_to_requests() {
+        let screenshot = Cli::try_parse_from([
+            "tui-test",
+            "screenshot",
+            "screen.svg",
+            "--background",
+            "#123456",
+        ])
+        .unwrap();
+        assert!(matches!(
+            build_request(screenshot.command.unwrap()).unwrap(),
+            Request::Screenshot {
+                background: Some(CaptureBackground::Color(color)),
+                ..
+            } if color.to_hex() == "#123456"
+        ));
+
+        let recording =
+            Cli::try_parse_from(["tui-test", "record", "start", "demo.gif", "--transparent"])
+                .unwrap();
+        assert!(matches!(
+            build_request(recording.command.unwrap()).unwrap(),
+            Request::StartRecording {
+                background: Some(CaptureBackground::Transparent),
+                ..
+            }
+        ));
     }
 
     #[test]

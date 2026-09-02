@@ -220,6 +220,8 @@ mod stubs {
                     path: typing.Optional[str],
                     full: bool,
                     zoom: typing.Optional[float],
+                    background: typing.Optional[str],
+                    transparent: bool,
                 ) -> typing.Awaitable[str]: ...
                 def start_recording(
                     self,
@@ -229,6 +231,8 @@ mod stubs {
                     speed: typing.Optional[float],
                     idle_time_limit: typing.Optional[float],
                     zoom: typing.Optional[float],
+                    background: typing.Optional[str],
+                    transparent: bool,
                 ) -> typing.Awaitable[None]: ...
                 def stop_recording(self) -> typing.Awaitable[str]: ...
                 def recording(self) -> typing.Awaitable[str]: ...

@@ -167,6 +167,8 @@ pub enum Request {
         path: Option<String>,
         #[serde(default)]
         zoom: Option<f64>,
+        #[serde(default)]
+        background: Option<tui_test::CaptureBackground>,
     },
     StartRecording {
         path: String,
@@ -176,6 +178,8 @@ pub enum Request {
         idle_time_limit: Option<f64>,
         #[serde(default)]
         zoom: Option<f64>,
+        #[serde(default)]
+        background: Option<tui_test::CaptureBackground>,
     },
     StopRecording,
     FlushRecording,
@@ -365,9 +369,17 @@ impl Request {
                 include_title,
                 cwd,
             }),
-            Request::Screenshot { full, path, zoom } => {
-                Ok(Operation::Screenshot { full, path, zoom })
-            }
+            Request::Screenshot {
+                full,
+                path,
+                zoom,
+                background,
+            } => Ok(Operation::Screenshot {
+                full,
+                path,
+                zoom,
+                background,
+            }),
             Request::StartRecording {
                 path,
                 format,
@@ -375,6 +387,7 @@ impl Request {
                 speed,
                 idle_time_limit,
                 zoom,
+                background,
             } => Ok(Operation::StartRecording {
                 path,
                 format,
@@ -382,6 +395,7 @@ impl Request {
                 speed,
                 idle_time_limit,
                 zoom,
+                background,
             }),
             Request::StopRecording => Ok(Operation::StopRecording),
             Request::Ping
@@ -700,7 +714,14 @@ mod tests {
         let screenshot: Request =
             serde_json::from_str(r#"{"kind":"screenshot","full":false,"path":"screen.svg"}"#)
                 .expect("deserialize legacy screenshot");
-        assert!(matches!(screenshot, Request::Screenshot { zoom: None, .. }));
+        assert!(matches!(
+            screenshot,
+            Request::Screenshot {
+                zoom: None,
+                background: None,
+                ..
+            }
+        ));
 
         let recording: Request = serde_json::from_str(
             r#"{"kind":"start_recording","path":"demo.png","format":null,
@@ -709,7 +730,11 @@ mod tests {
         .expect("deserialize legacy recording");
         assert!(matches!(
             recording,
-            Request::StartRecording { zoom: None, .. }
+            Request::StartRecording {
+                zoom: None,
+                background: None,
+                ..
+            }
         ));
     }
 

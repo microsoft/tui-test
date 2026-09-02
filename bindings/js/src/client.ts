@@ -148,11 +148,15 @@ export interface RecordingOptions {
   speed?: number;
   idleTimeLimit?: number;
   zoom?: number;
+  background?: string;
+  transparent?: boolean;
 }
 
 export interface ScreenshotOptions {
   full?: boolean;
   zoom?: number;
+  background?: string;
+  transparent?: boolean;
 }
 
 const TERMINAL_MARKER = "Terminal content:\n";
@@ -883,17 +887,28 @@ export class TuiTest {
   }
 
   async screenshot(path: string | null = null, opts: ScreenshotOptions = {}): Promise<string> {
-    if (opts.zoom !== undefined && path === null) {
-      throw new TypeError("screenshot zoom requires a path");
+    if (
+      (opts.zoom !== undefined || opts.background !== undefined || opts.transparent === true) &&
+      path === null
+    ) {
+      throw new TypeError("screenshot customization requires a path");
+    }
+    if (opts.background !== undefined && opts.transparent === true) {
+      throw new TypeError("screenshot background and transparent options conflict");
     }
     return this.#runtime.screenshot({
       full: opts.full ?? false,
       path: optional(path),
       zoom: opts.zoom,
+      background: opts.background,
+      transparent: opts.transparent,
     });
   }
 
   async startRecording(path: string, opts: RecordingOptions = {}): Promise<void> {
+    if (opts.background !== undefined && opts.transparent === true) {
+      throw new TypeError("recording background and transparent options conflict");
+    }
     await this.#runtime.startRecording({
       path,
       format: opts.format,
@@ -901,6 +916,8 @@ export class TuiTest {
       speed: opts.speed,
       idleTimeLimit: opts.idleTimeLimit,
       zoom: opts.zoom,
+      background: opts.background,
+      transparent: opts.transparent,
     });
   }
 

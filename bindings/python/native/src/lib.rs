@@ -9,12 +9,12 @@ use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
 use tui_test::{
     AutomaticRecording as CoreAutomaticRecording,
-    AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend, BellEvent, Cell, CellColor,
-    ClipboardPattern, Cursor, ErrorKind, KeyAction, LocatorDirection, LocatorQuery,
-    LocatorSelector, MatchOccurrence, MouseAction, MouseOptions, OpenOptions, OpenResult,
-    Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
-    SnapshotResult, State, StyleSelector, TextMatch, TextSelector, TextStyle, Timeouts,
-    TuiTestError, WhitespaceMode,
+    AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend, BellEvent, CaptureBackground,
+    Cell, CellColor, ClipboardPattern, Cursor, ErrorKind, KeyAction, LocatorDirection,
+    LocatorQuery, LocatorSelector, MatchOccurrence, MouseAction, MouseOptions, OpenOptions,
+    OpenResult, Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions,
+    ScreenshotResult, Size, SnapshotResult, State, StyleSelector, TextMatch, TextSelector,
+    TextStyle, Timeouts, TuiTestError, WhitespaceMode,
 };
 
 pyo3::create_exception!(
@@ -1138,24 +1138,37 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (path, full, zoom=None))]
+    #[pyo3(signature = (path, full, zoom=None, background=None, transparent=false))]
     fn screenshot<'py>(
         &self,
         py: Python<'py>,
         path: Option<String>,
         full: bool,
         zoom: Option<f64>,
+        background: Option<String>,
+        transparent: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let background = capture_background(background, transparent).map_err(shell_error_to_py)?;
         let name = self.name.clone();
         future_blocking(
             py,
-            move || execute_screenshot(&name, Operation::Screenshot { full, path, zoom }),
+            move || {
+                execute_screenshot(
+                    &name,
+                    Operation::Screenshot {
+                        full,
+                        path,
+                        zoom,
+                        background,
+                    },
+                )
+            },
             screenshot_to_py,
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (path, format, fps, speed, idle_time_limit, zoom=None))]
+    #[pyo3(signature = (path, format, fps, speed, idle_time_limit, zoom=None, background=None, transparent=false))]
     fn start_recording<'py>(
         &self,
         py: Python<'py>,
@@ -1165,8 +1178,11 @@ impl NativeSession {
         speed: Option<f64>,
         idle_time_limit: Option<f64>,
         zoom: Option<f64>,
+        background: Option<String>,
+        transparent: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let fps = capture_optional_integer(fps);
+        let background = capture_background(background, transparent).map_err(shell_error_to_py)?;
         let name = self.name.clone();
         future_blocking(
             py,
@@ -1183,6 +1199,7 @@ impl NativeSession {
                         speed,
                         idle_time_limit,
                         zoom,
+                        background,
                     },
                 )
             },
@@ -1636,6 +1653,23 @@ fn parse_recording_format(value: Option<&str>) -> Result<Option<RecordingFormat>
                 "unknown recording format '{other}'; expected apng, gif, mp4, or cast"
             ))),
         })
+        .transpose()
+}
+
+fn capture_background(
+    background: Option<String>,
+    transparent: bool,
+) -> Result<Option<CaptureBackground>, TuiTestError> {
+    if background.is_some() && transparent {
+        return Err(TuiTestError::usage(
+            "background and transparent options conflict",
+        ));
+    }
+    if transparent {
+        return Ok(Some(CaptureBackground::Transparent));
+    }
+    background
+        .map(|value| CaptureBackground::parse(&value))
         .transpose()
 }
 

@@ -289,6 +289,7 @@ impl Session {
         speed: Option<f64>,
         idle_time_limit: Option<f64>,
         zoom: Option<f64>,
+        background: Option<crate::api::CaptureBackground>,
     ) -> Result<(), crate::api::TuiTestError> {
         if path.trim().is_empty() {
             return Err(crate::api::TuiTestError::usage(
@@ -306,6 +307,18 @@ impl Session {
         if format == crate::api::RecordingFormat::Cast && zoom != 1.0 {
             return Err(crate::api::TuiTestError::usage(
                 "zoom is only supported for image and video recordings",
+            ));
+        }
+        if format == crate::api::RecordingFormat::Cast && background.is_some() {
+            return Err(crate::api::TuiTestError::usage(
+                "background customization is only supported for image and video recordings",
+            ));
+        }
+        if format == crate::api::RecordingFormat::Mp4
+            && background == Some(crate::api::CaptureBackground::Transparent)
+        {
+            return Err(crate::api::TuiTestError::usage(
+                "transparent backgrounds are not supported for MP4 recordings",
             ));
         }
         #[cfg(not(feature = "recording-raster"))]
@@ -366,6 +379,8 @@ impl Session {
             #[cfg(feature = "recording-raster")]
             zoom,
             #[cfg(feature = "recording-raster")]
+            background,
+            #[cfg(feature = "recording-raster")]
             timeline: record::frames::TimelineOptions {
                 fps,
                 speed,
@@ -402,7 +417,12 @@ impl Session {
                 let cast = record::cast::read(&stopped.capture_path)?;
                 let frames = record::frames::from_cast(cast, &stopped.timeline)?;
                 let (max_cols, max_rows) = record::frames::max_dimensions(&frames)?;
-                let mut renderer = GridRenderer::with_zoom(max_cols, max_rows, 2.0 * stopped.zoom)?;
+                let mut renderer = GridRenderer::with_zoom_and_background(
+                    max_cols,
+                    max_rows,
+                    2.0 * stopped.zoom,
+                    stopped.background,
+                )?;
                 crate::render::encode::encode(
                     &temporary_path,
                     stopped.format,

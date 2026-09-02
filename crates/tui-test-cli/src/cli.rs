@@ -258,6 +258,12 @@ pub enum Command {
         /// Scale the SVG dimensions while keeping the same terminal cells.
         #[arg(long)]
         zoom: Option<f64>,
+        /// Canvas background color (#rgb or #rrggbb).
+        #[arg(long, conflicts_with = "transparent")]
+        background: Option<String>,
+        /// Leave the SVG canvas transparent.
+        #[arg(long)]
+        transparent: bool,
     },
     /// Start or stop an animated terminal recording.
     Record {
@@ -410,6 +416,12 @@ pub enum RecordCmd {
         /// Scale image/video dimensions while keeping the same terminal cells.
         #[arg(long)]
         zoom: Option<f64>,
+        /// Canvas background color (#rgb or #rrggbb).
+        #[arg(long, conflicts_with = "transparent")]
+        background: Option<String>,
+        /// Leave the APNG or GIF canvas transparent.
+        #[arg(long)]
+        transparent: bool,
     },
     /// Stop the active recording and finish its output file.
     Stop,

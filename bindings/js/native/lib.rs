@@ -11,7 +11,7 @@ use tui_test::shell::Shell as CoreShell;
 use tui_test::{
     global_registry, AutomaticRecording as CoreAutomaticRecording,
     AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend as CoreBackend,
-    BellEvent as CoreBellEvent, Cell as CoreCell, CellColor, ClipboardPattern,
+    BellEvent as CoreBellEvent, CaptureBackground, Cell as CoreCell, CellColor, ClipboardPattern,
     Cursor as CoreCursor, EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind, KeyAction,
     LocatorDirection as CoreLocatorDirection, LocatorQuery as CoreLocatorQuery,
     LocatorSelector as CoreLocatorSelector, MatchOccurrence as CoreMatchOccurrence, MouseAction,
@@ -489,6 +489,8 @@ pub struct ScreenshotOptions {
     pub full: Option<bool>,
     pub path: Option<String>,
     pub zoom: Option<f64>,
+    pub background: Option<String>,
+    pub transparent: Option<bool>,
 }
 
 #[napi(object)]
@@ -499,6 +501,8 @@ pub struct RecordingOptions {
     pub speed: Option<f64>,
     pub idle_time_limit: Option<f64>,
     pub zoom: Option<f64>,
+    pub background: Option<String>,
+    pub transparent: Option<bool>,
 }
 
 #[napi(string_enum = "lowercase")]
@@ -523,6 +527,23 @@ fn native_error(error: TuiTestError) -> Error {
         Status::GenericFailure,
         format!("{ERROR_PREFIX}{}\n{}", error.kind.as_str(), error.message),
     )
+}
+
+fn capture_background(
+    background: Option<String>,
+    transparent: bool,
+) -> Result<Option<CaptureBackground>> {
+    if background.is_some() && transparent {
+        return Err(native_error(TuiTestError::usage(
+            "background and transparent options conflict",
+        )));
+    }
+    if transparent {
+        return Ok(Some(CaptureBackground::Transparent));
+    }
+    background
+        .map(|value| CaptureBackground::parse(&value).map_err(native_error))
+        .transpose()
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> String {
@@ -1647,7 +1668,11 @@ impl NativeSession {
             full: None,
             path: None,
             zoom: None,
+            background: None,
+            transparent: None,
         });
+        let background =
+            capture_background(options.background, options.transparent.unwrap_or(false))?;
         execute(
             self.handle.clone(),
             "screenshot",
@@ -1655,6 +1680,7 @@ impl NativeSession {
                 full: options.full.unwrap_or(false),
                 path: options.path,
                 zoom: options.zoom,
+                background,
             },
             |result| match result {
                 OperationResult::Screenshot(CoreScreenshotResult::Path(value))
@@ -1672,6 +1698,8 @@ impl NativeSession {
             .map(|value| u8_value(value, "fps"))
             .transpose()
             .map_err(native_error)?;
+        let background =
+            capture_background(options.background, options.transparent.unwrap_or(false))?;
         self.unit(
             "startRecording",
             Operation::StartRecording {
@@ -1681,6 +1709,7 @@ impl NativeSession {
                 speed: options.speed,
                 idle_time_limit: options.idle_time_limit,
                 zoom: options.zoom,
+                background,
             },
         )
         .await

@@ -68,6 +68,8 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `expect_bell_count()`, `expect_snapshot()` | Assert bells or snapshots. |
 | `screenshot()` | Read text or save SVG. |
 | `start_recording()`, `stop_recording()` | Record. |
+
+Pass `background="#rrggbb"` or `transparent=True` to `screenshot()` and `start_recording()` to customize the capture canvas. Transparency is available for SVG, APNG, and GIF.
 | `close()`, `close_quiet()` | Close. |
 
 Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
