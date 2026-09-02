@@ -10,16 +10,11 @@ Use the CLI for terminal work split across separate commands.
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run an app. |
-| `restart [--graceful-timeout MS]` | Recreate the session from its last successful open/run. |
+| `restart [--graceful-timeout MS]` | Restart the session. |
 | `sessions` | List sessions. |
 | `close [--all]` | Close sessions. |
 
 Use `--session NAME` to select a session. `open` and `run` reuse it unless `--restart` is set.
-`restart` sends Ctrl-C/SIGINT, waits up to 5000ms by default, then uses the hard-kill path before respawning with the stored command and settings.
-
-```sh
-tui-test restart --session work --graceful-timeout 5000
-```
 
 ## Locate text
 
