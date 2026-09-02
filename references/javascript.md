@@ -68,7 +68,7 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `waitTitle()`, `waitClipboard()`, `waitBell()` | Wait for events. |
 | `expectTitle()`, `expectOutput()`, `expectExitCode()` | Assert state. |
 | `expectBellCount()`, `expectSnapshot()` | Assert bells or snapshots. |
-| `screenshot()` | Read text or save SVG. |
+| `screenshot()` | Read text or save SVG (default) or PNG, selected by extension. |
 | `startRecording()`, `stopRecording()` | Record. |
 | `close()`, `closeQuiet()` | Close. |
 

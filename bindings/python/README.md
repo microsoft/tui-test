@@ -119,7 +119,7 @@ Snapshot options are `update`, `include_colors`, and `include_title`.
 
 | Method | Description |
 | --- | --- |
-| `await screenshot(path=None, full=False, zoom=None)` | Return text or save SVG. |
+| `await screenshot(path=None, full=False, zoom=None)` | Return text or save SVG (default) or PNG, selected by extension. |
 | `await start_recording(path, **options)` | Start APNG, GIF, MP4, or asciinema recording. |
 | `await stop_recording()` | Finish the recording and return its path. |
 

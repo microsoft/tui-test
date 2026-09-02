@@ -38,6 +38,24 @@ pub(crate) fn encode(
     }
 }
 
+pub(crate) fn encode_png(
+    path: &Path,
+    frame: &Frame,
+    renderer: &mut dyn FrameRenderer,
+) -> anyhow::Result<()> {
+    let (width, height) = renderer.pixel_size();
+    let output = BufWriter::new(File::create(path)?);
+    let mut encoder = png::Encoder::new(output, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
+    let mut writer = encoder.write_header()?;
+    let image = renderer.render(frame)?;
+    writer.write_image_data(image.as_raw())?;
+    writer.finish()?;
+    Ok(())
+}
+
 fn encode_mp4(
     path: &Path,
     frames: &[Frame],
@@ -478,6 +496,27 @@ mod tests {
             }
             std::fs::remove_file(path).unwrap();
         }
+    }
+
+    #[test]
+    fn png_is_static_and_round_trips_dimensions_and_color() {
+        let path = temp_path("png");
+        let frame = frame(Color::Rgb(200, 10, 20), Duration::ZERO);
+        let mut renderer = GridRenderer::with_zoom(1, 1, 1.5).unwrap();
+        encode_png(&path, &frame, &mut renderer).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        let chunks = png_chunks(&bytes);
+        assert_eq!(png_dimensions(&chunks), renderer.pixel_size());
+        assert!(!chunks.iter().any(|(kind, _)| kind == b"acTL"));
+        let pixel = decode_first_png_pixel(
+            &path,
+            ((crate::render::raster::CANVAS_PADDING + 20) as f64 * 1.5) as u32,
+            ((crate::render::raster::CANVAS_PADDING + 48) as f64 * 1.5) as u32,
+        );
+        assert_eq!(&pixel[..3], &[200, 10, 20]);
+
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
