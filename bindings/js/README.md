@@ -41,10 +41,11 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs"` | `"alacritty"` |
 | `timeouts` | `Timeouts` | built-in defaults |
 | `profile` | `Profile` | built-in profile |
-| `artifacts` | `{ dir, onFailure? }` | off |
+| `screenHistoryLimit` | `number` | `10` |
+| `artifacts` | `{ dir, onFailure?, includeRecording? }` | off |
 | `recording` | `{ mode?, directory? }` | `{ mode: "always" }` |
 
-`artifacts.onFailure` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+`artifacts.onFailure` is `"bundle"`, `"json"`, `"svg"`, `"text"`, or `"none"`. Bundle mode writes `failure.json`, `report.md`, `current.txt`, and `current.svg`. `includeRecording: true` also copies an immutable prefix of the automatic cast. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
 
 #### Properties
 
@@ -65,7 +66,7 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `closeQuiet()` | Close without throwing. |
 | `[Symbol.asyncDispose]()` | Close from `await using`. |
 
-`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
+`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, `timeouts`, and `screenHistoryLimit`. `run()` accepts the same options except `shell`.
 
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
 
@@ -267,7 +268,12 @@ const terminal = new TuiTest("test", {
     colors: { foreground: "#ffffff", background: "#000000" },
   },
   timeouts: { text: 10_000, command: 60_000 },
-  artifacts: { dir: "artifacts", onFailure: "svg" },
+  screenHistoryLimit: 10,
+  artifacts: {
+    dir: "artifacts/failures",
+    onFailure: "bundle",
+    includeRecording: true,
+  },
   recording: { mode: "on-failure", directory: "artifacts" },
 });
 ```
@@ -283,6 +289,8 @@ const terminal = new TuiTest("test", {
 | `Profile`, `Colors` | Scrollback and colors. |
 | `Timeouts` | Text, idle, command, exit, and ready timeouts. |
 | `AutomaticRecording` | Automatic recording mode and directory. |
+| `FailureDetails` | Structured operation, locator, process, runtime, and screen evidence. |
+| `FailureArtifactRef` | Paths and write status for a failure artifact. |
 | `MouseButton` | `"left"`, `"middle"`, or `"right"`. |
 | `MouseClickOptions` | Button, modifiers, target text, and click count. |
 | `MouseButtonOptions` | Button and modifiers. |
@@ -300,6 +308,6 @@ const terminal = new TuiTest("test", {
 | `NoSessionError` | `3` |
 | `InternalError` | `5` |
 
-All errors extend `TuiTestError` and include `kind` and `exitCode`. Expectation errors can include `terminal.text` and `terminal.screenshot`.
+All errors extend `TuiTestError` and include `kind` and `exitCode`. Structured native failures expose `details` and `artifact`; expectation errors continue to populate compatibility `terminal.text` and `terminal.screenshot` fields. Failure artifacts can contain terminal output, titles, locator operands, and recordings, so review them before uploading.
 
 Sessions are local to the current process and cannot be controlled by the CLI. Cancelling a promise does not stop an active terminal operation.

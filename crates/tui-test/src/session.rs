@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::diagnostics::{elapsed_ms, DiagnosticRetentionOptions, ScreenHistory};
 use crate::event::BellTracker;
 use crate::logger::Logger;
 use crate::profile::Profile;
@@ -33,6 +34,13 @@ pub struct TermState {
     /// the emulator, so it is identical across backends.
     pub tracker: CommandTracker,
     pub observed_clipboard_revision: u64,
+    pub started_at: Instant,
+    pub visual_revision: u64,
+    pub screen_history: ScreenHistory,
+    pub screen_dirty: bool,
+    pub last_screen_sample: Instant,
+    pub last_visual_change_ms: u64,
+    pub diagnostic_error: Option<String>,
     pub last_change: Instant,
     pub awaiting_start: Option<u64>,
     pub exited: Option<i32>,
@@ -42,6 +50,9 @@ pub struct TermState {
 
 pub struct Session {
     pub shell: Option<Shell>,
+    pub backend: Backend,
+    pub profile: Profile,
+    pub child_pid: Option<u32>,
     pub cols: u16,
     pub rows: u16,
     /// Per-class timeout defaults for the lifetime of this session.
@@ -75,34 +86,47 @@ impl Session {
         cwd: Option<String>,
         env: Vec<(String, String)>,
         timeouts: crate::api::Timeouts,
+        diagnostics: DiagnosticRetentionOptions,
         logger: Arc<Logger>,
         recording_path: Option<PathBuf>,
         recording_required: bool,
     ) -> anyhow::Result<Self> {
+        diagnostics.validate().map_err(anyhow::Error::msg)?;
         let started_at = Instant::now();
         let bells = BellTracker::new(started_at);
-        let state = Arc::new(Mutex::new(TermState {
-            emu: backend.build_with_bells(cols, rows, &profile, bells.clone())?,
+        let emu = backend.build_with_bells(cols, rows, &profile, bells.clone())?;
+        let mut initial_state = TermState {
+            emu,
             tracker: CommandTracker::new(),
             observed_clipboard_revision: 0,
+            started_at,
+            visual_revision: 0,
+            screen_history: ScreenHistory::new(diagnostics.screen_history_limit),
+            screen_dirty: true,
+            last_screen_sample: started_at,
+            last_visual_change_ms: 0,
+            diagnostic_error: None,
             last_change: Instant::now(),
             awaiting_start: None,
             exited: None,
             exit_error: None,
             highlight: None,
-        }));
+        };
+        let _ = try_capture_visual_state(&mut initial_state, true);
+        let state = Arc::new(Mutex::new(initial_state));
 
         let mut rec_env = vec![("TERM".to_string(), "xterm-256color".to_string())];
         if let Some(sh) = shell {
             rec_env.push(("SHELL".to_string(), sh.as_str().to_string()));
         }
-        let recorder = Recorder::create(
+        let recorder = Recorder::create_at(
             recording_path.clone(),
             cols,
             rows,
             &rec_env,
             recording_required,
             logger.clone(),
+            started_at,
         )?;
         let spawned = (|| {
             if let Some(program) = &program {
@@ -137,6 +161,7 @@ impl Session {
             }
         };
 
+        let child_pid = pty.pid();
         let pty = Arc::new(Mutex::new(pty));
         let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -166,9 +191,12 @@ impl Session {
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
                             st.emu.process(&buf[..n]);
                             st.tracker.feed(&buf[..n]);
+                            st.visual_revision = st.visual_revision.wrapping_add(1);
+                            st.screen_dirty = true;
                             st.last_change = Instant::now();
                             st.highlight = None;
                             reader_recorder.on_data(&buf[..n]);
+                            let _ = try_capture_visual_state(&mut st, false);
                             st.emu.take_pending_writes()
                         };
                         if !pending.is_empty() {
@@ -229,6 +257,9 @@ impl Session {
 
         Ok(Session {
             shell,
+            backend,
+            profile,
+            child_pid,
             cols,
             rows,
             timeouts,
@@ -438,10 +469,7 @@ impl Session {
     }
 
     pub fn pid(&self) -> Option<u32> {
-        self.pty
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .pid()
+        self.child_pid
     }
 
     /// A parse failure the emulator hit on the reader thread, if any.
@@ -450,11 +478,11 @@ impl Session {
     /// return an error to, so the failure is recorded there and reported by
     /// whichever operation runs next.
     pub fn fault(&self) -> Option<String> {
-        self.state
+        let state = self
+            .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .emu
-            .fault()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.emu.fault().or_else(|| state.diagnostic_error.clone())
     }
 
     pub fn is_alive(&self) -> Result<bool, crate::api::TuiTestError> {
@@ -502,6 +530,14 @@ impl Session {
         self.recorder.flush().map_err(capture_error)
     }
 
+    pub(crate) fn snapshot_automatic_recording(
+        &self,
+        target_path: PathBuf,
+        max_bytes: u64,
+    ) -> Result<record::AutomaticRecordingSnapshot, CaptureError> {
+        self.recorder.snapshot_automatic(target_path, max_bytes)
+    }
+
     pub fn automatic_recording_enabled(&self) -> bool {
         self.recorder.automatic_enabled()
     }
@@ -513,8 +549,73 @@ fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, col
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     recorder.on_resize(cols, rows);
     state.emu.resize(cols, rows);
+    state.visual_revision = state.visual_revision.wrapping_add(1);
+    state.screen_dirty = true;
     state.last_change = Instant::now();
     state.highlight = None;
+    let _ = try_capture_visual_state(&mut state, true);
+}
+
+pub(crate) fn capture_visual_state(state: &mut TermState, force: bool) -> u64 {
+    if !state.screen_dirty && !force {
+        return state.screen_history.current_sequence();
+    }
+    if !force
+        && state.last_screen_sample.elapsed() < Duration::from_millis(crate::config::POLL_DELAY_MS)
+    {
+        return state.screen_history.current_sequence();
+    }
+    let rows = state.emu.viewable_rows();
+    let (cols, _) = state.emu.size();
+    let title = state.emu.title();
+    let cursor = state.emu.cursor();
+    let cursor_visible = state.emu.cursor_visible();
+    let cursor_shape = state.emu.cursor_shape();
+    let previous_sequence = state.screen_history.current_sequence();
+    let elapsed = elapsed_ms(state.started_at);
+    let sequence = state.screen_history.capture(
+        rows,
+        cols,
+        title,
+        cursor,
+        cursor_visible,
+        cursor_shape,
+        elapsed,
+    );
+    if sequence != previous_sequence {
+        state.last_visual_change_ms = elapsed;
+    }
+    state.screen_dirty = false;
+    state.last_screen_sample = Instant::now();
+    sequence
+}
+
+pub(crate) fn try_capture_visual_state(state: &mut TermState, force: bool) -> Result<u64, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        capture_visual_state(state, force)
+    })) {
+        Ok(sequence) => Ok(sequence),
+        Err(payload) => {
+            let message = format!(
+                "terminal diagnostic capture panicked: {}",
+                diagnostic_panic_message(payload.as_ref())
+            );
+            if state.diagnostic_error.is_none() {
+                state.diagnostic_error = Some(message.clone());
+            }
+            Err(message)
+        }
+    }
+}
+
+fn diagnostic_panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        message
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.as_str()
+    } else {
+        "unknown panic"
+    }
 }
 
 fn drain_reader_and_recorder(reader: &mut Option<JoinHandle<()>>, recorder: &mut Recorder) {
@@ -658,10 +759,18 @@ mod tests {
             Arc::new(Logger::disabled()),
         )
         .unwrap();
+        let started_at = Instant::now();
         let state = Arc::new(Mutex::new(TermState {
             emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
             tracker: CommandTracker::new(),
             observed_clipboard_revision: 0,
+            started_at,
+            visual_revision: 0,
+            screen_history: ScreenHistory::new(crate::diagnostics::DEFAULT_SCREEN_HISTORY_LIMIT),
+            screen_dirty: true,
+            last_screen_sample: started_at,
+            last_visual_change_ms: 0,
+            diagnostic_error: None,
             last_change: Instant::now(),
             awaiting_start: None,
             exited: None,

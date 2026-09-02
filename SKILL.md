@@ -107,6 +107,8 @@ Do not use a fixed sleep when a wait can describe the state.
 
 Use `screenshot` for text or SVG. Use `record` for APNG, GIF, MP4, or asciinema. Use recording mode `on-failure` for test artifacts.
 
+For a failed assertion that must be understood offline, add `--failure-artifacts <dir>`. Read `report.md` first, inspect `failure.json` for exact locator and process evidence, then use `current.svg` or the optional cast when the report is insufficient. Add `--failure-artifact-recording` only when terminal output is safe to retain; diagnostic bundles can contain sensitive terminal text, titles, and locator operands.
+
 ## References
 
 - [CLI](references/cli.md)

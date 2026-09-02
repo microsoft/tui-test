@@ -354,6 +354,7 @@ pub struct Settings {
     pub profile: Profile,
     pub timeouts: crate::api::Timeouts,
     pub recording: crate::api::AutomaticRecording,
+    pub diagnostics: crate::diagnostics::DiagnosticRetentionOptions,
 }
 
 impl From<ConfigProfile> for Settings {
@@ -365,6 +366,7 @@ impl From<ConfigProfile> for Settings {
             },
             timeouts: value.timeouts,
             recording: crate::api::AutomaticRecording::default(),
+            diagnostics: crate::diagnostics::DiagnosticRetentionOptions::default(),
         }
     }
 }
@@ -375,12 +377,14 @@ impl From<ConfigProfile> for Settings {
 pub struct ConfigFile {
     pub profiles: BTreeMap<String, ConfigProfile>,
     pub recording: crate::api::AutomaticRecording,
+    pub diagnostics: crate::diagnostics::DiagnosticRetentionOptions,
 }
 
 impl ConfigFile {
     pub fn parse(toml_text: &str) -> anyhow::Result<Self> {
         let config: Self = toml::from_str(toml_text)?;
         config.recording.validate()?;
+        config.diagnostics.validate().map_err(anyhow::Error::msg)?;
         Ok(config)
     }
 
@@ -430,6 +434,7 @@ impl ConfigFile {
         }?;
         let mut settings: Settings = profile.into();
         settings.recording = self.recording.clone();
+        settings.diagnostics = self.diagnostics;
         Ok(settings)
     }
 }
@@ -560,6 +565,19 @@ mod tests {
         let cfg = ConfigFile::parse("").unwrap();
         assert_eq!(cfg.profile(None).unwrap(), Profile::default());
         assert_eq!(Profile::default().scrollback, 10_000);
+    }
+
+    #[test]
+    fn diagnostics_history_limit_is_loaded() {
+        let config = ConfigFile::parse("[diagnostics]\nscreen-history-limit = 3\n").unwrap();
+        assert_eq!(
+            config
+                .settings(None)
+                .unwrap()
+                .diagnostics
+                .screen_history_limit,
+            3
+        );
     }
 
     /// Every field is individually optional, so a profile can set one color

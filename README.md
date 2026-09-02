@@ -144,6 +144,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `--session NAME` | Select a session. Default: `default` or `TUI_TEST_SESSION`. |
 | `--json` | Print JSON. |
 | `--verbose`, `-v` | Write a session log. |
+| `--failure-artifacts DIR` | Write structured assertion artifacts. |
+| `--failure-artifact-mode MODE` | Select `bundle`, `json`, `svg`, `text`, or `none`. |
+| `--failure-artifact-recording` | Copy the automatic cast through the failure boundary. |
+| `--diagnostic-context KEY=VALUE` | Add safe caller context to failure details. |
 
 CLI sessions persist between commands. `open` and `run` reuse a live session unless `--restart` is set.
 
@@ -159,7 +163,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | `daemon status` | Show daemon status. |
 | `daemon stop [--all]` | Stop one or all daemons. |
 
-`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, and `--timeout-<class> MS`. `open` also accepts `--shell`.
+`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, `--timeout-<class> MS`, and `--screen-history-limit COUNT`. `open` also accepts `--shell`.
 
 ### Text locators
 
@@ -310,9 +314,14 @@ red = "#800000"
 [recording]
 mode = "on-failure"
 directory = "./artifacts"
+
+[diagnostics]
+screen-history-limit = 10
 ```
 
 Recording modes are `disabled`, `on-failure`, and `always`. Default: `always`.
+
+`--json` assertion failures include structured details. With `--failure-artifacts`, tui-test writes a self-contained diagnostic directory containing `failure.json` and the requested report, screen, SVG, and optional recording evidence. These files can contain terminal output, titles, locator operands, and other user-supplied values; review them before uploading.
 
 The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
 

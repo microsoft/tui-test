@@ -70,9 +70,11 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `start_recording()`, `stop_recording()` | Record. |
 | `close()`, `close_quiet()` | Close. |
 
-Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
+Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`, and `screen_history_limit`.
 
 Recording modes: `disabled`, `on-failure`, and `always`.
+
+Failure artifact modes are `bundle`, `json`, `svg`, `text`, and `none`. Bundle mode writes a deterministic report, structured JSON, and the pinned screen; `include_recording=True` also copies the automatic cast through the failure boundary.
 
 ## Input helpers
 
@@ -101,5 +103,7 @@ Helpers: `create_terminal`, `terminal`, `close_all_tracked`, `set_terminal_defau
 ## Errors
 
 `ExpectationError`, `UsageError`, `NoSessionError`, and `InternalError` extend `TuiTestError`.
+
+`TuiTestError.details` contains the structured operation, locator evaluation, style mismatches, process/runtime state, recent operations, and recent screens. `TuiTestError.artifact` identifies the committed bundle files. Terminal evidence and locator operands may be sensitive.
 
 Full API: [bindings/python/README.md](https://github.com/microsoft/tui-test/blob/main/bindings/python/README.md)

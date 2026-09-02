@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import json
 import unittest
 from pathlib import Path
 
@@ -103,8 +104,19 @@ class NativeSurfaceTests(unittest.TestCase):
             session = _native.NativeSession(unique_session("native-number"))
             awaitable = session.resize(-1, 24)
             self.assertTrue(inspect.isawaitable(awaitable))
-            with self.assertRaises(_native.NativeUsageError):
+            with self.assertRaises(_native.NativeUsageError) as raised:
                 await awaitable
+            envelope = json.loads(
+                raised.exception._tui_test_error_json
+            )
+            self.assertEqual(envelope["kind"], "usage")
+            self.assertIn("cols", envelope["message"])
+            self.assertFalse(
+                hasattr(
+                    _native.NativeUsageError,
+                    "_tui_test_error_json",
+                )
+            )
 
         asyncio.run(scenario())
 
@@ -116,7 +128,7 @@ class NativeSurfaceTests(unittest.TestCase):
                 {"kind": "style", "style": {"bold": True}, "text": "x"},
             ):
                 with self.assertRaises(_native.NativeUsageError):
-                    await session.find_locator([stage])
+                    await session.find_locator([stage], False)
 
         asyncio.run(scenario())
 
@@ -136,6 +148,32 @@ class NativeSurfaceTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_screen_history_limit_is_validated_by_core(self):
+        async def scenario():
+            session = _native.NativeSession(unique_session("native-history"))
+            with self.assertRaises(_native.NativeUsageError) as raised:
+                await session.open(
+                    None,
+                    None,
+                    80,
+                    24,
+                    None,
+                    [],
+                    None,
+                    False,
+                    None,
+                    [],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    51,
+                )
+            self.assertIn("at most 50", str(raised.exception))
+
+        asyncio.run(scenario())
+
 
 class NativeStubTests(unittest.TestCase):
     def test_native_futures_are_annotated_as_awaitables(self):
@@ -150,7 +188,7 @@ class NativeStubTests(unittest.TestCase):
         self.assertNotIn("request_json", stub)
         self.assertIn("def open(", stub)
         self.assertIn(
-            "def find_locator(self, stages: typing.List[typing.Dict[str, typing.Any]])",
+            "def find_locator(self, stages: typing.List[typing.Dict[str, typing.Any]], require_one: bool)",
             stub,
         )
         self.assertIn("typing.Awaitable[", stub)

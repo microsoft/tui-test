@@ -532,6 +532,11 @@ class IntegrationTests(unittest.TestCase):
                 self.assertIn("Terminal content:\n╭", message)
                 self.assertIn("ready", message)
                 self.assertIn("\n╰", message)
+                self.assertIsNotNone(raised.exception.details)
+                self.assertEqual(
+                    raised.exception.details.operation["name"],
+                    "locator.expect",
+                )
 
         run(scenario())
 

@@ -1,10 +1,16 @@
-import type { TerminalArtifact } from "./types.js";
+import type {
+  FailureArtifactRef,
+  FailureDetails,
+  TerminalArtifact,
+} from "./types.js";
 
 export type ErrorKind = "assertion" | "usage" | "no_session" | "internal";
 
 export class TuiTestError extends Error {
   readonly kind: ErrorKind;
   readonly exitCode: number;
+  readonly details?: FailureDetails;
+  readonly artifact?: FailureArtifactRef;
   terminal?: TerminalArtifact;
 
   constructor(message: string, kind: ErrorKind = "internal", exitCode = 5) {

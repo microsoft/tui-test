@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import copy
+import json
 import os
 import re
 import time
@@ -27,11 +28,10 @@ from . import _ephemeral as ephemeral
 from . import _native as native
 from .errors import (
     ExpectationError,
-    InternalError,
     NoSessionError,
     TerminalArtifact,
     TuiTestError,
-    UsageError,
+    make_error,
 )
 from .types import (
     AutomaticRecording,
@@ -49,7 +49,9 @@ from .types import (
 )
 
 _TERMINAL_MARKER = "Terminal content:\n"
+_ERROR_JSON_ATTRIBUTE = "_tui_test_error_json"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
+_ARTIFACT_MODES = ("bundle", "svg", "text", "json", "none")
 
 _T = TypeVar("_T")
 
@@ -146,13 +148,46 @@ async def _await_native(awaitable: Awaitable[_T]) -> _T:
     try:
         return await awaitable
     except native.NativeAssertionError as error:
-        raise ExpectationError(str(error)) from error
+        raise _decode_native_error(error, "assertion") from error
     except native.NativeUsageError as error:
-        raise UsageError(str(error)) from error
+        raise _decode_native_error(error, "usage") from error
     except native.NativeNoSessionError as error:
-        raise NoSessionError(str(error)) from error
+        raise _decode_native_error(error, "no_session") from error
     except native.NativeInternalError as error:
-        raise InternalError(str(error)) from error
+        raise _decode_native_error(error, "internal") from error
+
+
+def _decode_native_error(error: Exception, fallback_kind: str) -> TuiTestError:
+    raw = getattr(error, _ERROR_JSON_ATTRIBUTE, None)
+    if raw is None:
+        return make_error(fallback_kind, str(error))
+    try:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        envelope = json.loads(raw) if isinstance(raw, str) else None
+    except (UnicodeDecodeError, ValueError, TypeError) as decode_error:
+        return make_error(
+            "internal",
+            "malformed native error envelope: {}".format(decode_error),
+        )
+    if not isinstance(envelope, Mapping):
+        return make_error(
+            "internal",
+            "malformed native error envelope: expected an object",
+        )
+
+    kind = envelope.get("kind")
+    if kind not in ("assertion", "usage", "no_session", "internal"):
+        kind = fallback_kind
+    message = envelope.get("message")
+    details = envelope.get("details")
+    artifact = envelope.get("artifact")
+    return make_error(
+        kind,
+        message if isinstance(message, str) else str(error),
+        details=details if isinstance(details, Mapping) else None,
+        artifact=artifact if isinstance(artifact, Mapping) else None,
+    )
 
 
 def _atexit_close_all() -> None:
@@ -272,6 +307,48 @@ def _extract_terminal_text(message: Optional[str]) -> Optional[str]:
     if index == -1:
         return None
     return message[index + len(_TERMINAL_MARKER):].rstrip("\n") or None
+
+
+def _artifact_values(
+    artifacts: Optional[Dict[str, Any]],
+) -> Tuple[
+    Optional[Dict[str, Any]],
+    Optional[str],
+    Optional[str],
+    bool,
+]:
+    if artifacts is None:
+        return None, None, None, False
+    if not isinstance(artifacts, dict):
+        raise TypeError("artifacts must be a dict")
+
+    mode = artifacts.get("on_failure", "svg")
+    if mode not in _ARTIFACT_MODES:
+        raise ValueError(
+            "artifacts.on_failure must be bundle, svg, text, json, or none"
+        )
+    include_recording = artifacts.get("include_recording", False)
+    if not isinstance(include_recording, bool):
+        raise TypeError("artifacts.include_recording must be a bool")
+
+    directory = artifacts.get("dir")
+    absolute_directory = None  # type: Optional[str]
+    if directory is not None:
+        try:
+            absolute_directory = os.path.abspath(os.fspath(directory))
+        except TypeError:
+            raise TypeError("artifacts.dir must be path-like") from None
+    if mode != "none" and not absolute_directory:
+        raise ValueError(
+            "artifacts.dir is required unless artifacts.on_failure is none"
+        )
+
+    normalized = dict(artifacts)
+    normalized["on_failure"] = mode
+    normalized["include_recording"] = include_recording
+    if absolute_directory is not None:
+        normalized["dir"] = absolute_directory
+    return normalized, absolute_directory, mode, include_recording
 
 
 _MOUSE_BUTTON_CODES = {
@@ -482,19 +559,32 @@ class Locator:
         )
 
     async def locations(self) -> List[TextMatch]:
+        try:
+            awaitable = self._client._native.find_locator(
+                self._query, False
+            )
+        except TypeError:
+            awaitable = self._client._native.find_locator(self._query)
         values = await self._client._guarded(
             "locator.locations",
-            self._client._native.find_locator(self._query),
+            awaitable,
         )
         return [TextMatch.from_dict(value) for value in values]
 
     async def location(self) -> TextMatch:
-        query = self._strict_query()
+        legacy = False
+        try:
+            awaitable = self._client._native.find_locator(self._query, True)
+        except TypeError:
+            legacy = True
+            awaitable = self._client._native.find_locator(
+                self._strict_query()
+            )
         values = await self._client._guarded(
             "locator.location",
-            self._client._native.find_locator(query),
+            awaitable,
         )
-        if len(values) != 1:
+        if legacy and len(values) != 1:
             current = self._query[-1]
             description = (
                 repr(current["text"])
@@ -563,7 +653,7 @@ class Locator:
         await self._client._guarded(
             "locator.click",
             self._client._native.click_locator(
-                self._strict_query(),
+                self._query,
                 code,
                 clicks,
                 self._client._timeout("text", timeout),
@@ -603,20 +693,40 @@ class TuiTest:
         backend: Optional[Backend] = None,
         timeouts: Optional[Timeouts] = None,
         profile: Optional[Profile] = None,
+        screen_history_limit: Optional[int] = None,
         artifacts: Optional[Dict[str, Any]] = None,
         recording: Optional[AutomaticRecording] = None,
     ) -> None:
         self._session = cfg.resolve_session(session)
         recording_values = cfg.normalize_recording(recording) or {}
-        self._native = native.NativeSession(
-            self._session,
-            recording_values.get("mode"),
-            recording_values.get("directory"),
-        )
+        (
+            normalized_artifacts,
+            artifact_directory,
+            artifact_mode,
+            artifact_include_recording,
+        ) = _artifact_values(artifacts)
+        try:
+            self._legacy_native = False
+            self._native = native.NativeSession(
+                self._session,
+                recording_values.get("mode"),
+                recording_values.get("directory"),
+                artifact_directory,
+                artifact_mode,
+                artifact_include_recording,
+            )
+        except TypeError:
+            self._legacy_native = True
+            self._native = native.NativeSession(
+                self._session,
+                recording_values.get("mode"),
+                recording_values.get("directory"),
+            )
         self._backend = cfg.normalize_backend(backend)
         self._timeouts = cfg.normalize_timeouts(timeouts)
         self._profile = cfg.normalize_profile(profile)
-        self._artifacts = artifacts
+        self._screen_history_limit = screen_history_limit
+        self._artifacts = normalized_artifacts
         self._artifact_counter = 0
         self.keyboard = _Keyboard(self)
         self.mouse = _Mouse(self)
@@ -647,6 +757,58 @@ class TuiTest:
             raise
 
     async def _capture_artifacts(self, error: ExpectationError) -> None:
+        if error.details is not None or error.artifact is not None:
+            errors = (
+                list(error.artifact.errors)
+                if error.artifact is not None
+                else []
+            )
+            text = None  # type: Optional[str]
+            if error.artifact is not None and error.artifact.screen_text is not None:
+                try:
+                    with open(
+                        error.artifact.screen_text,
+                        "r",
+                        encoding="utf-8",
+                    ) as artifact_file:
+                        text = artifact_file.read()
+                except Exception as artifact_error:
+                    errors.append(
+                        "failed to read core screen text artifact: {}".format(
+                            artifact_error
+                        )
+                    )
+            if text is None and error.details is not None:
+                terminal = error.details.terminal
+                if isinstance(terminal, Mapping):
+                    history = terminal.get("screen_history")
+                    if isinstance(history, Mapping):
+                        screens = history.get("screens")
+                        if isinstance(screens, (list, tuple)) and screens:
+                            latest = screens[-1]
+                            if isinstance(latest, Mapping):
+                                value = latest.get("text")
+                                if isinstance(value, str):
+                                    text = value
+            if (
+                text is not None
+                or (
+                    error.artifact is not None
+                    and error.artifact.screen_svg is not None
+                )
+                or errors
+            ):
+                error.terminal = TerminalArtifact(
+                    text=text,
+                    screenshot=(
+                        error.artifact.screen_svg
+                        if error.artifact is not None
+                        else None
+                    ),
+                    errors=tuple(errors),
+                )
+            return
+
         artifacts = self._artifacts
         if artifacts is None:
             return
@@ -655,21 +817,39 @@ class TuiTest:
             return
         text = None  # type: Optional[str]
         screenshot_path = None  # type: Optional[str]
+        errors = []  # type: List[str]
         try:
-            text = _extract_terminal_text(error.message)
-        except Exception:
-            pass
-        if mode == "svg":
+            if mode in ("bundle", "svg", "text"):
+                text = _extract_terminal_text(error.message)
+        except Exception as artifact_error:
+            errors.append(
+                "failed to parse terminal text from legacy error: {}".format(
+                    artifact_error
+                )
+            )
+        if mode in ("bundle", "svg"):
             try:
                 screenshot_path = await self._write_artifact_svg()
-            except Exception:
-                pass
-        if text is None and screenshot_path is None:
+            except Exception as artifact_error:
+                errors.append(
+                    "failed to capture legacy SVG artifact: {}".format(
+                        artifact_error
+                    )
+                )
+        if text is None and screenshot_path is None and not errors:
             return
         try:
-            error.terminal = TerminalArtifact(text=text, screenshot=screenshot_path)
-        except Exception:
-            pass
+            error.terminal = TerminalArtifact(
+                text=text,
+                screenshot=screenshot_path,
+                errors=tuple(errors),
+            )
+        except Exception as artifact_error:
+            error.__dict__.setdefault("artifact_capture_errors", []).append(
+                "failed to attach legacy terminal artifact: {}".format(
+                    artifact_error
+                )
+            )
 
     async def _write_artifact_svg(self) -> Optional[str]:
         directory = self._artifacts.get("dir") if self._artifacts else None
@@ -721,21 +901,24 @@ class TuiTest:
             profile if profile is not None else self._profile
         )
         timeout_values = _session_timeout_values(timeouts)
-        return await self._spawn(
-            lambda: self._native.open(
-                shell,
-                cfg.normalize_backend(
-                    backend if backend is not None else self._backend
-                ),
-                cols,
-                rows,
-                cwd,
-                env_values,
-                wait_ready,
-                restart,
-                *profile_values,
-                *timeout_values,
+        native_args = (
+            shell,
+            cfg.normalize_backend(
+                backend if backend is not None else self._backend
             ),
+            cols,
+            rows,
+            cwd,
+            env_values,
+            wait_ready,
+            restart,
+            *profile_values,
+            *timeout_values,
+        )
+        if not self._legacy_native:
+            native_args += (self._screen_history_limit,)
+        return await self._spawn(
+            lambda: self._native.open(*native_args),
             retries,
         )
 
@@ -759,22 +942,25 @@ class TuiTest:
             profile if profile is not None else self._profile
         )
         timeout_values = _session_timeout_values(timeouts)
-        return await self._spawn(
-            lambda: self._native.run(
-                program,
-                list(args),
-                cfg.normalize_backend(
-                    backend if backend is not None else self._backend
-                ),
-                cols,
-                rows,
-                cwd,
-                env_values,
-                wait_ready,
-                restart,
-                *profile_values,
-                *timeout_values,
+        native_args = (
+            program,
+            list(args),
+            cfg.normalize_backend(
+                backend if backend is not None else self._backend
             ),
+            cols,
+            rows,
+            cwd,
+            env_values,
+            wait_ready,
+            restart,
+            *profile_values,
+            *timeout_values,
+        )
+        if not self._legacy_native:
+            native_args += (self._screen_history_limit,)
+        return await self._spawn(
+            lambda: self._native.run(*native_args),
             retries,
         )
 

@@ -10,7 +10,8 @@ use tui_test::shell::Shell;
 use tui_test::{
     AutomaticRecording as CoreAutomaticRecording,
     AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend, BellEvent, Cell, CellColor,
-    ClipboardPattern, Cursor, ErrorKind, KeyAction, LocatorDirection, LocatorQuery,
+    ClipboardPattern, Cursor, DiagnosticRetentionOptions, ErrorKind, ExecutionContext,
+    FailureArtifactMode, FailureArtifactOptions, KeyAction, LocatorDirection, LocatorQuery,
     LocatorSelector, MatchOccurrence, MouseAction, MouseOptions, OpenOptions, OpenResult,
     Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
     SnapshotResult, State, StyleSelector, TextMatch, TextSelector, TextStyle, Timeouts,
@@ -42,21 +43,73 @@ pyo3::create_exception!(
     "Native internal error."
 );
 
-#[pyclass(module = "tui_test._native", frozen)]
+#[derive(Clone)]
+#[pyclass(module = "tui_test._native", frozen, skip_from_py_object)]
 struct NativeSession {
     #[pyo3(get)]
     name: String,
     recording: CoreAutomaticRecording,
+    artifact: Option<FailureArtifactOptions>,
+}
+
+impl NativeSession {
+    fn execution_context(&self) -> ExecutionContext {
+        ExecutionContext {
+            artifact: self.artifact.clone(),
+            ..ExecutionContext::default()
+        }
+    }
+
+    fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
+        global_registry()
+            .session(self.name.clone())
+            .execute_with_context(operation, self.execution_context())
+    }
+
+    fn execute_named(
+        &self,
+        operation_name: &'static str,
+        operation: Operation,
+    ) -> Result<OperationResult, TuiTestError> {
+        global_registry()
+            .session(self.name.clone())
+            .execute_with_context(
+                operation,
+                self.execution_context().with_operation(operation_name),
+            )
+    }
+
+    fn execute_with_retention(
+        &self,
+        operation: Operation,
+        retention: DiagnosticRetentionOptions,
+    ) -> Result<OperationResult, TuiTestError> {
+        let mut context = self.execution_context();
+        context.retention = retention;
+        global_registry()
+            .session(self.name.clone())
+            .execute_with_context(operation, context)
+    }
 }
 
 #[pymethods]
 impl NativeSession {
     #[new]
-    #[pyo3(signature = (name, recording_mode = None, recording_directory = None))]
+    #[pyo3(signature = (
+        name,
+        recording_mode = None,
+        recording_directory = None,
+        artifact_directory = None,
+        artifact_mode = None,
+        artifact_include_recording = false
+    ))]
     fn new(
         name: String,
         recording_mode: Option<String>,
         recording_directory: Option<String>,
+        artifact_directory: Option<String>,
+        artifact_mode: Option<String>,
+        artifact_include_recording: bool,
     ) -> PyResult<Self> {
         let mode = match recording_mode.as_deref().unwrap_or("always") {
             "disabled" => CoreAutomaticRecordingMode::Disabled,
@@ -74,6 +127,28 @@ impl NativeSession {
                 mode,
                 directory: recording_directory.map(Into::into),
             },
+            artifact: artifact_mode
+                .map(|mode| {
+                    let mode = match mode.as_str() {
+                        "bundle" => FailureArtifactMode::Bundle,
+                        "svg" => FailureArtifactMode::Svg,
+                        "text" => FailureArtifactMode::Text,
+                        "json" => FailureArtifactMode::Json,
+                        "none" => FailureArtifactMode::None,
+                        other => {
+                            return Err(TuiTestError::usage(format!(
+                                "unknown failure artifact mode {other:?}; expected bundle, svg, text, json, or none"
+                            )))
+                        }
+                    };
+                    Ok(FailureArtifactOptions {
+                        directory: artifact_directory.unwrap_or_default().into(),
+                        mode,
+                        include_recording: artifact_include_recording,
+                    })
+                })
+                .transpose()
+                .map_err(shell_error_to_py)?,
         })
     }
 
@@ -92,7 +167,8 @@ impl NativeSession {
         idle_timeout,
         command_timeout,
         exit_timeout,
-        ready_timeout
+        ready_timeout,
+        screen_history_limit
     ))]
     #[allow(clippy::too_many_arguments)]
     fn open<'py>(
@@ -113,6 +189,7 @@ impl NativeSession {
         command_timeout: Option<Bound<'py, PyAny>>,
         exit_timeout: Option<Bound<'py, PyAny>>,
         ready_timeout: Option<Bound<'py, PyAny>>,
+        screen_history_limit: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let cols = capture_integer(&cols);
         let rows = capture_integer(&rows);
@@ -122,13 +199,14 @@ impl NativeSession {
         let command_timeout = capture_optional_integer(command_timeout);
         let exit_timeout = capture_optional_integer(exit_timeout);
         let ready_timeout = capture_optional_integer(ready_timeout);
-        let name = self.name.clone();
+        let screen_history_limit = capture_optional_integer(screen_history_limit);
+        let session = self.clone();
         let recording = self.recording.clone();
         future_blocking(
             py,
             move || {
                 execute_open(
-                    &name,
+                    &session,
                     Operation::Open(OpenOptions {
                         backend: parse_backend(backend.as_deref())?,
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
@@ -148,6 +226,7 @@ impl NativeSession {
                         },
                         recording,
                     }),
+                    diagnostic_retention(screen_history_limit.as_ref())?,
                 )
             },
             open_to_py,
@@ -170,7 +249,8 @@ impl NativeSession {
         idle_timeout,
         command_timeout,
         exit_timeout,
-        ready_timeout
+        ready_timeout,
+        screen_history_limit
     ))]
     #[allow(clippy::too_many_arguments)]
     fn run<'py>(
@@ -192,6 +272,7 @@ impl NativeSession {
         command_timeout: Option<Bound<'py, PyAny>>,
         exit_timeout: Option<Bound<'py, PyAny>>,
         ready_timeout: Option<Bound<'py, PyAny>>,
+        screen_history_limit: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let cols = capture_integer(&cols);
         let rows = capture_integer(&rows);
@@ -201,13 +282,14 @@ impl NativeSession {
         let command_timeout = capture_optional_integer(command_timeout);
         let exit_timeout = capture_optional_integer(exit_timeout);
         let ready_timeout = capture_optional_integer(ready_timeout);
-        let name = self.name.clone();
+        let screen_history_limit = capture_optional_integer(screen_history_limit);
+        let session = self.clone();
         let recording = self.recording.clone();
         future_blocking(
             py,
             move || {
                 execute_open(
-                    &name,
+                    &session,
                     Operation::Run(RunOptions {
                         backend: parse_backend(backend.as_deref())?,
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
@@ -228,6 +310,7 @@ impl NativeSession {
                         },
                         recording,
                     }),
+                    diagnostic_retention(screen_history_limit.as_ref())?,
                 )
             },
             open_to_py,
@@ -235,28 +318,28 @@ impl NativeSession {
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_unit(&name, Operation::Close),
+            move || execute_unit(&session, Operation::Close),
             unit_to_py,
         )
     }
 
     fn state<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_state(&name, Operation::State),
+            move || execute_state(&session, Operation::State),
             state_to_py,
         )
     }
 
     fn text<'py>(&self, py: Python<'py>, full: bool) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_text(&name, Operation::Text { full }),
+            move || execute_text(&session, Operation::Text { full }),
             string_to_py,
         )
     }
@@ -265,12 +348,20 @@ impl NativeSession {
         &self,
         py: Python<'py>,
         stages: Vec<Bound<'py, PyAny>>,
+        require_one: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let query = capture_locator_query(&stages);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_matches(&name, Operation::FindLocator { query: query? }),
+            move || {
+                let operation = if require_one {
+                    Operation::ResolveLocator { query: query? }
+                } else {
+                    Operation::FindLocator { query: query? }
+                };
+                execute_matches(&session, operation)
+            },
             matches_to_py,
         )
     }
@@ -285,12 +376,12 @@ impl NativeSession {
     ) -> PyResult<Bound<'py, PyAny>> {
         let query = capture_locator_query(&stages);
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::WaitLocator {
                         query: query?,
                         not: not_,
@@ -315,12 +406,12 @@ impl NativeSession {
         let button = capture_integer(&button);
         let clicks = capture_integer(&clicks);
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::ClickLocator {
                         query: query?,
                         options: mouse_options(&button)?,
@@ -342,12 +433,12 @@ impl NativeSession {
     ) -> PyResult<Bound<'py, PyAny>> {
         let query = capture_locator_query(&stages);
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_matches(
-                    &name,
+                    &session,
                     Operation::HighlightLocator {
                         query: query?,
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
@@ -368,12 +459,13 @@ impl NativeSession {
     ) -> PyResult<Bound<'py, PyAny>> {
         let query = capture_locator_query(&stages);
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
-                execute_unit(
-                    &name,
+                execute_unit_named(
+                    &session,
+                    "locator.expect",
                     Operation::WaitLocator {
                         query: query?,
                         not: not_,
@@ -386,10 +478,10 @@ impl NativeSession {
     }
 
     fn packed_screen<'py>(&self, py: Python<'py>, full: bool) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_packed_screen(&name, Operation::PackedScreen { full }),
+            move || execute_packed_screen(&session, Operation::PackedScreen { full }),
             packed_screen_to_py,
         )
     }
@@ -406,12 +498,12 @@ impl NativeSession {
         let y = capture_integer(&y);
         let w = capture_integer(&w);
         let h = capture_integer(&h);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_cells(
-                    &name,
+                    &session,
                     Operation::Cells {
                         x: integer_u16(&x, "x")?,
                         y: integer_u16(&y, "y")?,
@@ -425,131 +517,131 @@ impl NativeSession {
     }
 
     fn get_command<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_command(&name, Operation::GetCommand),
+            move || execute_command(&session, Operation::GetCommand),
             optional_string_to_py,
         )
     }
 
     fn get_output<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_output(&name, Operation::GetOutput),
+            move || execute_output(&session, Operation::GetOutput),
             optional_string_to_py,
         )
     }
 
     fn get_exit_code<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_exit_code(&name, Operation::GetExitCode),
+            move || execute_exit_code(&session, Operation::GetExitCode),
             optional_i32_to_py,
         )
     }
 
     fn get_cwd<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_cwd(&name, Operation::GetCwd),
+            move || execute_cwd(&session, Operation::GetCwd),
             optional_string_to_py,
         )
     }
 
     fn get_title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_title(&name, Operation::GetTitle),
+            move || execute_title(&session, Operation::GetTitle),
             optional_string_to_py,
         )
     }
 
     fn get_clipboard<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_clipboard(&name, Operation::GetClipboard),
+            move || execute_clipboard(&session, Operation::GetClipboard),
             string_to_py,
         )
     }
 
     fn get_cursor<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_cursor(&name, Operation::GetCursor),
+            move || execute_cursor(&session, Operation::GetCursor),
             cursor_to_py,
         )
     }
 
     fn get_size<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_size(&name, Operation::GetSize),
+            move || execute_size(&session, Operation::GetSize),
             size_to_py,
         )
     }
 
     fn get_bell_count<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_bell_count(&name, Operation::GetBellCount),
+            move || execute_bell_count(&session, Operation::GetBellCount),
             u64_to_py,
         )
     }
 
     fn get_bell_events<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_bell_events(&name, Operation::GetBellEvents),
+            move || execute_bell_events(&session, Operation::GetBellEvents),
             bell_events_to_py_object,
         )
     }
 
     fn write<'py>(&self, py: Python<'py>, data: String) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_unit(&name, Operation::Write { data }),
+            move || execute_unit(&session, Operation::Write { data }),
             unit_to_py,
         )
     }
 
     #[pyo3(name = "type")]
     fn type_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_unit(&name, Operation::Write { data: text }),
+            move || execute_unit(&session, Operation::Write { data: text }),
             unit_to_py,
         )
     }
 
     #[pyo3(signature = (data))]
     fn submit<'py>(&self, py: Python<'py>, data: Option<String>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_unit(&name, Operation::Submit { data }),
+            move || execute_unit(&session, Operation::Submit { data }),
             unit_to_py,
         )
     }
 
     fn press<'py>(&self, py: Python<'py>, keys: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Key {
                         keys,
                         action: KeyAction::Press,
@@ -561,12 +653,12 @@ impl NativeSession {
     }
 
     fn key_down<'py>(&self, py: Python<'py>, keys: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Key {
                         keys,
                         action: KeyAction::Down,
@@ -578,12 +670,12 @@ impl NativeSession {
     }
 
     fn repeat<'py>(&self, py: Python<'py>, keys: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Key {
                         keys,
                         action: KeyAction::Repeat,
@@ -595,12 +687,12 @@ impl NativeSession {
     }
 
     fn key_up<'py>(&self, py: Python<'py>, keys: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Key {
                         keys,
                         action: KeyAction::Up,
@@ -625,12 +717,12 @@ impl NativeSession {
         let y = capture_optional_integer(y);
         let button = capture_integer(&button);
         let clicks = capture_integer(&clicks);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Mouse {
                         action: MouseAction::Click {
                             x: x.as_ref().map(|x| integer_u16(x, "x")).transpose()?,
@@ -654,12 +746,12 @@ impl NativeSession {
     ) -> PyResult<Bound<'py, PyAny>> {
         let x = capture_integer(&x);
         let y = capture_integer(&y);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Mouse {
                         action: MouseAction::Move {
                             x: integer_u16(&x, "x")?,
@@ -682,12 +774,12 @@ impl NativeSession {
         let x = capture_integer(&x);
         let y = capture_integer(&y);
         let button = capture_integer(&button);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Mouse {
                         action: MouseAction::Down {
                             x: integer_u16(&x, "x")?,
@@ -711,12 +803,12 @@ impl NativeSession {
         let x = capture_integer(&x);
         let y = capture_integer(&y);
         let button = capture_integer(&button);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Mouse {
                         action: MouseAction::Up {
                             x: integer_u16(&x, "x")?,
@@ -744,12 +836,12 @@ impl NativeSession {
         let x2 = capture_integer(&x2);
         let y2 = capture_integer(&y2);
         let button = capture_integer(&button);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Mouse {
                         action: MouseAction::Drag {
                             x1: integer_u16(&x1, "x1")?,
@@ -772,12 +864,12 @@ impl NativeSession {
         amount: Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let amount = capture_integer(&amount);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Mouse {
                         action: MouseAction::Scroll {
                             direction,
@@ -798,12 +890,12 @@ impl NativeSession {
     ) -> PyResult<Bound<'py, PyAny>> {
         let cols = capture_integer(&cols);
         let rows = capture_integer(&rows);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Resize {
                         cols: integer_u16(&cols, "cols")?,
                         rows: integer_u16(&rows, "rows")?,
@@ -815,21 +907,21 @@ impl NativeSession {
     }
 
     fn signal<'py>(&self, py: Python<'py>, signal: String) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_unit(&name, Operation::Signal { name: signal }),
+            move || execute_unit(&session, Operation::Signal { name: signal }),
             unit_to_py,
         )
     }
 
     fn kill<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::Signal {
                         name: "KILL".to_string(),
                     },
@@ -849,12 +941,12 @@ impl NativeSession {
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::WaitTitle {
                         text,
                         regex,
@@ -876,7 +968,7 @@ impl NativeSession {
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
@@ -901,7 +993,7 @@ impl NativeSession {
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
                 };
-                execute_unit(&name, operation)
+                execute_unit(&session, operation)
             },
             unit_to_py,
         )
@@ -914,12 +1006,12 @@ impl NativeSession {
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::WaitIdle {
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
@@ -936,12 +1028,12 @@ impl NativeSession {
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::WaitCommand {
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
@@ -958,12 +1050,12 @@ impl NativeSession {
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::WaitExit {
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
@@ -980,12 +1072,12 @@ impl NativeSession {
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::WaitReady {
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
@@ -1002,12 +1094,12 @@ impl NativeSession {
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::WaitBell {
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
                     },
@@ -1027,12 +1119,12 @@ impl NativeSession {
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::ExpectTitle {
                         text,
                         regex,
@@ -1054,12 +1146,12 @@ impl NativeSession {
     ) -> PyResult<Bound<'py, PyAny>> {
         let code = capture_integer(&code);
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::ExpectExitCode {
                         code: integer_i32(&code, "code")?,
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
@@ -1076,10 +1168,10 @@ impl NativeSession {
         text: String,
         regex: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_unit(&name, Operation::ExpectOutput { text, regex }),
+            move || execute_unit(&session, Operation::ExpectOutput { text, regex }),
             unit_to_py,
         )
     }
@@ -1093,12 +1185,12 @@ impl NativeSession {
     ) -> PyResult<Bound<'py, PyAny>> {
         let count = capture_integer(&count);
         let timeout_ms = capture_optional_integer(timeout_ms);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::ExpectBellCount {
                         count: integer_u64(&count, "count")?,
                         timeout_ms: optional_u64(timeout_ms.as_ref(), "timeout")?,
@@ -1119,7 +1211,7 @@ impl NativeSession {
         include_title: bool,
         cwd: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let session = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
@@ -1146,10 +1238,10 @@ impl NativeSession {
         full: bool,
         zoom: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_screenshot(&name, Operation::Screenshot { full, path, zoom }),
+            move || execute_screenshot(&session, Operation::Screenshot { full, path, zoom }),
             screenshot_to_py,
         )
     }
@@ -1167,12 +1259,12 @@ impl NativeSession {
         zoom: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let fps = capture_optional_integer(fps);
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 execute_unit(
-                    &name,
+                    &session,
                     Operation::StartRecording {
                         path,
                         format: parse_recording_format(format.as_deref())?,
@@ -1191,21 +1283,21 @@ impl NativeSession {
     }
 
     fn stop_recording<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
-            move || execute_recording(&name, Operation::StopRecording),
+            move || execute_recording(&session, Operation::StopRecording),
             string_to_py,
         )
     }
 
     fn recording<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let name = self.name.clone();
+        let session = self.clone();
         future_blocking(
             py,
             move || {
                 global_registry()
-                    .recording(&name)
+                    .recording(&session.name)
                     .map_err(io_error_to_shell_error)
             },
             string_to_py,
@@ -1309,7 +1401,25 @@ fn shell_error_to_py(error: TuiTestError) -> PyErr {
             ErrorKind::NoSession => py.get_type::<NativeNoSessionError>(),
             ErrorKind::Internal => py.get_type::<NativeInternalError>(),
         };
-        PyErr::from_type(exception, error.message)
+        let message = error.message;
+        let mut envelope = serde_json::Map::new();
+        envelope.insert("kind".to_string(), error.kind.as_str().into());
+        envelope.insert("message".to_string(), message.clone().into());
+        if let Some(details) = error.details.as_deref() {
+            if let Ok(value) = serde_json::to_value(details) {
+                envelope.insert("details".to_string(), value);
+            }
+        }
+        if let Some(artifact) = error.artifact.as_deref() {
+            if let Ok(value) = serde_json::to_value(artifact) {
+                envelope.insert("artifact".to_string(), value);
+            }
+        }
+        let py_error = PyErr::from_type(exception, message);
+        if let Ok(json) = serde_json::to_string(&envelope) {
+            let _ = py_error.value(py).setattr("_tui_test_error_json", json);
+        }
+        py_error
     })
 }
 
@@ -1377,6 +1487,17 @@ fn integer_u64(value: &IntegerInput, name: &str) -> Result<u64, TuiTestError> {
 
 fn optional_u64(value: Option<&IntegerInput>, name: &str) -> Result<Option<u64>, TuiTestError> {
     value.map(|value| integer_u64(value, name)).transpose()
+}
+
+fn diagnostic_retention(
+    screen_history_limit: Option<&IntegerInput>,
+) -> Result<DiagnosticRetentionOptions, TuiTestError> {
+    let mut diagnostics = DiagnosticRetentionOptions::default();
+    if let Some(limit) = screen_history_limit {
+        diagnostics.screen_history_limit = integer_u16(limit, "screen_history_limit")?;
+    }
+    diagnostics.validate().map_err(TuiTestError::usage)?;
+    Ok(diagnostics)
 }
 
 fn py_item<'py>(
@@ -1645,141 +1766,192 @@ fn unexpected_result(expected: &str) -> TuiTestError {
     ))
 }
 
-fn execute_unit(name: &str, operation: Operation) -> Result<(), TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_unit(session: &NativeSession, operation: Operation) -> Result<(), TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Unit => Ok(()),
         _ => Err(unexpected_result("no value")),
     }
 }
 
-fn execute_open(name: &str, operation: Operation) -> Result<OpenResult, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_unit_named(
+    session: &NativeSession,
+    operation_name: &'static str,
+    operation: Operation,
+) -> Result<(), TuiTestError> {
+    match session.execute_named(operation_name, operation)? {
+        OperationResult::Unit => Ok(()),
+        _ => Err(unexpected_result("no value")),
+    }
+}
+
+fn execute_open(
+    session: &NativeSession,
+    operation: Operation,
+    retention: DiagnosticRetentionOptions,
+) -> Result<OpenResult, TuiTestError> {
+    match session.execute_with_retention(operation, retention)? {
         OperationResult::Open(value) => Ok(value),
         _ => Err(unexpected_result("an open result")),
     }
 }
 
-fn execute_state(name: &str, operation: Operation) -> Result<State, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_state(session: &NativeSession, operation: Operation) -> Result<State, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::State(value) => Ok(value),
         _ => Err(unexpected_result("terminal state")),
     }
 }
 
-fn execute_text(name: &str, operation: Operation) -> Result<String, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_text(session: &NativeSession, operation: Operation) -> Result<String, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Text(value) => Ok(value),
         _ => Err(unexpected_result("terminal text")),
     }
 }
 
-fn execute_packed_screen(name: &str, operation: Operation) -> Result<PackedScreen, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_packed_screen(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<PackedScreen, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::PackedScreen(value) => Ok(value),
         _ => Err(unexpected_result("a packed screen")),
     }
 }
 
-fn execute_cells(name: &str, operation: Operation) -> Result<Vec<Cell>, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_cells(session: &NativeSession, operation: Operation) -> Result<Vec<Cell>, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Cells(value) => Ok(value),
         _ => Err(unexpected_result("terminal cells")),
     }
 }
 
-fn execute_matches(name: &str, operation: Operation) -> Result<Vec<TextMatch>, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_matches(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<Vec<TextMatch>, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Matches(value) => Ok(value),
         _ => Err(unexpected_result("text matches")),
     }
 }
 
-fn execute_command(name: &str, operation: Operation) -> Result<Option<String>, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_command(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<Option<String>, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Command(value) => Ok(value),
         _ => Err(unexpected_result("the last command")),
     }
 }
 
-fn execute_output(name: &str, operation: Operation) -> Result<Option<String>, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_output(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<Option<String>, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Output(value) => Ok(value),
         _ => Err(unexpected_result("the last output")),
     }
 }
 
-fn execute_exit_code(name: &str, operation: Operation) -> Result<Option<i32>, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_exit_code(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<Option<i32>, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::ExitCode(value) => Ok(value),
         _ => Err(unexpected_result("the last exit code")),
     }
 }
 
-fn execute_cwd(name: &str, operation: Operation) -> Result<Option<String>, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_cwd(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<Option<String>, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Cwd(value) => Ok(value),
         _ => Err(unexpected_result("the current working directory")),
     }
 }
 
-fn execute_title(name: &str, operation: Operation) -> Result<Option<String>, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_title(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<Option<String>, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Title(value) => Ok(value),
         _ => Err(unexpected_result("the window title")),
     }
 }
 
-fn execute_clipboard(name: &str, operation: Operation) -> Result<String, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_clipboard(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<String, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Clipboard(value) => Ok(value),
         _ => Err(unexpected_result("the clipboard content")),
     }
 }
 
-fn execute_cursor(name: &str, operation: Operation) -> Result<Cursor, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_cursor(session: &NativeSession, operation: Operation) -> Result<Cursor, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Cursor(value) => Ok(value),
         _ => Err(unexpected_result("the cursor position")),
     }
 }
 
-fn execute_size(name: &str, operation: Operation) -> Result<Size, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_size(session: &NativeSession, operation: Operation) -> Result<Size, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Size(value) => Ok(value),
         _ => Err(unexpected_result("the terminal size")),
     }
 }
 
-fn execute_bell_count(name: &str, operation: Operation) -> Result<u64, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_bell_count(session: &NativeSession, operation: Operation) -> Result<u64, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::BellCount(value) => Ok(value),
         _ => Err(unexpected_result("the terminal bell count")),
     }
 }
 
-fn execute_bell_events(name: &str, operation: Operation) -> Result<Vec<BellEvent>, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_bell_events(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<Vec<BellEvent>, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::BellEvents(value) => Ok(value),
         _ => Err(unexpected_result("the terminal bell events")),
     }
 }
 
-fn execute_snapshot(name: &str, operation: Operation) -> Result<SnapshotResult, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_snapshot(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<SnapshotResult, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Snapshot(value) => Ok(value),
         _ => Err(unexpected_result("a snapshot status")),
     }
 }
 
-fn execute_screenshot(name: &str, operation: Operation) -> Result<ScreenshotResult, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_screenshot(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<ScreenshotResult, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Screenshot(value) => Ok(value),
         _ => Err(unexpected_result("a screenshot")),
     }
 }
 
-fn execute_recording(name: &str, operation: Operation) -> Result<String, TuiTestError> {
-    match global_registry().execute(name, operation)? {
+fn execute_recording(
+    session: &NativeSession,
+    operation: Operation,
+) -> Result<String, TuiTestError> {
+    match session.execute(operation)? {
         OperationResult::Recording(path) => Ok(path),
         _ => Err(unexpected_result("a recording path")),
     }

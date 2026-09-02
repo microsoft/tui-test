@@ -937,6 +937,105 @@ fn explicit_wait_ready_fails_when_no_prompt_is_reported() {
 }
 
 #[test]
+fn json_failure_writes_and_reports_a_diagnostic_bundle() {
+    let sandbox = Sandbox::new("failure-artifact");
+    sandbox.ok(&["open", "--no-wait-ready"]);
+    let plain = sandbox.run(&[
+        "--json",
+        "expect",
+        "text",
+        "never-present",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(plain.status.code(), Some(1));
+    let plain: serde_json::Value =
+        serde_json::from_slice(&plain.stdout).expect("plain failure json response");
+    assert_eq!(plain["details"]["operation"]["name"], "locator.expect");
+
+    let artifacts = sandbox.home.join("failure-artifacts");
+    let artifacts = artifacts.to_str().unwrap();
+
+    let out = sandbox.run(&[
+        "--json",
+        "--failure-artifacts",
+        artifacts,
+        "--diagnostic-context",
+        "test=cli-bundle",
+        "expect",
+        "text",
+        "never-present",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let payload: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("failure json response");
+    assert_eq!(payload["details"]["schema_version"], 1);
+    assert_eq!(payload["details"]["operation"]["name"], "locator.expect");
+    assert_eq!(payload["details"]["context"]["test"], "cli-bundle");
+    let manifest = payload["artifact"]["manifest"]
+        .as_str()
+        .expect("failure manifest path");
+    assert!(std::path::Path::new(manifest).is_file());
+    assert!(payload["artifact"]["report"]
+        .as_str()
+        .is_some_and(|path| std::path::Path::new(path).is_file()));
+
+    sandbox.ok(&["close"]);
+}
+
+#[test]
+fn usage_errors_do_not_capture_terminal_artifacts() {
+    let sandbox = Sandbox::new("usage-no-artifact");
+    sandbox.ok(&["open", "--no-wait-ready"]);
+    let artifacts = sandbox.home.join("failure-artifacts");
+    let artifacts_arg = artifacts.to_str().unwrap();
+    let out = sandbox.run(&[
+        "--failure-artifacts",
+        artifacts_arg,
+        "expect",
+        "text",
+        "hello",
+        "--fg",
+        "not-a-color",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("Terminal content:"));
+    assert!(!artifacts.exists());
+    sandbox.ok(&["close"]);
+}
+
+#[test]
+fn diagnostic_capture_panics_do_not_kill_the_daemon() {
+    let sandbox = Sandbox::new("diagnostic-panic-containment");
+    sandbox.ok(&["open", "--no-wait-ready"]);
+    let resize = sandbox.run(&["resize", "0", "0"]);
+    assert_ne!(
+        resize.status.code(),
+        Some(4),
+        "diagnostic capture escaped the daemon: {}",
+        String::from_utf8_lossy(&resize.stderr)
+    );
+    let state = sandbox.run(&["state"]);
+    assert_eq!(
+        state.status.code(),
+        Some(5),
+        "corrupt diagnostic state should remain a contained internal error: {}",
+        String::from_utf8_lossy(&state.stderr)
+    );
+    let status = sandbox.run(&["daemon", "status"]);
+    assert!(
+        status.status.success(),
+        "daemon did not survive diagnostic capture panic: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    sandbox.ok(&["close"]);
+}
+
+#[test]
 fn run_without_wait_ready_returns_immediately() {
     let sandbox = Sandbox::new("run-no-wait");
     let mut args = vec!["--json", "run"];
