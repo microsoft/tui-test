@@ -124,11 +124,11 @@ Snapshot options are `update`, `includeColors`, and `includeTitle`.
 
 | Method | Description |
 | --- | --- |
-| `screenshot(path?, { full?, zoom? })` | Return text or save SVG. |
+| `screenshot(path?, { full?, zoom?, background?, transparent? })` | Return text or save SVG. |
 | `startRecording(path, options?)` | Start APNG, GIF, MP4, or asciinema recording. |
 | `stopRecording()` | Finish the recording and return its path. |
 
-Recording options are `format`, `fps`, `speed`, `idleTimeLimit`, and `zoom`. MP4 requires `ffmpeg`.
+Recording options: `format`, `fps`, `speed`, `idleTimeLimit`, `zoom`, `background`, and `transparent`. MP4 requires `ffmpeg` and does not support transparency.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
 

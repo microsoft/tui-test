@@ -81,7 +81,7 @@ Most waits accept `--timeout MS`. `expect`, `click`, and `highlight` retry. `fin
 | `text [--full]` | Read terminal text. |
 | `cells X Y [W H]` | Read cells and styles. |
 | `get FIELD` | Read one field. |
-| `screenshot [PATH]` | Read text or save SVG. |
+| `screenshot [PATH] [--background COLOR \| --transparent]` | Read text or save SVG. |
 
 Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `clipboard`, `bells`, and `bell-events`.
 
@@ -100,7 +100,7 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 
 | Command | Use |
 | --- | --- |
-| `record start PATH` | Start a recording. |
+| `record start PATH [--background COLOR \| --transparent]` | Start a recording. |
 | `record stop` | Finish it. |
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
 | `monitor` | Watch a session live. |

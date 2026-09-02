@@ -11,6 +11,7 @@
 use std::fmt::Write;
 
 use super::nerd_font::NerdFont;
+use crate::api::CaptureBackground;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{truncate_to_columns, Attrs, Color, EmuCell, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator};
@@ -415,7 +416,7 @@ pub(crate) fn render_svg(
     cursor: Option<(u16, usize)>,
     title: Option<&str>,
 ) -> String {
-    render_svg_with_zoom(rows, cols, colors, cursor, title, 1.0)
+    render_svg_with_zoom(rows, cols, colors, cursor, title, 1.0, None)
 }
 
 pub(crate) fn render_svg_with_zoom(
@@ -425,18 +426,7 @@ pub(crate) fn render_svg_with_zoom(
     cursor: Option<(u16, usize)>,
     title: Option<&str>,
     zoom: f64,
-) -> String {
-    render_svg_with_font(rows, cols, colors, cursor, title, FONT_STACK, zoom)
-}
-
-pub(crate) fn render_svg_with_font(
-    rows: &[Vec<EmuCell>],
-    cols: u16,
-    colors: &dyn RenderColors,
-    cursor: Option<(u16, usize)>,
-    title: Option<&str>,
-    font_family: &str,
-    zoom: f64,
+    background: Option<CaptureBackground>,
 ) -> String {
     let nerd_font = NerdFont::new(rows, FONT_SIZE);
     let cols = cols as usize;
@@ -454,14 +444,26 @@ pub(crate) fn render_svg_with_font(
     let mut out = String::new();
     let _ = write!(
         out,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{FONT_SIZE}px">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{FONT_STACK}" font-size="{FONT_SIZE}px">"#
     );
     nerd_font.write_defs(&mut out);
-    let _ = write!(
-        out,
-        r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
-        hex(CANVAS_BACKGROUND)
-    );
+    match background {
+        Some(CaptureBackground::Transparent) => {}
+        Some(CaptureBackground::Color(color)) => {
+            let _ = write!(
+                out,
+                r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
+                hex(color)
+            );
+        }
+        None => {
+            let _ = write!(
+                out,
+                r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
+                hex(CANVAS_BACKGROUND)
+            );
+        }
+    }
     for (spread, offset_y, alpha) in SHADOW_LAYERS {
         let shadow_x = padding - spread;
         let shadow_y = padding - spread + offset_y;
@@ -852,8 +854,34 @@ mod tests {
     #[test]
     fn zoom_changes_output_size_without_changing_the_view_box() {
         let rows = vec![vec![cell("x", None, None)]];
-        let svg = render_svg_with_zoom(&rows, 1, &colors(), None, None, 0.5);
+        let svg = render_svg_with_zoom(&rows, 1, &colors(), None, None, 0.5, None);
         assert!(svg.contains(r#"width="44" height="60.5" viewBox="0 0 88 121""#));
+    }
+
+    #[test]
+    fn canvas_background_can_be_custom_or_transparent() {
+        let rows = vec![vec![cell("x", None, None)]];
+        let custom = render_svg_with_zoom(
+            &rows,
+            1,
+            &colors(),
+            None,
+            None,
+            1.0,
+            Some(CaptureBackground::Color(Rgb::new(1, 2, 3))),
+        );
+        assert!(custom.contains(r##"<rect width="88" height="121" fill="#010203"/>"##));
+
+        let transparent = render_svg_with_zoom(
+            &rows,
+            1,
+            &colors(),
+            None,
+            None,
+            1.0,
+            Some(CaptureBackground::Transparent),
+        );
+        assert!(!transparent.contains(r##"<rect width="88" height="121" fill="#6867aa"/>"##));
     }
 
     #[test]

@@ -70,6 +70,8 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `start_recording()`, `stop_recording()` | Record. |
 | `close()`, `close_quiet()` | Close. |
 
+Capture options: `background` and `transparent` (SVG, APNG, and GIF).
+
 Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
 
 Recording modes: `disabled`, `on-failure`, and `always`.

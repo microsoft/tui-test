@@ -105,7 +105,7 @@ Do not use a fixed sleep when a wait can describe the state.
 
 ## Capture output
 
-Use `screenshot` for text or SVG. Use `record` for APNG, GIF, MP4, or asciinema. Use recording mode `on-failure` for test artifacts.
+Use `screenshot` for text or SVG. SVG, APNG, and GIF support `--background COLOR` and `--transparent`. MP4 supports `--background` only. Use `record` for APNG, GIF, MP4, or asciinema. Use recording mode `on-failure` for test artifacts.
 
 ## References
 

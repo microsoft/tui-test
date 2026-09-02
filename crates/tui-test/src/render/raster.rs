@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use tiny_skia::Pixmap;
 
+use crate::api::CaptureBackground;
 use crate::profile::ColorSlot;
 use crate::record::frames::Frame;
 use crate::terminal::cell::{EmuCell, CONTINUATION};
@@ -56,6 +57,7 @@ pub struct GridRenderer {
     height: u32,
     pixmap: Pixmap,
     fonts: FontSystem,
+    background: Option<CaptureBackground>,
 }
 
 impl GridRenderer {
@@ -69,6 +71,15 @@ impl GridRenderer {
     }
 
     pub fn with_zoom(cols: u16, rows: usize, zoom: f64) -> anyhow::Result<Self> {
+        Self::with_zoom_and_background(cols, rows, zoom, None)
+    }
+
+    pub fn with_zoom_and_background(
+        cols: u16,
+        rows: usize,
+        zoom: f64,
+        background: Option<CaptureBackground>,
+    ) -> anyhow::Result<Self> {
         if !zoom.is_finite() || zoom <= 0.0 || zoom > f64::from(f32::MAX) {
             anyhow::bail!("recording zoom must be finite and greater than zero");
         }
@@ -94,6 +105,7 @@ impl GridRenderer {
                 anyhow::anyhow!("terminal recording dimensions must fit a pixmap")
             })?,
             fonts: FontSystem::new(),
+            background,
         })
     }
 }
@@ -120,12 +132,23 @@ impl FrameRenderer for GridRenderer {
         let panel_height = scaled_dimension(base_height, f64::from(self.scale), "frame height")?;
         let origin_x = (self.width - panel_width) as f32 / 2.0;
         let origin_y = (self.height - panel_height) as f32 / 2.0;
-        self.pixmap.fill(tiny_skia::Color::from_rgba8(
-            CANVAS_BACKGROUND.r,
-            CANVAS_BACKGROUND.g,
-            CANVAS_BACKGROUND.b,
-            255,
-        ));
+        match self.background {
+            Some(CaptureBackground::Transparent) => {
+                self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
+            }
+            Some(CaptureBackground::Color(color)) => {
+                self.pixmap
+                    .fill(tiny_skia::Color::from_rgba8(color.r, color.g, color.b, 255));
+            }
+            None => {
+                self.pixmap.fill(tiny_skia::Color::from_rgba8(
+                    CANVAS_BACKGROUND.r,
+                    CANVAS_BACKGROUND.g,
+                    CANVAS_BACKGROUND.b,
+                    255,
+                ));
+            }
+        }
         draw_shadow(
             &mut self.pixmap,
             origin_x,
