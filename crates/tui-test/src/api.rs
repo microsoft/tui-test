@@ -496,6 +496,9 @@ impl LocatorQuery {
 pub enum Operation {
     Open(OpenOptions),
     Run(RunOptions),
+    Restart {
+        graceful_timeout_ms: u64,
+    },
     Close,
     State,
     Text {
@@ -719,6 +722,14 @@ impl TuiTestError {
         Self::new(
             ErrorKind::NoSession,
             "no active session; run `tui-test open` (or `tui-test run <program>`) first",
+        )
+    }
+
+    pub fn no_restart_metadata() -> Self {
+        Self::new(
+            ErrorKind::NoSession,
+            "session has no restart metadata; run `tui-test open` or \
+             `tui-test run <program>` before `tui-test restart`",
         )
     }
 

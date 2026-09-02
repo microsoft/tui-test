@@ -280,6 +280,143 @@ fn open_reuses_a_live_child_unless_restart_is_requested() {
 }
 
 #[test]
+fn run_restart_still_replaces_the_live_child_with_the_requested_program() {
+    let sandbox = Sandbox::new("run-restart");
+    let mut first_args = vec!["--json", "run"];
+    first_args.extend(sleeper());
+    let first: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&first_args)).expect("first run json");
+    let first_pid = first["data"]["shell_pid"]
+        .as_u64()
+        .expect("first child pid");
+
+    let mut restart_args = vec!["--json", "run", "--restart"];
+    restart_args.extend(sleeper());
+    let restarted: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&restart_args)).expect("restarted run json");
+    assert_ne!(restarted["data"]["shell_pid"].as_u64(), Some(first_pid));
+}
+
+#[test]
+fn restart_without_spawn_metadata_reports_a_specific_error() {
+    let sandbox = Sandbox::new("restart-no-metadata");
+    let out = sandbox.run(&["restart", "--graceful-timeout", "1"]);
+    assert_eq!(out.status.code(), Some(3));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no restart metadata"),
+        "unexpected restart error: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn restart_gracefully_recreates_a_run_with_its_metadata() {
+    let sandbox = Sandbox::new("restart-run");
+    let cwd = sandbox.home.join("restart-cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let marker = sandbox.home.join("graceful.txt");
+    let starts = sandbox.home.join("starts.txt");
+    let (program, script_args) = restart_helper(&sandbox.home);
+    let config = sandbox.home.join("restart.toml");
+    std::fs::write(
+        &config,
+        "[profiles.restart]\nscrollback = 432\n\
+         [profiles.restart.timeouts]\ntext = 1234\n\
+         [profiles.restart.colors]\nforeground = \"#123456\"\n",
+    )
+    .unwrap();
+
+    let mut owned = vec![
+        "--json".to_string(),
+        "run".to_string(),
+        "--backend".to_string(),
+        "rio".to_string(),
+        "--cols".to_string(),
+        "93".to_string(),
+        "--rows".to_string(),
+        "26".to_string(),
+        "--cwd".to_string(),
+        cwd.to_string_lossy().into_owned(),
+        "--env".to_string(),
+        format!("TUI_RESTART_TOKEN={}", "metadata-preserved"),
+        "--env".to_string(),
+        format!("TUI_RESTART_MARKER={}", marker.to_string_lossy()),
+        "--env".to_string(),
+        format!("TUI_RESTART_STARTS={}", starts.to_string_lossy()),
+        "--config".to_string(),
+        config.to_string_lossy().into_owned(),
+        "--profile".to_string(),
+        "restart".to_string(),
+        program,
+    ];
+    owned.extend(script_args);
+    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+    let first: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&refs)).expect("first run json");
+    let first_pid = first["data"]["shell_pid"]
+        .as_u64()
+        .expect("first child pid");
+    let recording = first["data"]["recording"]
+        .as_str()
+        .expect("first automatic recording")
+        .to_string();
+    assert!(!recording.is_empty());
+    sandbox.wait_for_text("restart-ready", "30000");
+    sandbox.ok(&[
+        "expect",
+        "text",
+        "restart-ready",
+        "--fg",
+        "#123456",
+        "--match",
+        "first",
+    ]);
+
+    let restarted: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "restart", "--graceful-timeout", "5000"]))
+            .expect("restart json");
+    assert_ne!(
+        restarted["data"]["shell_pid"].as_u64(),
+        Some(first_pid),
+        "restart should replace the child"
+    );
+    assert_eq!(restarted["data"]["recording"], recording);
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap().trim(),
+        "graceful",
+        "the old process should handle Ctrl-C before respawn"
+    );
+
+    sandbox.wait_for_text("restart-ready", "30000");
+    sandbox.ok(&[
+        "expect",
+        "text",
+        "restart-ready",
+        "--fg",
+        "#123456",
+        "--match",
+        "first",
+    ]);
+    let state: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "state"])).expect("state json");
+    assert_eq!(state["data"]["cols"], 93);
+    assert_eq!(state["data"]["rows"], 26);
+    assert_eq!(state["data"]["timeouts"]["text"], 1234);
+
+    let starts = std::fs::read_to_string(&starts).unwrap();
+    let lines: Vec<&str> = starts.lines().collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "expected one metadata line per spawn: {starts}"
+    );
+    assert_eq!(lines[0], lines[1], "spawn metadata changed across restart");
+    assert!(lines[0].contains("arg=restart-argument"));
+    assert!(lines[0].contains("token=metadata-preserved"));
+    assert!(lines[0].contains(&format!("cwd={}", cwd.to_string_lossy())));
+}
+
+#[test]
 fn wait_ready_succeeds_on_an_open_shell() {
     let sandbox = Sandbox::new("ready");
     sandbox.ok(&["open"]);
@@ -987,6 +1124,73 @@ fn sleeper() -> Vec<&'static str> {
     } else {
         vec!["sleep", "30"]
     }
+}
+
+#[cfg(windows)]
+fn restart_helper(root: &std::path::Path) -> (String, Vec<String>) {
+    let script = root.join("restart-helper.ps1");
+    std::fs::write(
+        &script,
+        r#"param([string]$RestartArgument)
+$line = "arg=$RestartArgument;token=$env:TUI_RESTART_TOKEN;cwd=$((Get-Location).Path);size=$([Console]::WindowWidth)x$([Console]::WindowHeight)"
+[IO.File]::AppendAllText($env:TUI_RESTART_STARTS, $line + [Environment]::NewLine)
+[Console]::WriteLine("restart-ready")
+[Console]::TreatControlCAsInput = $true
+while ($true) {
+    $key = [Console]::ReadKey($true)
+    if ($key.Key -eq [ConsoleKey]::C -and
+        ($key.Modifiers -band [ConsoleModifiers]::Control)) {
+        [IO.File]::WriteAllText($env:TUI_RESTART_MARKER, "graceful")
+        exit 0
+    }
+}
+"#,
+    )
+    .unwrap();
+    (
+        "powershell".to_string(),
+        vec![
+            "-NoLogo".to_string(),
+            "-NoProfile".to_string(),
+            "-File".to_string(),
+            script.to_string_lossy().into_owned(),
+            "restart-argument".to_string(),
+        ],
+    )
+}
+
+#[cfg(unix)]
+fn restart_helper(root: &std::path::Path) -> (String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = root.join("restart-helper.sh");
+    std::fs::write(
+        &script,
+        r#"#!/usr/bin/env bash
+set -eu
+size="$(stty size)"
+printf 'arg=%s;token=%s;cwd=%s;size=%s\n' "$1" "$TUI_RESTART_TOKEN" "$PWD" "$size" >> "$TUI_RESTART_STARTS"
+printf 'restart-ready\n'
+stty -isig
+while IFS= read -r -n 1 key; do
+    if [[ "$key" == $'\003' ]]; then
+        printf 'graceful' > "$TUI_RESTART_MARKER"
+        exit 0
+    fi
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    (
+        "bash".to_string(),
+        vec![
+            script.to_string_lossy().into_owned(),
+            "restart-argument".to_string(),
+        ],
+    )
 }
 
 fn two_bells_command() -> String {

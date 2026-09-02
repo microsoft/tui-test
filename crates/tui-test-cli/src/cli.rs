@@ -223,6 +223,12 @@ pub enum Command {
         #[command(flatten)]
         timeouts: TimeoutArgs,
     },
+    /// Gracefully stop and recreate the session from its last successful open or run.
+    Restart {
+        /// Time to wait after Ctrl-C/SIGINT before forcibly killing the child.
+        #[arg(long, value_name = "MS", default_value_t = 5_000)]
+        graceful_timeout: u64,
+    },
     /// Close the current session (or all sessions).
     Close {
         /// Close every session, not just the current one.
@@ -586,6 +592,26 @@ mod tests {
                 Some(Command::Run { restart: true, .. })
             ));
         }
+    }
+
+    #[test]
+    fn restart_accepts_a_named_session_and_graceful_timeout() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "restart",
+            "--session",
+            "work",
+            "--graceful-timeout",
+            "1234",
+        ])
+        .expect("parse named restart");
+        assert_eq!(cli.session.as_deref(), Some("work"));
+        assert!(matches!(
+            cli.command,
+            Some(Command::Restart {
+                graceful_timeout: 1234
+            })
+        ));
     }
 
     #[test]

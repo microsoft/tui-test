@@ -342,6 +342,63 @@ fn opening_a_live_named_session_reuses_it_unless_restart_is_requested() {
 }
 
 #[test]
+fn restart_without_spawn_metadata_is_a_specific_no_session_error() {
+    let session = Session::new("native-restart-without-metadata");
+    let error = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 10,
+        })
+        .expect_err("restart must require metadata");
+    assert_eq!(error.kind, ErrorKind::NoSession);
+    assert!(error.message.contains("no restart metadata"));
+}
+
+#[test]
+fn restarting_a_shell_changes_pid_and_restores_prompt_integration() {
+    let session = Session::new("native-shell-restart");
+    let first = session
+        .open(OpenOptions {
+            cols: 91,
+            rows: 27,
+            ..OpenOptions::default()
+        })
+        .expect("open shell");
+    assert!(first.ready);
+
+    let OperationResult::Open(restarted) = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 0,
+        })
+        .expect("restart shell")
+    else {
+        panic!("unexpected restart result");
+    };
+    assert_ne!(restarted.shell_pid, first.shell_pid);
+    assert!(restarted.ready);
+
+    session
+        .execute(Operation::Submit {
+            data: Some("echo shell-restart-ready".to_string()),
+        })
+        .expect("submit after restart");
+    session
+        .execute(Operation::WaitCommand {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for command after restart");
+    assert!(matches!(
+        session.execute(Operation::State).expect("state after restart"),
+        OperationResult::State(state)
+            if state.cols == 91
+                && state.rows == 27
+                && state.ready
+                && state.text.contains("shell-restart-ready")
+    ));
+
+    session.close().expect("close restarted shell");
+}
+
+#[test]
 fn unrelated_session_state_does_not_wait_behind_another_session() {
     let registry = Arc::new(SessionRegistry::default());
     for name in ["waiting", "responsive"] {

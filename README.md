@@ -145,7 +145,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `--json` | Print JSON. |
 | `--verbose`, `-v` | Write a session log. |
 
-CLI sessions persist between commands. `open` and `run` reuse a live session unless `--restart` is set.
+CLI sessions persist between commands. `open` and `run` reuse a live session unless `--restart` is set. `restart` recreates the selected session from its last successful `open` or `run`, first allowing Ctrl-C/SIGINT up to `--graceful-timeout` milliseconds (default 5000).
+
+```sh
+tui-test restart --session work --graceful-timeout 5000
+```
 
 ### Sessions
 
@@ -153,6 +157,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run a program. |
+| `restart [--graceful-timeout MS]` | Gracefully stop and recreate the selected session. |
 | `sessions` | List sessions. |
 | `close [--all]` | Close one or all sessions. |
 | `daemon start` | Start the session daemon. |
