@@ -26,6 +26,7 @@ MAPPING = {
         ("client", "get_cursor"),
         ("client", "get_size"),
         ("client", "get_title"),
+        ("client", "get_clipboard"),
         ("client", "get_bell_count"),
         ("client", "get_bell_events"),
     ],
@@ -38,8 +39,11 @@ MAPPING = {
     "write": [("client", "write")],
     "signal": [("client", "signal")],
     "kill": [("client", "kill")],
-    "wait": [("client", "wait_title"), ("client", "wait_text"), ("client", "wait_idle"), ("client", "wait_command"), ("client", "wait_exit"), ("client", "wait_bell")],
-    "expect": [("client", "expect_title"), ("client", "expect_text"), ("client", "expect_exit_code"), ("client", "expect_output"), ("client", "expect_bell_count"), ("client", "expect_snapshot")],
+    "wait": [("client", "wait_title"), ("client", "wait_clipboard"), ("client", "wait_idle"), ("client", "wait_command"), ("client", "wait_exit"), ("client", "wait_bell")],
+    "expect": [("client", "get_by_text"), ("client", "expect_title"), ("client", "expect_exit_code"), ("client", "expect_output"), ("client", "expect_bell_count"), ("client", "expect_snapshot")],
+    "find": [("client", "get_by_text")],
+    "click": [("client", "get_by_text")],
+    "highlight": [("client", "get_by_text")],
     "get-recording": [("module", "get_recording")],
 }
 

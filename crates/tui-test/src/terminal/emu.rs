@@ -10,6 +10,8 @@
 //! identical shell-integration behavior by construction rather than by
 //! reimplementation.
 
+use alacritty_terminal::vte::{Parser, Perform};
+
 use crate::profile::{ColorSlot, Rgb};
 use crate::terminal::cell::{Color, EmuCell};
 
@@ -38,6 +40,113 @@ bitflags::bitflags! {
     }
 }
 
+/// Clipboard target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardType {
+    Clipboard,
+    Selection,
+}
+
+/// The session-local clipboard state shared with a backend's event listener.
+#[derive(Debug, Default)]
+pub(crate) struct Clipboard {
+    clipboard: String,
+    selection: String,
+    clipboard_revision: u64,
+    selection_revision: u64,
+}
+
+impl Clipboard {
+    pub(crate) fn get(&self, clipboard: ClipboardType) -> &str {
+        match clipboard {
+            ClipboardType::Clipboard => &self.clipboard,
+            ClipboardType::Selection => &self.selection,
+        }
+    }
+
+    pub(crate) fn set(&mut self, clipboard: ClipboardType, text: String) {
+        match clipboard {
+            ClipboardType::Clipboard if self.clipboard != text => {
+                self.clipboard = text;
+                self.clipboard_revision = self.clipboard_revision.wrapping_add(1);
+            }
+            ClipboardType::Selection if self.selection != text => {
+                self.selection = text;
+                self.selection_revision = self.selection_revision.wrapping_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn revision(&self, clipboard: ClipboardType) -> u64 {
+        match clipboard {
+            ClipboardType::Clipboard => self.clipboard_revision,
+            ClipboardType::Selection => self.selection_revision,
+        }
+    }
+}
+
+#[derive(Default)]
+struct ClipboardValidation {
+    fault: Option<String>,
+    unsupported: bool,
+}
+
+impl Perform for ClipboardValidation {
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        if params.first().copied() != Some(b"52") {
+            return;
+        }
+        if self.unsupported {
+            if self.fault.is_none() {
+                self.fault = Some("clipboard access is unavailable".to_string());
+            }
+            return;
+        }
+        let selection = params.get(1).copied().unwrap_or_default();
+        if !matches!(selection, b"c" | b"p" | b"s") && self.fault.is_none() {
+            self.fault = Some(format!(
+                "clipboard selection {:?} is unavailable",
+                String::from_utf8_lossy(selection)
+            ));
+        }
+    }
+}
+
+/// Tracks unsupported OSC 52 destinations across arbitrary PTY read splits.
+pub(crate) struct ClipboardValidator {
+    parser: Parser,
+    state: ClipboardValidation,
+}
+
+impl ClipboardValidator {
+    pub(crate) fn new() -> Self {
+        Self {
+            parser: Parser::new(),
+            state: ClipboardValidation::default(),
+        }
+    }
+
+    #[cfg(feature = "xtermjs")]
+    pub(crate) fn unsupported() -> Self {
+        Self {
+            parser: Parser::new(),
+            state: ClipboardValidation {
+                unsupported: true,
+                ..Default::default()
+            },
+        }
+    }
+
+    pub(crate) fn process(&mut self, bytes: &[u8]) {
+        self.parser.advance(&mut self.state, bytes);
+    }
+
+    pub(crate) fn fault(&self) -> Option<String> {
+        self.state.fault.clone()
+    }
+}
+
 /// A headless terminal emulator: bytes in, cell grid out.
 ///
 /// Implementations must be `Send`; the daemon shares the emulator across its
@@ -63,6 +172,16 @@ pub trait Emulator: Send {
     /// attribute replies, cursor position reports, and similar). The caller
     /// forwards these to the PTY.
     fn take_pending_writes(&mut self) -> Vec<u8>;
+
+    /// Read a clipboard value.
+    fn clipboard(&self, _clipboard: ClipboardType) -> anyhow::Result<String> {
+        anyhow::bail!("clipboard access is unavailable")
+    }
+
+    #[doc(hidden)]
+    fn clipboard_revision(&self, _clipboard: ClipboardType) -> anyhow::Result<u64> {
+        anyhow::bail!("clipboard access is unavailable")
+    }
 
     /// Active Kitty keyboard protocol flags negotiated by the child.
     fn keyboard_mode(&self) -> KeyboardMode {

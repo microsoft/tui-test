@@ -73,18 +73,27 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
             _ => None,
         };
         let shutdown = matches!(&req, Request::Close | Request::Shutdown);
+        let recording_lifecycle = matches!(
+            &req,
+            Request::Open { .. } | Request::Close | Request::Shutdown
+        );
+        if matches!(&req, Request::Open { .. }) {
+            let _ = std::fs::write(config::recording_pointer_file(&session_name), "");
+        }
         let mut response = match req {
-            Request::Ping | Request::Shutdown => Response::ok(),
+            Request::Ping => Response::ok(),
+            Request::Shutdown => Response::from_result(engine.execute(Operation::Close)),
             Request::Status => status_response(&engine),
-            Request::FlushRecording => match engine.flush_recording() {
-                Ok(()) => Response::ok(),
-                Err(error) => Response::from_error(error),
-            },
+            Request::FlushRecording => flush_recording_response(&engine),
             operation => operation.execute(&engine),
         };
+        if recording_lifecycle {
+            sync_recording_pointer(&engine, &session_name);
+        }
         if let Some(status) = enrich {
             enrich_cli_response(&mut response, &session_name, logging, status);
         }
+
         let _ = ipc::write_response(&mut conn, &response);
         if shutdown {
             ipc::drain_peer(conn, Duration::from_millis(config::SHUTDOWN_DRAIN_MS));
@@ -94,6 +103,37 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
 
     cleanup(&session_name);
     Ok(())
+}
+
+fn flush_recording_response(engine: &Engine) -> Response {
+    let Some(path) = engine.recording_path() else {
+        return Response::with(serde_json::json!({
+            "recording": null,
+            "disabled": true,
+        }));
+    };
+    match engine.flush_recording() {
+        Ok(()) => Response::with(serde_json::json!({
+            "recording": path.to_string_lossy(),
+            "disabled": false,
+        })),
+        Err(error) if error.kind == tui_test::ErrorKind::NoSession => {
+            Response::with(serde_json::json!({
+                "recording": null,
+                "disabled": false,
+            }))
+        }
+        Err(error) => Response::from_error(error),
+    }
+}
+
+fn sync_recording_pointer(engine: &Engine, session: &str) {
+    let value = engine
+        .recording_path()
+        .filter(|path| path.is_file())
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let _ = std::fs::write(config::recording_pointer_file(session), value);
 }
 
 fn status_response(engine: &Engine) -> Response {
@@ -157,6 +197,7 @@ fn spawn_idle_watchdog(engine: Arc<Engine>, last_activity: Arc<Mutex<Instant>>, 
                 idle.as_secs()
             ));
             let _ = engine.execute(Operation::Close);
+            sync_recording_pointer(&engine, &session);
             cleanup(&session);
             std::process::exit(0);
         }

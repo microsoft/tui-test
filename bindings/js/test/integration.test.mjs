@@ -10,6 +10,7 @@ import {
   InternalError,
   NoSessionError,
   TuiTest,
+  UsageError,
   closeAll,
   getRecording,
   sessions,
@@ -31,6 +32,10 @@ const delayedBellCommand =
   process.platform === "win32"
     ? "Start-Sleep -Seconds 1; [Console]::Out.Write([char]7)"
     : "sleep 1; printf '\\a'";
+const clipboardCommand = (base64) =>
+  process.platform === "win32"
+    ? `[Console]::Out.Write(([char]27).ToString() + ']52;c;${base64}' + ([char]7).ToString())`
+    : `printf '\\033]52;c;${base64}\\a'`;
 const nonzeroExitArgs =
   typeof globalThis.Deno === "undefined"
     ? ["-e", "process.exit(7)"]
@@ -40,7 +45,7 @@ test("echo roundtrip drives a real session", async () => {
   await withTerminal({ shell }, async (su) => {
     await su.submit("echo hello-sdk");
     await su.waitCommand();
-    await su.expectText("hello-sdk", { strict: false });
+    await su.getByText("hello-sdk").first().expect();
 
     // A command finishes before the shell draws its next prompt. Wait for the
     // prompt-end marker so these separate cursor reads cannot straddle that
@@ -61,11 +66,11 @@ test("echo roundtrip drives a real session", async () => {
 
     await su.write("echo typed-write");
     await su.keyboard.press("Enter");
-    await su.waitText("typed-write");
+    await su.getByText("typed-write").wait();
     await su.waitCommand();
     await su.type("echo typed-type");
     await su.keyboard.press("Enter");
-    await su.waitText("typed-type");
+    await su.getByText("typed-type").wait();
     await su.waitCommand();
   });
 });
@@ -107,6 +112,78 @@ test("bell state, waits, and expectations stay consistent", async () => {
   }
 });
 
+test("clipboard getter and change wait stay consistent", async () => {
+  await withTerminal({ shell }, async (su) => {
+    assert.equal(await su.getClipboard(), "");
+
+    await su.submit(clipboardCommand("Y2hhbmdlZA=="));
+    await su.waitCommand();
+    await su.waitClipboard({ timeout: 5000 });
+    assert.equal(await su.getClipboard(), "changed");
+
+    await su.submit(clipboardCommand("cHJlZml4LXJlYWR5LTQy"));
+    await su.waitCommand();
+    await su.waitClipboard("ready", { timeout: 5000 });
+    await assert.rejects(
+      () => su.waitClipboard("ready", { regex: true, timeout: 100 }),
+      (error) => error instanceof UsageError,
+    );
+
+    await su.submit(clipboardCommand("YnVpbGQtMTIz"));
+    await su.waitCommand();
+    await su.waitClipboard(/^BUILD-[0-9]+$/i, { timeout: 5000 });
+
+    await su.submit(clipboardCommand("eApmb28="));
+    await su.waitCommand();
+    await assert.rejects(
+      () => su.waitClipboard(/foo/my, { timeout: 100 }),
+      (error) => error instanceof ExpectationError,
+    );
+    await su.submit(clipboardCommand("Zm9vCng="));
+    await su.waitCommand();
+    await su.waitClipboard(/foo/my, { timeout: 5000 });
+
+    await su.submit(clipboardCommand("8J+YgA=="));
+    await su.waitCommand();
+    await assert.rejects(
+      () => su.waitClipboard(/^..$/u, { timeout: 100 }),
+      (error) => error instanceof ExpectationError,
+    );
+    await su.waitClipboard(/^..$/, { timeout: 5000 });
+
+    await su.submit(clipboardCommand("eGZvbw=="));
+    await su.waitCommand();
+    const sticky = /foo/y;
+    sticky.lastIndex = 1;
+    await su.waitClipboard(sticky, { timeout: 5000 });
+    assert.equal(sticky.lastIndex, 1);
+
+    const globalAfterMatch = /foo/g;
+    globalAfterMatch.lastIndex = 2;
+    await assert.rejects(
+      () => su.waitClipboard(globalAfterMatch, { timeout: 100 }),
+      (error) => error instanceof ExpectationError,
+    );
+    assert.equal(globalAfterMatch.lastIndex, 2);
+  });
+});
+
+test("xterm.js clipboard rejects as InternalError", async () => {
+  const su = new TuiTest(uniqueSession("xtermjs-clipboard"), {
+    backend: "xtermjs",
+  });
+  try {
+    await su.open({ shell });
+    await assert.rejects(
+      () => su.getClipboard(),
+      (error) =>
+        error instanceof InternalError && error.message.includes("unavailable"),
+    );
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
 test("recording API writes an asciicast file", async () => {
   const root = mkdtempSync(join(tmpdir(), "tui-test-recording-"));
   const path = join(root, "demo.cast");
@@ -128,6 +205,43 @@ test("recording API writes an asciicast file", async () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("automatic recording mode and directory are configurable", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-test-auto-recording-"));
+  const disabled = new TuiTest(uniqueSession("recording-disabled"), {
+    recording: { mode: "disabled", directory: root },
+  });
+  assert.equal((await disabled.open({ shell, waitReady: false })).recording, "");
+  await disabled.close();
+
+  const always = new TuiTest(uniqueSession("recording-always"), {
+    recording: { mode: "always", directory: root },
+  });
+  const opened = await always.open({ shell, waitReady: false });
+  assert.ok(opened.recording.startsWith(root));
+  assert.ok(existsSync(opened.recording));
+  await always.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("failed open recording is readable before close", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-test-failed-open-"));
+  const name = uniqueSession("recording-failed-open");
+  const su = new TuiTest(name, {
+    recording: { mode: "on-failure", directory: root },
+  });
+  await assert.rejects(
+    () =>
+      su.run(process.execPath, evalArgs, {
+        waitReady: true,
+        timeouts: { ready: 50 },
+      }),
+    ExpectationError,
+  );
+  assert.match(await getRecording(name), /"version":2/);
+  await su.close();
+  rmSync(root, { recursive: true, force: true });
 });
 
 test("recording API exports styled Unicode to APNG and GIF", async () => {
@@ -177,20 +291,20 @@ test(
   "assertion errors include the current terminal",
   async () => {
     await withTerminal({ program: [process.execPath, ...evalArgs] }, async (su) => {
-      await su.waitText("ready", { timeout: 2000 });
+      await su.getByText("ready").wait({ timeout: 2000 });
       await assert.rejects(
-        su.expectText("text-that-is-not-on-screen", { timeout: 50 }),
+        su.getByText("text-that-is-not-on-screen").unique().expect({ timeout: 50 }),
         (error) =>
           error instanceof ExpectationError &&
           error.message.includes(
-            "expectText: timed out after 50ms waiting for 'text-that-is-not-on-screen' to be visible",
+            "locator.expect: timed out after 50ms waiting for 'text-that-is-not-on-screen' to be visible",
           ) &&
           error.message.includes("Terminal content:\n╭") &&
           error.message.includes("ready") &&
           error.message.includes("\n╰"),
       );
       await assert.rejects(
-        su.waitText("ready", { not: true, timeout: 50 }),
+        su.getByText("ready").wait({ state: "hidden", timeout: 50 }),
         (error) =>
           error instanceof ExpectationError &&
           error.message.includes("timed out after 50ms waiting for 'ready' to be hidden") &&
@@ -210,13 +324,13 @@ test(
 
 test("a blocking native wait runs off the JS event loop", async () => {
   await withTerminal({ program: [process.execPath, ...evalArgs] }, async (su) => {
-    await su.waitText("ready", { timeout: 2000 });
+    await su.getByText("ready").wait({ timeout: 2000 });
 
     const timeoutMs = 300;
     const eventLoopTurn = new Promise((resolve) =>
       setTimeout(() => resolve("event-loop"), 0),
     );
-    const wait = su.waitText("text-that-will-never-appear-xyz", {
+    const wait = su.getByText("text-that-will-never-appear-xyz").wait({
       timeout: timeoutMs,
     });
     const first = await Promise.race([
@@ -256,13 +370,13 @@ test("concurrent waits do not starve filesystem work", async () => {
       terminals.map((terminal) => terminal.run(process.execPath, evalArgs)),
     );
     await Promise.all(
-      terminals.map((terminal) => terminal.waitText("ready", { timeout: 2000 })),
+      terminals.map((terminal) => terminal.getByText("ready").wait({ timeout: 2000 })),
     );
 
     const waitStart = Date.now();
     const waits = terminals.map((terminal) =>
       assert.rejects(
-        terminal.waitText("text-that-will-never-appear-pool", { timeout: 800 }),
+        terminal.getByText("text-that-will-never-appear-pool").wait({ timeout: 800 }),
         (error) => error instanceof ExpectationError,
       ),
     );
@@ -289,7 +403,7 @@ test("same-name clients share one serialized native session", async () => {
     await first.open({ shell });
     await second.submit("echo shared-native-session");
     await second.waitCommand();
-    await first.waitText("shared-native-session");
+    await first.getByText("shared-native-session").wait();
     assert.match(await first.text(), /shared-native-session/);
 
     await second.resize(101, 27);
@@ -304,10 +418,10 @@ test("abandoning a raced promise keeps later operations serialized and safe", as
   const su = new TuiTest(uniqueSession("promise-abandonment"));
   try {
     await su.run(process.execPath, evalArgs);
-    await su.waitText("ready", { timeout: 2000 });
+    await su.getByText("ready").wait({ timeout: 2000 });
 
     const pending = su
-      .waitText("never-visible-abandonment-marker", { timeout: 250 })
+      .getByText("never-visible-abandonment-marker").wait({ timeout: 250 })
       .then(
         () => null,
         (error) => error,
@@ -342,7 +456,7 @@ test("private packed screens retain full UTF-8 logical rows and own their bytes"
     const args = typeof globalThis.Deno === "undefined" ? ["-e", script] : ["eval", script];
     const opened = await su.run(process.execPath, args);
     assert.ok(Object.hasOwn(opened, "shell_pid"));
-    await su.waitText("R", { timeout: 2000 });
+    await su.getByText("R").wait({ timeout: 2000 });
     assert.equal((await su.state()).session_shell, null);
 
     const cells = await su.cells(0, 0, 10, 2);
@@ -379,8 +493,169 @@ test("private packed screens retain full UTF-8 logical rows and own their bytes"
   }
 });
 
+test("locators support scoped text matches and style assertions", async () => {
+  const su = new TuiTest(uniqueSession("text-locators"));
+  const script =
+    "process.stdout.write('Settings One\\n  Save\\nSettings Two\\n  Save\\n\\x1b[1mWarning\\x1b[0m\\n\\x1b[1mPart\\x1b[0mial\\n');" +
+    "setInterval(() => {}, 1000)";
+  try {
+    await su.run(process.execPath, ["-e", script]);
+    await su.getByText("Warning").wait({ timeout: 2000 });
+    const matches = await su
+      .getByText("Settings")
+      .getByText("Save", {
+        whitespace: "normalize",
+        direction: "after",
+      })
+      .locations();
+    assert.equal(matches.length, 2);
+    assert.equal(matches[0].start.row, 1);
+    assert.equal(matches[0].start.column, 2);
+    assert.equal(matches[1].start.row, 3);
+    assert.equal(
+      (
+        await su
+          .getByText("Save")
+          .first()
+          .getByText("Settings", { direction: "before" })
+          .unique()
+          .location()
+      ).start.row,
+      0,
+    );
+    assert.equal(
+      (
+        await su
+          .getByStyle({ bold: true })
+          .getByText("Save", { direction: "before" })
+          .last()
+          .location()
+      ).start.row,
+      3,
+    );
+    await su
+      .getByText("Warning")
+      .getByStyle({ bold: true })
+      .unique()
+      .expect();
+    await assert.rejects(
+      su
+        .getByText("Warning")
+        .getByStyle({ bold: false })
+        .unique()
+        .expect({ timeout: 20 }),
+      (error) =>
+        error instanceof ExpectationError &&
+        error.message.includes("waiting for 'style' to be visible"),
+    );
+    await su
+      .getByStyle({ bold: true })
+      .getByText("Part")
+      .unique()
+      .expect();
+    await assert.rejects(
+      su
+        .getByText("Partial")
+        .getByStyle({ bold: true })
+        .expect({ timeout: 20 }),
+      (error) => error instanceof ExpectationError,
+    );
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
+test("get-by locators are lazy, chainable, and actionable", async () => {
+  const su = new TuiTest(uniqueSession("reusable-text-locators"));
+  const script =
+    typeof globalThis.Deno === "undefined"
+      ? "setTimeout(() => process.stdout.write('item outside\\n\\x1b[1mitem item\\x1b[0m\\n'), 200); setInterval(() => {}, 1000)"
+      : "setTimeout(() => Deno.stdout.writeSync(new TextEncoder().encode('item outside\\n\\x1b[1mitem item\\x1b[0m\\n')), 200); setInterval(() => {}, 1000)";
+  const args = typeof globalThis.Deno === "undefined" ? ["-e", script] : ["eval", script];
+  try {
+    await su.run(process.execPath, args);
+    const locator = su.getByText("item");
+    assert.throws(() => locator.nth(-1), /non-negative integer/);
+    assert.throws(
+      () => su.getByText("item", { occurrence: "last" }),
+      /select locator occurrences with/,
+    );
+    assert.throws(
+      () => locator.expect({ style: { bold: true } }),
+      /refine the locator with getByStyle/,
+    );
+    assert.throws(() => su.getByStyle({}), /at least one style/);
+
+    const waited = await locator.wait({ timeout: 2000 });
+    assert.strictEqual(waited, locator);
+    assert.equal(await locator.count(), 3);
+    await locator.any().expect({ timeout: 20 });
+    await locator.expect({ timeout: 20 });
+    await locator.first().expect({ timeout: 20 });
+    await locator.last().expect({ timeout: 20 });
+    await locator.nth(2).expect({ timeout: 20 });
+    await locator.nth(3).expect({ not: true, timeout: 20 });
+    await su
+      .getByText("missing-item")
+      .unique()
+      .expect({ not: true, timeout: 20 });
+    await assert.rejects(
+      locator.unique().expect({ timeout: 20 }),
+      (error) => error instanceof ExpectationError,
+    );
+    await assert.rejects(
+      locator.unique().expect({ not: true, timeout: 20 }),
+      (error) =>
+        error instanceof ExpectationError &&
+        error.message.includes("found 3"),
+    );
+    await assert.rejects(
+      locator.first().expect({ not: true, timeout: 20 }),
+      (error) => error instanceof ExpectationError,
+    );
+    const nested = su
+      .getByText("item item")
+      .getByStyle({ bold: true })
+      .getByText("tem");
+    await nested.wait({ timeout: 2000 });
+    assert.equal(await nested.count(), 2);
+    assert.equal(
+      await su.getByStyle({ bold: true }).getByText("item").count(),
+      2,
+    );
+
+    const items = await locator.all();
+    assert.equal(items.length, 3);
+    assert.equal((await items[0].location()).start.column, 0);
+    assert.equal((await items[1].location()).start.row, 1);
+    assert.equal((await locator.last().location()).start.column, 5);
+    await assert.rejects(
+      locator.unique().locations(),
+      (error) => error instanceof ExpectationError,
+    );
+    await assert.rejects(
+      su.getByText("missing-item").location(),
+      (error) =>
+        error instanceof ExpectationError &&
+        error.message.includes("Terminal content:") &&
+        error.message.includes("item item"),
+    );
+
+    await nested.highlight();
+    await nested.first().click({ timeout: 2000 });
+    await nested.first().expect();
+
+    await su.getByText("item").wait({ timeout: 2000 });
+    await su.getByText("item").first().highlight();
+  } finally {
+    await su.closeQuiet();
+  }
+});
+
 test("panic containment rejects as InternalError and Node keeps running", async () => {
-  const runtime = new NativeRuntime(uniqueSession("panic-probe"));
+  const name = uniqueSession("panic-probe");
+  const runtime = new NativeRuntime(name);
+  const client = new TuiTest(name);
   await assert.rejects(
     runtime.panicProbe(),
     (error) =>
@@ -390,7 +665,7 @@ test("panic containment rejects as InternalError and Node keeps running", async 
 
   try {
     await runtime.run({ program: process.execPath, args: evalArgs });
-    await runtime.waitText("ready", { timeoutMs: 2000 });
+    await client.getByText("ready").wait({ timeout: 2000 });
     assert.match(await runtime.text(), /ready/);
   } finally {
     await runtime.close();
@@ -401,7 +676,7 @@ test("typed mouse and signal operations execute against a real program", async (
   const su = new TuiTest(uniqueSession("typed-input-signal"));
   try {
     await su.run(process.execPath, evalArgs);
-    await su.waitText("ready", { timeout: 2000 });
+    await su.getByText("ready").wait({ timeout: 2000 });
     await su.mouse.move(1, 1);
     await su.mouse.down(1, 1);
     await su.mouse.up(1, 1);
@@ -427,7 +702,7 @@ test("ghostty backend preserves blink", async () => {
       ["-e", "process.stdout.write('\\u001b[5mX\\u001b[0m'); setInterval(() => {}, 1000)"],
       { cols: 10, rows: 2 },
     );
-    await su.waitText("X", { timeout: 5000 });
+    await su.getByText("X").wait({ timeout: 5000 });
     assert.equal((await su.cells(0, 0))[0].blink, true);
   } finally {
     await su.closeQuiet();
@@ -441,11 +716,11 @@ test("closeAll interrupts in-flight waits and closes every process-local session
   ];
   await Promise.all(terminals.map((terminal) => terminal.run(process.execPath, evalArgs)));
   await Promise.all(
-    terminals.map((terminal) => terminal.waitText("ready", { timeout: 2000 })),
+    terminals.map((terminal) => terminal.getByText("ready").wait({ timeout: 2000 })),
   );
 
   const waiting = terminals[0]
-    .waitText("never-visible-close-all-marker", { timeout: 30_000 })
+    .getByText("never-visible-close-all-marker").wait({ timeout: 30_000 })
     .then(
       () => null,
       (error) => error,
