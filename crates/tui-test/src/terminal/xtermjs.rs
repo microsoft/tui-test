@@ -26,9 +26,10 @@ use std::sync::Mutex;
 use compact_str::{CompactString, ToCompactString};
 use rquickjs::{Context, Ctx, Function, Object, Runtime};
 
+use crate::event::BellTracker;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{CursorShape, Emulator};
+use crate::terminal::emu::{ClipboardValidator, CursorShape, Emulator};
 
 const XTERM_BUNDLE: &str = include_str!("../../assets/xtermjs/xterm-headless.js");
 const UNICODE11: &str = include_str!("../../assets/xtermjs/addon-unicode11.js");
@@ -136,6 +137,8 @@ pub struct XtermJsEmu {
     /// consequence rather than a new fact, and the earliest message names the
     /// cause. Behind a lock because the reads that can fault take `&self`.
     fault: Mutex<Option<String>>,
+    bells: BellTracker,
+    clipboard_validator: ClipboardValidator,
 }
 
 /// Render a failed JS call as a message worth reading.
@@ -162,6 +165,15 @@ fn describe(ctx: &Ctx<'_>, method: &str, error: rquickjs::Error) -> String {
 
 impl XtermJsEmu {
     pub fn new(cols: u16, rows: u16, profile: &Profile) -> anyhow::Result<Self> {
+        Self::with_bell_tracker(cols, rows, profile, BellTracker::default())
+    }
+
+    pub(crate) fn with_bell_tracker(
+        cols: u16,
+        rows: u16,
+        profile: &Profile,
+        bells: BellTracker,
+    ) -> anyhow::Result<Self> {
         // The color every slot takes when no program has changed it. Resolved
         // here rather than in the shim so a query is answered with the same
         // value whichever backend a session runs on.
@@ -199,6 +211,8 @@ impl XtermJsEmu {
             rows,
             profile: *profile,
             fault: Mutex::new(None),
+            bells,
+            clipboard_validator: ClipboardValidator::unsupported(),
         };
         emu.sync_size();
         Ok(emu)
@@ -368,15 +382,21 @@ fn decode_into(out: &mut Vec<Vec<EmuCell>>, chars: &str, meta: &[i32], cols: usi
 
 impl Emulator for XtermJsEmu {
     fn process(&mut self, bytes: &[u8]) {
+        self.clipboard_validator.process(bytes);
         // Fed as bytes rather than as a string on purpose: xterm.js runs its
         // own incremental UTF-8 decoder over a byte array and carries a
         // partial sequence across calls, which is what keeps a multi-byte
         // character split across two PTY reads from being corrupted.
-        self.invoke("feed", |emu, ctx| {
-            let buf = rquickjs::TypedArray::<u8>::new(ctx.clone(), bytes)?;
-            emu.get::<_, Function>("feed")?.call((buf,))
-        })
-        .unwrap_or(())
+        let bell_count: i32 = self
+            .invoke("feed", |emu, ctx| {
+                let buf = rquickjs::TypedArray::<u8>::new(ctx.clone(), bytes)?;
+                let result: Object = emu.get::<_, Function>("feed")?.call((buf,))?;
+                result.get("bell_count")
+            })
+            .unwrap_or_default();
+        for _ in 0..bell_count.max(0) {
+            self.bells.ring();
+        }
     }
 
     fn fault(&self) -> Option<String> {
@@ -384,6 +404,7 @@ impl Emulator for XtermJsEmu {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+            .or_else(|| self.clipboard_validator.fault())
     }
 
     fn take_pending_writes(&mut self) -> Vec<u8> {
@@ -506,22 +527,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn multiple_bells_in_one_chunk_are_counted_individually() {
+        let bells = BellTracker::default();
+        let mut emulator =
+            XtermJsEmu::with_bell_tracker(80, 24, &Profile::default(), bells.clone())
+                .expect("create emulator");
+
+        emulator.process(b"\x07\x07");
+
+        assert_eq!(bells.count(), 2);
+        assert_eq!(bells.sequence(), 2);
+    }
+
+    #[test]
+    fn an_osc_bell_terminator_does_not_ring_the_terminal_bell() {
+        let bells = BellTracker::default();
+        let mut emulator =
+            XtermJsEmu::with_bell_tracker(80, 24, &Profile::default(), bells.clone())
+                .expect("create emulator");
+
+        emulator.process(b"\x1b]0;window");
+        emulator.process(b" title\x07");
+        assert_eq!(bells.count(), 0);
+
+        emulator.process(b"\x07");
+        assert_eq!(bells.count(), 1);
+    }
+
     crate::emulator_conformance_tests!(
         |cols, rows, profile| {
             Box::new(XtermJsEmu::new(cols, rows, profile).expect("create xterm.js emulator"))
         },
-        crate::terminal::conformance::Divergences {
+        &[
             // xterm.js keeps a cell's underline color in an extended-attribute
             // record it allocates only for a cell that has an underline style,
             // so `SGR 58` alone is not readable back off the cell. Verified
             // against the bundle rather than inferred: the cell reports
             // `isAttributeDefault()`, and the color is absent from the line's
             // extended attributes while remaining in the current SGR state.
-            underline_color_needs_a_style: true,
+            crate::terminal::conformance::Divergence::UnderlineColorNeedsAStyle,
+            // Clipboard access is unavailable.
+            crate::terminal::conformance::Divergence::ClipboardUnsupported,
             // xterm.js has no Kitty keyboard protocol implementation at all:
             // the bundle contains no handler for `CSI > u`, `CSI = u`, or
             // `CSI < u`, so the modes a child pushes are parsed and dropped.
-            no_kitty_keyboard: true,
-        }
+            crate::terminal::conformance::Divergence::NoKittyKeyboard,
+        ]
     );
 }

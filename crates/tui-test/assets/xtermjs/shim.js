@@ -93,6 +93,8 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
   var title = null;
   term.onTitleChange(function (t) { title = t ? t : null; });
 
+  var bellCount = 0;
+  term.onBell(function () { bellCount++; });
 
   // Colors a program set at runtime, keyed by the same slot numbering the
   // Rust side uses: 0-255 palette, then foreground, background, cursor. Only
@@ -298,7 +300,13 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
   var CELL = term.buffer.active.getNullCell();
 
   return {
-    feed: function (bytes) { scanTerminators(bytes); term.write(bytes); drain(); },
+    feed: function (bytes) {
+      bellCount = 0;
+      scanTerminators(bytes);
+      term.write(bytes);
+      drain();
+      return { bell_count: bellCount };
+    },
 
     // Joined rather than returned as an array: one string crossing the
     // boundary beats one call per pending reply.

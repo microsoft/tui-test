@@ -69,9 +69,7 @@ impl Backend {
         }
     }
 
-    /// Like [`Self::build`], but wires up bell tracking where the backend
-    /// supports it. Backends without native bell support simply won't
-    /// report bell events.
+    /// Like [`Self::build`], but wires up bell tracking.
     pub(crate) fn build_with_bells(
         self,
         cols: u16,
@@ -83,16 +81,18 @@ impl Backend {
             Self::Alacritty => Ok(Box::new(AlacrittyEmu::with_bell_tracker(
                 cols, rows, profile, bells,
             ))),
-            // Backends that do not report bells themselves are built the
-            // ordinary way and simply never raise one.
             #[cfg(feature = "ghostty")]
-            Self::Ghostty => self.build(cols, rows, profile),
+            Self::Ghostty => Ok(Box::new(GhosttyEmu::with_bell_tracker(
+                cols, rows, profile, bells,
+            )?)),
             #[cfg(feature = "rio")]
             Self::Rio => Ok(Box::new(RioEmu::with_bell_tracker(
                 cols, rows, profile, bells,
             ))),
             #[cfg(feature = "xtermjs")]
-            Self::Xtermjs => self.build(cols, rows, profile),
+            Self::Xtermjs => Ok(Box::new(XtermJsEmu::with_bell_tracker(
+                cols, rows, profile, bells,
+            )?)),
         }
     }
 

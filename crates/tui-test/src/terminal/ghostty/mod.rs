@@ -9,32 +9,79 @@ use std::thread::{self, JoinHandle};
 
 use alacritty_terminal::vte::{Params, Parser, Perform};
 use anyhow::{anyhow, Context, Result};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 
+use crate::event::BellTracker;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::EmuCell;
-use crate::terminal::emu::{CursorShape, Emulator, KeyboardMode};
+use crate::terminal::emu::{
+    ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
+};
 
 use self::core::GhosttyCore;
 
 mod core;
 
-#[derive(Default)]
-struct TitleState {
-    current: Option<String>,
-    stack: Vec<Option<String>>,
+#[derive(Debug)]
+enum ClipboardOperation {
+    Store {
+        clipboard: ClipboardType,
+        text: String,
+    },
+    Query {
+        clipboard: ClipboardType,
+        selector: u8,
+        bell_terminated: bool,
+    },
 }
 
-impl Perform for TitleState {
-    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
-        if !matches!(params.first().copied(), Some(b"0" | b"2")) {
-            return;
+#[derive(Default)]
+struct SequenceState {
+    current: Option<String>,
+    stack: Vec<Option<String>>,
+    clipboard_operations: Vec<ClipboardOperation>,
+}
+
+impl Perform for SequenceState {
+    fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
+        match params.first().copied() {
+            Some(b"0" | b"2") => {
+                let title = params[1..]
+                    .iter()
+                    .map(|part| String::from_utf8_lossy(part))
+                    .collect::<Vec<_>>()
+                    .join(";");
+                self.current = (!title.is_empty()).then_some(title);
+            }
+            Some(b"52") => {
+                let (clipboard, selector) = match params.get(1).copied() {
+                    Some(b"c") => (ClipboardType::Clipboard, b'c'),
+                    Some(b"p") => (ClipboardType::Selection, b'p'),
+                    Some(b"s") => (ClipboardType::Selection, b's'),
+                    _ => return,
+                };
+                match params.get(2).copied() {
+                    Some(b"?") => self.clipboard_operations.push(ClipboardOperation::Query {
+                        clipboard,
+                        selector,
+                        bell_terminated,
+                    }),
+                    Some(encoded) => {
+                        let Ok(bytes) = BASE64.decode(encoded) else {
+                            return;
+                        };
+                        let Ok(text) = String::from_utf8(bytes) else {
+                            return;
+                        };
+                        self.clipboard_operations
+                            .push(ClipboardOperation::Store { clipboard, text });
+                    }
+                    None => {}
+                }
+            }
+            _ => {}
         }
-        let title = params[1..]
-            .iter()
-            .map(|part| String::from_utf8_lossy(part))
-            .collect::<Vec<_>>()
-            .join(";");
-        self.current = (!title.is_empty()).then_some(title);
     }
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
@@ -59,21 +106,25 @@ impl Perform for TitleState {
     }
 }
 
-struct TitleTracker {
+struct SequenceTracker {
     parser: Parser,
-    state: TitleState,
+    state: SequenceState,
 }
 
-impl TitleTracker {
+impl SequenceTracker {
     fn new() -> Self {
         Self {
             parser: Parser::new(),
-            state: TitleState::default(),
+            state: SequenceState::default(),
         }
     }
 
     fn feed(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.state, bytes);
+    }
+
+    fn take_clipboard_operations(&mut self) -> Vec<ClipboardOperation> {
+        std::mem::take(&mut self.state.clipboard_operations)
     }
 }
 
@@ -82,17 +133,27 @@ type Job = Box<dyn FnOnce(&mut GhosttyCore) + Send + 'static>;
 pub struct GhosttyEmu {
     jobs: Option<Sender<Job>>,
     worker: Option<JoinHandle<()>>,
-    title: TitleTracker,
+    sequences: SequenceTracker,
+    clipboard_validator: ClipboardValidator,
 }
 
 impl GhosttyEmu {
     pub fn new(cols: u16, rows: u16, profile: &Profile) -> Result<Self> {
+        Self::with_bell_tracker(cols, rows, profile, BellTracker::default())
+    }
+
+    pub(crate) fn with_bell_tracker(
+        cols: u16,
+        rows: u16,
+        profile: &Profile,
+        bells: BellTracker,
+    ) -> Result<Self> {
         let (jobs, receiver) = mpsc::channel::<Job>();
         let (ready, started) = mpsc::sync_channel(1);
         let profile = *profile;
         let worker = thread::Builder::new()
             .name("tui-test-ghostty".to_string())
-            .spawn(move || match GhosttyCore::new(cols, rows, profile) {
+            .spawn(move || match GhosttyCore::new(cols, rows, profile, bells) {
                 Ok(mut core) => {
                     let _ = ready.send(Ok(()));
                     while let Ok(job) = receiver.recv() {
@@ -109,7 +170,8 @@ impl GhosttyEmu {
             Ok(()) => Ok(Self {
                 jobs: Some(jobs),
                 worker: Some(worker),
-                title: TitleTracker::new(),
+                sequences: SequenceTracker::new(),
+                clipboard_validator: ClipboardValidator::new(),
             }),
             Err(message) => {
                 let _ = worker.join();
@@ -157,9 +219,44 @@ impl Drop for GhosttyEmu {
 
 impl Emulator for GhosttyEmu {
     fn process(&mut self, bytes: &[u8]) {
-        let owned = bytes.to_vec();
-        self.call("processing output", move |core| core.process(&owned));
-        self.title.feed(bytes);
+        self.clipboard_validator.process(bytes);
+        let mut start = 0;
+        for index in 0..bytes.len() {
+            self.sequences.feed(&bytes[index..=index]);
+            let operations = self.sequences.take_clipboard_operations();
+            if operations.is_empty() {
+                continue;
+            }
+
+            let owned = bytes[start..=index].to_vec();
+            self.call("processing output", move |core| {
+                core.process(&owned);
+                for operation in operations {
+                    match operation {
+                        ClipboardOperation::Store { clipboard, text } => {
+                            core.set_clipboard(clipboard, text);
+                        }
+                        ClipboardOperation::Query {
+                            clipboard,
+                            selector,
+                            bell_terminated,
+                        } => {
+                            core.answer_clipboard_query(clipboard, selector, bell_terminated);
+                        }
+                    }
+                }
+            });
+            start = index + 1;
+        }
+
+        if start < bytes.len() {
+            let owned = bytes[start..].to_vec();
+            self.call("processing output", move |core| core.process(&owned));
+        }
+    }
+
+    fn fault(&self) -> Option<String> {
+        self.clipboard_validator.fault()
     }
 
     fn take_pending_writes(&mut self) -> Vec<u8> {
@@ -168,6 +265,16 @@ impl Emulator for GhosttyEmu {
 
     fn keyboard_mode(&self) -> KeyboardMode {
         self.call_result("reading keyboard mode", |core| core.keyboard_mode())
+    }
+
+    fn clipboard(&self, clipboard: ClipboardType) -> anyhow::Result<String> {
+        Ok(self.call("reading clipboard", move |core| core.clipboard(clipboard)))
+    }
+
+    fn clipboard_revision(&self, clipboard: ClipboardType) -> anyhow::Result<u64> {
+        Ok(self.call("reading clipboard state", move |core| {
+            core.clipboard_revision(clipboard)
+        }))
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
@@ -183,7 +290,7 @@ impl Emulator for GhosttyEmu {
     }
 
     fn title(&self) -> Option<String> {
-        self.title.state.current.clone()
+        self.sequences.state.current.clone()
     }
 
     fn cursor_visible(&self) -> bool {
@@ -218,6 +325,19 @@ mod tests {
     crate::emulator_conformance_tests!(|cols, rows, profile| {
         Box::new(GhosttyEmu::new(cols, rows, profile).expect("create Ghostty emulator"))
     });
+
+    #[test]
+    fn bells_are_counted_without_counting_osc_terminators() {
+        let bells = BellTracker::default();
+        let mut emulator =
+            GhosttyEmu::with_bell_tracker(80, 24, &Profile::default(), bells.clone())
+                .expect("create emulator");
+
+        emulator.process(b"\x07\x1b]0;window title\x07\x07");
+
+        assert_eq!(bells.count(), 2);
+        assert_eq!(bells.sequence(), 2);
+    }
 
     #[test]
     fn title_sequences_can_span_process_calls() {

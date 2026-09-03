@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use compact_str::{CompactString, ToCompactString};
 use rio_vt::ansi::CursorShape as RioCursorShape;
+use rio_vt::clipboard::ClipboardType as RioClipboardType;
 use rio_vt::config::colors::term::COUNT as COLOR_COUNT;
 use rio_vt::config::colors::{AnsiColor, ColorRgb, NamedColor as RioNamedColor};
 use rio_vt::crosswords::grid::ExtrasTable;
@@ -17,7 +18,16 @@ use rio_vt::performer::handler::Processor;
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{CursorShape, Emulator, KeyboardMode};
+use crate::terminal::emu::{
+    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
+};
+
+fn clipboard_type(clipboard: RioClipboardType) -> ClipboardType {
+    match clipboard {
+        RioClipboardType::Clipboard => ClipboardType::Clipboard,
+        RioClipboardType::Selection => ClipboardType::Selection,
+    }
+}
 
 fn color_from_rio(color: AnsiColor) -> Option<Color> {
     match color {
@@ -157,6 +167,7 @@ impl ColorState {
 struct CaptureProxy {
     pending: Arc<Mutex<Vec<u8>>>,
     colors: ColorState,
+    clipboard: Arc<Mutex<Clipboard>>,
     bells: BellTracker,
 }
 
@@ -180,6 +191,21 @@ impl EventListener for CaptureProxy {
                 );
             }
             RioEvent::ColorChange(_, index, color) => self.colors.set(index, color),
+            RioEvent::ClipboardStore(clipboard, text) => {
+                self.clipboard
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .set(clipboard_type(clipboard), text);
+            }
+            RioEvent::ClipboardLoad(_, clipboard, format) => {
+                let text = self
+                    .clipboard
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(clipboard_type(clipboard))
+                    .to_string();
+                self.push(format(&text).into_bytes());
+            }
             RioEvent::Bell => self.bells.ring(),
             _ => {}
         }
@@ -200,6 +226,8 @@ pub struct RioEmu {
     processor: Processor,
     pending: Arc<Mutex<Vec<u8>>>,
     colors: ColorState,
+    clipboard: Arc<Mutex<Clipboard>>,
+    clipboard_validator: ClipboardValidator,
     cols: u16,
     rows: u16,
     kitty_keyboard: bool,
@@ -220,9 +248,11 @@ impl RioEmu {
         let rows = rows.max(1);
         let pending = Arc::new(Mutex::new(Vec::new()));
         let colors = ColorState::new(profile);
+        let clipboard = Arc::new(Mutex::new(Clipboard::default()));
         let proxy = CaptureProxy {
             pending: Arc::clone(&pending),
             colors: colors.clone(),
+            clipboard: Arc::clone(&clipboard),
             bells,
         };
         Self {
@@ -237,6 +267,8 @@ impl RioEmu {
             processor: Processor::default(),
             pending,
             colors,
+            clipboard,
+            clipboard_validator: ClipboardValidator::new(),
             cols,
             rows,
             kitty_keyboard: profile.kitty_keyboard,
@@ -262,11 +294,33 @@ impl RioEmu {
 
 impl Emulator for RioEmu {
     fn process(&mut self, bytes: &[u8]) {
+        self.clipboard_validator.process(bytes);
         self.processor.advance(&mut self.term, bytes);
+    }
+
+    fn fault(&self) -> Option<String> {
+        self.clipboard_validator.fault()
     }
 
     fn take_pending_writes(&mut self) -> Vec<u8> {
         std::mem::take(&mut *self.pending.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    fn clipboard(&self, clipboard: ClipboardType) -> anyhow::Result<String> {
+        Ok(self
+            .clipboard
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(clipboard)
+            .to_string())
+    }
+
+    fn clipboard_revision(&self, clipboard: ClipboardType) -> anyhow::Result<u64> {
+        Ok(self
+            .clipboard
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .revision(clipboard))
     }
 
     fn keyboard_mode(&self) -> KeyboardMode {
