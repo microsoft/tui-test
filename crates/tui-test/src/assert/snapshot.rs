@@ -62,6 +62,15 @@ fn shift(prev: &EmuCell, cur: &EmuCell) -> Map<String, Value> {
     if prev.underline != cur.underline {
         m.insert("underline".into(), json!(cur.underline.name()));
     }
+    // The URI, not a boolean: a snapshot that only recorded "this is a link"
+    // would pass when the link silently started pointing somewhere else,
+    // which is the whole thing worth asserting about a link. The `id=` is
+    // deliberately not recorded, because it is an anchor for joining a
+    // wrapped link rather than anything a reader can check, and the ghostty
+    // backend cannot report it at all.
+    if prev.uri() != cur.uri() {
+        m.insert("link".into(), json!(cur.uri().unwrap_or_default()));
+    }
     m
 }
 

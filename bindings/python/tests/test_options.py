@@ -180,8 +180,9 @@ class TypedCallTests(unittest.TestCase):
         )
         self.assertTrue(args[7])
         self.assertEqual(args[8], 321)
-        self.assertEqual(args[9], [("red", "#010203")])
-        self.assertEqual(args[10:], (100, None, None, None, 200))
+        self.assertIsNone(args[9], "hyperlinks was not set")
+        self.assertEqual(args[10], [("red", "#010203")])
+        self.assertEqual(args[11:], (100, None, None, None, 200))
 
     def test_run_uses_program_and_argv(self):
         terminal = _CapturingClient("s")
@@ -199,7 +200,8 @@ class TypedCallTests(unittest.TestCase):
         args = terminal.fake.calls[0][1]
         self.assertFalse(args[8])
         self.assertIsNone(args[9])
-        self.assertEqual(args[10], [("background", "#112233")])
+        self.assertIsNone(args[10], "hyperlinks was not set")
+        self.assertEqual(args[11], [("background", "#112233")])
 
     def test_constructor_and_call_backends_are_forwarded(self):
         terminal = _CapturingClient("s", backend="ghostty")

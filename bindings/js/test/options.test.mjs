@@ -114,7 +114,14 @@ test("backendPayload validates backend names", () => {
 test("profilePayload validates profile and color fields", () => {
   assert.deepEqual(profilePayload({ scrollback: 50, colors: { red: "#010203" } }), {
     scrollback: 50,
+    hyperlinks: undefined,
     colors: [["red", "#010203"]],
+  });
+
+  assert.deepEqual(profilePayload({ hyperlinks: false }), {
+    scrollback: undefined,
+    hyperlinks: false,
+    colors: [],
   });
 
   assert.throws(() => profilePayload({ scrollbacks: 50 }), /scrollbacks/);

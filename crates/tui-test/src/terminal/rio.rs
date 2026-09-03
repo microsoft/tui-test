@@ -9,7 +9,7 @@ use rio_vt::config::colors::term::COUNT as COLOR_COUNT;
 use rio_vt::config::colors::{AnsiColor, ColorRgb, NamedColor as RioNamedColor};
 use rio_vt::crosswords::grid::ExtrasTable;
 use rio_vt::crosswords::pos::Line;
-use rio_vt::crosswords::square::{ContentTag, Square, Wide};
+use rio_vt::crosswords::square::{ContentTag, Hyperlink as RioHyperlink, Square, Wide};
 use rio_vt::crosswords::style::{Style, StyleFlags, StyleSet};
 use rio_vt::crosswords::{Crosswords, CrosswordsSize, Mode};
 use rio_vt::event::{EventListener, RioEvent, WindowId};
@@ -17,7 +17,7 @@ use rio_vt::performer::handler::Processor;
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
+use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{
     Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
 };
@@ -55,7 +55,19 @@ fn underline_from_rio(flags: StyleFlags) -> UnderlineStyle {
     }
 }
 
-fn styled_cell(square: Square, style: Style, extras: &ExtrasTable) -> EmuCell {
+/// rio invents an id for a link that arrived without one, appending `_rio` to
+/// a process-wide counter, exactly as alacritty does with `_alacritty`. It is
+/// dropped for the same reason: it is not what the child sent, it varies with
+/// parse order, and no other backend produces it.
+fn hyperlink_from_rio(link: &RioHyperlink) -> Arc<Hyperlink> {
+    let id = link.id();
+    Arc::new(Hyperlink {
+        id: (!id.ends_with("_rio")).then(|| id.to_compact_string()),
+        uri: link.uri().to_compact_string(),
+    })
+}
+
+fn styled_cell(square: Square, style: Style, extras: &ExtrasTable, hyperlinks: bool) -> EmuCell {
     let ch = match square.wide() {
         Wide::Spacer => CompactString::const_new(CONTINUATION),
         Wide::LeadingSpacer => CompactString::const_new(" "),
@@ -94,12 +106,25 @@ fn styled_cell(square: Square, style: Style, extras: &ExtrasTable) -> EmuCell {
         underline: underline_from_rio(style.flags),
         underline_color: style.underline_color.and_then(color_from_rio),
         attrs,
+        hyperlink: hyperlinks
+            .then(|| square.extras_id())
+            .flatten()
+            .and_then(|id| extras.get(id))
+            .and_then(|extra| extra.hyperlink.as_ref())
+            .map(hyperlink_from_rio),
     }
 }
 
-fn cell_from_rio(square: Square, styles: &StyleSet, extras: &ExtrasTable) -> EmuCell {
+fn cell_from_rio(
+    square: Square,
+    styles: &StyleSet,
+    extras: &ExtrasTable,
+    hyperlinks: bool,
+) -> EmuCell {
     match square.content_tag() {
-        ContentTag::Codepoint => styled_cell(square, styles.get(square.style_id()), extras),
+        ContentTag::Codepoint => {
+            styled_cell(square, styles.get(square.style_id()), extras, hyperlinks)
+        }
         ContentTag::BgPalette => EmuCell {
             bg: Some(Color::from_index(square.bg_palette_index())),
             ..EmuCell::blank()
@@ -230,6 +255,7 @@ pub struct RioEmu {
     clipboard_validator: ClipboardValidator,
     cols: u16,
     rows: u16,
+    hyperlinks: bool,
 }
 
 impl RioEmu {
@@ -270,6 +296,7 @@ impl RioEmu {
             clipboard_validator: ClipboardValidator::new(),
             cols,
             rows,
+            hyperlinks: profile.hyperlinks,
         }
     }
 
@@ -282,7 +309,7 @@ impl RioEmu {
             let mut row = Vec::with_capacity(self.cols as usize);
             for col in 0..self.cols as usize {
                 let square = source.inner.get(col).copied().unwrap_or_default();
-                row.push(cell_from_rio(square, styles, extras));
+                row.push(cell_from_rio(square, styles, extras, self.hyperlinks));
             }
             output.push(row);
         }

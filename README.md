@@ -301,6 +301,7 @@ Create `tui-test.toml`:
 ```toml
 [profiles.default]
 scrollback = 10000
+hyperlinks = true             # record OSC 8 links on the cells they cover
 
 [profiles.default.colors]
 background = "#000000"

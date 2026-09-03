@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -19,7 +20,7 @@ use ghostty_vt::{RenderState, Terminal};
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
+use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape};
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
@@ -54,7 +55,36 @@ fn underline(style: Underline) -> UnderlineStyle {
     }
 }
 
-fn cell_from_ghostty(cell: GhosttyCell, style: Style, graphemes: &[char]) -> Result<EmuCell> {
+/// Read a cell's OSC 8 URI off a grid reference.
+///
+/// Ghostty's FFI exposes the URI and nothing else, so the `id=` parameter is
+/// not recoverable here and every ghostty link reports `id: None`. That is
+/// declared as a conformance divergence rather than worked around.
+fn grid_hyperlink(grid: &GridRef<'_>) -> Result<Option<Arc<Hyperlink>>> {
+    let mut inline = [0u8; 128];
+    let uri = match grid.hyperlink_uri(&mut inline) {
+        Ok(0) => return Ok(None),
+        Ok(len) => {
+            CompactString::from_utf8(&inline[..len]).context("hyperlink URI is not UTF-8")?
+        }
+        Err(GhosttyError::OutOfSpace { required }) => {
+            let mut buf = vec![0u8; required];
+            let len = grid
+                .hyperlink_uri(&mut buf)
+                .context("reading hyperlink URI")?;
+            CompactString::from_utf8(&buf[..len]).context("hyperlink URI is not UTF-8")?
+        }
+        Err(error) => return Err(error).context("reading hyperlink URI"),
+    };
+    Ok(Some(Arc::new(Hyperlink { id: None, uri })))
+}
+
+fn cell_from_ghostty(
+    cell: GhosttyCell,
+    style: Style,
+    graphemes: &[char],
+    hyperlink: Option<Arc<Hyperlink>>,
+) -> Result<EmuCell> {
     let ch = match cell.wide().context("reading cell width")? {
         CellWide::SpacerTail => CompactString::const_new(CONTINUATION),
         CellWide::SpacerHead => CompactString::const_new(" "),
@@ -95,6 +125,7 @@ fn cell_from_ghostty(cell: GhosttyCell, style: Style, graphemes: &[char]) -> Res
         underline: underline(style.underline),
         underline_color: cell_color(style.underline_color),
         attrs,
+        hyperlink,
     })
 }
 
@@ -114,7 +145,7 @@ fn grid_graphemes(grid: &GridRef<'_>) -> Result<Vec<char>> {
     }
 }
 
-fn cell_from_grid(grid: &GridRef<'_>) -> Result<EmuCell> {
+fn cell_from_grid(grid: &GridRef<'_>, hyperlinks: bool) -> Result<EmuCell> {
     let cell = grid.cell().context("reading scrollback cell value")?;
     let graphemes = if matches!(
         cell.wide().context("reading scrollback cell width")?,
@@ -124,10 +155,16 @@ fn cell_from_grid(grid: &GridRef<'_>) -> Result<EmuCell> {
     } else {
         grid_graphemes(grid)?
     };
+    let hyperlink = if hyperlinks {
+        grid_hyperlink(grid)?
+    } else {
+        None
+    };
     cell_from_ghostty(
         cell,
         grid.style().context("reading scrollback cell style")?,
         &graphemes,
+        hyperlink,
     )
 }
 
@@ -295,11 +332,27 @@ impl GhosttyCore {
         };
 
         let mut output = Vec::with_capacity(rows as usize);
+        // Rows that carry an OSC 8 link, to be filled in after iteration.
+        // Ghostty's render path exposes a cell's style and graphemes but not
+        // its hyperlink, so the URI has to come from a grid reference, which
+        // costs an FFI call per cell. `Row::has_hyperlink` narrows that to the
+        // rows that have one, and it is allowed false positives but not false
+        // negatives, so a row it skips genuinely has no link.
+        let mut linked_rows = Vec::new();
         let mut row_iter = self
             .row_iter
             .update(&snapshot)
             .context("starting row iteration")?;
         while let Some(row) = row_iter.next() {
+            if self.profile.hyperlinks
+                && row
+                    .raw_row()
+                    .context("reading row")?
+                    .has_hyperlink()
+                    .context("reading row hyperlink flag")?
+            {
+                linked_rows.push(output.len());
+            }
             let mut output_row = Vec::with_capacity(cols as usize);
             let mut cells = self
                 .cell_iter
@@ -319,6 +372,7 @@ impl GhosttyCore {
                     raw,
                     cell.style().context("reading cell style")?,
                     &graphemes,
+                    None,
                 )?);
             }
             if output_row.len() != cols as usize {
@@ -328,6 +382,16 @@ impl GhosttyCore {
                 ));
             }
             output.push(output_row);
+        }
+        for y in linked_rows {
+            let point_y = u32::try_from(y).context("viewport row exceeds Ghostty coordinates")?;
+            for x in 0..cols {
+                let grid = self
+                    .terminal
+                    .grid_ref(Point::Viewport(PointCoordinate { x, y: point_y }))
+                    .context("reading viewport cell")?;
+                output[y][x as usize].hyperlink = grid_hyperlink(&grid)?;
+            }
         }
         if output.len() != rows as usize {
             return Err(anyhow!(
@@ -367,7 +431,7 @@ impl GhosttyCore {
                     .terminal
                     .grid_ref(Point::History(PointCoordinate { x, y }))
                     .context("reading scrollback cell")?;
-                row.push(cell_from_grid(&grid)?);
+                row.push(cell_from_grid(&grid, self.profile.hyperlinks)?);
             }
             output.push(row);
         }

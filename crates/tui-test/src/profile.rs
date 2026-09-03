@@ -30,6 +30,12 @@ use crate::terminal::cell::NamedColor;
 /// xterm.js 1,000), so this is always set explicitly rather than inherited.
 pub const DEFAULT_SCROLLBACK: usize = 10_000;
 
+/// Whether OSC 8 hyperlinks are recorded when a profile is silent.
+///
+/// On, because a link is something the child sent and a terminal that dropped
+/// it would be reporting less than it was told.
+pub const DEFAULT_HYPERLINKS: bool = true;
+
 /// The file a profile is read from, under the config directory.
 pub const CONFIG_FILE: &str = "tui-test.toml";
 
@@ -317,6 +323,11 @@ pub fn xterm_color(index: u8) -> Rgb {
 pub struct Profile {
     /// Rows retained beyond the visible screen.
     pub scrollback: usize,
+    /// Whether OSC 8 hyperlinks are recorded on the cells they cover.
+    ///
+    /// Turning this off makes the session behave like a terminal without
+    /// hyperlink support, which is what a program's fallback text renders on.
+    pub hyperlinks: bool,
     pub colors: Colors,
 }
 
@@ -324,6 +335,7 @@ impl Default for Profile {
     fn default() -> Self {
         Profile {
             scrollback: DEFAULT_SCROLLBACK,
+            hyperlinks: DEFAULT_HYPERLINKS,
             colors: Colors::default(),
         }
     }
@@ -334,6 +346,7 @@ impl Default for Profile {
 #[serde(default, deny_unknown_fields)]
 pub struct ConfigProfile {
     pub scrollback: usize,
+    pub hyperlinks: bool,
     pub colors: Colors,
     pub timeouts: crate::api::Timeouts,
 }
@@ -342,6 +355,7 @@ impl Default for ConfigProfile {
     fn default() -> Self {
         Self {
             scrollback: DEFAULT_SCROLLBACK,
+            hyperlinks: DEFAULT_HYPERLINKS,
             colors: Colors::default(),
             timeouts: crate::api::Timeouts::default(),
         }
@@ -361,6 +375,7 @@ impl From<ConfigProfile> for Settings {
         Self {
             profile: Profile {
                 scrollback: value.scrollback,
+                hyperlinks: value.hyperlinks,
                 colors: value.colors,
             },
             timeouts: value.timeouts,
@@ -560,6 +575,27 @@ mod tests {
         let cfg = ConfigFile::parse("").unwrap();
         assert_eq!(cfg.profile(None).unwrap(), Profile::default());
         assert_eq!(Profile::default().scrollback, 10_000);
+        assert!(
+            Profile::default().hyperlinks,
+            "links are recorded unless a profile says otherwise"
+        );
+    }
+
+    /// A terminal without OSC 8 support is a real thing to test against, so
+    /// the setting is readable from the config file and not only from the
+    /// in-process APIs.
+    #[test]
+    fn a_profile_can_turn_hyperlinks_off() {
+        let cfg = ConfigFile::parse(
+            r##"
+            [profiles.plain]
+            hyperlinks = false
+            "##,
+        )
+        .unwrap();
+        let p = cfg.profile(Some("plain")).unwrap();
+        assert!(!p.hyperlinks);
+        assert_eq!(p.scrollback, DEFAULT_SCROLLBACK, "other fields untouched");
     }
 
     /// Every field is individually optional, so a profile can set one color

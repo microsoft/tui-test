@@ -22,7 +22,7 @@ def resolve_session(session: Optional[str]) -> str:
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
 _BACKENDS = ("alacritty", "ghostty", "rio", "xtermjs")
 _RECORDING_MODES = ("disabled", "on-failure", "always")
-_PROFILE_FIELDS = frozenset(("scrollback", "colors"))
+_PROFILE_FIELDS = frozenset(("scrollback", "hyperlinks", "colors"))
 _COLOR_FIELDS = frozenset(
     (
         "foreground",
@@ -156,6 +156,8 @@ def normalize_profile(profile: object) -> Optional[Dict[str, Any]]:
     normalized = {}  # type: Dict[str, Any]
     if raw.get("scrollback") is not None:
         normalized["scrollback"] = raw["scrollback"]
+    if raw.get("hyperlinks") is not None:
+        normalized["hyperlinks"] = bool(raw["hyperlinks"])
 
     raw_colors = raw.get("colors")
     if raw_colors is not None:

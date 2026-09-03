@@ -87,6 +87,7 @@ impl NativeSession {
         wait_ready,
         restart,
         profile_scrollback,
+        profile_hyperlinks,
         profile_colors,
         text_timeout,
         idle_timeout,
@@ -107,6 +108,7 @@ impl NativeSession {
         wait_ready: Option<bool>,
         restart: bool,
         profile_scrollback: Option<Bound<'py, PyAny>>,
+        profile_hyperlinks: Option<bool>,
         profile_colors: Vec<(String, String)>,
         text_timeout: Option<Bound<'py, PyAny>>,
         idle_timeout: Option<Bound<'py, PyAny>>,
@@ -131,7 +133,11 @@ impl NativeSession {
                     &name,
                     Operation::Open(OpenOptions {
                         backend: parse_backend(backend.as_deref())?,
-                        profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
+                        profile: profile_from_parts(
+                            profile_scrollback.as_ref(),
+                            profile_hyperlinks,
+                            &profile_colors,
+                        )?,
                         shell: parse_shell(shell.as_deref())?,
                         cols: integer_u16(&cols, "cols")?,
                         rows: integer_u16(&rows, "rows")?,
@@ -165,6 +171,7 @@ impl NativeSession {
         wait_ready,
         restart,
         profile_scrollback,
+        profile_hyperlinks,
         profile_colors,
         text_timeout,
         idle_timeout,
@@ -186,6 +193,7 @@ impl NativeSession {
         wait_ready: Option<bool>,
         restart: bool,
         profile_scrollback: Option<Bound<'py, PyAny>>,
+        profile_hyperlinks: Option<bool>,
         profile_colors: Vec<(String, String)>,
         text_timeout: Option<Bound<'py, PyAny>>,
         idle_timeout: Option<Bound<'py, PyAny>>,
@@ -210,7 +218,11 @@ impl NativeSession {
                     &name,
                     Operation::Run(RunOptions {
                         backend: parse_backend(backend.as_deref())?,
-                        profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
+                        profile: profile_from_parts(
+                            profile_scrollback.as_ref(),
+                            profile_hyperlinks,
+                            &profile_colors,
+                        )?,
                         program,
                         args,
                         cols: integer_u16(&cols, "cols")?,
@@ -1545,12 +1557,16 @@ fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, Tu
 
 fn profile_from_parts(
     scrollback: Option<&IntegerInput>,
+    hyperlinks: Option<bool>,
     colors: &[(String, String)],
 ) -> Result<CoreProfile, TuiTestError> {
     let mut profile = CoreProfile::default();
     if let Some(scrollback) = scrollback {
         profile.scrollback =
             integer_unsigned(scrollback, "profile.scrollback", usize::MAX as u128)? as usize;
+    }
+    if let Some(hyperlinks) = hyperlinks {
+        profile.hyperlinks = hyperlinks;
     }
     for (name, raw) in colors {
         let color = Rgb::parse(raw)

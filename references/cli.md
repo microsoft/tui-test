@@ -110,6 +110,7 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 ```toml
 [profiles.default]
 scrollback = 10000
+hyperlinks = true
 
 [recording]
 mode = "on-failure"
