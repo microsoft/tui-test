@@ -352,13 +352,22 @@ mod tests {
     #[test]
     fn the_encoder_follows_the_terminals_cursor_key_mode() {
         let mut emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
-        assert_eq!(emu.encode_key(&press("up")).as_deref(), Some(&b"\x1b[A"[..]));
+        assert_eq!(
+            emu.encode_key(&press("up")).as_deref(),
+            Some(&b"\x1b[A"[..])
+        );
 
         emu.process(b"\x1b[?1h");
-        assert_eq!(emu.encode_key(&press("up")).as_deref(), Some(&b"\x1bOA"[..]));
+        assert_eq!(
+            emu.encode_key(&press("up")).as_deref(),
+            Some(&b"\x1bOA"[..])
+        );
 
         emu.process(b"\x1b[?1l");
-        assert_eq!(emu.encode_key(&press("up")).as_deref(), Some(&b"\x1b[A"[..]));
+        assert_eq!(
+            emu.encode_key(&press("up")).as_deref(),
+            Some(&b"\x1b[A"[..])
+        );
     }
 
     /// Kitty flags reach the encoder from the same terminal state.

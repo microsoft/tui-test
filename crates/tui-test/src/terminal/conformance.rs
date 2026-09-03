@@ -346,7 +346,11 @@ macro_rules! emulator_conformance_tests {
                 "popping restores what was underneath"
             );
             e.process(b"\x1b[<u");
-            assert_eq!(e.keyboard_mode(), K::empty(), "popping the last leaves none");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::empty(),
+                "popping the last leaves none"
+            );
         }
 
         /// `kitty_keyboard = false` makes the session behave like a terminal

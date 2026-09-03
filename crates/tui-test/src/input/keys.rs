@@ -458,7 +458,8 @@ fn character(ch: char, mods: Mods, event: KeyEventKind, mode: InputModes) -> Str
     let produces_text = !mods.disambiguates_character();
     let escape_encoded = mode.keyboard.contains(KeyboardMode::REPORT_ALL_KEYS_AS_ESC)
         || (report_events && event != KeyEventKind::Press && !produces_text)
-        || (mode.keyboard.contains(KeyboardMode::DISAMBIGUATE_ESC_CODES) && mods.disambiguates_character())
+        || (mode.keyboard.contains(KeyboardMode::DISAMBIGUATE_ESC_CODES)
+            && mods.disambiguates_character())
         || legacy.is_none();
     if event == KeyEventKind::Release && !escape_encoded {
         return String::new();
@@ -468,12 +469,14 @@ fn character(ch: char, mods: Mods, event: KeyEventKind, mode: InputModes) -> Str
     }
 
     let (base, text) = key_chars(ch, mods);
-    let payload =
-        if mode.keyboard.contains(KeyboardMode::REPORT_ALTERNATE_KEYS) && mods.shift && text != base {
-            format!("{}:{}", base as u32, text as u32)
-        } else {
-            (base as u32).to_string()
-        };
+    let payload = if mode.keyboard.contains(KeyboardMode::REPORT_ALTERNATE_KEYS)
+        && mods.shift
+        && text != base
+    {
+        format!("{}:{}", base as u32, text as u32)
+    } else {
+        (base as u32).to_string()
+    };
     let associated = associated_text(ch, mods);
     kitty_u(payload, mods, event, mode, associated.as_deref())
 }
@@ -589,7 +592,11 @@ pub fn token_to_presses(token: &str, action: KeyAction) -> anyhow::Result<Vec<Ke
         } else {
             literal_key(ch)
         };
-        vec![(key.to_compact_string(), mods, Some(produced_text(key, mods)))]
+        vec![(
+            key.to_compact_string(),
+            mods,
+            Some(produced_text(key, mods)),
+        )]
     } else if parsed.mods.any() {
         anyhow::bail!("invalid key: '{}'", parsed.key);
     } else {
@@ -598,7 +605,11 @@ pub fn token_to_presses(token: &str, action: KeyAction) -> anyhow::Result<Vec<Ke
             .chars()
             .map(|ch| {
                 let (key, mods) = literal_key(ch);
-                (key.to_compact_string(), mods, Some(produced_text(key, mods)))
+                (
+                    key.to_compact_string(),
+                    mods,
+                    Some(produced_text(key, mods)),
+                )
             })
             .collect()
     };
@@ -681,10 +692,7 @@ pub fn token_to_seq_for_action_with_mode(
 }
 
 /// Translate one key-down event using the active terminal keyboard mode.
-pub fn token_to_seq_with_mode(
-    token: &str,
-    mode: impl Into<InputModes>,
-) -> anyhow::Result<String> {
+pub fn token_to_seq_with_mode(token: &str, mode: impl Into<InputModes>) -> anyhow::Result<String> {
     token_to_seq_for_action_with_mode(token, KeyAction::Down, mode)
 }
 
