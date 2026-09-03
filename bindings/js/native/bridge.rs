@@ -28,6 +28,7 @@ struct Entry {
     clients: u32,
     attachments: u64,
     wait_attachment_baseline: Option<u64>,
+    wait_had_attachment: bool,
     started_at: u64,
 }
 
@@ -110,6 +111,7 @@ pub fn register(name: &str, metadata: Metadata) -> Result<(), TuiTestError> {
             clients: 0,
             attachments: 0,
             wait_attachment_baseline: None,
+            wait_had_attachment: false,
             started_at: host::now_ms(),
         },
     );
@@ -154,6 +156,7 @@ pub fn begin_wait(name: &str, outcome: &str) -> Result<String, TuiTestError> {
     entry.status = "waiting-for-attach".to_string();
     entry.outcome = Some(outcome.to_string());
     entry.wait_attachment_baseline = Some(entry.attachments);
+    entry.wait_had_attachment = entry.clients > 0;
     changed.notify_all();
     Ok(format!("{}/{}", bridge.descriptor.owner, name))
 }
@@ -172,18 +175,19 @@ pub fn wait(
         TuiTestError::new(ErrorKind::NoSession, format!("no active session '{name}'"))
     })?;
     let initial_attachments = entry.wait_attachment_baseline.unwrap_or(entry.attachments);
+    let attached_at_start = entry.wait_had_attachment;
 
     if state
         .sessions
         .get(name)
-        .is_some_and(|entry| entry.clients == 0)
+        .is_some_and(|entry| !attachment_observed(entry, initial_attachments, attached_at_start))
     {
         state = match timeout {
             Some(timeout) => {
                 let (state, _) = changed
                     .wait_timeout_while(state, timeout, |state| {
                         state.sessions.get(name).is_some_and(|entry| {
-                            entry.clients == 0 && entry.attachments == initial_attachments
+                            !attachment_observed(entry, initial_attachments, attached_at_start)
                         })
                     })
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -192,17 +196,16 @@ pub fn wait(
             None => changed
                 .wait_while(state, |state| {
                     state.sessions.get(name).is_some_and(|entry| {
-                        entry.clients == 0 && entry.attachments == initial_attachments
+                        !attachment_observed(entry, initial_attachments, attached_at_start)
                     })
                 })
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         };
     }
-
     let attached = state
         .sessions
         .get(name)
-        .is_some_and(|entry| entry.clients > 0 || entry.attachments > initial_attachments);
+        .is_some_and(|entry| attachment_observed(entry, initial_attachments, attached_at_start));
     if attached && hold_while_attached {
         state = changed
             .wait_while(state, |state| {
@@ -219,8 +222,13 @@ pub fn wait(
             entry.outcome.as_deref().unwrap_or("unknown")
         );
         entry.wait_attachment_baseline = None;
+        entry.wait_had_attachment = false;
     }
     Ok(attached)
+}
+
+fn attachment_observed(entry: &Entry, baseline: u64, attached_at_start: bool) -> bool {
+    attached_at_start || entry.clients > 0 || entry.attachments > baseline
 }
 
 fn serve(
@@ -472,5 +480,38 @@ impl Drop for Attachment {
             }
         }
         changed.notify_all();
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(clients: u32, attachments: u64) -> Entry {
+        Entry {
+            generation: 1,
+            metadata: Metadata::default(),
+            status: "waiting-for-attach".to_string(),
+            outcome: Some("failed".to_string()),
+            clients,
+            attachments,
+            wait_attachment_baseline: Some(attachments),
+            wait_had_attachment: clients > 0,
+            started_at: 0,
+        }
+    }
+
+    #[test]
+    fn attachment_present_when_wait_begins_remains_observed_after_disconnect() {
+        let mut entry = entry(1, 1);
+        let attached_at_start = entry.wait_had_attachment;
+        entry.clients = 0;
+        assert!(attachment_observed(&entry, 1, attached_at_start));
+    }
+
+    #[test]
+    fn attachment_between_begin_and_wait_is_observed_after_disconnect() {
+        let mut entry = entry(0, 0);
+        entry.attachments = 1;
+        assert!(attachment_observed(&entry, 0, false));
     }
 }
