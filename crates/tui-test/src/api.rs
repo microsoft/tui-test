@@ -384,6 +384,13 @@ pub struct TextStyle {
     pub hidden: Option<bool>,
     pub strikethrough: Option<bool>,
     pub blink: Option<bool>,
+    /// The OSC 8 URI a cell must link to.
+    ///
+    /// An empty string means "links nowhere", so a cell can be required to be
+    /// plain as well as required to be a link. That is why this is a
+    /// `String` rather than an `Option` used as the absence marker: the
+    /// `Option` already means "the caller did not ask".
+    pub link: Option<String>,
 }
 
 impl TextStyle {
