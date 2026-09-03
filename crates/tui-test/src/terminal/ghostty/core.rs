@@ -4,6 +4,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use anyhow::{anyhow, Context, Result};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use compact_str::CompactString;
 use ghostty_vt::error::Error as GhosttyError;
 use ghostty_vt::key::{
@@ -19,10 +21,11 @@ use ghostty_vt::terminal::{
 };
 use ghostty_vt::{RenderState, Terminal};
 
+use crate::event::BellTracker;
 use crate::input::keys::{KeyEventKind, KeyPress, Mods};
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{CursorShape, KeyboardMode};
+use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape, KeyboardMode};
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
     RgbColor {
@@ -147,12 +150,13 @@ pub(super) struct GhosttyCore {
     row_iter: RowIterator<'static>,
     cell_iter: CellIterator<'static>,
     pending: Rc<RefCell<Vec<u8>>>,
+    clipboard: Clipboard,
     profile: Profile,
     frame: Option<Frame>,
 }
 
 impl GhosttyCore {
-    pub(super) fn new(cols: u16, rows: u16, profile: Profile) -> Result<Self> {
+    pub(super) fn new(cols: u16, rows: u16, profile: Profile, bells: BellTracker) -> Result<Self> {
         let mut terminal = Terminal::new(cols.max(1), rows.max(1)).context("creating terminal")?;
         terminal
             .resize(cols.max(1), rows.max(1), 1, 1)
@@ -184,17 +188,23 @@ impl GhosttyCore {
             .context("setting palette")?;
 
         let pending = Rc::new(RefCell::new(Vec::new()));
+        let clipboard = Clipboard::default();
         terminal
             .on_pty_write({
                 let pending = Rc::clone(&pending);
                 move |_terminal, data| pending.borrow_mut().extend_from_slice(data)
             })
             .context("registering PTY replies")?
+            .on_bell(move |_terminal| bells.ring())
+            .context("registering bell events")?
             .on_device_attributes(|_terminal| {
                 Some(DeviceAttributes {
                     primary: PrimaryDeviceAttributes::new(
                         ConformanceLevel::VT220,
-                        &[DeviceAttributeFeature::ANSI_COLOR],
+                        &[
+                            DeviceAttributeFeature::ANSI_COLOR,
+                            DeviceAttributeFeature::CLIPBOARD,
+                        ],
                     ),
                     secondary: SecondaryDeviceAttributes {
                         device_type: DeviceType::VT220,
@@ -212,6 +222,7 @@ impl GhosttyCore {
             row_iter: RowIterator::new().context("creating row iterator")?,
             cell_iter: CellIterator::new().context("creating cell iterator")?,
             pending,
+            clipboard,
             profile,
             frame: None,
         })
@@ -348,6 +359,31 @@ impl GhosttyCore {
             mode.set(keyboard_flag, flags.contains(ghostty_flag));
         }
         Ok(mode)
+    }
+
+    pub(super) fn set_clipboard(&mut self, clipboard: ClipboardType, text: String) {
+        self.clipboard.set(clipboard, text);
+    }
+
+    pub(super) fn answer_clipboard_query(
+        &mut self,
+        clipboard: ClipboardType,
+        selector: u8,
+        bell_terminated: bool,
+    ) {
+        let encoded = BASE64.encode(self.clipboard.get(clipboard).as_bytes());
+        let terminator = if bell_terminated { "\x07" } else { "\x1b\\" };
+        self.pending.borrow_mut().extend_from_slice(
+            format!("\x1b]52;{};{encoded}{terminator}", char::from(selector)).as_bytes(),
+        );
+    }
+
+    pub(super) fn clipboard(&self, clipboard: ClipboardType) -> String {
+        self.clipboard.get(clipboard).to_string()
+    }
+
+    pub(super) fn clipboard_revision(&self, clipboard: ClipboardType) -> u64 {
+        self.clipboard.revision(clipboard)
     }
 
     pub(super) fn resize(&mut self, cols: u16, rows: u16) -> Result<()> {
@@ -506,7 +542,7 @@ mod tests {
 
     #[test]
     fn renders_wide_cells_into_the_neutral_grid() {
-        let mut core = GhosttyCore::new(5, 3, Profile::default()).unwrap();
+        let mut core = GhosttyCore::new(5, 3, Profile::default(), BellTracker::default()).unwrap();
         core.process("abcd你".as_bytes());
         let rows = &core.frame().unwrap().rows;
         assert_eq!(rows[0][4].ch, " ");
@@ -516,7 +552,7 @@ mod tests {
 
     #[test]
     fn queues_terminal_replies_synchronously() {
-        let mut core = GhosttyCore::new(10, 4, Profile::default()).unwrap();
+        let mut core = GhosttyCore::new(10, 4, Profile::default(), BellTracker::default()).unwrap();
         core.process(b"\x1b[3;5H\x1b[6n");
         assert_eq!(core.take_pending_writes(), b"\x1b[3;5R");
     }

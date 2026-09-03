@@ -37,6 +37,7 @@ const MAPPING = {
     ["client", "getCursor"],
     ["client", "getSize"],
     ["client", "getTitle"],
+    ["client", "getClipboard"],
     ["client", "getBellCount"],
     ["client", "getBellEvents"],
   ],
@@ -49,8 +50,11 @@ const MAPPING = {
   write: [["client", "write"]],
   signal: [["client", "signal"]],
   kill: [["client", "kill"]],
-  wait: [["client", "waitTitle"], ["client", "waitText"], ["client", "waitIdle"], ["client", "waitCommand"], ["client", "waitExit"], ["client", "waitBell"]],
-  expect: [["client", "expectTitle"], ["client", "expectText"], ["client", "expectExitCode"], ["client", "expectOutput"], ["client", "expectBellCount"], ["client", "expectSnapshot"]],
+  wait: [["client", "waitTitle"], ["client", "waitClipboard"], ["client", "waitIdle"], ["client", "waitCommand"], ["client", "waitExit"], ["client", "waitBell"]],
+  expect: [["client", "getByText"], ["client", "expectTitle"], ["client", "expectExitCode"], ["client", "expectOutput"], ["client", "expectBellCount"], ["client", "expectSnapshot"]],
+  find: [["client", "getByText"]],
+  click: [["client", "getByText"]],
+  highlight: [["client", "getByText"]],
   "get-recording": [["module", "getRecording"]],
 };
 

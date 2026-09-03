@@ -1,4 +1,4 @@
-import type { Backend, Profile, Timeouts } from "./types.js";
+import type { AutomaticRecording, Backend, Profile, Timeouts } from "./types.js";
 
 export const DEFAULT_COLS = 80;
 export const DEFAULT_ROWS = 30;
@@ -21,6 +21,7 @@ const TIMEOUT_CLASSES: readonly TimeoutClass[] = [
 ];
 const BACKENDS: readonly Backend[] = ["alacritty", "ghostty", "rio", "xtermjs"];
 const PROFILE_FIELDS = new Set(["scrollback", "kittyKeyboard", "colors"]);
+const RECORDING_MODES = new Set(["disabled", "on-failure", "always"]);
 const COLOR_FIELDS = new Map([
   ["foreground", "foreground"],
   ["background", "background"],
@@ -116,6 +117,33 @@ export interface ProfilePayload {
   scrollback?: number;
   kittyKeyboard?: boolean;
   colors: [string, string][];
+}
+
+export function recordingPayload(
+  recording?: AutomaticRecording,
+): AutomaticRecording | undefined {
+  if (recording === undefined) {
+    return undefined;
+  }
+  const raw = profileObject(recording, "recording");
+  const unknown = Object.keys(raw).filter(
+    (key) => key !== "mode" && key !== "directory",
+  );
+  if (unknown.length > 0) {
+    throw new TypeError(`unknown recording field ${unknown.join(", ")}`);
+  }
+  if (raw.mode !== undefined && !RECORDING_MODES.has(String(raw.mode))) {
+    throw new TypeError(
+      `unknown recording mode "${String(raw.mode)}"; expected disabled, on-failure, or always`,
+    );
+  }
+  if (
+    raw.directory !== undefined &&
+    (typeof raw.directory !== "string" || raw.directory.length === 0)
+  ) {
+    throw new TypeError("recording.directory must be a non-empty string");
+  }
+  return raw as AutomaticRecording;
 }
 
 export function profilePayload(profile?: Profile): ProfilePayload | undefined {

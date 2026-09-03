@@ -19,7 +19,7 @@ from typing import (
 from ._config import IS_MACOS, IS_WINDOWS
 from ._ephemeral import unique_session
 from .client import TuiTest
-from .types import Backend, Profile, Timeouts
+from .types import AutomaticRecording, Backend, Profile, Timeouts
 
 __all__ = [
     "TerminalOptions",
@@ -54,6 +54,7 @@ class TerminalOptions:
     timeouts: Optional[Timeouts] = None
     profile: Optional[Profile] = None
     artifacts: Optional[Dict[str, Any]] = None
+    recording: Optional[AutomaticRecording] = None
 
 
 _DEFAULTABLE = frozenset(TerminalOptions.__dataclass_fields__)
@@ -151,6 +152,8 @@ def _client_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
         kwargs["profile"] = opts.profile
     if opts.artifacts is not None:
         kwargs["artifacts"] = opts.artifacts
+    if opts.recording is not None:
+        kwargs["recording"] = opts.recording
     return kwargs
 
 
