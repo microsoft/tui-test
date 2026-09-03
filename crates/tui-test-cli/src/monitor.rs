@@ -33,7 +33,7 @@ pub struct Frame {
 /// The target's input modes as last announced to the viewer's terminal, so a
 /// mode is only re-applied when the target changes it.
 #[derive(Default)]
-pub(crate) struct ModeMirror {
+pub struct ModeMirror {
     applied: Option<(KeyboardMode, bool)>,
 }
 
@@ -254,16 +254,42 @@ fn push_color(s: &mut String, color: Option<Color>, fg: bool) {
     }
 }
 
-/// Run the interactive monitor client for `session` until the viewer quits or
-/// the session/daemon goes away. Returns a process exit code.
-pub fn run_client(session: &str, interactive: bool) -> i32 {
-    use crate::{config, ipc};
+#[derive(Clone)]
+enum MonitorTarget {
+    Daemon(String),
+    Host {
+        endpoint: String,
+        session: String,
+        generation: u64,
+    },
+}
 
-    let socket = config::socket_name(session);
-    if !ipc::is_running(&socket) {
-        eprintln!("no active session '{session}'; run `tui-test open` first");
-        return 3;
+impl MonitorTarget {
+    fn endpoint(&self) -> &str {
+        match self {
+            Self::Daemon(endpoint) | Self::Host { endpoint, .. } => endpoint,
+        }
     }
+
+    fn request(&self, request: crate::protocol::Request) -> crate::protocol::Request {
+        match self {
+            Self::Daemon(_) => request,
+            Self::Host {
+                session,
+                generation,
+                ..
+            } => crate::host::routed(session.clone(), *generation, request),
+        }
+    }
+}
+
+/// Run the interactive monitor client for `session` until the viewer quits or
+/// the session owner goes away. Returns a process exit code.
+pub fn run_client(session: &str, interactive: bool, id: Option<&str>) -> i32 {
+    let target = match resolve_target(session, interactive, id) {
+        Ok(target) => target,
+        Err(code) => return code,
+    };
     if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
         eprintln!("`monitor` requires an interactive terminal");
         return 2;
@@ -299,7 +325,73 @@ pub fn run_client(session: &str, interactive: bool) -> i32 {
         vt_input,
     };
     enter_viewer(&mut viewer.stdout, interactive);
-    stream_loop(&socket, interactive.then(spawn_stdin_reader), interactive)
+    stream_loop(&target, interactive.then(spawn_stdin_reader), interactive)
+}
+
+fn resolve_target(
+    session: &str,
+    interactive: bool,
+    id: Option<&str>,
+) -> Result<MonitorTarget, i32> {
+    use crate::{config, host, ipc};
+
+    if let Some(id) = id {
+        let matches = host::discover()
+            .into_iter()
+            .filter(|candidate| candidate.session.id == id)
+            .collect::<Vec<_>>();
+        return match matches.as_slice() {
+            [candidate] => Ok(MonitorTarget::Host {
+                endpoint: candidate.descriptor.endpoint.clone(),
+                session: candidate.session.session.clone(),
+                generation: candidate.session.generation,
+            }),
+            _ => {
+                eprintln!("no active process-hosted session with id '{id}'");
+                Err(3)
+            }
+        };
+    }
+
+    let socket = config::socket_name(session);
+    if ipc::is_running(&socket) {
+        return Ok(MonitorTarget::Daemon(socket));
+    }
+    let matches = host::discover()
+        .into_iter()
+        .filter(|candidate| candidate.session.session == session)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [candidate] => Ok(MonitorTarget::Host {
+            endpoint: candidate.descriptor.endpoint.clone(),
+            session: candidate.session.session.clone(),
+            generation: candidate.session.generation,
+        }),
+        [] => {
+            eprintln!(
+                "no active session '{session}'; run `tui-test open` or enable JavaScript monitoring"
+            );
+            Err(3)
+        }
+        candidates => {
+            eprintln!("session name '{session}' is ambiguous; use one of:");
+            for candidate in candidates {
+                let label = candidate
+                    .session
+                    .label
+                    .as_deref()
+                    .or(candidate.session.test_name.as_deref())
+                    .unwrap_or("(unlabelled)");
+                eprintln!(
+                    "  tui-test monitor{} --id {}  # {}",
+                    if interactive { " --interactive" } else { "" },
+                    candidate.session.id,
+                    label
+                );
+            }
+            Err(2)
+        }
+    }
 }
 
 struct ViewerGuard {
@@ -415,13 +507,17 @@ fn spawn_stdin_reader() -> mpsc::Receiver<Vec<u8>> {
     receiver
 }
 
-fn stream_loop(socket: &str, input: Option<mpsc::Receiver<Vec<u8>>>, interactive: bool) -> i32 {
+fn stream_loop(
+    target: &MonitorTarget,
+    input: Option<mpsc::Receiver<Vec<u8>>>,
+    interactive: bool,
+) -> i32 {
     use crate::ipc;
     use crate::protocol::Request;
 
     let mut detach = DetachParser::default();
     let input_stream = if interactive {
-        match InputStream::connect(socket) {
+        match InputStream::connect(target) {
             Ok(stream) => Some(stream),
             Err(_) => return 4,
         }
@@ -431,15 +527,15 @@ fn stream_loop(socket: &str, input: Option<mpsc::Receiver<Vec<u8>>>, interactive
     loop {
         let (vcols, vrows) = crossterm::terminal::size().unwrap_or((80, 24));
         let viewer = (vcols, vrows);
-        let mut conn = match ipc::connect(socket) {
+        let mut conn = match ipc::connect(target.endpoint()) {
             Ok(c) => c,
             Err(_) => return 4,
         };
-        let mut line = match serde_json::to_string(&Request::Monitor {
+        let mut line = match serde_json::to_string(&target.request(Request::Monitor {
             cols: vcols,
             rows: vrows,
             interactive,
-        }) {
+        })) {
             Ok(l) => l,
             Err(_) => return 5,
         };
@@ -656,11 +752,12 @@ struct InputStream {
 }
 
 impl InputStream {
-    fn connect(socket: &str) -> std::io::Result<Self> {
-        let conn = crate::ipc::connect(socket)?;
+    fn connect(target: &MonitorTarget) -> std::io::Result<Self> {
+        let conn = crate::ipc::connect(target.endpoint())?;
         let mut conn = BufReader::new(conn);
-        let mut request = serde_json::to_vec(&crate::protocol::Request::MonitorInputStream)
-            .map_err(std::io::Error::other)?;
+        let mut request =
+            serde_json::to_vec(&target.request(crate::protocol::Request::MonitorInputStream))
+                .map_err(std::io::Error::other)?;
         request.push(b'\n');
         conn.get_mut().write_all(&request)?;
         conn.get_mut().flush()?;

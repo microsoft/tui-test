@@ -31,6 +31,7 @@ export interface CreateTerminalOptions {
   profile?: Profile;
   artifacts?: ArtifactOptions;
   recording?: AutomaticRecording;
+  monitoring?: ClientOptions["monitoring"];
 }
 
 let defaults: Partial<CreateTerminalOptions> = {};
@@ -85,6 +86,7 @@ function clientOptions(opts: CreateTerminalOptions): ClientOptions {
     "profile",
     "artifacts",
     "recording",
+    "monitoring",
   ] as const) {
     const value = opts[key];
     if (value !== undefined) {
@@ -134,9 +136,13 @@ export async function withTerminal<T>(
 ): Promise<T> {
   const terminal = await createTerminal(options);
   try {
-    return await fn(terminal);
+    const result = await fn(terminal);
+    await terminal.finish({ outcome: "passed" });
+    return result;
+  } catch (error) {
+    await terminal.inspectFailure(error);
+    throw error;
   } finally {
-    await terminal.closeQuiet();
     untrackTerminal(terminal);
   }
 }

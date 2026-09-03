@@ -17,12 +17,15 @@ test = false
 [dependencies]
 napi = { version = "3", default-features = false, features = ["napi4", "dyn-symbols", "async"] }
 napi-derive = "3"
+interprocess.workspace = true
+serde_json.workspace = true
 tui-test = { workspace = true, features = [
     "ghostty",
     "rio",
     "xtermjs",
     "recording-font-jetbrains-mono-styles",
 ] }
+tui-test-cli = { path = "../../crates/tui-test-cli" }
 
 [build-dependencies]
 napi-build = "2"

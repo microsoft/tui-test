@@ -13,6 +13,12 @@ pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Request {
     Ping,
+    HostSessions,
+    Routed {
+        session: String,
+        generation: u64,
+        request: Box<Request>,
+    },
     Open {
         shell: Option<tui_test::shell::Shell>,
         program: Option<Vec<String>>,
@@ -388,6 +394,8 @@ impl Request {
             }),
             Request::StopRecording => Ok(Operation::StopRecording),
             Request::Ping
+            | Request::HostSessions
+            | Request::Routed { .. }
             | Request::Status
             | Request::FlushRecording
             | Request::Monitor { .. }
@@ -397,6 +405,28 @@ impl Request {
             )),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSession {
+    pub id: String,
+    pub session: String,
+    pub generation: u64,
+    pub owner: String,
+    pub pid: u32,
+    pub label: Option<String>,
+    pub test_file: Option<String>,
+    pub test_name: Option<String>,
+    pub framework: Option<String>,
+    pub worker: Option<String>,
+    pub status: String,
+    pub outcome: Option<String>,
+    pub child_exited: bool,
+    pub exit_code: Option<i32>,
+    pub clients: u32,
+    pub started_at: u64,
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

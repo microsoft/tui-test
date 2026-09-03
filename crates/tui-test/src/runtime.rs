@@ -334,6 +334,14 @@ impl Session {
         self.engine.recording_path()
     }
 
+    pub fn frame(&self) -> Option<crate::engine::LiveFrame> {
+        self.engine.frame()
+    }
+
+    pub fn write_monitor_input_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        self.engine.write_monitor_input_raw(data)
+    }
+
     pub fn recording(&self) -> std::io::Result<String> {
         let path = self.recording_path().ok_or_else(|| {
             std::io::Error::new(
@@ -405,6 +413,14 @@ impl SessionHandle {
 
     pub fn recording(&self) -> std::io::Result<String> {
         self.registry.recording(&self.name)
+    }
+
+    pub fn frame(&self) -> Option<crate::engine::LiveFrame> {
+        self.registry.frame(&self.name)
+    }
+
+    pub fn write_monitor_input_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        self.registry.write_monitor_input_raw(&self.name, data)
     }
 }
 
@@ -502,6 +518,38 @@ impl SessionRegistry {
             .collect::<Vec<_>>();
         names.sort();
         names
+    }
+
+    /// Snapshot a process-owned session without joining its serialized
+    /// operation queue. This keeps live monitoring responsive while a wait or
+    /// expectation is in progress.
+    pub fn frame(&self, name: &str) -> Option<crate::engine::LiveFrame> {
+        let session = {
+            let _lifecycle = self
+                .inner
+                .lifecycle
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.lock_sessions().get(name).cloned()
+        };
+        session.and_then(|session| session.frame())
+    }
+
+    /// Deliver monitor input directly to the live PTY instead of serializing
+    /// it behind an in-flight terminal operation.
+    pub fn write_monitor_input_raw(&self, name: &str, data: &[u8]) -> Result<(), TuiTestError> {
+        let session = {
+            let _lifecycle = self
+                .inner
+                .lifecycle
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.lock_sessions().get(name).cloned()
+        };
+        match session {
+            Some(session) => session.write_monitor_input_raw(data),
+            None => Ok(()),
+        }
     }
 
     pub fn close(&self, name: &str) -> Result<(), TuiTestError> {
@@ -710,6 +758,8 @@ mod tests {
         let registry = SessionRegistry::default();
         let error = registry.execute("missing", Operation::State).unwrap_err();
         assert_eq!(error.kind, ErrorKind::NoSession);
+        assert!(registry.frame("missing").is_none());
+        registry.write_monitor_input_raw("missing", b"x").unwrap();
     }
 
     #[test]

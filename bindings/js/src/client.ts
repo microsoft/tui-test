@@ -9,6 +9,7 @@ import {
   envPairs,
   profilePayload,
   recordingPayload,
+  resolveMonitoring,
   resolveSession,
   resolveTimeout,
   timeoutsPayload,
@@ -584,6 +585,8 @@ export class TuiTest {
   readonly mouse: Mouse;
   #runtime: NativeRuntime;
   #options: ClientOptions;
+  #monitoring: ReturnType<typeof resolveMonitoring>;
+  #holdPromise: Promise<unknown> | undefined;
   #artifactCounter = 0;
 
   constructor(session?: string, opts: ClientOptions = {}) {
@@ -594,7 +597,21 @@ export class TuiTest {
     backendPayload(opts.backend);
     profilePayload(opts.profile);
     this.#options = opts;
-    this.#runtime = new NativeRuntime(this.session, recordingPayload(opts.recording));
+    this.#monitoring = resolveMonitoring(opts.monitoring);
+    const nativeMonitoring = this.#monitoring.enabled
+      ? {
+          label: this.#monitoring.label,
+          testFile: this.#monitoring.metadata.testFile,
+          testName: this.#monitoring.metadata.testName,
+          framework: this.#monitoring.metadata.framework,
+          worker: this.#monitoring.metadata.worker,
+        }
+      : undefined;
+    this.#runtime = new NativeRuntime(
+      this.session,
+      recordingPayload(opts.recording),
+      nativeMonitoring,
+    );
     this.keyboard = new Keyboard(this.#runtime);
     this.mouse = new Mouse(this.#runtime);
   }
@@ -793,7 +810,88 @@ export class TuiTest {
   }
 
   async close(): Promise<void> {
+    if (this.#holdPromise) {
+      await this.#holdPromise;
+    }
     await this.#runtime.close();
+  }
+
+  async #finish(
+    outcome: "passed" | "failed",
+    primary: { present: boolean; value?: unknown },
+  ): Promise<void> {
+    const shouldWait =
+      this.#monitoring.enabled &&
+      (this.#monitoring.waitAtEnd === "always" ||
+        (outcome === "failed" && this.#monitoring.waitAtEnd === "failure"));
+    if (shouldWait) {
+      try {
+        const info = await this.#runtime.beginMonitorWait(outcome);
+        const timeout = this.#monitoring.firstAttachTimeout;
+        console.error(
+          `[tui-test] ${outcome === "failed" ? "Test failed" : "Test completed"}; ` +
+            "terminal kept open for inspection",
+        );
+        if (this.#monitoring.label) {
+          console.error(`[tui-test] ${this.#monitoring.label}`);
+        }
+        if (this.#monitoring.metadata.testFile) {
+          console.error(`[tui-test] ${this.#monitoring.metadata.testFile}`);
+        }
+        console.error(`[tui-test] Attach: ${info.command}`);
+        console.error(
+          timeout === null
+            ? "[tui-test] Waiting for an attachment"
+            : `[tui-test] Waiting up to ${timeout}ms for an attachment`,
+        );
+        this.#holdPromise = this.#runtime.waitForMonitor(
+          timeout,
+          this.#monitoring.holdWhileAttached,
+        );
+        await this.#holdPromise;
+      } catch (error) {
+        console.error(
+          `[tui-test] monitor inspection failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      } finally {
+        this.#holdPromise = undefined;
+      }
+    }
+    try {
+      await this.#runtime.close();
+    } catch (error) {
+      if (primary.present) {
+        console.error(
+          `[tui-test] terminal cleanup failed after primary failure: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      } else {
+        throw error;
+      }
+    }
+    if (primary.present) {
+      throw primary.value;
+    }
+  }
+
+  async finish(opts: {
+    outcome: "passed" | "failed";
+    error?: unknown;
+  }): Promise<void> {
+    await this.#finish(opts.outcome, {
+      present: opts.outcome === "failed" && "error" in opts,
+      value: opts.error,
+    });
+  }
+
+  async inspectFailure(error: unknown): Promise<never> {
+    return this.#finish("failed", {
+      present: true,
+      value: error,
+    }) as Promise<never>;
   }
 
   async closeQuiet(): Promise<void> {

@@ -1,4 +1,10 @@
-import type { AutomaticRecording, Backend, Profile, Timeouts } from "./types.js";
+import type {
+  AutomaticRecording,
+  Backend,
+  MonitoringOptions,
+  Profile,
+  Timeouts,
+} from "./types.js";
 
 export const DEFAULT_COLS = 80;
 export const DEFAULT_ROWS = 30;
@@ -22,6 +28,7 @@ const TIMEOUT_CLASSES: readonly TimeoutClass[] = [
 const BACKENDS: readonly Backend[] = ["alacritty", "ghostty", "rio", "xtermjs"];
 const PROFILE_FIELDS = new Set(["scrollback", "colors"]);
 const RECORDING_MODES = new Set(["disabled", "on-failure", "always"]);
+const WAIT_AT_END = new Set(["never", "failure", "always"]);
 const COLOR_FIELDS = new Map([
   ["foreground", "foreground"],
   ["background", "background"],
@@ -111,6 +118,115 @@ function profileObject(value: unknown, name: string): Record<string, unknown> {
     throw new TypeError(`${name} must be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+export interface ResolvedMonitoring {
+  enabled: boolean;
+  waitAtEnd: "never" | "failure" | "always";
+  firstAttachTimeout: number | null;
+  holdWhileAttached: boolean;
+  label?: string;
+  metadata: {
+    testFile?: string;
+    testName?: string;
+    framework?: string;
+    worker?: string;
+  };
+}
+
+function envEnabled(value: string | undefined): boolean {
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
+export function resolveMonitoring(
+  monitoring?: MonitoringOptions,
+): ResolvedMonitoring {
+  const raw =
+    monitoring === undefined
+      ? {}
+      : profileObject(monitoring, "monitoring");
+  const known = new Set([
+    "enabled",
+    "waitAtEnd",
+    "firstAttachTimeout",
+    "holdWhileAttached",
+    "label",
+    "metadata",
+  ]);
+  const unknown = Object.keys(raw).filter((key) => !known.has(key));
+  if (unknown.length > 0) {
+    throw new TypeError(`unknown monitoring field ${unknown.join(", ")}`);
+  }
+  const envWait = process.env.TUI_TEST_WAIT_AT_END;
+  const waitAtEnd = String(raw.waitAtEnd ?? envWait ?? "never");
+  if (!WAIT_AT_END.has(waitAtEnd)) {
+    throw new TypeError(
+      `monitoring.waitAtEnd must be never, failure, or always (got "${waitAtEnd}")`,
+    );
+  }
+  const timeoutValue =
+    raw.firstAttachTimeout !== undefined
+      ? raw.firstAttachTimeout
+      : process.env.TUI_TEST_FIRST_ATTACH_TIMEOUT === undefined
+        ? 30_000
+        : Number(process.env.TUI_TEST_FIRST_ATTACH_TIMEOUT);
+  if (
+    timeoutValue !== null &&
+    (!Number.isSafeInteger(timeoutValue) || Number(timeoutValue) < 0)
+  ) {
+    throw new TypeError(
+      "monitoring.firstAttachTimeout must be a non-negative integer or null",
+    );
+  }
+  if (raw.enabled !== undefined && typeof raw.enabled !== "boolean") {
+    throw new TypeError("monitoring.enabled must be a boolean");
+  }
+  if (
+    raw.holdWhileAttached !== undefined &&
+    typeof raw.holdWhileAttached !== "boolean"
+  ) {
+    throw new TypeError("monitoring.holdWhileAttached must be a boolean");
+  }
+  if (raw.label !== undefined && typeof raw.label !== "string") {
+    throw new TypeError("monitoring.label must be a string");
+  }
+  const metadata =
+    raw.metadata === undefined
+      ? {}
+      : profileObject(raw.metadata, "monitoring.metadata");
+  const metadataFields = new Set([
+    "testFile",
+    "testName",
+    "framework",
+    "worker",
+  ]);
+  const unknownMetadata = Object.keys(metadata).filter(
+    (key) => !metadataFields.has(key),
+  );
+  if (unknownMetadata.length > 0) {
+    throw new TypeError(
+      `unknown monitoring metadata field ${unknownMetadata.join(", ")}`,
+    );
+  }
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value !== undefined && typeof value !== "string") {
+      throw new TypeError(`monitoring.metadata.${key} must be a string`);
+    }
+  }
+  const enabled =
+    raw.enabled === undefined
+      ? envEnabled(process.env.TUI_TEST_MONITORING) || waitAtEnd !== "never"
+      : raw.enabled;
+  return {
+    enabled,
+    waitAtEnd: waitAtEnd as ResolvedMonitoring["waitAtEnd"],
+    firstAttachTimeout: timeoutValue === null ? null : Number(timeoutValue),
+    holdWhileAttached: (raw.holdWhileAttached as boolean | undefined) ?? true,
+    label:
+      (raw.label as string | undefined) ??
+      process.env.TUI_TEST_LABEL,
+    metadata: metadata as ResolvedMonitoring["metadata"],
+  };
 }
 
 export interface ProfilePayload {

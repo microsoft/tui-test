@@ -12,6 +12,7 @@ import {
   envPairs,
   profilePayload,
   recordingPayload,
+  resolveMonitoring,
   resolveTimeout,
   timeoutsPayload,
 } from "../dist/config.js";
@@ -218,6 +219,61 @@ test("recordingPayload accepts only mode and directory", () => {
   assert.throws(() => recordingPayload({ mode: "sometimes" }), /recording mode/);
   assert.throws(() => recordingPayload({ directory: "" }), /non-empty/);
   assert.throws(() => recordingPayload({ other: 1 }), /other/);
+});
+
+test("monitoring is opt-in and resolves explicit and environment settings", () => {
+  withEnv(
+    {
+      TUI_TEST_MONITORING: undefined,
+      TUI_TEST_WAIT_AT_END: undefined,
+      TUI_TEST_FIRST_ATTACH_TIMEOUT: undefined,
+      TUI_TEST_LABEL: undefined,
+    },
+    () => {
+      assert.deepEqual(resolveMonitoring(), {
+        enabled: false,
+        waitAtEnd: "never",
+        firstAttachTimeout: 30000,
+        holdWhileAttached: true,
+        label: undefined,
+        metadata: {},
+      });
+    },
+  );
+  withEnv(
+    {
+      TUI_TEST_MONITORING: "1",
+      TUI_TEST_WAIT_AT_END: "failure",
+      TUI_TEST_FIRST_ATTACH_TIMEOUT: "25",
+      TUI_TEST_LABEL: "env label",
+    },
+    () => {
+      assert.deepEqual(resolveMonitoring(), {
+        enabled: true,
+        waitAtEnd: "failure",
+        firstAttachTimeout: 25,
+        holdWhileAttached: true,
+        label: "env label",
+        metadata: {},
+      });
+      assert.equal(
+        resolveMonitoring({ enabled: false, waitAtEnd: "always" }).enabled,
+        false,
+      );
+    },
+  );
+  assert.throws(
+    () => resolveMonitoring({ firstAttachTimeout: -1 }),
+    /non-negative integer or null/,
+  );
+  assert.equal(
+    resolveMonitoring({ firstAttachTimeout: null }).firstAttachTimeout,
+    null,
+  );
+  assert.throws(
+    () => resolveMonitoring({ metadata: { unknown: "x" } }),
+    /unknown monitoring metadata field/,
+  );
 });
 
 test("unknown timeout classes are rejected before native dispatch", async () => {
@@ -430,4 +486,38 @@ test("close remains idempotent without a prior open", async () => {
   await su.close();
   await su.close();
   await su.closeQuiet();
+});
+
+test("inspectFailure never replaces the original error with cleanup failure", async () => {
+  const originalClose = NativeRuntime.prototype.close;
+  const primary = new Error("primary");
+  NativeRuntime.prototype.close = async () => {
+    throw new Error("cleanup");
+  };
+  try {
+    const terminal = new TuiTest("preserve-primary");
+    await assert.rejects(
+      terminal.inspectFailure(primary),
+      (error) => error === primary,
+    );
+  } finally {
+    NativeRuntime.prototype.close = originalClose;
+  }
+});
+
+test("finish reports cleanup failure after a successful test", async () => {
+  const originalClose = NativeRuntime.prototype.close;
+  const cleanup = new Error("cleanup");
+  NativeRuntime.prototype.close = async () => {
+    throw cleanup;
+  };
+  try {
+    const terminal = new TuiTest("report-cleanup");
+    await assert.rejects(
+      terminal.finish({ outcome: "passed" }),
+      (error) => error === cleanup,
+    );
+  } finally {
+    NativeRuntime.prototype.close = originalClose;
+  }
 });

@@ -10,7 +10,7 @@ Use the CLI for terminal work split across separate commands.
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run an app. |
-| `sessions` | List sessions. |
+| `sessions` | List daemon and monitoring-enabled process sessions. |
 | `close [--all]` | Close sessions. |
 
 Use `--session NAME` to select a session. `open` and `run` reuse it unless `--restart` is set.
@@ -105,6 +105,11 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
 | `monitor` | Watch a session live. |
 | `monitor --interactive` | Send input to a session. |
+| `monitor --interactive --id OWNER/SESSION` | Attach to an exact process session. |
+
+If no standalone daemon exists for `--session NAME`, `monitor` discovers an
+enabled JavaScript session with that exact name. Duplicate process session
+names produce an ambiguity error with copyable `--id` commands.
 
 ## Configure
 

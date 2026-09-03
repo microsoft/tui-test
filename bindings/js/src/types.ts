@@ -119,10 +119,27 @@ export interface ArtifactOptions {
   onFailure?: "svg" | "text" | "none";
 }
 
+export interface MonitoringMetadata {
+  testFile?: string;
+  testName?: string;
+  framework?: string;
+  worker?: string;
+}
+
+export interface MonitoringOptions {
+  enabled?: boolean;
+  waitAtEnd?: "never" | "failure" | "always";
+  firstAttachTimeout?: number | null;
+  holdWhileAttached?: boolean;
+  label?: string;
+  metadata?: MonitoringMetadata;
+}
+
 export interface ClientOptions {
   backend?: Backend;
   profile?: Profile;
   timeouts?: Timeouts;
   artifacts?: ArtifactOptions;
   recording?: AutomaticRecording;
+  monitoring?: MonitoringOptions;
 }

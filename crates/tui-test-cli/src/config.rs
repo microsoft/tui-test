@@ -17,6 +17,21 @@ pub fn ensure_home() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+pub fn host_dir() -> PathBuf {
+    home_dir().join("hosts")
+}
+
+pub fn ensure_host_dir() -> std::io::Result<PathBuf> {
+    let dir = host_dir();
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(dir)
+}
+
 pub fn pid_file(session: &str) -> PathBuf {
     home_dir().join(format!("{session}.pid"))
 }
