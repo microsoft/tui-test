@@ -537,28 +537,6 @@ impl GhosttyCore {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn renders_wide_cells_into_the_neutral_grid() {
-        let mut core = GhosttyCore::new(5, 3, Profile::default(), BellTracker::default()).unwrap();
-        core.process("abcd你".as_bytes());
-        let rows = &core.frame().unwrap().rows;
-        assert_eq!(rows[0][4].ch, " ");
-        assert_eq!(rows[1][0].ch, "你");
-        assert_eq!(rows[1][1].ch, CONTINUATION);
-    }
-
-    #[test]
-    fn queues_terminal_replies_synchronously() {
-        let mut core = GhosttyCore::new(10, 4, Profile::default(), BellTracker::default()).unwrap();
-        core.process(b"\x1b[3;5H\x1b[6n");
-        assert_eq!(core.take_pending_writes(), b"\x1b[3;5R");
-    }
-}
-
 fn ghostty_mods(mods: Mods) -> GhosttyMods {
     let mut out = GhosttyMods::empty();
     out.set(GhosttyMods::CTRL, mods.ctrl);
@@ -651,4 +629,26 @@ fn ghostty_key(name: &str) -> Option<Key> {
         "/" => Key::Slash,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_wide_cells_into_the_neutral_grid() {
+        let mut core = GhosttyCore::new(5, 3, Profile::default(), BellTracker::default()).unwrap();
+        core.process("abcd你".as_bytes());
+        let rows = &core.frame().unwrap().rows;
+        assert_eq!(rows[0][4].ch, " ");
+        assert_eq!(rows[1][0].ch, "你");
+        assert_eq!(rows[1][1].ch, CONTINUATION);
+    }
+
+    #[test]
+    fn queues_terminal_replies_synchronously() {
+        let mut core = GhosttyCore::new(10, 4, Profile::default(), BellTracker::default()).unwrap();
+        core.process(b"\x1b[3;5H\x1b[6n");
+        assert_eq!(core.take_pending_writes(), b"\x1b[3;5R");
+    }
 }
