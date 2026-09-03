@@ -444,6 +444,10 @@ impl Emulator for XtermJsEmu {
         self.call_or("cursorVisible", true)
     }
 
+    fn cursor_key_application(&self) -> bool {
+        self.call_or("cursorKeyApplication", 0) != 0
+    }
+
     fn cursor_shape(&self) -> CursorShape {
         match self.call::<String>("cursorShape").as_str() {
             "underline" => CursorShape::Underline,

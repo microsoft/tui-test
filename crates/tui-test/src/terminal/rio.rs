@@ -306,6 +306,10 @@ impl Emulator for RioEmu {
         std::mem::take(&mut *self.pending.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
+    fn cursor_key_application(&self) -> bool {
+        self.term.mode().contains(Mode::APP_CURSOR)
+    }
+
     fn clipboard(&self, clipboard: ClipboardType) -> anyhow::Result<String> {
         Ok(self
             .clipboard

@@ -8,17 +8,21 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use compact_str::CompactString;
 use ghostty_vt::error::Error as GhosttyError;
-use ghostty_vt::key::KittyKeyFlags;
+use ghostty_vt::key::{
+    Action as GhosttyKeyAction, Encoder, Event as GhosttyKeyEvent, Key, KittyKeyFlags,
+    Mods as GhosttyMods, OptionAsAlt,
+};
 use ghostty_vt::render::{CellIterator, CursorVisualStyle, RowIterator};
 use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef};
 use ghostty_vt::style::{Palette, PaletteIndex, RgbColor, Style, StyleColor, Underline};
 use ghostty_vt::terminal::{
-    ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Point, PointCoordinate,
-    PrimaryDeviceAttributes, SecondaryDeviceAttributes, TertiaryDeviceAttributes,
+    ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Mode, Point,
+    PointCoordinate, PrimaryDeviceAttributes, SecondaryDeviceAttributes, TertiaryDeviceAttributes,
 };
 use ghostty_vt::{RenderState, Terminal};
 
 use crate::event::BellTracker;
+use crate::input::keys::{KeyEventKind, KeyPress, Mods};
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape, KeyboardMode};
@@ -231,6 +235,90 @@ impl GhosttyCore {
 
     pub(super) fn take_pending_writes(&mut self) -> Vec<u8> {
         std::mem::take(&mut *self.pending.borrow_mut())
+    }
+
+    /// Encode a key event with ghostty's own encoder.
+    ///
+    /// `set_options_from_terminal` is the point of routing here: it reads the
+    /// modes off the live terminal, so this applies keypad application mode,
+    /// `modifyOtherKeys`, and the alt-escape prefix, none of which the shared
+    /// encoder models.
+    ///
+    /// `Ok(None)` means ghostty cannot express this event and the caller
+    /// should fall back rather than send something wrong.
+    pub(super) fn encode_key(&self, press: &KeyPress) -> Result<Option<Vec<u8>>> {
+        // Ghostty's modifier bitmask has no Hyper or Meta, which the Kitty
+        // protocol does define. An event using one cannot be handed over
+        // without silently dropping the modifier.
+        if press.mods.has_kitty_only_modifier() {
+            return Ok(None);
+        }
+        let Some(key) = ghostty_key(&press.key) else {
+            return Ok(None);
+        };
+
+        let mut event = GhosttyKeyEvent::new().context("creating key event")?;
+        event
+            .set_key(key)
+            .set_action(match press.event {
+                KeyEventKind::Press => GhosttyKeyAction::Press,
+                KeyEventKind::Repeat => GhosttyKeyAction::Repeat,
+                KeyEventKind::Release => GhosttyKeyAction::Release,
+            })
+            .set_mods(ghostty_mods(press.mods));
+
+        // Shift that went into producing the text is *consumed*: it made `A`
+        // out of `a` and is not reported separately. Without this a plain
+        // `Shift+a` encodes as `CSI 97;2u` instead of the text `A`, and the
+        // Kitty spec is explicit that a text-producing key still sends its
+        // text when only disambiguation is on.
+        if press.mods.shift && press.text.as_deref().is_some_and(|text| text != press.key) {
+            event.set_consumed_mods(GhosttyMods::SHIFT);
+        }
+
+        // A key that produces text has to say so. Ghostty encodes nothing at
+        // all for a text-bearing key with no `utf8` set, and needs it for the
+        // associated-text and alternate-key parts of the Kitty protocol.
+        // `unshifted_codepoint` is what the key sits on, which is exactly what
+        // `KeyPress::key` already holds for a character.
+        let mut chars = press.key.chars();
+        if let (Some(ch), None) = (chars.next(), chars.next()) {
+            event.set_unshifted_codepoint(ch);
+        }
+        if press.event != KeyEventKind::Release {
+            if let Some(text) = press.text.as_deref() {
+                event.set_utf8(Some(text));
+            }
+        }
+
+        let mut encoder = Encoder::new().context("creating key encoder")?;
+        encoder.set_options_from_terminal(&self.terminal);
+        // `set_options_from_terminal` resets this to `False`, which is a
+        // macOS GUI question rather than a terminal one: with it off, Alt is
+        // Option and composes text instead of prefixing ESC. A headless
+        // session has no keyboard and no compose behavior, so Alt is Alt.
+        encoder.set_macos_option_as_alt(OptionAsAlt::True);
+        // `set_options_from_terminal` reads the Kitty flags straight off the
+        // terminal, which is the whole point of routing here but goes around
+        // the profile. A disabled profile still tracks the modes a child
+        // pushes, it just must not encode with them, so they are cleared back
+        // out after the terminal has had its say. Without this a session with
+        // `kitty_keyboard = false` reports no flags and then encodes `Escape`
+        // as `CSI 27u` anyway.
+        if !self.profile.kitty_keyboard {
+            encoder.set_kitty_flags(KittyKeyFlags::DISABLED);
+        }
+        let mut out = Vec::with_capacity(16);
+        encoder
+            .encode_to_vec(&event, &mut out)
+            .context("encoding key event")?;
+        Ok(Some(out))
+    }
+
+    pub(super) fn cursor_key_application(&self) -> Result<bool> {
+        self.terminal
+            .mode(Mode::DECCKM)
+            .context("reading cursor key mode")
     }
 
     /// Kitty keyboard flags the child has pushed onto ghostty's mode stack.
@@ -447,6 +535,100 @@ impl GhosttyCore {
             .or(configured)
             .ok_or_else(|| anyhow!("Ghostty returned no color for {slot:?}"))
     }
+}
+
+fn ghostty_mods(mods: Mods) -> GhosttyMods {
+    let mut out = GhosttyMods::empty();
+    out.set(GhosttyMods::CTRL, mods.ctrl);
+    out.set(GhosttyMods::ALT, mods.alt);
+    out.set(GhosttyMods::SHIFT, mods.shift);
+    out.set(GhosttyMods::SUPER, mods.super_key);
+    out
+}
+
+/// The ghostty key for one of tui-test's lowercased key names.
+///
+/// Ghostty's `Key` is a physical key code in the W3C spelling, so this is a
+/// translation of naming rather than of meaning. `None` means ghostty has no
+/// key for it and the caller falls back to the shared encoder.
+fn ghostty_key(name: &str) -> Option<Key> {
+    Some(match name {
+        "up" => Key::ArrowUp,
+        "down" => Key::ArrowDown,
+        "left" => Key::ArrowLeft,
+        "right" => Key::ArrowRight,
+        "home" => Key::Home,
+        "end" => Key::End,
+        "pageup" => Key::PageUp,
+        "pagedown" => Key::PageDown,
+        "insert" => Key::Insert,
+        "delete" => Key::Delete,
+        "backspace" => Key::Backspace,
+        "tab" => Key::Tab,
+        "enter" | "return" => Key::Enter,
+        "space" => Key::Space,
+        "escape" | "esc" => Key::Escape,
+        "f1" => Key::F1,
+        "f2" => Key::F2,
+        "f3" => Key::F3,
+        "f4" => Key::F4,
+        "f5" => Key::F5,
+        "f6" => Key::F6,
+        "f7" => Key::F7,
+        "f8" => Key::F8,
+        "f9" => Key::F9,
+        "f10" => Key::F10,
+        "f11" => Key::F11,
+        "f12" => Key::F12,
+        "a" => Key::A,
+        "b" => Key::B,
+        "c" => Key::C,
+        "d" => Key::D,
+        "e" => Key::E,
+        "f" => Key::F,
+        "g" => Key::G,
+        "h" => Key::H,
+        "i" => Key::I,
+        "j" => Key::J,
+        "k" => Key::K,
+        "l" => Key::L,
+        "m" => Key::M,
+        "n" => Key::N,
+        "o" => Key::O,
+        "p" => Key::P,
+        "q" => Key::Q,
+        "r" => Key::R,
+        "s" => Key::S,
+        "t" => Key::T,
+        "u" => Key::U,
+        "v" => Key::V,
+        "w" => Key::W,
+        "x" => Key::X,
+        "y" => Key::Y,
+        "z" => Key::Z,
+        "0" => Key::Digit0,
+        "1" => Key::Digit1,
+        "2" => Key::Digit2,
+        "3" => Key::Digit3,
+        "4" => Key::Digit4,
+        "5" => Key::Digit5,
+        "6" => Key::Digit6,
+        "7" => Key::Digit7,
+        "8" => Key::Digit8,
+        "9" => Key::Digit9,
+        "`" => Key::Backquote,
+        "\\" => Key::Backslash,
+        "[" => Key::BracketLeft,
+        "]" => Key::BracketRight,
+        "," => Key::Comma,
+        "=" => Key::Equal,
+        "-" => Key::Minus,
+        "." => Key::Period,
+        "'" => Key::Quote,
+        ";" => Key::Semicolon,
+        "/" => Key::Slash,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

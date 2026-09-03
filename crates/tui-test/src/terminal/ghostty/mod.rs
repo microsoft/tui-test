@@ -13,6 +13,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 
 use crate::event::BellTracker;
+use crate::input::keys::KeyPress;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::{
@@ -263,6 +264,19 @@ impl Emulator for GhosttyEmu {
         self.call("draining replies", GhosttyCore::take_pending_writes)
     }
 
+    fn encode_key(&self, press: &KeyPress) -> Option<Vec<u8>> {
+        // The worker owns the terminal, so the event has to be moved across
+        // the channel rather than borrowed.
+        let press = press.clone();
+        self.call_result("encoding key", move |core| core.encode_key(&press))
+    }
+
+    fn cursor_key_application(&self) -> bool {
+        self.call_result("reading cursor key mode", |core| {
+            core.cursor_key_application()
+        })
+    }
+
     fn keyboard_mode(&self) -> KeyboardMode {
         self.call_result("reading keyboard mode", |core| core.keyboard_mode())
     }
@@ -325,6 +339,95 @@ mod tests {
     crate::emulator_conformance_tests!(|cols, rows, profile| {
         Box::new(GhosttyEmu::new(cols, rows, profile).expect("create Ghostty emulator"))
     });
+
+    fn press(key: &str) -> KeyPress {
+        crate::input::keys::token_to_presses(key, crate::api::KeyAction::Down)
+            .expect("valid token")
+            .remove(0)
+    }
+
+    /// The whole point of routing: ghostty's encoder reads the modes off the
+    /// live terminal, so `DECCKM` reaches key encoding without this backend
+    /// having to report the mode separately.
+    #[test]
+    fn the_encoder_follows_the_terminals_cursor_key_mode() {
+        let mut emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        assert_eq!(
+            emu.encode_key(&press("up")).as_deref(),
+            Some(&b"\x1b[A"[..])
+        );
+
+        emu.process(b"\x1b[?1h");
+        assert_eq!(
+            emu.encode_key(&press("up")).as_deref(),
+            Some(&b"\x1bOA"[..])
+        );
+
+        emu.process(b"\x1b[?1l");
+        assert_eq!(
+            emu.encode_key(&press("up")).as_deref(),
+            Some(&b"\x1b[A"[..])
+        );
+    }
+
+    /// Kitty flags reach the encoder from the same terminal state.
+    #[test]
+    fn the_encoder_follows_the_negotiated_kitty_flags() {
+        let mut emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        assert_eq!(emu.encode_key(&press("a")).as_deref(), Some(&b"a"[..]));
+
+        emu.process(b"\x1b[>1u");
+        assert_eq!(
+            emu.encode_key(&press("Escape")).as_deref(),
+            Some(&b"\x1b[27u"[..]),
+            "disambiguation is what mode 1 asks for"
+        );
+    }
+
+    /// A modifier ghostty's bitmask cannot represent has to decline rather
+    /// than encode without it, so the caller falls back instead of silently
+    /// sending a key with the modifier dropped.
+    #[test]
+    fn kitty_only_modifiers_decline_rather_than_lose_the_modifier() {
+        let emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        for modifier in ["hyper", "meta"] {
+            let event = press(&format!("{modifier}+a"));
+            assert_eq!(emu.encode_key(&event), None, "{modifier} is not encodable");
+        }
+    }
+
+    /// A key ghostty has no code for declines too.
+    #[test]
+    fn an_unmapped_key_declines() {
+        let emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        assert_eq!(emu.encode_key(&press("\u{4f60}")), None);
+    }
+
+    /// A profile that turns the protocol off has to reach the backend's own
+    /// encoder too, not just `keyboard_mode`. Ghostty reads its Kitty flags
+    /// off the live terminal, which goes around the profile unless the
+    /// encoder is told otherwise.
+    #[test]
+    fn a_disabled_profile_stops_the_backend_encoding_kitty() {
+        let profile = Profile {
+            kitty_keyboard: false,
+            ..Default::default()
+        };
+        let mut emu = GhosttyEmu::new(10, 2, &profile).unwrap();
+        emu.process(b"\x1b[>1u");
+
+        assert_eq!(emu.keyboard_mode(), KeyboardMode::empty());
+        assert_eq!(
+            emu.encode_key(&press("Escape")).as_deref(),
+            Some(&b"\x1b"[..]),
+            "a disabled profile keeps the legacy encoding"
+        );
+        assert_eq!(
+            emu.encode_key(&press("a")).as_deref(),
+            Some(&b"a"[..]),
+            "and text is still text"
+        );
+    }
 
     #[test]
     fn bells_are_counted_without_counting_osc_terminators() {

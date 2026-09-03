@@ -379,6 +379,10 @@ impl Emulator for AlacrittyEmu {
             .collect()
     }
 
+    fn cursor_key_application(&self) -> bool {
+        self.term.mode().contains(TermMode::APP_CURSOR)
+    }
+
     fn clipboard(&self, clipboard: ClipboardType) -> anyhow::Result<String> {
         Ok(self
             .clipboard

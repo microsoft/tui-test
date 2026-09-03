@@ -1,13 +1,39 @@
 //! Key-name and key-event to terminal input sequence mapping.
 
 use crate::api::KeyAction;
+use compact_str::{CompactString, ToCompactString};
+
 use crate::terminal::emu::KeyboardMode;
+
+/// The terminal state key encoding depends on.
+///
+/// Grouped rather than passed as separate arguments because encoding branches
+/// on all of it at once and the set grows: DECCKM joined the Kitty flags here
+/// once arrows had to be able to come out as `SS3 A`.
+///
+/// Public entry points take `impl Into<InputModes>`, so a caller that only has
+/// Kitty flags can still pass them directly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InputModes {
+    pub keyboard: KeyboardMode,
+    /// `DECCKM`: the child expects `SS3 A` from the up arrow, not `CSI A`.
+    pub cursor_key_application: bool,
+}
+
+impl From<KeyboardMode> for InputModes {
+    fn from(keyboard: KeyboardMode) -> Self {
+        Self {
+            keyboard,
+            cursor_key_application: false,
+        }
+    }
+}
 
 const ESC: &str = "\u{1b}";
 const CSI: &str = "\u{1b}[";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum KeyEventKind {
+pub enum KeyEventKind {
     #[default]
     Press,
     Repeat,
@@ -24,14 +50,14 @@ impl KeyEventKind {
     }
 }
 
-#[derive(Default, Clone, Copy)]
-struct Mods {
-    ctrl: bool,
-    alt: bool,
-    shift: bool,
-    super_key: bool,
-    hyper: bool,
-    meta: bool,
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Mods {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub super_key: bool,
+    pub hyper: bool,
+    pub meta: bool,
 }
 
 impl Mods {
@@ -43,7 +69,7 @@ impl Mods {
         self.ctrl || self.alt || self.super_key || self.hyper || self.meta
     }
 
-    fn has_kitty_only_modifier(self) -> bool {
+    pub fn has_kitty_only_modifier(self) -> bool {
         self.super_key || self.hyper || self.meta
     }
 
@@ -95,22 +121,28 @@ fn parse_token(token: &str) -> anyhow::Result<ParsedToken<'_>> {
     Ok(ParsedToken { key, mods })
 }
 
-fn kitty_sequences(mode: KeyboardMode) -> bool {
-    mode.intersects(
+fn kitty_sequences(mode: InputModes) -> bool {
+    mode.keyboard.intersects(
         KeyboardMode::DISAMBIGUATE_ESC_CODES
             | KeyboardMode::REPORT_EVENT_TYPES
             | KeyboardMode::REPORT_ALL_KEYS_AS_ESC,
     )
 }
 
-fn named(key: &str, mods: Mods, event: KeyEventKind, mode: KeyboardMode) -> Option<String> {
+fn named(key: &str, mods: Mods, event: KeyEventKind, mode: InputModes) -> Option<String> {
+    // `DECCKM` swaps the cursor keys' introducer from `CSI` to `SS3`, and it
+    // reaches exactly the keys `CSI ... A-D`, `H`, and `F` spell: the arrows
+    // plus Home and End. Only an unmodified press changes, which is already
+    // what `ss3_unmodified` means for F1-F4, so it reuses that rather than
+    // adding a second rule that could drift from it.
+    let ss3 = mode.cursor_key_application;
     let sequence = match key.to_ascii_lowercase().as_str() {
-        "home" => navigation(None, 'H', false, mods, event, mode),
-        "end" => navigation(None, 'F', false, mods, event, mode),
-        "up" => navigation(None, 'A', false, mods, event, mode),
-        "down" => navigation(None, 'B', false, mods, event, mode),
-        "right" => navigation(None, 'C', false, mods, event, mode),
-        "left" => navigation(None, 'D', false, mods, event, mode),
+        "home" => navigation(None, 'H', ss3, mods, event, mode),
+        "end" => navigation(None, 'F', ss3, mods, event, mode),
+        "up" => navigation(None, 'A', ss3, mods, event, mode),
+        "down" => navigation(None, 'B', ss3, mods, event, mode),
+        "right" => navigation(None, 'C', ss3, mods, event, mode),
+        "left" => navigation(None, 'D', ss3, mods, event, mode),
         "pageup" => navigation(Some(5), '~', false, mods, event, mode),
         "pagedown" => navigation(Some(6), '~', false, mods, event, mode),
         "insert" => navigation(Some(2), '~', false, mods, event, mode),
@@ -144,9 +176,9 @@ fn navigation(
     ss3_unmodified: bool,
     mods: Mods,
     event: KeyEventKind,
-    mode: KeyboardMode,
+    mode: InputModes,
 ) -> String {
-    let report_events = mode.contains(KeyboardMode::REPORT_EVENT_TYPES);
+    let report_events = mode.keyboard.contains(KeyboardMode::REPORT_EVENT_TYPES);
     if event == KeyEventKind::Release && !report_events {
         return String::new();
     }
@@ -198,14 +230,14 @@ impl ControlKey {
     }
 }
 
-fn control_key(key: ControlKey, mods: Mods, event: KeyEventKind, mode: KeyboardMode) -> String {
-    let report_events = mode.contains(KeyboardMode::REPORT_EVENT_TYPES);
-    let report_all = mode.contains(KeyboardMode::REPORT_ALL_KEYS_AS_ESC);
+fn control_key(key: ControlKey, mods: Mods, event: KeyEventKind, mode: InputModes) -> String {
+    let report_events = mode.keyboard.contains(KeyboardMode::REPORT_EVENT_TYPES);
+    let report_all = mode.keyboard.contains(KeyboardMode::REPORT_ALL_KEYS_AS_ESC);
     if event == KeyEventKind::Release && !report_events {
         return String::new();
     }
 
-    let disambiguate = mode.contains(KeyboardMode::DISAMBIGUATE_ESC_CODES);
+    let disambiguate = mode.keyboard.contains(KeyboardMode::DISAMBIGUATE_ESC_CODES);
     if matches!(key, ControlKey::Escape)
         && event == KeyEventKind::Press
         && !mods.any()
@@ -414,8 +446,8 @@ fn literal_key(ch: char) -> (char, Mods) {
     }
 }
 
-fn character(ch: char, mods: Mods, event: KeyEventKind, mode: KeyboardMode) -> String {
-    let report_events = mode.contains(KeyboardMode::REPORT_EVENT_TYPES);
+fn character(ch: char, mods: Mods, event: KeyEventKind, mode: InputModes) -> String {
+    let report_events = mode.keyboard.contains(KeyboardMode::REPORT_EVENT_TYPES);
     if event == KeyEventKind::Release && !report_events {
         return String::new();
     }
@@ -424,9 +456,10 @@ fn character(ch: char, mods: Mods, event: KeyEventKind, mode: KeyboardMode) -> S
     // Text-producing keys need report-all mode before repeat/release events
     // can be represented separately from their UTF-8 text.
     let produces_text = !mods.disambiguates_character();
-    let escape_encoded = mode.contains(KeyboardMode::REPORT_ALL_KEYS_AS_ESC)
+    let escape_encoded = mode.keyboard.contains(KeyboardMode::REPORT_ALL_KEYS_AS_ESC)
         || (report_events && event != KeyEventKind::Press && !produces_text)
-        || (mode.contains(KeyboardMode::DISAMBIGUATE_ESC_CODES) && mods.disambiguates_character())
+        || (mode.keyboard.contains(KeyboardMode::DISAMBIGUATE_ESC_CODES)
+            && mods.disambiguates_character())
         || legacy.is_none();
     if event == KeyEventKind::Release && !escape_encoded {
         return String::new();
@@ -436,12 +469,14 @@ fn character(ch: char, mods: Mods, event: KeyEventKind, mode: KeyboardMode) -> S
     }
 
     let (base, text) = key_chars(ch, mods);
-    let payload =
-        if mode.contains(KeyboardMode::REPORT_ALTERNATE_KEYS) && mods.shift && text != base {
-            format!("{}:{}", base as u32, text as u32)
-        } else {
-            (base as u32).to_string()
-        };
+    let payload = if mode.keyboard.contains(KeyboardMode::REPORT_ALTERNATE_KEYS)
+        && mods.shift
+        && text != base
+    {
+        format!("{}:{}", base as u32, text as u32)
+    } else {
+        (base as u32).to_string()
+    };
     let associated = associated_text(ch, mods);
     kitty_u(payload, mods, event, mode, associated.as_deref())
 }
@@ -450,15 +485,16 @@ fn kitty_u(
     payload: String,
     mods: Mods,
     event: KeyEventKind,
-    mode: KeyboardMode,
+    mode: InputModes,
     associated_text: Option<&str>,
 ) -> String {
     let event_code = mode
+        .keyboard
         .contains(KeyboardMode::REPORT_EVENT_TYPES)
         .then(|| event.code())
         .flatten();
     let associated_text = associated_text.filter(|text| {
-        mode.contains(KeyboardMode::REPORT_ASSOCIATED_TEXT)
+        mode.keyboard.contains(KeyboardMode::REPORT_ASSOCIATED_TEXT)
             && event != KeyEventKind::Release
             && text.chars().all(|ch| !is_control(ch))
     });
@@ -496,12 +532,117 @@ fn action_events(action: KeyAction) -> &'static [KeyEventKind] {
     }
 }
 
+/// One key event, as the encoder sees it before any escape sequence exists.
+///
+/// This is the hand-off point for [`crate::terminal::emu::Emulator::encode_key`]:
+/// a backend with its own encoder is given this rather than a token, so it
+/// never has to know tui-test's spelling of a key name.
+#[derive(Debug, Clone)]
+pub struct KeyPress {
+    /// The key's name. Either one of the named keys, lowercased (`"up"`,
+    /// `"f5"`, `"enter"`), or the single *unshifted* character the key sits
+    /// on, so `!` arrives as `"1"` with `mods.shift`.
+    ///
+    /// Owned rather than borrowed: a key name is a handful of bytes, and the
+    /// ghostty backend has to move it to the thread that owns its terminal.
+    pub key: CompactString,
+    pub mods: Mods,
+    pub event: KeyEventKind,
+    /// The text this key produces, for the keys that produce any.
+    ///
+    /// Carried rather than derived because deriving it needs a keyboard
+    /// layout: `Shift+1` is `!` on a US layout and `"` on a UK one. tui-test
+    /// works in the US layout its token vocabulary already assumes, and a
+    /// backend encoder is handed the answer rather than asked to guess.
+    pub text: Option<CompactString>,
+}
+
+/// Split a token into the key events an action produces.
+///
+/// Exposed so a caller routing to a backend encoder can hand it the same
+/// events the shared encoder would have encoded, rather than re-parsing the
+/// token itself and drifting from this one.
+pub fn token_to_presses(token: &str, action: KeyAction) -> anyhow::Result<Vec<KeyPress>> {
+    if token.is_empty() {
+        return Ok(Vec::new());
+    }
+    let parsed = parse_token(token)?;
+    // A multi-character token that is not a named key is a literal string,
+    // typed one character at a time; the backend encoder is handed each
+    // character as its own press.
+    let is_named = named(
+        parsed.key,
+        parsed.mods,
+        KeyEventKind::Press,
+        InputModes::default(),
+    )
+    .is_some();
+
+    // Mirrors how `token_to_seq_for_action_with_mode` classifies the same
+    // token, so both encoders are handed the same events. A named key keeps
+    // its name; a character is reduced to the key it sits on plus the text it
+    // produces, which is what an encoder needs to know.
+    let keys: Vec<(CompactString, Mods, Option<CompactString>)> = if is_named {
+        let text = (parsed.key.eq_ignore_ascii_case("space")).then(|| " ".into());
+        vec![(parsed.key.to_ascii_lowercase().into(), parsed.mods, text)]
+    } else if parsed.key.chars().count() == 1 {
+        let ch = parsed.key.chars().next().expect("one character");
+        let (key, mods) = if parsed.mods.any() {
+            (ch, parsed.mods)
+        } else {
+            literal_key(ch)
+        };
+        vec![(
+            key.to_compact_string(),
+            mods,
+            Some(produced_text(key, mods)),
+        )]
+    } else if parsed.mods.any() {
+        anyhow::bail!("invalid key: '{}'", parsed.key);
+    } else {
+        parsed
+            .key
+            .chars()
+            .map(|ch| {
+                let (key, mods) = literal_key(ch);
+                (
+                    key.to_compact_string(),
+                    mods,
+                    Some(produced_text(key, mods)),
+                )
+            })
+            .collect()
+    };
+
+    let mut out = Vec::new();
+    for (key, mods, text) in keys {
+        for &event in action_events(action) {
+            out.push(KeyPress {
+                key: key.clone(),
+                mods,
+                event,
+                text: text.clone(),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// The text an unshifted key plus its modifiers actually produces.
+fn produced_text(key: char, mods: Mods) -> CompactString {
+    match mods.shift.then(|| shift_ascii(key)).flatten() {
+        Some(shifted) => shifted.to_compact_string(),
+        None => key.to_compact_string(),
+    }
+}
+
 /// Translate one key token and action using the active terminal keyboard mode.
 pub fn token_to_seq_for_action_with_mode(
     token: &str,
     action: KeyAction,
-    mode: KeyboardMode,
+    mode: impl Into<InputModes>,
 ) -> anyhow::Result<String> {
+    let mode = mode.into();
     if token.is_empty() {
         return Ok(String::new());
     }
@@ -551,7 +692,7 @@ pub fn token_to_seq_for_action_with_mode(
 }
 
 /// Translate one key-down event using the active terminal keyboard mode.
-pub fn token_to_seq_with_mode(token: &str, mode: KeyboardMode) -> anyhow::Result<String> {
+pub fn token_to_seq_with_mode(token: &str, mode: impl Into<InputModes>) -> anyhow::Result<String> {
     token_to_seq_for_action_with_mode(token, KeyAction::Down, mode)
 }
 
@@ -559,8 +700,9 @@ pub fn token_to_seq_with_mode(token: &str, mode: KeyboardMode) -> anyhow::Result
 pub fn tokens_to_seq_for_action_with_mode(
     tokens: &[String],
     action: KeyAction,
-    mode: KeyboardMode,
+    mode: impl Into<InputModes>,
 ) -> anyhow::Result<String> {
+    let mode = mode.into();
     let mut out = String::new();
     for token in tokens {
         out.push_str(&token_to_seq_for_action_with_mode(token, action, mode)?);
@@ -569,7 +711,10 @@ pub fn tokens_to_seq_for_action_with_mode(
 }
 
 /// Translate key-down tokens using the active terminal keyboard mode.
-pub fn tokens_to_seq_with_mode(tokens: &[String], mode: KeyboardMode) -> anyhow::Result<String> {
+pub fn tokens_to_seq_with_mode(
+    tokens: &[String],
+    mode: impl Into<InputModes>,
+) -> anyhow::Result<String> {
     tokens_to_seq_for_action_with_mode(tokens, KeyAction::Down, mode)
 }
 
@@ -584,6 +729,95 @@ pub fn tokens_to_seq(tokens: &[String]) -> anyhow::Result<String> {
 }
 
 #[cfg(test)]
+mod decckm_tests {
+    use super::*;
+
+    fn app(token: &str) -> String {
+        token_to_seq_with_mode(
+            token,
+            InputModes {
+                keyboard: KeyboardMode::empty(),
+                cursor_key_application: true,
+            },
+        )
+        .unwrap()
+    }
+
+    /// `CSI ?1h` swaps the cursor keys onto `SS3`. readline, vim, and less all
+    /// set it, so a session that kept sending `CSI A` was sending something no
+    /// real terminal sends once the child had asked.
+    #[test]
+    fn application_cursor_keys_use_ss3() {
+        for (token, expected) in [
+            ("Up", "\x1bOA"),
+            ("Down", "\x1bOB"),
+            ("Right", "\x1bOC"),
+            ("Left", "\x1bOD"),
+            ("Home", "\x1bOH"),
+            ("End", "\x1bOF"),
+        ] {
+            assert_eq!(app(token), expected, "{token} in application mode");
+        }
+    }
+
+    /// Without the mode the cursor keys keep the `CSI` form, so this changes
+    /// nothing for a child that never asked.
+    #[test]
+    fn normal_cursor_keys_are_unchanged() {
+        for (token, expected) in [
+            ("Up", "\x1b[A"),
+            ("Down", "\x1b[B"),
+            ("Right", "\x1b[C"),
+            ("Left", "\x1b[D"),
+            ("Home", "\x1b[H"),
+            ("End", "\x1b[F"),
+        ] {
+            assert_eq!(token_to_seq(token).unwrap(), expected, "{token} normally");
+        }
+    }
+
+    /// A modified cursor key carries its modifier parameter, which `SS3` has
+    /// nowhere to put, so it stays `CSI` in application mode too.
+    #[test]
+    fn a_modified_cursor_key_stays_csi() {
+        let modes = InputModes {
+            keyboard: KeyboardMode::empty(),
+            cursor_key_application: true,
+        };
+        assert_eq!(
+            token_to_seq_with_mode("Ctrl+Up", modes).unwrap(),
+            "\x1b[1;5A"
+        );
+        assert_eq!(
+            token_to_seq_with_mode("Shift+Home", modes).unwrap(),
+            "\x1b[1;2H"
+        );
+    }
+
+    /// The Kitty protocol replaces the legacy encoding outright, and its
+    /// cursor keys are `CSI` with a parameter, so `DECCKM` does not apply.
+    #[test]
+    fn kitty_encoding_outranks_application_mode() {
+        let modes = InputModes {
+            keyboard: KeyboardMode::DISAMBIGUATE_ESC_CODES,
+            cursor_key_application: true,
+        };
+        assert_eq!(token_to_seq_with_mode("Up", modes).unwrap(), "\x1b[A");
+    }
+
+    /// Keys that are not cursor keys are untouched, including the function
+    /// keys that have their own unrelated `SS3` form.
+    #[test]
+    fn application_mode_reaches_only_the_cursor_keys() {
+        assert_eq!(app("PageUp"), "\x1b[5~");
+        assert_eq!(app("Delete"), "\x1b[3~");
+        assert_eq!(app("F1"), "\x1bOP", "F1 is SS3 either way");
+        assert_eq!(app("F5"), "\x1b[15~");
+        assert_eq!(app("a"), "a");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -591,7 +825,11 @@ mod tests {
         token_to_seq(token)
     }
 
-    fn action_seq(token: &str, action: KeyAction, mode: KeyboardMode) -> anyhow::Result<String> {
+    fn action_seq(
+        token: &str,
+        action: KeyAction,
+        mode: impl Into<InputModes>,
+    ) -> anyhow::Result<String> {
         token_to_seq_for_action_with_mode(token, action, mode)
     }
 
@@ -785,7 +1023,14 @@ mod tests {
         );
     }
 
-    fn assert_events(mode: KeyboardMode, key: &str, press: &str, repeat: &str, release: &str) {
+    fn assert_events(
+        mode: impl Into<InputModes>,
+        key: &str,
+        press: &str,
+        repeat: &str,
+        release: &str,
+    ) {
+        let mode = mode.into();
         assert_eq!(token_to_seq_with_mode(key, mode).unwrap(), press, "{key}");
         assert_eq!(
             action_seq(key, KeyAction::Repeat, mode).unwrap(),
