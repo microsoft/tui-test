@@ -243,7 +243,7 @@ impl AlacrittyEmu {
         let size = TermSize::new(cols as usize, rows as usize);
         let alac_config = AlacConfig {
             scrolling_history: profile.scrollback,
-            kitty_keyboard: true,
+            kitty_keyboard: profile.kitty_keyboard,
             osc52: Osc52::CopyPaste,
             ..Default::default()
         };

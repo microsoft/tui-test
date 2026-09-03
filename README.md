@@ -301,6 +301,7 @@ Create `tui-test.toml`:
 ```toml
 [profiles.default]
 scrollback = 10000
+kitty_keyboard = true         # honor the Kitty keyboard protocol
 
 [profiles.default.colors]
 background = "#000000"

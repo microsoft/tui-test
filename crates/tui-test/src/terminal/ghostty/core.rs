@@ -8,6 +8,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use compact_str::CompactString;
 use ghostty_vt::error::Error as GhosttyError;
+use ghostty_vt::key::KittyKeyFlags;
 use ghostty_vt::render::{CellIterator, CursorVisualStyle, RowIterator};
 use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef};
 use ghostty_vt::style::{Palette, PaletteIndex, RgbColor, Style, StyleColor, Underline};
@@ -20,7 +21,7 @@ use ghostty_vt::{RenderState, Terminal};
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape};
+use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape, KeyboardMode};
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
     RgbColor {
@@ -230,6 +231,47 @@ impl GhosttyCore {
 
     pub(super) fn take_pending_writes(&mut self) -> Vec<u8> {
         std::mem::take(&mut *self.pending.borrow_mut())
+    }
+
+    /// Kitty keyboard flags the child has pushed onto ghostty's mode stack.
+    ///
+    /// Ghostty's `Terminal` takes no configuration, so a profile that turns
+    /// the protocol off is honored here rather than in the emulator: the
+    /// modes are still tracked, they just never reach key encoding.
+    pub(super) fn keyboard_mode(&self) -> Result<KeyboardMode> {
+        if !self.profile.kitty_keyboard {
+            return Ok(KeyboardMode::empty());
+        }
+        let flags = self
+            .terminal
+            .kitty_keyboard_flags()
+            .context("reading Kitty keyboard flags")?;
+        let mut mode = KeyboardMode::empty();
+        for (ghostty_flag, keyboard_flag) in [
+            (
+                KittyKeyFlags::DISAMBIGUATE,
+                KeyboardMode::DISAMBIGUATE_ESC_CODES,
+            ),
+            (
+                KittyKeyFlags::REPORT_EVENTS,
+                KeyboardMode::REPORT_EVENT_TYPES,
+            ),
+            (
+                KittyKeyFlags::REPORT_ALTERNATES,
+                KeyboardMode::REPORT_ALTERNATE_KEYS,
+            ),
+            (
+                KittyKeyFlags::REPORT_ALL,
+                KeyboardMode::REPORT_ALL_KEYS_AS_ESC,
+            ),
+            (
+                KittyKeyFlags::REPORT_ASSOCIATED,
+                KeyboardMode::REPORT_ASSOCIATED_TEXT,
+            ),
+        ] {
+            mode.set(keyboard_flag, flags.contains(ghostty_flag));
+        }
+        Ok(mode)
     }
 
     pub(super) fn set_clipboard(&mut self, clipboard: ClipboardType, text: String) {

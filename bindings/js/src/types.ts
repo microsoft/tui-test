@@ -86,6 +86,8 @@ export interface Colors {
 
 export interface Profile {
   scrollback?: number;
+  /** Honor the Kitty keyboard protocol. Defaults to true. */
+  kittyKeyboard?: boolean;
   colors?: Colors;
 }
 

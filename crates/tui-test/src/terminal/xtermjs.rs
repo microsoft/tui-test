@@ -569,6 +569,10 @@ mod tests {
             crate::terminal::conformance::Divergence::UnderlineColorNeedsAStyle,
             // Clipboard access is unavailable.
             crate::terminal::conformance::Divergence::ClipboardUnsupported,
+            // xterm.js has no Kitty keyboard protocol implementation at all:
+            // the bundle contains no handler for `CSI > u`, `CSI = u`, or
+            // `CSI < u`, so the modes a child pushes are parsed and dropped.
+            crate::terminal::conformance::Divergence::NoKittyKeyboard,
         ]
     );
 }

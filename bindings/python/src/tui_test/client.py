@@ -179,10 +179,14 @@ def _session_timeout_values(timeouts: object) -> Tuple[Optional[int], ...]:
 
 def _profile_values(
     profile: object,
-) -> Tuple[Optional[int], List[Tuple[str, str]]]:
+) -> Tuple[Optional[int], Optional[bool], List[Tuple[str, str]]]:
     normalized = cfg.normalize_profile(profile) or {}
     colors = normalized.get("colors") or {}
-    return normalized.get("scrollback"), list(colors.items())
+    return (
+        normalized.get("scrollback"),
+        normalized.get("kitty_keyboard"),
+        list(colors.items()),
+    )
 
 
 def _occurrence_fields(value: _Occurrence) -> Dict[str, object]:

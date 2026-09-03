@@ -173,6 +173,7 @@ export interface OpenOptions {
   waitReady?: boolean
   restart?: boolean
   profileScrollback?: number
+  profileKittyKeyboard?: boolean
   profileColors?: Array<[string, string]>
   timeouts?: Timeouts
 }
@@ -229,6 +230,7 @@ export interface RunOptions {
   waitReady?: boolean
   restart?: boolean
   profileScrollback?: number
+  profileKittyKeyboard?: boolean
   profileColors?: Array<[string, string]>
   timeouts?: Timeouts
 }

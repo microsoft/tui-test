@@ -764,6 +764,7 @@ export class TuiTest {
       waitReady: opts.waitReady,
       restart: opts.restart,
       profileScrollback: profile?.scrollback,
+      profileKittyKeyboard: profile?.kittyKeyboard,
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
     };
@@ -786,6 +787,7 @@ export class TuiTest {
       waitReady: opts.waitReady,
       restart: opts.restart,
       profileScrollback: profile?.scrollback,
+      profileKittyKeyboard: profile?.kittyKeyboard,
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
     };

@@ -54,6 +54,8 @@ Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style
 | `mouse down\|up X Y [options]` | Press or release a button. |
 | `mouse drag X1 Y1 X2 Y2 [options]` | Drag. |
 | `mouse scroll up\|down [--amount N]` | Scroll. |
+
+Key input follows the Kitty keyboard protocol the child negotiates. Set `kitty_keyboard = false` on a profile to behave like a terminal without it, so mode requests are ignored and keys keep their legacy encodings. The `xtermjs` backend always behaves this way; its bundle does not implement the protocol.
 | `resize COLS ROWS` | Resize. |
 | `signal NAME` | Send a signal. |
 
@@ -110,6 +112,7 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 ```toml
 [profiles.default]
 scrollback = 10000
+kitty_keyboard = true
 
 [recording]
 mode = "on-failure"
