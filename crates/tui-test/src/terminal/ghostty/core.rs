@@ -275,7 +275,6 @@ impl GhosttyCore {
         if press.mods.shift && press.text.as_deref().is_some_and(|text| text != press.key) {
             event.set_consumed_mods(GhosttyMods::SHIFT);
         }
-
         // A key that produces text has to say so. Ghostty encodes nothing at
         // all for a text-bearing key with no `utf8` set, and needs it for the
         // associated-text and alternate-key parts of the Kitty protocol.
