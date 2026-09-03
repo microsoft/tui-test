@@ -29,6 +29,10 @@ pub fn log_file(session: &str) -> PathBuf {
     home_dir().join(format!("{session}.log"))
 }
 
+pub fn recording_pointer_file(session: &str) -> PathBuf {
+    home_dir().join(format!("{session}.recording"))
+}
+
 pub fn recording_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("TUI_TEST_HOME") {
         return PathBuf::from(dir).join("recordings");

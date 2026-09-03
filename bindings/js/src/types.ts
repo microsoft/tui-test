@@ -6,6 +6,7 @@ import type {
   OpenResult as NativeOpenResult,
   Size as NativeSize,
   State as NativeState,
+  TextMatch as NativeTextMatch,
   Timeouts as NativeTimeouts,
 } from "../native/index.js";
 
@@ -57,6 +58,8 @@ export type BellEvent = NativeBellEvent;
 
 export type State = NativeState;
 
+export type TextMatch = NativeTextMatch;
+
 export type OpenResult = NativeOpenResult;
 
 export interface Colors {
@@ -86,6 +89,11 @@ export interface Profile {
   /** Record OSC 8 hyperlinks on the cells they cover. Defaults to true. */
   hyperlinks?: boolean;
   colors?: Colors;
+}
+
+export interface AutomaticRecording {
+  mode?: "disabled" | "on-failure" | "always";
+  directory?: string;
 }
 
 export interface SpawnOptions {
@@ -118,4 +126,5 @@ export interface ClientOptions {
   profile?: Profile;
   timeouts?: Timeouts;
   artifacts?: ArtifactOptions;
+  recording?: AutomaticRecording;
 }

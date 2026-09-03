@@ -1,11 +1,15 @@
 use std::collections::{HashMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, Weak};
 
 use sha2::{Digest, Sha256};
 
-use crate::api::{OpenOptions, OpenResult, Operation, OperationResult, RunOptions, TuiTestError};
+use crate::api::{
+    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, MouseOptions, OpenOptions,
+    OpenResult, Operation, OperationResult, RunOptions, StyleSelector, TextMatch, TextSelector,
+    TuiTestError,
+};
 use crate::engine::Engine;
 use crate::logger::Logger;
 
@@ -15,6 +19,249 @@ const MAX_COMPLETED_RECORDINGS: usize = 1024;
 pub struct Session {
     name: Arc<str>,
     engine: Arc<Engine>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LocatorClickOptions {
+    pub mouse: MouseOptions,
+    pub clicks: u8,
+    pub timeout_ms: Option<u64>,
+}
+
+impl Default for LocatorClickOptions {
+    fn default() -> Self {
+        Self {
+            mouse: MouseOptions::default(),
+            clicks: 1,
+            timeout_ms: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LocatorExpectOptions {
+    pub not: bool,
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Clone)]
+enum LocatorTarget {
+    Session(Session),
+    Handle(SessionHandle),
+}
+
+impl LocatorTarget {
+    fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
+        match self {
+            Self::Session(session) => session.execute(operation),
+            Self::Handle(session) => session.execute(operation),
+        }
+    }
+}
+
+/// A lazy query resolved against the current terminal grid before every read,
+/// wait, or action.
+#[derive(Clone)]
+pub struct Locator {
+    target: LocatorTarget,
+    query: LocatorQuery,
+}
+
+impl Locator {
+    fn new(target: LocatorTarget, query: LocatorQuery) -> Self {
+        Self { target, query }
+    }
+
+    pub fn query(&self) -> &LocatorQuery {
+        &self.query
+    }
+
+    pub fn get_by_text(&self, selector: impl Into<TextSelector>) -> Self {
+        self.get_by_text_relative(selector, LocatorDirection::Within)
+    }
+
+    pub fn get_by_text_relative(
+        &self,
+        selector: impl Into<TextSelector>,
+        direction: LocatorDirection,
+    ) -> Self {
+        Self {
+            target: self.target.clone(),
+            query: LocatorQuery {
+                selector: LocatorSelector::Text(selector.into()),
+                occurrence: MatchOccurrence::Any,
+                within: Some(Box::new(self.query.clone())),
+                direction,
+                style: Default::default(),
+            },
+        }
+    }
+
+    pub fn get_by_style(&self, selector: impl Into<StyleSelector>) -> Self {
+        self.get_by_style_relative(selector, LocatorDirection::Within)
+    }
+
+    pub fn get_by_style_relative(
+        &self,
+        selector: impl Into<StyleSelector>,
+        direction: LocatorDirection,
+    ) -> Self {
+        Self {
+            target: self.target.clone(),
+            query: LocatorQuery {
+                selector: LocatorSelector::Style(selector.into()),
+                occurrence: MatchOccurrence::Any,
+                within: Some(Box::new(self.query.clone())),
+                direction,
+                style: Default::default(),
+            },
+        }
+    }
+
+    pub fn any(&self) -> Self {
+        self.with_occurrence(MatchOccurrence::Any)
+    }
+
+    pub fn unique(&self) -> Self {
+        self.with_occurrence(MatchOccurrence::Unique)
+    }
+
+    pub fn first(&self) -> Self {
+        self.with_occurrence(MatchOccurrence::First)
+    }
+
+    pub fn last(&self) -> Self {
+        self.with_occurrence(MatchOccurrence::Last)
+    }
+
+    pub fn nth(&self, index: usize) -> Self {
+        self.with_occurrence(MatchOccurrence::Nth(index))
+    }
+
+    fn with_occurrence(&self, occurrence: MatchOccurrence) -> Self {
+        let mut locator = self.clone();
+        locator.query.occurrence = occurrence;
+        locator
+    }
+
+    fn strict_query(&self) -> LocatorQuery {
+        let mut query = self.query.clone();
+        if query.occurrence == MatchOccurrence::Any {
+            query.occurrence = MatchOccurrence::Unique;
+        }
+        query
+    }
+
+    pub fn all(&self) -> Result<Vec<Self>, TuiTestError> {
+        let matches = self.locations()?;
+        if self.query.occurrence == MatchOccurrence::Any {
+            Ok((0..matches.len()).map(|index| self.nth(index)).collect())
+        } else {
+            Ok(matches.into_iter().map(|_| self.clone()).collect())
+        }
+    }
+
+    pub fn count(&self) -> Result<usize, TuiTestError> {
+        self.locations().map(|matches| matches.len())
+    }
+
+    pub fn locations(&self) -> Result<Vec<TextMatch>, TuiTestError> {
+        match self.target.execute(Operation::FindLocator {
+            query: self.query.clone(),
+        })? {
+            OperationResult::Matches(matches) => Ok(matches),
+            _ => Err(TuiTestError::internal(
+                "locator locations returned an unexpected result type",
+            )),
+        }
+    }
+
+    pub fn location(&self) -> Result<TextMatch, TuiTestError> {
+        let query = self.strict_query();
+        let description = query.selector.description();
+        match self.target.execute(Operation::FindLocator { query })? {
+            OperationResult::Matches(mut matches) if matches.len() == 1 => Ok(matches.remove(0)),
+            OperationResult::Matches(_) => {
+                let diagnostic = match self.target.execute(Operation::Text { full: false }) {
+                    Ok(OperationResult::Text(screen)) => {
+                        format!("\n\nTerminal content:\n{screen}")
+                    }
+                    Ok(_) => "\n\nTerminal content unavailable: unexpected result type".to_string(),
+                    Err(error) => format!("\n\nTerminal content unavailable: {error}"),
+                };
+                Err(TuiTestError::assertion(format!(
+                    "no match found for '{description}'{diagnostic}"
+                )))
+            }
+            _ => Err(TuiTestError::internal(
+                "locator location returned an unexpected result type",
+            )),
+        }
+    }
+
+    pub fn wait(&self) -> Result<(), TuiTestError> {
+        self.wait_with_timeout(None)
+    }
+
+    pub fn wait_with_timeout(&self, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
+        self.wait_for(false, timeout_ms)
+    }
+
+    pub fn wait_hidden(&self, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
+        self.wait_for(true, timeout_ms)
+    }
+
+    fn wait_for(&self, not: bool, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
+        self.target
+            .execute(Operation::WaitLocator {
+                query: self.query.clone(),
+                not,
+                timeout_ms,
+            })
+            .map(|_| ())
+    }
+
+    pub fn click(&self) -> Result<(), TuiTestError> {
+        self.click_with(LocatorClickOptions::default())
+    }
+
+    pub fn click_with(&self, options: LocatorClickOptions) -> Result<(), TuiTestError> {
+        self.target
+            .execute(Operation::ClickLocator {
+                query: self.strict_query(),
+                options: options.mouse,
+                clicks: options.clicks,
+                timeout_ms: options.timeout_ms,
+            })
+            .map(|_| ())
+    }
+
+    pub fn highlight(&self) -> Result<(), TuiTestError> {
+        self.highlight_with_timeout(None)
+    }
+
+    pub fn highlight_with_timeout(&self, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
+        self.target
+            .execute(Operation::HighlightLocator {
+                query: self.query.clone(),
+                timeout_ms,
+            })
+            .map(|_| ())
+    }
+
+    pub fn expect(&self) -> Result<(), TuiTestError> {
+        self.expect_with(LocatorExpectOptions::default())
+    }
+
+    pub fn expect_with(&self, options: LocatorExpectOptions) -> Result<(), TuiTestError> {
+        self.target
+            .execute(Operation::WaitLocator {
+                query: self.query.clone(),
+                not: options.not,
+                timeout_ms: options.timeout_ms,
+            })
+            .map(|_| ())
+    }
 }
 
 impl Session {
@@ -33,6 +280,20 @@ impl Session {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn get_by_text(&self, selector: impl Into<TextSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Session(self.clone()),
+            LocatorQuery::text(selector),
+        )
+    }
+
+    pub fn get_by_style(&self, selector: impl Into<StyleSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Session(self.clone()),
+            LocatorQuery::style(selector),
+        )
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
@@ -69,15 +330,25 @@ impl Session {
         self.engine.is_open()
     }
 
-    pub fn recording_path(&self) -> &Path {
+    pub fn recording_path(&self) -> Option<PathBuf> {
         self.engine.recording_path()
     }
 
     pub fn recording(&self) -> std::io::Result<String> {
+        let path = self.recording_path().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "automatic recording is disabled",
+            )
+        })?;
         self.engine
             .flush_recording()
             .map_err(tui_test_error_to_io_error)?;
-        std::fs::read_to_string(self.recording_path())
+        std::fs::read_to_string(path)
+    }
+
+    fn retained_recording_path(&self) -> Option<PathBuf> {
+        self.engine.retained_recording_path()
     }
 }
 
@@ -90,6 +361,20 @@ pub struct SessionHandle {
 impl SessionHandle {
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn get_by_text(&self, selector: impl Into<TextSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Handle(self.clone()),
+            LocatorQuery::text(selector),
+        )
+    }
+
+    pub fn get_by_style(&self, selector: impl Into<StyleSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Handle(self.clone()),
+            LocatorQuery::style(selector),
+        )
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
@@ -228,34 +513,28 @@ impl SessionRegistry {
     }
 
     pub fn close_all(&self) {
-        let (sessions, removed) = {
+        let mut removed = Vec::new();
+        {
             let _lifecycle = self
                 .inner
                 .lifecycle
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut recordings = self.lock_recordings();
             let sessions = std::mem::take(&mut *self.lock_sessions());
-            let mut removed = Vec::new();
-            for (name, session) in &sessions {
-                let path = session.recording_path();
-                if path.is_file() {
-                    removed.extend(Self::cache_recording(
-                        &mut recordings,
-                        name.clone(),
-                        path.to_path_buf(),
-                    ));
-                }
+            for session in sessions.values() {
+                session.interrupt();
             }
-            (sessions, removed)
-        };
+            let mut recordings = self.lock_recordings();
+            for (name, session) in sessions {
+                let _ = session.close();
+                removed.extend(Self::replace_recording(
+                    &mut recordings,
+                    name,
+                    session.retained_recording_path(),
+                ));
+            }
+        }
         Self::remove_recording_files(removed);
-        for session in sessions.values() {
-            session.interrupt();
-        }
-        for session in sessions.into_values() {
-            let _ = session.close();
-        }
     }
 
     pub fn recording(&self, name: &str) -> std::io::Result<String> {
@@ -284,26 +563,22 @@ impl SessionRegistry {
     }
 
     fn close_locked(&self, name: &str) -> Result<(), TuiTestError> {
-        let (session, removed) = {
-            let _lifecycle = self
-                .inner
-                .lifecycle
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut recordings = self.lock_recordings();
-            let Some(session) = self.lock_sessions().remove(name) else {
-                return Ok(());
-            };
-            let path = session.recording_path();
-            let removed = if path.is_file() {
-                Self::cache_recording(&mut recordings, name.to_string(), path.to_path_buf())
-            } else {
-                Vec::new()
-            };
-            (session, removed)
+        let _lifecycle = self
+            .inner
+            .lifecycle
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(session) = self.lock_sessions().remove(name) else {
+            return Ok(());
         };
+        let result = session.close();
+        let removed = Self::replace_recording(
+            &mut self.lock_recordings(),
+            name.to_string(),
+            session.retained_recording_path(),
+        );
         Self::remove_recording_files(removed);
-        session.close()
+        result
     }
 
     fn lock_sessions(&self) -> MutexGuard<'_, HashMap<String, Session>> {
@@ -365,6 +640,20 @@ impl SessionRegistry {
         removed
     }
 
+    fn replace_recording(
+        recordings: &mut CompletedRecordings,
+        name: String,
+        path: Option<PathBuf>,
+    ) -> Vec<PathBuf> {
+        match path {
+            Some(path) => Self::cache_recording(recordings, name, path),
+            None => {
+                recordings.order.retain(|entry| entry != &name);
+                recordings.paths.remove(&name).into_iter().collect()
+            }
+        }
+    }
+
     fn remove_recording_files(paths: Vec<PathBuf>) {
         for path in paths {
             let _ = std::fs::remove_file(path);
@@ -386,7 +675,11 @@ fn native_recording_path(name: &str) -> PathBuf {
         .join("tui-test")
         .join("native")
         .join(std::process::id().to_string())
-        .join(format!("{}-{sequence}.cast", &digest[..16]))
+        .join(format!(
+            "{}-{}-{sequence}.cast",
+            &digest[..16],
+            std::process::id()
+        ))
 }
 
 fn tui_test_error_to_io_error(error: TuiTestError) -> std::io::Error {

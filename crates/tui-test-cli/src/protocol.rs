@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use tui_test::{
-    Backend, Engine, KeyAction, OpenOptions, Operation, OperationResult, RecordingFormat,
-    RunOptions, ScreenshotResult, TuiTestError,
+    AutomaticRecording, Backend, ClipboardPattern, Engine, KeyAction, LocatorQuery, MouseOptions,
+    OpenOptions, Operation, OperationResult, RecordingFormat, RunOptions, ScreenshotResult,
+    TuiTestError,
 };
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
@@ -33,6 +34,8 @@ pub enum Request {
         restart: bool,
         #[serde(default)]
         timeouts: Timeouts,
+        #[serde(default)]
+        recording: Box<AutomaticRecording>,
     },
     Close,
     Status,
@@ -73,20 +76,20 @@ pub enum Request {
     Signal {
         name: String,
     },
-    WaitText {
-        text: String,
-        regex: bool,
-        full: bool,
-        #[serde(default)]
-        timeout_ms: Option<u64>,
-        not: bool,
-    },
     WaitTitle {
         text: String,
         regex: bool,
         #[serde(default)]
         timeout_ms: Option<u64>,
         not: bool,
+    },
+    WaitClipboard {
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        regex: bool,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
     },
     WaitIdle {
         #[serde(default)]
@@ -108,14 +111,24 @@ pub enum Request {
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
-    ExpectText {
-        text: String,
-        regex: bool,
-        full: bool,
-        strict: bool,
+    FindLocator {
+        query: LocatorQuery,
+    },
+    ClickLocator {
+        query: LocatorQuery,
+        button: u8,
+        clicks: u8,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    HighlightLocator {
+        query: LocatorQuery,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    ExpectLocator {
+        query: LocatorQuery,
         not: bool,
-        fg: Option<String>,
-        bg: Option<String>,
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
@@ -195,6 +208,7 @@ impl Request {
                 wait_ready,
                 restart,
                 timeouts,
+                recording,
             } => {
                 if let Some(program) = program {
                     let mut parts = program.into_iter();
@@ -213,6 +227,7 @@ impl Request {
                         wait_ready,
                         restart,
                         timeouts,
+                        recording: *recording,
                     }))
                 } else {
                     Ok(Operation::Open(OpenOptions {
@@ -226,6 +241,7 @@ impl Request {
                         wait_ready,
                         restart,
                         timeouts,
+                        recording: *recording,
                     }))
                 }
             }
@@ -241,6 +257,7 @@ impl Request {
                 GetField::Cursor => Operation::GetCursor,
                 GetField::Size => Operation::GetSize,
                 GetField::Title => Operation::GetTitle,
+                GetField::Clipboard => Operation::GetClipboard,
                 GetField::BellCount => Operation::GetBellCount,
                 GetField::BellEvents => Operation::GetBellEvents,
             }),
@@ -254,19 +271,6 @@ impl Request {
             Request::Mouse { action } => Ok(Operation::Mouse { action }),
             Request::Resize { cols, rows } => Ok(Operation::Resize { cols, rows }),
             Request::Signal { name } => Ok(Operation::Signal { name }),
-            Request::WaitText {
-                text,
-                regex,
-                full,
-                timeout_ms,
-                not,
-            } => Ok(Operation::WaitText {
-                text,
-                regex,
-                full,
-                timeout_ms,
-                not,
-            }),
             Request::WaitTitle {
                 text,
                 regex,
@@ -278,28 +282,56 @@ impl Request {
                 timeout_ms,
                 not,
             }),
+            Request::WaitClipboard {
+                text,
+                regex,
+                timeout_ms,
+            } => match text {
+                Some(text) => {
+                    let pattern = if regex {
+                        ClipboardPattern::regex(&text).map_err(|error| {
+                            TuiTestError::usage(format!("invalid regex: {error}"))
+                        })?
+                    } else {
+                        text.into()
+                    };
+                    Ok(Operation::WaitClipboardMatch {
+                        pattern,
+                        timeout_ms,
+                    })
+                }
+                None if regex => Err(TuiTestError::usage("clipboard regex requires text")),
+                None => Ok(Operation::WaitClipboard { timeout_ms }),
+            },
             Request::WaitIdle { timeout_ms } => Ok(Operation::WaitIdle { timeout_ms }),
             Request::WaitCommand { timeout_ms } => Ok(Operation::WaitCommand { timeout_ms }),
             Request::WaitExit { timeout_ms } => Ok(Operation::WaitExit { timeout_ms }),
             Request::WaitReady { timeout_ms } => Ok(Operation::WaitReady { timeout_ms }),
             Request::WaitBell { timeout_ms } => Ok(Operation::WaitBell { timeout_ms }),
-            Request::ExpectText {
-                text,
-                regex,
-                full,
-                strict,
-                not,
-                fg,
-                bg,
+            Request::FindLocator { query } => Ok(Operation::FindLocator { query }),
+            Request::ClickLocator {
+                query,
+                button,
+                clicks,
                 timeout_ms,
-            } => Ok(Operation::ExpectText {
-                text,
-                regex,
-                full,
-                strict,
+            } => Ok(Operation::ClickLocator {
+                query,
+                options: MouseOptions::from_sgr_code(button).ok_or_else(|| {
+                    TuiTestError::usage(format!("invalid mouse button code {button}"))
+                })?,
+                clicks,
+                timeout_ms,
+            }),
+            Request::HighlightLocator { query, timeout_ms } => {
+                Ok(Operation::HighlightLocator { query, timeout_ms })
+            }
+            Request::ExpectLocator {
+                query,
                 not,
-                fg,
-                bg,
+                timeout_ms,
+            } => Ok(Operation::WaitLocator {
+                query,
+                not,
                 timeout_ms,
             }),
             Request::ExpectTitle {
@@ -373,6 +405,7 @@ pub enum GetField {
     Cursor,
     Size,
     Title,
+    Clipboard,
     BellCount,
     BellEvents,
 }
@@ -440,11 +473,13 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
             "text": String::from_utf8_lossy(&screen.utf8),
         })),
         OperationResult::Cells(cells) => Ok(json!({ "cells": cells })),
+        OperationResult::Matches(matches) => Ok(json!({ "matches": matches })),
         OperationResult::Command(value) => Ok(json!({ "value": value })),
         OperationResult::Output(value) => Ok(json!({ "value": value })),
         OperationResult::ExitCode(value) => Ok(json!({ "value": value })),
         OperationResult::Cwd(value) => Ok(json!({ "value": value })),
         OperationResult::Title(value) => Ok(json!({ "value": value })),
+        OperationResult::Clipboard(value) => Ok(json!({ "value": value })),
         OperationResult::Cursor(value) => Ok(json!({ "value": value })),
         OperationResult::Size(value) => Ok(json!({ "value": value })),
         OperationResult::BellCount(value) => Ok(json!({ "value": value })),
@@ -475,6 +510,7 @@ mod tests {
             wait_ready,
             restart: false,
             timeouts,
+            recording: Box::new(AutomaticRecording::default()),
         }
     }
 
@@ -514,6 +550,45 @@ mod tests {
             Operation::Key { action, .. } => assert_eq!(action, KeyAction::Press),
             other => panic!("expected key operation, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn locator_click_button_codes_map_to_mouse_options() {
+        let request = Request::ClickLocator {
+            query: LocatorQuery::text("Save"),
+            button: 22,
+            clicks: 2,
+            timeout_ms: Some(500),
+        };
+        match request.into_operation().unwrap() {
+            Operation::ClickLocator {
+                options,
+                clicks,
+                timeout_ms,
+                ..
+            } => {
+                assert_eq!(
+                    options,
+                    MouseOptions {
+                        button: tui_test::MouseButton::Right,
+                        ctrl: true,
+                        shift: true,
+                        ..MouseOptions::default()
+                    }
+                );
+                assert_eq!(clicks, 2);
+                assert_eq!(timeout_ms, Some(500));
+            }
+            other => panic!("expected locator click operation, got {other:?}"),
+        }
+
+        let invalid = Request::ClickLocator {
+            query: LocatorQuery::text("Save"),
+            button: 3,
+            clicks: 1,
+            timeout_ms: None,
+        };
+        assert_eq!(invalid.into_operation().unwrap_err().kind, ErrorKind::Usage);
     }
 
     #[test]
@@ -567,6 +642,7 @@ mod tests {
             r#"{"kind":"wait_exit"}"#,
             r#"{"kind":"wait_ready"}"#,
             r#"{"kind":"wait_bell"}"#,
+            r#"{"kind":"wait_clipboard"}"#,
         ] {
             let request: Request = serde_json::from_str(raw).expect("deserialize wait");
             let timeout = match request {
@@ -574,11 +650,25 @@ mod tests {
                 | Request::WaitCommand { timeout_ms }
                 | Request::WaitExit { timeout_ms }
                 | Request::WaitReady { timeout_ms }
-                | Request::WaitBell { timeout_ms } => timeout_ms,
+                | Request::WaitBell { timeout_ms }
+                | Request::WaitClipboard { timeout_ms, .. } => timeout_ms,
                 other => panic!("expected a wait, got {other:?}"),
             };
             assert_eq!(timeout, None);
         }
+    }
+
+    #[test]
+    fn clipboard_regex_requires_text() {
+        let error = Request::WaitClipboard {
+            text: None,
+            regex: true,
+            timeout_ms: None,
+        }
+        .into_operation()
+        .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Usage);
+        assert!(error.message.contains("requires text"));
     }
 
     #[test]

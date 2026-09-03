@@ -363,10 +363,11 @@ impl Default for ConfigProfile {
 }
 
 /// Concrete session settings resolved from a config profile.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
     pub profile: Profile,
     pub timeouts: crate::api::Timeouts,
+    pub recording: crate::api::AutomaticRecording,
 }
 
 impl From<ConfigProfile> for Settings {
@@ -378,26 +379,45 @@ impl From<ConfigProfile> for Settings {
                 colors: value.colors,
             },
             timeouts: value.timeouts,
+            recording: crate::api::AutomaticRecording::default(),
         }
     }
 }
 
-/// A parsed config file: named profiles, and nothing else.
+/// A parsed config file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ConfigFile {
     pub profiles: BTreeMap<String, ConfigProfile>,
+    pub recording: crate::api::AutomaticRecording,
 }
 
 impl ConfigFile {
     pub fn parse(toml_text: &str) -> anyhow::Result<Self> {
-        Ok(toml::from_str(toml_text)?)
+        let config: Self = toml::from_str(toml_text)?;
+        config.recording.validate()?;
+        Ok(config)
     }
 
     pub fn load(path: &Path) -> anyhow::Result<Self> {
-        let text = std::fs::read_to_string(path)
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        let text = std::fs::read_to_string(&path)
             .map_err(|e| anyhow::anyhow!("could not read {}: {e}", path.display()))?;
-        Self::parse(&text).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))
+        let mut config =
+            Self::parse(&text).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        if let Some(directory) = config.recording.directory.as_mut() {
+            if directory.is_relative() {
+                *directory = path
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(&*directory);
+            }
+        }
+        Ok(config)
     }
 
     /// The named profile, or the built-in defaults when nothing is named and
@@ -423,7 +443,9 @@ impl ConfigFile {
                 .copied()
                 .unwrap_or_default()),
         }?;
-        Ok(profile.into())
+        let mut settings: Settings = profile.into();
+        settings.recording = self.recording.clone();
+        Ok(settings)
     }
 }
 
@@ -500,6 +522,24 @@ pub fn resolve_settings(
         Some(name) => anyhow::bail!("no profile {name:?}: no config file found"),
         None => Ok(Settings::default()),
     }
+}
+
+pub fn resolve_recording(
+    explicit_config: Option<&Path>,
+    cwd: &Path,
+) -> anyhow::Result<crate::api::AutomaticRecording> {
+    if let Some(path) = explicit_config {
+        return Ok(ConfigFile::load(path)?.recording);
+    }
+    if let Some(path) = std::env::var_os("TUI_TEST_CONFIG").map(PathBuf::from) {
+        return Ok(ConfigFile::load(&path)?.recording);
+    }
+    for path in default_search_paths(cwd) {
+        if path.is_file() {
+            return Ok(ConfigFile::load(&path)?.recording);
+        }
+    }
+    Ok(crate::api::AutomaticRecording::default())
 }
 
 #[cfg(test)]
@@ -610,6 +650,24 @@ mod tests {
         assert_eq!(merged.text, Some(2_000));
         assert_eq!(merged.command, Some(30_000));
         assert_eq!(merged.ready, Some(5_000));
+    }
+
+    #[test]
+    fn automatic_recording_configuration_is_loaded() {
+        let config =
+            ConfigFile::parse("[recording]\nmode = \"on-failure\"\ndirectory = \"artifacts\"\n")
+                .unwrap();
+        let recording = config.settings(None).unwrap().recording;
+        assert_eq!(
+            recording.mode,
+            crate::api::AutomaticRecordingMode::OnFailure
+        );
+        assert_eq!(recording.directory, Some(PathBuf::from("artifacts")));
+    }
+
+    #[test]
+    fn empty_recording_directory_is_rejected() {
+        assert!(ConfigFile::parse("[recording]\ndirectory = \"\"\n").is_err());
     }
 
     #[test]

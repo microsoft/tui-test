@@ -4,14 +4,16 @@
 //! back to the PTY.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags as AlacFlags;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config as AlacConfig, Term, TermMode};
+use alacritty_terminal::term::{
+    ClipboardType as AlacClipboardType, Config as AlacConfig, Osc52, Term, TermMode,
+};
 use alacritty_terminal::vte::ansi;
 use alacritty_terminal::vte::ansi::CursorShape as AlacCursorShape;
 use alacritty_terminal::vte::ansi::NamedColor;
@@ -24,7 +26,16 @@ use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{
     Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION,
 };
-use crate::terminal::emu::{CursorShape, Emulator, KeyboardMode};
+use crate::terminal::emu::{
+    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
+};
+
+fn clipboard_type(clipboard: AlacClipboardType) -> ClipboardType {
+    match clipboard {
+        AlacClipboardType::Clipboard => ClipboardType::Clipboard,
+        AlacClipboardType::Selection => ClipboardType::Selection,
+    }
+}
 
 /// Alacritty's palette colors arrive either as a `Named` variant or an index;
 /// both funnel through [`Color::from_index`] so a given slot always yields the
@@ -171,6 +182,7 @@ enum Reply {
 struct CaptureProxy {
     pending: Arc<Mutex<Vec<Reply>>>,
     title: Arc<Mutex<Option<String>>>,
+    clipboard: Arc<Mutex<Clipboard>>,
     bells: BellTracker,
     color_query_pending: Arc<AtomicBool>,
 }
@@ -182,6 +194,21 @@ impl EventListener for CaptureProxy {
                 self.push_reply(Reply::Bytes(bytes.as_bytes().to_vec()), false)
             }
             Event::ColorRequest(slot, format) => self.push_reply(Reply::Color(slot, format), true),
+            Event::ClipboardStore(clipboard, text) => {
+                self.clipboard
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .set(clipboard_type(clipboard), text);
+            }
+            Event::ClipboardLoad(clipboard, format) => {
+                let text = self
+                    .clipboard
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(clipboard_type(clipboard))
+                    .to_string();
+                self.push_reply(Reply::Bytes(format(&text).into_bytes()), false);
+            }
             // `OSC 0` and `OSC 2` both arrive here, and so does a pop of the
             // title stack (`CSI 23 t`), which alacritty implements by setting
             // the title it popped. An empty payload means the same as a reset:
@@ -218,6 +245,8 @@ pub struct AlacrittyEmu {
     rows: u16,
     pending: Arc<Mutex<Vec<Reply>>>,
     title: Arc<Mutex<Option<String>>>,
+    clipboard: Arc<Mutex<Clipboard>>,
+    clipboard_validator: ClipboardValidator,
     color_query_pending: Arc<AtomicBool>,
     /// The settings this session was opened with. A program can shadow the
     /// colors at runtime but never reach them, so a reset always has a value
@@ -240,14 +269,17 @@ impl AlacrittyEmu {
         let alac_config = AlacConfig {
             scrolling_history: profile.scrollback,
             kitty_keyboard: true,
+            osc52: Osc52::CopyPaste,
             ..Default::default()
         };
         let pending: Arc<Mutex<Vec<Reply>>> = Arc::default();
         let title: Arc<Mutex<Option<String>>> = Arc::default();
+        let clipboard: Arc<Mutex<Clipboard>> = Arc::default();
         let color_query_pending = Arc::new(AtomicBool::new(false));
         let proxy = CaptureProxy {
             pending: pending.clone(),
             title: title.clone(),
+            clipboard: clipboard.clone(),
             bells,
             color_query_pending: color_query_pending.clone(),
         };
@@ -258,6 +290,8 @@ impl AlacrittyEmu {
             rows,
             pending,
             title,
+            clipboard,
+            clipboard_validator: ClipboardValidator::new(),
             color_query_pending,
             profile: *profile,
         }
@@ -326,6 +360,7 @@ impl AlacrittyEmu {
 
 impl Emulator for AlacrittyEmu {
     fn process(&mut self, bytes: &[u8]) {
+        self.clipboard_validator.process(bytes);
         let mut start = 0;
         for (index, byte) in bytes.iter().enumerate() {
             // OSC replies are emitted when BEL, ST (ESC \), or C1 ST closes
@@ -349,6 +384,10 @@ impl Emulator for AlacrittyEmu {
         }
     }
 
+    fn fault(&self) -> Option<String> {
+        self.clipboard_validator.fault()
+    }
+
     fn take_pending_writes(&mut self) -> Vec<u8> {
         let queued = match self.pending.lock() {
             Ok(mut queue) => std::mem::take(&mut *queue),
@@ -363,6 +402,23 @@ impl Emulator for AlacrittyEmu {
                 Reply::Color(..) => Vec::new(),
             })
             .collect()
+    }
+
+    fn clipboard(&self, clipboard: ClipboardType) -> anyhow::Result<String> {
+        Ok(self
+            .clipboard
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(clipboard)
+            .to_string())
+    }
+
+    fn clipboard_revision(&self, clipboard: ClipboardType) -> anyhow::Result<u64> {
+        Ok(self
+            .clipboard
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .revision(clipboard))
     }
 
     fn keyboard_mode(&self) -> KeyboardMode {

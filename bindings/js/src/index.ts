@@ -1,12 +1,24 @@
 export { TuiTest } from "./client.js";
 export type {
-  ExpectTextOptions,
+  ClipboardWaitOptions,
+  LocatorClickOptions,
+  LocatorDirection,
+  LocatorExpectOptions,
+  LocatorHighlightOptions,
+  LocatorWaitOptions,
+  Locator,
+  RelativeStyleSelectorOptions,
+  RelativeTextSelectorOptions,
+  StyleSelectorOptions,
+  TextSelectorOptions,
+  TextStyleExpectation,
+  MouseButton,
   MouseButtonOptions,
+  MouseClickOptions,
   TitleOptions,
   RecordingFormat,
   RecordingOptions,
   ScreenshotOptions,
-  WaitTextOptions,
 } from "./client.js";
 export { uniqueSession } from "./ephemeral.js";
 export { closeAll, getRecording, sessions } from "./sessions.js";
@@ -21,6 +33,7 @@ export type { ErrorKind } from "./errors.js";
 export { VERSION } from "./version.js";
 export type {
   ArtifactOptions,
+  AutomaticRecording,
   Backend,
   BellEvent,
   Cell,
@@ -35,6 +48,7 @@ export type {
   Size,
   SpawnOptions,
   State,
+  TextMatch,
   TerminalArtifact,
   Timeouts,
 } from "./types.js";

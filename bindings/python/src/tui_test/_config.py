@@ -6,7 +6,7 @@ import os
 import sys
 from typing import Any, Dict, Mapping, Optional
 
-VERSION = "0.1.0-beta.2"
+VERSION = "0.1.0-beta.3"
 
 DEFAULT_COLS = 80
 DEFAULT_ROWS = 30
@@ -21,6 +21,7 @@ def resolve_session(session: Optional[str]) -> str:
 
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
 _BACKENDS = ("alacritty", "ghostty", "rio", "xtermjs")
+_RECORDING_MODES = ("disabled", "on-failure", "always")
 _PROFILE_FIELDS = frozenset(("scrollback", "hyperlinks", "colors"))
 _COLOR_FIELDS = frozenset(
     (
@@ -112,6 +113,32 @@ def _object_mapping(value: object, name: str) -> Dict[str, Any]:
     if isinstance(value, collections.abc.Mapping):
         return dict(value)
     raise TypeError("{} must be a dataclass or mapping".format(name))
+
+
+def normalize_recording(recording: object) -> Optional[Dict[str, Any]]:
+    if recording is None:
+        return None
+    raw = _object_mapping(recording, "recording")
+    unknown = sorted(set(raw) - {"mode", "directory"})
+    if unknown:
+        raise ValueError(
+            "unknown recording field {}".format(
+                ", ".join(repr(name) for name in unknown)
+            )
+        )
+    mode = raw.get("mode")
+    if mode is not None and mode not in _RECORDING_MODES:
+        raise ValueError(
+            "unknown recording mode {!r}; expected one of {}".format(
+                mode, ", ".join(_RECORDING_MODES)
+            )
+        )
+    directory = raw.get("directory")
+    if directory is not None and (
+        not isinstance(directory, str) or not directory
+    ):
+        raise TypeError("recording.directory must be a non-empty string")
+    return raw
 
 
 def normalize_profile(profile: object) -> Optional[Dict[str, Any]]:

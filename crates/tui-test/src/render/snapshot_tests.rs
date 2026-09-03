@@ -32,9 +32,9 @@ fn single_frame_gif_and_png_renders_match_snapshots() {
                     ROWS as u16,
                     &Profile::default(),
                 )),
-                cursor: None,
+                cursor: case.cursor,
             };
-            let mut renderer = GridRenderer::with_scale(COLS, ROWS, 2);
+            let mut renderer = GridRenderer::with_zoom(COLS, ROWS, case.zoom).unwrap();
             encode::encode(&output, format, &[frame], &mut renderer, 30, None).unwrap();
             let actual = std::fs::read(&output).unwrap();
             std::fs::remove_file(output).unwrap();
@@ -46,21 +46,35 @@ fn single_frame_gif_and_png_renders_match_snapshots() {
 struct SnapshotCase {
     name: &'static str,
     grid: Vec<Vec<EmuCell>>,
+    cursor: Option<(u16, usize)>,
+    zoom: f64,
 }
 
-fn cases() -> [SnapshotCase; 3] {
+fn cases() -> [SnapshotCase; 4] {
     [
         SnapshotCase {
             name: "regular",
             grid: regular_grid(),
+            cursor: None,
+            zoom: 2.0,
         },
         SnapshotCase {
             name: "styles",
             grid: styles_grid(),
+            cursor: None,
+            zoom: 2.0,
         },
         SnapshotCase {
             name: "nerd-fonts",
             grid: nerd_font_grid(),
+            cursor: None,
+            zoom: 2.0,
+        },
+        SnapshotCase {
+            name: "pixel-alignment",
+            grid: pixel_alignment_grid(),
+            cursor: Some((27, 1)),
+            zoom: 1.25,
         },
     ]
 }
@@ -228,6 +242,50 @@ fn nerd_font_grid() -> Vec<Vec<EmuCell>> {
         CellStyle::default(),
     );
     grid
+}
+
+fn pixel_alignment_grid() -> Vec<Vec<EmuCell>> {
+    let mut grid = blank_grid();
+    write_text(
+        &mut grid,
+        0,
+        0,
+        "fractional color runs",
+        CellStyle::default(),
+    );
+    fill_background(&mut grid, 1, 0, 9, Color::Rgb(236, 106, 94));
+    fill_background(&mut grid, 1, 9, 18, Color::Rgb(244, 191, 79));
+    fill_background(&mut grid, 1, 18, 27, Color::Rgb(97, 197, 84));
+    fill_background(&mut grid, 2, 0, usize::from(COLS), Color::Rgb(125, 86, 244));
+    write_text(
+        &mut grid,
+        3,
+        0,
+        "cursor touches final run",
+        CellStyle::default(),
+    );
+    grid
+}
+
+fn fill_background(
+    grid: &mut [Vec<EmuCell>],
+    row: usize,
+    start: usize,
+    end: usize,
+    background: Color,
+) {
+    for column in start..end {
+        set_cell(
+            grid,
+            row,
+            column,
+            " ",
+            CellStyle {
+                bg: Some(background),
+                ..CellStyle::default()
+            },
+        );
+    }
 }
 
 #[derive(Clone, Copy, Default)]
