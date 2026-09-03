@@ -325,6 +325,7 @@ fn set_cell(
         attrs: style.attrs,
         underline: style.underline,
         underline_color: style.underline_color,
+        ..EmuCell::blank()
     };
 }
 
