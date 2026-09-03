@@ -17,9 +17,7 @@ use rio_vt::performer::handler::Processor;
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{
-    Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION,
-};
+use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{
     Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
 };
@@ -69,12 +67,7 @@ fn hyperlink_from_rio(link: &RioHyperlink) -> Arc<Hyperlink> {
     })
 }
 
-fn styled_cell(
-    square: Square,
-    style: Style,
-    extras: &ExtrasTable,
-    hyperlinks: bool,
-) -> EmuCell {
+fn styled_cell(square: Square, style: Style, extras: &ExtrasTable, hyperlinks: bool) -> EmuCell {
     let ch = match square.wide() {
         Wide::Spacer => CompactString::const_new(CONTINUATION),
         Wide::LeadingSpacer => CompactString::const_new(" "),

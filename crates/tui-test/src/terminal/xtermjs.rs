@@ -28,9 +28,7 @@ use rquickjs::{Context, Ctx, Function, Object, Runtime};
 
 use crate::event::BellTracker;
 use crate::profile::{ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{
-    Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION,
-};
+use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{ClipboardValidator, CursorShape, Emulator};
 
 const XTERM_BUNDLE: &str = include_str!("../../assets/xtermjs/xterm-headless.js");

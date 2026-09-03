@@ -23,9 +23,7 @@ use compact_str::{CompactString, ToCompactString};
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{
-    Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION,
-};
+use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{
     Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
 };

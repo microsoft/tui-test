@@ -20,9 +20,7 @@ use ghostty_vt::{RenderState, Terminal};
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{
-    Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION,
-};
+use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape};
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
@@ -66,7 +64,9 @@ fn grid_hyperlink(grid: &GridRef<'_>) -> Result<Option<Arc<Hyperlink>>> {
     let mut inline = [0u8; 128];
     let uri = match grid.hyperlink_uri(&mut inline) {
         Ok(0) => return Ok(None),
-        Ok(len) => CompactString::from_utf8(&inline[..len]).context("hyperlink URI is not UTF-8")?,
+        Ok(len) => {
+            CompactString::from_utf8(&inline[..len]).context("hyperlink URI is not UTF-8")?
+        }
         Err(GhosttyError::OutOfSpace { required }) => {
             let mut buf = vec![0u8; required];
             let len = grid
