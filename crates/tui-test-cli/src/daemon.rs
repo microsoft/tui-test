@@ -1,8 +1,8 @@
 //! cli daemon host: local socket listener, idle watchdog, monitor streaming,
 //! and process state files around the reusable in-process engine.
 
-use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::io::{Read, Write};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use interprocess::local_socket::traits::ListenerExt;
@@ -50,59 +50,92 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
         Arc::clone(&last_activity),
         session_name.clone(),
     );
+    let (operations, requests) = mpsc::channel();
+    let operation_worker =
+        spawn_operation_worker(requests, Arc::clone(&engine), session_name.clone(), logging);
 
     for conn in listener.incoming() {
-        let Ok(mut conn) = conn else { continue };
+        let Ok(conn) = conn else { continue };
         let req = match ipc::read_request(&conn) {
             Ok(request) => request,
             Err(_) => continue,
         };
         *last_activity.lock().unwrap() = Instant::now();
-        if let Request::Monitor { cols, rows } = req {
+        if let Request::Monitor {
+            cols,
+            rows,
+            interactive,
+        } = req
+        {
             spawn_monitor(
                 Arc::clone(&engine),
                 conn,
                 (cols, rows),
                 session_name.clone(),
+                interactive,
             );
             continue;
         }
-        let enrich = match &req {
-            Request::Open { .. } => Some(false),
-            Request::Status => Some(true),
-            _ => None,
-        };
+        if matches!(req, Request::MonitorInputStream) {
+            let mut conn = conn;
+            if ipc::write_response(&mut conn, &Response::ok()).is_ok() {
+                spawn_monitor_input(Arc::clone(&engine), Arc::clone(&last_activity), conn);
+            }
+            continue;
+        }
         let shutdown = matches!(&req, Request::Close | Request::Shutdown);
-        let recording_lifecycle = matches!(
-            &req,
-            Request::Open { .. } | Request::Close | Request::Shutdown
-        );
-        if matches!(&req, Request::Open { .. }) {
-            let _ = std::fs::write(config::recording_pointer_file(&session_name), "");
-        }
-        let mut response = match req {
-            Request::Ping => Response::ok(),
-            Request::Shutdown => Response::from_result(engine.execute(Operation::Close)),
-            Request::Status => status_response(&engine),
-            Request::FlushRecording => flush_recording_response(&engine),
-            operation => operation.execute(&engine),
-        };
-        if recording_lifecycle {
-            sync_recording_pointer(&engine, &session_name);
-        }
-        if let Some(status) = enrich {
-            enrich_cli_response(&mut response, &session_name, logging, status);
-        }
-
-        let _ = ipc::write_response(&mut conn, &response);
-        if shutdown {
-            ipc::drain_peer(conn, Duration::from_millis(config::SHUTDOWN_DRAIN_MS));
+        if operations.send((req, conn)).is_err() || shutdown {
             break;
         }
     }
 
+    drop(operations);
+    let _ = operation_worker.join();
     cleanup(&session_name);
     Ok(())
+}
+
+fn spawn_operation_worker(
+    requests: mpsc::Receiver<(Request, Stream)>,
+    engine: Arc<Engine>,
+    session: String,
+    logging: bool,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        for (req, mut conn) in requests {
+            let enrich = match &req {
+                Request::Open { .. } => Some(false),
+                Request::Status => Some(true),
+                _ => None,
+            };
+            let shutdown = matches!(&req, Request::Close | Request::Shutdown);
+            let recording_lifecycle = matches!(
+                &req,
+                Request::Open { .. } | Request::Close | Request::Shutdown
+            );
+            if matches!(&req, Request::Open { .. }) {
+                let _ = std::fs::write(config::recording_pointer_file(&session), "");
+            }
+            let mut response = match req {
+                Request::Ping => Response::ok(),
+                Request::Shutdown => Response::from_result(engine.execute(Operation::Close)),
+                Request::Status => status_response(&engine),
+                Request::FlushRecording => flush_recording_response(&engine),
+                operation => operation.execute(&engine),
+            };
+            if recording_lifecycle {
+                sync_recording_pointer(&engine, &session);
+            }
+            if let Some(status) = enrich {
+                enrich_cli_response(&mut response, &session, logging, status);
+            }
+            let _ = ipc::write_response(&mut conn, &response);
+            if shutdown {
+                ipc::drain_peer(conn, Duration::from_millis(config::SHUTDOWN_DRAIN_MS));
+                break;
+            }
+        }
+    })
 }
 
 fn flush_recording_response(engine: &Engine) -> Response {
@@ -204,24 +237,51 @@ fn spawn_idle_watchdog(engine: Arc<Engine>, last_activity: Arc<Mutex<Instant>>, 
     });
 }
 
-fn spawn_monitor(engine: Arc<Engine>, mut conn: Stream, viewer: (u16, u16), session: String) {
+fn spawn_monitor(
+    engine: Arc<Engine>,
+    mut conn: Stream,
+    viewer: (u16, u16),
+    session: String,
+    interactive: bool,
+) {
     std::thread::spawn(move || {
         engine.log_event("monitor attached");
+        let mut modes = monitor::ModeMirror::default();
         loop {
             let frame = engine.frame().map(|frame| monitor::Frame {
                 grid: frame.grid,
                 cursor: frame.cursor,
                 size: frame.size,
+                keyboard_mode: frame.keyboard_mode,
+                bracketed_paste: frame.bracketed_paste,
                 exited: frame.exited,
                 shell: frame.shell,
             });
-            let bytes = monitor::render_frame(frame.as_ref(), viewer, &session);
+            let bytes =
+                monitor::render_frame(frame.as_ref(), viewer, &session, interactive, &mut modes);
             if conn.write_all(&bytes).is_err() || conn.flush().is_err() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(config::MONITOR_FRAME_MS));
         }
         engine.log_event("monitor detached");
+    });
+}
+
+/// Forward viewer input to the pty verbatim.
+fn spawn_monitor_input(engine: Arc<Engine>, last_activity: Arc<Mutex<Instant>>, mut conn: Stream) {
+    std::thread::spawn(move || {
+        let mut buffer = [0; 16 * 1024];
+        loop {
+            let read = match conn.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => read,
+            };
+            *last_activity.lock().unwrap() = Instant::now();
+            if let Err(error) = engine.write_monitor_input_raw(&buffer[..read]) {
+                engine.log_event(&format!("monitor input write failed: {}", error.message));
+            }
+        }
     });
 }
 

@@ -182,7 +182,10 @@ pub enum Request {
     Monitor {
         cols: u16,
         rows: u16,
+        #[serde(default)]
+        interactive: bool,
     },
+    MonitorInputStream,
     Shutdown,
 }
 
@@ -388,6 +391,7 @@ impl Request {
             | Request::Status
             | Request::FlushRecording
             | Request::Monitor { .. }
+            | Request::MonitorInputStream
             | Request::Shutdown => Err(TuiTestError::usage(
                 "daemon control request cannot execute as a terminal operation",
             )),

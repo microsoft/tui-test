@@ -6,23 +6,35 @@
 //! mode and blits those frames, so the viewer sees the session in real time
 //! while the agent keeps driving it through the same daemon.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use tui_test::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle};
+use tui_test::terminal::emu::KeyboardMode;
 
-const BORDER: &str = "\x1b[38;5;240m";
-const RESET: &str = "\x1b[0m";
+use crate::ansi;
+
+#[cfg(windows)]
+const UTF8_CONSOLE_CODE_PAGE: u32 = 65001;
 
 /// A snapshot of a live session, rendered into one monitor frame.
 pub struct Frame {
     pub grid: Vec<Vec<EmuCell>>,
     pub cursor: (u16, u16),
     pub size: (u16, u16),
+    pub keyboard_mode: KeyboardMode,
+    pub bracketed_paste: bool,
     pub exited: Option<i32>,
     pub shell: Option<&'static str>,
+}
+
+/// The target's input modes as last announced to the viewer's terminal, so a
+/// mode is only re-applied when the target changes it.
+#[derive(Default)]
+pub(crate) struct ModeMirror {
+    applied: Option<(KeyboardMode, bool)>,
 }
 
 /// Render a framed, full-color view of `frame` clipped to the `viewer` size.
@@ -30,7 +42,13 @@ pub struct Frame {
 /// `None` renders a "no active session" placeholder. The output positions
 /// itself from the home cell and clears trailing cells/rows, so successive
 /// frames repaint in place without flicker (no full screen clear).
-pub fn render_frame(frame: Option<&Frame>, viewer: (u16, u16), session: &str) -> Vec<u8> {
+pub fn render_frame(
+    frame: Option<&Frame>,
+    viewer: (u16, u16),
+    session: &str,
+    interactive: bool,
+    modes: &mut ModeMirror,
+) -> Vec<u8> {
     let vcols = viewer.0.max(8);
     let vrows = viewer.1.max(4);
     let inner_w = match frame {
@@ -43,15 +61,35 @@ pub fn render_frame(frame: Option<&Frame>, viewer: (u16, u16), session: &str) ->
     } as usize;
 
     let mut out = String::with_capacity(inner_w * inner_h * 4);
-    out.push_str("\x1b[H");
+    if interactive {
+        let keyboard = frame.map_or_else(KeyboardMode::empty, |f| f.keyboard_mode);
+        let paste = frame.is_some_and(|f| f.bracketed_paste);
+        if modes.applied.map(|(mode, _)| mode) != Some(keyboard) {
+            out.push_str(&ansi::kitty_keyboard_mode(keyboard.bits()));
+        }
+        if modes.applied.map(|(_, paste)| paste) != Some(paste) {
+            out.push_str(if paste {
+                ansi::BRACKETED_PASTE_ENABLE
+            } else {
+                ansi::BRACKETED_PASTE_DISABLE
+            });
+        }
+        modes.applied = Some((keyboard, paste));
+    }
+    out.push_str(ansi::HOME);
     header(&mut out, frame, session, inner_w);
     if let Some(f) = frame {
         content(&mut out, f, inner_w, inner_h);
     } else {
         placeholder(&mut out, inner_w, inner_h);
     }
-    border_line(&mut out, '└', '┘', "┤ q quit ├", inner_w, false);
-    out.push_str("\x1b[J");
+    let detach_hint = if interactive {
+        "┤ Ctrl+] detach ├"
+    } else {
+        "┤ q quit ├"
+    };
+    border_line(&mut out, '└', '┘', detach_hint, inner_w, false);
+    out.push_str(ansi::ERASE_DISPLAY);
     out.into_bytes()
 }
 
@@ -74,9 +112,9 @@ fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize) {
     let (cx, cy) = f.cursor;
     let show_cursor = f.exited.is_none();
     for y in 0..inner_h {
-        out.push_str(BORDER);
+        out.push_str(ansi::BORDER);
         out.push('│');
-        out.push_str(RESET);
+        out.push_str(ansi::RESET);
         let row = f.grid.get(y);
         let mut last: Option<Style> = None;
         for x in 0..inner_w {
@@ -91,20 +129,21 @@ fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize) {
             }
             out.push_str(&cell.ch);
         }
-        out.push_str(RESET);
-        out.push_str(BORDER);
+        out.push_str(ansi::RESET);
+        out.push_str(ansi::BORDER);
         out.push('│');
-        out.push_str(RESET);
-        out.push_str("\x1b[K\r\n");
+        out.push_str(ansi::RESET);
+        out.push_str(ansi::ERASE_LINE);
+        out.push_str("\r\n");
     }
 }
 
 fn placeholder(out: &mut String, inner_w: usize, inner_h: usize) {
     let msg = "no active session, run `tui-test open`";
     for y in 0..inner_h {
-        out.push_str(BORDER);
+        out.push_str(ansi::BORDER);
         out.push('│');
-        out.push_str(RESET);
+        out.push_str(ansi::RESET);
         if y == inner_h / 2 {
             let shown: String = msg.chars().take(inner_w).collect();
             let count = shown.chars().count();
@@ -115,15 +154,16 @@ fn placeholder(out: &mut String, inner_w: usize, inner_h: usize) {
         } else {
             out.push_str(&" ".repeat(inner_w));
         }
-        out.push_str(BORDER);
+        out.push_str(ansi::BORDER);
         out.push('│');
-        out.push_str(RESET);
-        out.push_str("\x1b[K\r\n");
+        out.push_str(ansi::RESET);
+        out.push_str(ansi::ERASE_LINE);
+        out.push_str("\r\n");
     }
 }
 
 fn border_line(out: &mut String, left: char, right: char, title: &str, inner_w: usize, nl: bool) {
-    out.push_str(BORDER);
+    out.push_str(ansi::BORDER);
     out.push(left);
     let tlen = title.chars().count();
     if tlen + 1 >= inner_w {
@@ -136,8 +176,8 @@ fn border_line(out: &mut String, left: char, right: char, title: &str, inner_w: 
         }
     }
     out.push(right);
-    out.push_str(RESET);
-    out.push_str("\x1b[K");
+    out.push_str(ansi::RESET);
+    out.push_str(ansi::ERASE_LINE);
     if nl {
         out.push_str("\r\n");
     }
@@ -164,7 +204,7 @@ impl Style {
     }
 
     fn sgr(&self) -> String {
-        let mut s = String::from("\x1b[0");
+        let mut s = String::from(ansi::SGR_START);
         for (attr, code) in [
             (Attrs::BOLD, "1"),
             (Attrs::DIM, "2"),
@@ -216,7 +256,7 @@ fn push_color(s: &mut String, color: Option<Color>, fg: bool) {
 
 /// Run the interactive monitor client for `session` until the viewer quits or
 /// the session/daemon goes away. Returns a process exit code.
-pub fn run_client(session: &str) -> i32 {
+pub fn run_client(session: &str, interactive: bool) -> i32 {
     use crate::{config, ipc};
 
     let socket = config::socket_name(session);
@@ -228,41 +268,169 @@ pub fn run_client(session: &str) -> i32 {
         eprintln!("`monitor` requires an interactive terminal");
         return 2;
     }
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!("`monitor` requires terminal stdin");
+        return 2;
+    }
 
     if crossterm::terminal::enable_raw_mode().is_err() {
         eprintln!("failed to enter raw mode");
         return 5;
     }
-    let mut stdout = std::io::stdout();
+
+    #[cfg(windows)]
+    let vt_input = if interactive {
+        match VirtualTerminalInput::enable() {
+            Ok(mode) => Some(mode),
+            Err(error) => {
+                let _ = crossterm::terminal::disable_raw_mode();
+                eprintln!("failed to enable virtual terminal input: {error}");
+                return 5;
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut viewer = ViewerGuard {
+        stdout: std::io::stdout(),
+        interactive,
+        #[cfg(windows)]
+        vt_input,
+    };
+    enter_viewer(&mut viewer.stdout, interactive);
+    stream_loop(&socket, interactive.then(spawn_stdin_reader), interactive)
+}
+
+struct ViewerGuard {
+    stdout: std::io::Stdout,
+    interactive: bool,
+    #[cfg(windows)]
+    vt_input: Option<VirtualTerminalInput>,
+}
+
+impl Drop for ViewerGuard {
+    fn drop(&mut self) {
+        leave_viewer(&mut self.stdout, self.interactive);
+        #[cfg(windows)]
+        drop(self.vt_input.take());
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+fn enter_viewer(out: &mut impl Write, interactive: bool) {
     let _ = crossterm::execute!(
-        stdout,
+        out,
         crossterm::terminal::EnterAlternateScreen,
         crossterm::cursor::Hide
     );
+    if interactive {
+        let _ = out.write_all(ansi::BRACKETED_PASTE_SAVE);
+        let _ = out.write_all(ansi::KITTY_KEYBOARD_PUSH);
+        let _ = out.flush();
+    }
+}
 
-    let code = stream_loop(&socket);
-
+fn leave_viewer(out: &mut impl Write, interactive: bool) {
+    if interactive {
+        let _ = out.write_all(ansi::KITTY_KEYBOARD_POP);
+        let _ = out.write_all(ansi::BRACKETED_PASTE_DISABLE.as_bytes());
+        let _ = out.write_all(ansi::BRACKETED_PASTE_RESTORE);
+        let _ = out.flush();
+    }
     let _ = crossterm::execute!(
-        std::io::stdout(),
+        out,
         crossterm::cursor::Show,
         crossterm::terminal::LeaveAlternateScreen
     );
-    let _ = crossterm::terminal::disable_raw_mode();
-    code
 }
 
-enum Action {
-    Quit,
-    Reconnect,
-    Disconnected,
+#[cfg(windows)]
+struct VirtualTerminalInput {
+    handle: *mut core::ffi::c_void,
+    original_mode: u32,
+    original_code_page: u32,
 }
 
-fn stream_loop(socket: &str) -> i32 {
+#[cfg(windows)]
+impl VirtualTerminalInput {
+    fn enable() -> std::io::Result<Self> {
+        use windows_sys::Win32::System::Console::{
+            GetConsoleCP, GetConsoleMode, GetStdHandle, SetConsoleCP, SetConsoleMode,
+            ENABLE_VIRTUAL_TERMINAL_INPUT, STD_INPUT_HANDLE,
+        };
+
+        unsafe {
+            let handle = GetStdHandle(STD_INPUT_HANDLE);
+            let mut original_mode = 0;
+            if handle.is_null() || GetConsoleMode(handle, &mut original_mode) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let original_code_page = GetConsoleCP();
+            if original_code_page == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if SetConsoleMode(handle, original_mode | ENABLE_VIRTUAL_TERMINAL_INPUT) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if SetConsoleCP(UTF8_CONSOLE_CODE_PAGE) == 0 {
+                let error = std::io::Error::last_os_error();
+                SetConsoleMode(handle, original_mode);
+                return Err(error);
+            }
+            Ok(Self {
+                handle,
+                original_mode,
+                original_code_page,
+            })
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for VirtualTerminalInput {
+    fn drop(&mut self) {
+        use windows_sys::Win32::System::Console::{SetConsoleCP, SetConsoleMode};
+
+        unsafe {
+            SetConsoleCP(self.original_code_page);
+            SetConsoleMode(self.handle, self.original_mode);
+        }
+    }
+}
+
+/// Read viewer stdin on its own thread; the channel closes when stdin does.
+fn spawn_stdin_reader() -> mpsc::Receiver<Vec<u8>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut stdin = stdin.lock();
+        let mut buffer = [0; 4096];
+        while let Ok(read) = stdin.read(&mut buffer) {
+            if read == 0 || sender.send(buffer[..read].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    receiver
+}
+
+fn stream_loop(socket: &str, input: Option<mpsc::Receiver<Vec<u8>>>, interactive: bool) -> i32 {
     use crate::ipc;
     use crate::protocol::Request;
 
+    let mut detach = DetachParser::default();
+    let input_stream = if interactive {
+        match InputStream::connect(socket) {
+            Ok(stream) => Some(stream),
+            Err(_) => return 4,
+        }
+    } else {
+        None
+    };
     loop {
         let (vcols, vrows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let viewer = (vcols, vrows);
         let mut conn = match ipc::connect(socket) {
             Ok(c) => c,
             Err(_) => return 4,
@@ -270,6 +438,7 @@ fn stream_loop(socket: &str) -> i32 {
         let mut line = match serde_json::to_string(&Request::Monitor {
             cols: vcols,
             rows: vrows,
+            interactive,
         }) {
             Ok(l) => l,
             Err(_) => return 5,
@@ -306,47 +475,221 @@ fn stream_loop(socket: &str) -> i32 {
             })
         };
 
-        let action = input_loop(&disconnected);
+        let reconnect = match (&input, &input_stream) {
+            (Some(input), Some(input_stream)) => {
+                interactive_input_loop(viewer, input, &disconnected, &mut detach, input_stream)
+            }
+            _ => read_only_input_loop(viewer, &disconnected),
+        };
         stop.store(true, Ordering::Relaxed);
         let _ = reader.join();
 
-        match action {
-            Action::Quit => return 0,
-            Action::Disconnected => {
-                eprintln!("session ended");
-                return 0;
+        if !reconnect {
+            return 0;
+        }
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+        );
+    }
+}
+
+/// Pump viewer input until the viewer detaches or the frame stream has to be
+/// reopened at a new size (`true`).
+fn interactive_input_loop(
+    viewer: (u16, u16),
+    input: &mpsc::Receiver<Vec<u8>>,
+    disconnected: &AtomicBool,
+    detach: &mut DetachParser,
+    input_stream: &InputStream,
+) -> bool {
+    loop {
+        if disconnected.load(Ordering::Relaxed) {
+            return false;
+        }
+        if crossterm::terminal::size().is_ok_and(|size| size != viewer) {
+            return true;
+        }
+
+        match input.recv_timeout(Duration::from_millis(50)) {
+            Ok(bytes) => {
+                let (forward, detached) = detach.push(&bytes);
+                if !input_stream.send(forward) {
+                    eprintln!("monitor input disconnected");
+                    return false;
+                }
+                if detached {
+                    return false;
+                }
             }
-            Action::Reconnect => {
-                let _ = crossterm::execute!(
-                    std::io::stdout(),
-                    crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
-                );
+            Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(bytes) = detach.on_idle() {
+                    if !input_stream.send(bytes) {
+                        eprintln!("monitor input disconnected");
+                        return false;
+                    }
+                }
             }
         }
     }
 }
 
-fn input_loop(disconnected: &AtomicBool) -> Action {
+fn read_only_input_loop(viewer: (u16, u16), disconnected: &AtomicBool) -> bool {
     use crossterm::event::{Event, KeyCode, KeyModifiers};
 
     loop {
         if disconnected.load(Ordering::Relaxed) {
-            return Action::Disconnected;
+            return false;
         }
-        if crossterm::event::poll(Duration::from_millis(100)).unwrap_or(false) {
-            match crossterm::event::read() {
-                Ok(Event::Key(k)) => {
-                    let ctrl_c =
-                        k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL);
-                    if ctrl_c || matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) {
-                        return Action::Quit;
-                    }
+        if crossterm::terminal::size().is_ok_and(|size| size != viewer) {
+            return true;
+        }
+        if !crossterm::event::poll(Duration::from_millis(50)).unwrap_or(false) {
+            continue;
+        }
+        match crossterm::event::read() {
+            Ok(Event::Key(key)) => {
+                let ctrl_c =
+                    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+                if ctrl_c || matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
+                    return false;
                 }
-                Ok(Event::Resize(_, _)) => return Action::Reconnect,
-                Ok(_) => {}
-                Err(_) => return Action::Quit,
             }
+            Ok(Event::Resize(_, _)) => return true,
+            Ok(_) => {}
+            Err(_) => return false,
         }
+    }
+}
+
+/// Kitty encodes `Ctrl+]` as `CSI 93 ; <modifiers> u`; every other terminal
+/// sends the single byte 0x1d.
+const CTRL_RIGHT_BRACKET: u8 = 0x1d;
+
+/// Splits viewer stdin into bytes for the target and the detach chord, holding
+/// back a partial kitty chord until the rest of it arrives.
+#[derive(Default)]
+struct DetachParser {
+    pending: Vec<u8>,
+}
+
+impl DetachParser {
+    /// Returns the bytes to forward and whether the viewer asked to detach.
+    fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, bool) {
+        self.pending.extend_from_slice(bytes);
+        if let Some(at) = self
+            .pending
+            .iter()
+            .position(|byte| *byte == CTRL_RIGHT_BRACKET)
+        {
+            let forwarded = self.pending.drain(..at).collect();
+            self.pending.clear();
+            return (forwarded, true);
+        }
+        let mut forwarded = Vec::new();
+        loop {
+            let Some(start) = self
+                .pending
+                .windows(ansi::KITTY_CTRL_RIGHT_BRACKET.len())
+                .position(|window| window == ansi::KITTY_CTRL_RIGHT_BRACKET)
+            else {
+                let keep = (1..ansi::KITTY_CTRL_RIGHT_BRACKET
+                    .len()
+                    .min(self.pending.len() + 1))
+                    .rev()
+                    .find(|length| {
+                        self.pending
+                            .ends_with(&ansi::KITTY_CTRL_RIGHT_BRACKET[..*length])
+                    })
+                    .unwrap_or(0);
+                let ready = self.pending.len() - keep;
+                forwarded.extend(self.pending.drain(..ready));
+                return (forwarded, false);
+            };
+            forwarded.extend(self.pending.drain(..start));
+            let Some(end) = self.pending[ansi::KITTY_CTRL_RIGHT_BRACKET.len()..]
+                .iter()
+                .position(|byte| (0x40..=0x7e).contains(byte))
+            else {
+                return (forwarded, false);
+            };
+            let sequence: Vec<u8> = self
+                .pending
+                .drain(..=end + ansi::KITTY_CTRL_RIGHT_BRACKET.len())
+                .collect();
+            if is_detach_chord(&sequence) {
+                self.pending.clear();
+                return (forwarded, true);
+            }
+            forwarded.extend(sequence);
+        }
+    }
+
+    /// Nothing followed the held-back bytes, so they were not a detach chord.
+    fn on_idle(&mut self) -> Option<Vec<u8>> {
+        (!self.pending.is_empty()).then(|| std::mem::take(&mut self.pending))
+    }
+}
+
+/// True for `Ctrl+]` held with no modifier that would make it another chord
+/// the target is entitled to see.
+fn is_detach_chord(sequence: &[u8]) -> bool {
+    const CTRL: u16 = 1 << 2;
+    const LOCKS: u16 = (1 << 6) | (1 << 7);
+
+    let Some(modifiers) = sequence
+        .strip_prefix(ansi::KITTY_CTRL_RIGHT_BRACKET)
+        .and_then(|rest| rest.strip_suffix(b"u"))
+        .and_then(|rest| rest.split(|byte| matches!(byte, b';' | b':')).next())
+        .and_then(|digits| std::str::from_utf8(digits).ok()?.parse::<u16>().ok())
+        .and_then(|value| value.checked_sub(1))
+    else {
+        return false;
+    };
+    modifiers & CTRL != 0 && modifiers & !(CTRL | LOCKS) == 0
+}
+
+struct InputStream {
+    sender: mpsc::Sender<Vec<u8>>,
+    connected: Arc<AtomicBool>,
+}
+
+impl InputStream {
+    fn connect(socket: &str) -> std::io::Result<Self> {
+        let conn = crate::ipc::connect(socket)?;
+        let mut conn = BufReader::new(conn);
+        let mut request = serde_json::to_vec(&crate::protocol::Request::MonitorInputStream)
+            .map_err(std::io::Error::other)?;
+        request.push(b'\n');
+        conn.get_mut().write_all(&request)?;
+        conn.get_mut().flush()?;
+        let mut response = String::new();
+        conn.read_line(&mut response)?;
+        let response: crate::protocol::Response =
+            serde_json::from_str(response.trim()).map_err(std::io::Error::other)?;
+        if !response.ok {
+            return Err(std::io::Error::other("monitor input stream rejected"));
+        }
+        let mut conn = conn.into_inner();
+
+        let (sender, receiver) = mpsc::channel::<Vec<u8>>();
+        let connected = Arc::new(AtomicBool::new(true));
+        let writer_connected = Arc::clone(&connected);
+        std::thread::spawn(move || {
+            for bytes in receiver {
+                if conn.write_all(&bytes).is_err() || conn.flush().is_err() {
+                    break;
+                }
+            }
+            writer_connected.store(false, Ordering::Relaxed);
+        });
+        Ok(Self { sender, connected })
+    }
+
+    fn send(&self, bytes: Vec<u8>) -> bool {
+        bytes.is_empty()
+            || (self.connected.load(Ordering::Relaxed) && self.sender.send(bytes).is_ok())
     }
 }
 
@@ -418,10 +761,18 @@ mod tests {
             grid: vec![vec![cell("h"), cell("i")]],
             cursor: (0, 0),
             size: (40, 1),
+            keyboard_mode: KeyboardMode::empty(),
+            bracketed_paste: false,
             exited: None,
             shell: Some("bash"),
         };
-        let bytes = render_frame(Some(&frame), (50, 6), "default");
+        let bytes = render_frame(
+            Some(&frame),
+            (50, 6),
+            "default",
+            false,
+            &mut ModeMirror::default(),
+        );
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.contains('┌') && text.contains('┘'));
         assert!(text.contains("bash"));
@@ -431,7 +782,7 @@ mod tests {
 
     #[test]
     fn render_placeholder_without_session() {
-        let bytes = render_frame(None, (40, 6), "work");
+        let bytes = render_frame(None, (40, 6), "work", false, &mut ModeMirror::default());
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.contains("no session"));
         assert!(text.contains("no active session"));
@@ -443,10 +794,112 @@ mod tests {
             grid: vec![vec![cell("x")]],
             cursor: (0, 0),
             size: (1, 1),
+            keyboard_mode: KeyboardMode::empty(),
+            bracketed_paste: false,
             exited: None,
             shell: None,
         };
-        let text = String::from_utf8(render_frame(Some(&frame), (10, 5), "s")).unwrap();
+        let text = String::from_utf8(render_frame(
+            Some(&frame),
+            (10, 5),
+            "s",
+            false,
+            &mut ModeMirror::default(),
+        ))
+        .unwrap();
         assert!(text.contains(";7") || text.contains("[7"));
+    }
+
+    /// The viewer's terminal has to speak the same key and paste protocol as
+    /// the target, and only re-announce it when the target changes it.
+    #[test]
+    fn interactive_render_mirrors_target_modes_when_they_change() {
+        let mut frame = Frame {
+            grid: vec![vec![cell("x")]],
+            cursor: (0, 0),
+            size: (1, 1),
+            keyboard_mode: KeyboardMode::empty(),
+            bracketed_paste: false,
+            exited: None,
+            shell: None,
+        };
+        let mut modes = ModeMirror::default();
+        let render = |frame: Option<&Frame>, modes: &mut ModeMirror| {
+            render_frame(frame, (10, 5), "s", true, modes)
+        };
+
+        assert!(render(Some(&frame), &mut modes).starts_with(b"\x1b[=0u\x1b[?2004l\x1b[H"));
+        assert!(render(Some(&frame), &mut modes).starts_with(b"\x1b[H"));
+
+        frame.keyboard_mode =
+            KeyboardMode::DISAMBIGUATE_ESC_CODES | KeyboardMode::REPORT_ASSOCIATED_TEXT;
+        frame.bracketed_paste = true;
+        assert!(render(Some(&frame), &mut modes).starts_with(b"\x1b[=17u\x1b[?2004h\x1b[H"));
+        assert!(render(None, &mut modes).starts_with(b"\x1b[=0u\x1b[?2004l\x1b[H"));
+        assert!(render_frame(
+            Some(&frame),
+            (10, 5),
+            "s",
+            false,
+            &mut ModeMirror::default()
+        )
+        .starts_with(b"\x1b[H"));
+    }
+
+    /// Interactive mode restores viewer input modes; read-only mode leaves them
+    /// untouched.
+    #[test]
+    fn viewer_saves_and_restores_terminal_modes() {
+        let mut output = Vec::new();
+        enter_viewer(&mut output, true);
+        leave_viewer(&mut output, true);
+        let text = String::from_utf8(output).unwrap();
+        let push = std::str::from_utf8(ansi::KITTY_KEYBOARD_PUSH).unwrap();
+        let pop = std::str::from_utf8(ansi::KITTY_KEYBOARD_POP).unwrap();
+        let order = [
+            "\x1b[?2004s",
+            push,
+            pop,
+            "\x1b[?2004l",
+            "\x1b[?2004r",
+            "\x1b[?1049l",
+        ];
+        let found: Vec<_> = order.iter().map(|sequence| text.find(sequence)).collect();
+        assert!(
+            found.windows(2).all(|at| at[0].is_some() && at[0] < at[1]),
+            "out of order: {found:?} in {text:?}"
+        );
+
+        let mut read_only = Vec::new();
+        enter_viewer(&mut read_only, false);
+        leave_viewer(&mut read_only, false);
+        assert!(!read_only
+            .windows(b"\x1b[?2004".len())
+            .any(|window| window == b"\x1b[?2004"));
+    }
+
+    /// Viewer keystrokes reach the target untouched; only the detach chord is
+    /// swallowed, including a kitty encoding split across reads.
+    #[test]
+    fn interactive_input_is_raw_except_for_the_detach_chord() {
+        let raw = b"\x03text \xff\x1b[200~paste\n\x1b[201~";
+        let mut input = DetachParser::default();
+        assert_eq!(input.push(raw), (raw.to_vec(), false));
+        assert_eq!(input.push(b"before\x1dafter"), (b"before".to_vec(), true));
+
+        for chord in [
+            b"\x1b[93;5u".as_slice(),
+            b"\x1b[93;69:1u",
+            b"\x1b[93;197:1;29u",
+        ] {
+            let mut input = DetachParser::default();
+            let split = chord.len() - 2;
+            assert_eq!(input.push(&chord[..split]), (Vec::new(), false));
+            assert_eq!(input.push(&chord[split..]), (Vec::new(), true));
+        }
+
+        // Ctrl+Shift+] is a different chord, so it belongs to the target.
+        let mut input = DetachParser::default();
+        assert_eq!(input.push(b"\x1b[93;6u"), (b"\x1b[93;6u".to_vec(), false));
     }
 }
