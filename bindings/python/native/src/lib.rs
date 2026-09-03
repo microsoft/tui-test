@@ -1469,6 +1469,7 @@ fn core_style(dict: &Bound<'_, PyDict>) -> Result<TextStyle, TuiTestError> {
         hidden: py_bool(dict, "hidden")?,
         strikethrough: py_bool(dict, "strikethrough")?,
         blink: py_bool(dict, "blink")?,
+        link: py_string(dict, "link")?,
     })
 }
 

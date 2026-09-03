@@ -1905,6 +1905,11 @@ fn cell_matches_style(cell: &EmuCell, style: &TextStyle, colors: &dyn Emulator) 
     {
         return false;
     }
+    if let Some(expected) = style.link.as_deref() {
+        if expected != cell.uri().unwrap_or_default() {
+            return false;
+        }
+    }
     for (spec, actual, foreground) in [
         (&style.foreground, cell.fg, true),
         (&style.background, cell.bg, false),
@@ -2259,6 +2264,86 @@ mod tests {
             &cell,
             &TextStyle {
                 foreground: Some("#ff0000".into()),
+                ..TextStyle::default()
+            },
+            &emu,
+        ));
+    }
+
+    /// A link is matched by where it points, so a locator can find the cells
+    /// of one link and ignore an identical-looking one pointing elsewhere.
+    #[test]
+    fn style_locators_match_a_cell_by_its_link() {
+        let emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        let linked = EmuCell {
+            ch: "x".into(),
+            hyperlink: Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: None,
+                uri: "https://example.com".into(),
+            })),
+            ..EmuCell::blank()
+        };
+
+        let with_link = |uri: &str| TextStyle {
+            link: Some(uri.into()),
+            ..TextStyle::default()
+        };
+        assert!(cell_matches_style(
+            &linked,
+            &with_link("https://example.com"),
+            &emu
+        ));
+        assert!(!cell_matches_style(
+            &linked,
+            &with_link("https://other.example"),
+            &emu
+        ));
+    }
+
+    /// An empty link is a real requirement, not an absent one: it asks for a
+    /// cell that links nowhere, which is how a test asserts that a link was
+    /// closed rather than merely that some other link was not found.
+    #[test]
+    fn an_empty_link_requires_a_cell_that_links_nowhere() {
+        let emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        let plain = EmuCell {
+            ch: "x".into(),
+            ..EmuCell::blank()
+        };
+        let linked = EmuCell {
+            hyperlink: Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: None,
+                uri: "https://example.com".into(),
+            })),
+            ..plain.clone()
+        };
+        let unlinked = TextStyle {
+            link: Some(String::new()),
+            ..TextStyle::default()
+        };
+
+        assert!(cell_matches_style(&plain, &unlinked, &emu));
+        assert!(!cell_matches_style(&linked, &unlinked, &emu));
+    }
+
+    /// A style that says nothing about links keeps matching either kind, so
+    /// adding the field does not narrow every existing query.
+    #[test]
+    fn a_style_without_a_link_still_matches_a_linked_cell() {
+        let emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        let linked = EmuCell {
+            ch: "x".into(),
+            attrs: Attrs::BOLD,
+            hyperlink: Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: None,
+                uri: "https://example.com".into(),
+            })),
+            ..EmuCell::blank()
+        };
+        assert!(cell_matches_style(
+            &linked,
+            &TextStyle {
+                bold: Some(true),
                 ..TextStyle::default()
             },
             &emu,

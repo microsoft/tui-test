@@ -853,6 +853,25 @@ mod tests {
         assert_eq!(query.style.underline_style.as_deref(), Some("curly"));
     }
 
+    /// `--link ""` has to survive parsing as an empty string rather than as
+    /// an absent option, because that is how a caller asks for a cell that
+    /// links nowhere.
+    #[test]
+    fn expect_text_accepts_a_link_target() {
+        for (argument, expected) in [("https://example.com", "https://example.com"), ("", "")] {
+            let cli =
+                Cli::try_parse_from(["tui-test", "expect", "text", "Docs", "--link", argument])
+                    .expect("parse link expectation");
+            let Some(Command::Expect {
+                what: ExpectCmd::Text { query, .. },
+            }) = cli.command
+            else {
+                panic!("expected Expect text");
+            };
+            assert_eq!(query.style.link.as_deref(), Some(expected));
+        }
+    }
+
     #[test]
     fn expect_exit_code_accepts_a_timeout() {
         let cli =
@@ -1209,6 +1228,9 @@ pub struct TextStyleArgs {
     pub strikethrough: Option<bool>,
     #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
     pub blink: Option<bool>,
+    /// Required OSC 8 link target. Pass an empty string to require no link.
+    #[arg(long)]
+    pub link: Option<String>,
 }
 
 #[derive(Args)]

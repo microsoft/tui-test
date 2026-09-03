@@ -103,6 +103,7 @@ class TextStyle:
     hidden: Optional[bool] = None
     strikethrough: Optional[bool] = None
     blink: Optional[bool] = None
+    link: Optional[str] = None
 
 
 @dataclass
