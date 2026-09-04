@@ -374,6 +374,9 @@ pub enum Command {
         /// Forward keyboard and paste input to the session; press Ctrl+] to detach.
         #[arg(long)]
         interactive: bool,
+        /// Exact process-hosted session id from `tui-test sessions`.
+        #[arg(long, value_name = "OWNER/SESSION")]
+        id: Option<String>,
     },
     /// Print a compact command cheatsheet for agents.
     Usage,

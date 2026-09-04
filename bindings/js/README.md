@@ -43,8 +43,31 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `profile` | `Profile` | built-in profile |
 | `artifacts` | `{ dir, onFailure? }` | off |
 | `recording` | `{ mode?, directory? }` | `{ mode: "always" }` |
+| `monitoring` | `MonitoringOptions` | disabled |
 
 `artifacts.onFailure` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+
+Monitoring is opt-in. An enabled session remains owned by the Node process, but
+is advertised through one lazy process-local bridge so another terminal can run
+`tui-test --session NAME monitor --interactive`. `tui-test sessions` shows the
+exact `--id OWNER/SESSION` target when names are duplicated.
+
+```js
+const terminal = new TuiTest("login", {
+  monitoring: {
+    enabled: true,
+    waitAtEnd: "failure",
+    firstAttachTimeout: 30_000,
+    label: "login rejects expired tokens",
+    metadata: { testFile: "test/login.test.mjs", framework: "node:test" },
+  },
+});
+```
+
+`waitAtEnd` is `"never"`, `"failure"`, or `"always"`.
+`firstAttachTimeout` is milliseconds or `null`, and `holdWhileAttached`
+defaults to true. Environment equivalents are `TUI_TEST_MONITORING`,
+`TUI_TEST_WAIT_AT_END`, `TUI_TEST_FIRST_ATTACH_TIMEOUT`, and `TUI_TEST_LABEL`.
 
 #### Properties
 
@@ -63,6 +86,8 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `run(program, args?, options?)` | Run a program. |
 | `close()` | Close the session. |
 | `closeQuiet()` | Close without throwing. |
+| `finish({ outcome, error? })` | Apply configured end-of-test inspection, then close. |
+| `inspectFailure(error)` | Inspect, close, and rethrow the same error object. |
 | `[Symbol.asyncDispose]()` | Close from `await using`. |
 
 `open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
@@ -247,6 +272,11 @@ Import from `@microsoft/tui-test/test`.
 | `terminalSnapshot(text)` | Normalize text for snapshots. |
 
 `CreateTerminalOptions` adds `shell`, `program`, `session`, and `prefix` to the client and spawn options.
+
+When `waitAtEnd: "failure"` is enabled, `withTerminal()` catches the callback
+error, waits up to `firstAttachTimeout` for a monitor, holds while monitor
+streams remain attached, closes, and rethrows the exact original error object.
+No attachment before the finite timeout proceeds directly to cleanup.
 
 `defaultShell` is the platform default.
 

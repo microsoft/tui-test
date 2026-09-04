@@ -2044,9 +2044,12 @@ dependencies = [
 name = "tui-test-node"
 version = "0.1.0-beta.3"
 dependencies = [
+ "interprocess",
  "napi",
  "napi-build",
  "napi-derive",
+ "serde_json",
+ "tui-test-cli",
  "tui-test-rs",
 ]
 

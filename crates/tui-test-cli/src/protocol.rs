@@ -13,6 +13,12 @@ pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Request {
     Ping,
+    HostSessions,
+    Routed {
+        session: String,
+        generation: u64,
+        request: Box<Request>,
+    },
     Open {
         shell: Option<tui_test::shell::Shell>,
         program: Option<Vec<String>>,
@@ -186,6 +192,7 @@ pub enum Request {
         interactive: bool,
     },
     MonitorInputStream,
+    MonitorLeaseStream,
     Shutdown,
 }
 
@@ -388,15 +395,40 @@ impl Request {
             }),
             Request::StopRecording => Ok(Operation::StopRecording),
             Request::Ping
+            | Request::HostSessions
+            | Request::Routed { .. }
             | Request::Status
             | Request::FlushRecording
             | Request::Monitor { .. }
             | Request::MonitorInputStream
+            | Request::MonitorLeaseStream
             | Request::Shutdown => Err(TuiTestError::usage(
                 "daemon control request cannot execute as a terminal operation",
             )),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostSession {
+    pub id: String,
+    pub session: String,
+    pub generation: u64,
+    pub owner: String,
+    pub pid: u32,
+    pub label: Option<String>,
+    pub test_file: Option<String>,
+    pub test_name: Option<String>,
+    pub framework: Option<String>,
+    pub worker: Option<String>,
+    pub status: String,
+    pub outcome: Option<String>,
+    pub child_exited: bool,
+    pub exit_code: Option<i32>,
+    pub clients: u32,
+    pub started_at: u64,
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -626,6 +658,34 @@ mod tests {
         match serde_json::from_str::<Request>(raw).expect("deserialize open") {
             Request::Open { backend, .. } => assert_eq!(backend, Backend::Ghostty),
             other => panic!("expected Open, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn routed_monitor_stream_requests_round_trip() {
+        for (request, inner_kind) in [
+            (
+                Request::Monitor {
+                    cols: 120,
+                    rows: 40,
+                    interactive: true,
+                },
+                "monitor",
+            ),
+            (Request::MonitorInputStream, "monitor_input_stream"),
+            (Request::MonitorLeaseStream, "monitor_lease_stream"),
+        ] {
+            let routed = Request::Routed {
+                session: "login".to_string(),
+                generation: 7,
+                request: Box::new(request),
+            };
+            let value = serde_json::to_value(&routed).expect("serialize routed request");
+            assert_eq!(value["kind"], "routed");
+            assert_eq!(value["session"], "login");
+            assert_eq!(value["generation"], 7);
+            assert_eq!(value["request"]["kind"], inner_kind);
+            serde_json::from_value::<Request>(value).expect("deserialize routed request");
         }
     }
 

@@ -21,6 +21,33 @@ pub struct Session {
     engine: Arc<Engine>,
 }
 
+#[derive(Clone)]
+pub struct SessionMonitorTarget {
+    session: Session,
+    pty: Arc<Mutex<crate::terminal::pty::Pty>>,
+}
+
+impl SessionMonitorTarget {
+    pub fn frame(&self) -> Option<crate::engine::LiveFrame> {
+        self.session.engine.frame_for(&self.pty)
+    }
+
+    pub fn write_monitor_input_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        self.session
+            .engine
+            .write_monitor_input_raw_for(&self.pty, data)
+    }
+
+    pub fn is_current(&self) -> bool {
+        self.session.engine.is_monitor_pty(&self.pty)
+    }
+
+    pub fn same_target(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.session.engine, &other.session.engine)
+            && Arc::ptr_eq(&self.pty, &other.pty)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct LocatorClickOptions {
     pub mouse: MouseOptions,
@@ -334,6 +361,21 @@ impl Session {
         self.engine.recording_path()
     }
 
+    pub fn frame(&self) -> Option<crate::engine::LiveFrame> {
+        self.engine.frame()
+    }
+
+    pub fn write_monitor_input_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        self.engine.write_monitor_input_raw(data)
+    }
+
+    pub fn monitor_target(&self) -> Option<SessionMonitorTarget> {
+        Some(SessionMonitorTarget {
+            session: self.clone(),
+            pty: self.engine.monitor_pty()?,
+        })
+    }
+
     pub fn recording(&self) -> std::io::Result<String> {
         let path = self.recording_path().ok_or_else(|| {
             std::io::Error::new(
@@ -399,12 +441,58 @@ impl SessionHandle {
         }
     }
 
+    pub fn open_with_target(
+        &self,
+        options: OpenOptions,
+    ) -> Result<(OpenResult, SessionMonitorTarget), TuiTestError> {
+        match self
+            .registry
+            .execute_with_target(&self.name, Operation::Open(options))?
+        {
+            (OperationResult::Open(result), session) => Ok((result, session)),
+            _ => Err(TuiTestError::internal(
+                "open returned an unexpected result type",
+            )),
+        }
+    }
+
+    pub fn run_with_target(
+        &self,
+        options: RunOptions,
+    ) -> Result<(OpenResult, SessionMonitorTarget), TuiTestError> {
+        match self
+            .registry
+            .execute_with_target(&self.name, Operation::Run(options))?
+        {
+            (OperationResult::Open(result), session) => Ok((result, session)),
+            _ => Err(TuiTestError::internal(
+                "run returned an unexpected result type",
+            )),
+        }
+    }
+
     pub fn close(&self) -> Result<(), TuiTestError> {
         self.registry.close(&self.name)
     }
 
+    pub fn close_with_target(&self) -> (Result<(), TuiTestError>, Option<SessionMonitorTarget>) {
+        self.registry.close_with_target(&self.name)
+    }
+
+    pub fn close_target(&self, target: &SessionMonitorTarget) -> Result<(), TuiTestError> {
+        self.registry.close_target(&self.name, target)
+    }
+
     pub fn recording(&self) -> std::io::Result<String> {
         self.registry.recording(&self.name)
+    }
+
+    pub fn frame(&self) -> Option<crate::engine::LiveFrame> {
+        self.registry.frame(&self.name)
+    }
+
+    pub fn write_monitor_input_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        self.registry.write_monitor_input_raw(&self.name, data)
     }
 }
 
@@ -490,6 +578,28 @@ impl SessionRegistry {
         }
     }
 
+    fn execute_with_target(
+        &self,
+        name: &str,
+        operation: Operation,
+    ) -> Result<(OperationResult, SessionMonitorTarget), TuiTestError> {
+        let generation = self.generation(name);
+        let _generation = generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lifecycle = self
+            .inner
+            .lifecycle
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let session = self.get_or_create_locked(name.to_string());
+        let result = session.execute(operation)?;
+        let target = session
+            .monitor_target()
+            .ok_or_else(TuiTestError::no_session)?;
+        Ok((result, target))
+    }
+
     pub fn sessions(&self) -> Vec<String> {
         let sessions = self
             .lock_sessions()
@@ -504,12 +614,75 @@ impl SessionRegistry {
         names
     }
 
+    /// Snapshot a process-owned session without joining its serialized
+    /// operation queue. This keeps live monitoring responsive while a wait or
+    /// expectation is in progress.
+    pub fn monitor_target(&self, name: &str) -> Option<SessionMonitorTarget> {
+        let _lifecycle = self
+            .inner
+            .lifecycle
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.lock_sessions().get(name)?.monitor_target()
+    }
+
+    pub fn frame(&self, name: &str) -> Option<crate::engine::LiveFrame> {
+        self.monitor_target(name)
+            .and_then(|session| session.frame())
+    }
+
+    /// Deliver monitor input directly to the live PTY instead of serializing
+    /// it behind an in-flight terminal operation.
+    pub fn write_monitor_input_raw(&self, name: &str, data: &[u8]) -> Result<(), TuiTestError> {
+        let session = self.monitor_target(name);
+        match session {
+            Some(session) => session.write_monitor_input_raw(data),
+            None => Ok(()),
+        }
+    }
+
     pub fn close(&self, name: &str) -> Result<(), TuiTestError> {
         let generation = self.generation(name);
         let _generation = generation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.close_locked(name)
+    }
+
+    pub fn close_with_target(
+        &self,
+        name: &str,
+    ) -> (Result<(), TuiTestError>, Option<SessionMonitorTarget>) {
+        let generation = self.generation(name);
+        let _generation = generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let target = self
+            .lock_sessions()
+            .get(name)
+            .and_then(Session::monitor_target);
+        (self.close_locked(name), target)
+    }
+
+    pub fn close_target(
+        &self,
+        name: &str,
+        target: &SessionMonitorTarget,
+    ) -> Result<(), TuiTestError> {
+        let generation = self.generation(name);
+        let _generation = generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let matches = self
+            .lock_sessions()
+            .get(name)
+            .and_then(Session::monitor_target)
+            .is_some_and(|current| current.same_target(target));
+        if matches {
+            self.close_locked(name)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn close_all(&self) {
@@ -710,6 +883,40 @@ mod tests {
         let registry = SessionRegistry::default();
         let error = registry.execute("missing", Operation::State).unwrap_err();
         assert_eq!(error.kind, ErrorKind::NoSession);
+        assert!(registry.frame("missing").is_none());
+        registry.write_monitor_input_raw("missing", b"x").unwrap();
+    }
+
+    #[test]
+    fn monitor_targets_follow_spawn_identity() {
+        let registry = SessionRegistry::default();
+        let handle = registry.session(format!("monitor-target-{}", std::process::id()));
+        let options = OpenOptions {
+            wait_ready: Some(false),
+            ..OpenOptions::default()
+        };
+        let (_, first) = handle.open_with_target(options.clone()).unwrap();
+        let (_, reused) = handle.open_with_target(options).unwrap();
+        assert!(first.same_target(&reused));
+        assert!(first.is_current());
+
+        let (_, replacement) = handle
+            .open_with_target(OpenOptions {
+                wait_ready: Some(false),
+                restart: true,
+                ..OpenOptions::default()
+            })
+            .unwrap();
+        assert!(!first.same_target(&replacement));
+        assert!(!first.is_current());
+        assert!(replacement.is_current());
+
+        handle.close_target(&first).unwrap();
+        assert!(replacement.is_current());
+        let (result, closed) = handle.close_with_target();
+        result.unwrap();
+        assert!(closed.is_some_and(|target| target.same_target(&replacement)));
+        assert!(!replacement.is_current());
     }
 
     #[test]

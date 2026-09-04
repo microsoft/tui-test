@@ -107,6 +107,34 @@ test(
 );
 
 test(
+  "withTerminal preserves the exact callback failure after monitor timeout",
+  async () => {
+    const original = new Error("original callback failure");
+    let caught;
+    try {
+      await withTerminal(
+        {
+          prefix: "helpers-monitor-failure",
+          monitoring: {
+            enabled: true,
+            waitAtEnd: "failure",
+            firstAttachTimeout: 0,
+            label: "failure preservation test",
+          },
+        },
+        async () => {
+          throw original;
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    assert.equal(caught, original);
+    assert.equal(trackedCount(), 0);
+  },
+);
+
+test(
   "createTerminal registers the terminal for automatic cleanup",
   async () => {
     await closeAllTracked();

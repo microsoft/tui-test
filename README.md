@@ -153,7 +153,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run a program. |
-| `sessions` | List sessions. |
+| `sessions` | List daemon sessions and monitoring-enabled JavaScript sessions. |
 | `close [--all]` | Close one or all sessions. |
 | `daemon start` | Start the session daemon. |
 | `daemon status` | Show daemon status. |
@@ -276,7 +276,12 @@ Timeout defaults:
 | `record start PATH [options]` | Start APNG, GIF, MP4, or asciinema recording. |
 | `record stop` | Finish the recording. |
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
-| `monitor [--interactive]` | Watch a CLI session or send input with `--interactive`. |
+| `monitor [--interactive] [--id OWNER/SESSION]` | Watch a daemon or monitoring-enabled JavaScript session. |
+
+For JavaScript sessions, monitoring is explicitly enabled in the constructor
+or test helper. The terminal remains process-owned; the CLI discovers a lazy
+per-process bridge and reuses the same full-color monitor and interactive input
+handling as daemon sessions.
 
 `record start` accepts `--format`, `--fps`, `--speed`, `--idle-time-limit`, and `--zoom`. MP4 output requires `ffmpeg`.
 
