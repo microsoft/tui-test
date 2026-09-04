@@ -260,7 +260,10 @@ fn monitor_frames_and_input_outlive_the_target() {
         "monitor did not receive a frame"
     );
 
-    let mut input = monitor_stream(&sandbox, "{\"kind\":\"monitor_input_stream\"}\n");
+    let mut input = monitor_stream(
+        &sandbox,
+        "{\"kind\":\"monitor_input_stream\",\"cols\":80,\"rows\":30}\n",
+    );
     input.write_all(b"ignored").expect("write without target");
     input.flush().expect("flush without target");
     std::thread::sleep(Duration::from_millis(100));
@@ -331,7 +334,7 @@ fn monitor_input_is_delivered_while_a_long_operation_is_running() {
     let started = Instant::now();
     let _input = monitor_stream(
         &sandbox,
-        &format!("{{\"kind\":\"monitor_input_stream\"}}\necho {marker}\r"),
+        &format!("{{\"kind\":\"monitor_input_stream\",\"cols\":80,\"rows\":30}}\necho {marker}\r"),
     );
     assert!(
         started.elapsed() < Duration::from_secs(2),

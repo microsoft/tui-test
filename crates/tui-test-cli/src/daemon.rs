@@ -76,10 +76,15 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
             );
             continue;
         }
-        if matches!(req, Request::MonitorInputStream) {
+        if let Request::MonitorInputStream { cols, rows } = req {
             let mut conn = conn;
             if ipc::write_response(&mut conn, &Response::ok()).is_ok() {
-                spawn_monitor_input(Arc::clone(&engine), Arc::clone(&last_activity), conn);
+                spawn_monitor_input(
+                    Arc::clone(&engine),
+                    Arc::clone(&last_activity),
+                    conn,
+                    (cols, rows),
+                );
             }
             continue;
         }
@@ -254,6 +259,7 @@ fn spawn_monitor(
                 size: frame.size,
                 keyboard_mode: frame.keyboard_mode,
                 bracketed_paste: frame.bracketed_paste,
+                mouse_mode: frame.mouse_mode,
                 exited: frame.exited,
                 shell: frame.shell,
             });
@@ -269,18 +275,48 @@ fn spawn_monitor(
 }
 
 /// Forward viewer input to the pty verbatim.
-fn spawn_monitor_input(engine: Arc<Engine>, last_activity: Arc<Mutex<Instant>>, mut conn: Stream) {
+fn spawn_monitor_input(
+    engine: Arc<Engine>,
+    last_activity: Arc<Mutex<Instant>>,
+    mut conn: Stream,
+    viewer: (u16, u16),
+) {
     std::thread::spawn(move || {
-        let mut buffer = [0; 16 * 1024];
-        loop {
-            let read = match conn.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
-                Ok(read) => read,
-            };
-            *last_activity.lock().unwrap() = Instant::now();
-            if let Err(error) = engine.write_monitor_input_raw(&buffer[..read]) {
-                engine.log_event(&format!("monitor input write failed: {}", error.message));
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buffer = [0; 16 * 1024];
+            loop {
+                let read = match conn.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => read,
+                };
+                if sender.send(buffer[..read].to_vec()).is_err() {
+                    break;
+                }
             }
+        });
+        let mut mouse = monitor::MouseRemapper::new(viewer);
+        loop {
+            let input = match receiver.recv_timeout(Duration::from_millis(50)) {
+                Ok(input) => {
+                    *last_activity.lock().unwrap() = Instant::now();
+                    mouse.push(&input, engine.monitor_mouse_size())
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    mouse.observe(engine.monitor_mouse_size());
+                    mouse.finish()
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+            if !input.is_empty() {
+                if let Err(error) = engine.write_monitor_input_raw(&input) {
+                    engine.log_event(&format!("monitor input write failed: {}", error.message));
+                }
+            }
+        }
+        let pending = mouse.finish();
+        if !pending.is_empty() {
+            let _ = engine.write_monitor_input_raw(&pending);
         }
     });
 }
