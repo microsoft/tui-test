@@ -383,36 +383,74 @@ impl Engine {
     }
 
     pub fn frame(&self) -> Option<LiveFrame> {
+        let pty = self.monitor_pty()?;
+        self.frame_for(&pty)
+    }
+
+    pub(crate) fn monitor_pty(&self) -> Option<Arc<Mutex<crate::terminal::pty::Pty>>> {
         let live = self
             .live
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        live.as_ref().map(|target| {
-            let state = target
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            LiveFrame {
-                grid: highlighted_rows(&state, false),
-                cursor: state.emu.cursor(),
-                size: state.emu.size(),
-                keyboard_mode: state.emu.keyboard_mode(),
-                bracketed_paste: state.emu.bracketed_paste_mode(),
-                exited: state.exited,
-                shell: target.shell,
-            }
-        })
+        live.as_ref().map(|target| Arc::clone(&target.pty))
+    }
+
+    pub(crate) fn is_monitor_pty(&self, pty: &Arc<Mutex<crate::terminal::pty::Pty>>) -> bool {
+        self.live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|target| Arc::ptr_eq(&target.pty, pty))
+    }
+
+    pub(crate) fn frame_for(
+        &self,
+        pty: &Arc<Mutex<crate::terminal::pty::Pty>>,
+    ) -> Option<LiveFrame> {
+        let live = self
+            .live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        live.as_ref()
+            .filter(|target| Arc::ptr_eq(&target.pty, pty))
+            .map(|target| {
+                let state = target
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                LiveFrame {
+                    grid: highlighted_rows(&state, false),
+                    cursor: state.emu.cursor(),
+                    size: state.emu.size(),
+                    keyboard_mode: state.emu.keyboard_mode(),
+                    bracketed_paste: state.emu.bracketed_paste_mode(),
+                    exited: state.exited,
+                    shell: target.shell,
+                }
+            })
     }
 
     /// Write viewer keystrokes straight to the pty: untracked and unlogged, so
     /// a human watching cannot disturb what the agent is waiting on.
     pub fn write_monitor_input_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        let Some(pty) = self.monitor_pty() else {
+            return Ok(());
+        };
+        self.write_monitor_input_raw_for(&pty, data)
+    }
+
+    pub(crate) fn write_monitor_input_raw_for(
+        &self,
+        expected_pty: &Arc<Mutex<crate::terminal::pty::Pty>>,
+        data: &[u8],
+    ) -> Result<(), TuiTestError> {
         let Some((state, pty)) = ({
             let live = self
                 .live
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             live.as_ref()
+                .filter(|target| Arc::ptr_eq(&target.pty, expected_pty))
                 .map(|target| (Arc::clone(&target.state), Arc::clone(&target.pty)))
         }) else {
             return Ok(());

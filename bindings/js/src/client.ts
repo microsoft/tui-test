@@ -587,6 +587,7 @@ export class TuiTest {
   #options: ClientOptions;
   #monitoring: ReturnType<typeof resolveMonitoring>;
   #holdPromise: Promise<unknown> | undefined;
+  #holdGeneration: string | undefined;
   #artifactCounter = 0;
 
   constructor(session?: string, opts: ClientOptions = {}) {
@@ -813,7 +814,15 @@ export class TuiTest {
     if (this.#holdPromise) {
       await this.#holdPromise;
     }
-    await this.#runtime.close();
+    const generation = this.#holdGeneration;
+    if (generation) {
+      await this.#runtime.closeMonitorTarget(generation);
+      if (this.#holdGeneration === generation) {
+        this.#holdGeneration = undefined;
+      }
+    } else {
+      await this.#runtime.close();
+    }
   }
 
   async #finish(
@@ -827,6 +836,7 @@ export class TuiTest {
     if (shouldWait) {
       try {
         const info = await this.#runtime.beginMonitorWait(outcome);
+        this.#holdGeneration = info.generation;
         const timeout = this.#monitoring.firstAttachTimeout;
         console.error(
           `[tui-test] ${outcome === "failed" ? "Test failed" : "Test completed"}; ` +
@@ -845,6 +855,7 @@ export class TuiTest {
             : `[tui-test] Waiting up to ${timeout}ms for an attachment`,
         );
         this.#holdPromise = this.#runtime.waitForMonitor(
+          info.generation,
           timeout,
           this.#monitoring.holdWhileAttached,
         );
@@ -860,7 +871,7 @@ export class TuiTest {
       }
     }
     try {
-      await this.#runtime.close();
+      await this.close();
     } catch (error) {
       if (primary.present) {
         console.error(

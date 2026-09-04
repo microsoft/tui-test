@@ -7,7 +7,8 @@ export declare class NativeSession {
   run(options: RunOptions): Promise<OpenResult>
   close(): Promise<void>
   beginMonitorWait(outcome: string): MonitorInfo
-  waitForMonitor(timeoutMs?: number | undefined | null, holdWhileAttached?: boolean | undefined | null): Promise<boolean>
+  waitForMonitor(generation: string, timeoutMs?: number | undefined | null, holdWhileAttached?: boolean | undefined | null): Promise<boolean>
+  closeMonitorTarget(generation: string): Promise<void>
   state(): Promise<State>
   text(full?: boolean | undefined | null): Promise<string>
   findLocator(stages: Array<LocatorStage>): Promise<Array<TextMatch>>
@@ -160,6 +161,7 @@ export interface LocatorStyle {
 export interface MonitorInfo {
   id: string
   command: string
+  generation: string
 }
 
 export interface MonitoringOptions {

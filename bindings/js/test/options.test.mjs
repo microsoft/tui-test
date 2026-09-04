@@ -276,6 +276,37 @@ test("monitoring is opt-in and resolves explicit and environment settings", () =
   );
 });
 
+test(
+  "a monitor wait does not close a restarted same-name session",
+  { timeout: 10000 },
+  async () => {
+    const name = uniqueSession("monitor-restart");
+    const monitored = new TuiTest(name, {
+      monitoring: {
+        enabled: true,
+        waitAtEnd: "always",
+        firstAttachTimeout: null,
+        label: "restart boundary test",
+      },
+    });
+    const replacement = new TuiTest(name);
+    try {
+      await monitored.run(process.execPath, evalArgs);
+      const finishing = monitored.finish({ outcome: "passed" });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await replacement.run(process.execPath, [
+        "-e",
+        "console.log('replacement-ready'); setInterval(() => {}, 1000)",
+      ], { restart: true });
+      await finishing;
+      await replacement.getByText("replacement-ready").wait({ timeout: 2000 });
+    } finally {
+      await replacement.closeQuiet();
+      await monitored.closeQuiet();
+    }
+  },
+);
+
 test("unknown timeout classes are rejected before native dispatch", async () => {
   assert.throws(() => timeoutsPayload({ comand: 100 }), /comand/);
   assert.throws(() => new TuiTest("s", { timeouts: { txt: 100 } }), /txt/);

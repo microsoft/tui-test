@@ -136,6 +136,7 @@ impl From<MonitoringOptions> for bridge::Metadata {
 pub struct MonitorInfo {
     pub id: String,
     pub command: String,
+    pub generation: String,
 }
 
 #[napi(object)]
@@ -922,19 +923,18 @@ impl NativeSession {
     pub async fn open(&self, options: Option<OpenOptions>) -> Result<OpenResult> {
         let handle = self.handle.clone();
         let recording = self.recording.clone();
-        let result = blocking("open", move || {
-            let result = handle.execute(Operation::Open(open_options(options, recording)?))?;
-            match result {
-                OperationResult::Open(value) => Ok(value.into()),
-                _ => Err(unexpected("open")),
-            }
+        let (result, target) = blocking("open", move || {
+            let (result, target) = handle.open_with_target(open_options(options, recording)?)?;
+            Ok((result.into(), target))
         })
         .await?;
         if let Some(metadata) = self.monitoring.clone() {
-            if let Err(error) = bridge::register(self.handle.name(), metadata) {
-                let _ = self.handle.close();
+            if let Err(error) = bridge::register(self.handle.name(), &target, metadata) {
+                let _ = self.handle.close_target(&target);
                 return Err(native_error(error));
             }
+        } else {
+            bridge::invalidate_replaced(self.handle.name(), &target);
         }
         Ok(result)
     }
@@ -943,48 +943,38 @@ impl NativeSession {
     pub async fn run(&self, options: RunOptions) -> Result<OpenResult> {
         let handle = self.handle.clone();
         let recording = self.recording.clone();
-        let result = blocking("run", move || {
-            let result = handle.execute(Operation::Run(run_options(options, recording)?))?;
-            match result {
-                OperationResult::Open(value) => Ok(value.into()),
-                _ => Err(unexpected("run")),
-            }
+        let (result, target) = blocking("run", move || {
+            let (result, target) = handle.run_with_target(run_options(options, recording)?)?;
+            Ok((result.into(), target))
         })
         .await?;
         if let Some(metadata) = self.monitoring.clone() {
-            if let Err(error) = bridge::register(self.handle.name(), metadata) {
-                let _ = self.handle.close();
+            if let Err(error) = bridge::register(self.handle.name(), &target, metadata) {
+                let _ = self.handle.close_target(&target);
                 return Err(native_error(error));
             }
+        } else {
+            bridge::invalidate_replaced(self.handle.name(), &target);
         }
         Ok(result)
     }
 
     #[napi]
     pub async fn close(&self) -> Result<()> {
-        let result = execute(
-            self.handle.clone(),
-            "close",
-            Operation::Close,
-            |result| match result {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("close")),
-            },
-        )
-        .await;
-        if self.monitoring.is_some() {
-            bridge::unregister(self.handle.name());
-        }
-        result
+        let handle = self.handle.clone();
+        let (result, target) = blocking("close", move || Ok(handle.close_with_target())).await?;
+        bridge::unregister(self.handle.name(), target.as_ref());
+        result.map_err(native_error)
     }
 
     #[napi]
     pub fn begin_monitor_wait(&self, outcome: String) -> Result<MonitorInfo> {
         ffi_boundary(|| {
-            let id = bridge::begin_wait(self.handle.name(), &outcome)?;
+            let (id, generation) = bridge::begin_wait(self.handle.name(), &outcome)?;
             Ok(MonitorInfo {
                 command: format!("tui-test monitor --interactive --id {id}"),
                 id,
+                generation: generation.to_string(),
             })
         })
     }
@@ -992,15 +982,42 @@ impl NativeSession {
     #[napi]
     pub async fn wait_for_monitor(
         &self,
+        generation: String,
         timeout_ms: Option<f64>,
         hold_while_attached: Option<bool>,
     ) -> Result<bool> {
         let name = self.handle.name().to_string();
         blocking("waitForMonitor", move || {
+            let generation = generation
+                .parse()
+                .map_err(|_| TuiTestError::usage("invalid monitor generation"))?;
             let timeout = timeout(timeout_ms, "timeoutMs")?.map(std::time::Duration::from_millis);
-            bridge::wait(&name, timeout, hold_while_attached.unwrap_or(true))
+            bridge::wait(
+                &name,
+                generation,
+                timeout,
+                hold_while_attached.unwrap_or(true),
+            )
         })
         .await
+    }
+
+    #[napi]
+    pub async fn close_monitor_target(&self, generation: String) -> Result<()> {
+        let generation = generation
+            .parse()
+            .map_err(|_| native_error(TuiTestError::usage("invalid monitor generation")))?;
+        let Some(target) = bridge::wait_target(self.handle.name(), generation) else {
+            return Ok(());
+        };
+        let handle = self.handle.clone();
+        let target_for_close = target.clone();
+        blocking("closeMonitorTarget", move || {
+            handle.close_target(&target_for_close)
+        })
+        .await?;
+        bridge::unregister(self.handle.name(), Some(&target));
+        Ok(())
     }
 
     #[napi]

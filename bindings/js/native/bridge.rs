@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use interprocess::local_socket::traits::ListenerExt;
 use interprocess::local_socket::Stream;
-use tui_test::{global_registry, ErrorKind, TuiTestError};
+use tui_test::{ErrorKind, SessionMonitorTarget, TuiTestError};
 use tui_test_cli::host::{self, HostDescriptor};
 use tui_test_cli::protocol::{HostSession, Request, Response};
 use tui_test_cli::{config, ipc, monitor};
@@ -22,6 +22,7 @@ pub struct Metadata {
 #[derive(Clone)]
 struct Entry {
     generation: u64,
+    target: SessionMonitorTarget,
     metadata: Metadata,
     status: String,
     outcome: Option<String>,
@@ -92,19 +93,36 @@ fn bridge_error(error: impl std::fmt::Display) -> TuiTestError {
     )
 }
 
-pub fn register(name: &str, metadata: Metadata) -> Result<(), TuiTestError> {
+pub fn register(
+    name: &str,
+    target: &SessionMonitorTarget,
+    metadata: Metadata,
+) -> Result<bool, TuiTestError> {
+    if !target.is_current() {
+        return Ok(false);
+    }
     let bridge = bridge();
     bridge.ensure_started()?;
     let (state, changed) = &*bridge.state;
     let mut state = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(entry) = state.sessions.get_mut(name) {
+        if entry.target.same_target(target) {
+            entry.metadata = metadata;
+            return Ok(true);
+        }
+    }
+    if !target.is_current() {
+        return Ok(false);
+    }
     let generation = state.next_generation;
     state.next_generation = state.next_generation.wrapping_add(1).max(1);
     state.sessions.insert(
         name.to_string(),
         Entry {
             generation,
+            target: target.clone(),
             metadata,
             status: "running".to_string(),
             outcome: None,
@@ -116,10 +134,10 @@ pub fn register(name: &str, metadata: Metadata) -> Result<(), TuiTestError> {
         },
     );
     changed.notify_all();
-    Ok(())
+    Ok(true)
 }
 
-pub fn unregister(name: &str) {
+pub fn unregister(name: &str, target: Option<&SessionMonitorTarget>) {
     let Some(bridge) = BRIDGE.get() else {
         return;
     };
@@ -127,8 +145,32 @@ pub fn unregister(name: &str) {
     let mut state = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    state.sessions.remove(name);
-    changed.notify_all();
+    let remove = state.sessions.get(name).is_some_and(|entry| match target {
+        Some(target) => entry.target.same_target(target),
+        None => !entry.target.is_current(),
+    });
+    if remove {
+        state.sessions.remove(name);
+        changed.notify_all();
+    }
+}
+
+pub fn invalidate_replaced(name: &str, target: &SessionMonitorTarget) {
+    let Some(bridge) = BRIDGE.get() else {
+        return;
+    };
+    let (state, changed) = &*bridge.state;
+    let mut state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let replaced = state
+        .sessions
+        .get(name)
+        .is_some_and(|entry| !entry.target.same_target(target));
+    if replaced {
+        state.sessions.remove(name);
+        changed.notify_all();
+    }
 }
 
 pub fn clear_sessions() {
@@ -144,7 +186,7 @@ pub fn clear_sessions() {
     changed.notify_all();
 }
 
-pub fn begin_wait(name: &str, outcome: &str) -> Result<String, TuiTestError> {
+pub fn begin_wait(name: &str, outcome: &str) -> Result<(String, u64), TuiTestError> {
     let bridge = bridge();
     let (state, changed) = &*bridge.state;
     let mut state = state
@@ -153,16 +195,24 @@ pub fn begin_wait(name: &str, outcome: &str) -> Result<String, TuiTestError> {
     let entry = state.sessions.get_mut(name).ok_or_else(|| {
         TuiTestError::new(ErrorKind::NoSession, format!("no active session '{name}'"))
     })?;
+    if !entry.target.is_current() {
+        return Err(TuiTestError::new(
+            ErrorKind::NoSession,
+            format!("no active session '{name}'"),
+        ));
+    }
     entry.status = "waiting-for-attach".to_string();
     entry.outcome = Some(outcome.to_string());
     entry.wait_attachment_baseline = Some(entry.attachments);
     entry.wait_had_attachment = entry.clients > 0;
+    let generation = entry.generation;
     changed.notify_all();
-    Ok(format!("{}/{}", bridge.descriptor.owner, name))
+    Ok((format!("{}/{}", bridge.descriptor.owner, name), generation))
 }
 
 pub fn wait(
     name: &str,
+    generation: u64,
     timeout: Option<Duration>,
     hold_while_attached: bool,
 ) -> Result<bool, TuiTestError> {
@@ -171,33 +221,53 @@ pub fn wait(
     let mut state = state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let entry = state.sessions.get(name).ok_or_else(|| {
-        TuiTestError::new(ErrorKind::NoSession, format!("no active session '{name}'"))
-    })?;
+    let entry = state
+        .sessions
+        .get(name)
+        .filter(|entry| entry.generation == generation)
+        .ok_or_else(|| {
+            TuiTestError::new(ErrorKind::NoSession, format!("no active session '{name}'"))
+        })?;
+    if !entry.target.is_current() {
+        return Err(TuiTestError::new(
+            ErrorKind::NoSession,
+            format!("no active session '{name}'"),
+        ));
+    }
     let initial_attachments = entry.wait_attachment_baseline.unwrap_or(entry.attachments);
     let attached_at_start = entry.wait_had_attachment;
 
-    if state
-        .sessions
-        .get(name)
-        .is_some_and(|entry| !attachment_observed(entry, initial_attachments, attached_at_start))
-    {
+    if waiting_for_attachment(
+        &state,
+        name,
+        generation,
+        initial_attachments,
+        attached_at_start,
+    ) {
         state = match timeout {
             Some(timeout) => {
                 let (state, _) = changed
                     .wait_timeout_while(state, timeout, |state| {
-                        state.sessions.get(name).is_some_and(|entry| {
-                            !attachment_observed(entry, initial_attachments, attached_at_start)
-                        })
+                        waiting_for_attachment(
+                            state,
+                            name,
+                            generation,
+                            initial_attachments,
+                            attached_at_start,
+                        )
                     })
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 state
             }
             None => changed
                 .wait_while(state, |state| {
-                    state.sessions.get(name).is_some_and(|entry| {
-                        !attachment_observed(entry, initial_attachments, attached_at_start)
-                    })
+                    waiting_for_attachment(
+                        state,
+                        name,
+                        generation,
+                        initial_attachments,
+                        attached_at_start,
+                    )
                 })
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         };
@@ -205,18 +275,31 @@ pub fn wait(
     let attached = state
         .sessions
         .get(name)
-        .is_some_and(|entry| attachment_observed(entry, initial_attachments, attached_at_start));
+        .filter(|entry| entry.generation == generation)
+        .is_some_and(|entry| {
+            attachment_observed(
+                entry.clients,
+                entry.attachments,
+                initial_attachments,
+                attached_at_start,
+            )
+        });
     if attached && hold_while_attached {
         state = changed
             .wait_while(state, |state| {
                 state
                     .sessions
                     .get(name)
+                    .filter(|entry| entry.generation == generation)
                     .is_some_and(|entry| entry.clients > 0)
             })
             .unwrap_or_else(std::sync::PoisonError::into_inner);
     }
-    if let Some(entry) = state.sessions.get_mut(name) {
+    if let Some(entry) = state
+        .sessions
+        .get_mut(name)
+        .filter(|entry| entry.generation == generation)
+    {
         entry.status = format!(
             "completed-{}",
             entry.outcome.as_deref().unwrap_or("unknown")
@@ -227,8 +310,47 @@ pub fn wait(
     Ok(attached)
 }
 
-fn attachment_observed(entry: &Entry, baseline: u64, attached_at_start: bool) -> bool {
-    attached_at_start || entry.clients > 0 || entry.attachments > baseline
+fn waiting_for_attachment(
+    state: &State,
+    name: &str,
+    generation: u64,
+    initial_attachments: u64,
+    attached_at_start: bool,
+) -> bool {
+    state
+        .sessions
+        .get(name)
+        .filter(|entry| entry.generation == generation)
+        .is_some_and(|entry| {
+            !attachment_observed(
+                entry.clients,
+                entry.attachments,
+                initial_attachments,
+                attached_at_start,
+            )
+        })
+}
+
+pub fn wait_target(name: &str, generation: u64) -> Option<SessionMonitorTarget> {
+    let bridge = BRIDGE.get()?;
+    bridge
+        .state
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .sessions
+        .get(name)
+        .filter(|entry| entry.generation == generation)
+        .map(|entry| entry.target.clone())
+}
+
+fn attachment_observed(
+    clients: u32,
+    attachments: u64,
+    baseline: u64,
+    attached_at_start: bool,
+) -> bool {
+    attached_at_start || clients > 0 || attachments > baseline
 }
 
 fn serve(
@@ -278,6 +400,22 @@ fn handle(mut connection: Stream, state: Arc<(Mutex<State>, Condvar)>, descripto
                 (cols, rows),
                 interactive,
             ),
+            Request::MonitorLeaseStream => {
+                if let Some(attachment) = Attachment::new(Arc::clone(&state), &session, generation)
+                {
+                    if ipc::write_response(&mut connection, &Response::ok()).is_ok() {
+                        hold_lease(connection, attachment);
+                    }
+                } else {
+                    let _ = ipc::write_response(
+                        &mut connection,
+                        &Response::from_error(TuiTestError::new(
+                            ErrorKind::NoSession,
+                            format!("no monitorable session '{session}'"),
+                        )),
+                    );
+                }
+            }
             Request::MonitorInputStream => {
                 if registered(&state, &session, generation) {
                     if ipc::write_response(&mut connection, &Response::ok()).is_ok() {
@@ -324,8 +462,9 @@ fn host_sessions(
     state
         .sessions
         .iter()
+        .filter(|(_, entry)| entry.target.is_current())
         .map(|(name, entry)| {
-            let frame = global_registry().frame(name);
+            let frame = entry.target.frame();
             HostSession {
                 id: format!("{}/{}", descriptor.owner, name),
                 session: name.clone(),
@@ -357,35 +496,23 @@ fn stream_monitor(
     viewer: (u16, u16),
     interactive: bool,
 ) {
-    let Some(attachment) = Attachment::new(Arc::clone(&state), &session, generation) else {
+    let Some(target) = target(&state, &session, generation) else {
         return;
     };
     let mut modes = monitor::ModeMirror::default();
     loop {
-        let frame = {
-            let current = state
-                .0
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if current
-                .sessions
-                .get(&session)
-                .is_none_or(|entry| entry.generation != attachment.generation)
-            {
-                break;
-            }
-            global_registry()
-                .frame(&session)
-                .map(|frame| monitor::Frame {
-                    grid: frame.grid,
-                    cursor: frame.cursor,
-                    size: frame.size,
-                    keyboard_mode: frame.keyboard_mode,
-                    bracketed_paste: frame.bracketed_paste,
-                    exited: frame.exited,
-                    shell: frame.shell,
-                })
-        };
+        if !registered(&state, &session, generation) {
+            break;
+        }
+        let frame = target.frame().map(|frame| monitor::Frame {
+            grid: frame.grid,
+            cursor: frame.cursor,
+            size: frame.size,
+            keyboard_mode: frame.keyboard_mode,
+            bracketed_paste: frame.bracketed_paste,
+            exited: frame.exited,
+            shell: frame.shell,
+        });
         let bytes =
             monitor::render_frame(frame.as_ref(), viewer, &session, interactive, &mut modes);
         if connection.write_all(&bytes).is_err() || connection.flush().is_err() {
@@ -395,12 +522,20 @@ fn stream_monitor(
     }
 }
 
+fn hold_lease(mut connection: Stream, _attachment: Attachment) {
+    let mut buffer = [0; 1];
+    while connection.read(&mut buffer).is_ok_and(|read| read > 0) {}
+}
+
 fn stream_input(
     mut connection: Stream,
     state: Arc<(Mutex<State>, Condvar)>,
     session: String,
     generation: u64,
 ) {
+    let Some(target) = target(&state, &session, generation) else {
+        return;
+    };
     let mut buffer = [0; 16 * 1024];
     loop {
         let read = match connection.read(&mut buffer) {
@@ -410,13 +545,29 @@ fn stream_input(
         if !registered(&state, &session, generation) {
             break;
         }
-        if global_registry()
-            .write_monitor_input_raw(&session, &buffer[..read])
-            .is_err()
-        {
+        if target.write_monitor_input_raw(&buffer[..read]).is_err() {
             break;
         }
     }
+}
+
+fn target(
+    state: &Arc<(Mutex<State>, Condvar)>,
+    session: &str,
+    generation: u64,
+) -> Option<SessionMonitorTarget> {
+    state
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .sessions
+        .get(session)
+        .filter(|entry| {
+            entry.generation == generation
+                && !entry.status.starts_with("completed-")
+                && entry.target.is_current()
+        })
+        .map(|entry| entry.target.clone())
 }
 
 fn registered(state: &Arc<(Mutex<State>, Condvar)>, session: &str, generation: u64) -> bool {
@@ -427,7 +578,9 @@ fn registered(state: &Arc<(Mutex<State>, Condvar)>, session: &str, generation: u
         .sessions
         .get(session)
         .is_some_and(|entry| {
-            entry.generation == generation && !entry.status.starts_with("completed-")
+            entry.generation == generation
+                && !entry.status.starts_with("completed-")
+                && entry.target.is_current()
         })
 }
 
@@ -444,7 +597,7 @@ impl Attachment {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = current.sessions.get_mut(session)?;
-        if entry.generation != generation {
+        if entry.generation != generation || !entry.target.is_current() {
             return None;
         }
         entry.clients += 1;
@@ -486,32 +639,13 @@ impl Drop for Attachment {
 mod tests {
     use super::*;
 
-    fn entry(clients: u32, attachments: u64) -> Entry {
-        Entry {
-            generation: 1,
-            metadata: Metadata::default(),
-            status: "waiting-for-attach".to_string(),
-            outcome: Some("failed".to_string()),
-            clients,
-            attachments,
-            wait_attachment_baseline: Some(attachments),
-            wait_had_attachment: clients > 0,
-            started_at: 0,
-        }
-    }
-
     #[test]
     fn attachment_present_when_wait_begins_remains_observed_after_disconnect() {
-        let mut entry = entry(1, 1);
-        let attached_at_start = entry.wait_had_attachment;
-        entry.clients = 0;
-        assert!(attachment_observed(&entry, 1, attached_at_start));
+        assert!(attachment_observed(0, 1, 1, true));
     }
 
     #[test]
     fn attachment_between_begin_and_wait_is_observed_after_disconnect() {
-        let mut entry = entry(0, 0);
-        entry.attachments = 1;
-        assert!(attachment_observed(&entry, 0, false));
+        assert!(attachment_observed(0, 1, 0, false));
     }
 }

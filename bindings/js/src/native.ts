@@ -180,17 +180,24 @@ export class NativeRuntime {
     return this.#call((session) => session.close());
   }
 
-  beginMonitorWait(outcome: "passed" | "failed"): Promise<{ id: string; command: string }> {
+  beginMonitorWait(
+    outcome: "passed" | "failed",
+  ): Promise<{ id: string; command: string; generation: string }> {
     return this.#call(async (session) => session.beginMonitorWait(outcome));
   }
 
   waitForMonitor(
+    generation: string,
     timeoutMs: number | null,
     holdWhileAttached: boolean,
   ): Promise<boolean> {
     return this.#call((session) =>
-      session.waitForMonitor(timeoutMs, holdWhileAttached),
+      session.waitForMonitor(generation, timeoutMs, holdWhileAttached),
     );
+  }
+
+  closeMonitorTarget(generation: string): Promise<void> {
+    return this.#call((session) => session.closeMonitorTarget(generation));
   }
 
   state(): Promise<State> {

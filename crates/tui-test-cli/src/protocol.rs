@@ -192,6 +192,7 @@ pub enum Request {
         interactive: bool,
     },
     MonitorInputStream,
+    MonitorLeaseStream,
     Shutdown,
 }
 
@@ -400,6 +401,7 @@ impl Request {
             | Request::FlushRecording
             | Request::Monitor { .. }
             | Request::MonitorInputStream
+            | Request::MonitorLeaseStream
             | Request::Shutdown => Err(TuiTestError::usage(
                 "daemon control request cannot execute as a terminal operation",
             )),
@@ -656,6 +658,34 @@ mod tests {
         match serde_json::from_str::<Request>(raw).expect("deserialize open") {
             Request::Open { backend, .. } => assert_eq!(backend, Backend::Ghostty),
             other => panic!("expected Open, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn routed_monitor_stream_requests_round_trip() {
+        for (request, inner_kind) in [
+            (
+                Request::Monitor {
+                    cols: 120,
+                    rows: 40,
+                    interactive: true,
+                },
+                "monitor",
+            ),
+            (Request::MonitorInputStream, "monitor_input_stream"),
+            (Request::MonitorLeaseStream, "monitor_lease_stream"),
+        ] {
+            let routed = Request::Routed {
+                session: "login".to_string(),
+                generation: 7,
+                request: Box::new(request),
+            };
+            let value = serde_json::to_value(&routed).expect("serialize routed request");
+            assert_eq!(value["kind"], "routed");
+            assert_eq!(value["session"], "login");
+            assert_eq!(value["generation"], 7);
+            assert_eq!(value["request"]["kind"], inner_kind);
+            serde_json::from_value::<Request>(value).expect("deserialize routed request");
         }
     }
 

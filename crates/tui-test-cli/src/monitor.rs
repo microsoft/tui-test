@@ -516,6 +516,10 @@ fn stream_loop(
     use crate::protocol::Request;
 
     let mut detach = DetachParser::default();
+    let _lease = match LeaseStream::connect(target) {
+        Ok(lease) => lease,
+        Err(_) => return 4,
+    };
     let input_stream = if interactive {
         match InputStream::connect(target) {
             Ok(stream) => Some(stream),
@@ -751,24 +755,25 @@ struct InputStream {
     connected: Arc<AtomicBool>,
 }
 
+struct LeaseStream {
+    _connection: crate::ipc::Stream,
+}
+
+impl LeaseStream {
+    fn connect(target: &MonitorTarget) -> std::io::Result<Option<Self>> {
+        if matches!(target, MonitorTarget::Daemon(_)) {
+            return Ok(None);
+        }
+        let connection = connect_stream(target, crate::protocol::Request::MonitorLeaseStream)?;
+        Ok(Some(Self {
+            _connection: connection,
+        }))
+    }
+}
+
 impl InputStream {
     fn connect(target: &MonitorTarget) -> std::io::Result<Self> {
-        let conn = crate::ipc::connect(target.endpoint())?;
-        let mut conn = BufReader::new(conn);
-        let mut request =
-            serde_json::to_vec(&target.request(crate::protocol::Request::MonitorInputStream))
-                .map_err(std::io::Error::other)?;
-        request.push(b'\n');
-        conn.get_mut().write_all(&request)?;
-        conn.get_mut().flush()?;
-        let mut response = String::new();
-        conn.read_line(&mut response)?;
-        let response: crate::protocol::Response =
-            serde_json::from_str(response.trim()).map_err(std::io::Error::other)?;
-        if !response.ok {
-            return Err(std::io::Error::other("monitor input stream rejected"));
-        }
-        let mut conn = conn.into_inner();
+        let mut conn = connect_stream(target, crate::protocol::Request::MonitorInputStream)?;
 
         let (sender, receiver) = mpsc::channel::<Vec<u8>>();
         let connected = Arc::new(AtomicBool::new(true));
@@ -788,6 +793,27 @@ impl InputStream {
         bytes.is_empty()
             || (self.connected.load(Ordering::Relaxed) && self.sender.send(bytes).is_ok())
     }
+}
+
+fn connect_stream(
+    target: &MonitorTarget,
+    request: crate::protocol::Request,
+) -> std::io::Result<crate::ipc::Stream> {
+    let conn = crate::ipc::connect(target.endpoint())?;
+    let mut conn = BufReader::new(conn);
+    let mut request =
+        serde_json::to_vec(&target.request(request)).map_err(std::io::Error::other)?;
+    request.push(b'\n');
+    conn.get_mut().write_all(&request)?;
+    conn.get_mut().flush()?;
+    let mut response = String::new();
+    conn.read_line(&mut response)?;
+    let response: crate::protocol::Response =
+        serde_json::from_str(response.trim()).map_err(std::io::Error::other)?;
+    if !response.ok {
+        return Err(std::io::Error::other("monitor stream rejected"));
+    }
+    Ok(conn.into_inner())
 }
 
 #[cfg(test)]
