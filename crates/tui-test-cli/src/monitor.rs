@@ -12,7 +12,7 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use tui_test::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle};
-use tui_test::terminal::emu::KeyboardMode;
+use tui_test::terminal::emu::{KeyboardMode, MouseMode};
 
 use crate::ansi;
 
@@ -26,6 +26,7 @@ pub struct Frame {
     pub size: (u16, u16),
     pub keyboard_mode: KeyboardMode,
     pub bracketed_paste: bool,
+    pub mouse_mode: MouseMode,
     pub exited: Option<i32>,
     pub shell: Option<&'static str>,
 }
@@ -34,7 +35,7 @@ pub struct Frame {
 /// mode is only re-applied when the target changes it.
 #[derive(Default)]
 pub(crate) struct ModeMirror {
-    applied: Option<(KeyboardMode, bool)>,
+    applied: Option<(KeyboardMode, bool, MouseMode)>,
 }
 
 /// Render a framed, full-color view of `frame` clipped to the `viewer` size.
@@ -64,17 +65,27 @@ pub fn render_frame(
     if interactive {
         let keyboard = frame.map_or_else(KeyboardMode::empty, |f| f.keyboard_mode);
         let paste = frame.is_some_and(|f| f.bracketed_paste);
-        if modes.applied.map(|(mode, _)| mode) != Some(keyboard) {
+        let mouse = frame.map_or(MouseMode::None, |f| f.mouse_mode);
+        if modes.applied.map(|(mode, _, _)| mode) != Some(keyboard) {
             out.push_str(&ansi::kitty_keyboard_mode(keyboard.bits()));
         }
-        if modes.applied.map(|(_, paste)| paste) != Some(paste) {
+        if modes.applied.map(|(_, paste, _)| paste) != Some(paste) {
             out.push_str(if paste {
                 ansi::BRACKETED_PASTE_ENABLE
             } else {
                 ansi::BRACKETED_PASTE_DISABLE
             });
         }
-        modes.applied = Some((keyboard, paste));
+        if modes.applied.map(|(_, _, mouse)| mouse) != Some(mouse) {
+            out.push_str(ansi::MOUSE_DISABLE);
+            out.push_str(match mouse {
+                MouseMode::None => "",
+                MouseMode::Click => ansi::MOUSE_CLICK_ENABLE,
+                MouseMode::Drag => ansi::MOUSE_DRAG_ENABLE,
+                MouseMode::Motion => ansi::MOUSE_MOTION_ENABLE,
+            });
+        }
+        modes.applied = Some((keyboard, paste, mouse));
     }
     out.push_str(ansi::HOME);
     header(&mut out, frame, session, inner_w);
@@ -327,6 +338,7 @@ fn enter_viewer(out: &mut impl Write, interactive: bool) {
     if interactive {
         let _ = out.write_all(ansi::BRACKETED_PASTE_SAVE);
         let _ = out.write_all(ansi::KITTY_KEYBOARD_PUSH);
+        let _ = out.write_all(ansi::MOUSE_DISABLE.as_bytes());
         let _ = out.flush();
     }
 }
@@ -336,6 +348,7 @@ fn leave_viewer(out: &mut impl Write, interactive: bool) {
         let _ = out.write_all(ansi::KITTY_KEYBOARD_POP);
         let _ = out.write_all(ansi::BRACKETED_PASTE_DISABLE.as_bytes());
         let _ = out.write_all(ansi::BRACKETED_PASTE_RESTORE);
+        let _ = out.write_all(ansi::MOUSE_DISABLE.as_bytes());
         let _ = out.flush();
     }
     let _ = crossterm::execute!(
@@ -420,17 +433,17 @@ fn stream_loop(socket: &str, input: Option<mpsc::Receiver<Vec<u8>>>, interactive
     use crate::protocol::Request;
 
     let mut detach = DetachParser::default();
-    let input_stream = if interactive {
-        match InputStream::connect(socket) {
-            Ok(stream) => Some(stream),
-            Err(_) => return 4,
-        }
-    } else {
-        None
-    };
     loop {
         let (vcols, vrows) = crossterm::terminal::size().unwrap_or((80, 24));
         let viewer = (vcols, vrows);
+        let input_stream = if interactive {
+            match InputStream::connect(socket, viewer) {
+                Ok(stream) => Some(stream),
+                Err(_) => return 4,
+            }
+        } else {
+            None
+        };
         let mut conn = match ipc::connect(socket) {
             Ok(c) => c,
             Err(_) => return 4,
@@ -650,17 +663,174 @@ fn is_detach_chord(sequence: &[u8]) -> bool {
     modifiers & CTRL != 0 && modifiers & !(CTRL | LOCKS) == 0
 }
 
+pub(crate) struct MouseRemapper {
+    pending: Vec<u8>,
+    viewer: (u16, u16),
+    pressed: u8,
+    active: bool,
+    mouse_seen: bool,
+}
+
+impl MouseRemapper {
+    pub(crate) fn new(viewer: (u16, u16)) -> Self {
+        Self {
+            pending: Vec::new(),
+            viewer,
+            pressed: 0,
+            active: false,
+            mouse_seen: false,
+        }
+    }
+
+    pub(crate) fn observe(&mut self, size: Option<(u16, u16)>) {
+        if size.is_some() {
+            if !self.active {
+                self.pressed = 0;
+            }
+            self.active = true;
+            self.mouse_seen = true;
+        } else {
+            self.active = false;
+        }
+    }
+
+    pub(crate) fn push(&mut self, bytes: &[u8], size: Option<(u16, u16)>) -> Vec<u8> {
+        self.observe(size);
+        if size.is_none() && !self.mouse_seen {
+            let mut forwarded = std::mem::take(&mut self.pending);
+            forwarded.extend_from_slice(bytes);
+            return forwarded;
+        }
+        let size = size.map(|target| {
+            (
+                target.0.min(self.viewer.0.saturating_sub(2)),
+                target.1.min(self.viewer.1.saturating_sub(2)),
+            )
+        });
+        self.pending.extend_from_slice(bytes);
+        let mut forwarded = Vec::new();
+        loop {
+            let Some(start) = self
+                .pending
+                .windows(ansi::SGR_MOUSE_PREFIX.len())
+                .position(|window| window == ansi::SGR_MOUSE_PREFIX)
+            else {
+                let keep = (1..ansi::SGR_MOUSE_PREFIX.len().min(self.pending.len() + 1))
+                    .rev()
+                    .find(|length| self.pending.ends_with(&ansi::SGR_MOUSE_PREFIX[..*length]))
+                    .unwrap_or(0);
+                let ready = self.pending.len() - keep;
+                forwarded.extend(self.pending.drain(..ready));
+                return forwarded;
+            };
+            forwarded.extend(self.pending.drain(..start));
+            let Some(end) = self.pending[ansi::SGR_MOUSE_PREFIX.len()..]
+                .iter()
+                .position(|byte| (0x40..=0x7e).contains(byte))
+            else {
+                if self.pending.len() > 64 {
+                    forwarded.push(self.pending.remove(0));
+                    continue;
+                }
+                return forwarded;
+            };
+            let sequence: Vec<u8> = self
+                .pending
+                .drain(..=end + ansi::SGR_MOUSE_PREFIX.len())
+                .collect();
+            match remap_sgr_mouse(&sequence, size, &mut self.pressed) {
+                Some(Some(remapped)) => forwarded.extend(remapped),
+                Some(None) => {}
+                None => forwarded.extend(sequence),
+            }
+        }
+    }
+
+    pub(crate) fn finish(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.pending)
+    }
+}
+
+fn remap_sgr_mouse(
+    sequence: &[u8],
+    size: Option<(u16, u16)>,
+    pressed: &mut u8,
+) -> Option<Option<Vec<u8>>> {
+    let (&final_byte, params) = sequence.split_last()?;
+    if !matches!(final_byte, b'M' | b'm') {
+        return None;
+    }
+    let mut params = params
+        .strip_prefix(ansi::SGR_MOUSE_PREFIX)?
+        .split(|byte| *byte == b';');
+    let button = parse_u16(params.next()?)?;
+    let x = parse_u16(params.next()?)?;
+    let y = parse_u16(params.next()?)?;
+    if params.next().is_some() {
+        return None;
+    }
+    let mut x = x.checked_sub(1)?;
+    let mut y = y.checked_sub(1)?;
+    let base_button = (button & 0b11) as u8;
+    let button_bit = (base_button < 3).then(|| 1 << base_button);
+    let Some(size) = size else {
+        if final_byte == b'm' {
+            if let Some(bit) = button_bit {
+                *pressed &= !bit;
+            }
+        }
+        return Some(None);
+    };
+    let outside = x == 0 || y == 0 || x > size.0 || y > size.1;
+    if final_byte == b'm' {
+        let bit = button_bit?;
+        if *pressed & bit == 0 {
+            return Some(None);
+        }
+        *pressed &= !bit;
+        if outside {
+            if size.0 == 0 || size.1 == 0 {
+                return Some(None);
+            }
+            x = x.clamp(1, size.0);
+            y = y.clamp(1, size.1);
+        }
+    } else {
+        if outside {
+            return Some(None);
+        }
+        let motion = button & 32 != 0;
+        let wheel = button & 64 != 0;
+        if motion && button_bit.is_some_and(|bit| *pressed & bit == 0) {
+            return Some(None);
+        }
+        if !motion && !wheel {
+            if let Some(bit) = button_bit {
+                *pressed |= bit;
+            }
+        }
+    }
+    Some(Some(ansi::sgr_mouse(button, x, y, final_byte)))
+}
+
+fn parse_u16(bytes: &[u8]) -> Option<u16> {
+    std::str::from_utf8(bytes).ok()?.parse().ok()
+}
+
 struct InputStream {
     sender: mpsc::Sender<Vec<u8>>,
     connected: Arc<AtomicBool>,
 }
 
 impl InputStream {
-    fn connect(socket: &str) -> std::io::Result<Self> {
+    fn connect(socket: &str, viewer: (u16, u16)) -> std::io::Result<Self> {
         let conn = crate::ipc::connect(socket)?;
         let mut conn = BufReader::new(conn);
-        let mut request = serde_json::to_vec(&crate::protocol::Request::MonitorInputStream)
-            .map_err(std::io::Error::other)?;
+        let mut request = serde_json::to_vec(&crate::protocol::Request::MonitorInputStream {
+            cols: viewer.0,
+            rows: viewer.1,
+        })
+        .map_err(std::io::Error::other)?;
         request.push(b'\n');
         conn.get_mut().write_all(&request)?;
         conn.get_mut().flush()?;
@@ -763,6 +933,7 @@ mod tests {
             size: (40, 1),
             keyboard_mode: KeyboardMode::empty(),
             bracketed_paste: false,
+            mouse_mode: MouseMode::None,
             exited: None,
             shell: Some("bash"),
         };
@@ -796,6 +967,7 @@ mod tests {
             size: (1, 1),
             keyboard_mode: KeyboardMode::empty(),
             bracketed_paste: false,
+            mouse_mode: MouseMode::None,
             exited: None,
             shell: None,
         };
@@ -810,8 +982,7 @@ mod tests {
         assert!(text.contains(";7") || text.contains("[7"));
     }
 
-    /// The viewer's terminal has to speak the same key and paste protocol as
-    /// the target, and only re-announce it when the target changes it.
+    /// The viewer's terminal mirrors target input modes only when they change.
     #[test]
     fn interactive_render_mirrors_target_modes_when_they_change() {
         let mut frame = Frame {
@@ -820,6 +991,7 @@ mod tests {
             size: (1, 1),
             keyboard_mode: KeyboardMode::empty(),
             bracketed_paste: false,
+            mouse_mode: MouseMode::None,
             exited: None,
             shell: None,
         };
@@ -828,14 +1000,19 @@ mod tests {
             render_frame(frame, (10, 5), "s", true, modes)
         };
 
-        assert!(render(Some(&frame), &mut modes).starts_with(b"\x1b[=0u\x1b[?2004l\x1b[H"));
+        assert!(render(Some(&frame), &mut modes)
+            .starts_with(b"\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[H"));
         assert!(render(Some(&frame), &mut modes).starts_with(b"\x1b[H"));
 
         frame.keyboard_mode =
             KeyboardMode::DISAMBIGUATE_ESC_CODES | KeyboardMode::REPORT_ASSOCIATED_TEXT;
         frame.bracketed_paste = true;
-        assert!(render(Some(&frame), &mut modes).starts_with(b"\x1b[=17u\x1b[?2004h\x1b[H"));
-        assert!(render(None, &mut modes).starts_with(b"\x1b[=0u\x1b[?2004l\x1b[H"));
+        frame.mouse_mode = MouseMode::Drag;
+        assert!(render(Some(&frame), &mut modes).starts_with(
+            b"\x1b[=17u\x1b[?2004h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1006h\x1b[?1002h\x1b[H"
+        ));
+        assert!(render(None, &mut modes)
+            .starts_with(b"\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[H"));
         assert!(render_frame(
             Some(&frame),
             (10, 5),
@@ -901,5 +1078,62 @@ mod tests {
         // Ctrl+Shift+] is a different chord, so it belongs to the target.
         let mut input = DetachParser::default();
         assert_eq!(input.push(b"\x1b[93;6u"), (b"\x1b[93;6u".to_vec(), false));
+    }
+
+    #[test]
+    fn monitor_mouse_reports_map_to_the_target_grid() {
+        let mut mouse = MouseRemapper::new((12, 7));
+        assert_eq!(
+            mouse.push(b"text\x1b[<0;2", Some((10, 5))),
+            b"text".to_vec()
+        );
+        assert_eq!(
+            mouse.push(b";2Mtail", Some((10, 5))),
+            b"\x1b[<0;1;1Mtail".to_vec()
+        );
+        assert_eq!(
+            mouse.push(b"\x1b[<64;11;6M", Some((10, 5))),
+            b"\x1b[<64;10;5M".to_vec()
+        );
+        assert!(mouse
+            .push(b"\x1b[<0;1;2M\x1b[<0;12;2M", Some((10, 5)))
+            .is_empty());
+        assert_eq!(mouse.push(b"\x1b[31m", Some((10, 5))), b"\x1b[31m".to_vec());
+
+        let mut clipped = MouseRemapper::new((8, 4));
+        assert!(clipped.push(b"\x1b[<0;7;4M", Some((10, 5))).is_empty());
+        assert!(clipped.push(b"\x1b[<0;7;4m", Some((10, 5))).is_empty());
+        assert_eq!(
+            clipped.push(b"\x1b[<0;2;2M", Some((10, 5))),
+            b"\x1b[<0;1;1M".to_vec()
+        );
+        assert_eq!(
+            clipped.push(b"\x1b[<0;7;4m", Some((10, 5))),
+            b"\x1b[<0;6;2m".to_vec()
+        );
+
+        let mut idle = MouseRemapper::new((12, 7));
+        assert!(idle.push(b"\x1b", Some((10, 5))).is_empty());
+        assert_eq!(idle.finish(), b"\x1b");
+
+        let mut disabled = MouseRemapper::new((12, 7));
+        assert_eq!(
+            disabled.push(b"\x1b[<0;2;2M", None),
+            b"\x1b[<0;2;2M".to_vec()
+        );
+
+        let mut observed = MouseRemapper::new((12, 7));
+        observed.observe(Some((10, 5)));
+        observed.observe(None);
+        assert!(observed.push(b"\x1b[<0;2;2M", None).is_empty());
+
+        let mut turning_off = MouseRemapper::new((12, 7));
+        assert_eq!(
+            turning_off.push(b"\x1b[<0;2;2M", Some((10, 5))),
+            b"\x1b[<0;1;1M".to_vec()
+        );
+        assert!(turning_off.push(b"\x1b[<0;2;2m", None).is_empty());
+        assert!(turning_off.push(b"\x1b[<64;2;2M", None).is_empty());
+        assert_eq!(turning_off.push(b"a", None), b"a".to_vec());
     }
 }

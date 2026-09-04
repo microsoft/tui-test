@@ -17,7 +17,7 @@ use crate::input::{keys, mouse};
 use crate::logger::Logger;
 use crate::session::{Session as TerminalSession, TermState, TextHighlight};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
-use crate::terminal::emu::{ClipboardType, Emulator, KeyboardMode};
+use crate::terminal::emu::{ClipboardType, Emulator, KeyboardMode, MouseMode};
 use crate::terminal::locator::{self, Pattern};
 
 pub struct Engine {
@@ -56,6 +56,7 @@ pub struct LiveFrame {
     pub size: (u16, u16),
     pub keyboard_mode: KeyboardMode,
     pub bracketed_paste: bool,
+    pub mouse_mode: MouseMode,
     pub exited: Option<i32>,
     pub shell: Option<&'static str>,
 }
@@ -398,9 +399,24 @@ impl Engine {
                 size: state.emu.size(),
                 keyboard_mode: state.emu.keyboard_mode(),
                 bracketed_paste: state.emu.bracketed_paste_mode(),
+                mouse_mode: state.mouse_mode.mode(),
                 exited: state.exited,
                 shell: target.shell,
             }
+        })
+    }
+
+    pub fn monitor_mouse_size(&self) -> Option<(u16, u16)> {
+        let live = self
+            .live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        live.as_ref().and_then(|target| {
+            let state = target
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (state.mouse_mode.mode() != MouseMode::None).then(|| state.emu.size())
         })
     }
 
