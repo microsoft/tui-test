@@ -188,6 +188,37 @@ fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socke
     stream
 }
 
+fn wait_for_size(sandbox: &Sandbox, cols: u16, rows: u16) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "state"])).expect("state json");
+        if state["data"]["cols"] == cols && state["data"]["rows"] == rows {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "session did not resize to {cols}x{rows}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn drain_monitor(
+    mut stream: interprocess::local_socket::Stream,
+) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        loop {
+            if stream.read(&mut buffer).unwrap_or(0) == 0 || stop_rx.try_recv().is_ok() {
+                break;
+            }
+        }
+    });
+    (stop_tx, reader)
+}
+
 #[test]
 fn sandbox_paths_fit_in_a_unix_socket_address() {
     const SUN_PATH_MAX: usize = 103;
@@ -253,7 +284,11 @@ fn monitor_frames_and_input_outlive_the_target() {
         let mut buffer = [0u8; 4096];
         let read = frames.read(&mut buffer).expect("read monitor frame");
         frame_tx.send(read).expect("report monitor frame");
-        let _ = detach_rx.recv();
+        while detach_rx.try_recv().is_err() {
+            if frames.read(&mut buffer).unwrap_or(0) == 0 {
+                break;
+            }
+        }
     });
     assert!(
         frame_rx.recv_timeout(Duration::from_secs(5)).unwrap_or(0) > 0,
@@ -270,6 +305,7 @@ fn monitor_frames_and_input_outlive_the_target() {
 
     let secret = "human-secret-monitor-input";
     sandbox.ok(&["open"]);
+    wait_for_size(&sandbox, 78, 22);
     input
         .write_all(format!("echo {secret}\r").as_bytes())
         .expect("write to first target");
@@ -277,6 +313,7 @@ fn monitor_frames_and_input_outlive_the_target() {
     sandbox.wait_for_text(secret, "5000");
 
     sandbox.ok(&["open", "--restart"]);
+    wait_for_size(&sandbox, 78, 22);
     input
         .write_all(b"echo restarted-monitor-marker\r")
         .expect("write to restarted target");
@@ -301,6 +338,29 @@ fn monitor_frames_and_input_outlive_the_target() {
 
     detach_tx.send(()).expect("detach monitor");
     reader.join().expect("join monitor reader");
+}
+
+#[test]
+fn monitor_resizes_the_target_in_both_modes() {
+    let sandbox = Sandbox::new("monitor-resize");
+    sandbox.ok(&["open"]);
+
+    let (read_only_stop, read_only_reader) = drain_monitor(monitor_stream(
+        &sandbox,
+        "{\"kind\":\"monitor\",\"cols\":42,\"rows\":12,\"interactive\":false}\n",
+    ));
+    wait_for_size(&sandbox, 40, 10);
+
+    let (interactive_stop, interactive_reader) = drain_monitor(monitor_stream(
+        &sandbox,
+        "{\"kind\":\"monitor\",\"cols\":32,\"rows\":9,\"interactive\":true}\n",
+    ));
+    wait_for_size(&sandbox, 30, 7);
+    interactive_stop.send(()).expect("stop interactive monitor");
+    interactive_reader.join().expect("join interactive monitor");
+    wait_for_size(&sandbox, 40, 10);
+    read_only_stop.send(()).expect("stop read-only monitor");
+    read_only_reader.join().expect("join read-only monitor");
 }
 
 /// The accept loop must not park behind a long operation: viewer keystrokes
