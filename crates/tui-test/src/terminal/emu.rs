@@ -188,6 +188,11 @@ pub trait Emulator: Send {
         KeyboardMode::empty()
     }
 
+    /// Whether the child enabled bracketed paste mode.
+    fn bracketed_paste_mode(&self) -> bool {
+        false
+    }
+
     fn resize(&mut self, cols: u16, rows: u16);
 
     /// Current grid size as `(cols, rows)`.

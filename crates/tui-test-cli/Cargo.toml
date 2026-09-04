@@ -28,3 +28,6 @@ tui-test = { workspace = true, features = [
     "xtermjs",
     "recording-font-jetbrains-mono-styles",
 ] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Console"] }

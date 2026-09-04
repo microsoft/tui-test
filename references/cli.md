@@ -104,6 +104,7 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 | `record stop` | Finish it. |
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
 | `monitor` | Watch a session live. |
+| `monitor --interactive` | Send input to a session. |
 
 ## Configure
 

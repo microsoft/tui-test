@@ -1,4 +1,5 @@
 mod agent_context;
+mod ansi;
 mod cli;
 mod config;
 mod daemon;
@@ -98,7 +99,7 @@ fn main() {
             config::session_was_specified(&cli.session),
             cli.json,
         ),
-        Command::Monitor => monitor::run_client(&session),
+        Command::Monitor { interactive } => monitor::run_client(&session, interactive),
         command => run_remote(&session, command, cli.json, cli.verbose),
     };
     std::process::exit(code);
@@ -1229,7 +1230,7 @@ EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
-WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
+WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
 GLOBAL    --session NAME | --json | --verbose (log PTY traffic to ~/.tui-test/<session>.log)\n\
 EXIT      0 ok | 1 assertion/wait failed | 2 usage | 3 no session | 4 daemon/IPC | 5 internal\n\

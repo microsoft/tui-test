@@ -276,7 +276,7 @@ Timeout defaults:
 | `record start PATH [options]` | Start APNG, GIF, MP4, or asciinema recording. |
 | `record stop` | Finish the recording. |
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
-| `monitor` | Watch a CLI session live. |
+| `monitor [--interactive]` | Watch a CLI session or send input with `--interactive`. |
 
 `record start` accepts `--format`, `--fps`, `--speed`, `--idle-time-limit`, and `--zoom`. MP4 output requires `ffmpeg`.
 
@@ -287,8 +287,6 @@ The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`.
 <p align="center">
   <img alt="animated terminal recording created by tui-test" src="static/recording.gif" width="400">
 </p>
-
-#### Live monitor
 
 | input | monitor |
 | :---: | :---: |

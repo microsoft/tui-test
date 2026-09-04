@@ -63,10 +63,19 @@ pub fn listen(socket: &str) -> anyhow::Result<interprocess::local_socket::Listen
 
 /// Read one request line from an accepted connection.
 pub fn read_request(conn: &Stream) -> anyhow::Result<Request> {
-    let mut reader = BufReader::new(conn);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    let req: Request = serde_json::from_str(line.trim())?;
+    let mut conn = conn;
+    let mut line = Vec::new();
+    let mut byte = [0];
+    loop {
+        if conn.read(&mut byte)? == 0 {
+            anyhow::bail!("connection closed before request");
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+        line.push(byte[0]);
+    }
+    let req: Request = serde_json::from_slice(&line)?;
     Ok(req)
 }
 

@@ -148,6 +148,10 @@ mod tests {
         assert_eq!(doc["schema_version"], json!(SCHEMA_VERSION));
         assert_eq!(doc["name"], json!("tui-test"));
         assert!(doc["commands"]["expect"].is_object());
+        assert_eq!(
+            doc["commands"]["monitor"]["args"][0]["long"],
+            json!("--interactive")
+        );
         assert!(doc["commands"].get("__daemon").is_none());
         assert!(doc["exit_codes"]["3"].is_string());
         let globals = doc["global_flags"].as_array().unwrap();
