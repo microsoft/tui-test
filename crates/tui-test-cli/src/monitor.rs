@@ -60,6 +60,16 @@ pub fn render_frame(
         Some(f) => f.size.1.min(vrows - 2),
         None => vrows - 2,
     } as usize;
+    let too_small = viewer.0 < 8
+        || viewer.1 < 4
+        || frame.is_some_and(|f| {
+            f.size.0 > viewer.0.saturating_sub(2) || f.size.1 > viewer.1.saturating_sub(2)
+        });
+    let border = if too_small {
+        ansi::WARNING_BORDER
+    } else {
+        ansi::BORDER
+    };
 
     let mut out = String::with_capacity(inner_w * inner_h * 4);
     if interactive {
@@ -88,23 +98,30 @@ pub fn render_frame(
         modes.applied = Some((keyboard, paste, mouse));
     }
     out.push_str(ansi::HOME);
-    header(&mut out, frame, session, inner_w);
+    header(&mut out, frame, session, inner_w, too_small, border);
     if let Some(f) = frame {
-        content(&mut out, f, inner_w, inner_h);
+        content(&mut out, f, inner_w, inner_h, border);
     } else {
-        placeholder(&mut out, inner_w, inner_h);
+        placeholder(&mut out, inner_w, inner_h, border);
     }
     let detach_hint = if interactive {
         "┤ Ctrl+] detach ├"
     } else {
         "┤ q quit ├"
     };
-    border_line(&mut out, '└', '┘', detach_hint, inner_w, false);
+    border_line(&mut out, '└', '┘', detach_hint, inner_w, false, border);
     out.push_str(ansi::ERASE_DISPLAY);
     out.into_bytes()
 }
 
-fn header(out: &mut String, frame: Option<&Frame>, session: &str, inner_w: usize) {
+fn header(
+    out: &mut String,
+    frame: Option<&Frame>,
+    session: &str,
+    inner_w: usize,
+    too_small: bool,
+    border: &str,
+) {
     let title = match frame {
         Some(f) => {
             let shell = f.shell.map(|s| format!("{s} · ")).unwrap_or_default();
@@ -112,18 +129,19 @@ fn header(out: &mut String, frame: Option<&Frame>, session: &str, inner_w: usize
                 Some(code) => format!("exited {code}"),
                 None => "live".to_string(),
             };
-            format!("┤ {shell}{}×{} · {status} ├", f.size.0, f.size.1)
+            let warning = if too_small { "! too small · " } else { "" };
+            format!("┤ {warning}{shell}{}×{} · {status} ├", f.size.0, f.size.1)
         }
         None => format!("┤ {session} · no session ├"),
     };
-    border_line(out, '┌', '┐', &title, inner_w, true);
+    border_line(out, '┌', '┐', &title, inner_w, true, border);
 }
 
-fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize) {
+fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize, border: &str) {
     let (cx, cy) = f.cursor;
     let show_cursor = f.exited.is_none();
     for y in 0..inner_h {
-        out.push_str(ansi::BORDER);
+        out.push_str(border);
         out.push('│');
         out.push_str(ansi::RESET);
         let row = f.grid.get(y);
@@ -141,7 +159,7 @@ fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize) {
             out.push_str(&cell.ch);
         }
         out.push_str(ansi::RESET);
-        out.push_str(ansi::BORDER);
+        out.push_str(border);
         out.push('│');
         out.push_str(ansi::RESET);
         out.push_str(ansi::ERASE_LINE);
@@ -149,10 +167,10 @@ fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize) {
     }
 }
 
-fn placeholder(out: &mut String, inner_w: usize, inner_h: usize) {
+fn placeholder(out: &mut String, inner_w: usize, inner_h: usize, border: &str) {
     let msg = "no active session, run `tui-test open`";
     for y in 0..inner_h {
-        out.push_str(ansi::BORDER);
+        out.push_str(border);
         out.push('│');
         out.push_str(ansi::RESET);
         if y == inner_h / 2 {
@@ -165,7 +183,7 @@ fn placeholder(out: &mut String, inner_w: usize, inner_h: usize) {
         } else {
             out.push_str(&" ".repeat(inner_w));
         }
-        out.push_str(ansi::BORDER);
+        out.push_str(border);
         out.push('│');
         out.push_str(ansi::RESET);
         out.push_str(ansi::ERASE_LINE);
@@ -173,8 +191,16 @@ fn placeholder(out: &mut String, inner_w: usize, inner_h: usize) {
     }
 }
 
-fn border_line(out: &mut String, left: char, right: char, title: &str, inner_w: usize, nl: bool) {
-    out.push_str(ansi::BORDER);
+fn border_line(
+    out: &mut String,
+    left: char,
+    right: char,
+    title: &str,
+    inner_w: usize,
+    nl: bool,
+    border: &str,
+) {
+    out.push_str(border);
     out.push(left);
     let tlen = title.chars().count();
     if tlen + 1 >= inner_w {
@@ -949,6 +975,30 @@ mod tests {
         assert!(text.contains("bash"));
         assert!(text.contains('h') && text.contains('i'));
         assert!(text.starts_with("\x1b[H"));
+    }
+
+    #[test]
+    fn clipped_frame_uses_warning_border() {
+        let frame = Frame {
+            grid: vec![vec![cell("x"); 40]; 10],
+            cursor: (0, 0),
+            size: (40, 10),
+            keyboard_mode: KeyboardMode::empty(),
+            bracketed_paste: false,
+            mouse_mode: MouseMode::None,
+            exited: None,
+            shell: None,
+        };
+        let text = String::from_utf8(render_frame(
+            Some(&frame),
+            (20, 6),
+            "s",
+            false,
+            &mut ModeMirror::default(),
+        ))
+        .unwrap();
+        assert!(text.contains(ansi::WARNING_BORDER));
+        assert!(text.contains("! too small"));
     }
 
     #[test]

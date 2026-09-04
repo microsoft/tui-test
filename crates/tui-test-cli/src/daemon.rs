@@ -252,8 +252,48 @@ fn spawn_monitor(
     std::thread::spawn(move || {
         engine.log_event("monitor attached");
         let mut modes = monitor::ModeMirror::default();
+        let target_size = (
+            viewer.0.saturating_sub(2).max(1),
+            viewer.1.saturating_sub(2).max(1),
+        );
+        let resize_request = engine.request_monitor_resize(target_size.0, target_size.1);
+        let (resize_sender, resize_receiver) = mpsc::channel::<Option<String>>();
+        let mut resize_pending = false;
+        let mut resize_generation = None;
+        let mut resize_epoch = None;
         loop {
-            let frame = engine.frame().map(|frame| monitor::Frame {
+            if let Ok(error) = resize_receiver.try_recv() {
+                resize_pending = false;
+                if let Some(error) = error {
+                    engine.log_event(&format!("monitor resize failed: {error}"));
+                }
+            }
+            let frame = engine.frame();
+            let current_resize_epoch = engine.monitor_resize_epoch(resize_request);
+            if current_resize_epoch.is_some() && current_resize_epoch != resize_epoch {
+                resize_generation = None;
+            }
+            resize_epoch = current_resize_epoch;
+            if let Some(frame) = frame.as_ref() {
+                if frame.size != target_size
+                    && current_resize_epoch.is_some()
+                    && !resize_pending
+                    && resize_generation != Some(frame.generation)
+                {
+                    resize_pending = true;
+                    resize_generation = Some(frame.generation);
+                    let engine = Arc::clone(&engine);
+                    let resize_sender = resize_sender.clone();
+                    std::thread::spawn(move || {
+                        let error = engine
+                            .resize_monitor(resize_request)
+                            .err()
+                            .map(|error| error.message);
+                        let _ = resize_sender.send(error);
+                    });
+                }
+            }
+            let frame = frame.map(|frame| monitor::Frame {
                 grid: frame.grid,
                 cursor: frame.cursor,
                 size: frame.size,
@@ -270,6 +310,7 @@ fn spawn_monitor(
             }
             std::thread::sleep(Duration::from_millis(config::MONITOR_FRAME_MS));
         }
+        engine.release_monitor_resize(resize_request);
         engine.log_event("monitor detached");
     });
 }

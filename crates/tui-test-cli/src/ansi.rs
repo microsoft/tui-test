@@ -1,4 +1,5 @@
 pub const BORDER: &str = "\x1b[38;5;240m";
+pub const WARNING_BORDER: &str = "\x1b[33m";
 pub const RESET: &str = "\x1b[0m";
 pub const HOME: &str = "\x1b[H";
 pub const ERASE_DISPLAY: &str = "\x1b[J";

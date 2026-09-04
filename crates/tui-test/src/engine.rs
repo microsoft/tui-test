@@ -1,6 +1,8 @@
 //! Reusable in-process terminal engine.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -25,6 +27,8 @@ pub struct Engine {
     operations: Mutex<()>,
     session: Mutex<Option<TerminalSession>>,
     live: Arc<Mutex<Option<LiveTarget>>>,
+    next_live_generation: AtomicU64,
+    monitor_resizes: Mutex<MonitorResizes>,
     interrupt: Mutex<Option<InterruptTarget>>,
     logger: Arc<Logger>,
     default_recording_path: PathBuf,
@@ -45,12 +49,21 @@ struct InterruptTarget {
 }
 
 struct LiveTarget {
+    generation: u64,
     state: Arc<Mutex<TermState>>,
     pty: Arc<Mutex<crate::terminal::pty::Pty>>,
     shell: Option<&'static str>,
 }
 
+#[derive(Default)]
+struct MonitorResizes {
+    next: u64,
+    epoch: u64,
+    active: BTreeMap<u64, (u16, u16)>,
+}
+
 pub struct LiveFrame {
+    pub generation: u64,
     pub grid: Vec<Vec<EmuCell>>,
     pub cursor: (u16, u16),
     pub size: (u16, u16),
@@ -103,6 +116,8 @@ impl Engine {
             operations: Mutex::new(()),
             session: Mutex::new(None),
             live: Arc::new(Mutex::new(None)),
+            next_live_generation: AtomicU64::new(0),
+            monitor_resizes: Mutex::new(MonitorResizes::default()),
             interrupt: Mutex::new(None),
             logger,
             default_recording_path: recording_path.clone(),
@@ -306,6 +321,7 @@ impl Engine {
             return Err(TuiTestError::assertion(message));
         }
         let live = LiveTarget {
+            generation: self.next_live_generation.fetch_add(1, Ordering::Relaxed),
             state: session.state.clone(),
             pty: session.pty.clone(),
             shell: session.shell.map(|value| value.as_str()),
@@ -394,6 +410,7 @@ impl Engine {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             LiveFrame {
+                generation: target.generation,
                 grid: highlighted_rows(&state, false),
                 cursor: state.emu.cursor(),
                 size: state.emu.size(),
@@ -418,6 +435,67 @@ impl Engine {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             (state.mouse_mode.mode() != MouseMode::None).then(|| state.emu.size())
         })
+    }
+
+    pub fn request_monitor_resize(&self, cols: u16, rows: u16) -> u64 {
+        let mut resizes = self
+            .monitor_resizes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        resizes.next += 1;
+        resizes.epoch += 1;
+        let request = resizes.next;
+        resizes.active.insert(request, (cols, rows));
+        request
+    }
+
+    pub fn release_monitor_resize(&self, request: u64) {
+        let mut resizes = self
+            .monitor_resizes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if resizes.active.remove(&request).is_some() {
+            resizes.epoch += 1;
+        }
+    }
+
+    pub fn monitor_resize_epoch(&self, request: u64) -> Option<u64> {
+        let resizes = self
+            .monitor_resizes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        resizes
+            .active
+            .last_key_value()
+            .is_some_and(|(latest, _)| *latest == request)
+            .then_some(resizes.epoch)
+    }
+
+    pub fn resize_monitor(&self, request: u64) -> Result<(), TuiTestError> {
+        let mut session = self.lock_session();
+        let Some(session) = session.as_mut() else {
+            return Ok(());
+        };
+        let latest = {
+            let resizes = self
+                .monitor_resizes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            resizes
+                .active
+                .last_key_value()
+                .map(|(request, size)| (*request, *size))
+        };
+        let Some((latest, (cols, rows))) = latest else {
+            return Ok(());
+        };
+        if request != latest {
+            return Ok(());
+        }
+        if session.cols == cols && session.rows == rows {
+            return Ok(());
+        }
+        act(session.resize(cols, rows))
     }
 
     /// Write viewer keystrokes straight to the pty: untracked and unlogged, so
