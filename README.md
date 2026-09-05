@@ -1,6 +1,6 @@
 # tui-test
 
-`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. Use it from the CLI or call the same engine from Rust, Python, or JavaScript. It works for AI agents that need structured access to terminal state, terminal automation, and terminal ui application testing.
+`tui-test` controls, inspects, tests, and records real shell sessions and full-screen terminal apps on Windows, Linux, and macOS. Use it from the CLI or call the same engine from Rust, Python, JavaScript, or Go. It works for AI agents that need structured access to terminal state, terminal automation, and terminal ui application testing.
 
 <p align="center">
   <a href="#installation">Installation</a>
@@ -52,12 +52,13 @@ You can also download a binary from [GitHub Releases](https://github.com/microso
 | Rust 1.90+ | `cargo add tui-test-rs@0.1.0-beta.3` | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
 | Python 3.8+ | `pip install --pre tui-test` | [Python API](bindings/python/README.md) |
 | Node 20+ | `npm install @microsoft/tui-test@beta` | [JavaScript API](bindings/js/README.md) |
+| Go 1.26+ | `go get github.com/microsoft/tui-test/bindings/go` | [Go installation and API](bindings/go/README.md) |
 
 Add the Rust `recording-raster` feature for APNG, GIF, and MP4 output. It uses installed fonts; `recording-font-jetbrains-mono*` bundles a font.
 
 ## Quick start
 
-The CLI and libraries expose the same terminal actions. Python, JavaScript, and Rust sessions run in-process and do not require the CLI.
+The CLI and libraries expose the same terminal actions. Python, JavaScript, Rust, and Go sessions run in-process and do not require the CLI. Published Go modules bundle the native engine and load it automatically; see [Go installation](bindings/go/README.md#install).
 
 ### CLI
 
@@ -134,6 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Rust | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
 | Python | [bindings/python/README.md](bindings/python/README.md) |
 | JavaScript | [bindings/js/README.md](bindings/js/README.md) |
+| Go | [bindings/go/README.md](bindings/go/README.md) |
 
 ## CLI reference
 

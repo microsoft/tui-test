@@ -1,0 +1,341 @@
+version: "2"
+
+run:
+  timeout: 10m
+  tests: true
+  modules-download-mode: readonly
+  allow-parallel-runners: true
+
+output:
+  formats:
+    text:
+      path: stdout
+
+linters:
+  default: none
+  enable:
+    # Correctness / reliability
+    - staticcheck
+    - govet
+    - errcheck
+    - errchkjson
+    - errorlint
+    - nilerr
+    - nilnil
+    - bodyclose
+    - contextcheck
+    - containedctx
+    - gocheckcompilerdirectives
+    - durationcheck
+    - exhaustive
+    - forcetypeassert
+
+    # Maintainability / complexity limits
+    - gocyclo
+    - gocognit
+    - funlen
+    - nestif
+    - dupl
+
+    # Readability / consistency
+    - depguard
+    - dogsled
+    - forbidigo
+    - inamedparam
+    - interfacebloat
+    - ireturn
+    - revive
+    - misspell
+    - whitespace
+    - unconvert
+    - unparam
+    - unused
+    - ineffassign
+    - wastedassign
+    - predeclared
+    - prealloc
+    - maintidx
+    - makezero
+    - usestdlibvars
+    - usetesting
+    - varnamelen
+    - wrapcheck
+    - asciicheck
+    - bidichk
+    - nolintlint
+    - thelper
+
+    # Team-specific rules via ruleguard
+    - gocritic
+    - gosec
+
+  settings:
+    depguard:
+      rules:
+        unsafe-openpgp:
+          list-mode: lax
+          files:
+            - $all
+          deny:
+            - pkg: golang.org/x/crypto/openpgp
+              desc: golang.org/x/crypto/openpgp is unmaintained and unsafe by design
+        cmd-boundary:
+          list-mode: lax
+          files:
+            - "**/cmd/runnerfoundry/*.go"
+          deny:
+            - pkg: github.com/actions/scaleset
+              desc: cmd packages should adapt operator input and delegate GitHub integration to internal daemon code
+            - pkg: github.com/stateshifters/runnerfoundry/internal/provider/
+              desc: cmd packages should not construct providers directly
+        config-driver-boundary:
+          list-mode: lax
+          files:
+            - "**/internal/config/*.go"
+            - "**/internal/postgresconfig/*.go"
+          deny:
+            - pkg: github.com/jackc/pgx/v5
+              desc: configuration packages must remain independent of the PostgreSQL driver
+
+    dogsled:
+      max-blank-identifiers: 2
+
+    govet:
+      # Strict by default: correctness > convenience.
+      enable-all: true
+      # High-churn / low-signal in practice unless you commit to struct padding work.
+      disable:
+        - fieldalignment
+
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+    gocyclo:
+      min-complexity: 15
+
+    gocognit:
+      min-complexity: 10
+
+    funlen:
+      lines: 80
+      statements: 50
+
+    nestif:
+      min-complexity: 3
+
+    dupl:
+      threshold: 100
+
+    misspell:
+      locale: US
+
+    maintidx:
+      under: 45
+
+    forbidigo:
+      forbid:
+        - pattern: ^print(ln)?$
+          msg: use structured logging or explicit operator output
+        - pattern: ^panic$
+          msg: return an error instead of panicking
+      analyze-types: true
+
+    interfacebloat:
+      max: 5
+
+    ireturn:
+      allow:
+        - anon
+        - empty
+        - error
+        - stdlib
+
+    thelper:
+      test:
+        first: true
+        name: true
+        begin: true
+      benchmark:
+        first: true
+        name: true
+        begin: true
+      tb:
+        first: true
+        name: true
+        begin: true
+      fuzz:
+        first: true
+        name: true
+        begin: true
+
+    varnamelen:
+      max-distance: 5
+      min-name-length: 2
+      check-receiver: true
+      check-return: true
+      check-type-param: true
+      ignore-type-assert-ok: true
+      ignore-map-index-ok: true
+      ignore-chan-recv-ok: true
+      ignore-names:
+        - t
+        - tt
+        - err
+        - ctx
+        - cfg
+        - cmd
+        - fs
+        - ok
+        - i
+        - j
+        - k
+      ignore-decls:
+        - t testing.T
+        - t *testing.T
+        - b *testing.B
+        - f *testing.F
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+    revive:
+      severity: warning
+      confidence: 0.8
+      rules:
+        # --- Correctness / reliability ---
+        - name: atomic
+        - name: datarace
+        - name: waitgroup-by-value
+        - name: range-val-in-closure
+        - name: range-val-address
+        - name: unreachable-code
+
+        # --- Error handling discipline (North Star: loud failures) ---
+        - name: unhandled-error
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: errorf
+
+        # --- Readability / simplicity ---
+        - name: indent-error-flow
+        - name: superfluous-else
+        - name: early-return
+        - name: empty-block
+        - name: empty-lines
+        - name: bool-literal-in-expr
+        - name: string-format
+        - name: unnecessary-stmt
+        - name: unnecessary-format
+
+        # --- Public surfaces must be documented (North Star: public API docblocks) ---
+        # Team decision: disable exported/package-comments rules; rely on review for meaningful comments.
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+
+        # --- Naming policy ---
+        # Team-defined expectations: keep only a tiny allowlist of conventional short names.
+        # NOTE: this does not govern receiver names; receiver names are enforced by ruleguard.
+        - name: var-naming
+          arguments:
+            - - ID
+              - URL
+              - HTTP
+              - JSON
+              - SHA1
+              - ctx
+              - err
+              - cfg
+              - cmd
+              - t
+              - tt
+              - fs
+            - - i
+              - j
+              - k
+              - v
+
+        # Keep receiver naming enabled for baseline consistency, but the hard rule is ruleguard.
+        - name: receiver-naming
+
+        # --- Boundary / context usage ---
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: flag-parameter
+
+        # --- Complexity thresholds (match .golangci.yml) ---
+        - name: cyclomatic
+          arguments: [15]
+        - name: cognitive-complexity
+          arguments: [10]
+        - name: function-length
+          arguments: [80, 50]
+        - name: argument-limit
+          arguments: [8]
+        - name: function-result-limit
+          arguments: [3]
+
+        # --- Import hygiene ---
+        - name: blank-imports
+        - name: dot-imports
+        - name: duplicated-imports
+        - name: redundant-import-alias
+
+        # --- General maintainability ---
+        - name: confusing-naming
+        - name: confusing-results
+        - name: modifies-parameter
+        - name: modifies-value-receiver
+        - name: unexported-return
+        - name: redefines-builtin-id
+
+    gocritic:
+      disable-all: true
+      enabled-checks:
+        # Required: ruleguard for custom team rules.
+        - ruleguard
+
+        # Required: high-signal correctness/robustness checks.
+        - exitAfterDefer
+        - emptyStringTest
+        - equalFold
+        - filepathJoin
+        - httpNoBody
+        - offBy1
+        - sloppyLen
+        - sloppyTypeAssert
+
+      settings:
+        ruleguard:
+          failOn: dsl,import
+          rules: '${config-path}/ruleguard/rules-team.go'
+          enable: receiverNameMinLength,forbidIgnoringJSONDecodeError,forbidIgnoringHTTPRequestBuildError,forbidIgnoringAtoiErrorInBoundaryParsing
+
+    gosec:
+      severity: low
+      confidence: low
+      config:
+        global:
+          nosec: false
+          show-ignored: true
+          audit: true
+        G101:
+          pattern: "(?i)passwd|password|pwd|secret|private_key|token|api[_-]?key|bearer|cred"
+          ignore_entropy: false
+          entropy_threshold: "80.0"
+          per_char_threshold: "3.0"
+          truncate: "32"
+        # Keep permissions compatible with shared setups while avoiding overly permissive modes.
+        G301: "0755"
+        G302: "0644"
+        G306: "0644"
+
+issues:
+  # Do not truncate.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false

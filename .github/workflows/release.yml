@@ -136,6 +136,278 @@ jobs:
             tui-test-*.tar.gz
             tui-test-*.zip
 
+  build-go:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-22.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: bindings/go/go.mod
+          cache: false
+
+      - run: |
+          rustup toolchain install stable --profile default
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: "0.16.0"
+          cache-key: go-${{ matrix.target }}
+
+      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2.86.4
+        if: contains(matrix.target, 'musl')
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build Go native library
+        if: "!contains(matrix.target, 'musl')"
+        run: cargo build --release --locked -p tui-test-go --target ${{ matrix.target }}
+
+      - name: Build Go native library for musl
+        if: contains(matrix.target, 'musl')
+        run: cargo zigbuild --release --locked -p tui-test-go --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: -C target-feature=-crt-static
+
+      - name: Package native library
+        run: |
+          set -euo pipefail
+          mkdir -p go-package/include go-package/lib
+          cp bindings/go/internal/native/native.h go-package/include/tui_test_go.h
+          cp LICENSE go-package/
+          printf 'version=%s\ntarget=%s\ncommit=%s\n' "$RELEASE_TAG" '${{ matrix.target }}' "$(git rev-parse HEAD)" > go-package/VERSION
+          case '${{ matrix.target }}' in
+            *windows*)
+              cp target/${{ matrix.target }}/release/tui_test_go.dll go-package/lib/
+              ;;
+            *darwin*) cp target/${{ matrix.target }}/release/libtui_test_go.dylib go-package/lib/ ;;
+            *) cp target/${{ matrix.target }}/release/libtui_test_go.so go-package/lib/ ;;
+          esac
+          archive="tui-test-go-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C go-package .
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$archive" > "$archive.sha256"
+            sha256sum -c "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+            shasum -a 256 -c "$archive.sha256"
+          fi
+          mkdir go-installed
+          tar -xzf "$archive" -C go-installed
+          mkdir -p bindings/go/internal/native/embedded/${{ matrix.target }}
+          cp go-installed/lib/* bindings/go/internal/native/embedded/${{ matrix.target }}/
+
+      - name: Prepare external consumer
+        run: |
+          mkdir go-consumer
+          cp bindings/go/examples/smoke/main.go go-consumer/
+          cd go-consumer
+          go mod init example.com/go-package-smoke
+          go mod edit -require=github.com/microsoft/tui-test/bindings/go@v0.0.0
+          go mod edit -replace=github.com/microsoft/tui-test/bindings/go=../bindings/go
+
+      - name: Test packaged library without Rust on Unix
+        if: runner.os != 'Windows' && !contains(matrix.target, 'musl')
+        working-directory: go-consumer
+        run: |
+          go_bin="$(command -v go)"
+          export PATH="$(dirname "$go_bin"):/usr/bin:/bin:/usr/sbin:/sbin"
+          if command -v cargo >/dev/null 2>&1 || command -v rustc >/dev/null 2>&1; then
+            echo 'Rust is visible in consumer environment' >&2
+            exit 1
+          fi
+          export CGO_ENABLED=0
+          go mod tidy
+          go build -o smoke .
+          ./smoke
+
+      - name: Test packaged library without Rust on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: go-consumer
+        run: |
+          $goBin = Split-Path (Get-Command go).Source
+          $env:PATH = "$goBin;$env:SystemRoot\System32;$env:SystemRoot"
+          if ((Get-Command cargo,rustc -ErrorAction SilentlyContinue)) { throw 'Rust is visible in consumer environment' }
+          $env:CGO_ENABLED = '0'
+          go mod tidy
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          go build -o smoke.exe .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./smoke.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Test packaged musl library without Rust
+        if: contains(matrix.target, 'musl')
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/workspace" -w /workspace/go-consumer golang:1.26-alpine sh -ec '
+            if command -v cargo >/dev/null 2>&1 || command -v rustc >/dev/null 2>&1; then
+              echo "Rust is visible in consumer environment" >&2
+              exit 1
+            fi
+            export CGO_ENABLED=0
+            go mod tidy
+            go build -o smoke .
+            ./smoke
+          '
+
+      - name: Check Go native layout against the host C compiler
+        working-directory: bindings/go
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          "$(go env CC)" --version
+          go test -tags=tuitest_abi_check -run '^TestNativeLayoutMatchesCompiler$' -count=1 ./internal/native
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tui-test-go-${{ matrix.target }}
+          path: |
+            tui-test-go-*.tar.gz
+            tui-test-go-*.sha256
+          if-no-files-found: error
+
+  assemble-go-module:
+    needs: build-go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: tui-test-go-*
+          path: go-packages
+          merge-multiple: true
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: bindings/go/go.mod
+          cache: false
+
+      - name: Assemble the Go module with all native libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          targets=(
+            x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu
+            x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+            x86_64-apple-darwin aarch64-apple-darwin
+            x86_64-pc-windows-msvc
+          )
+          for target in "${targets[@]}"; do
+            (cd go-packages && sha256sum -c "tui-test-go-$target.tar.gz.sha256")
+            mkdir -p "go-unpacked/$target" "bindings/go/internal/native/embedded/$target"
+            tar -xzf "go-packages/tui-test-go-$target.tar.gz" -C "go-unpacked/$target"
+            grep -Fx "version=$RELEASE_TAG" "go-unpacked/$target/VERSION"
+            grep -Fx "target=$target" "go-unpacked/$target/VERSION"
+            grep -Fx "commit=$(git rev-parse HEAD)" "go-unpacked/$target/VERSION"
+            case "$target" in
+              *windows*) library=tui_test_go.dll ;;
+              *darwin*) library=libtui_test_go.dylib ;;
+              *) library=libtui_test_go.so ;;
+            esac
+            test -s "go-unpacked/$target/lib/$library"
+            test "$(wc -c < "go-unpacked/$target/lib/$library")" -lt 100000000
+            cp "go-unpacked/$target/lib/$library" "bindings/go/internal/native/embedded/$target/$library"
+          done
+          cp LICENSE bindings/go/LICENSE
+          printf 'version=%s\nsource-tag=%s\nsource-commit=%s\n' "$RELEASE_TAG" "$RELEASE_TAG" "$(git rev-parse HEAD)" > bindings/go/internal/native/embedded/RELEASE
+          module_bytes="$(find bindings/go -type f -printf '%s\n' | awk '{bytes += $1} END {printf "%.0f", bytes}')"
+          test "$module_bytes" -lt 524288000
+          tar -czf tui-test-go-module.tar.gz -C bindings/go .
+          sha256sum tui-test-go-module.tar.gz > tui-test-go-module.tar.gz.sha256
+
+      - name: Test the assembled module from an independent consumer
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir assembled-module assembled-consumer
+          tar -xzf tui-test-go-module.tar.gz -C assembled-module
+          cp assembled-module/examples/smoke/main.go assembled-consumer/
+          cd assembled-consumer
+          go mod init example.com/assembled-go-module-smoke
+          go mod edit -require=github.com/microsoft/tui-test/bindings/go@v0.0.0
+          go mod edit -replace=github.com/microsoft/tui-test/bindings/go=../assembled-module
+          go mod tidy
+          go build -o smoke .
+          ./smoke
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tui-test-go-module
+          path: |
+            tui-test-go-module.tar.gz
+            tui-test-go-module.tar.gz.sha256
+          if-no-files-found: error
+
+  publish-go-module:
+    needs:
+      - assemble-go-module
+      - release
+    if: always() && needs.assemble-go-module.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tui-test-go-module
+
+      - name: Publish the bundled Go module tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c tui-test-go-module.tar.gz.sha256
+          tar -xzf tui-test-go-module.tar.gz -C bindings/go
+          grep -Fx "source-commit=$(git rev-parse HEAD)" bindings/go/internal/native/embedded/RELEASE
+          tag="bindings/go/v$RELEASE_TAG"
+          git add --force -- bindings/go/internal/native/embedded bindings/go/LICENSE
+          existing="$(git ls-remote --tags origin "refs/tags/$tag")"
+          if [[ -n "$existing" ]]; then
+            git fetch --depth=1 origin "refs/tags/$tag:refs/tags/$tag"
+            git diff --exit-code "$tag" -- bindings/go
+            echo "$tag already contains this bundled module"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --signoff -m "build(go): bundle native libraries for $RELEASE_TAG"
+          git tag "$tag"
+          git push origin "refs/tags/$tag:refs/tags/$tag"
+
   build-node:
     needs: verify
     strategy:
@@ -516,6 +788,7 @@ jobs:
   release:
     needs:
       - build-cli
+      - assemble-go-module
       - package-node
       - build-python
     if: github.event_name == 'push'
