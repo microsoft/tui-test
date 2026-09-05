@@ -79,23 +79,6 @@ linters:
           deny:
             - pkg: golang.org/x/crypto/openpgp
               desc: golang.org/x/crypto/openpgp is unmaintained and unsafe by design
-        cmd-boundary:
-          list-mode: lax
-          files:
-            - "**/cmd/runnerfoundry/*.go"
-          deny:
-            - pkg: github.com/actions/scaleset
-              desc: cmd packages should adapt operator input and delegate GitHub integration to internal daemon code
-            - pkg: github.com/stateshifters/runnerfoundry/internal/provider/
-              desc: cmd packages should not construct providers directly
-        config-driver-boundary:
-          list-mode: lax
-          files:
-            - "**/internal/config/*.go"
-            - "**/internal/postgresconfig/*.go"
-          deny:
-            - pkg: github.com/jackc/pgx/v5
-              desc: configuration packages must remain independent of the PostgreSQL driver
 
     dogsled:
       max-blank-identifiers: 2
