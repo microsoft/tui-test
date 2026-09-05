@@ -9,3 +9,6 @@ bindings/js/native/target
 bindings/python/target
 bindings/python/native/target
 bindings/python/stub-gen/target
+/bindings/go/internal/native/embedded/**/*.dll
+/bindings/go/internal/native/embedded/**/*.so
+/bindings/go/internal/native/embedded/**/*.dylib

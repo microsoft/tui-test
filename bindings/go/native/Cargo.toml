@@ -1,0 +1,18 @@
+[package]
+name = "tui-test-go"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "tui_test_go"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tui-test = { workspace = true, features = ["ghostty", "rio", "xtermjs", "recording-font-jetbrains-mono-styles"] }
+
+[build-dependencies]
+cbindgen = "0.29"

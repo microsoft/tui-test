@@ -15,10 +15,16 @@ jobs:
         include:
           - os: macos-latest
             bin: target/debug/tui-test
+            go-target: aarch64-apple-darwin
+            go-library: libtui_test_go.dylib
           - os: windows-latest
             bin: target/debug/tui-test.exe
+            go-target: x86_64-pc-windows-msvc
+            go-library: tui_test_go.dll
           - os: ubuntu-latest
             bin: target/debug/tui-test
+            go-target: x86_64-unknown-linux-gnu
+            go-library: libtui_test_go.so
     runs-on: ${{ matrix.os }}
     env:
       TUI_TEST_BIN: ${{ github.workspace }}/${{ matrix.bin }}
@@ -58,6 +64,56 @@ jobs:
       - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
       - run: cargo build
       - run: cargo test --workspace -- --test-threads=1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: bindings/go/go.mod
+          cache: false
+
+      - name: Build Go native library and verify header
+        shell: bash
+        run: |
+          cargo build --locked -p tui-test-go
+          git diff --exit-code -- bindings/go/internal/native/native.h
+          mkdir -p bindings/go/internal/native/embedded/${{ matrix.go-target }}
+          cp target/debug/${{ matrix.go-library }} bindings/go/internal/native/embedded/${{ matrix.go-target }}/
+
+      - name: Check Go formatting, vet, and tests
+        shell: bash
+        working-directory: bindings/go
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+          go run ./examples/smoke
+
+      - name: Check Go races
+        shell: bash
+        working-directory: bindings/go
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+
+      - name: Check Go native layout against the C compiler
+        shell: bash
+        working-directory: bindings/go
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          "$(go env CC)" --version
+          go test -tags=tuitest_abi_check -run '^TestNativeLayoutMatchesCompiler$' -count=1 ./internal/native
+
+      - name: Verify Go lint configuration and lint binding
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+          working-directory: bindings/go
+          verify: true
+          args: ./...
+        env:
+          CGO_ENABLED: "0"
 
       - name: Install Python binding
         run: python -m pip install --disable-pip-version-check -e ./bindings/python
