@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, RwLock, Weak};
 
 use sha2::{Digest, Sha256};
 
@@ -571,8 +571,127 @@ pub struct SessionRegistry {
 struct RegistryInner {
     sessions: Mutex<HashMap<String, Session>>,
     recordings: Mutex<CompletedRecordings>,
-    generations: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    generations: Mutex<HashMap<String, Weak<Generation>>>,
     lifecycle: RwLock<()>,
+}
+
+struct Generation {
+    phase: Mutex<GenerationPhase>,
+    changed: Condvar,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GenerationPhase {
+    Idle,
+    Running,
+    ClosingIdle,
+    ClosingRunning,
+}
+
+struct GenerationOperation {
+    generation: Arc<Generation>,
+}
+
+struct GenerationClose {
+    generation: Arc<Generation>,
+}
+
+impl Generation {
+    fn new() -> Self {
+        Self {
+            phase: Mutex::new(GenerationPhase::Idle),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn start_operation(self: &Arc<Self>) -> GenerationOperation {
+        let mut phase = self.lock_phase();
+        while *phase != GenerationPhase::Idle {
+            phase = self
+                .changed
+                .wait(phase)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *phase = GenerationPhase::Running;
+        GenerationOperation {
+            generation: Arc::clone(self),
+        }
+    }
+
+    fn start_close(self: &Arc<Self>) -> GenerationClose {
+        let mut phase = self.lock_phase();
+        loop {
+            match *phase {
+                GenerationPhase::Idle => {
+                    *phase = GenerationPhase::ClosingIdle;
+                    break;
+                }
+                GenerationPhase::Running => {
+                    *phase = GenerationPhase::ClosingRunning;
+                    break;
+                }
+                GenerationPhase::ClosingIdle | GenerationPhase::ClosingRunning => {
+                    phase = self
+                        .changed
+                        .wait(phase)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+            }
+        }
+        GenerationClose {
+            generation: Arc::clone(self),
+        }
+    }
+
+    fn lock_phase(&self) -> MutexGuard<'_, GenerationPhase> {
+        self.phase
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl Drop for GenerationOperation {
+    fn drop(&mut self) {
+        let mut phase = self.generation.lock_phase();
+        match *phase {
+            GenerationPhase::Running => *phase = GenerationPhase::Idle,
+            GenerationPhase::ClosingRunning => *phase = GenerationPhase::ClosingIdle,
+            GenerationPhase::Idle | GenerationPhase::ClosingIdle => {
+                debug_assert!(false, "operation released from an invalid generation phase");
+                return;
+            }
+        }
+        self.generation.changed.notify_all();
+    }
+}
+
+impl GenerationClose {
+    fn wait_until_idle(&self) {
+        let mut phase = self.generation.lock_phase();
+        while *phase == GenerationPhase::ClosingRunning {
+            phase = self
+                .generation
+                .changed
+                .wait(phase)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        debug_assert_eq!(*phase, GenerationPhase::ClosingIdle);
+    }
+}
+
+impl Drop for GenerationClose {
+    fn drop(&mut self) {
+        let mut phase = self.generation.lock_phase();
+        *phase = match *phase {
+            GenerationPhase::ClosingIdle => GenerationPhase::Idle,
+            GenerationPhase::ClosingRunning => GenerationPhase::Running,
+            GenerationPhase::Idle | GenerationPhase::Running => {
+                debug_assert!(false, "close released from an invalid generation phase");
+                return;
+            }
+        };
+        self.generation.changed.notify_all();
+    }
 }
 
 #[derive(Default)]
@@ -626,10 +745,13 @@ impl SessionRegistry {
         operation: Operation,
         context: ExecutionContext,
     ) -> Result<OperationResult, TuiTestError> {
+        if matches!(operation, Operation::Close) {
+            return self
+                .close_with_context(name, context)
+                .map(|_| OperationResult::Unit);
+        }
         let generation = self.generation(name);
-        let _generation = generation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _operation = generation.start_operation();
         match operation {
             Operation::Open(_) | Operation::Run(_) => {
                 let _lifecycle = self
@@ -651,9 +773,9 @@ impl SessionRegistry {
                     .ok_or_else(TuiTestError::no_restart_metadata)?
                     .execute_with_context(operation, context)
             }
-            Operation::Close => self
-                .close_locked(name, context)
-                .map(|_| OperationResult::Unit),
+            Operation::Close => {
+                unreachable!("close operations are dispatched before generation locking")
+            }
             other => {
                 let session = {
                     let _lifecycle = self
@@ -685,11 +807,42 @@ impl SessionRegistry {
     }
 
     pub fn close(&self, name: &str) -> Result<(), TuiTestError> {
+        self.close_with_context(name, ExecutionContext::default())
+    }
+
+    fn close_with_context(
+        &self,
+        name: &str,
+        context: ExecutionContext,
+    ) -> Result<(), TuiTestError> {
         let generation = self.generation(name);
-        let _generation = generation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.close_locked(name, ExecutionContext::default())
+        let close = generation.start_close();
+        let session = { self.lock_sessions().get(name).cloned() };
+        if let Some(session) = session {
+            session.interrupt();
+        }
+        close.wait_until_idle();
+        let (result, removed) = {
+            let _lifecycle = self
+                .inner
+                .lifecycle
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(session) = self.lock_sessions().remove(name) else {
+                return Ok(());
+            };
+            let result = session
+                .execute_with_context(Operation::Close, context)
+                .map(|_| ());
+            let removed = Self::replace_recording(
+                &mut self.lock_recordings(),
+                name.to_string(),
+                session.retained_recording_path(),
+            );
+            (result, removed)
+        };
+        Self::remove_recording_files(removed);
+        result
     }
 
     pub fn close_all(&self) {
@@ -719,9 +872,7 @@ impl SessionRegistry {
 
     pub fn recording(&self, name: &str) -> std::io::Result<String> {
         let generation = self.generation(name);
-        let _generation = generation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _operation = generation.start_operation();
         let (session, completed) = {
             let _lifecycle = self
                 .inner
@@ -742,27 +893,6 @@ impl SessionRegistry {
         std::fs::read_to_string(path)
     }
 
-    fn close_locked(&self, name: &str, context: ExecutionContext) -> Result<(), TuiTestError> {
-        let _lifecycle = self
-            .inner
-            .lifecycle
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(session) = self.lock_sessions().remove(name) else {
-            return Ok(());
-        };
-        let result = session
-            .execute_with_context(Operation::Close, context)
-            .map(|_| ());
-        let removed = Self::replace_recording(
-            &mut self.lock_recordings(),
-            name.to_string(),
-            session.retained_recording_path(),
-        );
-        Self::remove_recording_files(removed);
-        result
-    }
-
     fn lock_sessions(&self) -> MutexGuard<'_, HashMap<String, Session>> {
         self.inner
             .sessions
@@ -777,7 +907,7 @@ impl SessionRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn generation(&self, name: &str) -> Arc<Mutex<()>> {
+    fn generation(&self, name: &str) -> Arc<Generation> {
         let mut generations = self
             .inner
             .generations
@@ -787,7 +917,7 @@ impl SessionRegistry {
         if let Some(generation) = generations.get(name).and_then(Weak::upgrade) {
             return generation;
         }
-        let generation = Arc::new(Mutex::new(()));
+        let generation = Arc::new(Generation::new());
         generations.insert(name.to_string(), Arc::downgrade(&generation));
         generation
     }
@@ -876,7 +1006,203 @@ fn tui_test_error_to_io_error(error: TuiTestError) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{ErrorKind, Operation};
+    use crate::api::{AutomaticRecording, AutomaticRecordingMode, ErrorKind, Operation};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    #[derive(Clone, Copy)]
+    enum NamedCloseEntry {
+        Close,
+        Execute,
+        ExecuteWithContext,
+    }
+
+    fn assert_named_close_interrupts_wait(entry: NamedCloseEntry) {
+        let registry = Arc::new(SessionRegistry::default());
+        let name = match entry {
+            NamedCloseEntry::Close => "close-interrupts-wait",
+            NamedCloseEntry::Execute => "execute-close-interrupts-wait",
+            NamedCloseEntry::ExecuteWithContext => "execute-with-context-close-interrupts-wait",
+        };
+        let log_path =
+            std::env::temp_dir().join(format!("tui-test-{name}-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&log_path);
+        let session = Session {
+            name: Arc::from(name),
+            engine: Arc::new(Engine::new(
+                name.to_string(),
+                Arc::new(Logger::to_file(&log_path).expect("create operation log")),
+                native_recording_path(name),
+            )),
+            context: ExecutionContext::default(),
+        };
+        session
+            .open(OpenOptions {
+                wait_ready: Some(false),
+                recording: AutomaticRecording {
+                    mode: AutomaticRecordingMode::Always,
+                    ..AutomaticRecording::default()
+                },
+                ..OpenOptions::default()
+            })
+            .expect("open target session");
+        registry
+            .lock_sessions()
+            .insert(name.to_string(), session.clone());
+        let existing_handle = registry.session(name);
+
+        let other = registry.session(format!("{name}-other"));
+        other
+            .open(OpenOptions {
+                wait_ready: Some(false),
+                ..OpenOptions::default()
+            })
+            .expect("open unrelated session");
+
+        let waiting_registry = Arc::clone(&registry);
+        let (wait_sent, wait_received) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let result = waiting_registry.execute(
+                name,
+                Operation::WaitLocator {
+                    query: LocatorQuery::text("text-that-will-never-appear"),
+                    not: false,
+                    timeout_ms: Some(30_000),
+                },
+            );
+            let _ = wait_sent.send(result);
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if std::fs::read_to_string(&log_path)
+                .is_ok_and(|log| log.contains("operation WaitLocator"))
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "wait operation did not start");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let start = Instant::now();
+        assert!(matches!(
+            registry.execute(other.name(), Operation::State),
+            Ok(OperationResult::State(_))
+        ));
+        assert!(start.elapsed() < Duration::from_secs(2));
+
+        let recording_registry = Arc::clone(&registry);
+        let (recording_started, recording_entered) = mpsc::sync_channel(1);
+        let (recording_sent, recording_received) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            recording_started.send(()).expect("signal recording read");
+            let result = recording_registry.recording(name);
+            let _ = recording_sent.send(result);
+        });
+        recording_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("recording read thread started");
+        assert!(matches!(
+            recording_received.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        let lifecycle_registry = Arc::clone(&registry);
+        let (lifecycle_held, lifecycle_entered) = mpsc::sync_channel(1);
+        let (lifecycle_release, lifecycle_released) = mpsc::sync_channel(1);
+        let (lifecycle_done, lifecycle_finished) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let unrelated_operation = lifecycle_registry
+                .inner
+                .lifecycle
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            lifecycle_held.send(()).expect("signal lifecycle reader");
+            lifecycle_released.recv().expect("release lifecycle reader");
+            drop(unrelated_operation);
+            let _ = lifecycle_done.send(());
+        });
+        lifecycle_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("unrelated lifecycle reader entered");
+
+        let close_registry = Arc::clone(&registry);
+        let (close_sent, close_received) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let result = match entry {
+                NamedCloseEntry::Close => close_registry.close(name),
+                NamedCloseEntry::Execute => {
+                    close_registry.execute(name, Operation::Close).map(|_| ())
+                }
+                NamedCloseEntry::ExecuteWithContext => close_registry
+                    .execute_with_context(name, Operation::Close, ExecutionContext::default())
+                    .map(|_| ()),
+            };
+            let _ = close_sent.send(result);
+        });
+
+        let close_result = match close_received.recv_timeout(Duration::from_secs(2)) {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = lifecycle_release.send(());
+                session.interrupt();
+                let _ = close_received.recv_timeout(Duration::from_secs(2));
+                let _ = wait_received.recv_timeout(Duration::from_secs(2));
+                let _ = recording_received.recv_timeout(Duration::from_secs(2));
+                panic!("named close did not interrupt the wait: {error}");
+            }
+        };
+        close_result.expect("close target session");
+        lifecycle_release
+            .send(())
+            .expect("release unrelated lifecycle reader");
+        lifecycle_finished
+            .recv_timeout(Duration::from_secs(2))
+            .expect("unrelated lifecycle reader released");
+        assert_eq!(
+            wait_received
+                .recv_timeout(Duration::from_secs(2))
+                .expect("wait completed after close")
+                .unwrap_err()
+                .kind,
+            ErrorKind::Assertion
+        );
+        let recording = recording_received
+            .recv_timeout(Duration::from_secs(2))
+            .expect("recording read completed after close")
+            .expect("read retained recording");
+        assert!(!recording.is_empty());
+        assert!(!registry.lock_sessions().contains_key(name));
+        assert!(matches!(
+            registry.execute(other.name(), Operation::State),
+            Ok(OperationResult::State(_))
+        ));
+
+        existing_handle
+            .open(OpenOptions {
+                wait_ready: Some(false),
+                ..OpenOptions::default()
+            })
+            .expect("reopen through existing named handle");
+        existing_handle.close().expect("close replacement session");
+        other.close().expect("close unrelated session");
+        let _ = std::fs::remove_file(log_path);
+    }
+
+    #[test]
+    fn close_interrupts_in_flight_wait_and_publishes_recording() {
+        assert_named_close_interrupts_wait(NamedCloseEntry::Close);
+    }
+
+    #[test]
+    fn execute_close_interrupts_in_flight_wait_and_publishes_recording() {
+        assert_named_close_interrupts_wait(NamedCloseEntry::Execute);
+    }
+
+    #[test]
+    fn execute_with_context_close_interrupts_in_flight_wait_and_publishes_recording() {
+        assert_named_close_interrupts_wait(NamedCloseEntry::ExecuteWithContext);
+    }
 
     #[test]
     fn registry_reuses_names_and_lists_only_open_sessions() {
