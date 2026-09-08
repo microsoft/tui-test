@@ -118,7 +118,7 @@ impl InputParser {
     ) -> (Vec<u8>, bool) {
         let mut output = Vec::new();
         for &byte in bytes {
-            if matches!(byte, 0x1b | CTRL_RIGHT_BRACKET) {
+            if byte == 0x1b || (byte == CTRL_RIGHT_BRACKET && self.pending != b"\x1b") {
                 output.append(&mut self.pending);
                 self.passthrough = false;
             }
@@ -279,6 +279,21 @@ mod tests {
             assert_eq!(output, input);
             assert_eq!(detach(&mut parser, b"\x1d"), (Vec::new(), true));
         }
+    }
+
+    #[test]
+    fn monitor_legacy_alt_ctrl_right_bracket_does_not_detach() {
+        let mut parser = InputParser::default();
+        assert_eq!(
+            detach(&mut parser, b"\x1b\x1d"),
+            (b"\x1b\x1d".to_vec(), false)
+        );
+        assert_eq!(detach(&mut parser, b"\x1d"), (Vec::new(), true));
+
+        let mut parser = InputParser::default();
+        assert_eq!(detach(&mut parser, b"\x1b"), (Vec::new(), false));
+        assert_eq!(detach(&mut parser, b"\x1d"), (b"\x1b\x1d".to_vec(), false));
+        assert_eq!(detach(&mut parser, b"\x1d"), (Vec::new(), true));
     }
 
     #[test]
