@@ -10,7 +10,7 @@ Use the CLI for terminal work split across separate commands.
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run an app. |
-| `sessions` | List daemon and monitoring-enabled process sessions. |
+| `sessions` | List sessions, including monitored tests. |
 | `close [--all]` | Close sessions. |
 
 Use `--session NAME` to select a session. `open` and `run` reuse it unless `--restart` is set.
@@ -103,45 +103,49 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 | `record start PATH` | Start a recording. |
 | `record stop` | Finish it. |
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
-| `monitor` | Watch a session live. |
+| `monitor` | Watch a session; q, Esc, or Ctrl+C detaches. |
 | `monitor --interactive` | Forward keyboard, paste, and supported SGR mouse input; Ctrl+] detaches. |
-| `monitor --interactive --id OWNER/SESSION` | Attach to an exact process session. |
-| `sessions --waiting` | Find sessions retained for inspection. |
-| `monitor --interactive --failed` | Choose a failed session. |
-| `monitor --interactive --latest` | Attach to the most recently completed or started matching session. |
-
-`--session NAME` matches daemon and enabled process-local sessions. Duplicate
-names produce an ambiguity error with copyable `--id` commands, including when
-a daemon and a process session share a name. `--owner OWNER`, `--failed`,
-`--waiting`, and `--cwd current` filter discovery. With no target, an interactive
-terminal presents a fuzzy-search picker ranked by waiting failures, other
-waiting sessions, nearby running sessions, and recent activity.
 
 Interactive monitors apply the target's keyboard and paste modes before reading
 input. SGR mouse clicks, drags, and motion are enabled when requested by the
 target, with coordinates translated past the monitor's border. Viewer modes are
 restored on detach; read-only monitoring does not change input modes.
 
-Each viewer uses one bidirectional IPC connection for frames, input, resize,
-and attachment lifetime. Resizing does not reconnect or release a test's
-inspection hold. Process-local sessions allow one interactive attachment and
-multiple read-only attachments; the owning Rust, Python, or JavaScript process
-must remain alive.
+Both modes resize the app to fit inside the border; interactive viewers take
+priority. Detaching restores the previous viewer's size. A yellow border and
+`! too small` indicate clipped content.
 
-Both viewing modes resize the child to the monitor's content area, excluding
-the border. Interactive viewers have priority; otherwise the last viewer to
-attach or resize controls the size. When it detaches, the previous viewer's
-size is restored. Daemon viewers also reapply their size when the child is
-created or restarted. If content is clipped, the border turns yellow and the
-header shows `! too small`.
+## Inspect tests
 
-Monitoring is disabled by default. Enable it through the language API or
-`TUI_TEST_MONITORING=1`; `TUI_TEST_WAIT_AT_END=failure` enables failure inspection.
-`TUI_TEST_FIRST_ATTACH_TIMEOUT` sets the first-attachment window in milliseconds
-(30,000 by default), and `TUI_TEST_LABEL` supplies a discovery label. Explicit
-API options override environment defaults. An unlimited first-attachment wait
-must be explicitly requested through the API or with
-`TUI_TEST_FIRST_ATTACH_TIMEOUT=infinite` for local debugging.
+Monitoring is opt-in. Configure [JavaScript](javascript.md#inspect-failed-tests),
+[Python](python.md#inspect-failed-tests), or [Rust](rust.md#inspect-failed-tests)
+tests to pause on failure, then run in another terminal:
+
+```sh
+tui-test sessions --waiting
+tui-test --session login monitor --interactive
+```
+
+Select by session name; if names repeat, use `tui-test monitor --interactive --id UUID` with
+the session UUID from `sessions`. Without a target, `monitor` offers a searchable
+picker in an interactive terminal. `--waiting`, `--failed`, and `--cwd current`
+filter sessions; `monitor --latest` selects the most recent match.
+
+Inspection waits 30 seconds for the first monitor by default. Without one, the
+test resumes; after attachment, it waits until monitors detach. Use Ctrl+] in
+interactive mode or q, Esc, or Ctrl+C in read-only mode. The test process must
+stay running while you inspect it.
+
+Environment defaults (explicit API options take precedence):
+
+| Variable | Default | Values |
+| --- | --- | --- |
+| `TUI_TEST_MONITORING` | disabled | `1` to enable. |
+| `TUI_TEST_WAIT_AT_END` | `never` | `never`, `failure`, `always`. |
+| `TUI_TEST_FIRST_ATTACH_TIMEOUT` | `30000` | Milliseconds; `infinite` waits indefinitely. |
+| `TUI_TEST_LABEL` | unset | Display label. |
+
+Use unlimited waits only for local debugging.
 
 ## Configure
 

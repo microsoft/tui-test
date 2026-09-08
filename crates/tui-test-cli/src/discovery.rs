@@ -1,35 +1,31 @@
 use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::cli::SessionFilter;
 use crate::{config, host, ipc};
+use tui_test::monitoring::{protocol::Request, SessionId};
 use tui_test::{ErrorKind, TuiTestError};
 
 #[derive(Clone)]
 pub(crate) enum Candidate {
-    Daemon(String),
+    Daemon { name: String, id: SessionId },
     Process(Box<host::DiscoveredHostSession>),
 }
 
 impl Candidate {
-    pub(crate) fn id(&self) -> String {
+    pub(crate) fn id(&self) -> SessionId {
         match self {
-            Self::Daemon(name) => format!("daemon/{name}"),
-            Self::Process(candidate) => candidate.session.id.clone(),
+            Self::Daemon { id, .. } => *id,
+            Self::Process(candidate) => candidate.session.id,
         }
     }
 
     fn session(&self) -> &str {
         match self {
-            Self::Daemon(name) => name,
+            Self::Daemon { name, .. } => name,
             Self::Process(candidate) => &candidate.session.session,
-        }
-    }
-
-    fn owner(&self) -> &str {
-        match self {
-            Self::Daemon(_) => "daemon",
-            Self::Process(candidate) => &candidate.session.owner,
         }
     }
 
@@ -43,7 +39,7 @@ impl Candidate {
 
     fn timestamp(&self) -> u64 {
         match self {
-            Self::Daemon(_) => 0,
+            Self::Daemon { .. } => 0,
             Self::Process(candidate) => candidate
                 .session
                 .completed_at
@@ -71,7 +67,7 @@ impl Candidate {
 
     fn description(&self, cwd: &Path) -> String {
         match self {
-            Self::Daemon(name) => format!("live  {name}  daemon"),
+            Self::Daemon { name, .. } => format!("live  {name}"),
             Self::Process(candidate) => {
                 let info = &candidate.session;
                 let label = info
@@ -87,7 +83,7 @@ impl Candidate {
                     .unwrap_or_else(|| "-".into());
                 let age = host::now_ms().saturating_sub(self.timestamp()) / 1000;
                 let text = format!(
-                    "{}{}  {}  {}  {}  worker={}  {}s  {}  {}",
+                    "{}{}  {}  {}  worker={}  {}s  {}  {}",
                     info.status,
                     if info.interactive_clients > 0 {
                         " [interactive]"
@@ -96,7 +92,6 @@ impl Candidate {
                     },
                     label,
                     file,
-                    info.owner,
                     info.worker.as_deref().unwrap_or("-"),
                     age,
                     info.session,
@@ -115,19 +110,16 @@ impl Candidate {
         struct ProcessDetail<'a> {
             #[serde(flatten)]
             session: &'a tui_test::monitoring::protocol::HostSession,
-            owner_type: &'static str,
             attach: String,
         }
         match self {
-            Self::Daemon(name) => Ok(serde_json::json!({
-                "id": self.id(), "session": name, "owner": "daemon",
-                "ownerType": "daemon", "status": "live",
-                "attach": host::monitor_command(&self.id(), true),
+            Self::Daemon { name, id } => Ok(serde_json::json!({
+                "id": id, "session": name, "status": "live",
+                "attach": host::monitor_command_by_id(&self.id(), true),
             })),
             Self::Process(candidate) => serde_json::to_value(ProcessDetail {
                 session: &candidate.session,
-                owner_type: "process",
-                attach: host::monitor_command(&self.id(), true),
+                attach: host::monitor_command_by_id(&self.id(), true),
             }),
         }
     }
@@ -175,10 +167,6 @@ fn filter_candidates(
     candidates.retain(|candidate| {
         (!filter.failed || candidate.failed())
             && (!filter.waiting || candidate.waiting())
-            && filter
-                .owner
-                .as_deref()
-                .is_none_or(|owner| owner == candidate.owner())
             && directory
                 .as_deref()
                 .is_none_or(|path| candidate.in_directory(path))
@@ -196,7 +184,13 @@ fn filter_candidates(
 fn discover(filter: &SessionFilter, cwd: &Path) -> Vec<Candidate> {
     let candidates = running_daemons()
         .into_iter()
-        .map(Candidate::Daemon)
+        .filter_map(|name| {
+            let connection = ipc::connect(&config::socket_name(&name)).ok()?;
+            let response =
+                ipc::exchange_timeout(connection, &Request::Ping, Duration::from_secs(1)).ok()?;
+            let id = serde_json::from_value(response.data?).ok()?;
+            Some(Candidate::Daemon { name, id })
+        })
         .chain(
             host::discover()
                 .into_iter()
@@ -208,7 +202,7 @@ fn discover(filter: &SessionFilter, cwd: &Path) -> Vec<Candidate> {
 
 pub(crate) fn select(
     session: Option<&str>,
-    id: Option<&str>,
+    id: Option<SessionId>,
     latest: bool,
     filter: &SessionFilter,
     interactive: bool,
@@ -246,7 +240,7 @@ fn choose(
             "no matching active session; enable process-local monitoring or run `tui-test open`",
         ));
     }
-    if latest {
+    if latest && (!explicit || candidates.len() == 1) {
         candidates.sort_by_key(|candidate| (Reverse(candidate.timestamp()), candidate.id()));
         return Ok(candidates.into_iter().next());
     }
@@ -273,7 +267,7 @@ fn choose(
         .map(|candidate| {
             format!(
                 "  {}  # {}",
-                host::monitor_command(&candidate.id(), interactive),
+                host::monitor_command_by_id(&candidate.id(), interactive),
                 candidate.description(cwd)
             )
         })
@@ -291,10 +285,7 @@ pub(crate) fn print_sessions(filter: &SessionFilter, json: bool) -> i32 {
         if json {
             let sessions = candidates
                 .iter()
-                .map(|candidate| match candidate {
-                    Candidate::Daemon(name) => name.clone(),
-                    Candidate::Process(candidate) => candidate.session.id.clone(),
-                })
+                .map(Candidate::session)
                 .collect::<Vec<_>>();
             let details = candidates
                 .iter()
@@ -307,8 +298,17 @@ pub(crate) fn print_sessions(filter: &SessionFilter, json: bool) -> i32 {
         } else if candidates.is_empty() {
             println!("no active sessions");
         } else {
-            for candidate in candidates {
-                println!("{}", candidate.description(&cwd));
+            let mut counts = HashMap::new();
+            for candidate in &candidates {
+                *counts.entry(candidate.session()).or_insert(0) += 1;
+            }
+            for candidate in &candidates {
+                let disambiguation = if counts[candidate.session()] > 1 {
+                    format!("  {}", candidate.id())
+                } else {
+                    String::new()
+                };
+                println!("{}{disambiguation}", candidate.description(&cwd));
             }
         }
         Ok(())
@@ -327,12 +327,10 @@ mod tests {
     use super::*;
 
     fn process(name: &str, status: &str, failed: bool, timestamp: u64) -> Candidate {
-        let descriptor = host::new_descriptor().unwrap();
+        let descriptor = host::new_descriptor();
         let session = tui_test::monitoring::protocol::HostSession {
-            id: format!("{}/{}", descriptor.owner, name),
+            id: SessionId::new_v4(),
             session: name.into(),
-            generation: 1,
-            owner: descriptor.owner.clone(),
             pid: descriptor.pid,
             label: Some(format!("scenario {name}")),
             test_file: Some(
@@ -379,7 +377,6 @@ mod tests {
                 failed: true,
                 waiting: true,
                 cwd: Some("current".into()),
-                ..Default::default()
             },
             &cwd,
         );
@@ -393,8 +390,15 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let hosted = process("login", "running", false, 1);
         let id = hosted.id();
+        let daemon_id = SessionId::new_v4();
         let error = choose(
-            vec![Candidate::Daemon("login".into()), hosted],
+            vec![
+                Candidate::Daemon {
+                    name: "login".into(),
+                    id: daemon_id,
+                },
+                hosted,
+            ],
             true,
             false,
             true,
@@ -404,8 +408,22 @@ mod tests {
         .err()
         .expect("ambiguous session");
         assert_eq!(error.kind, ErrorKind::Usage);
-        assert!(error.message.contains(&id));
-        assert!(error.message.contains("daemon/login"));
+        assert!(error.message.contains(&id.to_string()));
+        assert!(error.message.contains(&daemon_id.to_string()));
+    }
+
+    #[test]
+    fn monitor_ids_are_uuids_without_owner_metadata() {
+        let candidate = process("login", "running", false, 1);
+        let detail = candidate.detail().unwrap();
+        assert_eq!(detail["session"], "login");
+        assert_eq!(detail["id"], candidate.id().to_string());
+        for removed in ["owner", "ownerType", "generation"] {
+            assert!(detail.get(removed).is_none());
+        }
+        let cwd = std::env::current_dir().unwrap();
+        let duplicate = process("login", "running", false, 2);
+        assert!(choose(vec![candidate, duplicate], true, true, false, false, &cwd).is_err());
     }
 
     #[test]

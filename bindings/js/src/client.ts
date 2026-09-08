@@ -581,7 +581,7 @@ class Mouse {
 
 interface Completion {
   promise: Promise<void>;
-  initialized: Promise<void>;
+  phase: "initializing" | "cancel-requested" | "active";
 }
 
 export class TuiTest {
@@ -761,11 +761,16 @@ export class TuiTest {
     if (this.#completion) {
       const completion = this.#completion;
       if (restart) {
-        await completion.initialized;
-        await this.#runtime.cancelMonitorWait();
+        if (completion.phase === "initializing") {
+          completion.phase = "cancel-requested";
+        } else if (completion.phase === "active") {
+          await this.#runtime.cancelMonitorWait();
+        }
       }
       await completion.promise;
-      this.#completion = undefined;
+      if (this.#completion === completion) {
+        this.#completion = undefined;
+      }
     }
     let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -826,9 +831,6 @@ export class TuiTest {
   }
 
   close(): Promise<void> {
-    if (!this.#monitoring.enabled) {
-      return this.#completion?.promise ?? this.#runtime.close();
-    }
     return this.#completion?.promise ?? this.#startCompletion().promise;
   }
 
@@ -836,20 +838,23 @@ export class TuiTest {
     outcome?: "passed" | "failed",
     onError?: (error: unknown) => void,
   ): Completion {
-    let initialized!: () => void;
-    const ready = new Promise<void>((resolve) => { initialized = resolve; });
-    let promise = Promise.resolve()
-      .then(() => this.#complete(outcome, initialized))
-      .finally(initialized);
-    if (onError) {
-      promise = promise.catch(onError);
-    }
-    const completion = { promise, initialized: ready };
+    // Publish before native initialization so finish, close and restart share one operation.
+    const completion: Completion = {
+      phase: "initializing",
+      promise: Promise.resolve()
+        .then(() => this.#complete(completion, outcome))
+        .catch(onError)
+        .finally(() => {
+          if (!this.#monitoring.enabled && this.#completion === completion) {
+            this.#completion = undefined;
+          }
+        }),
+    };
     this.#completion = completion;
     return completion;
   }
 
-  async #complete(outcome: "passed" | "failed" | undefined, initialized: () => void): Promise<void> {
+  async #complete(completion: Completion, outcome?: "passed" | "failed"): Promise<void> {
     const errors: unknown[] = [];
     let generation: string | undefined;
     const shouldWait =
@@ -858,18 +863,23 @@ export class TuiTest {
       (this.#monitoring.waitAtEnd === "always" ||
         (outcome === "failed" && this.#monitoring.waitAtEnd === "failure"));
     const configureNoHold = this.#monitoring.enabled && !this.#monitoring.holdWhileAttached;
-    if (shouldWait || configureNoHold) {
-      // Native worker promises alone need not keep Node's event loop alive.
-      const keepAlive = shouldWait ? setInterval(() => {}, 2 ** 30) : undefined;
-      const timeout = shouldWait ? this.#monitoring.firstAttachTimeout : 0;
-      try {
-        const info = await this.#runtime.beginMonitorWait(
-          outcome ?? "passed",
-          timeout,
-          this.#monitoring.holdWhileAttached,
-        );
-        generation = info.generation;
-        initialized();
+    // Native worker promises alone need not keep Node's event loop alive.
+    const keepAlive = shouldWait ? setInterval(() => {}, 2 ** 30) : undefined;
+    const timeout = shouldWait ? this.#monitoring.firstAttachTimeout : 0;
+    try {
+      const info = shouldWait || configureNoHold
+        ? await this.#runtime.beginMonitorWait(
+            outcome ?? "passed",
+            timeout,
+            this.#monitoring.holdWhileAttached,
+          )
+        : undefined;
+      generation = info?.generation;
+      if (completion.phase === "cancel-requested") {
+        await this.#runtime.cancelMonitorWait();
+      }
+      completion.phase = "active";
+      if (info) {
         if (shouldWait) {
           console.error(
             `[tui-test] ${outcome === "failed" ? "Test failed" : "Test completed"}; ` +
@@ -893,16 +903,14 @@ export class TuiTest {
           timeout,
           this.#monitoring.holdWhileAttached,
         );
-      } catch (error) {
-        if (shouldWait || !(error instanceof NoSessionError)) {
-          errors.push(error);
-        }
-      } finally {
-        initialized();
-        clearInterval(keepAlive);
       }
-    } else {
-      initialized();
+    } catch (error) {
+      if (shouldWait || !(error instanceof NoSessionError)) {
+        errors.push(error);
+      }
+    } finally {
+      completion.phase = "active";
+      clearInterval(keepAlive);
     }
     try {
       if (generation !== undefined) {
@@ -921,12 +929,13 @@ export class TuiTest {
     }
   }
 
-  async #finish(
-    outcome: "passed" | "failed",
-    primary: { present: boolean; value?: unknown },
-  ): Promise<void> {
+  async finish(opts: {
+    outcome: "passed" | "failed";
+    error?: unknown;
+  }): Promise<void> {
+    const hasPrimaryError = opts.outcome === "failed" && "error" in opts;
     const handleSecondaryError = (error: unknown): void => {
-      if (!primary.present) {
+      if (!hasPrimaryError) {
         throw error;
       }
       console.error(
@@ -935,35 +944,19 @@ export class TuiTest {
         }`,
       );
     };
-    // Publish before beginning inspection so close/disposal also await initialization.
-    const completion = this.#completion ?? this.#startCompletion(outcome, handleSecondaryError);
-    try {
-      await completion.promise.catch(handleSecondaryError);
-      if (primary.present) {
-        throw primary.value;
-      }
-    } finally {
-      if (!this.#monitoring.enabled && this.#completion === completion) {
-        this.#completion = undefined;
-      }
+    if (this.#completion) {
+      await this.#completion.promise.catch(handleSecondaryError);
+    } else {
+      await this.#startCompletion(opts.outcome, handleSecondaryError).promise;
+    }
+    if (hasPrimaryError) {
+      throw opts.error;
     }
   }
 
-  async finish(opts: {
-    outcome: "passed" | "failed";
-    error?: unknown;
-  }): Promise<void> {
-    await this.#finish(opts.outcome, {
-      present: opts.outcome === "failed" && "error" in opts,
-      value: opts.error,
-    });
-  }
-
   async inspectFailure(error: unknown): Promise<never> {
-    return this.#finish("failed", {
-      present: true,
-      value: error,
-    }) as Promise<never>;
+    await this.finish({ outcome: "failed", error });
+    throw error;
   }
 
   async closeQuiet(): Promise<void> {

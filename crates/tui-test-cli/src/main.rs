@@ -112,7 +112,7 @@ fn main() {
         } => monitor::run_client(
             config::session_was_specified(&cli.session).then_some(session.as_str()),
             interactive,
-            id.as_deref(),
+            id,
             latest,
             &filter,
         ),
@@ -1219,7 +1219,7 @@ EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
-WATCH     monitor [--interactive] [--id OWNER/SESSION]\n\
+WATCH     monitor [--interactive] [--id UUID]\n\
           (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
 GLOBAL    --session NAME | --json | --verbose (log PTY traffic to ~/.tui-test/<session>.log)\n\

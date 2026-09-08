@@ -77,36 +77,26 @@ and `monitoring`.
 
 Recording modes: `disabled`, `on-failure`, and `always`.
 
-## Process-local monitoring
+## Inspect failed tests
 
 ```js
 import { withTerminal } from "@microsoft/tui-test/test";
 
 await withTerminal({
+  session: "login",
   program: ["my-app"],
-  monitoring: {
-    enabled: true,
-    waitAtEnd: "failure",
-    firstAttachTimeout: 30_000,
-    holdWhileAttached: true,
-    label: "login validation",
-    metadata: { testName: "rejects an expired token" },
-  },
+  monitoring: { enabled: true, waitAtEnd: "failure" },
 }, async (terminal) => {
   await terminal.getByText("Ready").expect();
 });
 ```
 
-On failure, the helper prints an exact `tui-test monitor --interactive --id ...`
-command and retains the original terminal until inspection completes, then
-rethrows the same error. Use `finish({ outcome: "passed" | "failed", error? })`
-or `inspectFailure(error)` with custom runners. `close`, `closeQuiet`, and async
-disposal do not bypass an active inspection hold.
+On failure, run the printed monitor command in another terminal.
+See [CLI inspection](cli.md#inspect-tests) for selection, detach keys, and environment options.
 
-`waitAtEnd` is `"never"` by default; `"always"` also delays successful cleanup.
-`firstAttachTimeout: null` explicitly waits indefinitely for a first attachment.
-Monitoring alone does not keep Node alive, and no terminal survives Node's exit.
-Use `tui-test sessions --waiting` to discover failures across workers.
+`waitAtEnd` accepts `"never"` (default), `"failure"`, or `"always"`.
+`firstAttachTimeout` is in milliseconds (default `30_000`); `null` waits indefinitely.
+`holdWhileAttached` defaults to `true`; set it to `false` to resume without waiting for detach.
 
 ## Input helpers
 

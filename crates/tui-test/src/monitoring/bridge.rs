@@ -12,6 +12,7 @@ use super::protocol::{Attach, HostSession, HostSnapshot, Request, Response};
 use super::render;
 use super::stream::{self, MonitorSession};
 use super::viewport::Viewport;
+use super::SessionId;
 use crate::{SessionMonitorTarget, TuiTestError};
 
 /// Optional discovery labels. Metadata never changes ownership of the child.
@@ -34,6 +35,7 @@ struct Client {
 
 #[derive(Clone)]
 struct Entry {
+    id: SessionId,
     generation: u64,
     target: SessionMonitorTarget,
     metadata: Metadata,
@@ -77,7 +79,7 @@ fn bridge_error(error: impl std::fmt::Display) -> TuiTestError {
 
 impl Bridge {
     fn start() -> Result<Arc<Self>, TuiTestError> {
-        let descriptor = host::new_descriptor().map_err(bridge_error)?;
+        let descriptor = host::new_descriptor();
         host::ensure_host_dir().map_err(bridge_error)?;
         let listener = ipc::listen(&descriptor.endpoint).map_err(bridge_error)?;
         host::publish(&descriptor).map_err(bridge_error)?;
@@ -181,6 +183,7 @@ pub fn register(
         let replaced = state.sessions.insert(
             name.into(),
             Entry {
+                id: SessionId::new_v4(),
                 generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
                 target: target.clone(),
                 metadata,
@@ -265,7 +268,7 @@ pub fn clear_sessions() {
 }
 
 /// Mark completion before starting asynchronous cleanup; defaults to a 30-second first attachment.
-pub fn begin_wait(name: &str, outcome: &str) -> Result<(String, u64), TuiTestError> {
+pub fn begin_wait(name: &str, outcome: &str) -> Result<(SessionId, u64), TuiTestError> {
     begin_wait_with_options(name, outcome, Some(Duration::from_secs(30)), true)
 }
 
@@ -275,7 +278,7 @@ pub fn begin_wait_with_options(
     outcome: &str,
     timeout: Option<Duration>,
     hold_while_attached: bool,
-) -> Result<(String, u64), TuiTestError> {
+) -> Result<(SessionId, u64), TuiTestError> {
     begin_wait_for(name, None, outcome, timeout, hold_while_attached)
 }
 
@@ -286,7 +289,7 @@ pub fn begin_wait_for_target_with_options(
     outcome: &str,
     timeout: Option<Duration>,
     hold_while_attached: bool,
-) -> Result<(String, u64), TuiTestError> {
+) -> Result<(SessionId, u64), TuiTestError> {
     begin_wait_for(name, Some(target), outcome, timeout, hold_while_attached)
 }
 
@@ -296,7 +299,7 @@ fn begin_wait_for(
     outcome: &str,
     timeout: Option<Duration>,
     hold_while_attached: bool,
-) -> Result<(String, u64), TuiTestError> {
+) -> Result<(SessionId, u64), TuiTestError> {
     let outcome = Outcome::parse(outcome)?;
     let bridge = current_bridge().ok_or_else(TuiTestError::no_session)?;
     let mut state = lock(&bridge.state);
@@ -326,7 +329,7 @@ fn begin_wait_for(
     }
     let generation = entry.generation;
     bridge.changed.notify_all();
-    Ok((format!("{}/{}", bridge.descriptor.owner, name), generation))
+    Ok((entry.id, generation))
 }
 
 pub fn wait(
@@ -387,18 +390,16 @@ pub fn wait_target(name: &str, generation: u64) -> Option<SessionMonitorTarget> 
     target
 }
 
-pub(super) fn target_identity(name: &str, target: &SessionMonitorTarget) -> Option<(String, u64)> {
+pub(super) fn target_identity(
+    name: &str,
+    target: &SessionMonitorTarget,
+) -> Option<(SessionId, u64)> {
     let bridge = current_bridge()?;
     let identity = lock(&bridge.state)
         .sessions
         .get(name)
         .filter(|entry| entry.target.same_target(target))
-        .map(|entry| {
-            (
-                format!("{}/{}", bridge.descriptor.owner, name),
-                entry.generation,
-            )
-        });
+        .map(|entry| (entry.id, entry.generation));
     identity
 }
 
@@ -590,10 +591,10 @@ fn handle(connection: Stream, bridge: Arc<Bridge>) {
         },
         Request::Monitor(attach) => {
             let attachment = attach.validate().and_then(|_| {
-                let route = attach.route.as_ref().ok_or_else(|| {
-                    TuiTestError::usage("process monitor requires a session route")
-                })?;
-                Attachment::new(bridge.clone(), &route.session, route.generation, &attach)
+                let id = attach
+                    .id
+                    .ok_or_else(|| TuiTestError::usage("monitor requires a session id"))?;
+                Attachment::new(bridge.clone(), id, &attach)
             });
             match attachment {
                 Ok(attachment) => {
@@ -622,10 +623,8 @@ fn host_sessions(bridge: &Bridge) -> HostSnapshot {
         .filter_map(|(name, entry)| {
             let frame = entry.target.frame()?;
             Some(HostSession {
-                id: format!("{}/{}", bridge.descriptor.owner, name),
+                id: entry.id,
                 session: name,
-                generation: entry.generation,
-                owner: bridge.descriptor.owner.clone(),
                 pid: bridge.descriptor.pid,
                 label: entry.metadata.label,
                 test_file: entry.metadata.test_file,
@@ -652,7 +651,7 @@ fn host_sessions(bridge: &Bridge) -> HostSnapshot {
     sessions.sort_by(|left, right| left.session.cmp(&right.session));
     HostSnapshot {
         protocol: host::HOST_PROTOCOL,
-        owner: bridge.descriptor.owner.clone(),
+        id: bridge.descriptor.id,
         capabilities: host::HOST_CAPABILITIES
             .iter()
             .map(|value| (*value).into())
@@ -672,21 +671,18 @@ struct Attachment {
 }
 
 impl Attachment {
-    fn new(
-        bridge: Arc<Bridge>,
-        session: &str,
-        generation: u64,
-        attach: &Attach,
-    ) -> Result<Self, TuiTestError> {
+    fn new(bridge: Arc<Bridge>, id: SessionId, attach: &Attach) -> Result<Self, TuiTestError> {
         let mut state = lock(&bridge.state);
         if state.stopped {
             return Err(TuiTestError::no_session());
         }
-        let entry = state
+        let (session, entry) = state
             .sessions
-            .get_mut(session)
-            .filter(|entry| entry.generation == generation && entry.lifecycle.accepts_attachments())
+            .iter_mut()
+            .find(|(_, entry)| entry.id == id && entry.lifecycle.accepts_attachments())
             .ok_or_else(TuiTestError::no_session)?;
+        let session = session.clone();
+        let generation = entry.generation;
         if attach.interactive && entry.clients.values().any(|client| client.interactive) {
             return Err(TuiTestError::usage(
                 "session already has an interactive monitor",
@@ -715,7 +711,7 @@ impl Attachment {
         );
         Ok(Self {
             bridge,
-            session: session.into(),
+            session,
             generation,
             id,
             active,

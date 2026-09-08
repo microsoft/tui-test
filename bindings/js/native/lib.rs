@@ -1115,8 +1115,8 @@ impl NativeSession {
                 }
             };
             Ok(MonitorInfo {
-                command: bridge::host::monitor_command(&id, true),
-                id,
+                command: bridge::host::monitor_command(self.handle.name(), true),
+                id: id.to_string(),
                 generation: generation.to_string(),
             })
         })

@@ -133,40 +133,35 @@ async def close_all_tracked() -> None:
     await _close_quietly(pending)
 
 
-
 def _client_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
-    kwargs = {}  # type: Dict[str, Any]
-    if opts.backend is not None:
-        kwargs["backend"] = opts.backend
-    if opts.timeouts is not None:
-        kwargs["timeouts"] = opts.timeouts
-    if opts.profile is not None:
-        kwargs["profile"] = opts.profile
-    if opts.artifacts is not None:
-        kwargs["artifacts"] = opts.artifacts
-    if opts.recording is not None:
-        kwargs["recording"] = opts.recording
-    if opts.monitoring is not None:
-        kwargs["monitoring"] = opts.monitoring
-    return kwargs
+    values = {
+        "backend": opts.backend,
+        "timeouts": opts.timeouts,
+        "profile": opts.profile,
+        "artifacts": opts.artifacts,
+        "recording": opts.recording,
+        "monitoring": opts.monitoring,
+    }
+    return {name: value for name, value in values.items() if value is not None}
 
 
 def _spawn_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
-    kwargs = {"retries": 2 if opts.retries is None else opts.retries}  # type: Dict[str, Any]
-    for name in ("cols", "rows", "cwd", "env", "wait_ready"):
-        value = getattr(opts, name)
-        if value is not None:
-            kwargs[name] = value
-    return kwargs
+    values = {
+        "retries": 2 if opts.retries is None else opts.retries,
+        "cols": opts.cols,
+        "rows": opts.rows,
+        "cwd": opts.cwd,
+        "env": opts.env,
+        "wait_ready": opts.wait_ready,
+    }
+    return {name: value for name, value in values.items() if value is not None}
 
 
 async def create_terminal(**options: Any) -> TuiTest:
     per_call = TerminalOptions(**options)
-    merged = dict(_defaults.__dict__)
-    for key, value in per_call.__dict__.items():
-        if value is not None:
-            merged[key] = value
-    opts = TerminalOptions(**merged)
+    opts = replace(_defaults, **{
+        name: value for name, value in vars(per_call).items() if value is not None
+    })
     session = opts.session or unique_session(opts.prefix)
     term = TuiTest(session, **_client_kwargs(opts))
     track_terminal(term)
@@ -191,13 +186,8 @@ async def create_terminal(**options: Any) -> TuiTest:
 async def terminal(**options: Any) -> AsyncIterator[TuiTest]:
     term = await create_terminal(**options)
     try:
-        try:
+        async with term:
             yield term
-        except BaseException as error:
-            await term.__aexit__(type(error), error, error.__traceback__)
-            raise
-        else:
-            await term.finish()
     finally:
         untrack_terminal(term)
 

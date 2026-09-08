@@ -1,15 +1,10 @@
 //! The monitor-only wire contract; ordinary terminal commands remain in the CLI.
 
+use super::SessionId;
 use crate::{ErrorKind, TuiTestError};
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 3;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Route {
-    pub session: String,
-    pub generation: u64,
-}
+pub const VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Attach {
@@ -20,7 +15,7 @@ pub struct Attach {
     #[serde(default)]
     pub interactive: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub route: Option<Route>,
+    pub id: Option<SessionId>,
 }
 
 impl Attach {
@@ -30,14 +25,14 @@ impl Attach {
             cols,
             rows,
             interactive,
-            route: None,
+            id: None,
         }
     }
 
     pub fn validate(&self) -> Result<(), TuiTestError> {
         if self.protocol != VERSION {
             return Err(TuiTestError::usage(
-                "incompatible monitor protocol; restart or upgrade the session owner",
+                "incompatible monitor protocol; restart or upgrade the session",
             ));
         }
         if self.cols == 0 || self.rows == 0 {
@@ -87,10 +82,8 @@ pub enum MonitorOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostSession {
-    pub id: String,
+    pub id: SessionId,
     pub session: String,
-    pub generation: u64,
-    pub owner: String,
     pub pid: u32,
     pub label: Option<String>,
     pub test_file: Option<String>,
@@ -116,7 +109,7 @@ pub struct HostSession {
 #[serde(rename_all = "camelCase")]
 pub struct HostSnapshot {
     pub protocol: u32,
-    pub owner: String,
+    pub id: SessionId,
     pub capabilities: Vec<String>,
     pub sessions: Vec<HostSession>,
 }
@@ -164,15 +157,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn monitor_attach_is_one_versioned_routed_handshake() {
+    fn monitor_attach_selects_a_session_uuid() {
         let mut attach = Attach::new(80, 24, true);
-        attach.route = Some(Route {
-            session: "login".into(),
-            generation: 7,
-        });
+        let id = SessionId::new_v4();
+        attach.id = Some(id);
         let json = serde_json::to_value(Request::Monitor(attach)).unwrap();
         assert_eq!(json["kind"], "monitor");
-        assert_eq!(json["route"]["generation"], 7);
+        assert_eq!(json["id"], id.to_string());
         let Request::Monitor(attach) = serde_json::from_value(json).unwrap() else {
             panic!("monitor request")
         };

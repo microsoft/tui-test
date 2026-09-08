@@ -5,8 +5,9 @@ import os
 import subprocess
 import sys
 import unittest
+from uuid import UUID
 
-from tui_test import TuiTest
+from tui_test import MonitoringMetadata, MonitoringOptions, TuiTest
 
 
 CLI = os.environ.get("TUI_TEST_BIN")
@@ -23,12 +24,16 @@ ECHO_CHILD = (
 @unittest.skipUnless(CLI, "TUI_TEST_BIN is required for native-to-CLI monitoring")
 class MonitoringCliTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_hold_close_finishes_while_read_only_viewer_is_connected(self):
-        for method in ("close", "close_quiet"):
+        for close in (TuiTest.close, TuiTest.close_quiet):
             target = TuiTest.ephemeral(
                 "python-no-hold", recording={"mode": "disabled"},
-                monitoring={"enabled": True, "wait_at_end": "never", "hold_while_attached": False},
+                monitoring=MonitoringOptions(
+                    enabled=True, wait_at_end="never", hold_while_attached=False,
+                ),
             )
-            viewer = TuiTest.ephemeral("python-no-hold-viewer", monitoring={"enabled": False})
+            viewer = TuiTest.ephemeral(
+                "python-no-hold-viewer", monitoring=MonitoringOptions(enabled=False),
+            )
             try:
                 await target.run(sys.executable, "-u", "-c", ECHO_CHILD, wait_ready=False)
                 result = await asyncio.get_running_loop().run_in_executor(
@@ -39,9 +44,12 @@ class MonitoringCliTests(unittest.IsolatedAsyncioTestCase):
                 )
                 entry = next(item for item in json.loads(result.stdout)["details"]
                              if item["session"] == target.session and item.get("pid") == os.getpid())
-                await viewer.run(CLI, "monitor", "--id", entry["id"], wait_ready=False)
+                UUID(entry["id"])
+                await viewer.run(
+                    CLI, "--session", target.session, "monitor", wait_ready=False,
+                )
                 await viewer.get_by_text("q quit").first().expect(timeout=10000)
-                await asyncio.wait_for(getattr(target, method)(), 5)
+                await asyncio.wait_for(close(target), 5)
                 await viewer.wait_exit(timeout=10000)
             finally:
                 await asyncio.wait_for(viewer.close_quiet(), 5)
@@ -50,7 +58,9 @@ class MonitoringCliTests(unittest.IsolatedAsyncioTestCase):
     async def test_same_instance_restart_leaves_an_infinite_inspection(self):
         target = TuiTest.ephemeral(
             "python-same-restart", recording={"mode": "disabled"},
-            monitoring={"enabled": True, "wait_at_end": "always", "first_attach_timeout": None},
+            monitoring=MonitoringOptions(
+                enabled=True, wait_at_end="always", first_attach_timeout=None,
+            ),
         )
         finishing = None
         try:
@@ -92,7 +102,9 @@ class MonitoringCliTests(unittest.IsolatedAsyncioTestCase):
             details = json.loads(result.stdout)["details"]
             for entry in details:
                 if entry["session"] == target.session and entry["pid"] == os.getpid():
-                    self.assertEqual(entry["ownerType"], "process")
+                    self.assertNotIn("owner", entry)
+                    self.assertNotIn("ownerType", entry)
+                    UUID(entry["id"])
                     self.assertEqual(entry["status"], "waiting-for-attach")
                     self.assertEqual(entry["outcome"], "failed")
                     self.assertEqual(entry["label"], "python-cli-interop")
@@ -107,25 +119,25 @@ class MonitoringCliTests(unittest.IsolatedAsyncioTestCase):
         target = TuiTest.ephemeral(
             "python-monitor-target",
             recording={"mode": "disabled"},
-            monitoring={
-                "enabled": True,
-                "wait_at_end": "failure",
-                "first_attach_timeout": 60_000,
-                "hold_while_attached": True,
-                "label": "python-cli-interop",
-                "metadata": {
-                    "test_file": __file__,
-                    "test_name": self._testMethodName,
-                    "framework": "unittest",
-                },
-            },
+            monitoring=MonitoringOptions(
+                enabled=True,
+                wait_at_end="failure",
+                first_attach_timeout=60_000,
+                hold_while_attached=True,
+                label="python-cli-interop",
+                metadata=MonitoringMetadata(
+                    test_file=__file__,
+                    test_name=self._testMethodName,
+                    framework="unittest",
+                ),
+            ),
         )
         viewer = TuiTest.ephemeral(
             "python-monitor-viewer",
             recording={"mode": "disabled"},
-            monitoring={
-                "enabled": False, "wait_at_end": "never", "first_attach_timeout": 0,
-            },
+            monitoring=MonitoringOptions(
+                enabled=False, wait_at_end="never", first_attach_timeout=0,
+            ),
         )
         inspection = None
         cleanup = None

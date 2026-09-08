@@ -180,21 +180,18 @@ mod tests {
     fn monitor_discovery_selectors_are_exposed_to_agents() {
         let doc: Value = serde_json::from_str(&render()).unwrap();
         let monitor = doc["commands"]["monitor"]["args"].as_array().unwrap();
-        for flag in [
-            "--id",
-            "--owner",
-            "--latest",
-            "--failed",
-            "--waiting",
-            "--cwd",
-        ] {
+        for flag in ["--id", "--latest", "--failed", "--waiting", "--cwd"] {
             assert!(
                 monitor.iter().any(|arg| arg["long"] == json!(flag)),
                 "{flag}"
             );
         }
         let sessions = doc["commands"]["sessions"]["args"].as_array().unwrap();
-        for flag in ["--owner", "--failed", "--waiting", "--cwd"] {
+        assert!(monitor
+            .iter()
+            .chain(sessions)
+            .all(|arg| arg["long"] != json!("--owner")));
+        for flag in ["--failed", "--waiting", "--cwd"] {
             assert!(
                 sessions.iter().any(|arg| arg["long"] == json!(flag)),
                 "{flag}"

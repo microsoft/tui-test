@@ -17,20 +17,9 @@ Use `tui-test` to control and test a real terminal.
 | Rust code | `tui-test-rs` | [Rust](references/rust.md) |
 | Common tasks | Current project language | [Recipes](references/recipes.md) |
 
-Use the library that matches the project. Use standalone CLI sessions when the
-terminal must persist across separate commands. The CLI can also monitor an
-opt-in Rust, Python, or JavaScript library session.
+Use the library that matches the project. Use the CLI when the terminal must persist across separate commands.
 
-Standalone CLI and library sessions have separate owners. Monitoring exposes
-the existing library-owned terminal through one process bridge; it does not
-transfer ownership or keep the session alive after that process exits. For
-failure inspection, use the language's monitoring options and copy the printed
-attach command, or run `tui-test sessions --waiting`.
-
-Each monitor viewer uses one bidirectional connection, including during resize.
-Both viewing modes resize the child inside the border; interactive viewers have
-priority, with the previous viewer's size restored on detach. A yellow border
-and `! too small` indicate clipped content.
+Library tests can opt into [monitoring](references/cli.md#inspect-tests) to inspect failures with the CLI.
 
 ## CLI
 

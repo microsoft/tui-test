@@ -32,7 +32,6 @@ dirs.workspace = true
 flate2.workspace = true
 fontdb = { workspace = true, optional = true }
 gif = { workspace = true, optional = true }
-getrandom.workspace = true
 interprocess.workspace = true
 ghostty-vt = { workspace = true, optional = true }
 png = { workspace = true, optional = true }
@@ -48,6 +47,7 @@ tiny-skia = { workspace = true, optional = true }
 ttf-parser.workspace = true
 unicode-width.workspace = true
 vte.workspace = true
+uuid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_Pipes"] }

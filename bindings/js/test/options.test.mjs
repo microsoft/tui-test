@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { test } from "node:test";
@@ -768,6 +769,14 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function monitorInfo(generation, session = "session") {
+  return {
+    id: randomUUID(),
+    command: `tui-test --session ${session} monitor --interactive`,
+    generation,
+  };
+}
+
 async function withRuntimeMethods(methods, fn) {
   const originals = Object.fromEntries(
     Object.keys(methods).map((name) => [name, NativeRuntime.prototype[name]]),
@@ -827,7 +836,7 @@ test("close and disposal await inspection initialization and share one targeted 
     await started.promise;
     assert.equal(closed, false);
     assert.deepEqual(calls, [["begin", "failed", 42, false]]);
-    begin.resolve({ id: "owner/session", command: "tui-test monitor --id owner/session", generation: "7" });
+    begin.resolve(monitorInfo("7", terminal.session));
     await attached.promise;
     await terminal.write("input during inspection");
     await terminal.resize(100, 40);
@@ -845,6 +854,90 @@ test("close and disposal await inspection initialization and share one targeted 
   });
 });
 
+test("restart cancels inspection only after initialization and before replacing its target", async () => {
+  for (const phase of ["initializing", "waiting"]) {
+    const begin = deferred();
+    const waiting = deferred();
+    const started = deferred();
+    const calls = [];
+    await withRuntimeMethods({
+      async beginMonitorWait() {
+        calls.push("begin");
+        return begin.promise;
+      },
+      async waitForMonitor(generation) {
+        calls.push(["wait", generation]);
+        started.resolve();
+        return waiting.promise;
+      },
+      async cancelMonitorWait() {
+        calls.push("cancel");
+        waiting.resolve(false);
+      },
+      async closeMonitorTarget(generation) {
+        calls.push(["closeTarget", generation]);
+      },
+      async run() {
+        calls.push("run");
+        return { session: "restart-race", ready: true, shell_pid: 1, recording: "" };
+      },
+      async close() { assert.fail("cleanup must use the inspected generation"); },
+    }, async () => {
+      const terminal = new TuiTest("restart-race", {
+        monitoring: { waitAtEnd: "always", firstAttachTimeout: null },
+      });
+      const finishing = terminal.finish({ outcome: "passed" });
+      if (phase === "waiting") {
+        begin.resolve(monitorInfo("17", terminal.session));
+        await started.promise;
+      }
+      const restarting = terminal.run("replacement", [], { restart: true });
+      if (phase === "initializing") {
+        await Promise.resolve();
+        assert.deepEqual(calls, ["begin"], "restart must wait for the exact target");
+        begin.resolve(monitorInfo("17", terminal.session));
+      }
+      await Promise.all([finishing, restarting]);
+      assert.deepEqual(calls, phase === "initializing"
+        ? ["begin", "cancel", ["wait", "17"], ["closeTarget", "17"], "run"]
+        : ["begin", ["wait", "17"], "cancel", ["closeTarget", "17"], "run"]);
+    });
+  }
+});
+
+test("restart also releases hold-aware cleanup without an inspection wait", async () => {
+  for (const phase of ["initializing", "closing"]) {
+    const started = deferred();
+    const closing = deferred();
+    const calls = [];
+    await withRuntimeMethods({
+      async beginMonitorWait() { assert.fail("ordinary cleanup must not start inspection"); },
+      async cancelMonitorWait() {
+        calls.push("cancel");
+        closing.resolve();
+      },
+      async close() {
+        calls.push("close");
+        started.resolve();
+        await closing.promise;
+      },
+      async run() {
+        calls.push("run");
+        return { session: "restart-close", ready: true, shell_pid: 1, recording: "" };
+      },
+    }, async () => {
+      const terminal = new TuiTest("restart-close", { monitoring: { enabled: true } });
+      const closed = terminal.close();
+      if (phase === "closing") await started.promise;
+      const restarted = terminal.run("replacement", [], { restart: true });
+      await Promise.all([closed, restarted]);
+      assert.deepEqual(calls, phase === "initializing"
+        ? ["cancel", "close", "run"]
+        : ["close", "cancel", "run"]);
+    });
+  }
+});
+
 test("successful finish propagates inspection errors and still cleans up", async () => {
   for (const phase of ["begin", "wait"]) {
     const failure = new Error(`${phase} failed`);
@@ -852,7 +945,7 @@ test("successful finish propagates inspection errors and still cleans up", async
     await withRuntimeMethods({
       async beginMonitorWait() {
         if (phase === "begin") throw failure;
-        return { id: "owner/session", command: "attach", generation: "11" };
+        return monitorInfo("11");
       },
       async waitForMonitor() {
         throw failure;
@@ -896,7 +989,7 @@ test("explicit no-hold policy reaches native cleanup even without end-of-test in
   await withRuntimeMethods({
     async beginMonitorWait(...args) {
       calls.push(["begin", ...args]);
-      return { id: "owner/no-hold", command: "attach", generation: "5" };
+      return monitorInfo("5", "no-hold");
     },
     async waitForMonitor(...args) {
       calls.push(["wait", ...args]);
@@ -1003,6 +1096,30 @@ test("async disposal propagates cleanup errors", async () => {
   });
 });
 
+test("unmonitored close, finish and disposal share only their in-flight cleanup", async () => {
+  const closing = deferred();
+  const started = deferred();
+  let closes = 0;
+  await withRuntimeMethods({
+    async close() {
+      closes++;
+      started.resolve();
+      await closing.promise;
+    },
+  }, async () => {
+    const terminal = new TuiTest("shared-cleanup", { monitoring: { enabled: false } });
+    const closed = terminal.close();
+    const finished = terminal.finish({ outcome: "passed" });
+    const disposed = terminal[Symbol.asyncDispose]();
+    await started.promise;
+    assert.equal(closes, 1);
+    closing.resolve();
+    await Promise.all([closed, finished, disposed]);
+    await terminal.close();
+    assert.equal(closes, 2, "later name-based cleanup must not reuse the completed operation");
+  });
+});
+
 test("a terminal can reopen after finishing without reusing its previous cleanup promise", async () => {
   const calls = [];
   await withRuntimeMethods({
@@ -1044,9 +1161,9 @@ test("an awaited inspection keeps Node alive without another referenced handle",
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
     import { TuiTest } from ${JSON.stringify(clientUrl)};
     import { NativeRuntime } from ${JSON.stringify(runtimeUrl)};
-    NativeRuntime.prototype.beginMonitorWait = async () => ({
-      id: "owner/keepalive", command: "attach", generation: "1",
-    });
+    NativeRuntime.prototype.beginMonitorWait = async () => (
+      ${JSON.stringify(monitorInfo("1", "keepalive"))}
+    );
     NativeRuntime.prototype.waitForMonitor = () => new Promise((resolve) => {
       setTimeout(() => resolve(false), 100).unref();
     });
@@ -1135,12 +1252,12 @@ test("the CLI inspects the actual JavaScript-owned PTY without replacing its fai
       const parsed = JSON.parse(stdout);
       const entries = parsed.details;
       assert.ok(Array.isArray(entries), "sessions discovery must return a session list");
-      return entries.find((candidate) =>
-        typeof candidate.id === "string" &&
-        candidate.id.endsWith(`/${target.session}`),
-      );
+      return entries.find((candidate) => candidate.session === target.session);
     }, "waiting JavaScript-owned session was not discoverable");
-    assert.equal(entry.ownerType, "process");
+    assert.match(entry.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    for (const removed of ["owner", "ownerType", "generation"]) {
+      assert.equal(removed in entry, false);
+    }
     assert.equal(entry.pid, process.pid);
     assert.equal(entry.label, "options.test.mjs - CLI inspects JavaScript-owned PTY");
     assert.deepEqual(entry.tags, ["interop"]);

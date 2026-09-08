@@ -93,9 +93,6 @@ pub struct SessionFilter {
     /// Only sessions waiting for inspection.
     #[arg(long)]
     pub waiting: bool,
-    /// Process owner id, or "daemon" for standalone sessions.
-    #[arg(long, value_name = "OWNER")]
-    pub owner: Option<String>,
     /// Only sessions in this directory; use "current" for the invoking directory.
     #[arg(long, value_name = "DIRECTORY")]
     pub cwd: Option<String>,
@@ -393,9 +390,9 @@ pub enum Command {
         /// Forward keyboard, paste, and supported mouse input; press Ctrl+] to detach.
         #[arg(long)]
         interactive: bool,
-        /// Exact process-hosted session id from `tui-test sessions`.
-        #[arg(long, value_name = "OWNER/SESSION")]
-        id: Option<String>,
+        /// Session UUID, required when multiple sessions have the same name.
+        #[arg(long, value_name = "UUID")]
+        id: Option<tui_test::monitoring::SessionId>,
         /// Select the most recently completed or started matching session.
         #[arg(long, conflicts_with = "id")]
         latest: bool,
@@ -932,6 +929,20 @@ mod tests {
             })
         ));
         assert_eq!(cli.session, None, "no session means no target was named");
+    }
+
+    #[test]
+    fn monitor_attach_command_accepts_hyphen_prefixed_names() {
+        let command = tui_test::monitoring::host::monitor_command("-debug", true);
+        let cli = Cli::try_parse_from(command.split_whitespace()).unwrap();
+        assert_eq!(cli.session.as_deref(), Some("-debug"));
+        assert!(matches!(
+            cli.command,
+            Some(Command::Monitor {
+                interactive: true,
+                ..
+            })
+        ));
     }
 
     #[test]

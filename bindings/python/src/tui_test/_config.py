@@ -4,9 +4,15 @@ import collections.abc
 import dataclasses
 import os
 import sys
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, cast
 
-from .types import MonitoringMetadata, _UNSET
+from .types import (
+    MonitoringMetadata,
+    MonitoringOptions,
+    MonitoringOutcome,
+    MonitoringWaitAtEnd,
+    _UNSET,
+)
 
 VERSION = "0.1.0-beta.3"
 
@@ -117,37 +123,73 @@ def _object_mapping(value: object, name: str) -> Dict[str, Any]:
     raise TypeError("{} must be a dataclass or mapping".format(name))
 
 
-def resolve_monitoring(monitoring: object = None) -> Dict[str, Any]:
-    raw = {} if monitoring is None else _object_mapping(monitoring, "monitoring")
-    raw = {key: value for key, value in raw.items() if value is not _UNSET}
-    fields = {
-        "enabled", "wait_at_end", "first_attach_timeout",
-        "hold_while_attached", "label", "metadata",
-    }
-    unknown = set(raw) - fields
-    if unknown:
-        raise ValueError("unknown monitoring field {}".format(
-            ", ".join(sorted(repr(key) for key in unknown))
-        ))
-    wait = raw.get("wait_at_end", os.environ.get("TUI_TEST_WAIT_AT_END", "never"))
+@dataclasses.dataclass(frozen=True)
+class ResolvedMonitoring:
+    enabled: bool = False
+    wait_at_end: MonitoringWaitAtEnd = "never"
+    first_attach_timeout: Optional[int] = 30_000
+    hold_while_attached: bool = True
+    label: Optional[str] = None
+    metadata: MonitoringMetadata = dataclasses.field(default_factory=MonitoringMetadata)
+
+    def waits_after(self, outcome: MonitoringOutcome) -> bool:
+        return self.wait_at_end == "always" or (
+            self.wait_at_end == "failure" and outcome == "failed"
+        )
+
+
+def _monitoring_timeout_from_environment() -> Optional[int]:
+    value = os.environ.get("TUI_TEST_FIRST_ATTACH_TIMEOUT")
+    if value is None:
+        return 30_000
+    value = value.strip()
+    if value.lower() == "infinite":
+        return None
+    if value.isascii() and value.isdecimal():
+        return int(value)
+    raise ValueError(
+        "TUI_TEST_FIRST_ATTACH_TIMEOUT must be a non-negative integer or infinite"
+    )
+
+
+def _monitoring_metadata(value: object) -> MonitoringMetadata:
+    if value is _UNSET:
+        return MonitoringMetadata()
+    if isinstance(value, MonitoringMetadata):
+        fields = {
+            name: item for name, item in dataclasses.asdict(value).items()
+            if item is not None
+        }
+    elif isinstance(value, collections.abc.Mapping):
+        fields = dict(value)
+    else:
+        raise TypeError("monitoring.metadata must be a MonitoringMetadata or mapping")
+    for name, item in fields.items():
+        if not isinstance(item, str):
+            raise TypeError("monitoring.metadata.{} must be a string".format(name))
+    return MonitoringMetadata(**fields)
+
+
+def resolve_monitoring(monitoring: object = None) -> ResolvedMonitoring:
+    if monitoring is None:
+        options = MonitoringOptions()
+    elif isinstance(monitoring, MonitoringOptions):
+        options = monitoring
+    elif isinstance(monitoring, collections.abc.Mapping):
+        options = MonitoringOptions(**monitoring)
+    else:
+        raise TypeError("monitoring must be a MonitoringOptions, a mapping, or None")
+
+    wait = (
+        os.environ.get("TUI_TEST_WAIT_AT_END", "never")
+        if options.wait_at_end is _UNSET else options.wait_at_end
+    )
     if not isinstance(wait, str) or wait not in ("never", "failure", "always"):
         raise ValueError("monitoring.wait_at_end must be never, failure, or always")
-    if "first_attach_timeout" in raw:
-        timeout = raw["first_attach_timeout"]
-    else:
-        env_timeout = os.environ.get("TUI_TEST_FIRST_ATTACH_TIMEOUT")
-        if env_timeout is not None:
-            env_timeout = env_timeout.strip()
-        if env_timeout is None:
-            timeout = 30_000
-        elif env_timeout.lower() == "infinite":
-            timeout = None
-        elif env_timeout.isascii() and env_timeout.isdecimal():
-            timeout = int(env_timeout)
-        else:
-            raise ValueError(
-                "TUI_TEST_FIRST_ATTACH_TIMEOUT must be a non-negative integer or infinite"
-            )
+    timeout = (
+        _monitoring_timeout_from_environment()
+        if options.first_attach_timeout is _UNSET else options.first_attach_timeout
+    )
     if timeout is not None and (
         isinstance(timeout, bool) or not isinstance(timeout, int)
         or timeout < 0 or timeout > 2**64 - 1
@@ -155,42 +197,32 @@ def resolve_monitoring(monitoring: object = None) -> Dict[str, Any]:
         raise TypeError(
             "monitoring.first_attach_timeout must be a non-negative 64-bit integer or None"
         )
-    for key in ("enabled", "hold_while_attached"):
-        if key in raw and not isinstance(raw[key], bool):
-            raise TypeError("monitoring.{} must be a boolean".format(key))
-    label = raw.get("label", os.environ.get("TUI_TEST_LABEL"))
-    if ("label" in raw or label is not None) and not isinstance(label, str):
-        raise TypeError("monitoring.label must be a string")
-    metadata_value = raw.get("metadata", {})
-    metadata = _object_mapping(metadata_value, "monitoring.metadata")
-    # Optional dataclass metadata fields are omitted, not JSON null values.
-    if dataclasses.is_dataclass(monitoring):
-        original = getattr(monitoring, "metadata", None)
-    else:
-        original = metadata_value
-    if isinstance(original, MonitoringMetadata):
-        metadata = {key: value for key, value in metadata.items() if value is not None}
-    unknown = set(metadata) - {"test_file", "test_name", "framework", "worker"}
-    if unknown:
-        raise ValueError("unknown monitoring metadata field {}".format(
-            ", ".join(sorted(repr(key) for key in unknown))
-        ))
-    for key, value in metadata.items():
-        if not isinstance(value, str):
-            raise TypeError("monitoring.metadata.{} must be a string".format(key))
-    enabled = raw.get(
-        "enabled",
-        os.environ.get("TUI_TEST_MONITORING", "").lower() in ("1", "true")
-        or wait != "never",
+    enabled = (
+        (
+            os.environ.get("TUI_TEST_MONITORING", "").lower() in ("1", "true")
+            or wait != "never"
+        )
+        if options.enabled is _UNSET else options.enabled
     )
-    return {
-        "enabled": enabled,
-        "wait_at_end": wait,
-        "first_attach_timeout": timeout,
-        "hold_while_attached": raw.get("hold_while_attached", True),
-        "label": label,
-        "metadata": metadata,
-    }
+    if not isinstance(enabled, bool):
+        raise TypeError("monitoring.enabled must be a boolean")
+    hold = True if options.hold_while_attached is _UNSET else options.hold_while_attached
+    if not isinstance(hold, bool):
+        raise TypeError("monitoring.hold_while_attached must be a boolean")
+    label = (
+        os.environ.get("TUI_TEST_LABEL")
+        if options.label is _UNSET else options.label
+    )
+    if (options.label is not _UNSET or label is not None) and not isinstance(label, str):
+        raise TypeError("monitoring.label must be a string")
+    return ResolvedMonitoring(
+        enabled=enabled,
+        wait_at_end=cast(MonitoringWaitAtEnd, wait),
+        first_attach_timeout=timeout,
+        hold_while_attached=hold,
+        label=label,
+        metadata=_monitoring_metadata(options.metadata),
+    )
 
 
 def normalize_recording(recording: object) -> Optional[Dict[str, Any]]:

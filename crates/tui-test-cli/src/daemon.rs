@@ -10,6 +10,7 @@ use interprocess::local_socket::Stream;
 
 use tui_test::engine::Engine;
 use tui_test::logger::Logger;
+use tui_test::monitoring::SessionId;
 use tui_test::Operation;
 
 use crate::protocol::{Request, Response};
@@ -20,6 +21,7 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
     sweep_recordings(&session_name);
     let socket = config::socket_name(&session_name);
     let listener = ipc::listen(&socket)?;
+    let id = SessionId::new_v4();
     std::fs::write(
         config::pid_file(&session_name),
         std::process::id().to_string(),
@@ -64,12 +66,17 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
             Err(_) => continue,
         };
         *last_activity.lock().unwrap() = Instant::now();
+        if matches!(req, Request::Ping) {
+            let _ = ipc::write_response(reader.get_mut(), &Response::with(serde_json::json!(id)));
+            continue;
+        }
         if let Request::Monitor(attach) = req {
             spawn_monitor(
                 Arc::clone(&engine),
                 Arc::clone(&last_activity),
                 reader,
                 session_name.clone(),
+                id,
                 attach,
             );
             continue;
@@ -77,17 +84,19 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
         if matches!(&req, Request::Close | Request::Shutdown) {
             // Stop accepting before acknowledging shutdown, not after the reply drains.
             drop(listener);
+            cleanup(&session_name);
             let _ = operations.send((req, reader.into_inner()));
             break;
         }
         if operations.send((req, reader.into_inner())).is_err() {
+            drop(listener);
+            cleanup(&session_name);
             break;
         }
     }
 
     drop(operations);
     let _ = operation_worker.join();
-    cleanup(&session_name);
     Ok(())
 }
 
@@ -113,7 +122,6 @@ fn spawn_operation_worker(
                 let _ = std::fs::write(config::recording_pointer_file(&session), "");
             }
             let mut response = match req {
-                Request::Ping => Response::ok(),
                 Request::Shutdown => {
                     crate::protocol::response_result(engine.execute(Operation::Close))
                 }
@@ -240,17 +248,16 @@ fn spawn_monitor(
     activity: Arc<Mutex<Instant>>,
     reader: BufReader<Stream>,
     session: String,
+    id: SessionId,
     attach: tui_test::monitoring::protocol::Attach,
 ) {
     std::thread::spawn(move || {
         let Ok(mut connection) = tui_test::monitoring::ipc::Connection::from_reader(reader) else {
             return;
         };
-        if attach.route.is_some() {
+        if attach.id.is_some_and(|requested| requested != id) {
             let _ = connection.writer().send(
-                &Response::from_error(tui_test::TuiTestError::usage(
-                    "daemon monitor does not accept a process route",
-                )),
+                &Response::from_error(tui_test::TuiTestError::no_session()),
                 &std::sync::atomic::AtomicBool::new(false),
             );
             connection.drain(Duration::from_secs(2));

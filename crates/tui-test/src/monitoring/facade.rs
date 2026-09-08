@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use super::{bridge, Metadata, Outcome};
+use super::{bridge, Metadata, Outcome, SessionId};
 use crate::{Session, SessionHandle, SessionMonitorTarget, TuiTestError};
 
 /// When completion should leave the terminal available for a first attachment.
@@ -12,7 +12,7 @@ pub enum WaitPolicy {
     Always,
 }
 
-/// Explicit opt-in. Constructing ordinary sessions does not consult the environment or start a bridge.
+/// Options for monitoring a session.
 #[derive(Debug, Clone)]
 pub struct Options {
     pub enabled: bool,
@@ -123,9 +123,8 @@ fn environment(name: &str) -> Result<Option<String>, TuiTestError> {
     }
 }
 
-/// Monitoring and generation-safe cleanup for an **already-open** Rust session.
+/// Keep an open session available for inspection.
 ///
-/// The original session remains usable; this guard adds no duplicate operation API.
 /// Call [`finish`](Self::finish) for successful completion, or return the original
 /// error through [`finish_failure`](Self::finish_failure). Dropping the guard closes
 /// its captured child, treating panic unwinding as failure.
@@ -134,7 +133,7 @@ pub struct Monitor {
     target: SessionMonitorTarget,
     handle: Option<SessionHandle>,
     options: Options,
-    identity: Option<(String, u64)>,
+    identity: Option<(SessionId, u64)>,
     finished: bool,
 }
 
@@ -178,24 +177,45 @@ impl Monitor {
         })
     }
 
-    /// Discovery identity usable with `tui-test monitor --id`; absent when disabled.
-    pub fn id(&self) -> Option<&str> {
-        self.identity.as_ref().map(|(id, _)| id.as_str())
+    /// Session UUID; absent when monitoring is disabled.
+    pub fn id(&self) -> Option<SessionId> {
+        self.identity.map(|(id, _)| id)
     }
 
     /// Explicit inspection independent of the automatic completion policy.
     /// Returns whether a long-lived client attached, including a brief attachment.
     pub fn inspect(&self, outcome: Outcome) -> Result<bool, TuiTestError> {
+        self.complete(outcome, true)
+    }
+
+    fn complete(&self, outcome: Outcome, inspect: bool) -> Result<bool, TuiTestError> {
         if self.identity.is_none() || !self.target.is_current() {
             return Ok(false);
         }
-        let (id, generation) = bridge::begin_wait_for_target_with_options(
+        let timeout = if inspect {
+            self.options.first_attach_timeout
+        } else {
+            Some(Duration::ZERO)
+        };
+        let (_, generation) = bridge::begin_wait_for_target_with_options(
             &self.name,
             &self.target,
             outcome.as_str(),
-            self.options.first_attach_timeout,
+            timeout,
             self.options.hold_while_attached,
         )?;
+        if inspect {
+            self.announce(outcome);
+        }
+        bridge::wait(
+            &self.name,
+            generation,
+            timeout,
+            self.options.hold_while_attached,
+        )
+    }
+
+    fn announce(&self, outcome: Outcome) {
         eprintln!(
             "[tui-test] {}; terminal kept open for inspection",
             if outcome == Outcome::Failed {
@@ -212,7 +232,7 @@ impl Monitor {
         }
         eprintln!(
             "[tui-test] Attach: {}",
-            super::host::monitor_command(&id, true)
+            super::host::monitor_command(&self.name, true)
         );
         match self.options.first_attach_timeout {
             Some(timeout) => eprintln!(
@@ -221,12 +241,6 @@ impl Monitor {
             ),
             None => eprintln!("[tui-test] Waiting for an attachment"),
         }
-        bridge::wait(
-            &self.name,
-            generation,
-            self.options.first_attach_timeout,
-            self.options.hold_while_attached,
-        )
     }
 
     /// Explicitly abandon inspection, releasing both first-attachment and client-disconnect
@@ -248,30 +262,7 @@ impl Monitor {
             WaitPolicy::Failure => outcome == Outcome::Failed,
             WaitPolicy::Always => true,
         };
-        let inspection = if self.identity.is_some() && self.target.is_current() {
-            if should_wait {
-                self.inspect(outcome).map(|_| ())
-            } else {
-                bridge::begin_wait_for_target_with_options(
-                    &self.name,
-                    &self.target,
-                    outcome.as_str(),
-                    Some(Duration::ZERO),
-                    self.options.hold_while_attached,
-                )
-                .and_then(|(_, generation)| {
-                    bridge::wait(
-                        &self.name,
-                        generation,
-                        Some(Duration::ZERO),
-                        self.options.hold_while_attached,
-                    )
-                })
-                .map(|_| ())
-            }
-        } else {
-            Ok(())
-        };
+        let inspection = self.complete(outcome, should_wait).map(|_| ());
         let closed = match &self.handle {
             Some(handle) => handle.close_target(&self.target),
             None => self.target.close(),

@@ -313,6 +313,7 @@ fn monitor_controls_a_process_local_rust_session_without_releasing_its_hold_on_r
             .any(|candidate| candidate.session.id == id),
         "native session missing from discovery"
     );
+    let id = id.to_string();
     let (held, finished) = std::sync::mpsc::channel();
     let name = guard.session.name().to_string();
     let hold = std::thread::spawn(move || {

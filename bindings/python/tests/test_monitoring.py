@@ -16,14 +16,7 @@ class MonitoringOptionsTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
 
     def test_defaults_are_disabled_and_finite(self):
-        expected = {
-            "enabled": False,
-            "wait_at_end": "never",
-            "first_attach_timeout": 30_000,
-            "hold_while_attached": True,
-            "label": None,
-            "metadata": {},
-        }
+        expected = cfg.ResolvedMonitoring()
         for value in (None, {}, MonitoringOptions()):
             self.assertEqual(cfg.resolve_monitoring(value), expected)
 
@@ -35,26 +28,26 @@ class MonitoringOptionsTests(unittest.TestCase):
             "TUI_TEST_LABEL": "environment",
         }):
             env = cfg.resolve_monitoring()
-            self.assertTrue(env["enabled"])
-            self.assertEqual(env["wait_at_end"], "failure")
-            self.assertEqual(env["first_attach_timeout"], 45)
-            self.assertEqual(env["label"], "environment")
+            self.assertTrue(env.enabled)
+            self.assertEqual(env.wait_at_end, "failure")
+            self.assertEqual(env.first_attach_timeout, 45)
+            self.assertEqual(env.label, "environment")
             explicit = cfg.resolve_monitoring(MonitoringOptions(
                 enabled=False, wait_at_end="never", first_attach_timeout=None,
                 hold_while_attached=False, label="explicit",
             ))
-        self.assertFalse(explicit["enabled"])
-        self.assertEqual(explicit["wait_at_end"], "never")
-        self.assertIsNone(explicit["first_attach_timeout"])
-        self.assertFalse(explicit["hold_while_attached"])
-        self.assertEqual(explicit["label"], "explicit")
+        self.assertFalse(explicit.enabled)
+        self.assertEqual(explicit.wait_at_end, "never")
+        self.assertIsNone(explicit.first_attach_timeout)
+        self.assertFalse(explicit.hold_while_attached)
+        self.assertEqual(explicit.label, "explicit")
 
     def test_wait_policy_enables_unless_explicitly_disabled(self):
         for wait in ("failure", "always"):
-            self.assertTrue(cfg.resolve_monitoring({"wait_at_end": wait})["enabled"])
+            self.assertTrue(cfg.resolve_monitoring({"wait_at_end": wait}).enabled)
             self.assertFalse(cfg.resolve_monitoring({
                 "enabled": False, "wait_at_end": wait,
-            })["enabled"])
+            }).enabled)
 
     def test_explicit_values_override_invalid_environment(self):
         with mock.patch.dict(os.environ, {
@@ -64,7 +57,7 @@ class MonitoringOptionsTests(unittest.TestCase):
             options = cfg.resolve_monitoring({
                 "wait_at_end": "never", "first_attach_timeout": 0,
             })
-        self.assertEqual(options["first_attach_timeout"], 0)
+        self.assertEqual(options.first_attach_timeout, 0)
 
     def test_invalid_option_types_and_fields(self):
         for value in (
@@ -83,7 +76,7 @@ class MonitoringOptionsTests(unittest.TestCase):
                 cfg.resolve_monitoring({"first_attach_timeout": value})
         for value in (0, 42, None):
             self.assertEqual(
-                cfg.resolve_monitoring({"first_attach_timeout": value})["first_attach_timeout"],
+                cfg.resolve_monitoring({"first_attach_timeout": value}).first_attach_timeout,
                 value,
             )
 
@@ -96,9 +89,9 @@ class MonitoringOptionsTests(unittest.TestCase):
     def test_environment_infinite_matches_shared_core_and_explicit_override(self):
         for value in ("infinite", " INFINITE "):
             with mock.patch.dict(os.environ, {"TUI_TEST_FIRST_ATTACH_TIMEOUT": value}):
-                self.assertIsNone(cfg.resolve_monitoring()["first_attach_timeout"])
+                self.assertIsNone(cfg.resolve_monitoring().first_attach_timeout)
                 self.assertEqual(
-                    cfg.resolve_monitoring({"first_attach_timeout": 0})["first_attach_timeout"],
+                    cfg.resolve_monitoring({"first_attach_timeout": 0}).first_attach_timeout,
                     0,
                 )
         with self.assertRaises(TypeError):
@@ -120,7 +113,25 @@ class MonitoringOptionsTests(unittest.TestCase):
         })
         self.assertEqual(cfg.resolve_monitoring(MonitoringOptions(
             metadata=MonitoringMetadata(test_file="test.py")
-        ))["metadata"], {"test_file": "test.py"})
+        )).metadata, MonitoringMetadata(test_file="test.py"))
+
+    def test_mapping_and_dataclass_metadata_resolve_identically(self):
+        metadata = MonitoringMetadata(test_name="test_password")
+        expected = cfg.resolve_monitoring(MonitoringOptions(metadata=metadata))
+        self.assertEqual(cfg.resolve_monitoring({"metadata": metadata}), expected)
+        self.assertEqual(cfg.resolve_monitoring({
+            "metadata": {"test_name": "test_password"},
+        }), expected)
+        metadata.test_name = "changed"
+        self.assertEqual(expected.metadata.test_name, "test_password")
+
+    def test_partial_dataclass_with_mapping_metadata_omits_unspecified_fields(self):
+        self.assertEqual(
+            cfg.resolve_monitoring(MonitoringOptions(
+                metadata={"test_file": "test.py"},
+            )).metadata,
+            MonitoringMetadata(test_file="test.py"),
+        )
 
     def test_disabled_does_not_pass_native_metadata(self):
         with mock.patch.object(client.native, "NativeSession") as constructor:
@@ -136,8 +147,12 @@ class MonitoringOptionsTests(unittest.TestCase):
 
 
 class FakeMonitoringSession:
+    session_id = "5a8c5f23-6cc2-4caa-bf77-059dd02d748a"
+    attach_command = "tui-test --session test monitor --interactive"
+
     def __init__(self):
         self.calls = []
+        self.generation = 7
         self.waiting = asyncio.Event()
         self.release = asyncio.Event()
         self.monitor_error = None
@@ -149,8 +164,8 @@ class FakeMonitoringSession:
         self.begin_options = (outcome, timeout, hold)
         self.calls.append(("begin", outcome))
         return (
-            "process-id:exact-session-id", 7,
-            "tui-test monitor --interactive --id process-id:exact-session-id",
+            self.session_id, self.generation,
+            self.attach_command,
         )
 
     async def wait_for_monitor(self, generation, timeout, hold):
@@ -217,7 +232,7 @@ class MonitoringLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("waiting 5 ms", self.banner.getvalue())
         self.assertIn("login | test_login.py", self.banner.getvalue())
         self.assertIn(
-            "[tui-test] tui-test monitor --interactive --id process-id:exact-session-id",
+            "[tui-test] " + fake.attach_command,
             self.banner.getvalue(),
         )
 
@@ -228,11 +243,24 @@ class MonitoringLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(term.open(restart=True), 1)
         await asyncio.wait_for(finishing, 1)
         self.assertIn(("cancel", 7), fake.calls)
+        self.assertEqual(fake.calls.count(("close_target", 7)), 1)
+
+        fake.generation = 8
+        fake.waiting.clear()
+        fake.release.clear()
+        replacement = asyncio.create_task(term.finish("failed"))
+        await asyncio.wait_for(fake.waiting.wait(), 1)
+        self.assertFalse(replacement.done())
+        self.assertIn(("wait", 8, None, True), fake.calls)
+        fake.release.set()
+        await asyncio.wait_for(replacement, 1)
+        self.assertEqual(fake.calls.count(("close_target", 7)), 1)
+        self.assertEqual(fake.calls.count(("close_target", 8)), 1)
 
     async def test_no_hold_applies_to_ordinary_close(self):
-        for method in ("close", "close_quiet"):
+        for close in (TuiTest.close, TuiTest.close_quiet):
             term, fake = self.terminal(enabled=True, wait_at_end="never", hold_while_attached=False)
-            await asyncio.wait_for(getattr(term, method)(), 1)
+            await asyncio.wait_for(close(term), 1)
             self.assertEqual(fake.begin_options, ("passed", 0, False))
             self.assertEqual(fake.calls[-1], ("close_target", 7))
 
@@ -268,10 +296,10 @@ class MonitoringLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_banner_uses_native_safely_quoted_command_verbatim(self):
         term, fake = self.terminal()
-        command = "tui-test monitor --interactive --id 'owner/session with spaces'"
+        command = "tui-test --session 'session with spaces' monitor --interactive"
 
         def begin(outcome, timeout, hold):
-            return "owner/session with spaces", 7, command
+            return fake.session_id, 7, command
 
         fake.begin_monitor_wait = begin
         await term.finish("failed")
@@ -361,6 +389,21 @@ class MonitoringLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake.calls.count(("begin", "failed")), 1)
         self.assertEqual(fake.calls.count(("close_target", 7)), 1)
 
+    async def test_concurrent_failures_preserve_each_callers_exception(self):
+        term, fake = self.terminal(first_attach_timeout=None)
+        first_error = AssertionError("first failure")
+        second_error = RuntimeError("second failure")
+        first = asyncio.create_task(term.inspect_failure(first_error))
+        await asyncio.wait_for(fake.waiting.wait(), 1)
+        second = asyncio.create_task(term.inspect_failure(second_error))
+        await asyncio.sleep(0)
+        fake.release.set()
+        errors = await asyncio.gather(first, second, return_exceptions=True)
+        self.assertIs(errors[0], first_error)
+        self.assertIs(errors[1], second_error)
+        self.assertEqual(fake.calls.count(("begin", "failed")), 1)
+        self.assertEqual(fake.calls.count(("close_target", 7)), 1)
+
     async def test_cancelling_inspection_cancels_native_wait_and_cleans_up(self):
         term, fake = self.terminal(first_attach_timeout=None)
         inspection = asyncio.create_task(term.finish("failed"))
@@ -402,6 +445,17 @@ class MonitoringLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("monitor failed", self.banner.getvalue())
         self.assertIn("cleanup failed", self.banner.getvalue())
 
+    async def test_primary_error_survives_a_previously_failed_completion(self):
+        term, fake = self.terminal()
+        fake.close_error = RuntimeError("cleanup failed first")
+        with self.assertRaises(RuntimeError):
+            await term.close()
+        original = AssertionError("primary failure")
+        with self.assertRaises(AssertionError) as raised:
+            await term.inspect_failure(original)
+        self.assertIs(raised.exception, original)
+        self.assertEqual(fake.calls, [("close",)])
+
     async def test_secondary_errors_propagate_without_primary(self):
         for phase in ("monitor_error", "close_error"):
             term, fake = self.terminal()
@@ -438,6 +492,13 @@ class MonitoringLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await term.close()
         self.assertEqual(fake.calls, [("close",)])
 
+    async def test_unmonitored_close_does_not_reuse_completed_cleanup(self):
+        term, fake = self.terminal(enabled=False)
+        await term.finish()
+        await term.close()
+        await term.close_quiet()
+        self.assertEqual(fake.calls, [("close",), ("close",), ("close",)])
+
     async def test_finish_publishes_explicit_no_hold_without_first_attachment_wait(self):
         for policy, outcome in (("never", "failed"), ("failure", "passed")):
             term, fake = self.terminal(
@@ -469,6 +530,19 @@ class MonitoringLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(raised.exception, original)
         self.assertIn(("begin", "failed"), fake.calls)
         self.assertEqual(testing.tracked_count(), 0)
+
+    async def test_startup_failure_survives_unavailable_inspection_and_cleanup(self):
+        term, fake = self.terminal()
+        original = RuntimeError("startup failed")
+        fake.open_error = original
+        fake.monitor_error = client.NoSessionError("no target")
+        fake.close_error = RuntimeError("cleanup failed")
+        with mock.patch.object(testing, "TuiTest", return_value=term):
+            with self.assertRaises(RuntimeError) as raised:
+                await testing.create_terminal(retries=0)
+        self.assertIs(raised.exception, original)
+        self.assertEqual(testing.tracked_count(), 0)
+        self.assertEqual(fake.calls[-1], ("close_target", 7))
 
     async def test_successful_helper_cleanup_errors_are_not_hidden(self):
         term, fake = self.terminal()

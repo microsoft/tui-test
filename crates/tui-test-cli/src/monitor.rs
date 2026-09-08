@@ -18,10 +18,11 @@ use tui_test::engine::LiveFrame as Frame;
 use tui_test::monitoring::input::MouseRemapper;
 use tui_test::monitoring::ipc::{Connection, Incoming};
 use tui_test::monitoring::protocol::{
-    Attach, MonitorInput, MonitorOutput, MonitorReady, Request, Response, Route, VERSION,
+    Attach, MonitorInput, MonitorOutput, MonitorReady, Request, Response, VERSION,
 };
 #[cfg(test)]
 use tui_test::monitoring::render::{render_frame, ModeMirror};
+use tui_test::monitoring::SessionId;
 #[cfg(test)]
 use tui_test::terminal::cell::EmuCell;
 #[cfg(test)]
@@ -34,45 +35,25 @@ use crate::console_input::ConsoleInput;
 use crate::monitor_input::{InputAction, InputEvent, InputParser};
 
 #[derive(Clone)]
-enum MonitorTarget {
-    Daemon(String),
-    Host {
-        endpoint: String,
-        session: String,
-        generation: u64,
-    },
+struct MonitorTarget {
+    endpoint: String,
+    id: SessionId,
 }
 
 impl MonitorTarget {
-    fn endpoint(&self) -> &str {
-        match self {
-            Self::Daemon(endpoint) | Self::Host { endpoint, .. } => endpoint,
-        }
-    }
-
     fn request(&self, size: (u16, u16), interactive: bool) -> Request {
         let mut attach = Attach::new(size.0, size.1, interactive);
-        if let Self::Host {
-            session,
-            generation,
-            ..
-        } = self
-        {
-            attach.route = Some(Route {
-                session: session.clone(),
-                generation: *generation,
-            });
-        }
+        attach.id = Some(self.id);
         Request::Monitor(attach)
     }
 }
 
 /// Run the interactive monitor client for `session` until the viewer quits or
-/// the session owner goes away. Returns a process exit code.
+/// the session closes. Returns a process exit code.
 pub fn run_client(
     session: Option<&str>,
     interactive: bool,
-    id: Option<&str>,
+    id: Option<SessionId>,
     latest: bool,
     filter: &crate::cli::SessionFilter,
 ) -> i32 {
@@ -167,7 +148,7 @@ pub fn run_client(
 fn resolve_target(
     session: Option<&str>,
     interactive: bool,
-    id: Option<&str>,
+    id: Option<SessionId>,
     latest: bool,
     filter: &crate::cli::SessionFilter,
 ) -> Result<Option<MonitorTarget>, tui_test::TuiTestError> {
@@ -177,11 +158,13 @@ fn resolve_target(
     Ok(
         crate::discovery::select(session, id, latest, filter, interactive, picker)?.map(
             |candidate| match candidate {
-                Candidate::Daemon(name) => MonitorTarget::Daemon(crate::config::socket_name(&name)),
-                Candidate::Process(candidate) => MonitorTarget::Host {
+                Candidate::Daemon { name, id } => MonitorTarget {
+                    endpoint: crate::config::socket_name(&name),
+                    id,
+                },
+                Candidate::Process(candidate) => MonitorTarget {
                     endpoint: candidate.descriptor.endpoint,
-                    session: candidate.session.session,
-                    generation: candidate.session.generation,
+                    id: candidate.session.id,
                 },
             },
         ),
@@ -430,7 +413,7 @@ impl ViewerConnection {
         size: (u16, u16),
         interactive: bool,
     ) -> std::io::Result<Self> {
-        let mut connection = Connection::new(crate::ipc::connect(target.endpoint())?)?;
+        let mut connection = Connection::new(crate::ipc::connect(&target.endpoint)?)?;
         let writer = connection.writer();
         let stop = Arc::new(AtomicBool::new(false));
         writer.send(&target.request(size, interactive), &stop)?;
@@ -611,8 +594,15 @@ mod tests {
                 server(connection);
             });
             client(
-                ViewerConnection::connect(&MonitorTarget::Daemon(endpoint), (80, 24), true)
-                    .unwrap(),
+                ViewerConnection::connect(
+                    &MonitorTarget {
+                        endpoint,
+                        id: SessionId::new_v4(),
+                    },
+                    (80, 24),
+                    true,
+                )
+                .unwrap(),
             );
         });
     }

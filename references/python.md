@@ -75,34 +75,26 @@ and `monitoring`.
 
 Recording modes: `disabled`, `on-failure`, and `always`.
 
-## Process-local monitoring
+## Inspect failed tests
 
 ```python
+from tui_test import MonitoringOptions
 from tui_test.testing import terminal
 
 async with terminal(
+    session="login",
     program=["my-app"],
-    monitoring={
-        "enabled": True,
-        "wait_at_end": "failure",
-        "first_attach_timeout": 30_000,
-        "hold_while_attached": True,
-        "label": "login validation",
-        "metadata": {"test_name": "rejects an expired token"},
-    },
+    monitoring=MonitoringOptions(enabled=True, wait_at_end="failure"),
 ) as app:
     await app.get_by_text("Ready").expect()
 ```
 
-On failure, the context manager retains the original terminal, prints an exact
-CLI monitor command, and delays cleanup until inspection completes. The same
-exception and traceback are then reported. Custom runners can use `finish` and
-`inspect_failure`; normal cleanup cannot bypass an active inspection hold.
+On failure, run the printed monitor command in another terminal.
+See [CLI inspection](cli.md#inspect-tests) for selection, detach keys, and environment options.
 
-Monitoring is disabled by default. `wait_at_end` accepts `"never"`, `"failure"`,
-or `"always"`. The first-attachment timeout defaults to 30,000 milliseconds;
-`None` explicitly waits indefinitely for local debugging. Native waits do not
-block the Python event loop. The terminal never outlives the Python process.
+`wait_at_end` accepts `"never"` (default), `"failure"`, or `"always"`.
+`first_attach_timeout` is in milliseconds (default `30_000`); `None` waits indefinitely.
+`hold_while_attached` defaults to `True`; set it to `False` to resume without waiting for detach.
 
 ## Input helpers
 

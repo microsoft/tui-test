@@ -312,8 +312,8 @@ impl NativeSession {
                 timeout,
                 hold_while_attached,
             )?;
-            let command = monitoring::host::monitor_command(&id, true);
-            Ok((id, generation, command))
+            let command = monitoring::host::monitor_command(&name, true);
+            Ok((id.to_string(), generation, command))
         })
         .map_err(shell_error_to_py)
     }

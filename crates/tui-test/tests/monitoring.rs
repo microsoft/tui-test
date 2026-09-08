@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tui_test::monitoring::{
     self, host, ipc,
     protocol::{
-        Attach, HostSnapshot, MonitorInput, MonitorOutput, MonitorReady, Request, Response, Route,
+        Attach, HostSnapshot, MonitorInput, MonitorOutput, MonitorReady, Request, Response,
     },
     Metadata, Monitor, Options, Outcome, WaitPolicy,
 };
@@ -151,10 +151,7 @@ fn monitor_request(
     size: (u16, u16),
 ) -> Request {
     let mut attach = Attach::new(size.0, size.1, interactive);
-    attach.route = Some(Route {
-        session: target.session.session.clone(),
-        generation: target.session.generation,
-    });
+    attach.id = Some(target.session.id);
     Request::Monitor(attach)
 }
 
@@ -264,7 +261,8 @@ fn monitoring_is_lazy_shared_and_restarts_after_last_close() {
     let first_entry = fixture.register(&first);
     let second = fixture.open("second");
     let second_entry = fixture.register(&second);
-    assert_eq!(first_entry.descriptor.owner, second_entry.descriptor.owner);
+    assert_eq!(first_entry.descriptor.id, second_entry.descriptor.id);
+    assert_ne!(first_entry.session.id, second_entry.session.id);
     let initial = snapshot(&first_entry);
     assert_eq!(initial.protocol, host::HOST_PROTOCOL);
     assert_eq!(initial.sessions.len(), 2);
@@ -272,10 +270,10 @@ fn monitoring_is_lazy_shared_and_restarts_after_last_close() {
     first.close().unwrap();
     assert_eq!(snapshot(&second_entry).sessions.len(), 1);
     second.close().unwrap();
-    assert!(!host::descriptor_path(&first_entry.descriptor.owner).exists());
+    assert!(!host::descriptor_path(&first_entry.descriptor.id).exists());
     let third = fixture.open("third");
     let third_entry = fixture.register(&third);
-    assert_ne!(first_entry.descriptor.owner, third_entry.descriptor.owner);
+    assert_ne!(first_entry.descriptor.id, third_entry.descriptor.id);
 }
 
 #[test]
@@ -444,6 +442,7 @@ fn replacement_is_generation_safe_and_child_exit_keeps_the_final_grid() {
     let session = fixture.open("generation");
     let entry = fixture.register(&session);
     let old_target = session.monitor_target().unwrap();
+    let (_, old_generation) = monitoring::begin_wait(session.name(), "passed").unwrap();
     session
         .open(OpenOptions {
             restart: true,
@@ -451,7 +450,7 @@ fn replacement_is_generation_safe_and_child_exit_keeps_the_final_grid() {
         })
         .unwrap();
     let replacement = fixture.register(&session);
-    assert_ne!(entry.session.generation, replacement.session.generation);
+    assert_ne!(entry.session.id, replacement.session.id);
     let stale_wait = monitoring::begin_wait_for_target_with_options(
         session.name(),
         &old_target,
@@ -467,9 +466,9 @@ fn replacement_is_generation_safe_and_child_exit_keeps_the_final_grid() {
     assert!(unchanged.sessions[0].outcome.is_none());
     old_target.close().unwrap();
     assert!(session.monitor_target().unwrap().is_current());
-    assert!(monitoring::wait_target(session.name(), entry.session.generation).is_none());
+    assert!(monitoring::wait_target(session.name(), old_generation).is_none());
     let mut stale = replacement.clone();
-    stale.session.generation = entry.session.generation;
+    stale.session.id = entry.session.id;
     assert!(!handshake(&stale, false).1.ok);
     let target = session.monitor_target().unwrap();
     target.write_monitor_input_raw(b"exit\r").unwrap();
@@ -655,7 +654,7 @@ fn force_shutdown_cancels_infinite_holds_and_removes_discovery() {
         .unwrap()
         .unwrap());
     waiter.join().unwrap();
-    assert!(!host::descriptor_path(&entry.descriptor.owner).exists());
+    assert!(!host::descriptor_path(&entry.descriptor.id).exists());
     assert!(session.monitor_target().is_none());
     drop(client);
 }
@@ -671,20 +670,18 @@ fn independent_live_sessions_cannot_replace_a_registered_name() {
     let second_target = second.monitor_target().unwrap();
     assert!(monitoring::register(first.name(), &first_target, Metadata::default()).unwrap());
     let original = host::discover().into_iter().next().unwrap();
+    let (_, generation) =
+        monitoring::begin_wait_with_options(first.name(), "passed", Some(Duration::ZERO), true)
+            .unwrap();
     let error =
         monitoring::register(second.name(), &second_target, Metadata::default()).unwrap_err();
     assert_eq!(error.kind, tui_test::ErrorKind::Usage);
     assert!(first_target.is_current());
     assert!(second_target.is_current());
-    assert!(
-        monitoring::wait_target(first.name(), original.session.generation)
-            .unwrap()
-            .same_target(&first_target)
-    );
-    assert_eq!(
-        snapshot(&original).sessions[0].generation,
-        original.session.generation
-    );
+    assert!(monitoring::wait_target(first.name(), generation)
+        .unwrap()
+        .same_target(&first_target));
+    assert_eq!(snapshot(&original).sessions[0].id, original.session.id);
     first.close().unwrap();
     assert!(monitoring::register(second.name(), &second_target, Metadata::default()).unwrap());
     second.close().unwrap();
@@ -751,7 +748,7 @@ fn target_interruption_closes_without_starting_a_wait_or_requiring_client_discon
     let client = attach(&entry, false);
     monitoring::cancel_target(session.name(), &target);
     let interrupted = snapshot(&entry);
-    assert_eq!(interrupted.sessions[0].generation, entry.session.generation);
+    assert_eq!(interrupted.sessions[0].id, entry.session.id);
     assert_eq!(interrupted.sessions[0].status, "closing");
     assert!(interrupted.sessions[0].outcome.is_none());
     assert!(interrupted.sessions[0].completed_at.is_none());

@@ -153,7 +153,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run a program. |
-| `sessions [--waiting] [--failed] [--owner OWNER]` | List daemon and monitoring-enabled process-local sessions. |
+| `sessions [--waiting] [--failed]` | List sessions, including monitored tests. |
 | `close [--all]` | Close one or all sessions. |
 | `daemon start` | Start the session daemon. |
 | `daemon status` | Show daemon status. |
@@ -276,36 +276,10 @@ Timeout defaults:
 | `record start PATH [options]` | Start APNG, GIF, MP4, or asciinema recording. |
 | `record stop` | Finish the recording. |
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
-| `monitor [--interactive] [--id OWNER/SESSION]` | Watch a daemon or monitoring-enabled Rust, Python, or JavaScript session. |
+| `monitor [--interactive] [--id UUID]` | Watch a session or send input with `--interactive`. |
 
-Process-local monitoring is opt-in. One lazy bridge per test process exposes the
-existing terminals; it does not start a daemon, recreate a session, or transfer
-PTY ownership. Sessions disappear when their owning process exits.
-
-Use `tui-test sessions --waiting` to find a retained failure, then copy its exact
-attach command. `monitor` without a target offers a searchable picker in an
-interactive terminal. Selectors include `--failed`, `--waiting`, `--latest`,
-`--owner OWNER`, and `--cwd current`. Duplicate session names require an exact
-`--id` rather than choosing an arbitrary worker.
-
-Failure inspection delays cleanup and the original test failure while a human
-attaches. The default first-attachment window is 30 seconds; an explicitly
-unlimited wait is intended only for local debugging. Attached clients can hold
-cleanup until the last disconnect. Read-only monitors may coexist, while one
-interactive monitor owns keyboard and mouse input at a time. Each viewer uses
-one bidirectional IPC connection for frames, input, resize, and attachment
-lifetime; resizing never reconnects or releases an inspection hold.
-
-Both viewing modes fit the child to the space inside the monitor border.
-An interactive viewer has resize priority; otherwise the most recently
-attached or resized viewer controls the size. Detaching restores the previous
-viewer's size, and daemon viewers reapply it after a child restart. A yellow
-border and `! too small` mark clipped content.
-
-JavaScript and Python constructor/test-helper options, and the Rust monitoring
-API, configure this behavior. `TUI_TEST_MONITORING`, `TUI_TEST_WAIT_AT_END`,
-`TUI_TEST_FIRST_ATTACH_TIMEOUT`, and `TUI_TEST_LABEL` provide environment defaults.
-Explicit settings take precedence; monitoring is disabled by default.
+Rust, Python, and JavaScript tests can opt into monitoring to pause on failure.
+See [test inspection](references/cli.md#inspect-tests) for setup, selection, and detach keys.
 
 `record start` accepts `--format`, `--fps`, `--speed`, `--idle-time-limit`, and `--zoom`. MP4 output requires `ffmpeg`.
 

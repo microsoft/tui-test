@@ -8,6 +8,7 @@ import type {
   EffectiveTimeouts,
   LocatorStage,
   LocatorStyle,
+  MonitorInfo,
   MonitoringOptions,
   MouseClickOptions,
   OpenOptions,
@@ -184,7 +185,7 @@ export class NativeRuntime {
     outcome: "passed" | "failed",
     timeoutMs: number | null = 30_000,
     holdWhileAttached = true,
-  ): Promise<{ id: string; command: string; generation: string }> {
+  ): Promise<MonitorInfo> {
     return this.#call(async (session) => session.beginMonitorWait(outcome, {
       timeoutMs: timeoutMs ?? undefined,
       holdWhileAttached,

@@ -46,7 +46,6 @@
     "create:npm-dirs": "napi create-npm-dirs",
     "artifacts": "napi artifacts --output-dir artifacts --npm-dir npm",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "inspect:failure": "node ./manual/inspection.mjs --inspect-failure",
     "test": "npm run test:node",
     "test:node": "npm run build && node --test ./test/conformance.test.mjs ./test/integration.test.mjs ./test/options.test.mjs ./test/native.test.mjs ./test/helpers.test.mjs",
     "test:bun": "npm run build && bun test ./test/conformance.test.mjs && bun test ./test/integration.test.mjs && bun test ./test/options.test.mjs && bun test ./test/native.test.mjs && bun test ./test/helpers.test.mjs",
