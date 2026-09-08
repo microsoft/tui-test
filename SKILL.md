@@ -19,7 +19,7 @@ Use `tui-test` to control and test a real terminal.
 
 Use the library that matches the project. Use the CLI when the terminal must persist across separate commands.
 
-Library tests can opt into [monitoring](references/cli.md#inspect-tests) to inspect failures with the CLI.
+Enable [monitoring](references/cli.md#inspect-tests) to inspect failed library tests with the CLI.
 
 ## CLI
 

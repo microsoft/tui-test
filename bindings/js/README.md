@@ -47,8 +47,8 @@ new TuiTest(session?: string, options?: ClientOptions)
 
 `artifacts.onFailure` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
 
-Pass `monitoring: { enabled: true, waitAtEnd: "failure" }` to `withTerminal()` to
-[inspect failed tests](../../references/javascript.md#inspect-failed-tests) with the CLI.
+Use `monitoring: { enabled: true, waitAtEnd: "failure" }` with `withTerminal()`
+to [inspect failed tests](../../references/javascript.md#inspect-failed-tests) in the CLI.
 
 #### Properties
 
@@ -67,7 +67,7 @@ Pass `monitoring: { enabled: true, waitAtEnd: "failure" }` to `withTerminal()` t
 | `run(program, args?, options?)` | Run a program. |
 | `close()` | Close the session. |
 | `closeQuiet()` | Close without throwing. |
-| `finish({ outcome, error? })` | Inspect as configured, then close. |
+| `finish({ outcome, error? })` | Close after any configured inspection. |
 | `inspectFailure(error)` | Inspect, close, and rethrow the error. |
 | `[Symbol.asyncDispose]()` | Close from `await using`. |
 

@@ -91,11 +91,11 @@ await withTerminal({
 });
 ```
 
-On failure, run the printed monitor command in another terminal.
-See [CLI inspection](cli.md#inspect-tests) for selection, detach keys, and environment options.
+If the test fails, run the monitor command it prints in another terminal.
+The [CLI guide](cli.md#inspect-tests) covers session selection, detach keys, and environment options.
 
 `waitAtEnd` accepts `"never"` (default), `"failure"`, or `"always"`.
-`firstAttachTimeout` is in milliseconds (default `30_000`); `null` waits indefinitely.
+`firstAttachTimeout` defaults to `30_000` milliseconds; `null` waits indefinitely.
 `holdWhileAttached` defaults to `true`; set it to `false` to resume without waiting for detach.
 
 ## Input helpers

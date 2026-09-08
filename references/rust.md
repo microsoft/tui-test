@@ -61,8 +61,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-On failure, run the printed monitor command in another terminal.
-`Options::from_env()` reads the [shared environment options](cli.md#inspect-tests).
-By default, inspection waits up to 30 seconds for attachment, then until monitors detach.
+If the test fails, run the monitor command it prints in another terminal.
+Use `Options::from_env()` to read the [environment options](cli.md#inspect-tests).
+By default, the test waits up to 30 seconds for a monitor to attach, then until all monitors detach.
 
 Full API: [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/)

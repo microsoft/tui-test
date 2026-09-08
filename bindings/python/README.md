@@ -42,8 +42,8 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=No
 
 `artifacts["on_failure"]` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
 
-Pass `monitoring=MonitoringOptions(enabled=True, wait_at_end="failure")` to
-[inspect failed tests](../../references/python.md#inspect-failed-tests) with the CLI.
+Use `monitoring=MonitoringOptions(enabled=True, wait_at_end="failure")`
+to [inspect failed tests](../../references/python.md#inspect-failed-tests) in the CLI.
 
 #### Properties
 
@@ -62,9 +62,9 @@ Pass `monitoring=MonitoringOptions(enabled=True, wait_at_end="failure")` to
 | `await run(program, *args, **options)` | Run a program. |
 | `await close()` | Close the session. |
 | `await close_quiet()` | Close without raising. |
-| `await finish(outcome="passed", error=None)` | Inspect as configured, then close. |
+| `await finish(outcome="passed", error=None)` | Close after any configured inspection. |
 | `await inspect_failure(error)` | Inspect, close, and re-raise the error. |
-| `async with TuiTest()` | Inspect as configured and close on exit. |
+| `async with TuiTest()` | Close on exit, after any configured inspection. |
 
 `open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
 

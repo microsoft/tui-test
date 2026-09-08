@@ -278,8 +278,9 @@ Timeout defaults:
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
 | `monitor [--interactive] [--id UUID]` | Watch a session or send input with `--interactive`. |
 
-Rust, Python, and JavaScript tests can opt into monitoring to pause on failure.
-See [test inspection](references/cli.md#inspect-tests) for setup, selection, and detach keys.
+Enable monitoring to pause Rust, Python, or JavaScript tests when they fail.
+The [test inspection guide](references/cli.md#inspect-tests) explains setup,
+session selection, and detach keys.
 
 `record start` accepts `--format`, `--fps`, `--speed`, `--idle-time-limit`, and `--zoom`. MP4 output requires `ffmpeg`.
 

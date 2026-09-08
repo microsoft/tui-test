@@ -111,32 +111,34 @@ input. SGR mouse clicks, drags, and motion are enabled when requested by the
 target, with coordinates translated past the monitor's border. Viewer modes are
 restored on detach; read-only monitoring does not change input modes.
 
-Both modes resize the app to fit inside the border; interactive viewers take
+Both modes resize the app to fit inside the border. Interactive viewers take
 priority. Detaching restores the previous viewer's size. A yellow border and
-`! too small` indicate clipped content.
+`! too small` warn that content is clipped.
 
 ## Inspect tests
 
-Monitoring is opt-in. Configure [JavaScript](javascript.md#inspect-failed-tests),
+Monitoring is off by default. Enable it in your
+[JavaScript](javascript.md#inspect-failed-tests),
 [Python](python.md#inspect-failed-tests), or [Rust](rust.md#inspect-failed-tests)
-tests to pause on failure, then run in another terminal:
+tests to pause them on failure. In another terminal, run:
 
 ```sh
 tui-test sessions --waiting
 tui-test --session login monitor --interactive
 ```
 
-Select by session name; if names repeat, use `tui-test monitor --interactive --id UUID` with
-the session UUID from `sessions`. Without a target, `monitor` offers a searchable
-picker in an interactive terminal. `--waiting`, `--failed`, and `--cwd current`
-filter sessions; `monitor --latest` selects the most recent match.
+Use the session name unless several sessions share it. For duplicate names,
+copy the UUID from `sessions` and run `tui-test monitor --interactive --id UUID`.
+With no target, `monitor` opens a searchable picker in an interactive terminal.
+Filter sessions with `--waiting`, `--failed`, or `--cwd current`;
+`monitor --latest` selects the most recent match.
 
-Inspection waits 30 seconds for the first monitor by default. Without one, the
-test resumes; after attachment, it waits until monitors detach. Use Ctrl+] in
-interactive mode or q, Esc, or Ctrl+C in read-only mode. The test process must
-stay running while you inspect it.
+By default, the test waits up to 30 seconds for a monitor to attach. If none
+attaches, the test resumes. Otherwise, it waits until all monitors detach.
+Press Ctrl+] in interactive mode or q, Esc, or Ctrl+C in read-only mode.
+Keep the test process running while you inspect it.
 
-Environment defaults (explicit API options take precedence):
+API options override these environment defaults:
 
 | Variable | Default | Values |
 | --- | --- | --- |
