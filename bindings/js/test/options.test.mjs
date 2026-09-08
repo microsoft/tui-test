@@ -367,6 +367,30 @@ test("inspection started after replacement cannot adopt the replacement's genera
   }
 });
 
+test("same-instance restart abandons infinite inspection including initialization", { timeout: 15000 }, async () => {
+  for (const initializationDelay of [0, 50]) {
+    const name = uniqueSession("same-instance-restart");
+    const terminal = new TuiTest(name, {
+      monitoring: { enabled: true, waitAtEnd: "always", firstAttachTimeout: null },
+    });
+    const cleanup = new NativeRuntime(name);
+    try {
+      await terminal.run(process.execPath, evalArgs);
+      const finishing = terminal.finish({ outcome: "passed" });
+      finishing.catch(() => {});
+      if (initializationDelay) await delay(initializationDelay);
+      await terminal.run(process.execPath, [
+        "-e", "console.log('same-instance-replacement'); setInterval(() => {}, 1000)",
+      ], { restart: true });
+      await finishing;
+      await terminal.getByText("same-instance-replacement").first().expect({ timeout: 5000 });
+    } finally {
+      await cleanup.cancelMonitorWait();
+      await terminal.closeQuiet();
+    }
+  }
+});
+
 test("a stale terminal's normal close cannot close a same-name replacement", async () => {
   const name = uniqueSession("monitor-stale-close");
   const original = new TuiTest(name, { monitoring: { enabled: true } });
@@ -406,6 +430,55 @@ test("a failed initial spawn cannot inspect or close a later same-name replaceme
   } finally {
     await replacement.closeQuiet();
     await original.closeQuiet();
+  }
+});
+
+test("unmonitored handles retain name-based cleanup after finishing or disposal", async () => {
+  for (const cleanup of ["finish", "inspectFailure", "dispose"]) {
+    const name = uniqueSession("unmonitored-reopen");
+    const original = new TuiTest(name, { monitoring: { enabled: false } });
+    const replacement = new TuiTest(name, { monitoring: { enabled: false } });
+    const primary = new Error("original unmonitored failure");
+    try {
+      await original.run(process.execPath, evalArgs);
+      if (cleanup === "finish") {
+        await original.finish({ outcome: "passed" });
+      } else if (cleanup === "inspectFailure") {
+        await assert.rejects(original.inspectFailure(primary), (error) => error === primary);
+      } else {
+        await original[Symbol.asyncDispose]();
+      }
+      await replacement.run(process.execPath, evalArgs);
+      await original.close();
+      await assert.rejects(replacement.state(), NoSessionError);
+    } finally {
+      await replacement.closeQuiet();
+      await original.closeQuiet();
+    }
+  }
+});
+
+test("never-opened monitored handles cannot inspect or close another same-name session", async () => {
+  for (const cleanup of ["close", "inspectFailure"]) {
+    const name = uniqueSession("monitored-unopened");
+    const original = new TuiTest(name, {
+      monitoring: { enabled: true, waitAtEnd: "failure", firstAttachTimeout: 0 },
+    });
+    const replacement = new TuiTest(name, { monitoring: { enabled: true } });
+    const primary = new Error("unopened monitored failure");
+    try {
+      await replacement.run(process.execPath, evalArgs);
+      if (cleanup === "close") {
+        await original.close();
+      } else {
+        await assert.rejects(original.inspectFailure(primary), (error) => error === primary);
+      }
+      await original[Symbol.asyncDispose]();
+      await replacement.getByText("ready").wait({ timeout: 5000 });
+    } finally {
+      await replacement.closeQuiet();
+      await original.closeQuiet();
+    }
   }
 });
 

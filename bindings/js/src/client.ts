@@ -579,6 +579,11 @@ class Mouse {
   }
 }
 
+interface Completion {
+  promise: Promise<void>;
+  initialized: Promise<void>;
+}
+
 export class TuiTest {
   readonly session: string;
   readonly keyboard: Keyboard;
@@ -586,7 +591,7 @@ export class TuiTest {
   #runtime: NativeRuntime;
   #options: ClientOptions;
   #monitoring: ReturnType<typeof resolveMonitoring>;
-  #finishPromise: Promise<void> | undefined;
+  #completion: Completion | undefined;
   #artifactCounter = 0;
 
   constructor(session?: string, opts: ClientOptions = {}) {
@@ -752,10 +757,15 @@ export class TuiTest {
     } catch {}
   }
 
-  async #spawn(action: () => Promise<OpenResult>, retries: number): Promise<OpenResult> {
-    if (this.#finishPromise) {
-      await this.#finishPromise;
-      this.#finishPromise = undefined;
+  async #spawn(action: () => Promise<OpenResult>, retries: number, restart = false): Promise<OpenResult> {
+    if (this.#completion) {
+      const completion = this.#completion;
+      if (restart) {
+        await completion.initialized;
+        await this.#runtime.cancelMonitorWait();
+      }
+      await completion.promise;
+      this.#completion = undefined;
     }
     let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -765,7 +775,7 @@ export class TuiTest {
         lastError = error;
         if (attempt < retries) {
           await this.closeQuiet();
-          this.#finishPromise = undefined;
+          this.#completion = undefined;
         }
       }
     }
@@ -790,7 +800,7 @@ export class TuiTest {
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
     };
-    return this.#spawn(() => this.#runtime.open(options), opts.retries ?? 0);
+    return this.#spawn(() => this.#runtime.open(options), opts.retries ?? 0, opts.restart);
   }
 
   async run(program: string, args: string[] = [], opts: SpawnOptions = {}): Promise<OpenResult> {
@@ -812,17 +822,34 @@ export class TuiTest {
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
     };
-    return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0);
+    return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0, opts.restart);
   }
 
   close(): Promise<void> {
     if (!this.#monitoring.enabled) {
-      return this.#finishPromise ?? this.#runtime.close();
+      return this.#completion?.promise ?? this.#runtime.close();
     }
-    return this.#finishPromise ??= Promise.resolve().then(() => this.#complete());
+    return this.#completion?.promise ?? this.#startCompletion().promise;
   }
 
-  async #complete(outcome?: "passed" | "failed"): Promise<void> {
+  #startCompletion(
+    outcome?: "passed" | "failed",
+    onError?: (error: unknown) => void,
+  ): Completion {
+    let initialized!: () => void;
+    const ready = new Promise<void>((resolve) => { initialized = resolve; });
+    let promise = Promise.resolve()
+      .then(() => this.#complete(outcome, initialized))
+      .finally(initialized);
+    if (onError) {
+      promise = promise.catch(onError);
+    }
+    const completion = { promise, initialized: ready };
+    this.#completion = completion;
+    return completion;
+  }
+
+  async #complete(outcome: "passed" | "failed" | undefined, initialized: () => void): Promise<void> {
     const errors: unknown[] = [];
     let generation: string | undefined;
     const shouldWait =
@@ -842,6 +869,7 @@ export class TuiTest {
           this.#monitoring.holdWhileAttached,
         );
         generation = info.generation;
+        initialized();
         if (shouldWait) {
           console.error(
             `[tui-test] ${outcome === "failed" ? "Test failed" : "Test completed"}; ` +
@@ -870,8 +898,11 @@ export class TuiTest {
           errors.push(error);
         }
       } finally {
+        initialized();
         clearInterval(keepAlive);
       }
+    } else {
+      initialized();
     }
     try {
       if (generation !== undefined) {
@@ -905,17 +936,15 @@ export class TuiTest {
       );
     };
     // Publish before beginning inspection so close/disposal also await initialization.
-    const completion = this.#finishPromise ??= Promise.resolve()
-      .then(() => this.#complete(outcome))
-      .catch(handleSecondaryError);
+    const completion = this.#completion ?? this.#startCompletion(outcome, handleSecondaryError);
     try {
-      await completion.catch(handleSecondaryError);
+      await completion.promise.catch(handleSecondaryError);
       if (primary.present) {
         throw primary.value;
       }
     } finally {
-      if (!this.#monitoring.enabled && this.#finishPromise === completion) {
-        this.#finishPromise = undefined;
+      if (!this.#monitoring.enabled && this.#completion === completion) {
+        this.#completion = undefined;
       }
     }
   }

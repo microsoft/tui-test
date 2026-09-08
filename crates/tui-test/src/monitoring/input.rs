@@ -199,12 +199,8 @@ impl MouseRemapper {
 
     pub fn push(&mut self, bytes: &[u8], size: Option<(u16, u16)>) -> Vec<u8> {
         self.observe(size);
-        let size = size.map(|target| {
-            (
-                target.0.min(self.viewer.0.saturating_sub(2)),
-                target.1.min(self.viewer.1.saturating_sub(2)),
-            )
-        });
+        let available = super::render::content_size(self.viewer);
+        let size = size.map(|target| (target.0.min(available.0), target.1.min(available.1)));
         self.parser
             .push(bytes, |event| match event {
                 InputEvent::Mouse {

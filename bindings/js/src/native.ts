@@ -205,6 +205,10 @@ export class NativeRuntime {
     return this.#call((session) => session.closeMonitorTarget(generation));
   }
 
+  cancelMonitorWait(): Promise<void> {
+    return this.#call(async (session) => session.cancelMonitorWait());
+  }
+
   state(): Promise<State> {
     return this.#call((session) => session.state());
   }

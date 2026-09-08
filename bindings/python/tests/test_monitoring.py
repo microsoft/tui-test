@@ -221,6 +221,30 @@ class MonitoringLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.banner.getvalue(),
         )
 
+    async def test_same_instance_restart_cancels_infinite_inspection(self):
+        term, fake = self.terminal(first_attach_timeout=None, wait_at_end="always")
+        finishing = asyncio.create_task(term.finish("passed"))
+        await asyncio.wait_for(fake.waiting.wait(), 1)
+        await asyncio.wait_for(term.open(restart=True), 1)
+        await asyncio.wait_for(finishing, 1)
+        self.assertIn(("cancel", 7), fake.calls)
+
+    async def test_no_hold_applies_to_ordinary_close(self):
+        for method in ("close", "close_quiet"):
+            term, fake = self.terminal(enabled=True, wait_at_end="never", hold_while_attached=False)
+            await asyncio.wait_for(getattr(term, method)(), 1)
+            self.assertEqual(fake.begin_options, ("passed", 0, False))
+            self.assertEqual(fake.calls[-1], ("close_target", 7))
+
+    async def test_no_hold_close_is_idempotent_without_a_target(self):
+        term, fake = self.terminal(enabled=True, hold_while_attached=False)
+        def missing(*args):
+            raise client.NoSessionError("missing")
+        fake.begin_monitor_wait = missing
+        await term.close()
+        await term.close_quiet()
+        self.assertEqual(fake.calls[-1], ("close",))
+
     async def test_original_exception_identity_and_traceback(self):
         term, fake = self.terminal()
         original = AssertionError("primary assertion")

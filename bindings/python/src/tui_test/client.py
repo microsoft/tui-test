@@ -732,11 +732,14 @@ class TuiTest:
         self,
         start: Callable[[], Awaitable[Dict[str, Any]]],
         retries: int,
+        restart: bool = False,
     ) -> Dict[str, Any]:
         attempts = retries + 1 if retries > 0 else 1
         for attempt in range(attempts):
             if self._finish_task is not None:
                 if not self._finish_task.done():
+                    if restart:
+                        self._cancel_monitor_wait()
                     await asyncio.shield(self._finish_task)
                 self._finish_task = None
                 self._finish_primary = None
@@ -787,6 +790,7 @@ class TuiTest:
                 *timeout_values,
             ),
             retries,
+            restart,
         )
 
     async def run(
@@ -826,6 +830,7 @@ class TuiTest:
                 *timeout_values,
             ),
             retries,
+            restart,
         )
 
     async def close(self) -> None:
@@ -884,7 +889,7 @@ class TuiTest:
             )
         )
         publish_no_hold = (
-            inspect and not self._finish_interrupted and options["enabled"]
+            not self._finish_interrupted and options["enabled"]
             and not options["hold_while_attached"]
         )
         secondary = None  # type: Optional[Exception]
@@ -918,8 +923,9 @@ class TuiTest:
                     generation, timeout, options["hold_while_attached"]
                 ))
         except Exception as failure:
-            secondary = failure
-            self._cancel_monitor_wait()
+            if should_wait or not isinstance(failure, NoSessionError):
+                secondary = failure
+                self._cancel_monitor_wait()
         except BaseException:
             self._cancel_monitor_wait()
             raise

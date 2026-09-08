@@ -101,7 +101,7 @@ and `testName` metadata form a label; no runner-global state is inferred.
 | `TuiTest.ephemeral(prefix?, options?)` | Create a unique session. |
 | `open(options?)` | Open a shell. |
 | `run(program, args?, options?)` | Run a program. |
-| `close()` | Await active inspection and close its original target. |
+| `close()` | Close the named session; monitored instances await inspection and close only their captured target. |
 | `closeQuiet()` | Close without throwing. |
 | `finish({ outcome, error? })` | Apply configured end-of-test inspection, then close. |
 | `inspectFailure(error)` | Inspect, close, and rethrow the same error object. |
@@ -303,7 +303,10 @@ or cleanup errors reject; simultaneous secondary errors form an `AggregateError`
 `closeQuiet()`, and async disposal join an inspection already in progress, including
 its initialization; they do not infer whether a test failed or start failure
 inspection themselves. Concurrent finish/cleanup calls share one operation.
-Cleanup cannot close a replacement session with the same name. Opening the
+For monitored instances, cleanup cannot close a replacement session with the
+same name, including when the instance never opened a target or startup failed.
+Unmonitored handles remain name-based: any handle may close the current session
+using that name, including a session reopened by another handle. Opening the
 terminal again after completion starts a new lifecycle.
 
 `defaultShell` is the platform default.

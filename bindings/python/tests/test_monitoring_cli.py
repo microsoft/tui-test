@@ -22,6 +22,55 @@ ECHO_CHILD = (
 
 @unittest.skipUnless(CLI, "TUI_TEST_BIN is required for native-to-CLI monitoring")
 class MonitoringCliTests(unittest.IsolatedAsyncioTestCase):
+    async def test_no_hold_close_finishes_while_read_only_viewer_is_connected(self):
+        for method in ("close", "close_quiet"):
+            target = TuiTest.ephemeral(
+                "python-no-hold", recording={"mode": "disabled"},
+                monitoring={"enabled": True, "wait_at_end": "never", "hold_while_attached": False},
+            )
+            viewer = TuiTest.ephemeral("python-no-hold-viewer", monitoring={"enabled": False})
+            try:
+                await target.run(sys.executable, "-u", "-c", ECHO_CHILD, wait_ready=False)
+                result = await asyncio.get_running_loop().run_in_executor(
+                    None, functools.partial(
+                        subprocess.run, [CLI, "sessions", "--json"],
+                        capture_output=True, encoding="utf-8", timeout=5, check=True,
+                    ),
+                )
+                entry = next(item for item in json.loads(result.stdout)["details"]
+                             if item["session"] == target.session and item.get("pid") == os.getpid())
+                await viewer.run(CLI, "monitor", "--id", entry["id"], wait_ready=False)
+                await viewer.get_by_text("q quit").first().expect(timeout=10000)
+                await asyncio.wait_for(getattr(target, method)(), 5)
+                await viewer.wait_exit(timeout=10000)
+            finally:
+                await asyncio.wait_for(viewer.close_quiet(), 5)
+                await asyncio.wait_for(target.close_quiet(), 5)
+
+    async def test_same_instance_restart_leaves_an_infinite_inspection(self):
+        target = TuiTest.ephemeral(
+            "python-same-restart", recording={"mode": "disabled"},
+            monitoring={"enabled": True, "wait_at_end": "always", "first_attach_timeout": None},
+        )
+        finishing = None
+        try:
+            await target.run(sys.executable, "-u", "-c", ECHO_CHILD, wait_ready=False)
+            finishing = asyncio.create_task(target.finish("passed"))
+            await asyncio.sleep(0)
+            await asyncio.wait_for(
+                target.run(sys.executable, "-u", "-c", ECHO_CHILD, wait_ready=False, restart=True), 10,
+            )
+            await asyncio.wait_for(finishing, 5)
+            await target.get_by_text(READY).first().expect(timeout=5000)
+        finally:
+            if finishing is not None and not finishing.done():
+                finishing.cancel()
+                try:
+                    await finishing
+                except asyncio.CancelledError:
+                    pass
+            await asyncio.wait_for(target.close_quiet(), 5)
+
     async def _waiting_session(self, target, inspection):
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 15

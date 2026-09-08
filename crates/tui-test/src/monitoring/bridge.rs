@@ -294,9 +294,7 @@ pub fn begin_wait_for_target_with_options(
     begin_wait_for(name, Some(target), outcome, timeout, hold_while_attached)
 }
 
-/// Atomically mark inspection, optionally requiring the caller's captured target.
-/// Owned clients should pass `Some(target)`; `None` deliberately selects by name.
-pub fn begin_wait_for(
+fn begin_wait_for(
     name: &str,
     expected: Option<&SessionMonitorTarget>,
     outcome: &str,
@@ -925,7 +923,7 @@ fn content_size(viewer: (u16, u16)) -> Result<(u16, u16), TuiTestError> {
             "monitor dimensions must be greater than zero",
         ));
     }
-    Ok((viewer.0, viewer.1.saturating_sub(1).max(1)))
+    Ok(render::content_size(viewer))
 }
 
 #[allow(clippy::too_many_arguments)]

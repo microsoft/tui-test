@@ -31,9 +31,8 @@ impl Fixture {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         monitoring::clear_sessions();
-        let home = std::env::current_dir()
-            .unwrap()
-            .join(format!(".monitoring-test-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("tmm-{:x}", std::process::id()));
+        std::fs::create_dir(&home).unwrap();
         let previous_home = std::env::var_os("TUI_TEST_HOME");
         std::env::set_var("TUI_TEST_HOME", &home);
         Self {
@@ -460,12 +459,6 @@ fn replacement_is_generation_safe_and_child_exit_keeps_the_final_grid() {
     )
     .unwrap_err();
     assert_eq!(stale_wait.kind, tui_test::ErrorKind::NoSession);
-    assert_eq!(
-        monitoring::begin_wait_for(session.name(), Some(&old_target), "failed", None, true)
-            .unwrap_err()
-            .kind,
-        tui_test::ErrorKind::NoSession
-    );
     monitoring::cancel_target(session.name(), &old_target);
     let unchanged = snapshot(&replacement);
     assert_eq!(unchanged.sessions[0].status, "running");
@@ -550,7 +543,7 @@ fn persistent_input_and_resize_bypass_terminal_waits_and_preserve_pipelined_byte
     waiter.join().unwrap();
     assert_eq!(
         session.monitor_target().unwrap().frame().unwrap().size,
-        (101, 30)
+        (99, 29)
     );
     drop((input, lease));
 }
@@ -643,7 +636,7 @@ fn interactive_resize_is_recorded_before_following_output() {
         .collect::<Vec<_>>();
     let resize = events
         .iter()
-        .position(|event| event[1] == "r" && event[2] == "100x30")
+        .position(|event| event[1] == "r" && event[2] == "98x29")
         .unwrap();
     let following_output = events[resize + 1..]
         .iter()

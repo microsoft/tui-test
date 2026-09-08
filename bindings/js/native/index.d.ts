@@ -6,6 +6,7 @@ export declare class NativeSession {
   open(options?: OpenOptions | undefined | null): Promise<OpenResult>
   run(options: RunOptions): Promise<OpenResult>
   close(): Promise<void>
+  cancelMonitorWait(): void
   beginMonitorWait(outcome: string, options?: MonitorWaitOptions | undefined | null): MonitorInfo
   waitForMonitor(generation: string, timeoutMs?: number | undefined | null, holdWhileAttached?: boolean | undefined | null): Promise<boolean>
   closeMonitorTarget(generation: string): Promise<void>

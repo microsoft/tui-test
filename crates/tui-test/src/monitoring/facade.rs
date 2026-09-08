@@ -189,9 +189,9 @@ impl Monitor {
         if self.identity.is_none() || !self.target.is_current() {
             return Ok(false);
         }
-        let (id, generation) = bridge::begin_wait_for(
+        let (id, generation) = bridge::begin_wait_for_target_with_options(
             &self.name,
-            Some(&self.target),
+            &self.target,
             outcome.as_str(),
             self.options.first_attach_timeout,
             self.options.hold_while_attached,
@@ -252,9 +252,9 @@ impl Monitor {
             if should_wait {
                 self.inspect(outcome).map(|_| ())
             } else {
-                bridge::begin_wait_for(
+                bridge::begin_wait_for_target_with_options(
                     &self.name,
-                    Some(&self.target),
+                    &self.target,
                     outcome.as_str(),
                     Some(Duration::ZERO),
                     self.options.hold_while_attached,

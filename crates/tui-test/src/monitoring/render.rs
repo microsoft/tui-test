@@ -10,6 +10,11 @@ pub struct ModeMirror {
     applied: Option<(KeyboardMode, bool, MouseMode)>,
 }
 
+/// Space inside the shared one-cell monitor border.
+pub fn content_size(viewer: (u16, u16)) -> (u16, u16) {
+    (viewer.0.max(8) - 2, viewer.1.max(4) - 2)
+}
+
 /// Render a framed, full-color view of `frame` clipped to the `viewer` size.
 ///
 /// `None` renders a "no active session" placeholder. The output positions
@@ -22,15 +27,14 @@ pub fn render_frame(
     interactive: bool,
     modes: &mut ModeMirror,
 ) -> Vec<u8> {
-    let vcols = viewer.0.max(8);
-    let vrows = viewer.1.max(4);
+    let available = content_size(viewer);
     let inner_w = match frame {
-        Some(f) => f.size.0.min(vcols - 2),
-        None => vcols - 2,
+        Some(f) => f.size.0.min(available.0),
+        None => available.0,
     } as usize;
     let inner_h = match frame {
-        Some(f) => f.size.1.min(vrows - 2),
-        None => vrows - 2,
+        Some(f) => f.size.1.min(available.1),
+        None => available.1,
     } as usize;
 
     let mut out = String::with_capacity(inner_w * inner_h * 4);
@@ -240,6 +244,41 @@ fn push_color(s: &mut String, color: Option<Color>, fg: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_content_bounds_keep_the_childs_last_row_and_column_visible() {
+        use crate::terminal::{alacritty::AlacrittyEmu, emu::Emulator};
+        for viewer in [(80, 24), (40, 12)] {
+            let size = content_size(viewer);
+            let mut grid = vec![vec![EmuCell::blank(); size.0 as usize]; size.1 as usize];
+            grid[size.1 as usize - 1][size.0 as usize - 1].ch = "Z".into();
+            let frame = Frame {
+                grid,
+                cursor: (0, 0),
+                size,
+                keyboard_mode: KeyboardMode::empty(),
+                bracketed_paste: false,
+                mouse_mode: MouseMode::None,
+                exited: None,
+                shell: None,
+            };
+            let mut emu =
+                AlacrittyEmu::new(viewer.0, viewer.1, &crate::profile::Profile::default());
+            emu.process(&render_frame(
+                Some(&frame),
+                viewer,
+                "edge",
+                true,
+                &mut ModeMirror::default(),
+            ));
+            assert_eq!(
+                emu.viewable_rows()[viewer.1 as usize - 2][viewer.0 as usize - 2]
+                    .ch
+                    .as_str(),
+                "Z"
+            );
+        }
+    }
 
     /// `sgr` writes to the viewer's real terminal, so the only honest check is
     /// to feed it back through an emulator and see the same style come out.

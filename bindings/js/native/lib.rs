@@ -1056,6 +1056,26 @@ impl NativeSession {
     }
 
     #[napi]
+    pub fn cancel_monitor_wait(&self) -> Result<()> {
+        ffi_boundary(|| {
+            let target = self
+                .target
+                .lock()
+                .map_err(|_| TuiTestError::internal("session target lock poisoned"))?
+                .clone();
+            let target = match target {
+                TargetOwnership::Opened(target) => Some(target),
+                TargetOwnership::Named => self.handle.monitor_target(),
+                TargetOwnership::Absent => None,
+            };
+            if let Some(target) = target {
+                bridge::cancel_target(self.handle.name(), &target);
+            }
+            Ok(())
+        })
+    }
+
+    #[napi]
     pub fn begin_monitor_wait(
         &self,
         outcome: String,
