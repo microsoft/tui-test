@@ -400,7 +400,7 @@ impl Engine {
                 cursor: state.emu.cursor(),
                 size: state.emu.size(),
                 keyboard_mode: state.emu.keyboard_mode(),
-                bracketed_paste: state.emu.bracketed_paste_mode(),
+                bracketed_paste: state.emu.mode(TerminalMode::BracketedPaste),
                 mouse_mode: state.mouse_mode.mode(),
                 exited: state.exited,
                 shell: target.shell,
@@ -1074,6 +1074,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
             .into_iter()
             .map(|mode| (mode.name().to_string(), state.emu.mode(mode)))
             .collect(),
+        mouse_mode: state.mouse_mode.mode().name().to_string(),
         timeouts: effective_timeouts(session),
         text: text_of(&state.emu.viewable_rows()),
     }

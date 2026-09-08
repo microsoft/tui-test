@@ -178,6 +178,18 @@ pub enum MouseMode {
     Motion,
 }
 
+impl MouseMode {
+    /// The name this tracking level goes by on the wire.
+    pub const fn name(self) -> &'static str {
+        match self {
+            MouseMode::None => "none",
+            MouseMode::Click => "click",
+            MouseMode::Drag => "drag",
+            MouseMode::Motion => "motion",
+        }
+    }
+}
+
 #[derive(Default)]
 struct MouseModeState {
     tracking: MouseMode,
@@ -395,13 +407,6 @@ pub trait Emulator: Send {
     /// ever enabled, and no test would catch it.
     fn mode(&self, mode: TerminalMode) -> bool;
 
-    /// Whether the child asked for bracketed paste.
-    ///
-    /// A named shorthand for the mode of the same name, kept because pasting
-    /// is the one place the daemon has to branch on a mode by itself.
-    fn bracketed_paste_mode(&self) -> bool {
-        self.mode(TerminalMode::BracketedPaste)
-    }
     /// Encode one key event with the backend's own key encoder.
     ///
     /// `None` means the backend has no encoder, or has one that cannot express
@@ -457,8 +462,15 @@ pub trait Emulator: Send {
     /// parked wherever the last write happened to leave it.
     /// Whether the cursor is being drawn.
     ///
-    /// A named shorthand for [`TerminalMode::CursorVisible`], kept because
-    /// the renderer asks this on every frame and reads better for it.
+    /// Kept as a named method, unlike the other modes, because it belongs to
+    /// the cursor group beside [`Emulator::cursor`] and
+    /// [`Emulator::cursor_shape`]. `DECSCUSR` is a shape rather than a
+    /// boolean, so that group cannot collapse into [`Emulator::mode`]
+    /// anyway, and splitting it so that two thirds of the cursor is asked for
+    /// one way and the rest another would read worse than either.
+    ///
+    /// It is one defaulted line over the real answer, so there is still a
+    /// single implementation per backend.
     fn cursor_visible(&self) -> bool {
         self.mode(TerminalMode::CursorVisible)
     }

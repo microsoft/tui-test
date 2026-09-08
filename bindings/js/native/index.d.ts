@@ -300,6 +300,7 @@ export interface State {
   ready: boolean
   bell_count: number
   modes: Record<string, boolean>
+  mouse_mode: string
   timeouts: EffectiveTimeouts
   text: string
 }

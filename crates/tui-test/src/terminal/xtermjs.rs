@@ -601,15 +601,6 @@ mod tests {
         assert_eq!(bells.count(), 1);
     }
 
-    #[test]
-    fn tracks_bracketed_paste_mode() {
-        let mut emulator = XtermJsEmu::new(10, 2, &Profile::default()).expect("create emulator");
-        emulator.process(b"\x1b[?2004h");
-        assert!(emulator.bracketed_paste_mode());
-        emulator.process(b"\x1b[?2004l");
-        assert!(!emulator.bracketed_paste_mode());
-    }
-
     crate::emulator_conformance_tests!(
         |cols, rows, profile| {
             Box::new(XtermJsEmu::new(cols, rows, profile).expect("create xterm.js emulator"))
@@ -628,6 +619,9 @@ mod tests {
             // the bundle contains no handler for `CSI > u`, `CSI = u`, or
             // `CSI < u`, so the modes a child pushes are parsed and dropped.
             crate::terminal::conformance::Divergence::NoKittyKeyboard,
+            // `ESC c` clears every other mode on this backend but leaves a
+            // hidden cursor hidden.
+            crate::terminal::conformance::Divergence::RisDoesNotResetCursorVisibility,
         ]
     );
 }

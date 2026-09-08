@@ -857,6 +857,13 @@ pub struct State {
     /// A map rather than a list, so a reader can tell "off" from "this build
     /// does not know that mode" and every key is always present.
     pub modes: BTreeMap<String, bool>,
+    /// Mouse tracking level: `none`, `click`, `drag`, or `motion`.
+    ///
+    /// Separate from `modes` because mouse tracking is not a set of
+    /// independent switches: `CSI ?1002 h` replaces `CSI ?1000 h` rather than
+    /// joining it, so reporting it as booleans would say two are on when the
+    /// terminal only honours the last.
+    pub mouse_mode: String,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }

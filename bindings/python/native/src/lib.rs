@@ -1869,6 +1869,7 @@ fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
         modes.set_item(name, enabled)?;
     }
     result.set_item("modes", modes)?;
+    result.set_item("mouse_mode", value.mouse_mode)?;
     let timeouts = PyDict::new(py);
     timeouts.set_item("text", value.timeouts.text)?;
     timeouts.set_item("idle", value.timeouts.idle)?;

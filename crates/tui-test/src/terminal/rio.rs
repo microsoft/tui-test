@@ -460,13 +460,4 @@ mod tests {
         assert_eq!(bells.count(), 2);
         assert_eq!(bells.sequence(), 2);
     }
-
-    #[test]
-    fn tracks_bracketed_paste_mode() {
-        let mut emulator = RioEmu::new(10, 2, &Profile::default());
-        emulator.process(b"\x1b[?2004h");
-        assert!(emulator.bracketed_paste_mode());
-        emulator.process(b"\x1b[?2004l");
-        assert!(!emulator.bracketed_paste_mode());
-    }
 }

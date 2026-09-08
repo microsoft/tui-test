@@ -143,6 +143,11 @@ Recording modes: `disabled`, `on-failure`, and `always`.
 | `bracketed_paste` | `CSI ?2004 h` | pastes are bracketed |
 | `alternate_screen` | `CSI ?1049 h` | the alternate screen is showing |
 
+Mouse tracking is reported separately, as `mouse_mode`: `none`, `click`,
+`drag`, or `motion`. It is not in the table because it is not a set of
+independent switches — `CSI ?1002 h` replaces `CSI ?1000 h` rather than
+joining it, so booleans would claim two are on when only the last is honoured.
+
 Read them with `get modes`, and assert one with `expect mode <NAME> [--off]`.
 The cursor has its own command, since position and shape have nowhere else to
 live:

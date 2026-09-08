@@ -160,6 +160,7 @@ class State:
     session_shell: Optional[str]
     bell_count: int = 0
     modes: Dict[str, bool] = field(default_factory=dict)
+    mouse_mode: str = "none"
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "State":
@@ -175,6 +176,7 @@ class State:
             ready=d.get("ready", False),
             bell_count=d.get("bell_count", 0),
             modes=d.get("modes", {}),
+            mouse_mode=d.get("mouse_mode", "none"),
             timeouts=Timeouts(**d["timeouts"]),
             text=d.get("text", ""),
             session_shell=d.get("session_shell"),

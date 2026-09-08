@@ -679,15 +679,6 @@ mod tests {
     }
 
     #[test]
-    fn tracks_bracketed_paste_mode() {
-        let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
-        emu.process(b"\x1b[?2004h");
-        assert!(emu.bracketed_paste_mode());
-        emu.process(b"\x1b[?2004l");
-        assert!(!emu.bracketed_paste_mode());
-    }
-
-    #[test]
     fn main_and_alternate_screens_keep_independent_keyboard_modes() {
         let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
 

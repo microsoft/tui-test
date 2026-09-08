@@ -48,6 +48,13 @@ pub enum Divergence {
     /// It belongs here rather than in a profile default because it is the
     /// emulator's own limit, not a setting.
     NoKittyKeyboard,
+    /// `RIS` does not put `DECTCEM` back, so a hidden cursor stays hidden
+    /// through a reset that restores every other mode.
+    ///
+    /// Verified rather than inferred: on the same emulator `RIS` does clear
+    /// bracketed paste, so this is the terminal's own state and not the
+    /// mapping onto it.
+    RisDoesNotResetCursorVisibility,
 }
 
 /// Generates the conformance tests for one backend. `$make` builds a boxed
@@ -107,17 +114,54 @@ macro_rules! emulator_conformance_tests {
                 .contains(&$crate::terminal::conformance::Divergence::ClipboardUnsupported)
         }
 
+        /// A mode sequence still lands when a PTY read splits it, which is
+        /// where an emulator that scanned for whole sequences would fail.
+        /// Split one byte before the final letter, the last place the parser
+        /// can still be holding parameters.
         #[test]
-        fn conformance_bracketed_paste_mode_tracks_enable_disable_and_reset() {
-            let mut e = conformance_emu(10, 4, 100);
-            assert!(!e.bracketed_paste_mode());
-            e.process(b"\x1b[?20");
-            e.process(b"04h");
-            assert!(e.bracketed_paste_mode());
-            e.process(b"\x1b[?2004l");
-            assert!(!e.bracketed_paste_mode());
-            e.process(b"\x1b[?2004h\x1bc");
-            assert!(!e.bracketed_paste_mode());
+        fn conformance_terminal_modes_survive_a_split_read() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let set = mode.set_sequence();
+                let (head, tail) = set.split_at(set.len() - 1);
+                let mut e = conformance_emu(20, 4, 100);
+                e.process(head);
+                e.process(tail);
+                assert!(e.mode(mode), "{} lost across a split read", mode.name());
+            }
+        }
+
+        /// `RIS` puts every mode back to its default, which is how a program
+        /// that leaves the terminal in a strange state is recovered from.
+        #[test]
+        fn conformance_ris_resets_every_terminal_mode() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let mut e = conformance_emu(20, 4, 100);
+                // Drive it away from its default in whichever direction that is.
+                let away = if mode.default_enabled() {
+                    mode.reset_sequence()
+                } else {
+                    mode.set_sequence()
+                };
+                e.process(away);
+                assert_eq!(e.mode(mode), !mode.default_enabled());
+
+                e.process(b"\x1bc");
+                if mode == TerminalMode::CursorVisible
+                    && CONFORMANCE_DIVERGENCES.contains(
+                        &$crate::terminal::conformance::Divergence::RisDoesNotResetCursorVisibility,
+                    )
+                {
+                    continue;
+                }
+                assert_eq!(
+                    e.mode(mode),
+                    mode.default_enabled(),
+                    "RIS did not restore {}",
+                    mode.name()
+                );
+            }
         }
 
         /// The grid is always exactly `rows` x `cols`, regardless of content.

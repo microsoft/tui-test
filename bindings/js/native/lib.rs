@@ -253,6 +253,7 @@ pub struct State {
     #[napi(js_name = "bell_count")]
     pub bell_count: f64,
     pub modes: HashMap<String, bool>,
+    pub mouse_mode: String,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }
@@ -272,6 +273,7 @@ impl From<CoreState> for State {
             ready: value.ready,
             bell_count: value.bell_count as f64,
             modes: value.modes.into_iter().collect(),
+            mouse_mode: value.mouse_mode,
             timeouts: value.timeouts.into(),
             text: value.text,
         }
