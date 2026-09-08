@@ -253,6 +253,7 @@ pub struct State {
     #[napi(js_name = "bell_count")]
     pub bell_count: f64,
     pub modes: HashMap<String, bool>,
+    #[napi(js_name = "mouse_mode")]
     pub mouse_mode: String,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
