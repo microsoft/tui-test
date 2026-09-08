@@ -1,25 +1,27 @@
 //! cli daemon host: local socket listener, idle watchdog, monitor streaming,
 //! and process state files around the reusable in-process engine.
 
-use std::io::{BufReader, Write};
+use std::io::BufReader;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use interprocess::local_socket::traits::ListenerExt;
+use interprocess::local_socket::traits::Listener;
 use interprocess::local_socket::Stream;
 
 use tui_test::engine::Engine;
 use tui_test::logger::Logger;
+use tui_test::monitoring::SessionId;
 use tui_test::Operation;
 
 use crate::protocol::{Request, Response};
-use crate::{config, ipc, monitor};
+use crate::{config, ipc};
 
 pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
     config::ensure_home()?;
     sweep_recordings(&session_name);
     let socket = config::socket_name(&session_name);
     let listener = ipc::listen(&socket)?;
+    let id = SessionId::new_v4();
     std::fs::write(
         config::pid_file(&session_name),
         std::process::id().to_string(),
@@ -54,58 +56,47 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
     let operation_worker =
         spawn_operation_worker(requests, Arc::clone(&engine), session_name.clone(), logging);
 
-    for conn in listener.incoming() {
-        let Ok(conn) = conn else { continue };
+    loop {
+        let Ok(conn) = listener.accept() else {
+            continue;
+        };
         let mut reader = BufReader::new(conn);
         let req = match ipc::read_request(&mut reader) {
             Ok(request) => request,
             Err(_) => continue,
         };
         *last_activity.lock().unwrap() = Instant::now();
-        if let Request::Monitor {
-            cols,
-            rows,
-            interactive,
-        } = req
-        {
+        if matches!(req, Request::Ping) {
+            let _ = ipc::write_response(reader.get_mut(), &Response::with(serde_json::json!(id)));
+            continue;
+        }
+        if let Request::Monitor(attach) = req {
             spawn_monitor(
                 Arc::clone(&engine),
-                reader.into_inner(),
-                (cols, rows),
+                Arc::clone(&last_activity),
+                reader,
                 session_name.clone(),
-                interactive,
+                id,
+                attach,
             );
             continue;
         }
-        if let Request::MonitorInputStream { cols, rows } = req {
-            let frame = engine.frame();
-            let initial_frame = monitor::render_frame(
-                frame.as_ref(),
-                (cols, rows),
-                &session_name,
-                true,
-                &mut monitor::ModeMirror::default(),
-            );
-            let response = Response::with(serde_json::json!({ "initial_frame": initial_frame }));
-            if ipc::write_response(reader.get_mut(), &response).is_ok() {
-                spawn_monitor_input(
-                    Arc::clone(&engine),
-                    Arc::clone(&last_activity),
-                    reader,
-                    (cols, rows),
-                );
-            }
-            continue;
+        if matches!(&req, Request::Close | Request::Shutdown) {
+            // Stop accepting before acknowledging shutdown, not after the reply drains.
+            drop(listener);
+            cleanup(&session_name);
+            let _ = operations.send((req, reader.into_inner()));
+            break;
         }
-        let shutdown = matches!(&req, Request::Close | Request::Shutdown);
-        if operations.send((req, reader.into_inner())).is_err() || shutdown {
+        if operations.send((req, reader.into_inner())).is_err() {
+            drop(listener);
+            cleanup(&session_name);
             break;
         }
     }
 
     drop(operations);
     let _ = operation_worker.join();
-    cleanup(&session_name);
     Ok(())
 }
 
@@ -131,8 +122,9 @@ fn spawn_operation_worker(
                 let _ = std::fs::write(config::recording_pointer_file(&session), "");
             }
             let mut response = match req {
-                Request::Ping => Response::ok(),
-                Request::Shutdown => Response::from_result(engine.execute(Operation::Close)),
+                Request::Shutdown => {
+                    crate::protocol::response_result(engine.execute(Operation::Close))
+                }
                 Request::Status => status_response(&engine),
                 Request::FlushRecording => flush_recording_response(&engine),
                 operation => operation.execute(&engine),
@@ -253,79 +245,36 @@ fn spawn_idle_watchdog(engine: Arc<Engine>, last_activity: Arc<Mutex<Instant>>, 
 
 fn spawn_monitor(
     engine: Arc<Engine>,
-    mut conn: Stream,
-    viewer: (u16, u16),
+    activity: Arc<Mutex<Instant>>,
+    reader: BufReader<Stream>,
     session: String,
-    interactive: bool,
+    id: SessionId,
+    attach: tui_test::monitoring::protocol::Attach,
 ) {
     std::thread::spawn(move || {
+        let Ok(mut connection) = tui_test::monitoring::ipc::Connection::from_reader(reader) else {
+            return;
+        };
+        if attach.id.is_some_and(|requested| requested != id) {
+            let _ = connection.writer().send(
+                &Response::from_error(tui_test::TuiTestError::no_session()),
+                &std::sync::atomic::AtomicBool::new(false),
+            );
+            connection.drain(Duration::from_secs(2));
+            return;
+        }
+        let source = Arc::new(tui_test::monitoring::stream::DaemonSession::new(
+            engine.clone(),
+            &attach,
+            activity,
+        ));
         engine.log_event("monitor attached");
-        let mut modes = monitor::ModeMirror::default();
-        loop {
-            let frame = engine.frame();
-            let bytes =
-                monitor::render_frame(frame.as_ref(), viewer, &session, interactive, &mut modes);
-            if conn.write_all(&bytes).is_err() || conn.flush().is_err() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(config::MONITOR_FRAME_MS));
+        if let Err(error) =
+            tui_test::monitoring::stream::serve(connection, source, &session, attach)
+        {
+            engine.log_event(&format!("monitor disconnected: {error}"));
         }
         engine.log_event("monitor detached");
-    });
-}
-
-/// Forward viewer input, translating SGR mouse coordinates past the frame border.
-fn spawn_monitor_input(
-    engine: Arc<Engine>,
-    last_activity: Arc<Mutex<Instant>>,
-    reader: BufReader<Stream>,
-    viewer: (u16, u16),
-) {
-    std::thread::spawn(move || {
-        let (sender, receiver) = mpsc::channel();
-        std::thread::spawn(move || {
-            let messages = serde_json::Deserializer::from_reader(reader)
-                .into_iter::<crate::protocol::MonitorInput>();
-            for message in messages {
-                let failed = message.is_err();
-                if sender.send(message).is_err() || failed {
-                    break;
-                }
-            }
-        });
-        let mut mouse = monitor::MouseRemapper::new(viewer);
-        loop {
-            let input = match receiver.recv_timeout(Duration::from_millis(50)) {
-                Ok(Ok(crate::protocol::MonitorInput::Write { data })) => {
-                    *last_activity.lock().unwrap() = Instant::now();
-                    mouse.push(&data, engine.monitor_mouse_size())
-                }
-                Ok(Ok(crate::protocol::MonitorInput::Resize { cols, rows })) => {
-                    mouse.resize((cols, rows));
-                    Vec::new()
-                }
-                Ok(Err(error)) => {
-                    engine.log_event(&format!("monitor input message failed: {error}"));
-                    break;
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    mouse.observe(engine.monitor_mouse_size());
-                    mouse.on_idle()
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            };
-            if !input.is_empty() {
-                if let Err(error) = engine.write_monitor_input_raw(&input) {
-                    engine.log_event(&format!("monitor input write failed: {}", error.message));
-                }
-            }
-        }
-        let pending = mouse.finish();
-        if !pending.is_empty() {
-            if let Err(error) = engine.write_monitor_input_raw(&pending) {
-                engine.log_event(&format!("monitor input write failed: {}", error.message));
-            }
-        }
     });
 }
 

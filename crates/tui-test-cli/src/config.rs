@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use sha2::{Digest, Sha256};
 
 pub const SHUTDOWN_DRAIN_MS: u64 = 2_000;
-pub const MONITOR_FRAME_MS: u64 = 50;
 pub const IDLE_TIMEOUT_MS: u64 = 4 * 60 * 60 * 1_000;
 pub const IDLE_CHECK_INTERVAL_MS: u64 = 5 * 60 * 1_000;
 

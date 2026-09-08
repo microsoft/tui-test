@@ -10,7 +10,7 @@ Use the CLI for terminal work split across separate commands.
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run an app. |
-| `sessions` | List sessions. |
+| `sessions` | List sessions, including monitored tests. |
 | `close [--all]` | Close sessions. |
 
 Use `--session NAME` to select a session. `open` and `run` reuse it unless `--restart` is set.
@@ -103,13 +103,51 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 | `record start PATH` | Start a recording. |
 | `record stop` | Finish it. |
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
-| `monitor` | Watch a session live. |
+| `monitor` | Watch a session; q, Esc, or Ctrl+C detaches. |
 | `monitor --interactive` | Forward keyboard, paste, and supported SGR mouse input; Ctrl+] detaches. |
 
 Interactive monitors apply the target's keyboard and paste modes before reading
 input. SGR mouse clicks, drags, and motion are enabled when requested by the
 target, with coordinates translated past the monitor's border. Viewer modes are
 restored on detach; read-only monitoring does not change input modes.
+
+Both modes resize the app to fit inside the border. Interactive viewers take
+priority. Detaching restores the previous viewer's size. A yellow border and
+`! too small` warn that content is clipped.
+
+## Inspect tests
+
+Monitoring is off by default. Enable it in your
+[JavaScript](javascript.md#inspect-failed-tests),
+[Python](python.md#inspect-failed-tests), or [Rust](rust.md#inspect-failed-tests)
+tests to pause them on failure. In another terminal, run:
+
+```sh
+tui-test sessions --waiting
+tui-test --session login monitor --interactive
+```
+
+Use the session name unless several sessions share it. For duplicate names,
+copy the UUID from `sessions` and run `tui-test monitor --interactive --id UUID`.
+With no target, `monitor` opens a searchable picker in an interactive terminal.
+Filter sessions with `--waiting`, `--failed`, or `--cwd current`;
+`monitor --latest` selects the most recent match.
+
+By default, the test waits up to 30 seconds for a monitor to attach. If none
+attaches, the test resumes. Otherwise, it waits until all monitors detach.
+Press Ctrl+] in interactive mode or q, Esc, or Ctrl+C in read-only mode.
+Keep the test process running while you inspect it.
+
+API options override these environment defaults:
+
+| Variable | Default | Values |
+| --- | --- | --- |
+| `TUI_TEST_MONITORING` | disabled | `1` to enable. |
+| `TUI_TEST_WAIT_AT_END` | `never` | `never`, `failure`, `always`. |
+| `TUI_TEST_FIRST_ATTACH_TIMEOUT` | `30000` | Milliseconds; `infinite` waits indefinitely. |
+| `TUI_TEST_LABEL` | unset | Display label. |
+
+Use unlimited waits only for local debugging.
 
 ## Configure
 

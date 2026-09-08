@@ -5,6 +5,8 @@ mod config;
 #[cfg(windows)]
 mod console_input;
 mod daemon;
+mod discovery;
+mod host;
 mod ipc;
 mod monitor;
 mod monitor_input;
@@ -86,7 +88,7 @@ fn main() {
             session: target,
             config,
         } => get_recording(target.unwrap_or(session), config.as_deref()),
-        Command::Sessions => list_sessions(cli.json),
+        Command::Sessions { filter } => discovery::print_sessions(&filter, cli.json),
         Command::Close { all } if all => close_all(cli.json),
         Command::Daemon {
             cmd: DaemonCmd::Start,
@@ -102,7 +104,18 @@ fn main() {
             config::session_was_specified(&cli.session),
             cli.json,
         ),
-        Command::Monitor { interactive } => monitor::run_client(&session, interactive),
+        Command::Monitor {
+            interactive,
+            id,
+            latest,
+            filter,
+        } => monitor::run_client(
+            config::session_was_specified(&cli.session).then_some(session.as_str()),
+            interactive,
+            id,
+            latest,
+            &filter,
+        ),
         command => run_remote(&session, command, cli.json, cli.verbose),
     };
     std::process::exit(code);
@@ -1010,34 +1023,7 @@ fn get_recording(session: String, explicit_config: Option<&Path>) -> i32 {
 
 /// Every session in this home whose daemon is currently answering.
 fn running_sessions() -> Vec<String> {
-    let mut sessions = Vec::new();
-    let Ok(entries) = std::fs::read_dir(config::home_dir()) else {
-        return sessions;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if let Some(stripped) = name.strip_suffix(".pid") {
-            if ipc::is_running(&config::socket_name(stripped)) {
-                sessions.push(stripped.to_string());
-            }
-        }
-    }
-    sessions.sort();
-    sessions
-}
-
-fn list_sessions(json: bool) -> i32 {
-    let sessions = running_sessions();
-    if json {
-        println!("{}", serde_json::json!({ "sessions": sessions }));
-    } else if sessions.is_empty() {
-        println!("no active sessions");
-    } else {
-        for s in sessions {
-            println!("{s}");
-        }
-    }
-    0
+    discovery::running_daemons()
 }
 
 fn close_all(json: bool) -> i32 {
@@ -1233,7 +1219,8 @@ EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
-WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
+WATCH     monitor [--interactive] [--id UUID]\n\
+          (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
 GLOBAL    --session NAME | --json | --verbose (log PTY traffic to ~/.tui-test/<session>.log)\n\
 EXIT      0 ok | 1 assertion/wait failed | 2 usage | 3 no session | 4 daemon/IPC | 5 internal\n\

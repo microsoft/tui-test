@@ -9,13 +9,14 @@ import {
   envPairs,
   profilePayload,
   recordingPayload,
+  resolveMonitoring,
   resolveSession,
   resolveTimeout,
   timeoutsPayload,
 } from "./config.js";
 import type { TimeoutClass } from "./config.js";
 import { uniqueSession } from "./ephemeral.js";
-import { ExpectationError, TuiTestError, UsageError } from "./errors.js";
+import { ExpectationError, NoSessionError, TuiTestError, UsageError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
 import type {
   RuntimeLocatorStage,
@@ -578,12 +579,19 @@ class Mouse {
   }
 }
 
+interface Completion {
+  promise: Promise<void>;
+  phase: "initializing" | "cancel-requested" | "active";
+}
+
 export class TuiTest {
   readonly session: string;
   readonly keyboard: Keyboard;
   readonly mouse: Mouse;
   #runtime: NativeRuntime;
   #options: ClientOptions;
+  #monitoring: ReturnType<typeof resolveMonitoring>;
+  #completion: Completion | undefined;
   #artifactCounter = 0;
 
   constructor(session?: string, opts: ClientOptions = {}) {
@@ -594,7 +602,22 @@ export class TuiTest {
     backendPayload(opts.backend);
     profilePayload(opts.profile);
     this.#options = opts;
-    this.#runtime = new NativeRuntime(this.session, recordingPayload(opts.recording));
+    this.#monitoring = resolveMonitoring(opts.monitoring);
+    const nativeMonitoring = this.#monitoring.enabled
+      ? {
+          label: this.#monitoring.label,
+          testFile: this.#monitoring.metadata.testFile,
+          testName: this.#monitoring.metadata.testName,
+          framework: this.#monitoring.metadata.framework,
+          worker: this.#monitoring.metadata.worker,
+          tags: this.#monitoring.metadata.tags,
+        }
+      : undefined;
+    this.#runtime = new NativeRuntime(
+      this.session,
+      recordingPayload(opts.recording),
+      nativeMonitoring,
+    );
     this.keyboard = new Keyboard(this.#runtime);
     this.mouse = new Mouse(this.#runtime);
   }
@@ -734,7 +757,21 @@ export class TuiTest {
     } catch {}
   }
 
-  async #spawn(action: () => Promise<OpenResult>, retries: number): Promise<OpenResult> {
+  async #spawn(action: () => Promise<OpenResult>, retries: number, restart = false): Promise<OpenResult> {
+    if (this.#completion) {
+      const completion = this.#completion;
+      if (restart) {
+        if (completion.phase === "initializing") {
+          completion.phase = "cancel-requested";
+        } else if (completion.phase === "active") {
+          await this.#runtime.cancelMonitorWait();
+        }
+      }
+      await completion.promise;
+      if (this.#completion === completion) {
+        this.#completion = undefined;
+      }
+    }
     let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
@@ -743,6 +780,7 @@ export class TuiTest {
         lastError = error;
         if (attempt < retries) {
           await this.closeQuiet();
+          this.#completion = undefined;
         }
       }
     }
@@ -767,7 +805,7 @@ export class TuiTest {
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
     };
-    return this.#spawn(() => this.#runtime.open(options), opts.retries ?? 0);
+    return this.#spawn(() => this.#runtime.open(options), opts.retries ?? 0, opts.restart);
   }
 
   async run(program: string, args: string[] = [], opts: SpawnOptions = {}): Promise<OpenResult> {
@@ -789,11 +827,136 @@ export class TuiTest {
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
     };
-    return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0);
+    return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0, opts.restart);
   }
 
-  async close(): Promise<void> {
-    await this.#runtime.close();
+  close(): Promise<void> {
+    return this.#completion?.promise ?? this.#startCompletion().promise;
+  }
+
+  #startCompletion(
+    outcome?: "passed" | "failed",
+    onError?: (error: unknown) => void,
+  ): Completion {
+    // Publish before native initialization so finish, close and restart share one operation.
+    const completion: Completion = {
+      phase: "initializing",
+      promise: Promise.resolve()
+        .then(() => this.#complete(completion, outcome))
+        .catch(onError)
+        .finally(() => {
+          if (!this.#monitoring.enabled && this.#completion === completion) {
+            this.#completion = undefined;
+          }
+        }),
+    };
+    this.#completion = completion;
+    return completion;
+  }
+
+  async #complete(completion: Completion, outcome?: "passed" | "failed"): Promise<void> {
+    const errors: unknown[] = [];
+    let generation: string | undefined;
+    const shouldWait =
+      outcome !== undefined &&
+      this.#monitoring.enabled &&
+      (this.#monitoring.waitAtEnd === "always" ||
+        (outcome === "failed" && this.#monitoring.waitAtEnd === "failure"));
+    const configureNoHold = this.#monitoring.enabled && !this.#monitoring.holdWhileAttached;
+    // Native worker promises alone need not keep Node's event loop alive.
+    const keepAlive = shouldWait ? setInterval(() => {}, 2 ** 30) : undefined;
+    const timeout = shouldWait ? this.#monitoring.firstAttachTimeout : 0;
+    try {
+      const info = shouldWait || configureNoHold
+        ? await this.#runtime.beginMonitorWait(
+            outcome ?? "passed",
+            timeout,
+            this.#monitoring.holdWhileAttached,
+          )
+        : undefined;
+      generation = info?.generation;
+      if (completion.phase === "cancel-requested") {
+        await this.#runtime.cancelMonitorWait();
+      }
+      completion.phase = "active";
+      if (info) {
+        if (shouldWait) {
+          console.error(
+            `[tui-test] ${outcome === "failed" ? "Test failed" : "Test completed"}; ` +
+              "terminal kept open for inspection",
+          );
+          if (this.#monitoring.label) {
+            console.error(`[tui-test] ${this.#monitoring.label}`);
+          }
+          if (this.#monitoring.metadata.testFile) {
+            console.error(`[tui-test] ${this.#monitoring.metadata.testFile}`);
+          }
+          console.error(`[tui-test] Attach: ${info.command}`);
+          console.error(
+            timeout === null
+              ? "[tui-test] Waiting for an attachment"
+              : `[tui-test] Waiting up to ${timeout}ms for an attachment`,
+          );
+        }
+        await this.#runtime.waitForMonitor(
+          info.generation,
+          timeout,
+          this.#monitoring.holdWhileAttached,
+        );
+      }
+    } catch (error) {
+      if (shouldWait || !(error instanceof NoSessionError)) {
+        errors.push(error);
+      }
+    } finally {
+      completion.phase = "active";
+      clearInterval(keepAlive);
+    }
+    try {
+      if (generation !== undefined) {
+        await this.#runtime.closeMonitorTarget(generation);
+      } else {
+        await this.#runtime.close();
+      }
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "terminal inspection and cleanup failed");
+    }
+  }
+
+  async finish(opts: {
+    outcome: "passed" | "failed";
+    error?: unknown;
+  }): Promise<void> {
+    const hasPrimaryError = opts.outcome === "failed" && "error" in opts;
+    const handleSecondaryError = (error: unknown): void => {
+      if (!hasPrimaryError) {
+        throw error;
+      }
+      console.error(
+        `[tui-test] terminal inspection or cleanup failed after primary failure: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    };
+    if (this.#completion) {
+      await this.#completion.promise.catch(handleSecondaryError);
+    } else {
+      await this.#startCompletion(opts.outcome, handleSecondaryError).promise;
+    }
+    if (hasPrimaryError) {
+      throw opts.error;
+    }
+  }
+
+  async inspectFailure(error: unknown): Promise<never> {
+    await this.finish({ outcome: "failed", error });
+    throw error;
   }
 
   async closeQuiet(): Promise<void> {
@@ -1033,6 +1196,6 @@ export class TuiTest {
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
-    await this.closeQuiet();
+    await this.close();
   }
 }

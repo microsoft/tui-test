@@ -2,10 +2,12 @@
 
 use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{Arc, Mutex};
 
 use napi::bindgen_prelude::{spawn_blocking, Buffer, Either};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
+use tui_test::monitoring as bridge;
 use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::shell::Shell as CoreShell;
 use tui_test::{
@@ -18,8 +20,8 @@ use tui_test::{
     MouseOptions as CoreMouseOptions, OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult,
     Operation, OperationResult, RecordingFormat as CoreRecordingFormat,
     RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
-    Size as CoreSize, SnapshotResult as CoreSnapshotResult, State as CoreState,
-    StyleSelector as CoreStyleSelector, TextMatch as CoreTextMatch,
+    SessionMonitorTarget, Size as CoreSize, SnapshotResult as CoreSnapshotResult,
+    State as CoreState, StyleSelector as CoreStyleSelector, TextMatch as CoreTextMatch,
     TextSelector as CoreTextSelector, TextStyle as CoreTextStyle, Timeouts as CoreTimeouts,
     TuiTestError, WhitespaceMode as CoreWhitespaceMode,
 };
@@ -107,6 +109,42 @@ pub struct Timeouts {
 pub struct AutomaticRecordingOptions {
     pub mode: Option<String>,
     pub directory: Option<String>,
+}
+
+#[napi(object)]
+pub struct MonitoringOptions {
+    pub label: Option<String>,
+    pub test_file: Option<String>,
+    pub test_name: Option<String>,
+    pub framework: Option<String>,
+    pub worker: Option<String>,
+    pub tags: Option<Vec<String>>,
+}
+
+impl From<MonitoringOptions> for bridge::Metadata {
+    fn from(value: MonitoringOptions) -> Self {
+        Self {
+            label: value.label,
+            test_file: value.test_file,
+            test_name: value.test_name,
+            framework: value.framework,
+            worker: value.worker,
+            tags: value.tags.unwrap_or_default(),
+        }
+    }
+}
+
+#[napi(object)]
+pub struct MonitorInfo {
+    pub id: String,
+    pub command: String,
+    pub generation: String,
+}
+
+#[napi(object)]
+pub struct MonitorWaitOptions {
+    pub timeout_ms: Option<f64>,
+    pub hold_while_attached: Option<bool>,
 }
 
 #[napi(object)]
@@ -862,19 +900,91 @@ where
     .await
 }
 
+#[derive(Clone, Default)]
+enum TargetOwnership {
+    #[default]
+    Named,
+    Absent,
+    Opened(SessionMonitorTarget),
+}
+
+fn register_target(
+    handle: &SessionHandle,
+    target: SessionMonitorTarget,
+    monitoring: Option<bridge::Metadata>,
+    owned_target: &Mutex<TargetOwnership>,
+) -> std::result::Result<(), TuiTestError> {
+    if let Some(metadata) = monitoring {
+        *owned_target
+            .lock()
+            .map_err(|_| TuiTestError::internal("session target lock poisoned"))? =
+            TargetOwnership::Opened(target.clone());
+        if let Err(error) = bridge::register(handle.name(), &target, metadata) {
+            let _ = handle.close_target(&target);
+            return Err(error);
+        }
+    } else {
+        bridge::invalidate_replaced(handle.name(), &target);
+    }
+    Ok(())
+}
+
+fn finish_open(
+    handle: &SessionHandle,
+    opened: (
+        std::result::Result<CoreOpenResult, TuiTestError>,
+        Option<SessionMonitorTarget>,
+    ),
+    monitoring: Option<bridge::Metadata>,
+    owned_target: &Mutex<TargetOwnership>,
+) -> std::result::Result<OpenResult, TuiTestError> {
+    let (result, target) = opened;
+    let registration = match target {
+        Some(target) => register_target(handle, target, monitoring, owned_target),
+        None => Ok(()),
+    };
+    match result {
+        Ok(result) => {
+            registration?;
+            Ok(result.into())
+        }
+        Err(primary) => {
+            if let Err(secondary) = registration {
+                eprintln!(
+                    "[tui-test] monitor registration failed after initialization failure: {secondary}"
+                );
+            }
+            Err(primary)
+        }
+    }
+}
+
 #[napi]
 pub struct NativeSession {
     handle: SessionHandle,
     recording: CoreAutomaticRecording,
+    monitoring: Option<bridge::Metadata>,
+    target: Arc<Mutex<TargetOwnership>>,
 }
 
 #[napi]
 impl NativeSession {
     #[napi(constructor)]
-    pub fn new(name: String, recording: Option<AutomaticRecordingOptions>) -> Result<Self> {
+    pub fn new(
+        name: String,
+        recording: Option<AutomaticRecordingOptions>,
+        monitoring: Option<MonitoringOptions>,
+    ) -> Result<Self> {
+        let ownership = if monitoring.is_some() {
+            TargetOwnership::Absent
+        } else {
+            TargetOwnership::Named
+        };
         Ok(Self {
             handle: global_registry().session(name),
             recording: core_recording(recording).map_err(native_error)?,
+            monitoring: monitoring.map(Into::into),
+            target: Arc::new(Mutex::new(ownership)),
         })
     }
 
@@ -887,12 +997,19 @@ impl NativeSession {
     pub async fn open(&self, options: Option<OpenOptions>) -> Result<OpenResult> {
         let handle = self.handle.clone();
         let recording = self.recording.clone();
+        let monitoring = self.monitoring.clone();
+        let owned_target = self.target.clone();
         blocking("open", move || {
-            let result = handle.execute(Operation::Open(open_options(options, recording)?))?;
-            match result {
-                OperationResult::Open(value) => Ok(value.into()),
-                _ => Err(unexpected("open")),
-            }
+            let options = open_options(options, recording)?;
+            let opened = if monitoring.is_some() {
+                handle.open_for_monitoring(options)
+            } else {
+                match handle.open_with_target(options) {
+                    Ok((result, target)) => (Ok(result), Some(target)),
+                    Err(error) => (Err(error), None),
+                }
+            };
+            finish_open(&handle, opened, monitoring, &owned_target)
         })
         .await
     }
@@ -901,28 +1018,154 @@ impl NativeSession {
     pub async fn run(&self, options: RunOptions) -> Result<OpenResult> {
         let handle = self.handle.clone();
         let recording = self.recording.clone();
+        let monitoring = self.monitoring.clone();
+        let owned_target = self.target.clone();
         blocking("run", move || {
-            let result = handle.execute(Operation::Run(run_options(options, recording)?))?;
-            match result {
-                OperationResult::Open(value) => Ok(value.into()),
-                _ => Err(unexpected("run")),
-            }
+            let options = run_options(options, recording)?;
+            let opened = if monitoring.is_some() {
+                handle.run_for_monitoring(options)
+            } else {
+                match handle.run_with_target(options) {
+                    Ok((result, target)) => (Ok(result), Some(target)),
+                    Err(error) => (Err(error), None),
+                }
+            };
+            finish_open(&handle, opened, monitoring, &owned_target)
         })
         .await
     }
 
     #[napi]
     pub async fn close(&self) -> Result<()> {
-        execute(
-            self.handle.clone(),
-            "close",
-            Operation::Close,
-            |result| match result {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("close")),
-            },
-        )
+        let handle = self.handle.clone();
+        let target = self
+            .target
+            .lock()
+            .map_err(|_| native_error(TuiTestError::internal("session target lock poisoned")))?
+            .clone();
+        blocking("close", move || {
+            let (result, target) = match target {
+                TargetOwnership::Opened(target) => (handle.close_target(&target), Some(target)),
+                TargetOwnership::Named => handle.close_with_target(),
+                TargetOwnership::Absent => return Ok(()),
+            };
+            bridge::unregister(handle.name(), target.as_ref());
+            result
+        })
         .await
+    }
+
+    #[napi]
+    pub fn cancel_monitor_wait(&self) -> Result<()> {
+        ffi_boundary(|| {
+            let target = self
+                .target
+                .lock()
+                .map_err(|_| TuiTestError::internal("session target lock poisoned"))?
+                .clone();
+            let target = match target {
+                TargetOwnership::Opened(target) => Some(target),
+                TargetOwnership::Named => self.handle.monitor_target(),
+                TargetOwnership::Absent => None,
+            };
+            if let Some(target) = target {
+                bridge::cancel_target(self.handle.name(), &target);
+            }
+            Ok(())
+        })
+    }
+
+    #[napi]
+    pub fn begin_monitor_wait(
+        &self,
+        outcome: String,
+        options: Option<MonitorWaitOptions>,
+    ) -> Result<MonitorInfo> {
+        ffi_boundary(|| {
+            let (timeout, hold_while_attached) = match options {
+                Some(options) => (
+                    timeout(options.timeout_ms, "timeoutMs")?.map(std::time::Duration::from_millis),
+                    options.hold_while_attached.unwrap_or(true),
+                ),
+                None => (Some(std::time::Duration::from_secs(30)), true),
+            };
+            let target = self
+                .target
+                .lock()
+                .map_err(|_| TuiTestError::internal("session target lock poisoned"))?;
+            let (id, generation) = match &*target {
+                TargetOwnership::Opened(target) => bridge::begin_wait_for_target_with_options(
+                    self.handle.name(),
+                    target,
+                    &outcome,
+                    timeout,
+                    hold_while_attached,
+                )?,
+                TargetOwnership::Named => bridge::begin_wait_with_options(
+                    self.handle.name(),
+                    &outcome,
+                    timeout,
+                    hold_while_attached,
+                )?,
+                TargetOwnership::Absent => {
+                    return Err(TuiTestError::new(
+                        ErrorKind::NoSession,
+                        "no monitorable target was opened",
+                    ));
+                }
+            };
+            Ok(MonitorInfo {
+                command: bridge::host::monitor_command(self.handle.name(), true),
+                id: id.to_string(),
+                generation: generation.to_string(),
+            })
+        })
+    }
+
+    #[napi]
+    pub async fn wait_for_monitor(
+        &self,
+        generation: String,
+        timeout_ms: Option<f64>,
+        hold_while_attached: Option<bool>,
+    ) -> Result<bool> {
+        let name = self.handle.name().to_string();
+        let generation = generation
+            .parse()
+            .map_err(|_| native_error(TuiTestError::usage("invalid monitor generation")))?;
+        let wait_name = name.clone();
+        let result = blocking("waitForMonitor", move || {
+            let timeout = timeout(timeout_ms, "timeoutMs")?.map(std::time::Duration::from_millis);
+            bridge::wait(
+                &wait_name,
+                generation,
+                timeout,
+                hold_while_attached.unwrap_or(true),
+            )
+        })
+        .await;
+        if result.is_err() {
+            bridge::cancel_wait(&name, generation);
+        }
+        result
+    }
+
+    #[napi]
+    pub async fn close_monitor_target(&self, generation: String) -> Result<()> {
+        let generation = generation
+            .parse()
+            .map_err(|_| native_error(TuiTestError::usage("invalid monitor generation")))?;
+        let Some(target) = bridge::wait_target(self.handle.name(), generation) else {
+            return Ok(());
+        };
+        let handle = self.handle.clone();
+        let target_for_close = target.clone();
+        let result = blocking("closeMonitorTarget", move || {
+            handle.close_target(&target_for_close)
+        })
+        .await;
+        bridge::unregister(self.handle.name(), Some(&target));
+        result
     }
 
     #[napi]
@@ -1758,7 +2001,7 @@ pub async fn close_all() -> Result<()> {
 #[napi]
 pub fn close_all_sync() -> Result<()> {
     ffi_boundary(|| {
-        global_registry().close_all();
+        global_registry().force_close_all();
         Ok(())
     })
 }

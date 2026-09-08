@@ -70,9 +70,31 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `start_recording()`, `stop_recording()` | Record. |
 | `close()`, `close_quiet()` | Close. |
 
-Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
+Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`,
+and `monitoring`.
 
 Recording modes: `disabled`, `on-failure`, and `always`.
+
+## Inspect failed tests
+
+```python
+from tui_test import MonitoringOptions
+from tui_test.testing import terminal
+
+async with terminal(
+    session="login",
+    program=["my-app"],
+    monitoring=MonitoringOptions(enabled=True, wait_at_end="failure"),
+) as app:
+    await app.get_by_text("Ready").expect()
+```
+
+If the test fails, run the monitor command it prints in another terminal.
+The [CLI guide](cli.md#inspect-tests) covers session selection, detach keys, and environment options.
+
+`wait_at_end` accepts `"never"` (default), `"failure"`, or `"always"`.
+`first_attach_timeout` defaults to `30_000` milliseconds; `None` waits indefinitely.
+`hold_while_attached` defaults to `True`; set it to `False` to resume without waiting for detach.
 
 ## Input helpers
 

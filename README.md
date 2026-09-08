@@ -153,7 +153,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run a program. |
-| `sessions` | List sessions. |
+| `sessions [--waiting] [--failed]` | List sessions, including monitored tests. |
 | `close [--all]` | Close one or all sessions. |
 | `daemon start` | Start the session daemon. |
 | `daemon status` | Show daemon status. |
@@ -276,7 +276,11 @@ Timeout defaults:
 | `record start PATH [options]` | Start APNG, GIF, MP4, or asciinema recording. |
 | `record stop` | Finish the recording. |
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
-| `monitor [--interactive]` | Watch a CLI session or send input with `--interactive`. |
+| `monitor [--interactive] [--id UUID]` | Watch a session or send input with `--interactive`. |
+
+Enable monitoring to pause Rust, Python, or JavaScript tests when they fail.
+The [test inspection guide](references/cli.md#inspect-tests) explains setup,
+session selection, and detach keys.
 
 `record start` accepts `--format`, `--fps`, `--speed`, `--idle-time-limit`, and `--zoom`. MP4 output requires `ffmpeg`.
 

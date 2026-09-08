@@ -8,6 +8,8 @@ import type {
   EffectiveTimeouts,
   LocatorStage,
   LocatorStyle,
+  MonitorInfo,
+  MonitoringOptions,
   MouseClickOptions,
   OpenOptions,
   OpenResult,
@@ -145,16 +147,21 @@ async function invoke<T>(action: () => Promise<T>): Promise<T> {
 async function createSession(
   name: string,
   recording?: AutomaticRecordingOptions,
+  monitoring?: MonitoringOptions,
 ): Promise<NativeSessionHandle> {
   const binding = await loadBinding();
-  return new binding.NativeSession(name, recording);
+  return new binding.NativeSession(name, recording, monitoring);
 }
 
 export class NativeRuntime {
   #session: Promise<NativeSessionHandle>;
 
-  constructor(name: string, recording?: AutomaticRecordingOptions) {
-    this.#session = createSession(name, recording);
+  constructor(
+    name: string,
+    recording?: AutomaticRecordingOptions,
+    monitoring?: MonitoringOptions,
+  ) {
+    this.#session = createSession(name, recording, monitoring);
   }
 
   async #call<T>(action: (session: NativeSessionHandle) => Promise<T>): Promise<T> {
@@ -172,6 +179,35 @@ export class NativeRuntime {
 
   close(): Promise<void> {
     return this.#call((session) => session.close());
+  }
+
+  beginMonitorWait(
+    outcome: "passed" | "failed",
+    timeoutMs: number | null = 30_000,
+    holdWhileAttached = true,
+  ): Promise<MonitorInfo> {
+    return this.#call(async (session) => session.beginMonitorWait(outcome, {
+      timeoutMs: timeoutMs ?? undefined,
+      holdWhileAttached,
+    }));
+  }
+
+  waitForMonitor(
+    generation: string,
+    timeoutMs: number | null,
+    holdWhileAttached: boolean,
+  ): Promise<boolean> {
+    return this.#call((session) =>
+      session.waitForMonitor(generation, timeoutMs, holdWhileAttached),
+    );
+  }
+
+  closeMonitorTarget(generation: string): Promise<void> {
+    return this.#call((session) => session.closeMonitorTarget(generation));
+  }
+
+  cancelMonitorWait(): Promise<void> {
+    return this.#call(async (session) => session.cancelMonitorWait());
   }
 
   state(): Promise<State> {

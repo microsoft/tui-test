@@ -17,9 +17,9 @@ Use `tui-test` to control and test a real terminal.
 | Rust code | `tui-test-rs` | [Rust](references/rust.md) |
 | Common tasks | Current project language | [Recipes](references/recipes.md) |
 
-Use the library that matches the project. Use the CLI when the terminal must persist across separate commands or be watched with `monitor`.
+Use the library that matches the project. Use the CLI when the terminal must persist across separate commands.
 
-CLI and library sessions do not share state.
+Enable [monitoring](references/cli.md#inspect-tests) to inspect failed library tests with the CLI.
 
 ## CLI
 

@@ -39,4 +39,30 @@ Add `recording-raster` for APNG, GIF, and MP4. Add `ghostty`, `rio`, or `xtermjs
 
 Raster output uses installed fonts. Add a `recording-font-jetbrains-mono*` feature to bundle one.
 
+## Inspect failed tests
+
+```rust
+use tui_test::{OpenOptions, Session};
+use tui_test::monitoring::{Monitor, Options, Outcome, WaitPolicy};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let terminal = Session::new("login");
+    terminal.open(OpenOptions::default())?;
+    let mut monitor = Monitor::for_session(&terminal, Options {
+        enabled: true,
+        wait_at_end: WaitPolicy::Failure,
+        ..Options::default()
+    })?;
+    match terminal.get_by_text("Ready").expect() {
+        Ok(()) => monitor.finish(Outcome::Passed)?,
+        Err(error) => return Err(monitor.finish_failure(error).into()),
+    }
+    Ok(())
+}
+```
+
+If the test fails, run the monitor command it prints in another terminal.
+Use `Options::from_env()` to read the [environment options](cli.md#inspect-tests).
+By default, the test waits up to 30 seconds for a monitor to attach, then until all monitors detach.
+
 Full API: [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/)

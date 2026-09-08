@@ -20,6 +20,9 @@ test("generated native declarations expose typed operations", async () => {
     "PackedScreen",
     "RecordingOptions",
     "TextMatch",
+    "MonitoringOptions",
+    "MonitorInfo",
+    "MonitorWaitOptions",
   ]) {
     assert.match(declarations, new RegExp(`export (?:interface|type) ${type}\\b`));
   }
@@ -27,6 +30,9 @@ test("generated native declarations expose typed operations", async () => {
     "open",
     "run",
     "close",
+    "beginMonitorWait",
+    "waitForMonitor",
+    "closeMonitorTarget",
     "state",
     "text",
     "findLocator",
@@ -68,6 +74,10 @@ test("generated native declarations expose typed operations", async () => {
     /findLocator\(stages: Array<LocatorStage>\)/,
   );
   assert.doesNotMatch(declarations, /(?:queryJson|requestJson): string/);
+  assert.match(
+    declarations,
+    /interface MonitoringOptions \{[^}]*tags\?: Array<string>/,
+  );
   assert.match(
     declarations,
     /interface PackedScreen \{[\s\S]*readonly cols: number[\s\S]*readonly rows: number[\s\S]*readonly utf8: Uint8Array[\s\S]*\}/,

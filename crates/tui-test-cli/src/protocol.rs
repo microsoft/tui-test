@@ -1,3 +1,6 @@
+use tui_test::monitoring::protocol::Attach;
+pub use tui_test::monitoring::protocol::Response;
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -7,7 +10,9 @@ use tui_test::{
     TuiTestError,
 };
 
-pub use tui_test::{ErrorKind, MouseAction, Timeouts};
+#[cfg(test)]
+use tui_test::ErrorKind;
+pub use tui_test::{MouseAction, Timeouts};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -179,23 +184,14 @@ pub enum Request {
     },
     StopRecording,
     FlushRecording,
-    Monitor {
-        cols: u16,
-        rows: u16,
-        #[serde(default)]
-        interactive: bool,
-    },
-    MonitorInputStream {
-        cols: u16,
-        rows: u16,
-    },
+    Monitor(Attach),
     Shutdown,
 }
 
 impl Request {
     pub fn execute(self, engine: &Engine) -> Response {
         match self.into_operation() {
-            Ok(operation) => Response::from_result(engine.execute(operation)),
+            Ok(operation) => response_result(engine.execute(operation)),
             Err(error) => Response::from_error(error),
         }
     }
@@ -393,8 +389,7 @@ impl Request {
             Request::Ping
             | Request::Status
             | Request::FlushRecording
-            | Request::Monitor { .. }
-            | Request::MonitorInputStream { .. }
+            | Request::Monitor(_)
             | Request::Shutdown => Err(TuiTestError::usage(
                 "daemon control request cannot execute as a terminal operation",
             )),
@@ -417,66 +412,11 @@ pub enum GetField {
     BellEvents,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MonitorInputReady {
-    pub initial_frame: Vec<u8>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum MonitorInput {
-    Write { data: Vec<u8> },
-    Resize { cols: u16, rows: u16 },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Response {
-    pub ok: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<ErrorKind>,
-}
-
-impl Response {
-    pub fn ok() -> Self {
-        Self {
-            ok: true,
-            data: None,
-            message: None,
-            kind: None,
-        }
-    }
-
-    pub fn with(data: serde_json::Value) -> Self {
-        Self {
-            ok: true,
-            data: Some(data),
-            message: None,
-            kind: None,
-        }
-    }
-
-    pub fn from_result(result: Result<OperationResult, TuiTestError>) -> Self {
-        match result {
-            Ok(result) => match operation_data(result) {
-                Ok(Some(data)) => Self::with(data),
-                Ok(None) => Self::ok(),
-                Err(error) => Self::from_error(error),
-            },
-            Err(error) => Self::from_error(error),
-        }
-    }
-
-    pub fn from_error(error: TuiTestError) -> Self {
-        Self {
-            ok: false,
-            data: None,
-            message: Some(error.message),
-            kind: Some(error.kind),
-        }
+pub fn response_result(result: Result<OperationResult, TuiTestError>) -> Response {
+    match result.and_then(operation_data) {
+        Ok(Some(data)) => Response::with(data),
+        Ok(None) => Response::ok(),
+        Err(error) => Response::from_error(error),
     }
 }
 

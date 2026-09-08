@@ -11,15 +11,17 @@ from typing import (
     AsyncIterator,
     Dict,
     Iterable,
+    Mapping,
     Optional,
     Sequence,
     Set,
+    Union,
 )
 
 from ._config import IS_MACOS, IS_WINDOWS
 from ._ephemeral import unique_session
-from .client import TuiTest
-from .types import AutomaticRecording, Backend, Profile, Timeouts
+from .client import TuiTest, _atexit_close_all
+from .types import AutomaticRecording, Backend, MonitoringOptions, Profile, Timeouts
 
 __all__ = [
     "TerminalOptions",
@@ -55,6 +57,7 @@ class TerminalOptions:
     profile: Optional[Profile] = None
     artifacts: Optional[Dict[str, Any]] = None
     recording: Optional[AutomaticRecording] = None
+    monitoring: Optional[Union[MonitoringOptions, Mapping[str, Any]]] = None
 
 
 _DEFAULTABLE = frozenset(TerminalOptions.__dataclass_fields__)
@@ -97,21 +100,10 @@ def _install_safety_net() -> None:
 
 
 def _close_all_tracked_blocking() -> None:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        pass
-    else:  # pragma: no cover - atexit never runs inside a live loop
-        return
     with _tracked_lock:
-        pending = list(_tracked)
         _tracked.clear()
-    if not pending:
-        return
-    try:
-        asyncio.run(_close_quietly(pending))
-    except Exception:  # pragma: no cover - best effort at shutdown
-        pass
+    # Interpreter exit is forceful; never start a new event loop or inspection hold.
+    _atexit_close_all()
 
 
 async def _close_quietly(terminals: Iterable[TuiTest]) -> None:
@@ -141,38 +133,35 @@ async def close_all_tracked() -> None:
     await _close_quietly(pending)
 
 
-
 def _client_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
-    kwargs = {}  # type: Dict[str, Any]
-    if opts.backend is not None:
-        kwargs["backend"] = opts.backend
-    if opts.timeouts is not None:
-        kwargs["timeouts"] = opts.timeouts
-    if opts.profile is not None:
-        kwargs["profile"] = opts.profile
-    if opts.artifacts is not None:
-        kwargs["artifacts"] = opts.artifacts
-    if opts.recording is not None:
-        kwargs["recording"] = opts.recording
-    return kwargs
+    values = {
+        "backend": opts.backend,
+        "timeouts": opts.timeouts,
+        "profile": opts.profile,
+        "artifacts": opts.artifacts,
+        "recording": opts.recording,
+        "monitoring": opts.monitoring,
+    }
+    return {name: value for name, value in values.items() if value is not None}
 
 
 def _spawn_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
-    kwargs = {"retries": 2 if opts.retries is None else opts.retries}  # type: Dict[str, Any]
-    for name in ("cols", "rows", "cwd", "env", "wait_ready"):
-        value = getattr(opts, name)
-        if value is not None:
-            kwargs[name] = value
-    return kwargs
+    values = {
+        "retries": 2 if opts.retries is None else opts.retries,
+        "cols": opts.cols,
+        "rows": opts.rows,
+        "cwd": opts.cwd,
+        "env": opts.env,
+        "wait_ready": opts.wait_ready,
+    }
+    return {name: value for name, value in values.items() if value is not None}
 
 
 async def create_terminal(**options: Any) -> TuiTest:
     per_call = TerminalOptions(**options)
-    merged = dict(_defaults.__dict__)
-    for key, value in per_call.__dict__.items():
-        if value is not None:
-            merged[key] = value
-    opts = TerminalOptions(**merged)
+    opts = replace(_defaults, **{
+        name: value for name, value in vars(per_call).items() if value is not None
+    })
     session = opts.session or unique_session(opts.prefix)
     term = TuiTest(session, **_client_kwargs(opts))
     track_terminal(term)
@@ -184,9 +173,11 @@ async def create_terminal(**options: Any) -> TuiTest:
             await term.run(program[0], *program[1:], **spawn)
         else:
             await term.open(shell=opts.shell, **spawn)
-    except BaseException:
-        await term.close_quiet()
-        untrack_terminal(term)
+    except BaseException as error:
+        try:
+            await term.__aexit__(type(error), error, error.__traceback__)
+        finally:
+            untrack_terminal(term)
         raise
     return term
 
@@ -195,9 +186,9 @@ async def create_terminal(**options: Any) -> TuiTest:
 async def terminal(**options: Any) -> AsyncIterator[TuiTest]:
     term = await create_terminal(**options)
     try:
-        yield term
+        async with term:
+            yield term
     finally:
-        await term.close_quiet()
         untrack_terminal(term)
 
 

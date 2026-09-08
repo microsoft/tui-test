@@ -43,8 +43,12 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `profile` | `Profile` | built-in profile |
 | `artifacts` | `{ dir, onFailure? }` | off |
 | `recording` | `{ mode?, directory? }` | `{ mode: "always" }` |
+| `monitoring` | `MonitoringOptions` | disabled |
 
 `artifacts.onFailure` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+
+Use `monitoring: { enabled: true, waitAtEnd: "failure" }` with `withTerminal()`
+to [inspect failed tests](../../references/javascript.md#inspect-failed-tests) in the CLI.
 
 #### Properties
 
@@ -63,6 +67,8 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `run(program, args?, options?)` | Run a program. |
 | `close()` | Close the session. |
 | `closeQuiet()` | Close without throwing. |
+| `finish({ outcome, error? })` | Close after any configured inspection. |
+| `inspectFailure(error)` | Inspect, close, and rethrow the error. |
 | `[Symbol.asyncDispose]()` | Close from `await using`. |
 
 `open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.

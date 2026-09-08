@@ -72,9 +72,31 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `startRecording()`, `stopRecording()` | Record. |
 | `close()`, `closeQuiet()` | Close. |
 
-Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
+Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`,
+and `monitoring`.
 
 Recording modes: `disabled`, `on-failure`, and `always`.
+
+## Inspect failed tests
+
+```js
+import { withTerminal } from "@microsoft/tui-test/test";
+
+await withTerminal({
+  session: "login",
+  program: ["my-app"],
+  monitoring: { enabled: true, waitAtEnd: "failure" },
+}, async (terminal) => {
+  await terminal.getByText("Ready").expect();
+});
+```
+
+If the test fails, run the monitor command it prints in another terminal.
+The [CLI guide](cli.md#inspect-tests) covers session selection, detach keys, and environment options.
+
+`waitAtEnd` accepts `"never"` (default), `"failure"`, or `"always"`.
+`firstAttachTimeout` defaults to `30_000` milliseconds; `null` waits indefinitely.
+`holdWhileAttached` defaults to `true`; set it to `false` to resume without waiting for detach.
 
 ## Input helpers
 

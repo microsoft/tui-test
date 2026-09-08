@@ -85,6 +85,19 @@ pub enum RecordingFormatArg {
     Cast,
 }
 
+#[derive(Args, Clone, Default)]
+pub struct SessionFilter {
+    /// Only sessions whose test or application failed.
+    #[arg(long)]
+    pub failed: bool,
+    /// Only sessions waiting for inspection.
+    #[arg(long)]
+    pub waiting: bool,
+    /// Only sessions in this directory; use "current" for the invoking directory.
+    #[arg(long, value_name = "DIRECTORY")]
+    pub cwd: Option<String>,
+}
+
 impl From<RecordingFormatArg> for RecordingFormat {
     fn from(format: RecordingFormatArg) -> Self {
         match format {
@@ -230,7 +243,10 @@ pub enum Command {
         all: bool,
     },
     /// List active sessions.
-    Sessions,
+    Sessions {
+        #[command(flatten)]
+        filter: SessionFilter,
+    },
     /// Start, inspect, or stop a session's daemon.
     Daemon {
         #[command(subcommand)]
@@ -371,9 +387,17 @@ pub enum Command {
     /// Takes over an alternate screen and streams the session as the agent
     /// drives it. By default, press `q`, `Esc`, or `Ctrl-C` to detach.
     Monitor {
-        /// Forward keyboard and paste input to the session; press Ctrl+] to detach.
+        /// Forward keyboard, paste, and supported mouse input; press Ctrl+] to detach.
         #[arg(long)]
         interactive: bool,
+        /// Session UUID, required when multiple sessions have the same name.
+        #[arg(long, value_name = "UUID")]
+        id: Option<tui_test::monitoring::SessionId>,
+        /// Select the most recently completed or started matching session.
+        #[arg(long, conflicts_with = "id")]
+        latest: bool,
+        #[command(flatten)]
+        filter: SessionFilter,
     },
     /// Print a compact command cheatsheet for agents.
     Usage,
@@ -905,6 +929,20 @@ mod tests {
             })
         ));
         assert_eq!(cli.session, None, "no session means no target was named");
+    }
+
+    #[test]
+    fn monitor_attach_command_accepts_hyphen_prefixed_names() {
+        let command = tui_test::monitoring::host::monitor_command("-debug", true);
+        let cli = Cli::try_parse_from(command.split_whitespace()).unwrap();
+        assert_eq!(cli.session.as_deref(), Some("-debug"));
+        assert!(matches!(
+            cli.command,
+            Some(Command::Monitor {
+                interactive: true,
+                ..
+            })
+        ));
     }
 
     #[test]

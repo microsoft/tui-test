@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import atexit
+import asyncio
 import copy
+import json
 import os
 import re
+import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from types import TracebackType
 from typing import (
     Any,
     Awaitable,
@@ -17,7 +21,9 @@ from typing import (
     Mapping,
     Optional,
     Pattern,
+    Set,
     Tuple,
+    Type,
     TypeVar,
     Union,
 )
@@ -39,6 +45,8 @@ from .types import (
     BellEvent,
     Cell,
     LocatorDirection,
+    MonitoringOptions,
+    MonitoringOutcome,
     MouseButton,
     Profile,
     RecordingFormat,
@@ -52,6 +60,30 @@ _TERMINAL_MARKER = "Terminal content:\n"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
 
 _T = TypeVar("_T")
+_finishing = set()  # type: Set[asyncio.Task[None]]
+
+
+@dataclass
+class _Completion:
+    outcome: MonitoringOutcome
+    inspect: bool
+    primary_error: Optional[BaseException] = None
+    interrupted: bool = False
+    generation: Optional[int] = None
+    task: Optional[asyncio.Task[None]] = None
+
+
+def _report_secondary(message: str, error: BaseException) -> None:
+    try:
+        print("[tui-test] {}: {}".format(message, error), file=sys.stderr)
+    except Exception:
+        pass
+
+
+def _finish_done(task: "asyncio.Task[None]") -> None:
+    _finishing.discard(task)
+    if not task.cancelled():
+        task.exception()
 
 
 def _unsupported_scoped_regex_flag(source: str) -> Optional[str]:
@@ -145,6 +177,19 @@ _Occurrence = Union[Literal["any", "unique", "first", "last"], int]
 async def _await_native(awaitable: Awaitable[_T]) -> _T:
     try:
         return await awaitable
+    except native.NativeAssertionError as error:
+        raise ExpectationError(str(error)) from error
+    except native.NativeUsageError as error:
+        raise UsageError(str(error)) from error
+    except native.NativeNoSessionError as error:
+        raise NoSessionError(str(error)) from error
+    except native.NativeInternalError as error:
+        raise InternalError(str(error)) from error
+
+
+def _call_native(operation: Callable[[], _T]) -> _T:
+    try:
+        return operation()
     except native.NativeAssertionError as error:
         raise ExpectationError(str(error)) from error
     except native.NativeUsageError as error:
@@ -605,14 +650,24 @@ class TuiTest:
         profile: Optional[Profile] = None,
         artifacts: Optional[Dict[str, Any]] = None,
         recording: Optional[AutomaticRecording] = None,
+        monitoring: Optional[Union[MonitoringOptions, Mapping[str, Any]]] = None,
     ) -> None:
         self._session = cfg.resolve_session(session)
         recording_values = cfg.normalize_recording(recording) or {}
+        self._monitoring = cfg.resolve_monitoring(monitoring)
+        metadata = {
+            name: value for name, value in asdict(self._monitoring.metadata).items()
+            if value is not None
+        }
+        if self._monitoring.label is not None:
+            metadata["label"] = self._monitoring.label
         self._native = native.NativeSession(
             self._session,
             recording_values.get("mode"),
             recording_values.get("directory"),
+            json.dumps(metadata) if self._monitoring.enabled else None,
         )
+        self._completion: Optional[_Completion] = None
         self._backend = cfg.normalize_backend(backend)
         self._timeouts = cfg.normalize_timeouts(timeouts)
         self._profile = cfg.normalize_profile(profile)
@@ -689,9 +744,17 @@ class TuiTest:
         self,
         start: Callable[[], Awaitable[Dict[str, Any]]],
         retries: int,
+        restart: bool = False,
     ) -> Dict[str, Any]:
         attempts = retries + 1 if retries > 0 else 1
         for attempt in range(attempts):
+            completion = self._completion
+            if completion is not None:
+                if completion.task is not None and not completion.task.done():
+                    if restart:
+                        self._cancel_monitor_wait(completion)
+                    await asyncio.shield(completion.task)
+                self._completion = None
             try:
                 return await self._await(start())
             except Exception:
@@ -737,6 +800,7 @@ class TuiTest:
                 *timeout_values,
             ),
             retries,
+            restart,
         )
 
     async def run(
@@ -776,10 +840,158 @@ class TuiTest:
                 *timeout_values,
             ),
             retries,
+            restart,
         )
 
     async def close(self) -> None:
-        await self._await(self._native.close())
+        completion = self._completion
+        if not self._monitoring.enabled and (
+            completion is None or completion.task is None or completion.task.done()
+        ):
+            # Unmonitored clients still address the current session by shared name.
+            await self._await(self._native.close())
+        else:
+            await self._complete("passed", None, inspect=False)
+
+    def _cancel_monitor_wait(self, completion: _Completion) -> None:
+        completion.interrupted = True
+        try:
+            self._native.cancel_monitor_wait(completion.generation)
+        except Exception as error:
+            _report_secondary("could not cancel monitoring wait", error)
+
+    async def _complete(
+        self,
+        outcome: MonitoringOutcome,
+        error: Optional[BaseException],
+        *,
+        inspect: bool,
+    ) -> None:
+        completion = self._completion
+        started = completion is None
+        if completion is None:
+            completion = self._completion = _Completion(outcome, inspect)
+        if completion.primary_error is None:
+            completion.primary_error = error
+        interrupted = error is not None and not isinstance(error, Exception)
+        if interrupted:
+            self._cancel_monitor_wait(completion)
+        if completion.task is None:
+            completion.task = asyncio.create_task(self._finish_impl(completion))
+            _finishing.add(completion.task)
+            completion.task.add_done_callback(_finish_done)
+        if interrupted:
+            # Preserve interrupts immediately; cleanup remains tracked and the
+            # forceful interpreter-exit safety net cannot create a new hold.
+            return
+        try:
+            # Cancelling a concurrent cleanup waiter must not release another
+            # task's inspection hold.
+            await asyncio.shield(completion.task)
+        except asyncio.CancelledError as cancellation:
+            if started:
+                completion.primary_error = cancellation
+                self._cancel_monitor_wait(completion)
+            raise
+        except Exception as secondary:
+            if error is None:
+                raise
+            _report_secondary("monitoring or cleanup failed", secondary)
+
+    async def _inspect(self, completion: _Completion) -> None:
+        options = self._monitoring
+        if completion.interrupted or not options.enabled:
+            return
+        should_wait = completion.inspect and options.waits_after(completion.outcome)
+        if not should_wait and options.hold_while_attached:
+            return
+        timeout = options.first_attach_timeout if should_wait else 0
+        try:
+            _, generation, command = _call_native(
+                lambda: self._native.begin_monitor_wait(
+                    completion.outcome, timeout, options.hold_while_attached
+                )
+            )
+            completion.generation = generation
+            if should_wait:
+                self._inspection_banner(completion.outcome, command)
+            await self._await(self._native.wait_for_monitor(
+                generation, timeout, options.hold_while_attached
+            ))
+        except NoSessionError:
+            if should_wait:
+                raise
+
+    def _inspection_banner(self, outcome: MonitoringOutcome, command: str) -> None:
+        options = self._monitoring
+        timeout = options.first_attach_timeout
+        duration = "indefinitely" if timeout is None else "{} ms".format(timeout)
+        description = " | ".join(
+            value for value in (options.label, options.metadata.test_file) if value
+        )
+        print(
+            "[tui-test] {}{}; waiting {} for first monitor attachment{}\n"
+            "[tui-test] {}".format(
+                outcome,
+                " ({})".format(description) if description else "",
+                duration,
+                ", then until all monitors detach" if options.hold_while_attached else "",
+                command,
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+
+    async def _finish_impl(self, completion: _Completion) -> None:
+        secondary = None  # type: Optional[Exception]
+        try:
+            await self._inspect(completion)
+        except Exception as failure:
+            secondary = failure
+            self._cancel_monitor_wait(completion)
+        except BaseException:
+            self._cancel_monitor_wait(completion)
+            raise
+        finally:
+            try:
+                if completion.generation is not None:
+                    await self._await(self._native.close_monitor_target(
+                        completion.generation
+                    ))
+                else:
+                    await self._await(self._native.close())
+            except Exception as failure:
+                if secondary is None:
+                    secondary = failure
+                else:
+                    _report_secondary("cleanup also failed", failure)
+        if secondary is not None:
+            if completion.primary_error is not None:
+                _report_secondary("monitoring or cleanup failed", secondary)
+            else:
+                raise secondary
+
+    async def finish(
+        self,
+        outcome: MonitoringOutcome = "passed",
+        *,
+        error: Optional[BaseException] = None,
+    ) -> None:
+        if not isinstance(outcome, str) or outcome not in ("passed", "failed"):
+            raise ValueError("outcome must be passed or failed")
+        if error is not None and not isinstance(error, BaseException):
+            raise TypeError("error must be an exception or None")
+        if error is not None and outcome != "failed":
+            raise ValueError("error requires outcome='failed'")
+        traceback = error.__traceback__ if error is not None else None
+        await self._complete(outcome, error, inspect=True)
+        if error is not None:
+            raise error.with_traceback(traceback)
+
+    async def inspect_failure(self, error: BaseException) -> None:
+        if not isinstance(error, BaseException):
+            raise TypeError("error must be an exception")
+        await self.finish("failed", error=error)
 
     async def close_quiet(self) -> None:
         try:
@@ -1078,8 +1290,15 @@ class TuiTest:
     async def __aenter__(self) -> "TuiTest":
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
-        await self.close_quiet()
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        error: Optional[BaseException],
+        traceback: Optional[TracebackType],
+    ) -> None:
+        await self._complete(
+            "failed" if error is not None else "passed", error, inspect=True
+        )
 
 
 async def sessions() -> List[str]:
@@ -1087,6 +1306,9 @@ async def sessions() -> List[str]:
 
 
 async def close_all() -> None:
+    pending = list(_finishing)
+    if pending:
+        await asyncio.gather(*(asyncio.shield(task) for task in pending))
     await _await_native(native.close_all())
 
 

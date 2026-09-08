@@ -1,9 +1,20 @@
 import asyncio
 import inspect
+import sys
+import time
 import unittest
 from pathlib import Path
 
-from tui_test import Locator, TuiTest, _native, unique_session
+from tui_test import (
+    ExpectationError,
+    Locator,
+    NoSessionError,
+    Timeouts,
+    TuiTest,
+    TuiTestError,
+    _native,
+    unique_session,
+)
 
 
 class _IndexValue:
@@ -36,6 +47,10 @@ class NativeSurfaceTests(unittest.TestCase):
             "open",
             "run",
             "close",
+            "begin_monitor_wait",
+            "wait_for_monitor",
+            "close_monitor_target",
+            "cancel_monitor_wait",
             "state",
             "text",
             "find_locator",
@@ -136,6 +151,248 @@ class NativeSurfaceTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_monitoring_metadata_json_is_strict(self):
+        _native.NativeSession(
+            unique_session("native-metadata"),
+            monitoring_metadata='{"label":"test","test_file":"test_file.py"}',
+        )
+        for value in (
+            "invalid", "null", "[]", '{"label":1}',
+            '{"testFile":"test.py"}', '{"worker":null}',
+        ):
+            with self.subTest(value=value), self.assertRaises(_native.NativeUsageError):
+                _native.NativeSession(
+                    unique_session("invalid-metadata"), monitoring_metadata=value,
+                )
+
+    def test_monitor_wait_requires_an_opened_target(self):
+        session = _native.NativeSession(unique_session("monitor-no-session"))
+        with self.assertRaises(_native.NativeNoSessionError):
+            session.begin_monitor_wait("failed", 30_000, True)
+        with self.assertRaises(_native.NativeUsageError):
+            session.begin_monitor_wait("unknown", 30_000, True)
+
+    def test_monitor_timeout_rejects_bool_from_native_awaitable(self):
+        async def scenario():
+            session = _native.NativeSession(unique_session("monitor-timeout"))
+            for value in (True, -1, 1.5):
+                with self.subTest(value=value), self.assertRaises(_native.NativeUsageError):
+                    await session.wait_for_monitor(1, value, True)
+
+        asyncio.run(scenario())
+
+    def test_monitor_without_client_times_out_off_event_loop(self):
+        async def scenario():
+            terminal = TuiTest.ephemeral(
+                "monitor-finite", recording={"mode": "disabled"},
+                monitoring={
+                    "enabled": True,
+                    "wait_at_end": "always",
+                    "first_attach_timeout": 100,
+                },
+            )
+            try:
+                await terminal.run(
+                    sys.executable, "-c", "import time; time.sleep(30)",
+                    wait_ready=False,
+                )
+                ticks = []
+
+                async def tick():
+                    await asyncio.sleep(0.01)
+                    ticks.append(time.monotonic())
+
+                timer = asyncio.create_task(tick())
+                start = time.monotonic()
+                await asyncio.wait_for(terminal.finish(), 5)
+                end = time.monotonic()
+                await timer
+                self.assertLess(ticks[0], end)
+                self.assertGreaterEqual(end - start, 0.08)
+            finally:
+                await terminal.close_quiet()
+
+        asyncio.run(scenario())
+
+    def test_stale_client_cannot_mark_or_close_monitored_replacement(self):
+        async def scenario():
+            for operation in ("close", "finish", "cancel"):
+                name = unique_session("monitor-replacement")
+                original = TuiTest(
+                    name, recording={"mode": "disabled"},
+                    monitoring={
+                        "enabled": True, "wait_at_end": "failure",
+                        "first_attach_timeout": 0,
+                    },
+                )
+                replacement = TuiTest(
+                    name, recording={"mode": "disabled"},
+                    monitoring={
+                        "enabled": True, "wait_at_end": "never",
+                        "first_attach_timeout": 0,
+                    },
+                )
+                try:
+                    await original.run(
+                        sys.executable, "-c", "import time; time.sleep(30)",
+                        wait_ready=False,
+                    )
+                    await replacement.run(
+                        sys.executable, "-c", "import time; time.sleep(30)",
+                        wait_ready=False, restart=True, cols=73, rows=19,
+                    )
+                    with self.subTest(operation=operation):
+                        if operation == "close":
+                            await original.close()
+                        elif operation == "finish":
+                            with self.assertRaises(NoSessionError):
+                                await original.finish("failed")
+                        else:
+                            original._native.cancel_monitor_wait()
+                            _, generation, _ = replacement._native.begin_monitor_wait(
+                                "passed", 0, False
+                            )
+                            await replacement._native.wait_for_monitor(
+                                generation, 0, False
+                            )
+                        self.assertEqual(
+                            await replacement.get_size(), {"cols": 73, "rows": 19}
+                        )
+                finally:
+                    await original.close_quiet()
+                    await replacement.close_quiet()
+
+        asyncio.run(scenario())
+
+    def test_pre_wait_cancellation_does_not_start_inspection_or_destroy_child(self):
+        async def scenario():
+            terminal = TuiTest.ephemeral(
+                "monitor-pre-wait-cancel", recording={"mode": "disabled"},
+                monitoring={"enabled": True, "wait_at_end": "never"},
+            )
+            try:
+                await terminal.run(
+                    sys.executable, "-c", "import time; time.sleep(30)",
+                    wait_ready=False,
+                )
+                terminal._native.cancel_monitor_wait()
+                self.assertIsNone((await terminal.state()).exited)
+                with self.assertRaises(_native.NativeUsageError):
+                    terminal._native.begin_monitor_wait("failed", None, True)
+                await asyncio.wait_for(terminal.close(), 5)
+            finally:
+                await asyncio.wait_for(terminal.close_quiet(), 5)
+
+        asyncio.run(scenario())
+
+    def test_cancelling_native_wait_releases_the_generation_hold(self):
+        async def scenario():
+            terminal = TuiTest.ephemeral(
+                "monitor-cancel", recording={"mode": "disabled"},
+                monitoring={"enabled": True, "wait_at_end": "never"},
+            )
+            generation = None
+            waiting = None
+            try:
+                await terminal.run(
+                    sys.executable, "-c", "import time; time.sleep(30)",
+                    wait_ready=False,
+                )
+                _, generation, _ = terminal._native.begin_monitor_wait(
+                    "failed", None, True
+                )
+                waiting = asyncio.ensure_future(
+                    terminal._native.wait_for_monitor(generation, None, True)
+                )
+                await asyncio.sleep(0.05)
+                waiting.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await waiting
+                await asyncio.wait_for(terminal.close(), 5)
+            finally:
+                if waiting is not None and not waiting.done():
+                    waiting.cancel()
+                if generation is not None:
+                    terminal._native.cancel_monitor_wait(generation)
+                await asyncio.wait_for(terminal.close_quiet(), 5)
+
+        asyncio.run(scenario())
+
+    def test_monitored_readiness_failure_preserves_child_and_original_error(self):
+        async def scenario():
+            terminal = TuiTest.ephemeral(
+                "monitor-readiness", recording={"mode": "disabled"},
+                monitoring={
+                    "enabled": True, "wait_at_end": "failure",
+                    "first_attach_timeout": 0,
+                },
+            )
+            try:
+                try:
+                    await terminal.run(
+                        sys.executable, "-u", "-c",
+                        "import time; print('READINESS_FAILURE_CHILD_LIVE'); time.sleep(30)",
+                        wait_ready=True, timeouts=Timeouts(ready=50),
+                    )
+                except ExpectationError as original:
+                    original_traceback = original.__traceback__
+                    self.assertIsNone((await terminal.state()).exited)
+                    await terminal.get_by_text("READINESS_FAILURE_CHILD_LIVE").first().expect(
+                        timeout=10_000
+                    )
+                    try:
+                        await terminal.inspect_failure(original)
+                    except ExpectationError as raised:
+                        self.assertIs(raised, original)
+                        traceback = raised.__traceback__
+                        while traceback is not None and traceback is not original_traceback:
+                            traceback = traceback.tb_next
+                        self.assertIs(traceback, original_traceback)
+                    else:
+                        self.fail("readiness error was swallowed after inspection")
+                else:
+                    self.fail("non-shell child unexpectedly reported shell readiness")
+            finally:
+                await terminal.close_quiet()
+
+        asyncio.run(scenario())
+
+    def test_unspawnable_client_cleanup_cannot_close_later_replacement(self):
+        async def scenario():
+            name = unique_session("monitor-unspawnable")
+            failed = TuiTest(
+                name, recording={"mode": "disabled"},
+                monitoring={
+                    "enabled": True, "wait_at_end": "failure",
+                    "first_attach_timeout": 0,
+                },
+            )
+            replacement = TuiTest(
+                name, recording={"mode": "disabled"},
+                monitoring={"enabled": False},
+            )
+            try:
+                try:
+                    await failed.run(sys.executable + ".does-not-exist", wait_ready=False)
+                except TuiTestError as original:
+                    await replacement.run(
+                        sys.executable, "-c", "import time; time.sleep(30)",
+                        wait_ready=False, cols=69, rows=18,
+                    )
+                    with self.assertRaises(TuiTestError) as raised:
+                        await failed.inspect_failure(original)
+                    self.assertIs(raised.exception, original)
+                    self.assertEqual(
+                        await replacement.get_size(), {"cols": 69, "rows": 18}
+                    )
+                else:
+                    self.fail("nonexistent program unexpectedly started")
+            finally:
+                await failed.close_quiet()
+                await replacement.close_quiet()
+
+        asyncio.run(scenario())
+
 
 class NativeStubTests(unittest.TestCase):
     def test_native_futures_are_annotated_as_awaitables(self):
@@ -154,6 +411,11 @@ class NativeStubTests(unittest.TestCase):
             stub,
         )
         self.assertIn("typing.Awaitable[", stub)
+        self.assertIn("monitoring_metadata: typing.Optional[str] = None", stub)
+        self.assertIn("def begin_monitor_wait(", stub)
+        self.assertIn("def wait_for_monitor(", stub)
+        self.assertIn("def cancel_monitor_wait(", stub)
+        self.assertIn("def close_monitor_target(", stub)
 
 
 if __name__ == "__main__":

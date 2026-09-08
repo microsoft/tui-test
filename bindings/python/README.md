@@ -27,7 +27,7 @@ async with TuiTest.ephemeral() as terminal:
 ### `TuiTest`
 
 ```python
-TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=None, recording=None)
+TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=None, recording=None, monitoring=None)
 ```
 
 | Option | Type | Default |
@@ -38,8 +38,12 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=No
 | `profile` | `Profile \| dict` | built-in profile |
 | `artifacts` | `dict` | off |
 | `recording` | `AutomaticRecording \| dict` | `{"mode": "always"}` |
+| `monitoring` | `MonitoringOptions \| dict` | disabled |
 
 `artifacts["on_failure"]` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+
+Use `monitoring=MonitoringOptions(enabled=True, wait_at_end="failure")`
+to [inspect failed tests](../../references/python.md#inspect-failed-tests) in the CLI.
 
 #### Properties
 
@@ -58,7 +62,9 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=No
 | `await run(program, *args, **options)` | Run a program. |
 | `await close()` | Close the session. |
 | `await close_quiet()` | Close without raising. |
-| `async with TuiTest()` | Close on exit. |
+| `await finish(outcome="passed", error=None)` | Close after any configured inspection. |
+| `await inspect_failure(error)` | Inspect, close, and re-raise the error. |
+| `async with TuiTest()` | Close on exit, after any configured inspection. |
 
 `open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
 
@@ -283,6 +289,8 @@ terminal = TuiTest(
 | `Profile` | Scrollback and colors. |
 | `Timeouts` | Text, idle, command, exit, and ready timeouts. |
 | `AutomaticRecording` | Automatic recording mode and directory. |
+| `MonitoringOptions`, `MonitoringMetadata` | Monitoring options and test labels. |
+| `MonitoringOutcome`, `MonitoringWaitAtEnd` | Test outcomes and inspection policies. |
 | `Colors` | Terminal palette. |
 | `MouseButton` | `"left"`, `"middle"`, or `"right"`. |
 | `TextPosition`, `TextSpan` | Match coordinates. |
@@ -300,4 +308,4 @@ terminal = TuiTest(
 
 All errors extend `TuiTestError`. Expectation errors can include `terminal.text` and `terminal.screenshot`.
 
-Sessions are local to the current process and cannot be controlled by the CLI. Cancelling a task does not stop an active terminal operation.
+Cancelling a task does not stop an active terminal operation.

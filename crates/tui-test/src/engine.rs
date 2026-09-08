@@ -23,6 +23,8 @@ use crate::terminal::locator::{self, Pattern};
 pub struct Engine {
     name: String,
     operations: Mutex<()>,
+    monitor_gate: Mutex<()>,
+    viewports: Arc<Mutex<crate::monitoring::viewport::Viewports>>,
     session: Mutex<Option<TerminalSession>>,
     live: Arc<Mutex<Option<LiveTarget>>>,
     interrupt: Mutex<Option<InterruptTarget>>,
@@ -48,6 +50,7 @@ struct LiveTarget {
     state: Arc<Mutex<TermState>>,
     pty: Arc<Mutex<crate::terminal::pty::Pty>>,
     shell: Option<&'static str>,
+    resize: crate::session::ResizeTarget,
 }
 
 pub struct LiveFrame {
@@ -60,6 +63,8 @@ pub struct LiveFrame {
     pub exited: Option<i32>,
     pub shell: Option<&'static str>,
 }
+
+pub(crate) type MonitorPty = Arc<Mutex<crate::terminal::pty::Pty>>;
 
 /// One-line operation description for the verbose log. Open and Run redact env
 /// values (they may contain secrets) and report only the variable count.
@@ -101,6 +106,8 @@ impl Engine {
         Self {
             name,
             operations: Mutex::new(()),
+            monitor_gate: Mutex::new(()),
+            viewports: Arc::new(Mutex::new(crate::monitoring::viewport::Viewports::default())),
             session: Mutex::new(None),
             live: Arc::new(Mutex::new(None)),
             interrupt: Mutex::new(None),
@@ -119,12 +126,32 @@ impl Engine {
             .operations
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.execute_locked(operation, false)
+    }
+
+    pub(crate) fn execute_for_monitoring(
+        &self,
+        operation: Operation,
+    ) -> (Result<OperationResult, TuiTestError>, Option<MonitorPty>) {
+        let _operation = self
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let result = self.execute_locked(operation, true);
+        (result, self.monitor_pty())
+    }
+
+    fn execute_locked(
+        &self,
+        operation: Operation,
+        retain_ready_failure: bool,
+    ) -> Result<OperationResult, TuiTestError> {
         if self.logger.enabled() {
             self.logger
                 .event(&format!("operation {}", operation_summary(&operation)));
         }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute_inner(operation)
+            self.execute_inner(operation, retain_ready_failure)
         }))
         .unwrap_or_else(|payload| {
             Err(TuiTestError::internal(format!(
@@ -144,11 +171,27 @@ impl Engine {
         result
     }
 
-    fn execute_inner(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
+    fn execute_inner(
+        &self,
+        operation: Operation,
+        retain_ready_failure: bool,
+    ) -> Result<OperationResult, TuiTestError> {
         match operation {
-            Operation::Open(options) => self.open(options).map(OperationResult::Open),
-            Operation::Run(options) => self.run(options).map(OperationResult::Open),
+            Operation::Open(options) => self
+                .open(options, retain_ready_failure)
+                .map(OperationResult::Open),
+            Operation::Run(options) => self
+                .run(options, retain_ready_failure)
+                .map(OperationResult::Open),
             Operation::Close => {
+                let _gate = self
+                    .monitor_gate
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let previous = self.monitor_pty();
+                if let Some(pty) = &previous {
+                    crate::monitoring::prepare_close(&self.name, pty);
+                }
                 *self
                     .live
                     .lock()
@@ -162,13 +205,20 @@ impl Engine {
                     drop(session);
                 }
                 self.cleanup_recording();
+                if let Some(pty) = previous {
+                    crate::monitoring::closed(&self.name, &pty);
+                }
                 Ok(OperationResult::Unit)
             }
             other => self.with_session(|session| dispatch(session, other)),
         }
     }
 
-    fn open(&self, options: OpenOptions) -> Result<OpenResult, TuiTestError> {
+    fn open(
+        &self,
+        options: OpenOptions,
+        retain_ready_failure: bool,
+    ) -> Result<OpenResult, TuiTestError> {
         self.spawn(
             options.shell,
             None,
@@ -182,10 +232,15 @@ impl Engine {
             options.restart,
             options.timeouts,
             options.recording,
+            retain_ready_failure,
         )
     }
 
-    fn run(&self, options: RunOptions) -> Result<OpenResult, TuiTestError> {
+    fn run(
+        &self,
+        options: RunOptions,
+        retain_ready_failure: bool,
+    ) -> Result<OpenResult, TuiTestError> {
         let mut program = Vec::with_capacity(options.args.len() + 1);
         program.push(options.program);
         program.extend(options.args);
@@ -202,6 +257,7 @@ impl Engine {
             options.restart,
             options.timeouts,
             options.recording,
+            retain_ready_failure,
         )
     }
 
@@ -220,6 +276,7 @@ impl Engine {
         restart: bool,
         timeouts: crate::api::Timeouts,
         recording: AutomaticRecording,
+        retain_ready_failure: bool,
     ) -> Result<OpenResult, TuiTestError> {
         recording.validate()?;
         let mut current = self.lock_session();
@@ -236,6 +293,14 @@ impl Engine {
         let recording_required = recording.directory.is_some();
         let recording_path = self.resolve_recording_path(&recording)?;
 
+        let _gate = self
+            .monitor_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_pty = self.monitor_pty();
+        if let Some(pty) = &previous_pty {
+            crate::monitoring::prepare_replace(&self.name, pty);
+        }
         *self
             .live
             .lock()
@@ -249,6 +314,9 @@ impl Engine {
             drop(previous);
         }
         drop(current);
+        if let Some(pty) = previous_pty {
+            crate::monitoring::closed(&self.name, &pty);
+        }
         self.discard_recording();
         *self
             .recording
@@ -293,7 +361,7 @@ impl Engine {
                 .tracker
                 .is_ready()
         };
-        if wait_ready == Some(true) && !ready {
+        let readiness_error = if wait_ready == Some(true) && !ready {
             let message = assertion_message(
                 &session,
                 &format!(
@@ -302,13 +370,20 @@ impl Engine {
                      integration"
                 ),
             );
-            session.kill();
-            return Err(TuiTestError::assertion(message));
-        }
+            let error = TuiTestError::assertion(message);
+            if !retain_ready_failure {
+                session.kill();
+                return Err(error);
+            }
+            Some(error)
+        } else {
+            None
+        };
         let live = LiveTarget {
             state: session.state.clone(),
             pty: session.pty.clone(),
             shell: session.shell.map(|value| value.as_str()),
+            resize: session.resize_target(),
         };
         *self
             .interrupt
@@ -322,6 +397,9 @@ impl Engine {
             .live
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(live);
+        if let Some(error) = readiness_error {
+            return Err(error);
+        }
         Ok(OpenResult {
             shell_pid,
             session: self.name.clone(),
@@ -364,8 +442,8 @@ impl Engine {
                 RuntimeStatus {
                     session: self.name.clone(),
                     shell_pid: session.pid(),
-                    cols: Some(session.cols),
-                    rows: Some(session.rows),
+                    cols: Some(state.emu.size().0),
+                    rows: Some(state.emu.size().1),
                     shell: session.shell.map(|value| value.as_str().to_string()),
                     exited: state.exited,
                     timeouts: Some(effective_timeouts(session)),
@@ -384,26 +462,162 @@ impl Engine {
     }
 
     pub fn frame(&self) -> Option<LiveFrame> {
+        let pty = self.monitor_pty()?;
+        self.frame_for(&pty)
+    }
+
+    pub(crate) fn monitor_viewport(
+        &self,
+        target: Option<MonitorPty>,
+        size: (u16, u16),
+        interactive: bool,
+    ) -> crate::monitoring::viewport::Viewport {
+        crate::monitoring::viewport::Viewport::new(
+            self.viewports.clone(),
+            target,
+            size,
+            interactive,
+        )
+    }
+
+    pub(crate) fn apply_monitor_viewport(
+        &self,
+        viewport: &crate::monitoring::viewport::Viewport,
+    ) -> Result<(), TuiTestError> {
+        if let Some(pty) = self.monitor_pty() {
+            viewport.apply(&pty, |(cols, rows)| {
+                if self
+                    .frame_for(&pty)
+                    .is_some_and(|frame| frame.size != (cols, rows))
+                {
+                    self.resize_monitor_for(&pty, cols, rows)?;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn monitor_pty(&self) -> Option<Arc<Mutex<crate::terminal::pty::Pty>>> {
         let live = self
             .live
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        live.as_ref().map(|target| {
-            let state = target
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            LiveFrame {
-                grid: highlighted_rows(&state, false),
-                cursor: state.emu.cursor(),
-                size: state.emu.size(),
-                keyboard_mode: state.emu.keyboard_mode(),
-                bracketed_paste: state.emu.bracketed_paste_mode(),
-                mouse_mode: state.mouse_mode.mode(),
-                exited: state.exited,
-                shell: target.shell,
+        live.as_ref().map(|target| Arc::clone(&target.pty))
+    }
+
+    pub(crate) fn is_monitor_pty(&self, pty: &Arc<Mutex<crate::terminal::pty::Pty>>) -> bool {
+        self.live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|target| Arc::ptr_eq(&target.pty, pty))
+    }
+
+    pub(crate) fn register_monitor(
+        &self,
+        pty: &Arc<Mutex<crate::terminal::pty::Pty>>,
+        register: impl FnOnce() -> Result<bool, TuiTestError>,
+    ) -> Result<bool, TuiTestError> {
+        let _gate = self
+            .monitor_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.is_monitor_pty(pty) {
+            register()
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub(crate) fn close_monitor_target(
+        &self,
+        pty: &Arc<Mutex<crate::terminal::pty::Pty>>,
+    ) -> Result<(), TuiTestError> {
+        let _operation = self
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.is_monitor_pty(pty) {
+            self.execute_inner(Operation::Close, false).map(|_| ())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn interrupt_monitor_target_for_close(
+        &self,
+        pty: &Arc<Mutex<crate::terminal::pty::Pty>>,
+    ) {
+        let _gate = self
+            .monitor_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.is_monitor_pty(pty) {
+            crate::monitoring::prepare_close(&self.name, pty);
+            self.interrupt();
+        }
+    }
+
+    pub(crate) fn resize_monitor_for(
+        &self,
+        pty: &Arc<Mutex<crate::terminal::pty::Pty>>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), TuiTestError> {
+        if cols == 0 || rows == 0 {
+            return Err(TuiTestError::usage(
+                "terminal dimensions must be greater than zero",
+            ));
+        }
+        let resize = self
+            .live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .filter(|target| Arc::ptr_eq(&target.pty, pty))
+            .map(|target| target.resize.clone());
+        if let Some(resize) = resize {
+            if let Err(error) = resize.resize(cols, rows) {
+                if self
+                    .frame_for(pty)
+                    .is_some_and(|frame| frame.exited.is_none())
+                {
+                    return Err(TuiTestError::internal(format!(
+                        "monitor resize failed: {error}"
+                    )));
+                }
             }
-        })
+        }
+        Ok(())
+    }
+
+    pub(crate) fn frame_for(
+        &self,
+        pty: &Arc<Mutex<crate::terminal::pty::Pty>>,
+    ) -> Option<LiveFrame> {
+        let live = self
+            .live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        live.as_ref()
+            .filter(|target| Arc::ptr_eq(&target.pty, pty))
+            .map(|target| {
+                let state = target
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                LiveFrame {
+                    grid: highlighted_rows(&state, false),
+                    cursor: state.emu.cursor(),
+                    size: state.emu.size(),
+                    keyboard_mode: state.emu.keyboard_mode(),
+                    bracketed_paste: state.emu.bracketed_paste_mode(),
+                    mouse_mode: state.mouse_mode.mode(),
+                    exited: state.exited,
+                    shell: target.shell,
+                }
+            })
     }
 
     pub fn monitor_mouse_size(&self) -> Option<(u16, u16)> {
@@ -423,12 +637,24 @@ impl Engine {
     /// Write viewer keystrokes straight to the pty: untracked and unlogged, so
     /// a human watching cannot disturb what the agent is waiting on.
     pub fn write_monitor_input_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        let Some(pty) = self.monitor_pty() else {
+            return Ok(());
+        };
+        self.write_monitor_input_raw_for(&pty, data)
+    }
+
+    pub(crate) fn write_monitor_input_raw_for(
+        &self,
+        expected_pty: &Arc<Mutex<crate::terminal::pty::Pty>>,
+        data: &[u8],
+    ) -> Result<(), TuiTestError> {
         let Some((state, pty)) = ({
             let live = self
                 .live
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             live.as_ref()
+                .filter(|target| Arc::ptr_eq(&target.pty, expected_pty))
                 .map(|target| (Arc::clone(&target.state), Arc::clone(&target.pty)))
         }) else {
             return Ok(());
@@ -671,7 +897,7 @@ fn grid_with_title(
     session: &TerminalSession,
     full: bool,
     include_title: bool,
-) -> (Vec<Vec<EmuCell>>, Option<String>) {
+) -> (Vec<Vec<EmuCell>>, Option<String>, u16) {
     let state = session
         .state
         .lock()
@@ -686,7 +912,7 @@ fn grid_with_title(
     } else {
         state.emu.viewable_rows()
     };
-    (rows, title)
+    (rows, title, state.emu.size().0)
 }
 
 fn grid(session: &TerminalSession, full: bool) -> Vec<Vec<EmuCell>> {
@@ -1051,9 +1277,9 @@ fn effective_timeouts(session: &TerminalSession) -> EffectiveTimeouts {
 }
 
 fn packed_screen(session: &TerminalSession, full: bool) -> PackedScreen {
-    let rows = grid(session, full);
+    let (rows, _, cols) = grid_with_title(session, full, false);
     PackedScreen {
-        cols: session.cols,
+        cols,
         rows: rows.len().min(u16::MAX as usize) as u16,
         utf8: rows_to_strings(&rows).join("\n").into_bytes(),
     }
@@ -2072,8 +2298,8 @@ fn do_snapshot(
     // The title is off by default: a shell prompt routinely sets it to a
     // username, hostname, and absolute path, which would pin every baseline to
     // one machine and make it change on `cd` while the screen stayed the same.
-    let (rows, title) = grid_with_title(session, false, include_title);
-    let content = snapshot::serialize(&rows, session.cols, include_colors, title.as_deref());
+    let (rows, title, cols) = grid_with_title(session, false, include_title);
+    let content = snapshot::serialize(&rows, cols, include_colors, title.as_deref());
     let base = cwd
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
@@ -2183,8 +2409,8 @@ fn timeout_message(pattern: &str, timeout_ms: u64, not: bool) -> String {
 }
 
 fn assertion_message(session: &TerminalSession, message: &str) -> String {
-    let (rows, title) = grid_with_title(session, false, true);
-    let screen = snapshot::serialize(&rows, session.cols, false, title.as_deref());
+    let (rows, title, cols) = grid_with_title(session, false, true);
+    let screen = snapshot::serialize(&rows, cols, false, title.as_deref());
     format!("{message}\n\nTerminal content:\n{screen}")
 }
 
