@@ -537,6 +537,7 @@ pub enum Operation {
     GetExitCode,
     GetCwd,
     GetCursor,
+    GetModes,
     GetSize,
     GetTitle,
     GetClipboard,
@@ -618,6 +619,20 @@ pub enum Operation {
         code: i32,
         timeout_ms: Option<u64>,
     },
+    /// Wait for a terminal mode to reach `enabled`.
+    ExpectMode {
+        mode: String,
+        enabled: bool,
+        timeout_ms: Option<u64>,
+    },
+    /// Wait for the cursor to match every property the caller named.
+    ExpectCursor {
+        visible: Option<bool>,
+        shape: Option<String>,
+        x: Option<u16>,
+        y: Option<u16>,
+        timeout_ms: Option<u64>,
+    },
     ExpectOutput {
         text: String,
         regex: bool,
@@ -666,7 +681,9 @@ impl Operation {
 pub enum OperationResult {
     Unit,
     Open(OpenResult),
-    State(State),
+    /// Boxed because it is much larger than every other variant, and a
+    /// `Result` of this enum is returned from every operation.
+    State(Box<State>),
     Text(String),
     PackedScreen(PackedScreen),
     Cells(Vec<Cell>),
@@ -678,6 +695,7 @@ pub enum OperationResult {
     Title(Option<String>),
     Clipboard(String),
     Cursor(Cursor),
+    Modes(BTreeMap<String, bool>),
     Size(Size),
     BellCount(u64),
     BellEvents(Vec<BellEvent>),
@@ -765,10 +783,16 @@ pub struct OpenResult {
     pub recording: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Cursor {
     pub x: u16,
     pub y: u16,
+    /// Whether the cursor is drawn (`DECTCEM`).
+    pub visible: bool,
+    /// `block`, `underline`, or `bar` (`DECSCUSR`).
+    pub shape: String,
+    /// The cursor colour as `#rrggbb`, after any `OSC 12` a program sent.
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

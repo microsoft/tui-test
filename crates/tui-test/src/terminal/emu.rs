@@ -28,6 +28,27 @@ pub enum CursorShape {
     Bar,
 }
 
+impl CursorShape {
+    /// The name this shape goes by on the wire.
+    pub const fn name(self) -> &'static str {
+        match self {
+            CursorShape::Block => "block",
+            CursorShape::Underline => "underline",
+            CursorShape::Bar => "bar",
+        }
+    }
+
+    /// Parse a wire name, or `None` when it is not a shape.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "block" => Some(CursorShape::Block),
+            "underline" => Some(CursorShape::Underline),
+            "bar" => Some(CursorShape::Bar),
+            _ => None,
+        }
+    }
+}
+
 bitflags::bitflags! {
     /// Kitty keyboard protocol flags currently requested by the child.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -70,11 +91,17 @@ pub enum TerminalMode {
     BracketedPaste,
     /// `CSI ?1049 h`: the alternate screen is showing.
     AlternateScreen,
+    /// `DECTCEM` (`CSI ?25 h`): the cursor is drawn.
+    ///
+    /// Not in xterm.js's `modes`, but every backend already had to answer it
+    /// for the renderer, so it is reported from the same place
+    /// [`Emulator::cursor_visible`] always was.
+    CursorVisible,
 }
 
 impl TerminalMode {
     /// Every mode, so a caller can report the whole set without listing it.
-    pub const ALL: [TerminalMode; 8] = [
+    pub const ALL: [TerminalMode; 9] = [
         TerminalMode::ApplicationCursorKeys,
         TerminalMode::ApplicationKeypad,
         TerminalMode::Origin,
@@ -83,6 +110,7 @@ impl TerminalMode {
         TerminalMode::FocusEvents,
         TerminalMode::BracketedPaste,
         TerminalMode::AlternateScreen,
+        TerminalMode::CursorVisible,
     ];
 
     /// The name this mode goes by on the wire.
@@ -96,6 +124,7 @@ impl TerminalMode {
             TerminalMode::FocusEvents => "focus_events",
             TerminalMode::BracketedPaste => "bracketed_paste",
             TerminalMode::AlternateScreen => "alternate_screen",
+            TerminalMode::CursorVisible => "cursor_visible",
         }
     }
 
@@ -110,6 +139,7 @@ impl TerminalMode {
             TerminalMode::FocusEvents => b"\x1b[?1004h",
             TerminalMode::BracketedPaste => b"\x1b[?2004h",
             TerminalMode::AlternateScreen => b"\x1b[?1049h",
+            TerminalMode::CursorVisible => b"\x1b[?25h",
         }
     }
 
@@ -124,15 +154,17 @@ impl TerminalMode {
             TerminalMode::FocusEvents => b"\x1b[?1004l",
             TerminalMode::BracketedPaste => b"\x1b[?2004l",
             TerminalMode::AlternateScreen => b"\x1b[?1049l",
+            TerminalMode::CursorVisible => b"\x1b[?25l",
         }
     }
 
     /// Whether the mode is on when a terminal has been told nothing.
     ///
-    /// `DECAWM` is the one that starts on: a terminal that did not wrap would
-    /// lose every character past the right margin.
+    /// `DECAWM` and `DECTCEM` are the two that start on: a terminal that did
+    /// not wrap would lose every character past the right margin, and one
+    /// that hid its cursor would need telling before it showed one.
     pub const fn default_enabled(self) -> bool {
-        matches!(self, TerminalMode::Wraparound)
+        matches!(self, TerminalMode::Wraparound | TerminalMode::CursorVisible)
     }
 }
 
@@ -423,7 +455,13 @@ pub trait Emulator: Send {
     /// `DECTCEM` (`CSI ?25 h` and `l`). Full-screen programs routinely hide it
     /// while repainting, so a screenshot that ignored this would show a cursor
     /// parked wherever the last write happened to leave it.
-    fn cursor_visible(&self) -> bool;
+    /// Whether the cursor is being drawn.
+    ///
+    /// A named shorthand for [`TerminalMode::CursorVisible`], kept because
+    /// the renderer asks this on every frame and reads better for it.
+    fn cursor_visible(&self) -> bool {
+        self.mode(TerminalMode::CursorVisible)
+    }
 
     /// The shape the cursor is currently drawn as.
     fn cursor_shape(&self) -> CursorShape;

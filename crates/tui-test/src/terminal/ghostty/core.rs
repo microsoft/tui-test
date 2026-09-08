@@ -178,7 +178,6 @@ fn cell_from_grid(grid: &GridRef<'_>, links: &mut LinkCache) -> Result<EmuCell> 
 pub(super) struct Frame {
     pub(super) rows: Vec<Vec<EmuCell>>,
     pub(super) cursor: (u16, u16),
-    pub(super) cursor_visible: bool,
     pub(super) cursor_shape: CursorShape,
 }
 
@@ -284,6 +283,7 @@ impl GhosttyCore {
             TerminalMode::FocusEvents => Mode::FOCUS_EVENT,
             TerminalMode::BracketedPaste => Mode::BRACKETED_PASTE,
             TerminalMode::AlternateScreen => Mode::ALT_SCREEN_SAVE,
+            TerminalMode::CursorVisible => Mode::CURSOR_VISIBLE,
         };
         self.terminal
             .mode(ghostty_mode)
@@ -481,9 +481,6 @@ impl GhosttyCore {
                 .context("reading cursor row")?
                 .min(rows.saturating_sub(1)),
         );
-        let cursor_visible = snapshot
-            .cursor_visible()
-            .context("reading cursor visibility")?;
         let cursor_shape = match snapshot
             .cursor_visual_style()
             .context("reading cursor shape")?
@@ -565,7 +562,6 @@ impl GhosttyCore {
         Ok(Frame {
             rows: output,
             cursor,
-            cursor_visible,
             cursor_shape,
         })
     }

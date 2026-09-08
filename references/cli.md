@@ -134,6 +134,7 @@ Recording modes: `disabled`, `on-failure`, and `always`.
 | Key | Sequence | Meaning |
 | --- | --- | --- |
 | `application_cursor_keys` | `CSI ?1 h` | cursor keys send `SS3` |
+| `cursor_visible` | `CSI ?25 h` | the cursor is drawn (on by default) |
 | `application_keypad` | `ESC =` | keypad sends application sequences |
 | `origin` | `CSI ?6 h` | cursor confined to the scroll region |
 | `wraparound` | `CSI ?7 h` | text wraps at the right margin (on by default) |
@@ -141,6 +142,22 @@ Recording modes: `disabled`, `on-failure`, and `always`.
 | `focus_events` | `CSI ?1004 h` | focus changes are reported to the child |
 | `bracketed_paste` | `CSI ?2004 h` | pastes are bracketed |
 | `alternate_screen` | `CSI ?1049 h` | the alternate screen is showing |
+
+Read them with `get modes`, and assert one with `expect mode <NAME> [--off]`.
+The cursor has its own command, since position and shape have nowhere else to
+live:
+
+```sh
+tui-test get cursor --json          # x, y, visible, shape, color
+tui-test expect cursor --hidden
+tui-test expect cursor --visible --shape bar
+tui-test expect cursor --x 4 --y 0
+tui-test expect mode alternate_screen
+tui-test expect mode bracketed_paste --off
+```
+
+`expect cursor` checks only the properties you name, so asserting a shape
+leaves visibility and position alone.
 
 Every key is always present, so `false` means off rather than unknown. The set
 is deliberately closed: a mode is listed only when all four backends report it

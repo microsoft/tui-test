@@ -380,6 +380,11 @@ impl Emulator for RioEmu {
     }
 
     fn mode(&self, mode: TerminalMode) -> bool {
+        // rio reports a hidden cursor as a cursor *shape* rather than through
+        // `SHOW_CURSOR`, so this one does not come from the mode bitflags.
+        if mode == TerminalMode::CursorVisible {
+            return !matches!(self.term.cursor().content, RioCursorShape::Hidden);
+        }
         let flag = match mode {
             TerminalMode::ApplicationCursorKeys => Mode::APP_CURSOR,
             TerminalMode::ApplicationKeypad => Mode::APP_KEYPAD,
@@ -389,6 +394,7 @@ impl Emulator for RioEmu {
             TerminalMode::FocusEvents => Mode::FOCUS_IN_OUT,
             TerminalMode::BracketedPaste => Mode::BRACKETED_PASTE,
             TerminalMode::AlternateScreen => Mode::ALT_SCREEN,
+            TerminalMode::CursorVisible => unreachable!("handled above"),
         };
         self.term.mode().contains(flag)
     }
@@ -413,10 +419,6 @@ impl Emulator for RioEmu {
 
     fn title(&self) -> Option<String> {
         (!self.term.title.is_empty()).then(|| self.term.title.clone())
-    }
-
-    fn cursor_visible(&self) -> bool {
-        !matches!(self.term.cursor().content, RioCursorShape::Hidden)
     }
 
     fn cursor_shape(&self) -> CursorShape {

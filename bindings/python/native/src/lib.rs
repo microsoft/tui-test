@@ -1662,7 +1662,7 @@ fn execute_open(name: &str, operation: Operation) -> Result<OpenResult, TuiTestE
 
 fn execute_state(name: &str, operation: Operation) -> Result<State, TuiTestError> {
     match global_registry().execute(name, operation)? {
-        OperationResult::State(value) => Ok(value),
+        OperationResult::State(value) => Ok(*value),
         _ => Err(unexpected_result("terminal state")),
     }
 }
@@ -1823,6 +1823,9 @@ fn cursor_dict(py: Python<'_>, cursor: Cursor) -> PyResult<Bound<'_, PyDict>> {
     let value = PyDict::new(py);
     value.set_item("x", cursor.x)?;
     value.set_item("y", cursor.y)?;
+    value.set_item("visible", cursor.visible)?;
+    value.set_item("shape", cursor.shape)?;
+    value.set_item("color", cursor.color)?;
     Ok(value)
 }
 
@@ -1861,6 +1864,11 @@ fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     result.set_item("exited", value.exited)?;
     result.set_item("ready", value.ready)?;
     result.set_item("bell_count", value.bell_count)?;
+    let modes = PyDict::new(py);
+    for (name, enabled) in value.modes {
+        modes.set_item(name, enabled)?;
+    }
+    result.set_item("modes", modes)?;
     let timeouts = PyDict::new(py);
     timeouts.set_item("text", value.timeouts.text)?;
     timeouts.set_item("idle", value.timeouts.idle)?;

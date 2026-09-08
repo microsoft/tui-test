@@ -311,12 +311,6 @@ impl Emulator for GhosttyEmu {
         self.call_result("reading terminal mode", move |core| core.mode(mode))
     }
 
-    fn cursor_visible(&self) -> bool {
-        self.call_result("reading cursor visibility", |core| {
-            Ok(core.frame()?.cursor_visible)
-        })
-    }
-
     fn cursor_shape(&self) -> CursorShape {
         self.call_result("reading cursor shape", |core| {
             Ok(core.frame()?.cursor_shape)

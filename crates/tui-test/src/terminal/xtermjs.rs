@@ -445,6 +445,10 @@ impl Emulator for XtermJsEmu {
     }
 
     fn mode(&self, mode: TerminalMode) -> bool {
+        // Not in xterm.js's `modes`; it lives on the core service instead.
+        if mode == TerminalMode::CursorVisible {
+            return self.call_or("cursorVisible", true);
+        }
         self.invoke("mode", |emu, ctx| {
             let name = rquickjs::String::from_str(ctx.clone(), mode.name())?;
             emu.get::<_, Function>("mode")?.call((name,))
@@ -480,10 +484,6 @@ impl Emulator for XtermJsEmu {
     fn title(&self) -> Option<String> {
         self.call::<Option<String>>("title")
             .filter(|title| !title.is_empty())
-    }
-
-    fn cursor_visible(&self) -> bool {
-        self.call_or("cursorVisible", true)
     }
 
     fn cursor_key_application(&self) -> bool {

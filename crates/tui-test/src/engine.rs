@@ -17,7 +17,9 @@ use crate::input::{keys, mouse};
 use crate::logger::Logger;
 use crate::session::{Session as TerminalSession, TermState, TextHighlight};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
-use crate::terminal::emu::{ClipboardType, Emulator, KeyboardMode, MouseMode};
+use crate::terminal::emu::{
+    ClipboardType, CursorShape, Emulator, KeyboardMode, MouseMode, TerminalMode,
+};
 use crate::terminal::locator::{self, Pattern};
 
 pub struct Engine {
@@ -741,7 +743,7 @@ fn dispatch(
     operation: Operation,
 ) -> Result<OperationResult, TuiTestError> {
     match operation {
-        Operation::State => Ok(OperationResult::State(state(session))),
+        Operation::State => Ok(OperationResult::State(Box::new(state(session)))),
         Operation::Text { full } => Ok(OperationResult::Text(text_of(&grid(session, full)))),
         Operation::PackedScreen { full } => {
             Ok(OperationResult::PackedScreen(packed_screen(session, full)))
@@ -785,13 +787,48 @@ fn dispatch(
         Operation::GetTitle => Ok(OperationResult::Title(title_of(session))),
         Operation::GetClipboard => Ok(OperationResult::Clipboard(get_clipboard(session)?)),
         Operation::GetCursor => {
-            let (x, y) = session
+            let state = session
                 .state
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .emu
-                .cursor();
-            Ok(OperationResult::Cursor(Cursor { x, y }))
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(OperationResult::Cursor(cursor_model(state.emu.as_ref())))
+        }
+        Operation::GetModes => {
+            let state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(OperationResult::Modes(modes_of(state.emu.as_ref())))
+        }
+        Operation::ExpectMode {
+            mode,
+            enabled,
+            timeout_ms,
+        } => {
+            expect_mode(
+                session,
+                &mode,
+                enabled,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
+        Operation::ExpectCursor {
+            visible,
+            shape,
+            x,
+            y,
+            timeout_ms,
+        } => {
+            expect_cursor(
+                session,
+                visible,
+                shape.as_deref(),
+                x,
+                y,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
         }
         Operation::GetSize => {
             let (cols, rows) = session
@@ -1019,14 +1056,13 @@ fn state(session: &TerminalSession) -> crate::api::State {
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (x, y) = state.emu.cursor();
     let (cols, rows) = state.emu.size();
     let bells = session.bells.snapshot();
     crate::api::State {
         session_shell: session.shell.map(|value| value.as_str().to_string()),
         cols,
         rows,
-        cursor: Cursor { x, y },
+        cursor: cursor_model(state.emu.as_ref()),
         title: state.emu.title(),
         cwd: state.tracker.cwd().map(str::to_string),
         last_command: state.tracker.last_command().map(str::to_string),
@@ -1103,6 +1139,125 @@ fn cell_model(x: u16, y: u16, cell: &EmuCell) -> Cell {
             .and_then(|link| link.id.as_deref())
             .unwrap_or_default()
             .to_string(),
+    }
+}
+
+/// Resolve a mode name, so an unknown one is a usage error naming the set
+/// rather than a silent `false`.
+fn parse_mode(name: &str) -> Result<TerminalMode, TuiTestError> {
+    TerminalMode::ALL
+        .into_iter()
+        .find(|mode| mode.name() == name)
+        .ok_or_else(|| {
+            let known = TerminalMode::ALL
+                .iter()
+                .map(|mode| mode.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            TuiTestError::usage(format!(
+                "unknown terminal mode '{name}'; expected one of: {known}"
+            ))
+        })
+}
+
+fn modes_of(emu: &dyn Emulator) -> std::collections::BTreeMap<String, bool> {
+    TerminalMode::ALL
+        .into_iter()
+        .map(|mode| (mode.name().to_string(), emu.mode(mode)))
+        .collect()
+}
+
+fn expect_mode(
+    session: &TerminalSession,
+    name: &str,
+    enabled: bool,
+    timeout_ms: u64,
+) -> Result<(), TuiTestError> {
+    let mode = parse_mode(name)?;
+    let reached = |session: &TerminalSession| {
+        session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .emu
+            .mode(mode)
+            == enabled
+    };
+    let mut matched = false;
+    poll_until(
+        || {
+            matched = reached(session);
+            matched || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if matched {
+        return Ok(());
+    }
+    Err(TuiTestError::assertion(format!(
+        "{} did not turn {} within {timeout_ms}ms",
+        mode.name(),
+        if enabled { "on" } else { "off" }
+    )))
+}
+
+fn expect_cursor(
+    session: &TerminalSession,
+    visible: Option<bool>,
+    shape: Option<&str>,
+    x: Option<u16>,
+    y: Option<u16>,
+    timeout_ms: u64,
+) -> Result<(), TuiTestError> {
+    if let Some(shape) = shape {
+        if CursorShape::parse(shape).is_none() {
+            return Err(TuiTestError::usage(format!(
+                "unknown cursor shape '{shape}'; expected block, underline, or bar"
+            )));
+        }
+    }
+    let mut last = None;
+    let mut matched = false;
+    poll_until(
+        || {
+            let cursor = {
+                let state = session
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                cursor_model(state.emu.as_ref())
+            };
+            matched = visible.is_none_or(|want| want == cursor.visible)
+                && shape.is_none_or(|want| want == cursor.shape)
+                && x.is_none_or(|want| want == cursor.x)
+                && y.is_none_or(|want| want == cursor.y);
+            last = Some(cursor);
+            matched || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if matched {
+        return Ok(());
+    }
+    let cursor = last.expect("the cursor is read at least once");
+    Err(TuiTestError::assertion(format!(
+        "cursor did not match within {timeout_ms}ms; it is at {},{}, {}, shape {}",
+        cursor.x,
+        cursor.y,
+        if cursor.visible { "visible" } else { "hidden" },
+        cursor.shape
+    )))
+}
+
+/// The cursor as a caller sees it: where it is, and how it is drawn.
+fn cursor_model(emu: &dyn Emulator) -> Cursor {
+    let (x, y) = emu.cursor();
+    Cursor {
+        x,
+        y,
+        visible: emu.cursor_visible(),
+        shape: emu.cursor_shape().name().to_string(),
+        color: emu.color(crate::profile::ColorSlot::Cursor).to_hex(),
     }
 }
 

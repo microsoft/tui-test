@@ -465,6 +465,9 @@ impl Emulator for AlacrittyEmu {
             TerminalMode::FocusEvents => TermMode::FOCUS_IN_OUT,
             TerminalMode::BracketedPaste => TermMode::BRACKETED_PASTE,
             TerminalMode::AlternateScreen => TermMode::ALT_SCREEN,
+            // `Hidden` is a shape alacritty uses for a cursor it will not
+            // draw, so this flag means the same thing as `DECTCEM`.
+            TerminalMode::CursorVisible => TermMode::SHOW_CURSOR,
         };
         self.term.mode().contains(flag)
     }

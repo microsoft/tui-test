@@ -5,6 +5,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use napi::bindgen_prelude::{spawn_blocking, Buffer, Either};
 use napi::{Error, Result, Status};
+use std::collections::HashMap;
+
 use napi_derive::napi;
 use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::shell::Shell as CoreShell;
@@ -164,6 +166,9 @@ impl From<CoreOpenResult> for OpenResult {
 pub struct Cursor {
     pub x: u16,
     pub y: u16,
+    pub visible: bool,
+    pub shape: String,
+    pub color: String,
 }
 
 impl From<CoreCursor> for Cursor {
@@ -171,6 +176,9 @@ impl From<CoreCursor> for Cursor {
         Self {
             x: value.x,
             y: value.y,
+            visible: value.visible,
+            shape: value.shape,
+            color: value.color,
         }
     }
 }
@@ -244,6 +252,7 @@ pub struct State {
     pub ready: bool,
     #[napi(js_name = "bell_count")]
     pub bell_count: f64,
+    pub modes: HashMap<String, bool>,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }
@@ -262,6 +271,7 @@ impl From<CoreState> for State {
             exited: value.exited,
             ready: value.ready,
             bell_count: value.bell_count as f64,
+            modes: value.modes.into_iter().collect(),
             timeouts: value.timeouts.into(),
             text: value.text,
         }
@@ -947,7 +957,7 @@ impl NativeSession {
             "state",
             Operation::State,
             |result| match result {
-                OperationResult::State(value) => Ok(value.into()),
+                OperationResult::State(value) => Ok((*value).into()),
                 _ => Err(unexpected("state")),
             },
         )

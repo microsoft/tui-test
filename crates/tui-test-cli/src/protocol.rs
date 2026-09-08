@@ -148,6 +148,18 @@ pub enum Request {
         text: String,
         regex: bool,
     },
+    ExpectMode {
+        mode: String,
+        enabled: bool,
+        timeout_ms: Option<u64>,
+    },
+    ExpectCursor {
+        visible: Option<bool>,
+        shape: Option<String>,
+        x: Option<u16>,
+        y: Option<u16>,
+        timeout_ms: Option<u64>,
+    },
     ExpectBellCount {
         count: u64,
         #[serde(default)]
@@ -261,6 +273,7 @@ impl Request {
                 GetField::ExitCode => Operation::GetExitCode,
                 GetField::Cwd => Operation::GetCwd,
                 GetField::Cursor => Operation::GetCursor,
+                GetField::Modes => Operation::GetModes,
                 GetField::Size => Operation::GetSize,
                 GetField::Title => Operation::GetTitle,
                 GetField::Clipboard => Operation::GetClipboard,
@@ -355,6 +368,28 @@ impl Request {
                 Ok(Operation::ExpectExitCode { code, timeout_ms })
             }
             Request::ExpectOutput { text, regex } => Ok(Operation::ExpectOutput { text, regex }),
+            Request::ExpectMode {
+                mode,
+                enabled,
+                timeout_ms,
+            } => Ok(Operation::ExpectMode {
+                mode,
+                enabled,
+                timeout_ms,
+            }),
+            Request::ExpectCursor {
+                visible,
+                shape,
+                x,
+                y,
+                timeout_ms,
+            } => Ok(Operation::ExpectCursor {
+                visible,
+                shape,
+                x,
+                y,
+                timeout_ms,
+            }),
             Request::ExpectBellCount { count, timeout_ms } => {
                 Ok(Operation::ExpectBellCount { count, timeout_ms })
             }
@@ -410,6 +445,7 @@ pub enum GetField {
     ExitCode,
     Cwd,
     Cursor,
+    Modes,
     Size,
     Title,
     Clipboard,
@@ -500,6 +536,7 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
         OperationResult::Title(value) => Ok(json!({ "value": value })),
         OperationResult::Clipboard(value) => Ok(json!({ "value": value })),
         OperationResult::Cursor(value) => Ok(json!({ "value": value })),
+        OperationResult::Modes(value) => Ok(json!({ "modes": value })),
         OperationResult::Size(value) => Ok(json!({ "value": value })),
         OperationResult::BellCount(value) => Ok(json!({ "value": value })),
         OperationResult::BellEvents(value) => Ok(json!({ "value": value })),
