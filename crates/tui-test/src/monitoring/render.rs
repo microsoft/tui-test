@@ -26,7 +26,7 @@ pub fn render_frame(
     session: &str,
     interactive: bool,
     modes: &mut ModeMirror,
-) -> Vec<u8> {
+) -> String {
     let available = content_size(viewer);
     let inner_w = match frame {
         Some(f) => f.size.0.min(available.0),
@@ -36,6 +36,16 @@ pub fn render_frame(
         Some(f) => f.size.1.min(available.1),
         None => available.1,
     } as usize;
+    let too_small = viewer.0 < 8
+        || viewer.1 < 4
+        || frame.is_some_and(|frame| {
+            frame.size.0 > viewer.0.saturating_sub(2) || frame.size.1 > viewer.1.saturating_sub(2)
+        });
+    let border = if too_small {
+        ansi::WARNING_BORDER
+    } else {
+        ansi::BORDER
+    };
 
     let mut out = String::with_capacity(inner_w * inner_h * 4);
     if interactive {
@@ -64,23 +74,30 @@ pub fn render_frame(
         modes.applied = Some((keyboard, paste, mouse));
     }
     out.push_str(ansi::HOME);
-    header(&mut out, frame, session, inner_w);
+    header(&mut out, frame, session, inner_w, too_small, border);
     if let Some(f) = frame {
-        content(&mut out, f, inner_w, inner_h);
+        content(&mut out, f, inner_w, inner_h, border);
     } else {
-        placeholder(&mut out, inner_w, inner_h);
+        placeholder(&mut out, inner_w, inner_h, border);
     }
     let detach_hint = if interactive {
         "┤ Ctrl+] detach ├"
     } else {
         "┤ q quit ├"
     };
-    border_line(&mut out, '└', '┘', detach_hint, inner_w, false);
+    border_line(&mut out, '└', '┘', detach_hint, inner_w, false, border);
     out.push_str(ansi::ERASE_DISPLAY);
-    out.into_bytes()
+    out
 }
 
-fn header(out: &mut String, frame: Option<&Frame>, session: &str, inner_w: usize) {
+fn header(
+    out: &mut String,
+    frame: Option<&Frame>,
+    session: &str,
+    inner_w: usize,
+    too_small: bool,
+    border: &str,
+) {
     let title = match frame {
         Some(f) => {
             let shell = f.shell.map(|s| format!("{s} · ")).unwrap_or_default();
@@ -88,18 +105,19 @@ fn header(out: &mut String, frame: Option<&Frame>, session: &str, inner_w: usize
                 Some(code) => format!("exited {code}"),
                 None => "live".to_string(),
             };
-            format!("┤ {shell}{}×{} · {status} ├", f.size.0, f.size.1)
+            let warning = if too_small { "! too small · " } else { "" };
+            format!("┤ {warning}{shell}{}×{} · {status} ├", f.size.0, f.size.1)
         }
         None => format!("┤ {session} · no session ├"),
     };
-    border_line(out, '┌', '┐', &title, inner_w, true);
+    border_line(out, '┌', '┐', &title, inner_w, true, border);
 }
 
-fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize) {
+fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize, border: &str) {
     let (cx, cy) = f.cursor;
     let show_cursor = f.exited.is_none();
     for y in 0..inner_h {
-        out.push_str(ansi::BORDER);
+        out.push_str(border);
         out.push('│');
         out.push_str(ansi::RESET);
         let row = f.grid.get(y);
@@ -117,7 +135,7 @@ fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize) {
             out.push_str(&cell.ch);
         }
         out.push_str(ansi::RESET);
-        out.push_str(ansi::BORDER);
+        out.push_str(border);
         out.push('│');
         out.push_str(ansi::RESET);
         out.push_str(ansi::ERASE_LINE);
@@ -125,10 +143,10 @@ fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize) {
     }
 }
 
-fn placeholder(out: &mut String, inner_w: usize, inner_h: usize) {
+fn placeholder(out: &mut String, inner_w: usize, inner_h: usize, border: &str) {
     let msg = "no active session, run `tui-test open`";
     for y in 0..inner_h {
-        out.push_str(ansi::BORDER);
+        out.push_str(border);
         out.push('│');
         out.push_str(ansi::RESET);
         if y == inner_h / 2 {
@@ -141,7 +159,7 @@ fn placeholder(out: &mut String, inner_w: usize, inner_h: usize) {
         } else {
             out.push_str(&" ".repeat(inner_w));
         }
-        out.push_str(ansi::BORDER);
+        out.push_str(border);
         out.push('│');
         out.push_str(ansi::RESET);
         out.push_str(ansi::ERASE_LINE);
@@ -149,8 +167,16 @@ fn placeholder(out: &mut String, inner_w: usize, inner_h: usize) {
     }
 }
 
-fn border_line(out: &mut String, left: char, right: char, title: &str, inner_w: usize, nl: bool) {
-    out.push_str(ansi::BORDER);
+fn border_line(
+    out: &mut String,
+    left: char,
+    right: char,
+    title: &str,
+    inner_w: usize,
+    nl: bool,
+    border: &str,
+) {
+    out.push_str(border);
     out.push(left);
     let tlen = title.chars().count();
     if tlen + 1 >= inner_w {
@@ -246,6 +272,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn clipped_frames_warn_until_the_child_fits_the_viewer() {
+        use crate::terminal::{alacritty::AlacrittyEmu, cell::NamedColor, emu::Emulator};
+        let viewer = (40, 12);
+        let mut frame = Frame {
+            grid: Vec::new(),
+            cursor: (0, 0),
+            size: (80, 24),
+            keyboard_mode: KeyboardMode::empty(),
+            bracketed_paste: false,
+            mouse_mode: MouseMode::None,
+            exited: None,
+            shell: None,
+        };
+        for interactive in [false, true] {
+            frame.size = (80, 24);
+            let mut modes = ModeMirror::default();
+            let clipped = render_frame(Some(&frame), viewer, "clipped", interactive, &mut modes);
+            assert!(clipped.contains("! too small"));
+            let mut emu =
+                AlacrittyEmu::new(viewer.0, viewer.1, &crate::profile::Profile::default());
+            emu.process(clipped.as_bytes());
+            assert_eq!(
+                emu.viewable_rows()[0][0].fg,
+                Some(Color::Named(NamedColor::Yellow))
+            );
+            frame.size = content_size(viewer);
+            let fitted = render_frame(Some(&frame), viewer, "clipped", interactive, &mut modes);
+            assert!(!fitted.contains("! too small"));
+            assert!(!fitted.contains(ansi::WARNING_BORDER));
+        }
+        assert!(render_frame(
+            Some(&frame),
+            (1, 1),
+            "tiny",
+            false,
+            &mut ModeMirror::default()
+        )
+        .contains(ansi::WARNING_BORDER));
+    }
+
+    #[test]
     fn monitor_content_bounds_keep_the_childs_last_row_and_column_visible() {
         use crate::terminal::{alacritty::AlacrittyEmu, emu::Emulator};
         for viewer in [(80, 24), (40, 12)] {
@@ -264,13 +331,16 @@ mod tests {
             };
             let mut emu =
                 AlacrittyEmu::new(viewer.0, viewer.1, &crate::profile::Profile::default());
-            emu.process(&render_frame(
-                Some(&frame),
-                viewer,
-                "edge",
-                true,
-                &mut ModeMirror::default(),
-            ));
+            emu.process(
+                render_frame(
+                    Some(&frame),
+                    viewer,
+                    "edge",
+                    true,
+                    &mut ModeMirror::default(),
+                )
+                .as_bytes(),
+            );
             assert_eq!(
                 emu.viewable_rows()[viewer.1 as usize - 2][viewer.0 as usize - 2]
                     .ch

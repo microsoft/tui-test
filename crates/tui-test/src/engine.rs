@@ -24,6 +24,7 @@ pub struct Engine {
     name: String,
     operations: Mutex<()>,
     monitor_gate: Mutex<()>,
+    viewports: Arc<Mutex<crate::monitoring::viewport::Viewports>>,
     session: Mutex<Option<TerminalSession>>,
     live: Arc<Mutex<Option<LiveTarget>>>,
     interrupt: Mutex<Option<InterruptTarget>>,
@@ -106,6 +107,7 @@ impl Engine {
             name,
             operations: Mutex::new(()),
             monitor_gate: Mutex::new(()),
+            viewports: Arc::new(Mutex::new(crate::monitoring::viewport::Viewports::default())),
             session: Mutex::new(None),
             live: Arc::new(Mutex::new(None)),
             interrupt: Mutex::new(None),
@@ -462,6 +464,38 @@ impl Engine {
     pub fn frame(&self) -> Option<LiveFrame> {
         let pty = self.monitor_pty()?;
         self.frame_for(&pty)
+    }
+
+    pub(crate) fn monitor_viewport(
+        &self,
+        target: Option<MonitorPty>,
+        size: (u16, u16),
+        interactive: bool,
+    ) -> crate::monitoring::viewport::Viewport {
+        crate::monitoring::viewport::Viewport::new(
+            self.viewports.clone(),
+            target,
+            size,
+            interactive,
+        )
+    }
+
+    pub(crate) fn apply_monitor_viewport(
+        &self,
+        viewport: &crate::monitoring::viewport::Viewport,
+    ) -> Result<(), TuiTestError> {
+        if let Some(pty) = self.monitor_pty() {
+            viewport.apply(&pty, |(cols, rows)| {
+                if self
+                    .frame_for(&pty)
+                    .is_some_and(|frame| frame.size != (cols, rows))
+                {
+                    self.resize_monitor_for(&pty, cols, rows)?;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
     }
 
     pub(crate) fn monitor_pty(&self) -> Option<Arc<Mutex<crate::terminal::pty::Pty>>> {

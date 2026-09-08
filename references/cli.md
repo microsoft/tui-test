@@ -122,10 +122,18 @@ input. SGR mouse clicks, drags, and motion are enabled when requested by the
 target, with coordinates translated past the monitor's border. Viewer modes are
 restored on detach; read-only monitoring does not change input modes.
 
-For process-local sessions, one interactive attachment owns input and child
-resizing; multiple read-only attachments are allowed. A persistent attachment
-lease survives viewer resizes, so a resize cannot release a test's inspection
-hold. The session's owning Rust, Python, or JavaScript process must remain alive.
+Each viewer uses one bidirectional IPC connection for frames, input, resize,
+and attachment lifetime. Resizing does not reconnect or release a test's
+inspection hold. Process-local sessions allow one interactive attachment and
+multiple read-only attachments; the owning Rust, Python, or JavaScript process
+must remain alive.
+
+Both viewing modes resize the child to the monitor's content area, excluding
+the border. Interactive viewers have priority; otherwise the last viewer to
+attach or resize controls the size. When it detaches, the previous viewer's
+size is restored. Daemon viewers also reapply their size when the child is
+created or restarted. If content is clipped, the border turns yellow and the
+header shows `! too small`.
 
 Monitoring is disabled by default. Enable it through the language API or
 `TUI_TEST_MONITORING=1`; `TUI_TEST_WAIT_AT_END=failure` enables failure inspection.

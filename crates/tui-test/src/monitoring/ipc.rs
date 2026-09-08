@@ -1,17 +1,21 @@
-//! cli ↔ daemon transport over an `interprocess` local socket.
-//! One JSON request line per connection, one JSON response line back.
+//! Shared local IPC and bounded, cancellation-aware JSON streaming.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{GenericFilePath, GenericNamespaced, ListenerOptions};
+use serde::{de::DeserializeOwned, Serialize};
 
+use super::protocol::Response;
 pub use interprocess::local_socket::Stream;
 
-use super::protocol::{Request, Response};
+const MAX_MESSAGE: usize = 16 * 1024 * 1024;
+const POLL: Duration = Duration::from_millis(5);
 
-fn to_name(raw: &str) -> std::io::Result<interprocess::local_socket::Name<'_>> {
+fn to_name(raw: &str) -> io::Result<interprocess::local_socket::Name<'_>> {
     if cfg!(windows) {
         raw.to_ns_name::<GenericNamespaced>()
     } else {
@@ -19,96 +23,240 @@ fn to_name(raw: &str) -> std::io::Result<interprocess::local_socket::Name<'_>> {
     }
 }
 
-/// Connect to a running daemon and exchange a single request/response.
-pub fn send(socket: &str, req: &Request) -> anyhow::Result<Response> {
-    exchange(connect(socket)?, req)
+pub fn connect(socket: &str) -> io::Result<Stream> {
+    Stream::connect(to_name(socket)?)
 }
 
-pub fn exchange(conn: Stream, req: &Request) -> anyhow::Result<Response> {
-    exchange_on(conn, req)
+pub fn is_running(socket: &str) -> bool {
+    connect(socket).is_ok()
+}
+
+pub fn listen(socket: &str) -> anyhow::Result<interprocess::local_socket::Listener> {
+    if !cfg!(windows) {
+        let _ = std::fs::remove_file(socket);
+    }
+    Ok(ListenerOptions::new()
+        .name(to_name(socket)?)
+        .create_sync()?)
+}
+
+pub fn read_request<T: DeserializeOwned>(reader: &mut impl BufRead) -> anyhow::Result<T> {
+    let mut line = Vec::new();
+    reader.read_until(b'\n', &mut line)?;
+    if line.last() != Some(&b'\n') {
+        anyhow::bail!("connection closed before request");
+    }
+    Ok(serde_json::from_slice(&line)?)
+}
+
+pub fn write_response(conn: &mut Stream, response: &Response) -> anyhow::Result<()> {
+    serde_json::to_writer(&mut *conn, response)?;
+    conn.write_all(b"\n")?;
+    conn.flush()?;
+    Ok(())
+}
+
+pub fn send(socket: &str, request: &impl Serialize) -> anyhow::Result<Response> {
+    exchange(connect(socket)?, request)
+}
+
+pub fn exchange(conn: Stream, request: &impl Serialize) -> anyhow::Result<Response> {
+    let mut conn = Connection::new(conn)?;
+    let stop = AtomicBool::new(false);
+    conn.writer().send(request, &stop)?;
+    Ok(conn.receive(None, &stop)?)
 }
 
 pub fn exchange_timeout(
     conn: Stream,
-    req: &Request,
+    request: &impl Serialize,
     timeout: Duration,
 ) -> anyhow::Result<Response> {
-    #[cfg(not(windows))]
-    conn.set_nonblocking(true)?;
-    let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "discovery timeout is too large",
-        )
-    })?;
-    exchange_on(
-        DeadlineStream {
-            stream: conn,
-            deadline,
-        },
-        req,
-    )
+    let mut conn = Connection::new(conn)?;
+    let stop = AtomicBool::new(false);
+    conn.writer().send(request, &stop)?;
+    Ok(conn.receive(Some(timeout), &stop)?)
 }
 
-fn exchange_on(conn: impl Read + Write, req: &Request) -> anyhow::Result<Response> {
-    let mut reader = BufReader::new(conn);
-    let mut line = serde_json::to_string(req)?;
-    line.push('\n');
-    reader.get_mut().write_all(line.as_bytes())?;
-    reader.get_mut().flush()?;
-
-    let mut response = String::new();
-    reader.read_line(&mut response)?;
-    let resp: Response = serde_json::from_str(response.trim())?;
-    Ok(resp)
+pub enum Incoming<T> {
+    Message(T),
+    Pending,
+    Closed,
 }
 
-struct DeadlineStream {
-    stream: Stream,
-    deadline: Instant,
+/// One socket, with independent read/write handles sharing its lifetime.
+pub struct Connection {
+    stream: Arc<Stream>,
+    pending: Vec<u8>,
+    searched: usize,
 }
 
-impl DeadlineStream {
-    fn retry<T>(
-        &mut self,
-        mut operation: impl FnMut(&mut Stream) -> std::io::Result<T>,
-    ) -> std::io::Result<T> {
+impl Connection {
+    pub fn new(stream: Stream) -> io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        Ok(Self {
+            stream: Arc::new(stream),
+            pending: Vec::new(),
+            searched: 0,
+        })
+    }
+
+    pub fn from_reader(reader: BufReader<Stream>) -> io::Result<Self> {
+        let pending = reader.buffer().to_vec();
+        let mut connection = Self::new(reader.into_inner())?;
+        connection.pending = pending;
+        Ok(connection)
+    }
+
+    pub fn writer(&self) -> Writer {
+        Writer(self.stream.clone())
+    }
+
+    pub fn try_receive<T: DeserializeOwned>(&mut self) -> io::Result<Incoming<T>> {
         loop {
-            let Some(remaining) = self.deadline.checked_duration_since(Instant::now()) else {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "process monitor discovery timed out",
-                ));
-            };
-            match operation(&mut self.stream) {
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(remaining.min(Duration::from_millis(5)));
+            if let Some(end) = self.pending[self.searched..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+            {
+                let end = self.searched + end;
+                if end + 1 > MAX_MESSAGE {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "IPC message is too large",
+                    ));
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                result => return result,
+                let message =
+                    serde_json::from_slice(&self.pending[..end]).map_err(io::Error::other)?;
+                self.pending.drain(..=end);
+                self.searched = 0;
+                return Ok(Incoming::Message(message));
+            }
+            self.searched = self.pending.len();
+            if self.pending.len() >= MAX_MESSAGE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "IPC message is too large",
+                ));
+            }
+            let mut buffer = [0u8; 16 * 1024];
+            match read_available(&self.stream, &mut buffer) {
+                Ok(0) if self.pending.is_empty() => return Ok(Incoming::Closed),
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "incomplete IPC message",
+                    ))
+                }
+                Ok(read) => self.pending.extend_from_slice(&buffer[..read]),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    return Ok(Incoming::Pending)
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    pub fn receive<T: DeserializeOwned>(
+        &mut self,
+        timeout: Option<Duration>,
+        stop: &AtomicBool,
+    ) -> io::Result<T> {
+        let deadline = timeout
+            .map(|timeout| {
+                Instant::now().checked_add(timeout).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "IPC timeout is too large")
+                })
+            })
+            .transpose()?;
+        loop {
+            if stop.load(Ordering::Acquire) {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            match self.try_receive()? {
+                Incoming::Message(value) => return Ok(value),
+                Incoming::Closed => return Err(io::ErrorKind::UnexpectedEof.into()),
+                Incoming::Pending => {}
+            }
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "IPC response timed out",
+                ));
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
+    /// Keep named-pipe replies alive until the peer consumes them and closes.
+    pub fn drain(&mut self, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            match self.try_receive::<serde_json::Value>() {
+                Ok(Incoming::Closed) | Err(_) => break,
+                _ => std::thread::sleep(POLL),
             }
         }
     }
 }
 
-impl Read for DeadlineStream {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.retry(|stream| read_available(stream, buffer))
+pub struct Writer(Arc<Stream>);
+
+impl Writer {
+    pub fn send(&self, value: &impl Serialize, stop: &AtomicBool) -> io::Result<()> {
+        let mut bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
+        bytes.push(b'\n');
+        if bytes.len() > MAX_MESSAGE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "IPC message is too large",
+            ));
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut remaining = bytes.as_slice();
+        let mut chunk = 4096;
+        let mut stream = &*self.0;
+        while !remaining.is_empty() {
+            if stop.load(Ordering::Acquire) {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            match stream.write(&remaining[..remaining.len().min(chunk)]) {
+                // PIPE_NOWAIT refuses oversized writes even with an empty buffer.
+                Ok(0) if chunk > 256 => chunk /= 2,
+                Ok(0) => std::thread::sleep(POLL),
+                Ok(written) => remaining = &remaining[written..],
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    std::thread::sleep(POLL)
+                }
+                Err(error) => return Err(error),
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "IPC write timed out",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
-/// Read without waiting for bytes. Unix callers must enable nonblocking mode.
-/// Peeking distinguishes an idle Windows pipe from an actual peer disconnect.
-pub fn read_available(stream: &mut Stream, buffer: &mut [u8]) -> std::io::Result<usize> {
+/// Unix callers enable nonblocking mode; peeking avoids Windows' idle-as-EOF behavior.
+pub fn read_available(stream: &Stream, buffer: &mut [u8]) -> io::Result<usize> {
     if buffer.is_empty() {
         return Ok(0);
     }
+    let mut source = stream;
     #[cfg(windows)]
     {
         use std::os::windows::io::{AsHandle, AsRawHandle};
         use windows_sys::Win32::System::Pipes::PeekNamedPipe;
-
-        let Stream::NamedPipe(pipe) = &*stream;
+        let Stream::NamedPipe(pipe) = stream;
         let mut available = 0;
         let success = unsafe {
             PeekNamedPipe(
@@ -121,10 +269,10 @@ pub fn read_available(stream: &mut Stream, buffer: &mut [u8]) -> std::io::Result
             )
         };
         if success == 0 {
-            let error = std::io::Error::last_os_error();
+            let error = io::Error::last_os_error();
             return if matches!(
                 error.kind(),
-                std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::NotConnected
+                io::ErrorKind::BrokenPipe | io::ErrorKind::NotConnected
             ) {
                 Ok(0)
             } else {
@@ -132,194 +280,187 @@ pub fn read_available(stream: &mut Stream, buffer: &mut [u8]) -> std::io::Result
             };
         }
         if available == 0 {
-            return Err(std::io::ErrorKind::WouldBlock.into());
+            return Err(io::ErrorKind::WouldBlock.into());
         }
         let length = buffer.len().min(available as usize);
-        stream.read(&mut buffer[..length])
+        source.read(&mut buffer[..length])
     }
     #[cfg(not(windows))]
-    stream.read(buffer)
+    source.read(buffer)
 }
 
-impl Write for DeadlineStream {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        if buffer.is_empty() {
-            return Ok(0);
-        }
-        self.retry(|stream| match stream.write(buffer) {
-            Ok(0) => Err(std::io::ErrorKind::WouldBlock.into()),
-            result => result,
-        })
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.retry(Write::flush)
-    }
-}
-
-/// Is a daemon currently accepting connections on this socket?
-pub fn is_running(socket: &str) -> bool {
-    match to_name(socket) {
-        Ok(name) => Stream::connect(name).is_ok(),
-        Err(_) => false,
-    }
-}
-
-/// Open a raw connection to a running daemon (for streaming, e.g. the monitor).
-pub fn connect(socket: &str) -> std::io::Result<Stream> {
-    let name = to_name(socket)?;
-    Stream::connect(name)
-}
-
-/// Bind the daemon listener, removing any stale Unix socket file first.
-pub fn listen(socket: &str) -> anyhow::Result<interprocess::local_socket::Listener> {
-    if !cfg!(windows) {
-        let _ = std::fs::remove_file(socket);
-    }
-    let name = to_name(socket)?;
-    let listener = ListenerOptions::new().name(name).create_sync()?;
-    Ok(listener)
-}
-
-/// Keep the reader for streaming requests so any read-ahead remains available.
-pub fn read_request(reader: &mut impl BufRead) -> anyhow::Result<Request> {
-    let mut line = Vec::new();
-    reader.read_until(b'\n', &mut line)?;
-    if line.last() != Some(&b'\n') {
-        anyhow::bail!("connection closed before request");
-    }
-    let req: Request = serde_json::from_slice(&line)?;
-    Ok(req)
-}
-
-/// Write one response line to an accepted connection.
-pub fn write_response(conn: &mut Stream, resp: &Response) -> anyhow::Result<()> {
-    let mut line = serde_json::to_string(resp)?;
-    line.push('\n');
-    conn.write_all(line.as_bytes())?;
-    conn.flush()?;
-    Ok(())
-}
-
-/// Wait briefly for the client to read the final response.
-/// Windows named pipes discard buffered data when the server exits; EOF proves
-/// the reply arrived. An unresponsive client can only cost `timeout`.
 pub fn drain_peer(conn: Stream, timeout: Duration) {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut conn = conn;
-        let mut buf = [0u8; 64];
-        while let Ok(n) = conn.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-        }
-        let _ = tx.send(());
-    });
-    let _ = rx.recv_timeout(timeout);
+    if let Ok(mut connection) = Connection::new(conn) {
+        connection.drain(timeout);
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::protocol::MonitorInput;
+    use super::super::protocol::{Attach, MonitorInput, Request};
     use super::*;
-    use std::io::Cursor;
+
+    fn pair() -> (Stream, Stream) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let socket = std::env::temp_dir().join(format!(
+            "tt-ipc-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let socket = socket.to_str().unwrap();
+        let listener = listen(socket).unwrap();
+        let client = connect(socket).unwrap();
+        (client, listener.accept().unwrap())
+    }
 
     #[test]
     fn monitor_handshake_retains_pipelined_input() {
-        let wire = b"{\"kind\":\"monitor_input_stream\",\"cols\":80,\"rows\":24}\n\
-            {\"kind\":\"write\",\"data\":[97,98]}\n\
-            {\"kind\":\"resize\",\"cols\":100,\"rows\":30}\n";
-        for capacity in [1, 16, wire.len()] {
-            let mut reader = BufReader::with_capacity(capacity, Cursor::new(wire));
-            assert!(matches!(
-                read_request(&mut reader).unwrap(),
-                Request::MonitorInputStream { cols: 80, rows: 24 }
-            ));
-            if capacity == wire.len() {
-                assert!(!reader.buffer().is_empty(), "exercise actual read-ahead");
+        let (mut client, server) = pair();
+        let wire = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&Request::Monitor(Attach::new(80, 24, true))).unwrap(),
+            serde_json::to_string(&MonitorInput::Resize {
+                cols: 100,
+                rows: 30
+            })
+            .unwrap()
+        );
+        client.write_all(wire.as_bytes()).unwrap();
+        let mut reader = BufReader::new(server);
+        assert!(matches!(
+            read_request::<Request>(&mut reader).unwrap(),
+            Request::Monitor(_)
+        ));
+        let mut connection = Connection::from_reader(reader).unwrap();
+        assert!(matches!(
+            connection
+                .receive::<MonitorInput>(Some(Duration::from_secs(2)), &AtomicBool::new(false))
+                .unwrap(),
+            MonitorInput::Resize {
+                cols: 100,
+                rows: 30
             }
-            let messages = serde_json::Deserializer::from_reader(reader)
-                .into_iter::<MonitorInput>()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-            assert!(matches!(
-                messages.as_slice(),
-                [MonitorInput::Write { data }, MonitorInput::Resize { cols: 100, rows: 30 }]
-                    if data == b"ab"
-            ));
-        }
+        ));
     }
 
     #[test]
-    fn monitor_handshake_requires_a_complete_request_line() {
-        for wire in [b"".as_slice(), b"{\"kind\":\"ping\"}"] {
-            assert!(read_request(&mut Cursor::new(wire)).is_err());
-        }
-    }
-
-    #[test]
-    fn monitor_discovery_timeout_works_with_an_unresponsive_peer() {
-        use interprocess::local_socket::traits::ListenerExt;
-        let descriptor = super::super::host::new_descriptor().unwrap();
-        super::super::host::ensure_host_dir().unwrap();
-        let listener = listen(&descriptor.endpoint).unwrap();
-        let (release, released) = std::sync::mpsc::channel();
-        let server = std::thread::spawn(move || {
-            let _stream = listener.incoming().next().unwrap().unwrap();
-            let _ = released.recv();
-        });
-        let result = exchange_timeout(
-            connect(&descriptor.endpoint).unwrap(),
-            &Request::HostSessions,
-            Duration::from_millis(50),
-        );
-        let _ = release.send(());
-        server.join().unwrap();
-        if !cfg!(windows) {
-            let _ = std::fs::remove_file(&descriptor.endpoint);
-        }
+    fn idle_connection_times_out_and_cancellation_interrupts_receiving() {
+        let (client, _server) = pair();
+        let mut connection = Connection::new(client).unwrap();
+        assert!(matches!(
+            connection.try_receive::<Response>().unwrap(),
+            Incoming::Pending
+        ));
+        let stop = AtomicBool::new(false);
         assert_eq!(
-            result
+            connection
+                .receive::<Response>(Some(Duration::from_millis(30)), &stop)
                 .unwrap_err()
-                .downcast_ref::<std::io::Error>()
-                .unwrap()
                 .kind(),
-            std::io::ErrorKind::TimedOut
+            io::ErrorKind::TimedOut
         );
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(30));
+                stop.store(true, Ordering::Release);
+            });
+            assert_eq!(
+                connection
+                    .receive::<Response>(None, &stop)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::Interrupted
+            );
+        });
     }
 
     #[test]
-    fn monitor_discovery_timeout_reads_a_live_peer_response() {
-        use interprocess::local_socket::traits::ListenerExt;
-        let descriptor = super::super::host::new_descriptor().unwrap();
-        super::super::host::ensure_host_dir().unwrap();
-        let listener = listen(&descriptor.endpoint).unwrap();
-        let (release, released) = std::sync::mpsc::channel();
-        let server = std::thread::spawn(move || {
-            let stream = listener.incoming().next().unwrap().unwrap();
-            let mut reader = BufReader::new(stream);
-            assert!(matches!(
-                read_request(&mut reader).unwrap(),
-                Request::HostSessions
-            ));
-            write_response(
-                reader.get_mut(),
-                &Response::with(serde_json::json!({"marker":"ready"})),
-            )
-            .unwrap();
-            let _ = released.recv();
+    fn exchange_receives_large_responses_without_losing_bytes() {
+        let (client, server) = pair();
+        let payload = "frame".repeat(30_000);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut connection = Connection::new(server).unwrap();
+                let stop = AtomicBool::new(false);
+                let request: Request = connection
+                    .receive(Some(Duration::from_secs(2)), &stop)
+                    .unwrap();
+                assert!(matches!(request, Request::Ping));
+                connection
+                    .writer()
+                    .send(&Response::with(payload.clone().into()), &stop)
+                    .unwrap();
+                connection.drain(Duration::from_secs(2));
+            });
+            let response =
+                exchange_timeout(client, &Request::Ping, Duration::from_secs(2)).unwrap();
+            assert_eq!(response.data.unwrap(), payload);
         });
-        let result = exchange_timeout(
-            connect(&descriptor.endpoint).unwrap(),
-            &Request::HostSessions,
-            Duration::from_secs(2),
-        );
-        let _ = release.send(());
-        server.join().unwrap();
-        if !cfg!(windows) {
-            let _ = std::fs::remove_file(&descriptor.endpoint);
+    }
+
+    #[test]
+    fn disconnect_distinguishes_complete_and_truncated_messages() {
+        for truncated in [false, true] {
+            let (client, mut server) = pair();
+            let mut connection = Connection::new(client).unwrap();
+            if truncated {
+                server.write_all(b"{\"ok\":").unwrap();
+                assert!(matches!(
+                    connection.try_receive::<Response>().unwrap(),
+                    Incoming::Pending
+                ));
+            }
+            drop(server);
+            let error = connection
+                .receive::<Response>(Some(Duration::from_secs(2)), &AtomicBool::new(false))
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
         }
-        assert_eq!(result.unwrap().data.unwrap()["marker"], "ready");
+    }
+
+    #[test]
+    fn blocked_writer_has_a_deadline_and_honors_cancellation() {
+        let payload = "x".repeat(4 * 1024 * 1024);
+        for cancelled in [false, true] {
+            let (client, _server) = pair();
+            let connection = Connection::new(client).unwrap();
+            let writer = connection.writer();
+            let stop = AtomicBool::new(false);
+            let started = Instant::now();
+            std::thread::scope(|scope| {
+                if cancelled {
+                    scope.spawn(|| {
+                        std::thread::sleep(Duration::from_millis(30));
+                        stop.store(true, Ordering::Release);
+                    });
+                }
+                let error = writer.send(&payload, &stop).unwrap_err();
+                assert_eq!(
+                    error.kind(),
+                    if cancelled {
+                        io::ErrorKind::Interrupted
+                    } else {
+                        io::ErrorKind::TimedOut
+                    }
+                );
+            });
+            assert!(started.elapsed() < Duration::from_secs(5));
+        }
+    }
+
+    #[test]
+    fn oversized_messages_are_rejected_with_or_without_a_newline() {
+        for newline in [false, true] {
+            let (client, _server) = pair();
+            let mut connection = Connection::new(client).unwrap();
+            connection.pending = vec![b' '; MAX_MESSAGE];
+            if newline {
+                connection.pending.push(b'\n');
+            }
+            assert_eq!(
+                connection.try_receive::<Response>().err().unwrap().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
     }
 }

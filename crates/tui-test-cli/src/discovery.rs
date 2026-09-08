@@ -114,7 +114,7 @@ impl Candidate {
         #[serde(rename_all = "camelCase")]
         struct ProcessDetail<'a> {
             #[serde(flatten)]
-            session: &'a crate::protocol::HostSession,
+            session: &'a tui_test::monitoring::protocol::HostSession,
             owner_type: &'static str,
             attach: String,
         }
@@ -328,7 +328,7 @@ mod tests {
 
     fn process(name: &str, status: &str, failed: bool, timestamp: u64) -> Candidate {
         let descriptor = host::new_descriptor().unwrap();
-        let session = crate::protocol::HostSession {
+        let session = tui_test::monitoring::protocol::HostSession {
             id: format!("{}/{}", descriptor.owner, name),
             session: name.into(),
             generation: 1,

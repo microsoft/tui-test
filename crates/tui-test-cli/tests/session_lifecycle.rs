@@ -1,14 +1,15 @@
 //! End-to-end coverage for session lifecycle over the real cli + daemon.
 
-use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
-use interprocess::local_socket::prelude::*;
-use interprocess::local_socket::{GenericFilePath, GenericNamespaced};
+use tui_test::monitoring::{
+    ipc,
+    protocol::{Attach, MonitorInput, MonitorOutput, MonitorReady, Request, Response},
+};
 use tui_test::Backend;
 
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
@@ -161,9 +162,26 @@ impl Drop for Sandbox {
     }
 }
 
-/// Connect to the session socket and send one request line, leaving the stream
-/// open for whatever the request streams next.
-fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socket::Stream {
+struct MonitorPipe {
+    writer: ipc::Writer,
+    stop: Arc<AtomicBool>,
+    reader: Option<std::thread::JoinHandle<()>>,
+}
+
+impl MonitorPipe {
+    fn send(&self, message: MonitorInput) {
+        self.writer.send(&message, &self.stop).unwrap();
+    }
+}
+
+impl Drop for MonitorPipe {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        self.reader.take().unwrap().join().unwrap();
+    }
+}
+
+fn monitor_stream(sandbox: &Sandbox, size: (u16, u16), interactive: bool) -> MonitorPipe {
     let raw = if cfg!(windows) {
         format!("tui-test-{}.sock", sandbox.session)
     } else {
@@ -173,37 +191,42 @@ fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socke
             .to_string_lossy()
             .into_owned()
     };
-    let name = if cfg!(windows) {
-        raw.to_ns_name::<GenericNamespaced>()
-    } else {
-        raw.to_fs_name::<GenericFilePath>()
+    let mut connection = ipc::Connection::new(ipc::connect(&raw).unwrap()).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let writer = connection.writer();
+    writer
+        .send(
+            &Request::Monitor(Attach::new(size.0, size.1, interactive)),
+            &stop,
+        )
+        .unwrap();
+    let response: Response = connection
+        .receive(Some(Duration::from_secs(5)), &stop)
+        .unwrap();
+    assert!(response.ok, "{response:?}");
+    let ready: MonitorReady = serde_json::from_value(response.data.unwrap()).unwrap();
+    assert!(!ready.frame.is_empty());
+    let read_stop = stop.clone();
+    let reader = std::thread::spawn(move || {
+        while !read_stop.load(Ordering::Acquire) {
+            match connection.try_receive::<MonitorOutput>() {
+                Ok(ipc::Incoming::Message(MonitorOutput::Frame { .. })) => {}
+                Ok(ipc::Incoming::Pending) => std::thread::sleep(Duration::from_millis(5)),
+                _ => break,
+            }
+        }
+    });
+    MonitorPipe {
+        writer,
+        stop,
+        reader: Some(reader),
     }
-    .expect("valid session socket name");
-    let mut stream =
-        interprocess::local_socket::Stream::connect(name).expect("connect session socket");
-    stream
-        .write_all(request.as_bytes())
-        .expect("send monitor request");
-    stream.flush().expect("flush monitor request");
-    if request.contains("\"monitor_input_stream\"") {
-        let mut response = String::new();
-        std::io::BufReader::new(&mut stream)
-            .read_line(&mut response)
-            .expect("read monitor input handshake");
-        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
-        assert_eq!(response["ok"], true);
-        assert!(response["data"]["initial_frame"].is_array());
-    }
-    stream
 }
 
-fn write_monitor_input(stream: &mut interprocess::local_socket::Stream, data: &[u8]) {
-    serde_json::to_writer(
-        &mut *stream,
-        &serde_json::json!({ "kind": "write", "data": data }),
-    )
-    .expect("encode monitor input");
-    stream.write_all(b"\n").expect("write monitor input");
+fn write_monitor_input(stream: &MonitorPipe, data: &[u8]) {
+    stream.send(MonitorInput::Write {
+        data: data.to_vec(),
+    });
 }
 
 #[test]
@@ -460,50 +483,29 @@ fn capturing_output_terminates_after_the_daemon_starts() {
     sandbox.ok(&["text"]);
 }
 
-/// One monitor holds two streams open: rendered frames out and input messages in.
-/// Neither needs a target to exist, and the input stream outlives a restart.
+/// One duplex attachment survives target creation, restart and exit.
 #[test]
 fn monitor_frames_and_input_outlive_the_target() {
     let sandbox = Sandbox::new("monitor-input");
     sandbox.ok(&["--verbose", "daemon", "start"]);
 
-    let mut frames = monitor_stream(
-        &sandbox,
-        "{\"kind\":\"monitor\",\"cols\":80,\"rows\":24,\"interactive\":true}\n",
-    );
-    let (frame_tx, frame_rx) = std::sync::mpsc::channel();
-    let (detach_tx, detach_rx) = std::sync::mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        let mut buffer = [0u8; 4096];
-        let read = frames.read(&mut buffer).expect("read monitor frame");
-        frame_tx.send(read).expect("report monitor frame");
-        let _ = detach_rx.recv();
-    });
-    assert!(
-        frame_rx.recv_timeout(Duration::from_secs(5)).unwrap_or(0) > 0,
-        "monitor did not receive a frame"
-    );
-
-    let mut input = monitor_stream(
-        &sandbox,
-        "{\"kind\":\"monitor_input_stream\",\"cols\":80,\"rows\":30}\n",
-    );
-    write_monitor_input(&mut input, b"ignored");
-    input.flush().expect("flush without target");
+    let input = monitor_stream(&sandbox, (80, 24), true);
+    write_monitor_input(&input, b"ignored");
     std::thread::sleep(Duration::from_millis(100));
 
     let secret = "human-secret-monitor-input";
     sandbox.ok(&["open"]);
-    write_monitor_input(&mut input, format!("echo {secret}\r").as_bytes());
-    input.flush().expect("flush first target input");
+    wait_for_size(&sandbox, 78, 22);
+    write_monitor_input(&input, format!("echo {secret}\r").as_bytes());
     sandbox.wait_for_text(secret, "5000");
 
     sandbox.ok(&["open", "--restart"]);
-    input
-        .write_all(b"{\"kind\":\"resize\",\"cols\":100,\"rows\":40}\n")
-        .expect("resize monitor input");
-    write_monitor_input(&mut input, b"echo restarted-monitor-marker\r");
-    input.flush().expect("flush restarted target input");
+    wait_for_size(&sandbox, 78, 22);
+    input.send(MonitorInput::Resize {
+        cols: 100,
+        rows: 40,
+    });
+    write_monitor_input(&input, b"echo restarted-monitor-marker\r");
     sandbox.wait_for_text("restarted-monitor-marker", "5000");
 
     // The keystrokes are the human's, so they stay out of the agent's log.
@@ -518,12 +520,43 @@ fn monitor_frames_and_input_outlive_the_target() {
     // Typing at an exited child is a normal race, not a daemon failure.
     sandbox.ok(&["submit", "exit"]);
     sandbox.ok(&["wait", "exit", "--timeout", "20000"]);
-    write_monitor_input(&mut input, b"x");
-    input.flush().expect("flush after exit");
+    write_monitor_input(&input, b"x");
     sandbox.ok(&["daemon", "status"]);
 
-    detach_tx.send(()).expect("detach monitor");
-    reader.join().expect("join monitor reader");
+    drop(input);
+}
+
+fn wait_for_size(sandbox: &Sandbox, cols: u16, rows: u16) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "state"])).unwrap();
+        if state["data"]["cols"] == cols && state["data"]["rows"] == rows {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected {cols}x{rows}, got {state}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn monitor_resizes_both_modes_and_restores_the_previous_viewer() {
+    let sandbox = Sandbox::new("monitor-resize");
+    sandbox.ok(&["open"]);
+    let readonly = monitor_stream(&sandbox, (42, 12), false);
+    wait_for_size(&sandbox, 40, 10);
+    let interactive = monitor_stream(&sandbox, (32, 9), true);
+    wait_for_size(&sandbox, 30, 7);
+    let observer = monitor_stream(&sandbox, (25, 8), false);
+    wait_for_size(&sandbox, 30, 7);
+    drop(interactive);
+    wait_for_size(&sandbox, 23, 6);
+    drop(observer);
+    wait_for_size(&sandbox, 40, 10);
+    drop(readonly);
 }
 
 /// The accept loop must not park behind a long operation: viewer keystrokes
@@ -555,13 +588,8 @@ fn monitor_input_is_delivered_while_a_long_operation_is_running() {
     std::thread::sleep(Duration::from_millis(200));
 
     let started = Instant::now();
-    let _input = monitor_stream(
-        &sandbox,
-        &format!(
-            "{{\"kind\":\"monitor_input_stream\",\"cols\":80,\"rows\":30}}\n{}\n",
-            serde_json::json!({ "kind": "write", "data": format!("echo {marker}\r").as_bytes() })
-        ),
-    );
+    let input = monitor_stream(&sandbox, (80, 30), true);
+    write_monitor_input(&input, format!("echo {marker}\r").as_bytes());
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "monitor input waited behind the long operation"

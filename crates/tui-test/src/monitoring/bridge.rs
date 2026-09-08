@@ -1,20 +1,17 @@
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use interprocess::local_socket::traits::{ListenerExt, Stream as _};
+use interprocess::local_socket::traits::ListenerExt;
 
 use super::host::{self, HostDescriptor};
-use super::input::MouseRemapper;
-use super::ipc::{self, Stream};
+use super::ipc::{self, Connection, Stream};
 use super::lifecycle::{Hold, Lifecycle, Outcome};
-use super::protocol::{
-    HostSession, HostSnapshot, MonitorInput, MonitorInputReady, MonitorLeaseReady, Request,
-    Response,
-};
+use super::protocol::{Attach, HostSession, HostSnapshot, Request, Response};
 use super::render;
+use super::stream::{self, MonitorSession};
+use super::viewport::Viewport;
 use crate::{SessionMonitorTarget, TuiTestError};
 
 /// Optional discovery labels. Metadata never changes ownership of the child.
@@ -30,9 +27,8 @@ pub struct Metadata {
 }
 
 #[derive(Clone)]
-struct Lease {
+struct Client {
     interactive: bool,
-    input_open: bool,
     active: Arc<Mutex<bool>>,
 }
 
@@ -43,7 +39,7 @@ struct Entry {
     metadata: Metadata,
     lifecycle: Lifecycle,
     outcome: Option<Outcome>,
-    leases: HashMap<u64, Lease>,
+    clients: HashMap<u64, Client>,
     attachments: u64,
     started_at: u64,
     completed_at: Option<u64>,
@@ -190,7 +186,7 @@ pub fn register(
                 metadata,
                 lifecycle: Lifecycle::Running,
                 outcome: None,
-                leases: HashMap::new(),
+                clients: HashMap::new(),
                 attachments: 0,
                 started_at: host::now_ms(),
                 completed_at: None,
@@ -218,12 +214,12 @@ pub fn unregister(name: &str, target: Option<&SessionMonitorTarget>) {
         |target| candidate.same_target(target),
     );
     if remove {
-        // Unregistration is not a normal-close escape hatch for an active hold or lease.
+        // Unregistration is not a normal-close escape hatch for an active hold or viewer.
         let mut state = lock(&bridge.state);
         if state.sessions.get(name).is_some_and(|entry| {
             entry.target.same_target(&candidate)
                 && !matches!(entry.lifecycle, Lifecycle::Holding(_))
-                && entry.leases.is_empty()
+                && entry.clients.is_empty()
         }) {
             state.sessions.remove(name);
         }
@@ -317,7 +313,7 @@ fn begin_wait_for(
     if matches!(entry.lifecycle, Lifecycle::Running) {
         entry.lifecycle = Lifecycle::Holding(Hold::new(
             entry.attachments,
-            entry.leases.len(),
+            entry.clients.len(),
             timeout,
             hold_while_attached,
         )?);
@@ -362,17 +358,17 @@ pub fn wait(
         };
         if entry
             .lifecycle
-            .advance(entry.attachments, entry.leases.len())
+            .advance(entry.attachments, entry.clients.len())
         {
             bridge.changed.notify_all();
         }
         let Lifecycle::Holding(hold) = &entry.lifecycle else {
             return Ok(entry
                 .lifecycle
-                .attached(entry.attachments, entry.leases.len()));
+                .attached(entry.attachments, entry.clients.len()));
         };
         // Once attached, the finite deadline no longer applies.
-        let deadline = if hold.observed(entry.attachments, entry.leases.len()) {
+        let deadline = if hold.observed(entry.attachments, entry.clients.len()) {
             None
         } else {
             hold.deadline
@@ -421,7 +417,7 @@ pub fn cancel_wait(name: &str, generation: u64) {
         if entry.outcome.is_some() {
             let attached = entry
                 .lifecycle
-                .attached(entry.attachments, entry.leases.len());
+                .attached(entry.attachments, entry.clients.len());
             match &mut entry.lifecycle {
                 Lifecycle::Holding(_) => {
                     entry.lifecycle = Lifecycle::Completed {
@@ -460,7 +456,7 @@ pub fn cancel_target(name: &str, target: &SessionMonitorTarget) {
         entry.lifecycle = Lifecycle::Closing {
             attached: entry
                 .lifecycle
-                .attached(entry.attachments, entry.leases.len()),
+                .attached(entry.attachments, entry.clients.len()),
             hold_while_attached: false,
         };
     }
@@ -479,7 +475,7 @@ pub(crate) fn prepare_replace(name: &str, pty: &Arc<Mutex<crate::terminal::pty::
             entry.lifecycle = Lifecycle::Closing {
                 attached: entry
                     .lifecycle
-                    .attached(entry.attachments, entry.leases.len()),
+                    .attached(entry.attachments, entry.clients.len()),
                 hold_while_attached: false,
             };
         }
@@ -503,13 +499,13 @@ pub(crate) fn prepare_close(name: &str, pty: &Arc<Mutex<crate::terminal::pty::Pt
         };
         if entry
             .lifecycle
-            .advance(entry.attachments, entry.leases.len())
+            .advance(entry.attachments, entry.clients.len())
         {
             bridge.changed.notify_all();
         }
         let deadline = match &entry.lifecycle {
             Lifecycle::Holding(hold) => {
-                if hold.observed(entry.attachments, entry.leases.len()) {
+                if hold.observed(entry.attachments, entry.clients.len()) {
                     None
                 } else {
                     hold.deadline
@@ -520,15 +516,15 @@ pub(crate) fn prepare_close(name: &str, pty: &Arc<Mutex<crate::terminal::pty::Pt
                 entry.lifecycle = Lifecycle::Closing {
                     attached: entry
                         .lifecycle
-                        .attached(entry.attachments, entry.leases.len()),
+                        .attached(entry.attachments, entry.clients.len()),
                     hold_while_attached,
                 };
                 bridge.changed.notify_all();
                 if !hold_while_attached {
                     let active = entry
-                        .leases
+                        .clients
                         .values()
-                        .map(|lease| lease.active.clone())
+                        .map(|client| client.active.clone())
                         .collect::<Vec<_>>();
                     drop(state);
                     // Revoke input before destroying the child, without waiting for clients
@@ -538,7 +534,7 @@ pub(crate) fn prepare_close(name: &str, pty: &Arc<Mutex<crate::terminal::pty::Pt
                     }
                     return;
                 }
-                if entry.leases.is_empty() {
+                if entry.clients.is_empty() {
                     return;
                 }
                 None
@@ -579,193 +575,39 @@ fn serve(listener: interprocess::local_socket::Listener, bridge: Arc<Bridge>) {
 }
 
 fn handle(connection: Stream, bridge: Arc<Bridge>) {
-    if connection.set_nonblocking(true).is_err() {
-        return;
-    }
-    let mut reader = BufReader::new(MonitorConnection(connection));
-    let Ok(request) = read_handshake(&mut reader, &bridge) else {
+    let Ok(mut connection) = Connection::new(connection) else {
         return;
     };
-    let result = match request {
-        Request::Ping => write_response(&mut reader.get_mut().0, &bridge, &Response::ok()),
-        Request::HostSessions => write_response(
-            &mut reader.get_mut().0,
-            &bridge,
-            &Response::with(
-                serde_json::to_value(host_sessions(&bridge)).expect("serializable host snapshot"),
-            ),
-        ),
-        Request::Routed {
-            session,
-            generation,
-            lease,
-            request,
-        } => match *request {
-            Request::MonitorLeaseStream { interactive } => {
-                match Attachment::new(bridge.clone(), &session, generation, interactive) {
-                    Ok(attachment) => {
-                        let response = Response::with(
-                            serde_json::to_value(MonitorLeaseReady {
-                                lease: attachment.token,
-                            })
-                            .unwrap(),
-                        );
-                        if write_response(&mut reader.get_mut().0, &bridge, &response).is_ok() {
-                            hold_lease(reader, attachment);
-                        }
-                        return;
-                    }
-                    Err(error) => Err(error),
-                }
-            }
-            Request::Monitor {
-                cols,
-                rows,
-                interactive,
-            } => match leased_target(&bridge, &session, generation, lease, interactive, false) {
-                Ok((target, _)) if cols != 0 && rows != 0 => {
-                    stream_monitor(
-                        reader.into_inner().0,
-                        bridge,
-                        session,
-                        generation,
-                        lease.unwrap(),
-                        target,
-                        (cols, rows),
-                        interactive,
-                    );
+    let stop = AtomicBool::new(false);
+    let Ok(request) = connection.receive::<Request>(Some(Duration::from_secs(5)), &stop) else {
+        return;
+    };
+    let response = match request {
+        Request::Ping => Response::ok(),
+        Request::HostSessions => match serde_json::to_value(host_sessions(&bridge)) {
+            Ok(snapshot) => Response::with(snapshot),
+            Err(error) => Response::from_error(bridge_error(error)),
+        },
+        Request::Monitor(attach) => {
+            let attachment = attach.validate().and_then(|_| {
+                let route = attach.route.as_ref().ok_or_else(|| {
+                    TuiTestError::usage("process monitor requires a session route")
+                })?;
+                Attachment::new(bridge.clone(), &route.session, route.generation, &attach)
+            });
+            match attachment {
+                Ok(attachment) => {
+                    let name = attachment.session.clone();
+                    let _ = stream::serve(connection, Arc::new(attachment), &name, attach);
                     return;
                 }
-                Ok(_) => Err(TuiTestError::usage(
-                    "monitor dimensions must be greater than zero",
-                )),
-                Err(error) => Err(error),
-            },
-            Request::MonitorInputStream { cols, rows } => {
-                match leased_target(&bridge, &session, generation, lease, true, true) {
-                    Ok((target, active)) => {
-                        stream_input(
-                            reader,
-                            bridge,
-                            session,
-                            generation,
-                            lease.unwrap(),
-                            target,
-                            active,
-                            (cols, rows),
-                        );
-                        return;
-                    }
-                    Err(error) => Err(error),
-                }
+                Err(error) => Response::from_error(error),
             }
-            _ => Err(TuiTestError::usage(
-                "process bridge supports monitor traffic only",
-            )),
-        },
-        _ => Err(TuiTestError::usage(
-            "process bridge request must be routed to a session",
-        )),
+        }
     };
-    if let Err(error) = result {
-        let _ = write_response(
-            &mut reader.get_mut().0,
-            &bridge,
-            &Response::from_error(error),
-        );
+    if connection.writer().send(&response, &stop).is_ok() {
+        connection.drain(Duration::from_secs(2));
     }
-    drain_reply(&mut reader, &bridge);
-}
-
-struct MonitorConnection(Stream);
-
-impl Read for MonitorConnection {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        ipc::read_available(&mut self.0, buffer)
-    }
-}
-
-fn drain_reply(reader: &mut BufReader<MonitorConnection>, bridge: &Bridge) {
-    // A named-pipe server must keep its end open until the peer consumes the reply.
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut buffer = [0u8; 1024];
-    while Instant::now() < deadline && !lock(&bridge.state).stopped {
-        match reader.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(error) if idle_read(&error) => network_pause(bridge, Duration::from_millis(10)),
-            Err(_) => break,
-        }
-    }
-}
-
-fn network_pause(bridge: &Bridge, duration: Duration) {
-    let state = lock(&bridge.state);
-    if !state.stopped {
-        drop(
-            bridge
-                .changed
-                .wait_timeout(state, duration)
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
-    }
-}
-
-fn read_handshake(
-    reader: &mut BufReader<MonitorConnection>,
-    bridge: &Bridge,
-) -> Result<Request, TuiTestError> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut line = Vec::new();
-    loop {
-        match reader.read_until(b'\n', &mut line) {
-            Ok(0) => return Err(bridge_error("connection closed before request")),
-            Ok(_) if line.last() == Some(&b'\n') => {
-                return serde_json::from_slice(&line).map_err(bridge_error)
-            }
-            Ok(_) => {}
-            Err(error) if idle_read(&error) => network_pause(bridge, Duration::from_millis(10)),
-            Err(error) => return Err(bridge_error(error)),
-        }
-        if line.len() > 1024 * 1024 || Instant::now() >= deadline || lock(&bridge.state).stopped {
-            return Err(bridge_error("incomplete or oversized monitor handshake"));
-        }
-    }
-}
-
-fn write_bytes(
-    connection: &mut Stream,
-    bridge: &Bridge,
-    mut bytes: &[u8],
-) -> Result<(), TuiTestError> {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut chunk = 4096;
-    while !bytes.is_empty() {
-        match connection.write(&bytes[..bytes.len().min(chunk)]) {
-            // PIPE_NOWAIT can refuse an oversized write even when its buffer is empty.
-            Ok(0) if chunk > 256 => chunk /= 2,
-            Ok(0) => network_pause(bridge, Duration::from_millis(10)),
-            Ok(written) => bytes = &bytes[written..],
-            Err(error) if idle_read(&error) => network_pause(bridge, Duration::from_millis(10)),
-            Err(error) => return Err(bridge_error(error)),
-        }
-        if Instant::now() >= deadline || lock(&bridge.state).stopped {
-            return Err(bridge_error(
-                "monitor connection stopped or write timed out",
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn write_response(
-    connection: &mut Stream,
-    bridge: &Bridge,
-    response: &Response,
-) -> Result<(), TuiTestError> {
-    let mut bytes = serde_json::to_vec(response).map_err(bridge_error)?;
-    bytes.push(b'\n');
-    write_bytes(connection, bridge, &bytes)
 }
 
 fn host_sessions(bridge: &Bridge) -> HostSnapshot {
@@ -791,15 +633,15 @@ fn host_sessions(bridge: &Bridge) -> HostSnapshot {
                 framework: entry.metadata.framework,
                 worker: entry.metadata.worker,
                 tags: entry.metadata.tags,
-                status: entry.lifecycle.status(entry.leases.len(), entry.outcome),
+                status: entry.lifecycle.status(entry.clients.len(), entry.outcome),
                 outcome: entry.outcome.map(|outcome| outcome.as_str().into()),
                 child_exited: frame.exited.is_some(),
                 exit_code: frame.exited,
-                clients: entry.leases.len() as u32,
+                clients: entry.clients.len() as u32,
                 interactive_clients: entry
-                    .leases
+                    .clients
                     .values()
-                    .filter(|lease| lease.interactive)
+                    .filter(|client| client.interactive)
                     .count() as u32,
                 started_at: entry.started_at,
                 completed_at: entry.completed_at,
@@ -819,237 +661,14 @@ fn host_sessions(bridge: &Bridge) -> HostSnapshot {
     }
 }
 
-fn leased_target(
-    bridge: &Bridge,
-    session: &str,
-    generation: u64,
-    token: Option<u64>,
-    interactive: bool,
-    input: bool,
-) -> Result<(SessionMonitorTarget, Arc<Mutex<bool>>), TuiTestError> {
-    let mut state = lock(&bridge.state);
-    let entry = state
-        .sessions
-        .get_mut(session)
-        .filter(|entry| entry.generation == generation)
-        .ok_or_else(TuiTestError::no_session)?;
-    let lease = token
-        .and_then(|token| entry.leases.get_mut(&token))
-        .ok_or_else(|| {
-            TuiTestError::usage("a live attachment lease for this generation is required")
-        })?;
-    if interactive && !lease.interactive {
-        return Err(TuiTestError::usage(
-            "interactive input requires an interactive attachment lease",
-        ));
-    }
-    if input {
-        if lease.input_open {
-            return Err(TuiTestError::usage(
-                "attachment already has an input stream",
-            ));
-        }
-        lease.input_open = true;
-    }
-    Ok((entry.target.clone(), lease.active.clone()))
-}
-
-fn lease_active(bridge: &Bridge, session: &str, generation: u64, token: u64) -> bool {
-    let state = lock(&bridge.state);
-    !state.stopped
-        && state.sessions.get(session).is_some_and(|entry| {
-            entry.generation == generation && entry.leases.contains_key(&token)
-        })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn stream_monitor(
-    mut connection: Stream,
-    bridge: Arc<Bridge>,
-    session: String,
-    generation: u64,
-    token: u64,
-    target: SessionMonitorTarget,
-    viewer: (u16, u16),
-    interactive: bool,
-) {
-    let mut modes = render::ModeMirror::default();
-    while lease_active(&bridge, &session, generation, token) {
-        let bytes = render::render_frame(
-            target.frame().as_ref(),
-            viewer,
-            &session,
-            interactive,
-            &mut modes,
-        );
-        if write_bytes(&mut connection, &bridge, &bytes).is_err() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(host::MONITOR_FRAME_MS));
-    }
-}
-
-fn hold_lease(mut reader: BufReader<MonitorConnection>, attachment: Attachment) {
-    let mut buffer = [0; 1];
-    while lease_active(
-        &attachment.bridge,
-        &attachment.session,
-        attachment.generation,
-        attachment.token,
-    ) {
-        match reader.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(error) if idle_read(&error) => {
-                network_pause(&attachment.bridge, Duration::from_millis(20))
-            }
-            Err(_) => break,
-        }
-    }
-}
-
-fn idle_read(error: &std::io::Error) -> bool {
-    matches!(
-        error.kind(),
-        std::io::ErrorKind::WouldBlock
-            | std::io::ErrorKind::TimedOut
-            | std::io::ErrorKind::Interrupted
-    )
-}
-
-fn content_size(viewer: (u16, u16)) -> Result<(u16, u16), TuiTestError> {
-    if viewer.0 == 0 || viewer.1 == 0 {
-        return Err(TuiTestError::usage(
-            "monitor dimensions must be greater than zero",
-        ));
-    }
-    Ok(render::content_size(viewer))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn stream_input(
-    mut reader: BufReader<MonitorConnection>,
-    bridge: Arc<Bridge>,
-    session: String,
-    generation: u64,
-    token: u64,
-    target: SessionMonitorTarget,
-    active: Arc<Mutex<bool>>,
-    viewer: (u16, u16),
-) {
-    let result = (|| -> Result<(), TuiTestError> {
-        let initial = lock(&active);
-        if !*initial {
-            return Err(TuiTestError::no_session());
-        }
-        let (cols, rows) = content_size(viewer)?;
-        target.resize(cols, rows)?;
-        let mut modes = render::ModeMirror::default();
-        let initial_frame =
-            render::render_frame(target.frame().as_ref(), viewer, &session, true, &mut modes);
-        write_response(
-            &mut reader.get_mut().0,
-            &bridge,
-            &Response::with(serde_json::to_value(MonitorInputReady { initial_frame }).unwrap()),
-        )?;
-        drop(initial);
-        let mut remapper = MouseRemapper::new(viewer);
-        let mut pending = Vec::new();
-        let mut buffer = [0u8; 16 * 1024];
-        let mut last_input = Instant::now();
-        loop {
-            if !lease_active(&bridge, &session, generation, token) {
-                break;
-            }
-            match reader.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(read) => {
-                    pending.extend_from_slice(&buffer[..read]);
-                    last_input = Instant::now();
-                }
-                Err(error) if idle_read(&error) => {
-                    let current = lock(&active);
-                    if !*current {
-                        break;
-                    }
-                    let mouse_size = target
-                        .frame()
-                        .filter(|frame| frame.mouse_mode != crate::terminal::emu::MouseMode::None)
-                        .map(|frame| frame.size);
-                    remapper.observe(mouse_size);
-                    if last_input.elapsed() >= Duration::from_millis(50) {
-                        target.write_monitor_input_raw(&remapper.on_idle())?;
-                    }
-                    drop(current);
-                    network_pause(&bridge, Duration::from_millis(10));
-                    continue;
-                }
-                Err(error) => return Err(bridge_error(error)),
-            }
-            while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
-                let message: MonitorInput =
-                    serde_json::from_slice(&pending[..end]).map_err(bridge_error)?;
-                pending.drain(..=end);
-                let current = lock(&active);
-                if !*current {
-                    break;
-                }
-                if !lease_active(&bridge, &session, generation, token) {
-                    break;
-                }
-                match message {
-                    MonitorInput::Write { data } => {
-                        let mouse_size = target
-                            .frame()
-                            .filter(|frame| {
-                                frame.mouse_mode != crate::terminal::emu::MouseMode::None
-                            })
-                            .map(|frame| frame.size);
-                        let bytes = remapper.push(&data, mouse_size);
-                        target.write_monitor_input_raw(&bytes)?;
-                    }
-                    MonitorInput::Resize { cols, rows } => {
-                        let size = content_size((cols, rows))?;
-                        target.resize(size.0, size.1)?;
-                        remapper.resize((cols, rows));
-                    }
-                }
-            }
-            if pending.len() > 1024 * 1024 {
-                return Err(TuiTestError::usage("monitor input message is too large"));
-            }
-        }
-        let current = lock(&active);
-        if *current && lease_active(&bridge, &session, generation, token) {
-            target.write_monitor_input_raw(&remapper.finish())?;
-        }
-        Ok(())
-    })();
-    if let Err(error) = result {
-        let _ = write_response(
-            &mut reader.get_mut().0,
-            &bridge,
-            &Response::from_error(error),
-        );
-        drain_reply(&mut reader, &bridge);
-    }
-    let mut state = lock(&bridge.state);
-    if let Some(lease) = state
-        .sessions
-        .get_mut(&session)
-        .filter(|entry| entry.generation == generation)
-        .and_then(|entry| entry.leases.get_mut(&token))
-    {
-        lease.input_open = false;
-    }
-}
-
 struct Attachment {
     bridge: Arc<Bridge>,
     session: String,
     generation: u64,
-    token: u64,
+    id: u64,
     active: Arc<Mutex<bool>>,
+    target: SessionMonitorTarget,
+    viewport: Viewport,
 }
 
 impl Attachment {
@@ -1057,11 +676,8 @@ impl Attachment {
         bridge: Arc<Bridge>,
         session: &str,
         generation: u64,
-        interactive: bool,
+        attach: &Attach,
     ) -> Result<Self, TuiTestError> {
-        let mut bytes = [0u8; 8];
-        getrandom::getrandom(&mut bytes).map_err(bridge_error)?;
-        let token = u64::from_ne_bytes(bytes);
         let mut state = lock(&bridge.state);
         if state.stopped {
             return Err(TuiTestError::no_session());
@@ -1071,56 +687,95 @@ impl Attachment {
             .get_mut(session)
             .filter(|entry| entry.generation == generation && entry.lifecycle.accepts_attachments())
             .ok_or_else(TuiTestError::no_session)?;
-        if interactive && entry.leases.values().any(|lease| lease.interactive) {
+        if attach.interactive && entry.clients.values().any(|client| client.interactive) {
             return Err(TuiTestError::usage(
                 "session already has an interactive monitor",
             ));
         }
-        if entry.leases.contains_key(&token) {
-            return Err(TuiTestError::internal(
-                "monitor attachment token collision; retry attachment",
-            ));
-        }
+        let id = entry
+            .attachments
+            .checked_add(1)
+            .ok_or_else(|| TuiTestError::internal("monitor attachment counter exhausted"))?;
         let active = Arc::new(Mutex::new(true));
-        entry.leases.insert(
-            token,
-            Lease {
-                interactive,
-                input_open: false,
+        entry.clients.insert(
+            id,
+            Client {
+                interactive: attach.interactive,
                 active: active.clone(),
             },
         );
-        entry.attachments = entry.attachments.wrapping_add(1);
+        entry.attachments = id;
+        let target = entry.target.clone();
         state.clients += 1;
         bridge.changed.notify_all();
         drop(state);
+        let viewport = target.monitor_viewport(
+            render::content_size((attach.cols, attach.rows)),
+            attach.interactive,
+        );
         Ok(Self {
             bridge,
             session: session.into(),
             generation,
-            token,
+            id,
             active,
+            target,
+            viewport,
         })
+    }
+}
+
+impl MonitorSession for Attachment {
+    fn active(&self) -> bool {
+        if !self.target.is_current() {
+            return false;
+        }
+        let state = lock(&self.bridge.state);
+        !state.stopped
+            && state.sessions.get(&self.session).is_some_and(|entry| {
+                entry.generation == self.generation && entry.clients.contains_key(&self.id)
+            })
+    }
+
+    fn frame(&self) -> Option<crate::engine::LiveFrame> {
+        self.target.frame()
+    }
+
+    fn write(&self, bytes: &[u8]) -> Result<(), TuiTestError> {
+        let active = lock(&self.active);
+        if !*active {
+            return Err(TuiTestError::no_session());
+        }
+        self.target.write_monitor_input_raw(bytes)
+    }
+
+    fn resize(&self, viewer: (u16, u16)) {
+        self.viewport.update(render::content_size(viewer));
+    }
+
+    fn synchronize_size(&self) -> Result<(), TuiTestError> {
+        let active = lock(&self.active);
+        if !*active {
+            return Ok(());
+        }
+        self.target.apply_monitor_viewport(&self.viewport)
     }
 }
 
 impl Drop for Attachment {
     fn drop(&mut self) {
-        // Finish an in-flight resize/write before handing interactive ownership to another client.
-        let mut active = lock(&self.active);
-        *active = false;
+        // The single connection owns this guard until all of its I/O has stopped.
         let mut state = lock(&self.bridge.state);
         if let Some(entry) = state
             .sessions
             .get_mut(&self.session)
             .filter(|entry| entry.generation == self.generation)
         {
-            entry.leases.remove(&self.token);
+            entry.clients.remove(&self.id);
         }
         state.clients = state.clients.saturating_sub(1);
         self.bridge.changed.notify_all();
         drop(state);
-        drop(active);
         self.bridge.stop_if_idle(false);
     }
 }

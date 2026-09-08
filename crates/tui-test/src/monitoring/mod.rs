@@ -6,6 +6,7 @@ pub mod host;
 pub mod ipc;
 mod lifecycle;
 pub mod protocol;
+pub(crate) mod viewport;
 
 #[doc(hidden)]
 pub mod ansi;
@@ -13,6 +14,8 @@ pub mod ansi;
 pub mod input;
 #[doc(hidden)]
 pub mod render;
+#[doc(hidden)]
+pub mod stream;
 
 pub use bridge::{
     begin_wait, begin_wait_for_target_with_options, begin_wait_with_options, cancel_target,

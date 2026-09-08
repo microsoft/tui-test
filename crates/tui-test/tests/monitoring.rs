@@ -1,13 +1,12 @@
-use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::sync::{mpsc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use interprocess::local_socket::traits::Stream as _;
 use tui_test::monitoring::{
     self, host, ipc,
     protocol::{
-        HostSnapshot, MonitorInput, MonitorInputReady, MonitorLeaseReady, Request, Response,
+        Attach, HostSnapshot, MonitorInput, MonitorOutput, MonitorReady, Request, Response, Route,
     },
     Metadata, Monitor, Options, Outcome, WaitPolicy,
 };
@@ -146,67 +145,94 @@ fn nonintegrated_program() -> RunOptions {
     }
 }
 
-fn routed(target: &host::DiscoveredHostSession, lease: Option<u64>, request: Request) -> Request {
-    Request::Routed {
+fn monitor_request(
+    target: &host::DiscoveredHostSession,
+    interactive: bool,
+    size: (u16, u16),
+) -> Request {
+    let mut attach = Attach::new(size.0, size.1, interactive);
+    attach.route = Some(Route {
         session: target.session.session.clone(),
         generation: target.session.generation,
-        lease,
-        request: Box::new(request),
+    });
+    Request::Monitor(attach)
+}
+
+struct Viewer {
+    writer: ipc::Writer,
+    stop: Arc<AtomicBool>,
+    reader: Option<std::thread::JoinHandle<()>>,
+    frame: Arc<Mutex<String>>,
+    error: Arc<Mutex<Option<tui_test::ErrorKind>>>,
+}
+
+impl Viewer {
+    fn new(mut connection: ipc::Connection, response: Response) -> Self {
+        assert!(response.ok, "{response:?}");
+        let ready: MonitorReady = serde_json::from_value(response.data.unwrap()).unwrap();
+        let frame = Arc::new(Mutex::new(ready.frame));
+        let error = Arc::new(Mutex::new(None));
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = connection.writer();
+        let read_stop = stop.clone();
+        let read_frame = frame.clone();
+        let read_error = error.clone();
+        let reader = std::thread::spawn(move || {
+            while !read_stop.load(Ordering::Acquire) {
+                match connection.try_receive::<MonitorOutput>() {
+                    Ok(ipc::Incoming::Message(MonitorOutput::Frame { frame })) => {
+                        *read_frame.lock().unwrap() = frame
+                    }
+                    Ok(ipc::Incoming::Message(MonitorOutput::Error { error_kind, .. })) => {
+                        *read_error.lock().unwrap() = Some(error_kind);
+                        break;
+                    }
+                    Ok(ipc::Incoming::Pending) => std::thread::sleep(Duration::from_millis(5)),
+                    _ => break,
+                }
+            }
+        });
+        Self {
+            writer,
+            stop,
+            reader: Some(reader),
+            frame,
+            error,
+        }
+    }
+
+    fn send(&self, message: MonitorInput) {
+        self.writer.send(&message, &self.stop).unwrap();
+    }
+}
+
+impl Drop for Viewer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        self.reader.take().unwrap().join().unwrap();
     }
 }
 
 fn handshake(
     target: &host::DiscoveredHostSession,
-    lease: Option<u64>,
-    request: Request,
-) -> (BufReader<ipc::Stream>, Response) {
-    let mut stream = ipc::connect(&target.descriptor.endpoint).unwrap();
-    stream.set_nonblocking(true).unwrap();
-    writeln!(
-        stream,
-        "{}",
-        serde_json::to_string(&routed(target, lease, request)).unwrap()
-    )
-    .unwrap();
-    stream.flush().unwrap();
-    let mut reader = BufReader::new(stream);
-    let response = read_response(&mut reader);
-    (reader, response)
-}
-
-fn read_response(reader: &mut BufReader<ipc::Stream>) -> Response {
-    let mut line = String::new();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match reader.read_line(&mut line) {
-            Ok(0) if cfg!(windows) => std::thread::sleep(Duration::from_millis(5)),
-            Ok(0) => panic!("connection closed before response"),
-            Ok(_) if line.ends_with('\n') => return serde_json::from_str(&line).unwrap(),
-            Ok(_) => {}
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock
-                        | std::io::ErrorKind::TimedOut
-                        | std::io::ErrorKind::Interrupted
-                ) =>
-            {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Err(error) => panic!("reading response: {error}"),
-        }
-        assert!(Instant::now() < deadline, "response timed out");
-    }
-}
-
-fn attach(
-    target: &host::DiscoveredHostSession,
     interactive: bool,
-) -> (BufReader<ipc::Stream>, u64) {
-    let (reader, response) = handshake(target, None, Request::MonitorLeaseStream { interactive });
-    assert!(response.ok, "{response:?}");
-    let ready: MonitorLeaseReady = serde_json::from_value(response.data.unwrap()).unwrap();
-    (reader, ready.lease)
+) -> (ipc::Connection, Response) {
+    let mut connection =
+        ipc::Connection::new(ipc::connect(&target.descriptor.endpoint).unwrap()).unwrap();
+    let stop = AtomicBool::new(false);
+    connection
+        .writer()
+        .send(&monitor_request(target, interactive, (80, 24)), &stop)
+        .unwrap();
+    let response = connection
+        .receive(Some(Duration::from_secs(5)), &stop)
+        .unwrap();
+    (connection, response)
+}
+
+fn attach(target: &host::DiscoveredHostSession, interactive: bool) -> Viewer {
+    let (connection, response) = handshake(target, interactive);
+    Viewer::new(connection, response)
 }
 
 fn snapshot(target: &host::DiscoveredHostSession) -> HostSnapshot {
@@ -319,10 +345,10 @@ fn existing_and_brief_attachments_are_counted_once() {
     for attached_before_begin in [false, true] {
         let session = fixture.open("observed");
         let entry = fixture.register(&session);
-        let existing = attached_before_begin.then(|| attach(&entry, false).0);
+        let existing = attached_before_begin.then(|| attach(&entry, false));
         let (_, generation) =
             monitoring::begin_wait_with_options(session.name(), "failed", None, true).unwrap();
-        let client = existing.unwrap_or_else(|| attach(&entry, false).0);
+        let client = existing.unwrap_or_else(|| attach(&entry, false));
         drop(client);
         eventually(|| snapshot(&entry).sessions[0].clients == 0);
         assert!(monitoring::wait(session.name(), generation, Some(Duration::ZERO), true).unwrap());
@@ -331,55 +357,39 @@ fn existing_and_brief_attachments_are_counted_once() {
 }
 
 #[test]
-fn readonly_leases_coexist_but_interactive_lease_is_exclusive() {
+fn readonly_viewers_coexist_but_interactive_viewer_is_exclusive() {
     let fixture = Fixture::new();
-    let session = fixture.open("leases");
+    let session = fixture.open("duplex-viewers");
+    let target = session.monitor_target().unwrap();
     let entry = fixture.register(&session);
-    let (first, readonly_token) = attach(&entry, false);
-    let (second, _) = attach(&entry, false);
-    let (interactive, interactive_token) = attach(&entry, true);
+    let first = attach(&entry, false);
+    eventually(|| target.frame().unwrap().size == (78, 22));
+    let second = attach(&entry, false);
+    second.send(MonitorInput::Resize { cols: 70, rows: 20 });
+    eventually(|| target.frame().unwrap().size == (68, 18));
+    let interactive = attach(&entry, true);
     assert_eq!(snapshot(&entry).sessions[0].clients, 3);
     assert_eq!(snapshot(&entry).sessions[0].interactive_clients, 1);
-    assert!(
-        !handshake(
-            &entry,
-            None,
-            Request::MonitorLeaseStream { interactive: true }
-        )
-        .1
-        .ok
-    );
-    assert!(
-        !handshake(
-            &entry,
-            Some(readonly_token),
-            Request::MonitorInputStream { cols: 80, rows: 24 }
-        )
-        .1
-        .ok
-    );
-    assert!(
-        !handshake(
-            &entry,
-            None,
-            Request::MonitorInputStream { cols: 80, rows: 24 }
-        )
-        .1
-        .ok
-    );
-    let (input, response) = handshake(
-        &entry,
-        Some(interactive_token),
-        Request::MonitorInputStream { cols: 80, rows: 24 },
-    );
-    assert!(response.ok);
+    assert!(!handshake(&entry, true).1.ok);
+    interactive.send(MonitorInput::Resize { cols: 90, rows: 30 });
+    eventually(|| target.frame().unwrap().size == (88, 28));
+    second.send(MonitorInput::Resize { cols: 60, rows: 18 });
+    eventually(|| second.frame.lock().unwrap().contains("! too small"));
+    assert_eq!(target.frame().unwrap().size, (88, 28));
     assert_eq!(
         snapshot(&entry).sessions[0].clients,
         3,
-        "input is part of its lease, not a fourth client"
+        "input and resize stay on the same attachment"
     );
-    drop(input);
-    drop((first, second, interactive));
+    drop(interactive);
+    eventually(|| target.frame().unwrap().size == (58, 16));
+    drop(second);
+    eventually(|| target.frame().unwrap().size == (78, 22));
+    first.send(MonitorInput::Write {
+        data: b"forbidden".to_vec(),
+    });
+    eventually(|| *first.error.lock().unwrap() == Some(tui_test::ErrorKind::Usage));
+    drop(first);
     eventually(|| snapshot(&entry).sessions[0].clients == 0);
 }
 
@@ -398,8 +408,8 @@ fn closing_rejects_new_clients_and_close_all_cannot_bypass_failure_hold() {
     });
     assert!(observed.recv_timeout(Duration::from_millis(50)).is_err());
     assert!(target.frame().is_some());
-    let (first, _) = attach(&entry, false);
-    let (second, _) = attach(&entry, false);
+    let first = attach(&entry, false);
+    let second = attach(&entry, false);
     assert!(observed.recv_timeout(Duration::from_millis(50)).is_err());
     drop(first);
     assert!(observed.recv_timeout(Duration::from_millis(50)).is_err());
@@ -411,23 +421,15 @@ fn closing_rejects_new_clients_and_close_all_cannot_bypass_failure_hold() {
     let session = fixture.open("ordinary-closing");
     let entry = fixture.register(&session);
     let target = session.monitor_target().unwrap();
-    let (first, _) = attach(&entry, false);
-    let (second, _) = attach(&entry, false);
+    let first = attach(&entry, false);
+    let second = attach(&entry, false);
     let (closed, observed) = mpsc::channel();
     let closer = std::thread::spawn(move || {
         session.close().unwrap();
         closed.send(()).unwrap();
     });
     eventually(|| snapshot(&entry).sessions[0].status == "closing");
-    assert!(
-        !handshake(
-            &entry,
-            None,
-            Request::MonitorLeaseStream { interactive: false }
-        )
-        .1
-        .ok
-    );
+    assert!(!handshake(&entry, false).1.ok);
     drop(first);
     assert!(observed.recv_timeout(Duration::from_millis(50)).is_err());
     drop(second);
@@ -468,15 +470,7 @@ fn replacement_is_generation_safe_and_child_exit_keeps_the_final_grid() {
     assert!(monitoring::wait_target(session.name(), entry.session.generation).is_none());
     let mut stale = replacement.clone();
     stale.session.generation = entry.session.generation;
-    assert!(
-        !handshake(
-            &stale,
-            None,
-            Request::MonitorLeaseStream { interactive: false }
-        )
-        .1
-        .ok
-    );
+    assert!(!handshake(&stale, false).1.ok);
     let target = session.monitor_target().unwrap();
     target.write_monitor_input_raw(b"exit\r").unwrap();
     session
@@ -485,11 +479,10 @@ fn replacement_is_generation_safe_and_child_exit_keeps_the_final_grid() {
         })
         .unwrap();
     assert!(target.frame().unwrap().exited.is_some());
-    let (client, _) = attach(&replacement, false);
+    let client = attach(&replacement, false);
     assert!(snapshot(&replacement).sessions[0].child_exited);
     target.write_monitor_input_raw(b"ignored").unwrap();
     target.resize(90, 25).unwrap();
-    assert_eq!(target.frame().unwrap().size, (90, 25));
     drop(client);
 }
 
@@ -498,7 +491,6 @@ fn persistent_input_and_resize_bypass_terminal_waits_and_preserve_pipelined_byte
     let fixture = Fixture::new();
     let session = fixture.open("input");
     let entry = fixture.register(&session);
-    let (lease, token) = attach(&entry, true);
     let clone = session.clone();
     let (done, result) = mpsc::channel();
     let waiter = std::thread::spawn(move || {
@@ -510,32 +502,36 @@ fn persistent_input_and_resize_bypass_terminal_waits_and_preserve_pipelined_byte
         .unwrap();
     });
     std::thread::sleep(Duration::from_millis(30));
-    let mut input = ipc::connect(&entry.descriptor.endpoint).unwrap();
-    input.set_nonblocking(true).unwrap();
-    let messages = [
-        serde_json::to_string(&routed(
-            &entry,
-            Some(token),
-            Request::MonitorInputStream { cols: 91, rows: 29 },
-        ))
-        .unwrap(),
-        serde_json::to_string(&MonitorInput::Resize {
-            cols: 101,
-            rows: 31,
-        })
-        .unwrap(),
-        serde_json::to_string(&MonitorInput::Write {
-            data: b"echo bridge-pipelined-marker\r".to_vec(),
-        })
-        .unwrap(),
-    ];
-    writeln!(input, "{}", messages.join("\n")).unwrap();
-    input.flush().unwrap();
-    let mut input = BufReader::new(input);
-    let response = read_response(&mut input);
+    let mut connection =
+        ipc::Connection::new(ipc::connect(&entry.descriptor.endpoint).unwrap()).unwrap();
+    let writer = connection.writer();
+    let stop = AtomicBool::new(false);
+    writer
+        .send(&monitor_request(&entry, true, (91, 29)), &stop)
+        .unwrap();
+    writer
+        .send(
+            &MonitorInput::Resize {
+                cols: 101,
+                rows: 31,
+            },
+            &stop,
+        )
+        .unwrap();
+    writer
+        .send(
+            &MonitorInput::Write {
+                data: b"echo bridge-pipelined-marker\r".to_vec(),
+            },
+            &stop,
+        )
+        .unwrap();
+    let response: Response = connection
+        .receive(Some(Duration::from_secs(5)), &stop)
+        .unwrap();
     assert!(response.ok, "{response:?}");
-    let ready: MonitorInputReady = serde_json::from_value(response.data.unwrap()).unwrap();
-    assert!(!ready.initial_frame.is_empty());
+    let input = Viewer::new(connection, response);
+    assert!(!input.frame.lock().unwrap().is_empty());
     result
         .recv_timeout(Duration::from_secs(5))
         .unwrap()
@@ -545,7 +541,7 @@ fn persistent_input_and_resize_bypass_terminal_waits_and_preserve_pipelined_byte
         session.monitor_target().unwrap().frame().unwrap().size,
         (99, 29)
     );
-    drop((input, lease));
+    drop(input);
 }
 
 #[test]
@@ -598,13 +594,7 @@ fn interactive_resize_is_recorded_before_following_output() {
         })
         .unwrap();
     let entry = fixture.register(&session);
-    let (lease, token) = attach(&entry, true);
-    let (mut input, ready) = handshake(
-        &entry,
-        Some(token),
-        Request::MonitorInputStream { cols: 90, rows: 30 },
-    );
-    assert!(ready.ok, "{ready:?}");
+    let input = attach(&entry, true);
     for message in [
         MonitorInput::Resize {
             cols: 100,
@@ -614,12 +604,7 @@ fn interactive_resize_is_recorded_before_following_output() {
             data: b"echo ordered-capture\r".to_vec(),
         },
     ] {
-        writeln!(
-            input.get_mut(),
-            "{}",
-            serde_json::to_string(&message).unwrap()
-        )
-        .unwrap();
+        input.send(message);
     }
     session
         .execute(Operation::WaitLocator {
@@ -647,7 +632,7 @@ fn interactive_resize_is_recorded_before_following_output() {
         following_output.contains("ordered-capture"),
         "{following_output:?}"
     );
-    drop((input, lease));
+    drop(input);
 }
 
 #[test]
@@ -655,7 +640,7 @@ fn force_shutdown_cancels_infinite_holds_and_removes_discovery() {
     let fixture = Fixture::new();
     let session = fixture.open("force");
     let entry = fixture.register(&session);
-    let (client, _) = attach(&entry, false);
+    let client = attach(&entry, false);
     let (_, generation) =
         monitoring::begin_wait_with_options(session.name(), "failed", None, true).unwrap();
     let (done, result) = mpsc::channel();
@@ -706,20 +691,14 @@ fn independent_live_sessions_cannot_replace_a_registered_name() {
 }
 
 #[test]
-fn explicit_no_hold_completion_closes_even_when_clients_keep_their_leases() {
+fn explicit_no_hold_completion_closes_even_when_clients_keep_their_connections() {
     let fixture = Fixture::new();
     for cleanup in 0..3 {
         let session = fixture.open("no-hold");
         let entry = fixture.register(&session);
         let target = session.monitor_target().unwrap();
-        let (readonly, _) = attach(&entry, false);
-        let (interactive, token) = attach(&entry, true);
-        let (input, ready) = handshake(
-            &entry,
-            Some(token),
-            Request::MonitorInputStream { cols: 80, rows: 25 },
-        );
-        assert!(ready.ok, "{ready:?}");
+        let readonly = attach(&entry, false);
+        let interactive = attach(&entry, true);
         let mut monitor = if cleanup == 2 {
             Some(
                 Monitor::for_handle(
@@ -759,7 +738,7 @@ fn explicit_no_hold_completion_closes_even_when_clients_keep_their_leases() {
             .unwrap();
         closer.join().unwrap();
         assert!(!target.is_current());
-        drop((readonly, interactive, input));
+        drop((readonly, interactive));
     }
 }
 
@@ -769,7 +748,7 @@ fn target_interruption_closes_without_starting_a_wait_or_requiring_client_discon
     let session = fixture.open("pre-wait-interruption");
     let entry = fixture.register(&session);
     let target = session.monitor_target().unwrap();
-    let (client, _) = attach(&entry, false);
+    let client = attach(&entry, false);
     monitoring::cancel_target(session.name(), &target);
     let interrupted = snapshot(&entry);
     assert_eq!(interrupted.sessions[0].generation, entry.session.generation);
@@ -812,7 +791,7 @@ fn monitoring_startup_retains_readiness_failure_without_changing_default_run() {
         "retaining a target alone is not registration"
     );
     let entry = fixture.register(&session);
-    let (client, _) = attach(&entry, false);
+    let client = attach(&entry, false);
     let (_, generation) =
         monitoring::begin_wait_with_options(session.name(), "failed", None, false).unwrap();
     assert!(monitoring::wait(session.name(), generation, None, false).unwrap());
@@ -859,14 +838,8 @@ fn explicit_cancellation_releases_live_client_holds_for_target_cleanup() {
     let session = fixture.open("cancel-with-clients");
     let entry = fixture.register(&session);
     let target = session.monitor_target().unwrap();
-    let (readonly, _) = attach(&entry, false);
-    let (interactive, token) = attach(&entry, true);
-    let (input, ready) = handshake(
-        &entry,
-        Some(token),
-        Request::MonitorInputStream { cols: 80, rows: 25 },
-    );
-    assert!(ready.ok, "{ready:?}");
+    let readonly = attach(&entry, false);
+    let interactive = attach(&entry, true);
     let (_, generation) =
         monitoring::begin_wait_with_options(session.name(), "failed", None, true).unwrap();
     let (done, completed) = mpsc::channel();
@@ -884,5 +857,5 @@ fn explicit_cancellation_releases_live_client_holds_for_target_cleanup() {
         .unwrap());
     waiter.join().unwrap();
     assert!(!target.is_current());
-    drop((readonly, interactive, input));
+    drop((readonly, interactive));
 }

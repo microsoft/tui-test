@@ -27,6 +27,11 @@ transfer ownership or keep the session alive after that process exits. For
 failure inspection, use the language's monitoring options and copy the printed
 attach command, or run `tui-test sessions --waiting`.
 
+Each monitor viewer uses one bidirectional connection, including during resize.
+Both viewing modes resize the child inside the border; interactive viewers have
+priority, with the previous viewer's size restored on detach. A yellow border
+and `! too small` indicate clipped content.
+
 ## CLI
 
 ```sh

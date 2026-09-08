@@ -6,25 +6,32 @@
 //! mode and blits those frames, so the viewer sees the session in real time
 //! while the agent keeps driving it through the same daemon.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::collections::VecDeque;
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(test)]
 use tui_test::engine::LiveFrame as Frame;
-pub(crate) use tui_test::monitoring::input::MouseRemapper;
-pub(crate) use tui_test::monitoring::render::{render_frame, ModeMirror};
+#[cfg(test)]
+use tui_test::monitoring::input::MouseRemapper;
+use tui_test::monitoring::ipc::{Connection, Incoming};
+use tui_test::monitoring::protocol::{
+    Attach, MonitorInput, MonitorOutput, MonitorReady, Request, Response, Route, VERSION,
+};
+#[cfg(test)]
+use tui_test::monitoring::render::{render_frame, ModeMirror};
 #[cfg(test)]
 use tui_test::terminal::cell::EmuCell;
 #[cfg(test)]
 use tui_test::terminal::emu::{KeyboardMode, MouseMode};
+use tui_test::TuiTestError;
 
 use crate::ansi;
 #[cfg(windows)]
 use crate::console_input::ConsoleInput;
 use crate::monitor_input::{InputAction, InputEvent, InputParser};
-use crate::protocol::MonitorInput;
 
 #[derive(Clone)]
 enum MonitorTarget {
@@ -33,7 +40,6 @@ enum MonitorTarget {
         endpoint: String,
         session: String,
         generation: u64,
-        lease: Option<u64>,
     },
 }
 
@@ -44,21 +50,20 @@ impl MonitorTarget {
         }
     }
 
-    fn request(&self, request: crate::protocol::Request) -> crate::protocol::Request {
-        match self {
-            Self::Daemon(_) => request,
-            Self::Host {
-                session,
-                generation,
-                lease,
-                ..
-            } => crate::protocol::Request::Routed {
+    fn request(&self, size: (u16, u16), interactive: bool) -> Request {
+        let mut attach = Attach::new(size.0, size.1, interactive);
+        if let Self::Host {
+            session,
+            generation,
+            ..
+        } = self
+        {
+            attach.route = Some(Route {
                 session: session.clone(),
                 generation: *generation,
-                lease: *lease,
-                request: Box::new(request),
-            },
+            });
         }
+        Request::Monitor(attach)
     }
 }
 
@@ -71,7 +76,7 @@ pub fn run_client(
     latest: bool,
     filter: &crate::cli::SessionFilter,
 ) -> i32 {
-    let mut target = match resolve_target(session, interactive, id, latest, filter) {
+    let target = match resolve_target(session, interactive, id, latest, filter) {
         Ok(Some(target)) => target,
         Ok(None) => return 0,
         Err(error) => {
@@ -91,25 +96,13 @@ pub fn run_client(
         eprintln!("`monitor` requires terminal stdin");
         return 2;
     }
-    let _lease = match LeaseStream::connect(&mut target, interactive) {
-        Ok(lease) => lease,
+    let size = crossterm::terminal::size().unwrap_or((80, 24));
+    let network = match ViewerConnection::connect(&target, size, interactive) {
+        Ok(network) => network,
         Err(error) => {
             eprintln!("failed to attach monitor: {error}");
             return 4;
         }
-    };
-
-    let size = crossterm::terminal::size().unwrap_or((80, 24));
-    let input_stream = if interactive {
-        match InputStream::connect(&target, size) {
-            Ok(stream) => Some(stream),
-            Err(error) => {
-                eprintln!("failed to attach monitor input: {error}");
-                return 4;
-            }
-        }
-    } else {
-        None
     };
 
     if crossterm::terminal::enable_raw_mode().is_err() {
@@ -139,22 +132,36 @@ pub fn run_client(
     };
     if let Err(error) = enter_viewer(
         &mut viewer.stdout,
-        input_stream
-            .as_ref()
-            .map(|stream| stream.initial_frame.as_slice()),
+        interactive.then_some(network.initial_frame.as_bytes()),
     ) {
         eprintln!("failed to initialize monitor: {error}");
         return 5;
     }
-    let input = match input_stream {
-        Some(stream) => ViewerInput::Interactive(Box::new(InteractiveInput {
+    if !interactive {
+        if let Err(error) = viewer
+            .stdout
+            .write_all(network.initial_frame.as_bytes())
+            .and_then(|_| viewer.stdout.flush())
+        {
+            eprintln!("failed to display monitor: {error}");
+            return 5;
+        }
+    }
+    let input = if interactive {
+        ViewerInput::Interactive(Box::new(InteractiveInput {
             stdin: spawn_stdin_reader(),
-            stream,
             parser: InputParser::default(),
-        })),
-        None => ViewerInput::ReadOnly,
+        }))
+    } else {
+        ViewerInput::ReadOnly
     };
-    stream_loop(&target, input, size)
+    match stream_loop(&network, input, size) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{}", error.message);
+            error.kind.exit_code()
+        }
+    }
 }
 
 fn resolve_target(
@@ -175,7 +182,6 @@ fn resolve_target(
                     endpoint: candidate.descriptor.endpoint,
                     session: candidate.session.session,
                     generation: candidate.session.generation,
-                    lease: None,
                 },
             },
         ),
@@ -306,7 +312,6 @@ enum ViewerInput {
 
 struct InteractiveInput {
     stdin: mpsc::Receiver<std::io::Result<Vec<u8>>>,
-    stream: InputStream,
     parser: InputParser,
 }
 
@@ -315,128 +320,74 @@ enum ViewerAction {
     Resize((u16, u16)),
 }
 
-fn stream_loop(target: &MonitorTarget, mut input: ViewerInput, mut viewer: (u16, u16)) -> i32 {
-    use crate::ipc;
-    use crate::protocol::Request;
-
-    let interactive = matches!(&input, ViewerInput::Interactive(_));
+fn stream_loop(
+    network: &ViewerConnection,
+    mut input: ViewerInput,
+    mut size: (u16, u16),
+) -> Result<(), TuiTestError> {
     loop {
-        let (vcols, vrows) = viewer;
-        let mut conn = match ipc::connect(target.endpoint()) {
-            Ok(c) => c,
-            Err(_) => return 4,
+        let (frames, result) = {
+            let mut state = network
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (std::mem::take(&mut state.frames), state.result.take())
         };
-        let mut line = match serde_json::to_string(&target.request(Request::Monitor {
-            cols: vcols,
-            rows: vrows,
-            interactive,
-        })) {
-            Ok(l) => l,
-            Err(_) => return 5,
-        };
-        line.push('\n');
-        if conn.write_all(line.as_bytes()).is_err() || conn.flush().is_err() {
-            return 4;
+        for frame in frames {
+            let mut out = std::io::stdout().lock();
+            out.write_all(frame.as_bytes())
+                .and_then(|_| out.flush())
+                .map_err(|error| TuiTestError::internal(error.to_string()))?;
         }
-
-        let stop = Arc::new(AtomicBool::new(false));
-        let disconnected = Arc::new(AtomicBool::new(false));
-        let reader = {
-            let stop = stop.clone();
-            let disconnected = disconnected.clone();
-            std::thread::spawn(move || {
-                let mut src = &conn;
-                let mut buf = [0u8; 16384];
-                let mut out = std::io::stdout();
-                loop {
-                    if stop.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    match src.read(&mut buf) {
-                        Ok(0) | Err(_) => {
-                            disconnected.store(true, Ordering::Relaxed);
-                            break;
-                        }
-                        Ok(n) => {
-                            if out.write_all(&buf[..n]).and_then(|_| out.flush()).is_err() {
-                                disconnected.store(true, Ordering::Relaxed);
-                                break;
-                            }
-                        }
-                    }
-                }
-            })
-        };
-
-        let action = viewer_input_loop(viewer, &mut input, &disconnected);
-        stop.store(true, Ordering::Relaxed);
-        let _ = reader.join();
-
-        viewer = match action {
-            Ok(ViewerAction::Stop) => return 0,
-            Ok(ViewerAction::Resize(size)) => size,
-            Err(error) => {
-                eprintln!("monitor input failed: {error}");
-                return 5;
-            }
-        };
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
-        );
-        if let ViewerInput::Interactive(input) = &input {
-            if let Err(error) = input.stream.resize(viewer) {
-                eprintln!("failed to resize monitor input: {error}");
-                return 4;
+        if let Some(result) = result {
+            return result;
+        }
+        if let Ok(current) = crossterm::terminal::size() {
+            if current != size {
+                network.send(MonitorInput::Resize {
+                    cols: current.0,
+                    rows: current.1,
+                })?;
+                size = current;
             }
         }
-    }
-}
-
-fn viewer_input_loop(
-    viewer: (u16, u16),
-    input: &mut ViewerInput,
-    disconnected: &AtomicBool,
-) -> std::io::Result<ViewerAction> {
-    loop {
-        if disconnected.load(Ordering::Relaxed) {
-            return Ok(ViewerAction::Stop);
-        }
-        if let Ok(size) = crossterm::terminal::size() {
-            if size != viewer {
-                return Ok(ViewerAction::Resize(size));
-            }
-        }
-        let action = match input {
+        let action = match &mut input {
             ViewerInput::ReadOnly => read_only_input(),
-            ViewerInput::Interactive(input) => input.poll()?,
+            ViewerInput::Interactive(input) => input.poll(network)?,
         };
-        if let Some(action) = action {
-            return Ok(action);
+        match action {
+            Some(ViewerAction::Stop) => {
+                return network.detach();
+            }
+            Some(ViewerAction::Resize(current)) if current != size => {
+                network.send(MonitorInput::Resize {
+                    cols: current.0,
+                    rows: current.1,
+                })?;
+                size = current;
+            }
+            _ => {}
         }
     }
 }
 
 impl InteractiveInput {
-    fn poll(&mut self) -> std::io::Result<Option<ViewerAction>> {
-        match self.stdin.recv_timeout(Duration::from_millis(50)) {
-            Ok(bytes) => {
-                let (forward, detached) = self.parser.push(&bytes?, |event| match event {
+    fn poll(&mut self, network: &ViewerConnection) -> Result<Option<ViewerAction>, TuiTestError> {
+        let (bytes, detached) = match self.stdin.recv_timeout(Duration::from_millis(50)) {
+            Ok(bytes) => self.parser.push(
+                &bytes.map_err(|error| TuiTestError::internal(error.to_string()))?,
+                |event| match event {
                     InputEvent::Detach => InputAction::Detach,
                     _ => InputAction::Forward,
-                });
-                self.stream.send(forward)?;
-                Ok(detached.then_some(ViewerAction::Stop))
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                self.stream.send(self.parser.finish())?;
-                Ok(Some(ViewerAction::Stop))
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.stream.send(self.parser.on_idle())?;
-                Ok(None)
-            }
+                },
+            ),
+            Err(mpsc::RecvTimeoutError::Timeout) => (self.parser.on_idle(), false),
+            Err(mpsc::RecvTimeoutError::Disconnected) => (self.parser.finish(), true),
+        };
+        if !bytes.is_empty() {
+            network.send(MonitorInput::Write { data: bytes })?;
         }
+        Ok(detached.then_some(ViewerAction::Stop))
     }
 }
 
@@ -459,139 +410,301 @@ fn read_only_input() -> Option<ViewerAction> {
     }
 }
 
-struct InputStream {
+#[derive(Default)]
+struct NetworkState {
+    frames: VecDeque<String>,
+    result: Option<Result<(), TuiTestError>>,
+}
+
+struct ViewerConnection {
+    initial_frame: String,
     sender: mpsc::Sender<MonitorInput>,
-    connected: Arc<AtomicBool>,
-    initial_frame: Vec<u8>,
+    stop: Arc<AtomicBool>,
+    state: Arc<Mutex<NetworkState>>,
+    workers: Vec<std::thread::JoinHandle<()>>,
 }
 
-struct LeaseStream {
-    _connection: crate::ipc::Stream,
-}
-
-impl LeaseStream {
-    fn connect(target: &mut MonitorTarget, interactive: bool) -> std::io::Result<Option<Self>> {
-        if matches!(target, MonitorTarget::Daemon(_)) {
-            return Ok(None);
+impl ViewerConnection {
+    fn connect(
+        target: &MonitorTarget,
+        size: (u16, u16),
+        interactive: bool,
+    ) -> std::io::Result<Self> {
+        let mut connection = Connection::new(crate::ipc::connect(target.endpoint())?)?;
+        let writer = connection.writer();
+        let stop = Arc::new(AtomicBool::new(false));
+        writer.send(&target.request(size, interactive), &stop)?;
+        let response: Response = connection.receive(Some(Duration::from_secs(5)), &stop)?;
+        if !response.ok {
+            return Err(std::io::Error::other(
+                response
+                    .message
+                    .unwrap_or_else(|| "monitor attachment rejected".into()),
+            ));
         }
-        let (connection, response) = connect_stream(
-            target,
-            crate::protocol::Request::MonitorLeaseStream { interactive },
-        )?;
-        let ready = serde_json::from_value::<crate::protocol::MonitorLeaseReady>(
+        let ready: MonitorReady = serde_json::from_value(
             response
                 .data
-                .ok_or_else(|| std::io::Error::other("missing monitor lease"))?,
+                .ok_or_else(|| std::io::Error::other("missing monitor handshake"))?,
         )
         .map_err(std::io::Error::other)?;
-        if let MonitorTarget::Host { lease, .. } = target {
-            *lease = Some(ready.lease);
+        if ready.protocol != VERSION {
+            return Err(std::io::Error::other("incompatible monitor protocol"));
         }
-        Ok(Some(Self {
-            _connection: connection,
-        }))
-    }
-}
-
-impl InputStream {
-    fn connect(target: &MonitorTarget, viewer: (u16, u16)) -> std::io::Result<Self> {
-        let (mut conn, response) = connect_stream(
-            target,
-            crate::protocol::Request::MonitorInputStream {
-                cols: viewer.0,
-                rows: viewer.1,
-            },
-        )?;
-        let data = response
-            .data
-            .ok_or_else(|| std::io::Error::other("missing monitor input handshake"))?;
-        let initial_frame = serde_json::from_value::<crate::protocol::MonitorInputReady>(data)
-            .map_err(std::io::Error::other)?
-            .initial_frame;
-
+        let state = Arc::new(Mutex::new(NetworkState::default()));
+        let reader_state = state.clone();
+        let reader_stop = stop.clone();
+        let reader = std::thread::spawn(move || {
+            while !reader_stop.load(Ordering::Acquire) {
+                let result = match connection.try_receive::<MonitorOutput>() {
+                    Ok(Incoming::Message(MonitorOutput::Frame { frame })) => {
+                        // Mode changes are embedded in frames: preserve order rather
+                        // than dropping a frame whose modes later frames depend on.
+                        loop {
+                            let mut state = reader_state
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            if state.frames.len() < 2 {
+                                state.frames.push_back(frame);
+                                break;
+                            }
+                            drop(state);
+                            if reader_stop.load(Ordering::Acquire) {
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        continue;
+                    }
+                    Ok(Incoming::Pending) => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Ok(Incoming::Closed | Incoming::Message(MonitorOutput::Closed)) => Ok(()),
+                    Ok(Incoming::Message(MonitorOutput::Error {
+                        message,
+                        error_kind,
+                    })) => Err(TuiTestError::new(error_kind, message)),
+                    Err(error) => Err(TuiTestError::internal(error.to_string())),
+                };
+                Self::finish(&reader_state, result);
+                reader_stop.store(true, Ordering::Release);
+                break;
+            }
+        });
         let (sender, receiver) = mpsc::channel::<MonitorInput>();
-        let connected = Arc::new(AtomicBool::new(true));
-        let writer_connected = Arc::clone(&connected);
-        std::thread::spawn(move || {
-            for message in receiver {
-                if serde_json::to_writer(&mut conn, &message).is_err()
-                    || conn.write_all(b"\n").is_err()
-                    || conn.flush().is_err()
-                {
-                    break;
+        let writer_state = state.clone();
+        let writer_stop = stop.clone();
+        let writer = std::thread::spawn(move || {
+            while !writer_stop.load(Ordering::Acquire) {
+                match receiver.recv_timeout(Duration::from_millis(20)) {
+                    Ok(message) => {
+                        if let Err(error) = writer.send(&message, &writer_stop) {
+                            if !writer_stop.load(Ordering::Acquire) {
+                                Self::finish(
+                                    &writer_state,
+                                    Err(TuiTestError::internal(error.to_string())),
+                                );
+                                writer_stop.store(true, Ordering::Release);
+                            }
+                            break;
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
-            writer_connected.store(false, Ordering::Relaxed);
         });
         Ok(Self {
+            initial_frame: ready.frame,
             sender,
-            connected,
-            initial_frame,
+            stop,
+            state,
+            workers: vec![reader, writer],
         })
     }
 
-    fn send(&self, bytes: Vec<u8>) -> std::io::Result<()> {
-        if bytes.is_empty() {
-            self.check_connected()
-        } else {
-            self.enqueue(MonitorInput::Write { data: bytes })
+    fn finish(state: &Mutex<NetworkState>, result: Result<(), TuiTestError>) {
+        let mut state = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.result.is_none() {
+            state.result = Some(result);
         }
     }
 
-    fn resize(&self, viewer: (u16, u16)) -> std::io::Result<()> {
-        self.enqueue(MonitorInput::Resize {
-            cols: viewer.0,
-            rows: viewer.1,
-        })
+    fn send(&self, message: MonitorInput) -> Result<(), TuiTestError> {
+        self.sender
+            .send(message)
+            .map_err(|_| TuiTestError::internal("monitor connection closed"))
     }
 
-    fn check_connected(&self) -> std::io::Result<()> {
-        if self.connected.load(Ordering::Relaxed) {
-            Ok(())
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "monitor input disconnected",
-            ))
+    fn detach(&self) -> Result<(), TuiTestError> {
+        self.send(MonitorInput::Detach)?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Keep receiving until the server acknowledges all input preceding Detach.
+            // No further frames need painting while the viewer is leaving.
+            state.frames.clear();
+            if let Some(result) = state.result.take() {
+                return result;
+            }
+            drop(state);
+            if std::time::Instant::now() >= deadline {
+                return Err(TuiTestError::internal("monitor detach timed out"));
+            }
+            std::thread::sleep(Duration::from_millis(5));
         }
-    }
-
-    fn enqueue(&self, message: MonitorInput) -> std::io::Result<()> {
-        self.check_connected()?;
-        self.sender.send(message).map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "monitor input disconnected")
-        })
     }
 }
 
-fn connect_stream(
-    target: &MonitorTarget,
-    request: crate::protocol::Request,
-) -> std::io::Result<(crate::ipc::Stream, crate::protocol::Response)> {
-    let conn = crate::ipc::connect(target.endpoint())?;
-    let mut conn = BufReader::new(conn);
-    let mut request =
-        serde_json::to_vec(&target.request(request)).map_err(std::io::Error::other)?;
-    request.push(b'\n');
-    conn.get_mut().write_all(&request)?;
-    conn.get_mut().flush()?;
-    let mut response = String::new();
-    conn.read_line(&mut response)?;
-    let response: crate::protocol::Response =
-        serde_json::from_str(response.trim()).map_err(std::io::Error::other)?;
-    if !response.ok {
-        return Err(std::io::Error::other(
-            response
-                .message
-                .unwrap_or_else(|| "monitor stream rejected".into()),
-        ));
+impl Drop for ViewerConnection {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
     }
-    Ok((conn.into_inner(), response))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_viewer(server: impl FnOnce(Connection) + Send, client: impl FnOnce(ViewerConnection)) {
+        use interprocess::local_socket::traits::Listener;
+        use tui_test::monitoring::ipc;
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let endpoint = std::env::temp_dir()
+            .join(format!(
+                "tt-viewer-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let listener = ipc::listen(&endpoint).unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let mut connection = Connection::new(listener.accept().unwrap()).unwrap();
+                let stop = AtomicBool::new(false);
+                let _: Request = connection
+                    .receive(Some(Duration::from_secs(2)), &stop)
+                    .unwrap();
+                let writer = connection.writer();
+                writer
+                    .send(
+                        &Response::with(
+                            serde_json::to_value(MonitorReady {
+                                protocol: VERSION,
+                                frame: String::new(),
+                            })
+                            .unwrap(),
+                        ),
+                        &stop,
+                    )
+                    .unwrap();
+                server(connection);
+            });
+            client(
+                ViewerConnection::connect(&MonitorTarget::Daemon(endpoint), (80, 24), true)
+                    .unwrap(),
+            );
+        });
+    }
+
+    #[test]
+    fn detach_delivers_input_from_the_same_stdin_chunk_before_closing() {
+        let mut bytes = vec![b'x'; 32 * 1024];
+        bytes.extend_from_slice(b"\r\x1d");
+        with_viewer(
+            |mut connection| {
+                let stop = AtomicBool::new(false);
+                std::thread::sleep(Duration::from_millis(100));
+                let message = connection
+                    .receive::<MonitorInput>(Some(Duration::from_secs(2)), &stop)
+                    .unwrap();
+                let MonitorInput::Write { data } = message else {
+                    panic!("expected input before detach")
+                };
+                assert_eq!(data, bytes[..bytes.len() - 1]);
+                assert!(matches!(
+                    connection
+                        .receive::<MonitorInput>(Some(Duration::from_secs(2)), &stop)
+                        .unwrap(),
+                    MonitorInput::Detach
+                ));
+                connection
+                    .writer()
+                    .send(&MonitorOutput::Closed, &stop)
+                    .unwrap();
+                connection.drain(Duration::from_secs(2));
+            },
+            |network| {
+                let (sender, stdin) = mpsc::channel();
+                sender.send(Ok(bytes.clone())).unwrap();
+                let mut input = InteractiveInput {
+                    stdin,
+                    parser: InputParser::default(),
+                };
+                assert!(matches!(
+                    input.poll(&network).unwrap(),
+                    Some(ViewerAction::Stop)
+                ));
+                network.detach().unwrap();
+            },
+        );
+    }
+
+    #[test]
+    fn slow_viewer_preserves_every_keyboard_mode_transition() {
+        let expected: Vec<_> = (0..8)
+            .map(|index| ansi::kitty_keyboard_mode(index % 2))
+            .collect();
+        with_viewer(
+            |mut connection| {
+                let stop = AtomicBool::new(false);
+                let writer = connection.writer();
+                for frame in &expected {
+                    writer
+                        .send(
+                            &MonitorOutput::Frame {
+                                frame: frame.clone(),
+                            },
+                            &stop,
+                        )
+                        .unwrap();
+                }
+                writer.send(&MonitorOutput::Closed, &stop).unwrap();
+                connection.drain(Duration::from_secs(2));
+            },
+            |network| {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while network.state.lock().unwrap().frames.len() < 2 {
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                let mut received = Vec::new();
+                loop {
+                    let mut state = network.state.lock().unwrap();
+                    received.extend(state.frames.drain(..));
+                    if let Some(result) = state.result.take() {
+                        result.unwrap();
+                        break;
+                    }
+                    drop(state);
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert_eq!(received, expected);
+            },
+        );
+    }
 
     fn cell(ch: &str) -> EmuCell {
         EmuCell {
@@ -619,7 +732,7 @@ mod tests {
             false,
             &mut ModeMirror::default(),
         );
-        let text = String::from_utf8(bytes).unwrap();
+        let text = bytes;
         assert!(text.contains('┌') && text.contains('┘'));
         assert!(text.contains("bash"));
         assert!(text.contains('h') && text.contains('i'));
@@ -629,7 +742,7 @@ mod tests {
     #[test]
     fn render_placeholder_without_session() {
         let bytes = render_frame(None, (40, 6), "work", false, &mut ModeMirror::default());
-        let text = String::from_utf8(bytes).unwrap();
+        let text = bytes;
         assert!(text.contains("no session"));
         assert!(text.contains("no active session"));
     }
@@ -646,14 +759,13 @@ mod tests {
             exited: None,
             shell: None,
         };
-        let text = String::from_utf8(render_frame(
+        let text = render_frame(
             Some(&frame),
             (10, 5),
             "s",
             false,
             &mut ModeMirror::default(),
-        ))
-        .unwrap();
+        );
         assert!(text.contains(";7") || text.contains("[7"));
     }
 
@@ -676,18 +788,18 @@ mod tests {
         };
 
         assert!(render(Some(&frame), &mut modes)
-            .starts_with(b"\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[H"));
-        assert!(render(Some(&frame), &mut modes).starts_with(b"\x1b[H"));
+            .starts_with("\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[H"));
+        assert!(render(Some(&frame), &mut modes).starts_with("\x1b[H"));
 
         frame.keyboard_mode =
             KeyboardMode::DISAMBIGUATE_ESC_CODES | KeyboardMode::REPORT_ASSOCIATED_TEXT;
         frame.bracketed_paste = true;
         frame.mouse_mode = MouseMode::Drag;
         assert!(render(Some(&frame), &mut modes).starts_with(
-            b"\x1b[=17u\x1b[?2004h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1006h\x1b[?1002h\x1b[H"
+            "\x1b[=17u\x1b[?2004h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1006h\x1b[?1002h\x1b[H"
         ));
         assert!(render(None, &mut modes)
-            .starts_with(b"\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[H"));
+            .starts_with("\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[H"));
         assert!(render_frame(
             Some(&frame),
             (10, 5),
@@ -695,7 +807,7 @@ mod tests {
             false,
             &mut ModeMirror::default()
         )
-        .starts_with(b"\x1b[H"));
+        .starts_with("\x1b[H"));
     }
 
     /// Interactive mode restores viewer input modes; read-only mode leaves them

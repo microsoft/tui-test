@@ -8,10 +8,9 @@ use super::ipc;
 use super::protocol::{HostSession, HostSnapshot, Request};
 use crate::config;
 
-pub const HOST_PROTOCOL: u32 = 2;
+pub const HOST_PROTOCOL: u32 = super::protocol::VERSION;
 pub const MONITOR_FRAME_MS: u64 = 50;
-pub const HOST_CAPABILITIES: &[&str] =
-    &["frames", "interactive-input", "resize", "attachment-leases"];
+pub const HOST_CAPABILITIES: &[&str] = &["duplex-monitor", "resize"];
 
 pub fn host_dir() -> PathBuf {
     config::home_dir().join("hosts")
@@ -276,15 +275,6 @@ pub fn monitor_command(id: &str, interactive: bool) -> String {
         "tui-test monitor{} --id {quoted}",
         if interactive { " --interactive" } else { "" }
     )
-}
-
-pub fn routed(session: impl Into<String>, generation: u64, request: Request) -> Request {
-    Request::Routed {
-        session: session.into(),
-        generation,
-        lease: None,
-        request: Box::new(request),
-    }
 }
 
 #[cfg(test)]

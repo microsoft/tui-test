@@ -28,6 +28,23 @@ pub struct SessionMonitorTarget {
 }
 
 impl SessionMonitorTarget {
+    pub(crate) fn monitor_viewport(
+        &self,
+        size: (u16, u16),
+        interactive: bool,
+    ) -> crate::monitoring::viewport::Viewport {
+        self.session
+            .engine
+            .monitor_viewport(Some(self.pty.clone()), size, interactive)
+    }
+
+    pub(crate) fn apply_monitor_viewport(
+        &self,
+        viewport: &crate::monitoring::viewport::Viewport,
+    ) -> Result<(), TuiTestError> {
+        self.session.engine.apply_monitor_viewport(viewport)
+    }
+
     /// Resize this exact child without joining the session's operation queue.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), TuiTestError> {
         self.session

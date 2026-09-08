@@ -86,9 +86,11 @@ it can be inspected; a program that could not be spawned has no target. Ordinary
 
 The CLI discovers enabled sessions through `tui-test sessions --waiting` and
 attaches with `tui-test monitor --interactive --id OWNER/SESSION`. Only one
-interactive viewer owns input and child resizing; multiple read-only viewers
-are supported. Completion waits use native notifications, and the terminal
-cannot survive the owning Rust process.
+interactive viewer owns input; multiple read-only viewers are supported.
+Each viewer has one bidirectional connection that stays attached through
+resizes. Both modes resize the child, with interactive viewers taking priority
+and the previous viewer's size restored on detach. Completion waits use native
+notifications, and the terminal cannot survive the owning Rust process.
 
 Add `recording-raster` for APNG, GIF, and MP4. Add `ghostty`, `rio`, or `xtermjs` for another backend.
 

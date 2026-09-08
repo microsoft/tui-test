@@ -19,7 +19,7 @@ pub struct Options {
     pub wait_at_end: WaitPolicy,
     /// `None` explicitly permits an infinite wait for the first attachment.
     pub first_attach_timeout: Option<Duration>,
-    /// If false, completion may revoke live leases and close without waiting for clients
+    /// If false, completion may revoke live attachments and close without waiting for clients
     /// to disconnect. The first-attachment timeout is still applied when policy requests it.
     pub hold_while_attached: bool,
     pub metadata: Metadata,

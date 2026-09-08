@@ -292,7 +292,15 @@ Failure inspection delays cleanup and the original test failure while a human
 attaches. The default first-attachment window is 30 seconds; an explicitly
 unlimited wait is intended only for local debugging. Attached clients can hold
 cleanup until the last disconnect. Read-only monitors may coexist, while one
-interactive monitor owns keyboard, mouse, and child resizing at a time.
+interactive monitor owns keyboard and mouse input at a time. Each viewer uses
+one bidirectional IPC connection for frames, input, resize, and attachment
+lifetime; resizing never reconnects or releases an inspection hold.
+
+Both viewing modes fit the child to the space inside the monitor border.
+An interactive viewer has resize priority; otherwise the most recently
+attached or resized viewer controls the size. Detaching restores the previous
+viewer's size, and daemon viewers reapply it after a child restart. A yellow
+border and `! too small` mark clipped content.
 
 JavaScript and Python constructor/test-helper options, and the Rust monitoring
 API, configure this behavior. `TUI_TEST_MONITORING`, `TUI_TEST_WAIT_AT_END`,
