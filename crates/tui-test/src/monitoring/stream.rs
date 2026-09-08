@@ -224,9 +224,11 @@ fn read_input(
             }
             Incoming::Pending => {
                 source.synchronize_size()?;
-                mouse.observe(mouse_size(source));
-                if interactive && last_input.elapsed() >= Duration::from_millis(50) {
-                    source.write(&mouse.on_idle())?;
+                if interactive {
+                    mouse.observe(mouse_size(source));
+                    if last_input.elapsed() >= Duration::from_millis(50) {
+                        source.write(&mouse.on_idle())?;
+                    }
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
@@ -244,10 +246,11 @@ mod tests {
     use super::*;
     use interprocess::local_socket::traits::Listener;
 
-    struct EmptySession;
+    struct EmptySession(std::sync::mpsc::Sender<()>);
 
     impl MonitorSession for EmptySession {
         fn frame(&self) -> Option<LiveFrame> {
+            let _ = self.0.send(());
             None
         }
         fn write(&self, _: &[u8]) -> Result<(), TuiTestError> {
@@ -266,18 +269,14 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let listener = ipc::listen(&endpoint).unwrap();
-        let size = if cfg!(windows) {
-            (200, 100)
-        } else {
-            (1000, 1000)
-        };
+        let (rendered, frames) = std::sync::mpsc::channel();
         std::thread::scope(|scope| {
             let server = scope.spawn(|| {
                 serve(
                     Connection::new(listener.accept().unwrap()).unwrap(),
-                    Arc::new(EmptySession),
+                    Arc::new(EmptySession(rendered)),
                     "large-frame",
-                    Attach::new(size.0, size.1, false),
+                    Attach::new(200, 100, false),
                 )
             });
             let mut connection = Connection::new(ipc::connect(&endpoint).unwrap()).unwrap();
@@ -286,8 +285,16 @@ mod tests {
                 .receive(Some(Duration::from_secs(5)), &stop)
                 .unwrap();
             assert!(ready.ok);
-            // Let a frame larger than the socket buffer back up before stopping input.
-            std::thread::sleep(Duration::from_millis(100));
+            // Stop reading until the socket fills and frame production stalls.
+            // Keep individual frames small enough to finish within the write deadline.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                match frames.recv_timeout(Duration::from_millis(200)) {
+                    Ok(()) => assert!(Instant::now() < deadline, "frame output did not back up"),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                    Err(error) => panic!("frame output stopped before input failed: {error}"),
+                }
+            }
             connection
                 .writer()
                 .send(&MonitorInput::Resize { cols: 0, rows: 24 }, &stop)
