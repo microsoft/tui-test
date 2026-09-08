@@ -474,6 +474,55 @@ macro_rules! emulator_conformance_tests {
             );
         }
 
+        /// Every mode in the vocabulary turns on and off on every backend.
+        ///
+        /// This case is the reason the vocabulary is a closed set: a mode
+        /// earns a variant by passing here on all four backends, so the enum
+        /// is a claim this test keeps honest rather than a wish list.
+        #[test]
+        fn conformance_terminal_modes_turn_on_and_off() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let mut e = conformance_emu(20, 4, 100);
+                assert_eq!(
+                    e.mode(mode),
+                    mode.default_enabled(),
+                    "{} starts at its documented default",
+                    mode.name()
+                );
+
+                e.process(mode.set_sequence());
+                assert!(e.mode(mode), "{} did not turn on", mode.name());
+
+                e.process(mode.reset_sequence());
+                assert!(!e.mode(mode), "{} did not turn off", mode.name());
+            }
+        }
+
+        /// Setting one mode leaves the others alone, so a backend that mapped
+        /// two of them onto the same flag fails here rather than silently
+        /// reporting one when a test asked about the other.
+        #[test]
+        fn conformance_terminal_modes_are_independent() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let mut e = conformance_emu(20, 4, 100);
+                e.process(mode.set_sequence());
+                for other in TerminalMode::ALL {
+                    if other == mode {
+                        continue;
+                    }
+                    assert_eq!(
+                        e.mode(other),
+                        other.default_enabled(),
+                        "setting {} also changed {}",
+                        mode.name(),
+                        other.name()
+                    );
+                }
+            }
+        }
+
         /// Resetting the underline color must not be confusable with setting
         /// it to white.
         ///

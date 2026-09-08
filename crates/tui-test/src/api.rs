@@ -1,6 +1,8 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::shell::Shell;
@@ -826,6 +828,11 @@ pub struct State {
     pub exited: Option<i32>,
     pub ready: bool,
     pub bell_count: u64,
+    /// Terminal modes the child has turned on, by name.
+    ///
+    /// A map rather than a list, so a reader can tell "off" from "this build
+    /// does not know that mode" and every key is always present.
+    pub modes: BTreeMap<String, bool>,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }

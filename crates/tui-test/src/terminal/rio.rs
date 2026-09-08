@@ -21,7 +21,7 @@ use crate::terminal::cell::{
     Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
 };
 use crate::terminal::emu::{
-    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
+    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode, TerminalMode,
 };
 
 fn clipboard_type(clipboard: RioClipboardType) -> ClipboardType {
@@ -379,8 +379,18 @@ impl Emulator for RioEmu {
         keyboard_mode
     }
 
-    fn bracketed_paste_mode(&self) -> bool {
-        self.term.mode().contains(Mode::BRACKETED_PASTE)
+    fn mode(&self, mode: TerminalMode) -> bool {
+        let flag = match mode {
+            TerminalMode::ApplicationCursorKeys => Mode::APP_CURSOR,
+            TerminalMode::ApplicationKeypad => Mode::APP_KEYPAD,
+            TerminalMode::Origin => Mode::ORIGIN,
+            TerminalMode::Wraparound => Mode::LINE_WRAP,
+            TerminalMode::Insert => Mode::INSERT,
+            TerminalMode::FocusEvents => Mode::FOCUS_IN_OUT,
+            TerminalMode::BracketedPaste => Mode::BRACKETED_PASTE,
+            TerminalMode::AlternateScreen => Mode::ALT_SCREEN,
+        };
+        self.term.mode().contains(flag)
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {

@@ -80,7 +80,7 @@ Most waits accept `--timeout MS`. `expect`, `click`, and `highlight` retry. `fin
 
 | Command | Use |
 | --- | --- |
-| `state` | Read session state and text. |
+| `state` | Read session state, terminal modes, and text. |
 | `text [--full]` | Read terminal text. |
 | `cells X Y [W H]` | Read cells and styles. |
 | `get FIELD` | Read one field. |
@@ -126,6 +126,25 @@ directory = "./artifacts"
 ```
 
 Recording modes: `disabled`, `on-failure`, and `always`.
+
+## Terminal modes
+
+`state` reports the modes the child has turned on, under `modes`:
+
+| Key | Sequence | Meaning |
+| --- | --- | --- |
+| `application_cursor_keys` | `CSI ?1 h` | cursor keys send `SS3` |
+| `application_keypad` | `ESC =` | keypad sends application sequences |
+| `origin` | `CSI ?6 h` | cursor confined to the scroll region |
+| `wraparound` | `CSI ?7 h` | text wraps at the right margin (on by default) |
+| `insert` | `CSI 4 h` | printed text shifts the line right |
+| `focus_events` | `CSI ?1004 h` | focus changes are reported to the child |
+| `bracketed_paste` | `CSI ?2004 h` | pastes are bracketed |
+| `alternate_screen` | `CSI ?1049 h` | the alternate screen is showing |
+
+Every key is always present, so `false` means off rather than unknown. The set
+is deliberately closed: a mode is listed only when all four backends report it
+identically, which the conformance suite checks.
 
 ## Agent commands
 

@@ -27,7 +27,7 @@ use crate::terminal::cell::{
     Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
 };
 use crate::terminal::emu::{
-    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
+    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode, TerminalMode,
 };
 
 fn clipboard_type(clipboard: AlacClipboardType) -> ClipboardType {
@@ -455,8 +455,18 @@ impl Emulator for AlacrittyEmu {
         keyboard_mode
     }
 
-    fn bracketed_paste_mode(&self) -> bool {
-        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    fn mode(&self, mode: TerminalMode) -> bool {
+        let flag = match mode {
+            TerminalMode::ApplicationCursorKeys => TermMode::APP_CURSOR,
+            TerminalMode::ApplicationKeypad => TermMode::APP_KEYPAD,
+            TerminalMode::Origin => TermMode::ORIGIN,
+            TerminalMode::Wraparound => TermMode::LINE_WRAP,
+            TerminalMode::Insert => TermMode::INSERT,
+            TerminalMode::FocusEvents => TermMode::FOCUS_IN_OUT,
+            TerminalMode::BracketedPaste => TermMode::BRACKETED_PASTE,
+            TerminalMode::AlternateScreen => TermMode::ALT_SCREEN,
+        };
+        self.term.mode().contains(flag)
     }
 
     fn title(&self) -> Option<String> {

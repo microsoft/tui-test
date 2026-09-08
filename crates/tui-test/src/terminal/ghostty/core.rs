@@ -28,7 +28,7 @@ use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{
     Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
 };
-use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape, KeyboardMode};
+use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape, KeyboardMode, TerminalMode};
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
     RgbColor {
@@ -271,10 +271,23 @@ impl GhosttyCore {
         self.frame = None;
     }
 
-    pub(super) fn bracketed_paste_mode(&self) -> Result<bool> {
+    pub(super) fn mode(&self, mode: TerminalMode) -> Result<bool> {
+        // Ghostty tracks `?1049` as the pair it is: a screen swap plus a
+        // cursor save. `ALT_SCREEN_SAVE` is the one `?1049` itself sets, and
+        // it is what a child that sent `?1049` gets told about.
+        let ghostty_mode = match mode {
+            TerminalMode::ApplicationCursorKeys => Mode::DECCKM,
+            TerminalMode::ApplicationKeypad => Mode::KEYPAD_KEYS,
+            TerminalMode::Origin => Mode::ORIGIN,
+            TerminalMode::Wraparound => Mode::WRAPAROUND,
+            TerminalMode::Insert => Mode::INSERT,
+            TerminalMode::FocusEvents => Mode::FOCUS_EVENT,
+            TerminalMode::BracketedPaste => Mode::BRACKETED_PASTE,
+            TerminalMode::AlternateScreen => Mode::ALT_SCREEN_SAVE,
+        };
         self.terminal
-            .mode(Mode::BRACKETED_PASTE)
-            .context("reading bracketed paste mode")
+            .mode(ghostty_mode)
+            .with_context(|| format!("reading {} mode", mode.name()))
     }
 
     pub(super) fn take_pending_writes(&mut self) -> Vec<u8> {

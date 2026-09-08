@@ -334,7 +334,27 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
       var s = term._core.coreService.decPrivateModes.cursorStyle;
       return s === undefined ? 'block' : String(s);
     },
-    bracketedPaste: function () { return term.modes.bracketedPasteMode; },
+    // Terminal modes, keyed by the neutral names the Rust side uses.
+    //
+    // `term.modes` is a fixed set rather than a "read mode N" call, which is
+    // why the Rust vocabulary is a closed enum: these are the ones every
+    // backend can answer. The alternate screen is the exception, absent from
+    // `modes` but readable from the active buffer, which reports `alternate`
+    // exactly while `?1049` or `?47` is in effect.
+    mode: function (name) {
+      var m = term.modes;
+      switch (name) {
+        case 'application_cursor_keys': return m.applicationCursorKeysMode ? 1 : 0;
+        case 'application_keypad': return m.applicationKeypadMode ? 1 : 0;
+        case 'origin': return m.originMode ? 1 : 0;
+        case 'wraparound': return m.wraparoundMode ? 1 : 0;
+        case 'insert': return m.insertMode ? 1 : 0;
+        case 'focus_events': return m.sendFocusMode ? 1 : 0;
+        case 'bracketed_paste': return m.bracketedPasteMode ? 1 : 0;
+        case 'alternate_screen': return term.buffer.active.type === 'alternate' ? 1 : 0;
+        default: return 0;
+      }
+    },
 
     // A color a program set, or -1 when it has not touched this slot and the
     // profile still decides. Kept as one call per slot: only a handful are

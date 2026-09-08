@@ -1034,6 +1034,10 @@ fn state(session: &TerminalSession) -> crate::api::State {
         exited: state.exited,
         ready: state.tracker.is_ready(),
         bell_count: bells.count,
+        modes: crate::terminal::emu::TerminalMode::ALL
+            .into_iter()
+            .map(|mode| (mode.name().to_string(), state.emu.mode(mode)))
+            .collect(),
         timeouts: effective_timeouts(session),
         text: text_of(&state.emu.viewable_rows()),
     }

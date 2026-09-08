@@ -29,7 +29,7 @@ use rquickjs::{Context, Ctx, Function, Object, Runtime};
 use crate::event::BellTracker;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{ClipboardValidator, CursorShape, Emulator};
+use crate::terminal::emu::{ClipboardValidator, CursorShape, Emulator, TerminalMode};
 
 const XTERM_BUNDLE: &str = include_str!("../../assets/xtermjs/xterm-headless.js");
 const UNICODE11: &str = include_str!("../../assets/xtermjs/addon-unicode11.js");
@@ -444,8 +444,13 @@ impl Emulator for XtermJsEmu {
         self.call::<String>("takeReplies").into_bytes()
     }
 
-    fn bracketed_paste_mode(&self) -> bool {
-        self.call("bracketedPaste")
+    fn mode(&self, mode: TerminalMode) -> bool {
+        self.invoke("mode", |emu, ctx| {
+            let name = rquickjs::String::from_str(ctx.clone(), mode.name())?;
+            emu.get::<_, Function>("mode")?.call((name,))
+        })
+        .unwrap_or(0i32)
+            != 0
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {

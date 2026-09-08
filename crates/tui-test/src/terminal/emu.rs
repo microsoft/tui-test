@@ -40,6 +40,102 @@ bitflags::bitflags! {
     }
 }
 
+/// A terminal mode a test can ask about.
+///
+/// Deliberately a closed set rather than a mode number, because the point is
+/// that every backend answers the same question the same way. A variant earns
+/// its place only when all four backends can report it: alacritty and rio from
+/// their `Mode` bitflags, ghostty from `Terminal::mode`, and xterm.js from its
+/// `modes` object, whose fixed set is the binding constraint. Modes that only
+/// some backends track are left out rather than reported as `false`, which
+/// would be a wrong answer dressed as a real one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TerminalMode {
+    /// `DECCKM` (`CSI ?1 h`): cursor keys send `SS3` instead of `CSI`.
+    ApplicationCursorKeys,
+    /// `DECKPAM` (`ESC =`): the keypad sends application sequences.
+    ///
+    /// Driven by `DECKPAM`/`DECKPNM` rather than `CSI ?66 h`, which alacritty
+    /// and rio do not implement: the escape form is the one all four honor.
+    ApplicationKeypad,
+    /// `DECOM` (`CSI ?6 h`): the cursor is confined to the scroll region.
+    Origin,
+    /// `DECAWM` (`CSI ?7 h`): text wraps at the right margin.
+    Wraparound,
+    /// `IRM` (`CSI 4 h`): printed text shifts the rest of the line right.
+    Insert,
+    /// `CSI ?1004 h`: the child is told when the terminal gains or loses focus.
+    FocusEvents,
+    /// `CSI ?2004 h`: pasted text is wrapped in `ESC [200~` and `ESC [201~`.
+    BracketedPaste,
+    /// `CSI ?1049 h`: the alternate screen is showing.
+    AlternateScreen,
+}
+
+impl TerminalMode {
+    /// Every mode, so a caller can report the whole set without listing it.
+    pub const ALL: [TerminalMode; 8] = [
+        TerminalMode::ApplicationCursorKeys,
+        TerminalMode::ApplicationKeypad,
+        TerminalMode::Origin,
+        TerminalMode::Wraparound,
+        TerminalMode::Insert,
+        TerminalMode::FocusEvents,
+        TerminalMode::BracketedPaste,
+        TerminalMode::AlternateScreen,
+    ];
+
+    /// The name this mode goes by on the wire.
+    pub const fn name(self) -> &'static str {
+        match self {
+            TerminalMode::ApplicationCursorKeys => "application_cursor_keys",
+            TerminalMode::ApplicationKeypad => "application_keypad",
+            TerminalMode::Origin => "origin",
+            TerminalMode::Wraparound => "wraparound",
+            TerminalMode::Insert => "insert",
+            TerminalMode::FocusEvents => "focus_events",
+            TerminalMode::BracketedPaste => "bracketed_paste",
+            TerminalMode::AlternateScreen => "alternate_screen",
+        }
+    }
+
+    /// The sequence that turns this mode on, for tests and documentation.
+    pub const fn set_sequence(self) -> &'static [u8] {
+        match self {
+            TerminalMode::ApplicationCursorKeys => b"\x1b[?1h",
+            TerminalMode::ApplicationKeypad => b"\x1b=",
+            TerminalMode::Origin => b"\x1b[?6h",
+            TerminalMode::Wraparound => b"\x1b[?7h",
+            TerminalMode::Insert => b"\x1b[4h",
+            TerminalMode::FocusEvents => b"\x1b[?1004h",
+            TerminalMode::BracketedPaste => b"\x1b[?2004h",
+            TerminalMode::AlternateScreen => b"\x1b[?1049h",
+        }
+    }
+
+    /// The sequence that turns this mode off.
+    pub const fn reset_sequence(self) -> &'static [u8] {
+        match self {
+            TerminalMode::ApplicationCursorKeys => b"\x1b[?1l",
+            TerminalMode::ApplicationKeypad => b"\x1b>",
+            TerminalMode::Origin => b"\x1b[?6l",
+            TerminalMode::Wraparound => b"\x1b[?7l",
+            TerminalMode::Insert => b"\x1b[4l",
+            TerminalMode::FocusEvents => b"\x1b[?1004l",
+            TerminalMode::BracketedPaste => b"\x1b[?2004l",
+            TerminalMode::AlternateScreen => b"\x1b[?1049l",
+        }
+    }
+
+    /// Whether the mode is on when a terminal has been told nothing.
+    ///
+    /// `DECAWM` is the one that starts on: a terminal that did not wrap would
+    /// lose every character past the right margin.
+    pub const fn default_enabled(self) -> bool {
+        matches!(self, TerminalMode::Wraparound)
+    }
+}
+
 /// SGR mouse events currently requested by the child.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MouseMode {
@@ -260,8 +356,19 @@ pub trait Emulator: Send {
     }
 
     /// Whether the child enabled bracketed paste mode.
+    /// Whether a terminal mode is currently set.
+    ///
+    /// Required rather than defaulted: a backend that silently answered
+    /// `false` for everything would look like a terminal where nothing is
+    /// ever enabled, and no test would catch it.
+    fn mode(&self, mode: TerminalMode) -> bool;
+
+    /// Whether the child asked for bracketed paste.
+    ///
+    /// A named shorthand for the mode of the same name, kept because pasting
+    /// is the one place the daemon has to branch on a mode by itself.
     fn bracketed_paste_mode(&self) -> bool {
-        false
+        self.mode(TerminalMode::BracketedPaste)
     }
     /// Encode one key event with the backend's own key encoder.
     ///
