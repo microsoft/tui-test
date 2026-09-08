@@ -5,7 +5,7 @@ use std::io::BufReader;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use interprocess::local_socket::traits::ListenerExt;
+use interprocess::local_socket::traits::Listener;
 use interprocess::local_socket::Stream;
 
 use tui_test::engine::Engine;
@@ -54,8 +54,10 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
     let operation_worker =
         spawn_operation_worker(requests, Arc::clone(&engine), session_name.clone(), logging);
 
-    for conn in listener.incoming() {
-        let Ok(conn) = conn else { continue };
+    loop {
+        let Ok(conn) = listener.accept() else {
+            continue;
+        };
         let mut reader = BufReader::new(conn);
         let req = match ipc::read_request(&mut reader) {
             Ok(request) => request,
@@ -72,8 +74,13 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
             );
             continue;
         }
-        let shutdown = matches!(&req, Request::Close | Request::Shutdown);
-        if operations.send((req, reader.into_inner())).is_err() || shutdown {
+        if matches!(&req, Request::Close | Request::Shutdown) {
+            // Stop accepting before acknowledging shutdown, not after the reply drains.
+            drop(listener);
+            let _ = operations.send((req, reader.into_inner()));
+            break;
+        }
+        if operations.send((req, reader.into_inner())).is_err() {
             break;
         }
     }
