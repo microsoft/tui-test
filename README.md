@@ -274,7 +274,7 @@ Timeout defaults:
 
 | Command | Description |
 | --- | --- |
-| `screenshot [PATH] [-o PATH] [--full] [--zoom N] [--background COLOR \| --transparent]` | Print text or save SVG. |
+| `screenshot [PATH] [-o PATH] [--full] [--zoom N] [--background COLOR \| --transparent]` | Print text or save SVG or PNG. |
 | `record start PATH [options] [--background COLOR \| --transparent]` | Start APNG, GIF, MP4, or asciinema recording. |
 | `record stop` | Finish the recording. |
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
