@@ -1,7 +1,7 @@
 //! cli daemon host: local socket listener, idle watchdog, monitor streaming,
 //! and process state files around the reusable in-process engine.
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -78,7 +78,16 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
         }
         if let Request::MonitorInputStream { cols, rows } = req {
             let mut conn = conn;
-            if ipc::write_response(&mut conn, &Response::ok()).is_ok() {
+            let frame = monitor_frame(&engine);
+            let initial_frame = monitor::render_frame(
+                frame.as_ref(),
+                (cols, rows),
+                &session_name,
+                true,
+                &mut monitor::ModeMirror::default(),
+            );
+            let response = Response::with(serde_json::json!({ "initial_frame": initial_frame }));
+            if ipc::write_response(&mut conn, &response).is_ok() {
                 spawn_monitor_input(
                     Arc::clone(&engine),
                     Arc::clone(&last_activity),
@@ -242,6 +251,19 @@ fn spawn_idle_watchdog(engine: Arc<Engine>, last_activity: Arc<Mutex<Instant>>, 
     });
 }
 
+fn monitor_frame(engine: &Engine) -> Option<monitor::Frame> {
+    engine.frame().map(|frame| monitor::Frame {
+        grid: frame.grid,
+        cursor: frame.cursor,
+        size: frame.size,
+        keyboard_mode: frame.keyboard_mode,
+        bracketed_paste: frame.bracketed_paste,
+        mouse_mode: frame.mouse_mode,
+        exited: frame.exited,
+        shell: frame.shell,
+    })
+}
+
 fn spawn_monitor(
     engine: Arc<Engine>,
     mut conn: Stream,
@@ -253,16 +275,7 @@ fn spawn_monitor(
         engine.log_event("monitor attached");
         let mut modes = monitor::ModeMirror::default();
         loop {
-            let frame = engine.frame().map(|frame| monitor::Frame {
-                grid: frame.grid,
-                cursor: frame.cursor,
-                size: frame.size,
-                keyboard_mode: frame.keyboard_mode,
-                bracketed_paste: frame.bracketed_paste,
-                mouse_mode: frame.mouse_mode,
-                exited: frame.exited,
-                shell: frame.shell,
-            });
+            let frame = monitor_frame(&engine);
             let bytes =
                 monitor::render_frame(frame.as_ref(), viewer, &session, interactive, &mut modes);
             if conn.write_all(&bytes).is_err() || conn.flush().is_err() {
@@ -274,23 +287,21 @@ fn spawn_monitor(
     });
 }
 
-/// Forward viewer input to the pty verbatim.
+/// Forward viewer input, translating SGR mouse coordinates past the frame border.
 fn spawn_monitor_input(
     engine: Arc<Engine>,
     last_activity: Arc<Mutex<Instant>>,
-    mut conn: Stream,
+    conn: Stream,
     viewer: (u16, u16),
 ) {
     std::thread::spawn(move || {
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let mut buffer = [0; 16 * 1024];
-            loop {
-                let read = match conn.read(&mut buffer) {
-                    Ok(0) | Err(_) => break,
-                    Ok(read) => read,
-                };
-                if sender.send(buffer[..read].to_vec()).is_err() {
+            let messages = serde_json::Deserializer::from_reader(std::io::BufReader::new(conn))
+                .into_iter::<crate::protocol::MonitorInput>();
+            for message in messages {
+                let failed = message.is_err();
+                if sender.send(message).is_err() || failed {
                     break;
                 }
             }
@@ -298,13 +309,21 @@ fn spawn_monitor_input(
         let mut mouse = monitor::MouseRemapper::new(viewer);
         loop {
             let input = match receiver.recv_timeout(Duration::from_millis(50)) {
-                Ok(input) => {
+                Ok(Ok(crate::protocol::MonitorInput::Write { data })) => {
                     *last_activity.lock().unwrap() = Instant::now();
-                    mouse.push(&input, engine.monitor_mouse_size())
+                    mouse.push(&data, engine.monitor_mouse_size())
+                }
+                Ok(Ok(crate::protocol::MonitorInput::Resize { cols, rows })) => {
+                    mouse.resize((cols, rows));
+                    Vec::new()
+                }
+                Ok(Err(error)) => {
+                    engine.log_event(&format!("monitor input message failed: {error}"));
+                    break;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     mouse.observe(engine.monitor_mouse_size());
-                    mouse.finish()
+                    mouse.on_idle()
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
@@ -316,7 +335,9 @@ fn spawn_monitor_input(
         }
         let pending = mouse.finish();
         if !pending.is_empty() {
-            let _ = engine.write_monitor_input_raw(&pending);
+            if let Err(error) = engine.write_monitor_input_raw(&pending) {
+                engine.log_event(&format!("monitor input write failed: {}", error.message));
+            }
         }
     });
 }

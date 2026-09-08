@@ -10,15 +10,15 @@ pub const BRACKETED_PASTE_DISABLE: &str = "\x1b[?2004l";
 pub const BRACKETED_PASTE_SAVE: &[u8] = b"\x1b[?2004s";
 pub const BRACKETED_PASTE_RESTORE: &[u8] = b"\x1b[?2004r";
 
-pub const KITTY_KEYBOARD_PUSH: &[u8] = b"\x1b[>0u";
+pub const KITTY_KEYBOARD_SAVE_AND_RESET: &[u8] = b"\x1b[>0u";
 pub const KITTY_KEYBOARD_POP: &[u8] = b"\x1b[<u";
-pub const KITTY_CTRL_RIGHT_BRACKET: &[u8] = b"\x1b[93;";
 
+pub const MOUSE_SAVE: &[u8] = b"\x1b[?1000s\x1b[?1002s\x1b[?1003s\x1b[?1006s";
+pub const MOUSE_RESTORE: &[u8] = b"\x1b[?1000r\x1b[?1002r\x1b[?1003r\x1b[?1006r";
 pub const MOUSE_DISABLE: &str = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l";
 pub const MOUSE_CLICK_ENABLE: &str = "\x1b[?1006h\x1b[?1000h";
 pub const MOUSE_DRAG_ENABLE: &str = "\x1b[?1006h\x1b[?1002h";
 pub const MOUSE_MOTION_ENABLE: &str = "\x1b[?1006h\x1b[?1003h";
-pub const SGR_MOUSE_PREFIX: &[u8] = b"\x1b[<";
 
 pub fn kitty_keyboard_mode(flags: u8) -> String {
     format!("\x1b[={flags}u")

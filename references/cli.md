@@ -104,7 +104,12 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 | `record stop` | Finish it. |
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
 | `monitor` | Watch a session live. |
-| `monitor --interactive` | Send input to a session. |
+| `monitor --interactive` | Forward keyboard, paste, and supported SGR mouse input; Ctrl+] detaches. |
+
+Interactive monitors apply the target's keyboard and paste modes before reading
+input. SGR mouse clicks, drags, and motion are enabled when requested by the
+target, with coordinates translated past the monitor's border. Viewer modes are
+restored on detach; read-only monitoring does not change input modes.
 
 ## Configure
 

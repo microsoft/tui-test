@@ -15,9 +15,10 @@ use tui_test::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle};
 use tui_test::terminal::emu::{KeyboardMode, MouseMode};
 
 use crate::ansi;
-
 #[cfg(windows)]
-const UTF8_CONSOLE_CODE_PAGE: u32 = 65001;
+use crate::console_input::ConsoleInput;
+use crate::monitor_input::{InputAction, InputEvent, InputParser};
+use crate::protocol::MonitorInput;
 
 /// A snapshot of a live session, rendered into one monitor frame.
 pub struct Frame {
@@ -284,6 +285,19 @@ pub fn run_client(session: &str, interactive: bool) -> i32 {
         return 2;
     }
 
+    let size = crossterm::terminal::size().unwrap_or((80, 24));
+    let input_stream = if interactive {
+        match InputStream::connect(&socket, size) {
+            Ok(stream) => Some(stream),
+            Err(error) => {
+                eprintln!("failed to attach monitor input: {error}");
+                return 4;
+            }
+        }
+    } else {
+        None
+    };
+
     if crossterm::terminal::enable_raw_mode().is_err() {
         eprintln!("failed to enter raw mode");
         return 5;
@@ -309,8 +323,21 @@ pub fn run_client(session: &str, interactive: bool) -> i32 {
         #[cfg(windows)]
         vt_input,
     };
-    enter_viewer(&mut viewer.stdout, interactive);
-    stream_loop(&socket, interactive.then(spawn_stdin_reader), interactive)
+    if let Err(error) = enter_viewer(
+        &mut viewer.stdout,
+        input_stream
+            .as_ref()
+            .map(|stream| stream.initial_frame.as_slice()),
+    ) {
+        eprintln!("failed to initialize monitor: {error}");
+        return 5;
+    }
+    stream_loop(
+        &socket,
+        interactive.then(spawn_stdin_reader),
+        input_stream,
+        size,
+    )
 }
 
 struct ViewerGuard {
@@ -329,18 +356,22 @@ impl Drop for ViewerGuard {
     }
 }
 
-fn enter_viewer(out: &mut impl Write, interactive: bool) {
-    let _ = crossterm::execute!(
+fn enter_viewer(out: &mut impl Write, initial_frame: Option<&[u8]>) -> std::io::Result<()> {
+    crossterm::execute!(
         out,
         crossterm::terminal::EnterAlternateScreen,
         crossterm::cursor::Hide
-    );
-    if interactive {
-        let _ = out.write_all(ansi::BRACKETED_PASTE_SAVE);
-        let _ = out.write_all(ansi::KITTY_KEYBOARD_PUSH);
-        let _ = out.write_all(ansi::MOUSE_DISABLE.as_bytes());
-        let _ = out.flush();
+    )?;
+    if let Some(frame) = initial_frame {
+        out.write_all(ansi::BRACKETED_PASTE_SAVE)?;
+        out.write_all(ansi::MOUSE_SAVE)?;
+        // Push saves the viewer's old flags and selects zero. Apply the target's
+        // complete mode snapshot before starting the stdin reader.
+        out.write_all(ansi::KITTY_KEYBOARD_SAVE_AND_RESET)?;
+        out.write_all(frame)?;
+        out.flush()?;
     }
+    Ok(())
 }
 
 fn leave_viewer(out: &mut impl Write, interactive: bool) {
@@ -349,6 +380,7 @@ fn leave_viewer(out: &mut impl Write, interactive: bool) {
         let _ = out.write_all(ansi::BRACKETED_PASTE_DISABLE.as_bytes());
         let _ = out.write_all(ansi::BRACKETED_PASTE_RESTORE);
         let _ = out.write_all(ansi::MOUSE_DISABLE.as_bytes());
+        let _ = out.write_all(ansi::MOUSE_RESTORE);
         let _ = out.flush();
     }
     let _ = crossterm::execute!(
@@ -362,15 +394,14 @@ fn leave_viewer(out: &mut impl Write, interactive: bool) {
 struct VirtualTerminalInput {
     handle: *mut core::ffi::c_void,
     original_mode: u32,
-    original_code_page: u32,
 }
 
 #[cfg(windows)]
 impl VirtualTerminalInput {
     fn enable() -> std::io::Result<Self> {
         use windows_sys::Win32::System::Console::{
-            GetConsoleCP, GetConsoleMode, GetStdHandle, SetConsoleCP, SetConsoleMode,
-            ENABLE_VIRTUAL_TERMINAL_INPUT, STD_INPUT_HANDLE,
+            GetConsoleMode, GetStdHandle, SetConsoleMode, ENABLE_VIRTUAL_TERMINAL_INPUT,
+            STD_INPUT_HANDLE,
         };
 
         unsafe {
@@ -379,22 +410,12 @@ impl VirtualTerminalInput {
             if handle.is_null() || GetConsoleMode(handle, &mut original_mode) == 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            let original_code_page = GetConsoleCP();
-            if original_code_page == 0 {
-                return Err(std::io::Error::last_os_error());
-            }
             if SetConsoleMode(handle, original_mode | ENABLE_VIRTUAL_TERMINAL_INPUT) == 0 {
                 return Err(std::io::Error::last_os_error());
-            }
-            if SetConsoleCP(UTF8_CONSOLE_CODE_PAGE) == 0 {
-                let error = std::io::Error::last_os_error();
-                SetConsoleMode(handle, original_mode);
-                return Err(error);
             }
             Ok(Self {
                 handle,
                 original_mode,
-                original_code_page,
             })
         }
     }
@@ -403,47 +424,52 @@ impl VirtualTerminalInput {
 #[cfg(windows)]
 impl Drop for VirtualTerminalInput {
     fn drop(&mut self) {
-        use windows_sys::Win32::System::Console::{SetConsoleCP, SetConsoleMode};
+        use windows_sys::Win32::System::Console::SetConsoleMode;
 
         unsafe {
-            SetConsoleCP(self.original_code_page);
             SetConsoleMode(self.handle, self.original_mode);
         }
     }
 }
 
 /// Read viewer stdin on its own thread; the channel closes when stdin does.
-fn spawn_stdin_reader() -> mpsc::Receiver<Vec<u8>> {
+fn spawn_stdin_reader() -> mpsc::Receiver<std::io::Result<Vec<u8>>> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let stdin = std::io::stdin();
-        let mut stdin = stdin.lock();
+        #[cfg(windows)]
+        let mut stdin = ConsoleInput::new();
+        #[cfg(not(windows))]
+        let mut stdin = std::io::stdin().lock();
         let mut buffer = [0; 4096];
-        while let Ok(read) = stdin.read(&mut buffer) {
-            if read == 0 || sender.send(buffer[..read].to_vec()).is_err() {
-                break;
+        loop {
+            match stdin.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) if sender.send(Ok(buffer[..read].to_vec())).is_err() => break,
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    let _ = sender.send(Err(error));
+                    break;
+                }
             }
         }
     });
     receiver
 }
 
-fn stream_loop(socket: &str, input: Option<mpsc::Receiver<Vec<u8>>>, interactive: bool) -> i32 {
+fn stream_loop(
+    socket: &str,
+    input: Option<mpsc::Receiver<std::io::Result<Vec<u8>>>>,
+    input_stream: Option<InputStream>,
+    mut viewer: (u16, u16),
+) -> i32 {
     use crate::ipc;
     use crate::protocol::Request;
 
-    let mut detach = DetachParser::default();
+    let interactive = input.is_some();
+    let mut detach = InputParser::default();
     loop {
-        let (vcols, vrows) = crossterm::terminal::size().unwrap_or((80, 24));
-        let viewer = (vcols, vrows);
-        let input_stream = if interactive {
-            match InputStream::connect(socket, viewer) {
-                Ok(stream) => Some(stream),
-                Err(_) => return 4,
-            }
-        } else {
-            None
-        };
+        let (vcols, vrows) = viewer;
         let mut conn = match ipc::connect(socket) {
             Ok(c) => c,
             Err(_) => return 4,
@@ -480,8 +506,10 @@ fn stream_loop(socket: &str, input: Option<mpsc::Receiver<Vec<u8>>>, interactive
                             break;
                         }
                         Ok(n) => {
-                            let _ = out.write_all(&buf[..n]);
-                            let _ = out.flush();
+                            if out.write_all(&buf[..n]).and_then(|_| out.flush()).is_err() {
+                                disconnected.store(true, Ordering::Relaxed);
+                                break;
+                            }
                         }
                     }
                 }
@@ -492,11 +520,18 @@ fn stream_loop(socket: &str, input: Option<mpsc::Receiver<Vec<u8>>>, interactive
             (Some(input), Some(input_stream)) => {
                 interactive_input_loop(viewer, input, &disconnected, &mut detach, input_stream)
             }
-            _ => read_only_input_loop(viewer, &disconnected),
+            _ => Ok(read_only_input_loop(viewer, &disconnected)),
         };
         stop.store(true, Ordering::Relaxed);
         let _ = reader.join();
 
+        let reconnect = match reconnect {
+            Ok(reconnect) => reconnect,
+            Err(error) => {
+                eprintln!("monitor input failed: {error}");
+                return 5;
+            }
+        };
         if !reconnect {
             return 0;
         }
@@ -504,6 +539,13 @@ fn stream_loop(socket: &str, input: Option<mpsc::Receiver<Vec<u8>>>, interactive
             std::io::stdout(),
             crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
         );
+        viewer = crossterm::terminal::size().unwrap_or((80, 24));
+        if let Some(stream) = &input_stream {
+            if !stream.resize(viewer) {
+                eprintln!("failed to resize monitor input");
+                return 4;
+            }
+        }
     }
 }
 
@@ -511,37 +553,50 @@ fn stream_loop(socket: &str, input: Option<mpsc::Receiver<Vec<u8>>>, interactive
 /// reopened at a new size (`true`).
 fn interactive_input_loop(
     viewer: (u16, u16),
-    input: &mpsc::Receiver<Vec<u8>>,
+    input: &mpsc::Receiver<std::io::Result<Vec<u8>>>,
     disconnected: &AtomicBool,
-    detach: &mut DetachParser,
+    detach: &mut InputParser,
     input_stream: &InputStream,
-) -> bool {
+) -> std::io::Result<bool> {
     loop {
         if disconnected.load(Ordering::Relaxed) {
-            return false;
+            return Ok(false);
         }
         if crossterm::terminal::size().is_ok_and(|size| size != viewer) {
-            return true;
+            return Ok(true);
         }
 
         match input.recv_timeout(Duration::from_millis(50)) {
             Ok(bytes) => {
-                let (forward, detached) = detach.push(&bytes);
+                let (forward, detached) = detach.push(&bytes?, |event| match event {
+                    InputEvent::Detach => InputAction::Detach,
+                    _ => InputAction::Forward,
+                });
                 if !input_stream.send(forward) {
-                    eprintln!("monitor input disconnected");
-                    return false;
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "monitor input disconnected",
+                    ));
                 }
                 if detached {
-                    return false;
+                    return Ok(false);
                 }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if !input_stream.send(detach.finish()) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "monitor input disconnected",
+                    ));
+                }
+                return Ok(false);
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if let Some(bytes) = detach.on_idle() {
-                    if !input_stream.send(bytes) {
-                        eprintln!("monitor input disconnected");
-                        return false;
-                    }
+                if !input_stream.send(detach.on_idle()) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "monitor input disconnected",
+                    ));
                 }
             }
         }
@@ -576,95 +631,8 @@ fn read_only_input_loop(viewer: (u16, u16), disconnected: &AtomicBool) -> bool {
     }
 }
 
-/// Kitty encodes `Ctrl+]` as `CSI 93 ; <modifiers> u`; every other terminal
-/// sends the single byte 0x1d.
-const CTRL_RIGHT_BRACKET: u8 = 0x1d;
-
-/// Splits viewer stdin into bytes for the target and the detach chord, holding
-/// back a partial kitty chord until the rest of it arrives.
-#[derive(Default)]
-struct DetachParser {
-    pending: Vec<u8>,
-}
-
-impl DetachParser {
-    /// Returns the bytes to forward and whether the viewer asked to detach.
-    fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, bool) {
-        self.pending.extend_from_slice(bytes);
-        if let Some(at) = self
-            .pending
-            .iter()
-            .position(|byte| *byte == CTRL_RIGHT_BRACKET)
-        {
-            let forwarded = self.pending.drain(..at).collect();
-            self.pending.clear();
-            return (forwarded, true);
-        }
-        let mut forwarded = Vec::new();
-        loop {
-            let Some(start) = self
-                .pending
-                .windows(ansi::KITTY_CTRL_RIGHT_BRACKET.len())
-                .position(|window| window == ansi::KITTY_CTRL_RIGHT_BRACKET)
-            else {
-                let keep = (1..ansi::KITTY_CTRL_RIGHT_BRACKET
-                    .len()
-                    .min(self.pending.len() + 1))
-                    .rev()
-                    .find(|length| {
-                        self.pending
-                            .ends_with(&ansi::KITTY_CTRL_RIGHT_BRACKET[..*length])
-                    })
-                    .unwrap_or(0);
-                let ready = self.pending.len() - keep;
-                forwarded.extend(self.pending.drain(..ready));
-                return (forwarded, false);
-            };
-            forwarded.extend(self.pending.drain(..start));
-            let Some(end) = self.pending[ansi::KITTY_CTRL_RIGHT_BRACKET.len()..]
-                .iter()
-                .position(|byte| (0x40..=0x7e).contains(byte))
-            else {
-                return (forwarded, false);
-            };
-            let sequence: Vec<u8> = self
-                .pending
-                .drain(..=end + ansi::KITTY_CTRL_RIGHT_BRACKET.len())
-                .collect();
-            if is_detach_chord(&sequence) {
-                self.pending.clear();
-                return (forwarded, true);
-            }
-            forwarded.extend(sequence);
-        }
-    }
-
-    /// Nothing followed the held-back bytes, so they were not a detach chord.
-    fn on_idle(&mut self) -> Option<Vec<u8>> {
-        (!self.pending.is_empty()).then(|| std::mem::take(&mut self.pending))
-    }
-}
-
-/// True for `Ctrl+]` held with no modifier that would make it another chord
-/// the target is entitled to see.
-fn is_detach_chord(sequence: &[u8]) -> bool {
-    const CTRL: u16 = 1 << 2;
-    const LOCKS: u16 = (1 << 6) | (1 << 7);
-
-    let Some(modifiers) = sequence
-        .strip_prefix(ansi::KITTY_CTRL_RIGHT_BRACKET)
-        .and_then(|rest| rest.strip_suffix(b"u"))
-        .and_then(|rest| rest.split(|byte| matches!(byte, b';' | b':')).next())
-        .and_then(|digits| std::str::from_utf8(digits).ok()?.parse::<u16>().ok())
-        .and_then(|value| value.checked_sub(1))
-    else {
-        return false;
-    };
-    modifiers & CTRL != 0 && modifiers & !(CTRL | LOCKS) == 0
-}
-
 pub(crate) struct MouseRemapper {
-    pending: Vec<u8>,
+    parser: InputParser,
     viewer: (u16, u16),
     pressed: u8,
     active: bool,
@@ -674,7 +642,7 @@ pub(crate) struct MouseRemapper {
 impl MouseRemapper {
     pub(crate) fn new(viewer: (u16, u16)) -> Self {
         Self {
-            pending: Vec::new(),
+            parser: InputParser::default(),
             viewer,
             pressed: 0,
             active: false,
@@ -694,115 +662,87 @@ impl MouseRemapper {
         }
     }
 
+    pub(crate) fn resize(&mut self, viewer: (u16, u16)) {
+        self.viewer = viewer;
+    }
+
     pub(crate) fn push(&mut self, bytes: &[u8], size: Option<(u16, u16)>) -> Vec<u8> {
         self.observe(size);
-        if size.is_none() && !self.mouse_seen {
-            let mut forwarded = std::mem::take(&mut self.pending);
-            forwarded.extend_from_slice(bytes);
-            return forwarded;
-        }
         let size = size.map(|target| {
             (
                 target.0.min(self.viewer.0.saturating_sub(2)),
                 target.1.min(self.viewer.1.saturating_sub(2)),
             )
         });
-        self.pending.extend_from_slice(bytes);
-        let mut forwarded = Vec::new();
-        loop {
-            let Some(start) = self
-                .pending
-                .windows(ansi::SGR_MOUSE_PREFIX.len())
-                .position(|window| window == ansi::SGR_MOUSE_PREFIX)
-            else {
-                let keep = (1..ansi::SGR_MOUSE_PREFIX.len().min(self.pending.len() + 1))
-                    .rev()
-                    .find(|length| self.pending.ends_with(&ansi::SGR_MOUSE_PREFIX[..*length]))
-                    .unwrap_or(0);
-                let ready = self.pending.len() - keep;
-                forwarded.extend(self.pending.drain(..ready));
-                return forwarded;
-            };
-            forwarded.extend(self.pending.drain(..start));
-            let Some(end) = self.pending[ansi::SGR_MOUSE_PREFIX.len()..]
-                .iter()
-                .position(|byte| (0x40..=0x7e).contains(byte))
-            else {
-                if self.pending.len() > 64 {
-                    forwarded.push(self.pending.remove(0));
-                    continue;
+        self.parser
+            .push(bytes, |event| match event {
+                InputEvent::Mouse {
+                    button,
+                    x,
+                    y,
+                    release,
+                } if self.mouse_seen => {
+                    match remap_sgr_mouse(button, x, y, release, size, &mut self.pressed) {
+                        Some(remapped) => InputAction::Replace(remapped),
+                        None => InputAction::Forward,
+                    }
                 }
-                return forwarded;
-            };
-            let sequence: Vec<u8> = self
-                .pending
-                .drain(..=end + ansi::SGR_MOUSE_PREFIX.len())
-                .collect();
-            match remap_sgr_mouse(&sequence, size, &mut self.pressed) {
-                Some(Some(remapped)) => forwarded.extend(remapped),
-                Some(None) => {}
-                None => forwarded.extend(sequence),
-            }
-        }
+                _ => InputAction::Forward,
+            })
+            .0
+    }
+
+    pub(crate) fn on_idle(&mut self) -> Vec<u8> {
+        self.parser.on_idle()
     }
 
     pub(crate) fn finish(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.pending)
+        self.parser.finish()
     }
 }
 
 fn remap_sgr_mouse(
-    sequence: &[u8],
+    button: u16,
+    x: u16,
+    y: u16,
+    release: bool,
     size: Option<(u16, u16)>,
     pressed: &mut u8,
-) -> Option<Option<Vec<u8>>> {
-    let (&final_byte, params) = sequence.split_last()?;
-    if !matches!(final_byte, b'M' | b'm') {
-        return None;
-    }
-    let mut params = params
-        .strip_prefix(ansi::SGR_MOUSE_PREFIX)?
-        .split(|byte| *byte == b';');
-    let button = parse_u16(params.next()?)?;
-    let x = parse_u16(params.next()?)?;
-    let y = parse_u16(params.next()?)?;
-    if params.next().is_some() {
-        return None;
-    }
+) -> Option<Vec<u8>> {
     let mut x = x.checked_sub(1)?;
     let mut y = y.checked_sub(1)?;
     let base_button = (button & 0b11) as u8;
     let button_bit = (base_button < 3).then(|| 1 << base_button);
     let Some(size) = size else {
-        if final_byte == b'm' {
+        if release {
             if let Some(bit) = button_bit {
                 *pressed &= !bit;
             }
         }
-        return Some(None);
+        return Some(Vec::new());
     };
     let outside = x == 0 || y == 0 || x > size.0 || y > size.1;
-    if final_byte == b'm' {
+    if release {
         let bit = button_bit?;
         if *pressed & bit == 0 {
-            return Some(None);
+            return Some(Vec::new());
         }
         *pressed &= !bit;
         if outside {
             if size.0 == 0 || size.1 == 0 {
-                return Some(None);
+                return Some(Vec::new());
             }
             x = x.clamp(1, size.0);
             y = y.clamp(1, size.1);
         }
     } else {
         if outside {
-            return Some(None);
+            return Some(Vec::new());
         }
         let motion = button & 32 != 0;
         let wheel = button & 64 != 0;
         if motion && button_bit.is_some_and(|bit| *pressed & bit == 0) {
-            return Some(None);
+            return Some(Vec::new());
         }
         if !motion && !wheel {
             if let Some(bit) = button_bit {
@@ -810,16 +750,18 @@ fn remap_sgr_mouse(
             }
         }
     }
-    Some(Some(ansi::sgr_mouse(button, x, y, final_byte)))
-}
-
-fn parse_u16(bytes: &[u8]) -> Option<u16> {
-    std::str::from_utf8(bytes).ok()?.parse().ok()
+    Some(ansi::sgr_mouse(
+        button,
+        x,
+        y,
+        if release { b'm' } else { b'M' },
+    ))
 }
 
 struct InputStream {
-    sender: mpsc::Sender<Vec<u8>>,
+    sender: mpsc::Sender<MonitorInput>,
     connected: Arc<AtomicBool>,
+    initial_frame: Vec<u8>,
 }
 
 impl InputStream {
@@ -841,25 +783,53 @@ impl InputStream {
         if !response.ok {
             return Err(std::io::Error::other("monitor input stream rejected"));
         }
+        let data = response
+            .data
+            .ok_or_else(|| std::io::Error::other("missing monitor input handshake"))?;
+        let initial_frame = serde_json::from_value::<crate::protocol::MonitorInputReady>(data)
+            .map_err(std::io::Error::other)?
+            .initial_frame;
         let mut conn = conn.into_inner();
 
-        let (sender, receiver) = mpsc::channel::<Vec<u8>>();
+        let (sender, receiver) = mpsc::channel::<MonitorInput>();
         let connected = Arc::new(AtomicBool::new(true));
         let writer_connected = Arc::clone(&connected);
         std::thread::spawn(move || {
-            for bytes in receiver {
-                if conn.write_all(&bytes).is_err() || conn.flush().is_err() {
+            for message in receiver {
+                if serde_json::to_writer(&mut conn, &message).is_err()
+                    || conn.write_all(b"\n").is_err()
+                    || conn.flush().is_err()
+                {
                     break;
                 }
             }
             writer_connected.store(false, Ordering::Relaxed);
         });
-        Ok(Self { sender, connected })
+        Ok(Self {
+            sender,
+            connected,
+            initial_frame,
+        })
     }
 
     fn send(&self, bytes: Vec<u8>) -> bool {
-        bytes.is_empty()
-            || (self.connected.load(Ordering::Relaxed) && self.sender.send(bytes).is_ok())
+        self.connected.load(Ordering::Relaxed)
+            && (bytes.is_empty()
+                || self
+                    .sender
+                    .send(MonitorInput::Write { data: bytes })
+                    .is_ok())
+    }
+
+    fn resize(&self, viewer: (u16, u16)) -> bool {
+        self.connected.load(Ordering::Relaxed)
+            && self
+                .sender
+                .send(MonitorInput::Resize {
+                    cols: viewer.0,
+                    rows: viewer.1,
+                })
+                .is_ok()
     }
 }
 
@@ -1028,14 +998,15 @@ mod tests {
     #[test]
     fn viewer_saves_and_restores_terminal_modes() {
         let mut output = Vec::new();
-        enter_viewer(&mut output, true);
+        enter_viewer(&mut output, Some(b"\x1b[=17u")).unwrap();
         leave_viewer(&mut output, true);
         let text = String::from_utf8(output).unwrap();
-        let push = std::str::from_utf8(ansi::KITTY_KEYBOARD_PUSH).unwrap();
+        let push = std::str::from_utf8(ansi::KITTY_KEYBOARD_SAVE_AND_RESET).unwrap();
         let pop = std::str::from_utf8(ansi::KITTY_KEYBOARD_POP).unwrap();
         let order = [
             "\x1b[?2004s",
             push,
+            "\x1b[=17u",
             pop,
             "\x1b[?2004l",
             "\x1b[?2004r",
@@ -1048,36 +1019,26 @@ mod tests {
         );
 
         let mut read_only = Vec::new();
-        enter_viewer(&mut read_only, false);
+        enter_viewer(&mut read_only, None).unwrap();
         leave_viewer(&mut read_only, false);
         assert!(!read_only
             .windows(b"\x1b[?2004".len())
             .any(|window| window == b"\x1b[?2004"));
     }
 
-    /// Viewer keystrokes reach the target untouched; only the detach chord is
-    /// swallowed, including a kitty encoding split across reads.
     #[test]
-    fn interactive_input_is_raw_except_for_the_detach_chord() {
-        let raw = b"\x03text \xff\x1b[200~paste\n\x1b[201~";
-        let mut input = DetachParser::default();
-        assert_eq!(input.push(raw), (raw.to_vec(), false));
-        assert_eq!(input.push(b"before\x1dafter"), (b"before".to_vec(), true));
-
-        for chord in [
-            b"\x1b[93;5u".as_slice(),
-            b"\x1b[93;69:1u",
-            b"\x1b[93;197:1;29u",
-        ] {
-            let mut input = DetachParser::default();
-            let split = chord.len() - 2;
-            assert_eq!(input.push(&chord[..split]), (Vec::new(), false));
-            assert_eq!(input.push(&chord[split..]), (Vec::new(), true));
-        }
-
-        // Ctrl+Shift+] is a different chord, so it belongs to the target.
-        let mut input = DetachParser::default();
-        assert_eq!(input.push(b"\x1b[93;6u"), (b"\x1b[93;6u".to_vec(), false));
+    fn viewer_applies_target_keyboard_mode_before_input_and_restores_previous_mode() {
+        use tui_test::terminal::{alacritty::AlacrittyEmu, emu::Emulator};
+        let mut emu = AlacrittyEmu::new(20, 5, &tui_test::profile::Profile::default());
+        emu.process(b"\x1b[>3u");
+        let mut output = Vec::new();
+        enter_viewer(&mut output, Some(b"\x1b[=17u")).unwrap();
+        emu.process(&output);
+        assert_eq!(emu.keyboard_mode().bits(), 17);
+        output.clear();
+        leave_viewer(&mut output, true);
+        emu.process(&output);
+        assert_eq!(emu.keyboard_mode().bits(), 3);
     }
 
     #[test]
@@ -1135,5 +1096,34 @@ mod tests {
         assert!(turning_off.push(b"\x1b[<0;2;2m", None).is_empty());
         assert!(turning_off.push(b"\x1b[<64;2;2M", None).is_empty());
         assert_eq!(turning_off.push(b"a", None), b"a".to_vec());
+    }
+
+    #[test]
+    fn monitor_mouse_reports_survive_idle_and_leave_paste_untouched() {
+        let mut mouse = MouseRemapper::new((12, 7));
+        assert!(mouse.push(b"\x1b[<0;2", Some((10, 5))).is_empty());
+        assert!(mouse.on_idle().is_empty());
+        assert_eq!(mouse.push(b";2M", Some((10, 5))), b"\x1b[<0;1;1M");
+        let paste = b"\x1b[200~\x1b[<0;2;2M\x1d\x1b[93;5u\x1b[201~";
+        let mut forwarded = Vec::new();
+        for byte in paste {
+            forwarded.extend(mouse.push(&[*byte], Some((10, 5))));
+        }
+        assert_eq!(forwarded, paste);
+        let mut mouse = MouseRemapper::new((12, 7));
+        assert_eq!(mouse.push(paste, Some((10, 5))), paste);
+    }
+
+    #[test]
+    fn monitor_resize_preserves_mouse_buttons_and_paste_state() {
+        let mut mouse = MouseRemapper::new((12, 7));
+        assert_eq!(mouse.push(b"\x1b[<0;2;2M", Some((10, 5))), b"\x1b[<0;1;1M");
+        mouse.resize((8, 4));
+        assert_eq!(mouse.push(b"\x1b[<0;9;6m", Some((10, 5))), b"\x1b[<0;6;2m");
+
+        assert_eq!(mouse.push(b"\x1b[200~", Some((10, 5))), b"\x1b[200~");
+        mouse.resize((15, 10));
+        let payload = b"\x1b[<0;2;2M\x1b[201~";
+        assert_eq!(mouse.push(payload, Some((10, 5))), payload);
     }
 }

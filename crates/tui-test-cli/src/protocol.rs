@@ -417,6 +417,18 @@ pub enum GetField {
     BellEvents,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MonitorInputReady {
+    pub initial_frame: Vec<u8>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MonitorInput {
+    Write { data: Vec<u8> },
+    Resize { cols: u16, rows: u16 },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response {
     pub ok: bool,

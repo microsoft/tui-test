@@ -2,9 +2,12 @@ mod agent_context;
 mod ansi;
 mod cli;
 mod config;
+#[cfg(windows)]
+mod console_input;
 mod daemon;
 mod ipc;
 mod monitor;
+mod monitor_input;
 mod protocol;
 mod skill;
 
