@@ -19,16 +19,31 @@ var nativeFunctions nativeFunctionTable
 var loadNativeEngine = sync.OnceValue(initializeNativeEngine)
 
 func initializeNativeEngine() error {
-	path := os.Getenv("TUI_TEST_GO_NATIVE_LIBRARY")
-	if path == "" {
-		return errors.New("TUI_TEST_GO_NATIVE_LIBRARY must name the native engine library")
-	}
-	table, err := loadNativeFunctions(path)
+	paths, source, err := nativeLibraryPaths()
 	if err != nil {
-		return fmt.Errorf("load native engine from TUI_TEST_GO_NATIVE_LIBRARY: %w", err)
+		return fmt.Errorf("prepare native engine: %w", err)
 	}
-	nativeFunctions = table
-	return nil
+	failures := make([]error, 0, len(paths))
+	for _, path := range paths {
+		table, loadErr := loadNativeFunctions(path)
+		if loadErr == nil {
+			nativeFunctions = table
+			return nil
+		}
+		failures = append(failures, loadErr)
+	}
+	if len(failures) == 0 {
+		return errors.New("no embedded native engine is available for this platform")
+	}
+	return fmt.Errorf("load %s: %w", source, errors.Join(failures...))
+}
+
+func nativeLibraryPaths() ([]string, string, error) {
+	if path := os.Getenv("TUI_TEST_GO_NATIVE_LIBRARY"); path != "" {
+		return []string{path}, "native engine configured by TUI_TEST_GO_NATIVE_LIBRARY", nil
+	}
+	paths, err := embeddedNativeLibraries()
+	return paths, "embedded native engine", err
 }
 
 func loadNativeFunctions(path string) (nativeFunctionTable, error) {
