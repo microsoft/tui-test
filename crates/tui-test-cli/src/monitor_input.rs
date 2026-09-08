@@ -78,30 +78,10 @@ impl Perform for InputState {
             }
         }
     }
-
-    fn esc_dispatch(&mut self, _: &[u8], _: bool, _: u8) {
-        self.complete = true;
-    }
-
-    fn osc_dispatch(&mut self, _: &[&[u8]], _: bool) {
-        self.complete = true;
-    }
-
-    fn hook(&mut self, _: &Params, _: &[u8], _: bool, _: char) {
-        self.complete = true;
-    }
-
-    fn put(&mut self, _: u8) {
-        self.complete = true;
-    }
-
-    fn unhook(&mut self) {
-        self.complete = true;
-    }
 }
 
-/// Interpret input with VTE, but forward the original bytes rather than
-/// reconstructing them from callbacks (which can normalize invalid UTF-8).
+/// Use VTE for CSI input, preserving original bytes rather than reconstructing
+/// them from callbacks (which can normalize invalid UTF-8).
 #[derive(Default)]
 pub(crate) struct InputParser {
     parser: Parser,
@@ -123,13 +103,6 @@ impl InputParser {
                 self.passthrough = false;
             }
             self.pending.push(byte);
-            self.state.complete = false;
-            self.state.event = None;
-            self.parser.advance(&mut self.state, &[byte]);
-            // ESC can finish an OSC/DCS and begin the next sequence in one step.
-            if byte == 0x1b {
-                continue;
-            }
             // VTE parses terminal output, where ESC ] starts an OSC. On input
             // it is also the ordinary legacy Alt+] chord. Only defer CSI input.
             if self.pending.first() == Some(&0x1b)
@@ -138,6 +111,12 @@ impl InputParser {
                 output.append(&mut self.pending);
                 self.parser = Parser::new();
                 self.passthrough = false;
+                continue;
+            }
+            self.state.complete = false;
+            self.state.event = None;
+            self.parser.advance(&mut self.state, &[byte]);
+            if byte == 0x1b {
                 continue;
             }
             if self.state.complete {
@@ -204,6 +183,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn monitor_unrecognized_escape_sequences_are_forwarded_unchanged() {
+        for input in [
+            b"\x1b]0;title\x07".as_slice(),
+            b"\x1bP1;2qpayload\x1b\\",
+            b"\x1b[38;2;1;2;3m",
+        ] {
+            let mut parser = InputParser::default();
+            let mut output = Vec::new();
+            for byte in input {
+                let (forwarded, detached) = detach(&mut parser, &[*byte]);
+                assert!(!detached);
+                output.extend(forwarded);
+            }
+            output.extend(parser.finish());
+            assert_eq!(output, input);
+        }
+    }
     #[test]
     fn monitor_detach_accepts_kitty_subparameters_across_every_split() {
         for chord in [

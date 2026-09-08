@@ -206,6 +206,37 @@ fn write_monitor_input(stream: &mut interprocess::local_socket::Stream, data: &[
     stream.write_all(b"\n").expect("write monitor input");
 }
 
+#[test]
+fn monitor_read_only_viewer_resizes_and_detaches() {
+    let target = Sandbox::new("monitor-read-only-target");
+    target.ok(&["open"]);
+    target.ok(&["submit", "echo monitor-read-only-marker"]);
+    target.wait_for_text("monitor-read-only-marker", "10000");
+
+    let viewer = Sandbox::new("monitor-read-only-viewer");
+    let home = format!("TUI_TEST_HOME={}", target.home.display());
+    viewer.ok(&[
+        "run",
+        "--cols",
+        "100",
+        "--rows",
+        "36",
+        "--env",
+        &home,
+        "--",
+        BIN,
+        "--session",
+        &target.session,
+        "monitor",
+    ]);
+    viewer.wait_for_text("monitor-read-only-marker", "10000");
+    viewer.ok(&["resize", "90", "34"]);
+    viewer.wait_for_text("q quit", "10000");
+    viewer.ok(&["key", "press", "q"]);
+    viewer.ok(&["wait", "exit", "--timeout", "10000"]);
+    target.ok(&["daemon", "status"]);
+}
+
 #[cfg(windows)]
 #[test]
 fn monitor_windows_console_forwards_ctrl_z_and_unicode_without_detaching() {

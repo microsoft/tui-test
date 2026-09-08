@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
+use tui_test::engine::LiveFrame as Frame;
 use tui_test::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle};
 use tui_test::terminal::emu::{KeyboardMode, MouseMode};
 
@@ -19,18 +20,6 @@ use crate::ansi;
 use crate::console_input::ConsoleInput;
 use crate::monitor_input::{InputAction, InputEvent, InputParser};
 use crate::protocol::MonitorInput;
-
-/// A snapshot of a live session, rendered into one monitor frame.
-pub struct Frame {
-    pub grid: Vec<Vec<EmuCell>>,
-    pub cursor: (u16, u16),
-    pub size: (u16, u16),
-    pub keyboard_mode: KeyboardMode,
-    pub bracketed_paste: bool,
-    pub mouse_mode: MouseMode,
-    pub exited: Option<i32>,
-    pub shell: Option<&'static str>,
-}
 
 /// The target's input modes as last announced to the viewer's terminal, so a
 /// mode is only re-applied when the target changes it.
@@ -332,12 +321,15 @@ pub fn run_client(session: &str, interactive: bool) -> i32 {
         eprintln!("failed to initialize monitor: {error}");
         return 5;
     }
-    stream_loop(
-        &socket,
-        interactive.then(spawn_stdin_reader),
-        input_stream,
-        size,
-    )
+    let input = match input_stream {
+        Some(stream) => ViewerInput::Interactive(Box::new(InteractiveInput {
+            stdin: spawn_stdin_reader(),
+            stream,
+            parser: InputParser::default(),
+        })),
+        None => ViewerInput::ReadOnly,
+    };
+    stream_loop(&socket, input, size)
 }
 
 struct ViewerGuard {
@@ -457,17 +449,27 @@ fn spawn_stdin_reader() -> mpsc::Receiver<std::io::Result<Vec<u8>>> {
     receiver
 }
 
-fn stream_loop(
-    socket: &str,
-    input: Option<mpsc::Receiver<std::io::Result<Vec<u8>>>>,
-    input_stream: Option<InputStream>,
-    mut viewer: (u16, u16),
-) -> i32 {
+enum ViewerInput {
+    ReadOnly,
+    Interactive(Box<InteractiveInput>),
+}
+
+struct InteractiveInput {
+    stdin: mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    stream: InputStream,
+    parser: InputParser,
+}
+
+enum ViewerAction {
+    Stop,
+    Resize((u16, u16)),
+}
+
+fn stream_loop(socket: &str, mut input: ViewerInput, mut viewer: (u16, u16)) -> i32 {
     use crate::ipc;
     use crate::protocol::Request;
 
-    let interactive = input.is_some();
-    let mut detach = InputParser::default();
+    let interactive = matches!(&input, ViewerInput::Interactive(_));
     loop {
         let (vcols, vrows) = viewer;
         let mut conn = match ipc::connect(socket) {
@@ -516,118 +518,94 @@ fn stream_loop(
             })
         };
 
-        let reconnect = match (&input, &input_stream) {
-            (Some(input), Some(input_stream)) => {
-                interactive_input_loop(viewer, input, &disconnected, &mut detach, input_stream)
-            }
-            _ => Ok(read_only_input_loop(viewer, &disconnected)),
-        };
+        let action = viewer_input_loop(viewer, &mut input, &disconnected);
         stop.store(true, Ordering::Relaxed);
         let _ = reader.join();
 
-        let reconnect = match reconnect {
-            Ok(reconnect) => reconnect,
+        viewer = match action {
+            Ok(ViewerAction::Stop) => return 0,
+            Ok(ViewerAction::Resize(size)) => size,
             Err(error) => {
                 eprintln!("monitor input failed: {error}");
                 return 5;
             }
         };
-        if !reconnect {
-            return 0;
-        }
         let _ = crossterm::execute!(
             std::io::stdout(),
             crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
         );
-        viewer = crossterm::terminal::size().unwrap_or((80, 24));
-        if let Some(stream) = &input_stream {
-            if !stream.resize(viewer) {
-                eprintln!("failed to resize monitor input");
+        if let ViewerInput::Interactive(input) = &input {
+            if let Err(error) = input.stream.resize(viewer) {
+                eprintln!("failed to resize monitor input: {error}");
                 return 4;
             }
         }
     }
 }
 
-/// Pump viewer input until the viewer detaches or the frame stream has to be
-/// reopened at a new size (`true`).
-fn interactive_input_loop(
+fn viewer_input_loop(
     viewer: (u16, u16),
-    input: &mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    input: &mut ViewerInput,
     disconnected: &AtomicBool,
-    detach: &mut InputParser,
-    input_stream: &InputStream,
-) -> std::io::Result<bool> {
+) -> std::io::Result<ViewerAction> {
     loop {
         if disconnected.load(Ordering::Relaxed) {
-            return Ok(false);
+            return Ok(ViewerAction::Stop);
         }
-        if crossterm::terminal::size().is_ok_and(|size| size != viewer) {
-            return Ok(true);
+        if let Ok(size) = crossterm::terminal::size() {
+            if size != viewer {
+                return Ok(ViewerAction::Resize(size));
+            }
         }
+        let action = match input {
+            ViewerInput::ReadOnly => read_only_input(),
+            ViewerInput::Interactive(input) => input.poll()?,
+        };
+        if let Some(action) = action {
+            return Ok(action);
+        }
+    }
+}
 
-        match input.recv_timeout(Duration::from_millis(50)) {
+impl InteractiveInput {
+    fn poll(&mut self) -> std::io::Result<Option<ViewerAction>> {
+        match self.stdin.recv_timeout(Duration::from_millis(50)) {
             Ok(bytes) => {
-                let (forward, detached) = detach.push(&bytes?, |event| match event {
+                let (forward, detached) = self.parser.push(&bytes?, |event| match event {
                     InputEvent::Detach => InputAction::Detach,
                     _ => InputAction::Forward,
                 });
-                if !input_stream.send(forward) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::BrokenPipe,
-                        "monitor input disconnected",
-                    ));
-                }
-                if detached {
-                    return Ok(false);
-                }
+                self.stream.send(forward)?;
+                Ok(detached.then_some(ViewerAction::Stop))
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                if !input_stream.send(detach.finish()) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::BrokenPipe,
-                        "monitor input disconnected",
-                    ));
-                }
-                return Ok(false);
+                self.stream.send(self.parser.finish())?;
+                Ok(Some(ViewerAction::Stop))
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if !input_stream.send(detach.on_idle()) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::BrokenPipe,
-                        "monitor input disconnected",
-                    ));
-                }
+                self.stream.send(self.parser.on_idle())?;
+                Ok(None)
             }
         }
     }
 }
 
-fn read_only_input_loop(viewer: (u16, u16), disconnected: &AtomicBool) -> bool {
+fn read_only_input() -> Option<ViewerAction> {
     use crossterm::event::{Event, KeyCode, KeyModifiers};
 
-    loop {
-        if disconnected.load(Ordering::Relaxed) {
-            return false;
+    if !crossterm::event::poll(Duration::from_millis(50)).unwrap_or(false) {
+        return None;
+    }
+    match crossterm::event::read() {
+        Ok(Event::Key(key)) => {
+            let ctrl_c =
+                key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+            (ctrl_c || matches!(key.code, KeyCode::Char('q') | KeyCode::Esc))
+                .then_some(ViewerAction::Stop)
         }
-        if crossterm::terminal::size().is_ok_and(|size| size != viewer) {
-            return true;
-        }
-        if !crossterm::event::poll(Duration::from_millis(50)).unwrap_or(false) {
-            continue;
-        }
-        match crossterm::event::read() {
-            Ok(Event::Key(key)) => {
-                let ctrl_c =
-                    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-                if ctrl_c || matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
-                    return false;
-                }
-            }
-            Ok(Event::Resize(_, _)) => return true,
-            Ok(_) => {}
-            Err(_) => return false,
-        }
+        Ok(Event::Resize(cols, rows)) => Some(ViewerAction::Resize((cols, rows))),
+        Ok(_) => None,
+        Err(_) => Some(ViewerAction::Stop),
     }
 }
 
@@ -812,24 +790,37 @@ impl InputStream {
         })
     }
 
-    fn send(&self, bytes: Vec<u8>) -> bool {
-        self.connected.load(Ordering::Relaxed)
-            && (bytes.is_empty()
-                || self
-                    .sender
-                    .send(MonitorInput::Write { data: bytes })
-                    .is_ok())
+    fn send(&self, bytes: Vec<u8>) -> std::io::Result<()> {
+        if bytes.is_empty() {
+            self.check_connected()
+        } else {
+            self.enqueue(MonitorInput::Write { data: bytes })
+        }
     }
 
-    fn resize(&self, viewer: (u16, u16)) -> bool {
-        self.connected.load(Ordering::Relaxed)
-            && self
-                .sender
-                .send(MonitorInput::Resize {
-                    cols: viewer.0,
-                    rows: viewer.1,
-                })
-                .is_ok()
+    fn resize(&self, viewer: (u16, u16)) -> std::io::Result<()> {
+        self.enqueue(MonitorInput::Resize {
+            cols: viewer.0,
+            rows: viewer.1,
+        })
+    }
+
+    fn check_connected(&self) -> std::io::Result<()> {
+        if self.connected.load(Ordering::Relaxed) {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "monitor input disconnected",
+            ))
+        }
+    }
+
+    fn enqueue(&self, message: MonitorInput) -> std::io::Result<()> {
+        self.check_connected()?;
+        self.sender.send(message).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "monitor input disconnected")
+        })
     }
 }
 

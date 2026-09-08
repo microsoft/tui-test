@@ -1,7 +1,7 @@
 //! cli daemon host: local socket listener, idle watchdog, monitor streaming,
 //! and process state files around the reusable in-process engine.
 
-use std::io::Write;
+use std::io::{BufReader, Write};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -56,7 +56,8 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
 
     for conn in listener.incoming() {
         let Ok(conn) = conn else { continue };
-        let req = match ipc::read_request(&conn) {
+        let mut reader = BufReader::new(conn);
+        let req = match ipc::read_request(&mut reader) {
             Ok(request) => request,
             Err(_) => continue,
         };
@@ -69,7 +70,7 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
         {
             spawn_monitor(
                 Arc::clone(&engine),
-                conn,
+                reader.into_inner(),
                 (cols, rows),
                 session_name.clone(),
                 interactive,
@@ -77,8 +78,7 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
             continue;
         }
         if let Request::MonitorInputStream { cols, rows } = req {
-            let mut conn = conn;
-            let frame = monitor_frame(&engine);
+            let frame = engine.frame();
             let initial_frame = monitor::render_frame(
                 frame.as_ref(),
                 (cols, rows),
@@ -87,18 +87,18 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
                 &mut monitor::ModeMirror::default(),
             );
             let response = Response::with(serde_json::json!({ "initial_frame": initial_frame }));
-            if ipc::write_response(&mut conn, &response).is_ok() {
+            if ipc::write_response(reader.get_mut(), &response).is_ok() {
                 spawn_monitor_input(
                     Arc::clone(&engine),
                     Arc::clone(&last_activity),
-                    conn,
+                    reader,
                     (cols, rows),
                 );
             }
             continue;
         }
         let shutdown = matches!(&req, Request::Close | Request::Shutdown);
-        if operations.send((req, conn)).is_err() || shutdown {
+        if operations.send((req, reader.into_inner())).is_err() || shutdown {
             break;
         }
     }
@@ -251,19 +251,6 @@ fn spawn_idle_watchdog(engine: Arc<Engine>, last_activity: Arc<Mutex<Instant>>, 
     });
 }
 
-fn monitor_frame(engine: &Engine) -> Option<monitor::Frame> {
-    engine.frame().map(|frame| monitor::Frame {
-        grid: frame.grid,
-        cursor: frame.cursor,
-        size: frame.size,
-        keyboard_mode: frame.keyboard_mode,
-        bracketed_paste: frame.bracketed_paste,
-        mouse_mode: frame.mouse_mode,
-        exited: frame.exited,
-        shell: frame.shell,
-    })
-}
-
 fn spawn_monitor(
     engine: Arc<Engine>,
     mut conn: Stream,
@@ -275,7 +262,7 @@ fn spawn_monitor(
         engine.log_event("monitor attached");
         let mut modes = monitor::ModeMirror::default();
         loop {
-            let frame = monitor_frame(&engine);
+            let frame = engine.frame();
             let bytes =
                 monitor::render_frame(frame.as_ref(), viewer, &session, interactive, &mut modes);
             if conn.write_all(&bytes).is_err() || conn.flush().is_err() {
@@ -291,13 +278,13 @@ fn spawn_monitor(
 fn spawn_monitor_input(
     engine: Arc<Engine>,
     last_activity: Arc<Mutex<Instant>>,
-    conn: Stream,
+    reader: BufReader<Stream>,
     viewer: (u16, u16),
 ) {
     std::thread::spawn(move || {
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let messages = serde_json::Deserializer::from_reader(std::io::BufReader::new(conn))
+            let messages = serde_json::Deserializer::from_reader(reader)
                 .into_iter::<crate::protocol::MonitorInput>();
             for message in messages {
                 let failed = message.is_err();
