@@ -662,6 +662,7 @@ pub enum Operation {
         full: bool,
         path: Option<String>,
         zoom: Option<f64>,
+        background: Option<CaptureBackground>,
     },
     StartRecording {
         path: String,
@@ -670,6 +671,7 @@ pub enum Operation {
         speed: Option<f64>,
         idle_time_limit: Option<f64>,
         zoom: Option<f64>,
+        background: Option<CaptureBackground>,
     },
     StopRecording,
 }
@@ -994,6 +996,24 @@ pub enum RecordingFormat {
     Gif,
     Mp4,
     Cast,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "color")]
+pub enum CaptureBackground {
+    Color(crate::profile::Rgb),
+    Transparent,
+}
+
+impl CaptureBackground {
+    pub fn parse(value: &str) -> Result<Self, TuiTestError> {
+        if value.eq_ignore_ascii_case("transparent") {
+            return Ok(Self::Transparent);
+        }
+        crate::profile::Rgb::parse(value)
+            .map(Self::Color)
+            .map_err(TuiTestError::usage)
+    }
 }
 
 impl RecordingFormat {

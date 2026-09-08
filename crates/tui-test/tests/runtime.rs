@@ -957,6 +957,7 @@ fn session_records_and_exports_an_apng() {
             speed: Some(1.0),
             idle_time_limit: Some(5.0),
             zoom: Some(0.5),
+            background: None,
         })
         .expect("start recording");
     session
