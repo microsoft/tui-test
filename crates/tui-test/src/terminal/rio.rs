@@ -348,6 +348,10 @@ impl Emulator for RioEmu {
         keyboard_mode
     }
 
+    fn bracketed_paste_mode(&self) -> bool {
+        self.term.mode().contains(Mode::BRACKETED_PASTE)
+    }
+
     fn resize(&mut self, cols: u16, rows: u16) {
         self.cols = cols.max(1);
         self.rows = rows.max(1);
@@ -412,5 +416,14 @@ mod tests {
 
         assert_eq!(bells.count(), 2);
         assert_eq!(bells.sequence(), 2);
+    }
+
+    #[test]
+    fn tracks_bracketed_paste_mode() {
+        let mut emulator = RioEmu::new(10, 2, &Profile::default());
+        emulator.process(b"\x1b[?2004h");
+        assert!(emulator.bracketed_paste_mode());
+        emulator.process(b"\x1b[?2004l");
+        assert!(!emulator.bracketed_paste_mode());
     }
 }

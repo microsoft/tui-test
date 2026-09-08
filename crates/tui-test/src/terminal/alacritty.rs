@@ -426,6 +426,10 @@ impl Emulator for AlacrittyEmu {
         keyboard_mode
     }
 
+    fn bracketed_paste_mode(&self) -> bool {
+        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
     fn title(&self) -> Option<String> {
         self.title.lock().ok()?.clone()
     }
@@ -630,6 +634,15 @@ mod tests {
 
         emu.process(b"\x1b[=8u");
         assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_ALL_KEYS_AS_ESC);
+    }
+
+    #[test]
+    fn tracks_bracketed_paste_mode() {
+        let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        emu.process(b"\x1b[?2004h");
+        assert!(emu.bracketed_paste_mode());
+        emu.process(b"\x1b[?2004l");
+        assert!(!emu.bracketed_paste_mode());
     }
 
     #[test]

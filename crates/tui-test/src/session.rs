@@ -15,7 +15,7 @@ use crate::record::{self, CaptureError, Recorder, StartRecording};
 use crate::render::raster::GridRenderer;
 use crate::shell::{self, Shell};
 use crate::terminal::backend::Backend;
-use crate::terminal::emu::Emulator;
+use crate::terminal::emu::{Emulator, MouseModeTracker};
 use crate::terminal::integration::CommandTracker;
 use crate::terminal::pty::{Pty, SpawnOptions};
 
@@ -32,6 +32,7 @@ pub struct TermState {
     /// Shell-integration state, derived from the raw PTY stream rather than
     /// the emulator, so it is identical across backends.
     pub tracker: CommandTracker,
+    pub(crate) mouse_mode: MouseModeTracker,
     pub observed_clipboard_revision: u64,
     pub last_change: Instant,
     pub awaiting_start: Option<u64>,
@@ -84,6 +85,7 @@ impl Session {
         let state = Arc::new(Mutex::new(TermState {
             emu: backend.build_with_bells(cols, rows, &profile, bells.clone())?,
             tracker: CommandTracker::new(),
+            mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
             last_change: Instant::now(),
             awaiting_start: None,
@@ -166,6 +168,7 @@ impl Session {
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
                             st.emu.process(&buf[..n]);
                             st.tracker.feed(&buf[..n]);
+                            st.mouse_mode.process(&buf[..n]);
                             st.last_change = Instant::now();
                             st.highlight = None;
                             reader_recorder.on_data(&buf[..n]);
@@ -661,6 +664,7 @@ mod tests {
         let state = Arc::new(Mutex::new(TermState {
             emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
             tracker: CommandTracker::new(),
+            mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
             last_change: Instant::now(),
             awaiting_start: None,

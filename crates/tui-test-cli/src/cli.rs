@@ -369,8 +369,12 @@ pub enum Command {
     /// Watch a session live in another terminal (full-color, framed).
     ///
     /// Takes over an alternate screen and streams the session as the agent
-    /// drives it. Press `q`, `Esc`, or `Ctrl-C` to detach.
-    Monitor,
+    /// drives it. By default, press `q`, `Esc`, or `Ctrl-C` to detach.
+    Monitor {
+        /// Forward keyboard and paste input to the session; press Ctrl+] to detach.
+        #[arg(long)]
+        interactive: bool,
+    },
     /// Print a compact command cheatsheet for agents.
     Usage,
     /// Print a machine-readable description of the full cli surface (JSON).

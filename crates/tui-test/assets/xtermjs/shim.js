@@ -330,6 +330,7 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
       var s = term._core.coreService.decPrivateModes.cursorStyle;
       return s === undefined ? 'block' : String(s);
     },
+    bracketedPaste: function () { return term.modes.bracketedPasteMode; },
 
     // A color a program set, or -1 when it has not touched this slot and the
     // profile still decides. Kept as one call per slot: only a handful are
