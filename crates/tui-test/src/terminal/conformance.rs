@@ -92,6 +92,19 @@ macro_rules! emulator_conformance_tests {
                 .contains(&$crate::terminal::conformance::Divergence::ClipboardUnsupported)
         }
 
+        #[test]
+        fn conformance_bracketed_paste_mode_tracks_enable_disable_and_reset() {
+            let mut e = conformance_emu(10, 4, 100);
+            assert!(!e.bracketed_paste_mode());
+            e.process(b"\x1b[?20");
+            e.process(b"04h");
+            assert!(e.bracketed_paste_mode());
+            e.process(b"\x1b[?2004l");
+            assert!(!e.bracketed_paste_mode());
+            e.process(b"\x1b[?2004h\x1bc");
+            assert!(!e.bracketed_paste_mode());
+        }
+
         /// The grid is always exactly `rows` x `cols`, regardless of content.
         #[test]
         fn conformance_grid_shape_is_exact() {

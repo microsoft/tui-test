@@ -417,6 +417,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "658bce805d770f407bc62102fca7c2c64ceef2fbcb2b8bd19d2765ce093980de"
 dependencies = [
  "console",
+ "fuzzy-matcher",
  "shell-words",
  "thiserror 1.0.69",
 ]
@@ -668,6 +669,15 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fuzzy-matcher"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54614a3312934d066701a80f20f15fa3b56d67ac7722b39eea5b4c9dd1d66c94"
+dependencies = [
+ "thread_local",
 ]
 
 [[package]]
@@ -1886,6 +1896,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "thread_local"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
+dependencies = [
+ "cfg-if 1.0.4",
+]
+
+[[package]]
 name = "tiny-skia"
 version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2037,6 +2056,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tui-test-rs",
+ "vte",
  "windows-sys 0.61.2",
 ]
 
@@ -2044,12 +2064,10 @@ dependencies = [
 name = "tui-test-node"
 version = "0.1.0-beta.3"
 dependencies = [
- "interprocess",
  "napi",
  "napi-build",
  "napi-derive",
  "serde_json",
- "tui-test-cli",
  "tui-test-rs",
 ]
 
@@ -2060,6 +2078,7 @@ dependencies = [
  "anyhow",
  "pyo3",
  "pyo3-async-runtimes",
+ "serde_json",
  "tokio",
  "tui-test-rs",
 ]
@@ -2076,7 +2095,9 @@ dependencies = [
  "dirs",
  "flate2",
  "fontdb",
+ "getrandom",
  "gif",
+ "interprocess",
  "libghostty-vt",
  "png",
  "portable-pty",
@@ -2090,6 +2111,8 @@ dependencies = [
  "toml",
  "ttf-parser",
  "unicode-width",
+ "vte",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

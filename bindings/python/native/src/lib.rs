@@ -1,9 +1,12 @@
 use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyMemoryView, PyModule, PyTuple};
+use tui_test::monitoring::{self, Metadata as MonitoringMetadata};
 use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::runtime::global_registry;
 use tui_test::shell::Shell;
@@ -12,9 +15,9 @@ use tui_test::{
     AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend, BellEvent, Cell, CellColor,
     ClipboardPattern, Cursor, ErrorKind, KeyAction, LocatorDirection, LocatorQuery,
     LocatorSelector, MatchOccurrence, MouseAction, MouseOptions, OpenOptions, OpenResult,
-    Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
-    SnapshotResult, State, StyleSelector, TextMatch, TextSelector, TextStyle, Timeouts,
-    TuiTestError, WhitespaceMode,
+    Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult,
+    SessionMonitorTarget, Size, SnapshotResult, State, StyleSelector, TextMatch, TextSelector,
+    TextStyle, Timeouts, TuiTestError, WhitespaceMode,
 };
 
 pyo3::create_exception!(
@@ -47,16 +50,19 @@ struct NativeSession {
     #[pyo3(get)]
     name: String,
     recording: CoreAutomaticRecording,
+    monitoring: Option<MonitoringMetadata>,
+    target: Arc<Mutex<Option<SessionMonitorTarget>>>,
 }
 
 #[pymethods]
 impl NativeSession {
     #[new]
-    #[pyo3(signature = (name, recording_mode = None, recording_directory = None))]
+    #[pyo3(signature = (name, recording_mode = None, recording_directory = None, monitoring_metadata = None))]
     fn new(
         name: String,
         recording_mode: Option<String>,
         recording_directory: Option<String>,
+        monitoring_metadata: Option<String>,
     ) -> PyResult<Self> {
         let mode = match recording_mode.as_deref().unwrap_or("always") {
             "disabled" => CoreAutomaticRecordingMode::Disabled,
@@ -74,6 +80,12 @@ impl NativeSession {
                 mode,
                 directory: recording_directory.map(Into::into),
             },
+            monitoring: monitoring_metadata
+                .as_deref()
+                .map(parse_monitoring_metadata)
+                .transpose()
+                .map_err(shell_error_to_py)?,
+            target: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -124,11 +136,15 @@ impl NativeSession {
         let ready_timeout = capture_optional_integer(ready_timeout);
         let name = self.name.clone();
         let recording = self.recording.clone();
+        let monitoring = self.monitoring.clone();
+        let target = self.target.clone();
         future_blocking(
             py,
             move || {
                 execute_open(
                     &name,
+                    monitoring,
+                    target,
                     Operation::Open(OpenOptions {
                         backend: parse_backend(backend.as_deref())?,
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
@@ -203,11 +219,15 @@ impl NativeSession {
         let ready_timeout = capture_optional_integer(ready_timeout);
         let name = self.name.clone();
         let recording = self.recording.clone();
+        let monitoring = self.monitoring.clone();
+        let target = self.target.clone();
         future_blocking(
             py,
             move || {
                 execute_open(
                     &name,
+                    monitoring,
+                    target,
                     Operation::Run(RunOptions {
                         backend: parse_backend(backend.as_deref())?,
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
@@ -236,9 +256,141 @@ impl NativeSession {
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let name = self.name.clone();
+        let monitored = self.monitoring.is_some();
+        let target = self
+            .target
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         future_blocking(
             py,
-            move || execute_unit(&name, Operation::Close),
+            move || {
+                let session = global_registry().session(&name);
+                let (result, closed) = if !monitored {
+                    session.close_with_target()
+                } else if let Some(target) = target {
+                    (session.close_target(&target), Some(target))
+                } else {
+                    return Ok(());
+                };
+                if let Some(target) = closed {
+                    monitoring::unregister(&name, Some(&target));
+                }
+                result
+            },
+            unit_to_py,
+        )
+    }
+
+    #[pyo3(signature = (outcome, timeout_ms, hold_while_attached))]
+    fn begin_monitor_wait(
+        &self,
+        py: Python<'_>,
+        outcome: String,
+        timeout_ms: Option<Bound<'_, PyAny>>,
+        hold_while_attached: bool,
+    ) -> PyResult<(String, u64, String)> {
+        let name = self.name.clone();
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let timeout = optional_u64(timeout_ms.as_ref(), "timeout")
+            .map_err(shell_error_to_py)?
+            .map(Duration::from_millis);
+        let target = self
+            .target
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        py.detach(move || {
+            if outcome != "passed" && outcome != "failed" {
+                return Err(TuiTestError::usage("outcome must be passed or failed"));
+            }
+            let target = target.ok_or_else(TuiTestError::no_session)?;
+            let (id, generation) = monitoring::begin_wait_for_target_with_options(
+                &name,
+                &target,
+                &outcome,
+                timeout,
+                hold_while_attached,
+            )?;
+            let command = monitoring::host::monitor_command(&id, true);
+            Ok((id, generation, command))
+        })
+        .map_err(shell_error_to_py)
+    }
+
+    #[pyo3(signature = (generation, timeout_ms, hold_while_attached))]
+    fn wait_for_monitor<'py>(
+        &self,
+        py: Python<'py>,
+        generation: Bound<'py, PyAny>,
+        timeout_ms: Option<Bound<'py, PyAny>>,
+        hold_while_attached: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let generation = capture_integer(&generation);
+        let timeout_ms = capture_optional_integer(timeout_ms);
+        let name = self.name.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let generation = integer_u64(&generation, "generation").map_err(shell_error_to_py)?;
+            let mut guard = CancelMonitorWait {
+                name: name.clone(),
+                generation,
+                armed: true,
+            };
+            let timeout = optional_u64(timeout_ms.as_ref(), "timeout")
+                .map_err(shell_error_to_py)?
+                .map(Duration::from_millis);
+            let result = run_blocking(move || {
+                monitoring::wait(&name, generation, timeout, hold_while_attached)
+            })
+            .await
+            .map_err(shell_error_to_py)?;
+            guard.armed = false;
+            Python::attach(|py| Ok(result.into_pyobject(py)?.to_owned().into_any().unbind()))
+        })
+    }
+
+    #[pyo3(signature = (generation = None))]
+    fn cancel_monitor_wait(
+        &self,
+        py: Python<'_>,
+        generation: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        if let Some(generation) = generation {
+            let generation = integer_u64(&capture_integer(&generation), "generation")
+                .map_err(shell_error_to_py)?;
+            py.detach(|| monitoring::cancel_wait(&self.name, generation));
+        } else {
+            let target = self
+                .target
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            if let Some(target) = target {
+                py.detach(|| monitoring::cancel_target(&self.name, &target));
+            }
+        }
+        Ok(())
+    }
+
+    fn close_monitor_target<'py>(
+        &self,
+        py: Python<'py>,
+        generation: Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let generation = capture_integer(&generation);
+        let name = self.name.clone();
+        future_blocking(
+            py,
+            move || {
+                let generation = integer_u64(&generation, "generation")?;
+                if let Some(target) = monitoring::wait_target(&name, generation) {
+                    let result = global_registry().session(&name).close_target(&target);
+                    monitoring::unregister(&name, Some(&target));
+                    result
+                } else {
+                    Ok(())
+                }
+            },
             unit_to_py,
         )
     }
@@ -1256,7 +1408,50 @@ fn panic_probe(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
 
 #[pyfunction]
 fn _close_all_blocking(py: Python<'_>) {
-    py.detach(|| global_registry().close_all());
+    py.detach(|| {
+        monitoring::clear_sessions();
+        global_registry().force_close_all();
+    });
+}
+
+struct CancelMonitorWait {
+    name: String,
+    generation: u64,
+    armed: bool,
+}
+
+impl Drop for CancelMonitorWait {
+    fn drop(&mut self) {
+        if self.armed {
+            monitoring::cancel_wait(&self.name, self.generation);
+        }
+    }
+}
+
+fn parse_monitoring_metadata(value: &str) -> Result<MonitoringMetadata, TuiTestError> {
+    let value: serde_json::Value = serde_json::from_str(value).map_err(|error| {
+        TuiTestError::usage(format!("invalid monitoring metadata JSON: {error}"))
+    })?;
+    let fields = value
+        .as_object()
+        .ok_or_else(|| TuiTestError::usage("monitoring metadata must be a JSON object"))?;
+    for (name, value) in fields {
+        if !matches!(
+            name.as_str(),
+            "label" | "test_file" | "test_name" | "framework" | "worker"
+        ) {
+            return Err(TuiTestError::usage(format!(
+                "unknown monitoring metadata field {name:?}"
+            )));
+        }
+        if !value.is_string() {
+            return Err(TuiTestError::usage(format!(
+                "monitoring metadata {name} must be a string"
+            )));
+        }
+    }
+    serde_json::from_value(value)
+        .map_err(|error| TuiTestError::usage(format!("invalid monitoring metadata: {error}")))
 }
 
 fn future_blocking<'py, T, F>(
@@ -1652,11 +1847,43 @@ fn execute_unit(name: &str, operation: Operation) -> Result<(), TuiTestError> {
     }
 }
 
-fn execute_open(name: &str, operation: Operation) -> Result<OpenResult, TuiTestError> {
-    match global_registry().execute(name, operation)? {
-        OperationResult::Open(value) => Ok(value),
-        _ => Err(unexpected_result("an open result")),
+fn execute_open(
+    name: &str,
+    monitoring: Option<MonitoringMetadata>,
+    opened_target: Arc<Mutex<Option<SessionMonitorTarget>>>,
+    operation: Operation,
+) -> Result<OpenResult, TuiTestError> {
+    let session = global_registry().session(name);
+    let (result, target) = if monitoring.is_some() {
+        match operation {
+            Operation::Open(options) => session.open_for_monitoring(options),
+            Operation::Run(options) => session.run_for_monitoring(options),
+            _ => return Err(unexpected_result("an open operation")),
+        }
+    } else {
+        let (result, target) = match operation {
+            Operation::Open(options) => session.open_with_target(options)?,
+            Operation::Run(options) => session.run_with_target(options)?,
+            _ => return Err(unexpected_result("an open operation")),
+        };
+        (Ok(result), Some(target))
+    };
+    if let Some(target) = target {
+        if let Some(metadata) = monitoring {
+            *opened_target
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(target.clone());
+            if let Err(error) = monitoring::register(name, &target, metadata) {
+                if result.is_ok() {
+                    return Err(error);
+                }
+                eprintln!("[tui-test] monitoring registration also failed: {error}");
+            }
+        } else {
+            monitoring::invalidate_replaced(name, &target);
+        }
     }
+    result
 }
 
 fn execute_state(name: &str, operation: Operation) -> Result<State, TuiTestError> {

@@ -85,6 +85,22 @@ pub enum RecordingFormatArg {
     Cast,
 }
 
+#[derive(Args, Clone, Default)]
+pub struct SessionFilter {
+    /// Only sessions whose test or application failed.
+    #[arg(long)]
+    pub failed: bool,
+    /// Only sessions waiting for inspection.
+    #[arg(long)]
+    pub waiting: bool,
+    /// Process owner id, or "daemon" for standalone sessions.
+    #[arg(long, value_name = "OWNER")]
+    pub owner: Option<String>,
+    /// Only sessions in this directory; use "current" for the invoking directory.
+    #[arg(long, value_name = "DIRECTORY")]
+    pub cwd: Option<String>,
+}
+
 impl From<RecordingFormatArg> for RecordingFormat {
     fn from(format: RecordingFormatArg) -> Self {
         match format {
@@ -230,7 +246,10 @@ pub enum Command {
         all: bool,
     },
     /// List active sessions.
-    Sessions,
+    Sessions {
+        #[command(flatten)]
+        filter: SessionFilter,
+    },
     /// Start, inspect, or stop a session's daemon.
     Daemon {
         #[command(subcommand)]
@@ -371,12 +390,17 @@ pub enum Command {
     /// Takes over an alternate screen and streams the session as the agent
     /// drives it. By default, press `q`, `Esc`, or `Ctrl-C` to detach.
     Monitor {
-        /// Forward keyboard and paste input to the session; press Ctrl+] to detach.
+        /// Forward keyboard, paste, and supported mouse input; press Ctrl+] to detach.
         #[arg(long)]
         interactive: bool,
         /// Exact process-hosted session id from `tui-test sessions`.
         #[arg(long, value_name = "OWNER/SESSION")]
         id: Option<String>,
+        /// Select the most recently completed or started matching session.
+        #[arg(long, conflicts_with = "id")]
+        latest: bool,
+        #[command(flatten)]
+        filter: SessionFilter,
     },
     /// Print a compact command cheatsheet for agents.
     Usage,

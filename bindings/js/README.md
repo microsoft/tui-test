@@ -48,9 +48,10 @@ new TuiTest(session?: string, options?: ClientOptions)
 `artifacts.onFailure` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
 
 Monitoring is opt-in. An enabled session remains owned by the Node process, but
-is advertised through one lazy process-local bridge so another terminal can run
+is advertised through one lazy native bridge per process so another terminal can run
 `tui-test --session NAME monitor --interactive`. `tui-test sessions` shows the
-exact `--id OWNER/SESSION` target when names are duplicated.
+exact `--id OWNER/SESSION` target when names are duplicated. No daemon is required;
+the test process keeps its original registry and PTY.
 
 ```js
 const terminal = new TuiTest("login", {
@@ -59,15 +60,31 @@ const terminal = new TuiTest("login", {
     waitAtEnd: "failure",
     firstAttachTimeout: 30_000,
     label: "login rejects expired tokens",
-    metadata: { testFile: "test/login.test.mjs", framework: "node:test" },
+    metadata: {
+      testFile: "test/login.test.mjs",
+      testName: "rejects expired tokens",
+      framework: "node:test",
+      worker: "1",
+      tags: ["login", "smoke"],
+    },
   },
 });
 ```
 
 `waitAtEnd` is `"never"`, `"failure"`, or `"always"`.
-`firstAttachTimeout` is milliseconds or `null`, and `holdWhileAttached`
-defaults to true. Environment equivalents are `TUI_TEST_MONITORING`,
+`firstAttachTimeout` defaults to 30,000 milliseconds; `null` waits indefinitely
+for the first attachment. `holdWhileAttached` defaults to true and waits until
+all long-lived monitors disconnect, not just the interactive owner. Snapshot
+requests do not count as attachments. Only one monitor can own interactive input;
+other monitors can remain read-only. Input, resize, and mouse operations remain
+available during inspection.
+
+Environment equivalents are `TUI_TEST_MONITORING`,
 `TUI_TEST_WAIT_AT_END`, `TUI_TEST_FIRST_ATTACH_TIMEOUT`, and `TUI_TEST_LABEL`.
+Use `TUI_TEST_FIRST_ATTACH_TIMEOUT=infinite` for an unlimited first-attachment wait.
+Explicit options override the corresponding environment values, including
+`enabled: false`. Without an explicit or environment label, supplied `testFile`
+and `testName` metadata form a label; no runner-global state is inferred.
 
 #### Properties
 
@@ -84,11 +101,11 @@ defaults to true. Environment equivalents are `TUI_TEST_MONITORING`,
 | `TuiTest.ephemeral(prefix?, options?)` | Create a unique session. |
 | `open(options?)` | Open a shell. |
 | `run(program, args?, options?)` | Run a program. |
-| `close()` | Close the session. |
+| `close()` | Await active inspection and close its original target. |
 | `closeQuiet()` | Close without throwing. |
 | `finish({ outcome, error? })` | Apply configured end-of-test inspection, then close. |
 | `inspectFailure(error)` | Inspect, close, and rethrow the same error object. |
-| `[Symbol.asyncDispose]()` | Close from `await using`. |
+| `[Symbol.asyncDispose]()` | Await active inspection and close from `await using`; cleanup errors propagate. |
 
 `open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
 
@@ -277,6 +294,17 @@ When `waitAtEnd: "failure"` is enabled, `withTerminal()` catches the callback
 error, waits up to `firstAttachTimeout` for a monitor, holds while monitor
 streams remain attached, closes, and rethrows the exact original error object.
 No attachment before the finite timeout proceeds directly to cleanup.
+Initialization failures also attempt inspection when a monitorable target exists.
+Inspection and cleanup errors never replace the callback's original thrown value
+(including `undefined`) or alter its stack. After a successful callback, inspection
+or cleanup errors reject; simultaneous secondary errors form an `AggregateError`.
+
+`finish()` is the explicit outcome boundary for runner integrations. `close()`,
+`closeQuiet()`, and async disposal join an inspection already in progress, including
+its initialization; they do not infer whether a test failed or start failure
+inspection themselves. Concurrent finish/cleanup calls share one operation.
+Cleanup cannot close a replacement session with the same name. Opening the
+terminal again after completion starts a new lifecycle.
 
 `defaultShell` is the platform default.
 
@@ -287,6 +315,25 @@ await withTerminal({ program: ["my-app"] }, async (terminal) => {
   await terminal.getByText("Ready").expect();
 });
 ```
+
+#### Manual failing inspection fixture
+
+Build the binding with `npm run build`, then run `npm run inspect:failure`.
+This deliberately fails an assertion, prints the exact CLI attach command, and
+keeps the actual test-owned PTY available for inspection. Run that command in
+another terminal; type into the fixture, resize it, then disconnect all monitors.
+The original assertion is rethrown and the fixture exits nonzero. Without a
+monitor, it resumes after the default 30-second first-attachment timeout.
+`TUI_TEST_FIRST_ATTACH_TIMEOUT` can adjust that timeout.
+
+The fixture lives in `manual/inspection.mjs`, outside the default test suites.
+It runs only through the explicit script (or the `--inspect-failure` flag).
+
+When `TUI_TEST_BIN` points to a built CLI, the binding's options tests also run
+a CLI interoperability regression: a second, unmonitored native PTY runs the CLI
+viewer against the original JavaScript-owned target. The test checks discovery,
+interactive input, resize, detach, and preservation of the original failure.
+It skips when `TUI_TEST_BIN` is absent.
 
 ### Configuration
 

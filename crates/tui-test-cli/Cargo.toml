@@ -22,6 +22,7 @@ interprocess.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+vte.workspace = true
 tui-test = { workspace = true, features = [
     "ghostty",
     "rio",

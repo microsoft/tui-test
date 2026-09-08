@@ -70,9 +70,39 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `start_recording()`, `stop_recording()` | Record. |
 | `close()`, `close_quiet()` | Close. |
 
-Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
+Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`,
+and `monitoring`.
 
 Recording modes: `disabled`, `on-failure`, and `always`.
+
+## Process-local monitoring
+
+```python
+from tui_test.testing import terminal
+
+async with terminal(
+    program=["my-app"],
+    monitoring={
+        "enabled": True,
+        "wait_at_end": "failure",
+        "first_attach_timeout": 30_000,
+        "hold_while_attached": True,
+        "label": "login validation",
+        "metadata": {"test_name": "rejects an expired token"},
+    },
+) as app:
+    await app.get_by_text("Ready").expect()
+```
+
+On failure, the context manager retains the original terminal, prints an exact
+CLI monitor command, and delays cleanup until inspection completes. The same
+exception and traceback are then reported. Custom runners can use `finish` and
+`inspect_failure`; normal cleanup cannot bypass an active inspection hold.
+
+Monitoring is disabled by default. `wait_at_end` accepts `"never"`, `"failure"`,
+or `"always"`. The first-attachment timeout defaults to 30,000 milliseconds;
+`None` explicitly waits indefinitely for local debugging. Native waits do not
+block the Python event loop. The terminal never outlives the Python process.
 
 ## Input helpers
 

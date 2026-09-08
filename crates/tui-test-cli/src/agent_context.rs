@@ -175,4 +175,30 @@ mod tests {
         let values = recording_format["values"].as_array().unwrap();
         assert!(values.contains(&json!("mp4")));
     }
+
+    #[test]
+    fn monitor_discovery_selectors_are_exposed_to_agents() {
+        let doc: Value = serde_json::from_str(&render()).unwrap();
+        let monitor = doc["commands"]["monitor"]["args"].as_array().unwrap();
+        for flag in [
+            "--id",
+            "--owner",
+            "--latest",
+            "--failed",
+            "--waiting",
+            "--cwd",
+        ] {
+            assert!(
+                monitor.iter().any(|arg| arg["long"] == json!(flag)),
+                "{flag}"
+            );
+        }
+        let sessions = doc["commands"]["sessions"]["args"].as_array().unwrap();
+        for flag in ["--owner", "--failed", "--waiting", "--cwd"] {
+            assert!(
+                sessions.iter().any(|arg| arg["long"] == json!(flag)),
+                "{flag}"
+            );
+        }
+    }
 }

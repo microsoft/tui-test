@@ -12,8 +12,8 @@ use ghostty_vt::render::{CellIterator, CursorVisualStyle, RowIterator};
 use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef};
 use ghostty_vt::style::{Palette, PaletteIndex, RgbColor, Style, StyleColor, Underline};
 use ghostty_vt::terminal::{
-    ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Point, PointCoordinate,
-    PrimaryDeviceAttributes, SecondaryDeviceAttributes, TertiaryDeviceAttributes,
+    ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Mode, Point,
+    PointCoordinate, PrimaryDeviceAttributes, SecondaryDeviceAttributes, TertiaryDeviceAttributes,
 };
 use ghostty_vt::{RenderState, Terminal};
 
@@ -226,6 +226,12 @@ impl GhosttyCore {
     pub(super) fn process(&mut self, bytes: &[u8]) {
         self.terminal.vt_write(bytes);
         self.frame = None;
+    }
+
+    pub(super) fn bracketed_paste_mode(&self) -> Result<bool> {
+        self.terminal
+            .mode(Mode::BRACKETED_PASTE)
+            .context("reading bracketed paste mode")
     }
 
     pub(super) fn take_pending_writes(&mut self) -> Vec<u8> {

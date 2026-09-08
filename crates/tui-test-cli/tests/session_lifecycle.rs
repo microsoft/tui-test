@@ -1,6 +1,6 @@
 //! End-to-end coverage for session lifecycle over the real cli + daemon.
 
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -185,7 +185,231 @@ fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socke
         .write_all(request.as_bytes())
         .expect("send monitor request");
     stream.flush().expect("flush monitor request");
+    if request.contains("\"monitor_input_stream\"") {
+        let mut response = String::new();
+        std::io::BufReader::new(&mut stream)
+            .read_line(&mut response)
+            .expect("read monitor input handshake");
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["ok"], true);
+        assert!(response["data"]["initial_frame"].is_array());
+    }
     stream
+}
+
+fn write_monitor_input(stream: &mut interprocess::local_socket::Stream, data: &[u8]) {
+    serde_json::to_writer(
+        &mut *stream,
+        &serde_json::json!({ "kind": "write", "data": data }),
+    )
+    .expect("encode monitor input");
+    stream.write_all(b"\n").expect("write monitor input");
+}
+
+#[test]
+fn monitor_read_only_viewer_resizes_and_detaches() {
+    let target = Sandbox::new("monitor-read-only-target");
+    target.ok(&["open"]);
+    target.ok(&["submit", "echo monitor-read-only-marker"]);
+    target.wait_for_text("monitor-read-only-marker", "10000");
+
+    let viewer = Sandbox::new("monitor-read-only-viewer");
+    let home = format!("TUI_TEST_HOME={}", target.home.display());
+    viewer.ok(&[
+        "run",
+        "--cols",
+        "100",
+        "--rows",
+        "36",
+        "--env",
+        &home,
+        "--",
+        BIN,
+        "--session",
+        &target.session,
+        "monitor",
+    ]);
+    viewer.wait_for_text("monitor-read-only-marker", "10000");
+    viewer.ok(&["resize", "90", "34"]);
+    viewer.wait_for_text("q quit", "10000");
+    viewer.ok(&["key", "press", "q"]);
+    viewer.ok(&["wait", "exit", "--timeout", "10000"]);
+    target.ok(&["daemon", "status"]);
+}
+
+struct NativeMonitorGuard {
+    session: tui_test::Session,
+    target: tui_test::SessionMonitorTarget,
+    generation: u64,
+}
+
+impl Drop for NativeMonitorGuard {
+    fn drop(&mut self) {
+        tui_test::monitoring::cancel_wait(self.session.name(), self.generation);
+        tui_test::monitoring::unregister(self.session.name(), Some(&self.target));
+        self.session.interrupt();
+        let _ = self.session.close();
+    }
+}
+
+#[test]
+fn monitor_controls_a_process_local_rust_session_without_releasing_its_hold_on_resize() {
+    let session = tui_test::Session::new(format!(
+        "native-{}-{}",
+        std::process::id(),
+        SANDBOX_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    session
+        .open(tui_test::OpenOptions {
+            recording: tui_test::AutomaticRecording {
+                mode: tui_test::AutomaticRecordingMode::Disabled,
+                directory: None,
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    let target = session.monitor_target().unwrap();
+    tui_test::monitoring::register(
+        session.name(),
+        &target,
+        tui_test::monitoring::Metadata {
+            label: Some("Rust failure inspection".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let (id, generation) = tui_test::monitoring::begin_wait(session.name(), "failed").unwrap();
+    let guard = NativeMonitorGuard {
+        session,
+        target,
+        generation,
+    };
+    assert!(
+        tui_test::monitoring::host::discover()
+            .iter()
+            .any(|candidate| candidate.session.id == id),
+        "native session missing from discovery"
+    );
+    let (held, finished) = std::sync::mpsc::channel();
+    let name = guard.session.name().to_string();
+    let hold = std::thread::spawn(move || {
+        let result =
+            tui_test::monitoring::wait(&name, generation, Some(Duration::from_secs(30)), true);
+        let _ = held.send(result);
+    });
+    let input_target = guard.session.clone();
+    let waiting = std::thread::spawn(move || {
+        input_target
+            .get_by_text("native-monitor-input-marker")
+            .first()
+            .wait_with_timeout(Some(20000))
+    });
+    // Viewers must drop before the native owner during assertion unwinding,
+    // since normal native cleanup waits for attached clients.
+    let viewer = Sandbox::new("monitor-native-rust");
+    let home = format!("TUI_TEST_HOME={}", tui_test::config::home_dir().display());
+    viewer.ok(&[
+        "run",
+        "--cols",
+        "100",
+        "--rows",
+        "36",
+        "--env",
+        &home,
+        "--",
+        BIN,
+        "monitor",
+        "--interactive",
+        "--id",
+        &id,
+    ]);
+    viewer.wait_for_text("Ctrl+] detach", "10000");
+    let initial_size = guard.target.frame().unwrap().size;
+    viewer.ok(&["write", "echo native-monitor-input-marker\r"]);
+    waiting.join().unwrap().unwrap();
+
+    let observer = Sandbox::new("monitor-native-rust-observer");
+    observer.ok(&[
+        "run", "--cols", "100", "--rows", "36", "--env", &home, "--", BIN, "monitor", "--id", &id,
+    ]);
+    observer.wait_for_text("q quit", "10000");
+    viewer.ok(&["resize", "90", "34"]);
+    viewer.ok(&["write", "echo native-monitor-resized-marker\r"]);
+    guard
+        .session
+        .get_by_text("native-monitor-resized-marker")
+        .first()
+        .wait_with_timeout(Some(10000))
+        .unwrap();
+    let size = guard.session.execute(tui_test::Operation::GetSize).unwrap();
+    let tui_test::OperationResult::Size(size) = size else {
+        panic!("unexpected size response")
+    };
+    // ConPTY can report a console viewport different from the requested PTY
+    // canvas. Verify that the actual viewport follows the exact resize delta.
+    assert_eq!(
+        (size.cols, size.rows),
+        (initial_size.0 - 10, initial_size.1 - 2)
+    );
+    assert!(matches!(
+        finished.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+
+    viewer.ok(&["write", "\u{1d}"]);
+    viewer.ok(&["wait", "exit", "--timeout", "10000"]);
+    assert!(matches!(
+        finished.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    observer.ok(&["key", "press", "q"]);
+    observer.ok(&["wait", "exit", "--timeout", "10000"]);
+    assert!(finished
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap()
+        .unwrap());
+    hold.join().unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn monitor_windows_console_forwards_ctrl_z_and_unicode_without_detaching() {
+    let target = Sandbox::new("monitor-console-target");
+    target.ok(&[
+        "run", "--", "powershell", "-NoProfile", "-Command",
+        "Write-Output CONSOLE_READY; while ($true) { $k = [Console]::ReadKey($true); [Console]::WriteLine('KEY:' + [int]$k.KeyChar) }",
+    ]);
+    target.wait_for_text("CONSOLE_READY", "10000");
+    let viewer = Sandbox::new("monitor-console-viewer");
+    let home = format!("TUI_TEST_HOME={}", target.home.display());
+    viewer.ok(&[
+        "run",
+        "--cols",
+        "100",
+        "--rows",
+        "36",
+        "--env",
+        &home,
+        "--",
+        BIN,
+        "--session",
+        &target.session,
+        "monitor",
+        "--interactive",
+    ]);
+    viewer.wait_for_text("Ctrl+] detach", "10000");
+    viewer.ok(&["write", "\u{1a}"]);
+    target.wait_for_text("KEY:26", "10000");
+    viewer.ok(&["resize", "90", "34"]);
+    viewer.ok(&["write", "a\u{e9}\u{1f680}"]);
+    for code in [97, 233, 55357, 56960] {
+        target.wait_for_text(&format!("KEY:{code}"), "10000");
+    }
+    let state: serde_json::Value = serde_json::from_str(&viewer.ok(&["--json", "state"])).unwrap();
+    assert!(state["exited"].is_null());
+    viewer.ok(&["write", "\u{1d}"]);
+    viewer.ok(&["wait", "exit", "--timeout", "10000"]);
+    target.ok(&["daemon", "status"]);
 }
 
 #[test]
@@ -236,7 +460,7 @@ fn capturing_output_terminates_after_the_daemon_starts() {
     sandbox.ok(&["text"]);
 }
 
-/// One monitor holds two streams open: rendered frames out and raw input in.
+/// One monitor holds two streams open: rendered frames out and input messages in.
 /// Neither needs a target to exist, and the input stream outlives a restart.
 #[test]
 fn monitor_frames_and_input_outlive_the_target() {
@@ -260,23 +484,25 @@ fn monitor_frames_and_input_outlive_the_target() {
         "monitor did not receive a frame"
     );
 
-    let mut input = monitor_stream(&sandbox, "{\"kind\":\"monitor_input_stream\"}\n");
-    input.write_all(b"ignored").expect("write without target");
+    let mut input = monitor_stream(
+        &sandbox,
+        "{\"kind\":\"monitor_input_stream\",\"cols\":80,\"rows\":30}\n",
+    );
+    write_monitor_input(&mut input, b"ignored");
     input.flush().expect("flush without target");
     std::thread::sleep(Duration::from_millis(100));
 
     let secret = "human-secret-monitor-input";
     sandbox.ok(&["open"]);
-    input
-        .write_all(format!("echo {secret}\r").as_bytes())
-        .expect("write to first target");
+    write_monitor_input(&mut input, format!("echo {secret}\r").as_bytes());
     input.flush().expect("flush first target input");
     sandbox.wait_for_text(secret, "5000");
 
     sandbox.ok(&["open", "--restart"]);
     input
-        .write_all(b"echo restarted-monitor-marker\r")
-        .expect("write to restarted target");
+        .write_all(b"{\"kind\":\"resize\",\"cols\":100,\"rows\":40}\n")
+        .expect("resize monitor input");
+    write_monitor_input(&mut input, b"echo restarted-monitor-marker\r");
     input.flush().expect("flush restarted target input");
     sandbox.wait_for_text("restarted-monitor-marker", "5000");
 
@@ -292,7 +518,7 @@ fn monitor_frames_and_input_outlive_the_target() {
     // Typing at an exited child is a normal race, not a daemon failure.
     sandbox.ok(&["submit", "exit"]);
     sandbox.ok(&["wait", "exit", "--timeout", "20000"]);
-    input.write_all(b"x").expect("write after exit");
+    write_monitor_input(&mut input, b"x");
     input.flush().expect("flush after exit");
     sandbox.ok(&["daemon", "status"]);
 
@@ -331,7 +557,10 @@ fn monitor_input_is_delivered_while_a_long_operation_is_running() {
     let started = Instant::now();
     let _input = monitor_stream(
         &sandbox,
-        &format!("{{\"kind\":\"monitor_input_stream\"}}\necho {marker}\r"),
+        &format!(
+            "{{\"kind\":\"monitor_input_stream\",\"cols\":80,\"rows\":30}}\n{}\n",
+            serde_json::json!({ "kind": "write", "data": format!("echo {marker}\r").as_bytes() })
+        ),
     );
     assert!(
         started.elapsed() < Duration::from_secs(2),

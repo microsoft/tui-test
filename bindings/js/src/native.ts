@@ -182,8 +182,13 @@ export class NativeRuntime {
 
   beginMonitorWait(
     outcome: "passed" | "failed",
+    timeoutMs: number | null = 30_000,
+    holdWhileAttached = true,
   ): Promise<{ id: string; command: string; generation: string }> {
-    return this.#call(async (session) => session.beginMonitorWait(outcome));
+    return this.#call(async (session) => session.beginMonitorWait(outcome, {
+      timeoutMs: timeoutMs ?? undefined,
+      holdWhileAttached,
+    }));
   }
 
   waitForMonitor(

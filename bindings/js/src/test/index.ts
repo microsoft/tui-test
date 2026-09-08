@@ -123,9 +123,11 @@ export async function createTerminal(
       await terminal.open({ shell: opts.shell, ...spawn });
     }
   } catch (error) {
-    await terminal.closeQuiet();
-    untrackTerminal(terminal);
-    throw error;
+    try {
+      return await terminal.inspectFailure(error);
+    } finally {
+      untrackTerminal(terminal);
+    }
   }
   return terminal;
 }
@@ -136,12 +138,14 @@ export async function withTerminal<T>(
 ): Promise<T> {
   const terminal = await createTerminal(options);
   try {
-    const result = await fn(terminal);
+    let result: T;
+    try {
+      result = await fn(terminal);
+    } catch (error) {
+      return await terminal.inspectFailure(error);
+    }
     await terminal.finish({ outcome: "passed" });
     return result;
-  } catch (error) {
-    await terminal.inspectFailure(error);
-    throw error;
   } finally {
     untrackTerminal(terminal);
   }

@@ -1,13 +1,22 @@
 mod agent_context;
+mod ansi;
 mod cli;
+mod config;
+#[cfg(windows)]
+mod console_input;
 mod daemon;
+mod discovery;
+mod host;
+mod ipc;
+mod monitor;
+mod monitor_input;
+mod protocol;
 mod skill;
 
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
-use tui_test_cli::{config, host, ipc, monitor, protocol};
 
 use cli::{
     Cli, ClickCmd, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, HighlightCmd, KeyCmd, MatchArg,
@@ -79,7 +88,7 @@ fn main() {
             session: target,
             config,
         } => get_recording(target.unwrap_or(session), config.as_deref()),
-        Command::Sessions => list_sessions(cli.json),
+        Command::Sessions { filter } => discovery::print_sessions(&filter, cli.json),
         Command::Close { all } if all => close_all(cli.json),
         Command::Daemon {
             cmd: DaemonCmd::Start,
@@ -95,9 +104,18 @@ fn main() {
             config::session_was_specified(&cli.session),
             cli.json,
         ),
-        Command::Monitor { interactive, id } => {
-            monitor::run_client(&session, interactive, id.as_deref())
-        }
+        Command::Monitor {
+            interactive,
+            id,
+            latest,
+            filter,
+        } => monitor::run_client(
+            config::session_was_specified(&cli.session).then_some(session.as_str()),
+            interactive,
+            id.as_deref(),
+            latest,
+            &filter,
+        ),
         command => run_remote(&session, command, cli.json, cli.verbose),
     };
     std::process::exit(code);
@@ -1005,85 +1023,7 @@ fn get_recording(session: String, explicit_config: Option<&Path>) -> i32 {
 
 /// Every session in this home whose daemon is currently answering.
 fn running_sessions() -> Vec<String> {
-    let mut sessions = Vec::new();
-    let Ok(entries) = std::fs::read_dir(config::home_dir()) else {
-        return sessions;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if let Some(stripped) = name.strip_suffix(".pid") {
-            if ipc::is_running(&config::socket_name(stripped)) {
-                sessions.push(stripped.to_string());
-            }
-        }
-    }
-    sessions.sort();
-    sessions
-}
-
-fn list_sessions(json: bool) -> i32 {
-    let daemons = running_sessions();
-    let hosted = host::discover();
-    if json {
-        let mut details = daemons
-            .iter()
-            .map(|session| {
-                serde_json::json!({
-                    "id": session,
-                    "session": session,
-                    "ownerType": "daemon",
-                    "status": "live",
-                    "attach": format!("tui-test monitor --interactive --session {session}"),
-                })
-            })
-            .collect::<Vec<_>>();
-        details.extend(hosted.iter().map(|candidate| {
-            let mut value =
-                serde_json::to_value(&candidate.session).unwrap_or_else(|_| serde_json::json!({}));
-            if let Some(object) = value.as_object_mut() {
-                object.insert(
-                    "ownerType".to_string(),
-                    serde_json::Value::String("process".to_string()),
-                );
-                object.insert(
-                    "attach".to_string(),
-                    serde_json::Value::String(format!(
-                        "tui-test monitor --interactive --id {}",
-                        candidate.session.id
-                    )),
-                );
-            }
-            value
-        }));
-        let sessions = daemons
-            .iter()
-            .cloned()
-            .chain(hosted.iter().map(|candidate| candidate.session.id.clone()))
-            .collect::<Vec<_>>();
-        println!(
-            "{}",
-            serde_json::json!({ "sessions": sessions, "details": details })
-        );
-    } else if daemons.is_empty() && hosted.is_empty() {
-        println!("no active sessions");
-    } else {
-        for session in daemons {
-            println!("{session}");
-        }
-        for candidate in hosted {
-            let label = candidate
-                .session
-                .label
-                .as_deref()
-                .or(candidate.session.test_name.as_deref())
-                .unwrap_or("-");
-            println!(
-                "{}\tprocess {}\t{}\t{}",
-                candidate.session.session, candidate.session.owner, candidate.session.status, label
-            );
-        }
-    }
-    0
+    discovery::running_daemons()
 }
 
 fn close_all(json: bool) -> i32 {

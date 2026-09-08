@@ -124,6 +124,7 @@ export interface MonitoringMetadata {
   testName?: string;
   framework?: string;
   worker?: string;
+  tags?: string[];
 }
 
 export interface MonitoringOptions {

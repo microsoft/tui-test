@@ -1,6 +1,7 @@
 import type {
   AutomaticRecording,
   Backend,
+  MonitoringMetadata,
   MonitoringOptions,
   Profile,
   Timeouts,
@@ -126,12 +127,7 @@ export interface ResolvedMonitoring {
   firstAttachTimeout: number | null;
   holdWhileAttached: boolean;
   label?: string;
-  metadata: {
-    testFile?: string;
-    testName?: string;
-    framework?: string;
-    worker?: string;
-  };
+  metadata: MonitoringMetadata;
 }
 
 function envEnabled(value: string | undefined): boolean {
@@ -164,12 +160,15 @@ export function resolveMonitoring(
       `monitoring.waitAtEnd must be never, failure, or always (got "${waitAtEnd}")`,
     );
   }
+  const envTimeout = process.env.TUI_TEST_FIRST_ATTACH_TIMEOUT;
   const timeoutValue =
     raw.firstAttachTimeout !== undefined
       ? raw.firstAttachTimeout
-      : process.env.TUI_TEST_FIRST_ATTACH_TIMEOUT === undefined
+      : envTimeout === undefined
         ? 30_000
-        : Number(process.env.TUI_TEST_FIRST_ATTACH_TIMEOUT);
+        : envTimeout.trim().toLowerCase() === "infinite"
+          ? null
+          : Number(envTimeout);
   if (
     timeoutValue !== null &&
     (!Number.isSafeInteger(timeoutValue) || Number(timeoutValue) < 0)
@@ -199,6 +198,7 @@ export function resolveMonitoring(
     "testName",
     "framework",
     "worker",
+    "tags",
   ]);
   const unknownMetadata = Object.keys(metadata).filter(
     (key) => !metadataFields.has(key),
@@ -209,7 +209,14 @@ export function resolveMonitoring(
     );
   }
   for (const [key, value] of Object.entries(metadata)) {
-    if (value !== undefined && typeof value !== "string") {
+    if (key === "tags") {
+      if (
+        value !== undefined &&
+        (!Array.isArray(value) || value.some((tag) => typeof tag !== "string"))
+      ) {
+        throw new TypeError("monitoring.metadata.tags must be an array of strings");
+      }
+    } else if (value !== undefined && typeof value !== "string") {
       throw new TypeError(`monitoring.metadata.${key} must be a string`);
     }
   }
@@ -224,8 +231,12 @@ export function resolveMonitoring(
     holdWhileAttached: (raw.holdWhileAttached as boolean | undefined) ?? true,
     label:
       (raw.label as string | undefined) ??
-      process.env.TUI_TEST_LABEL,
-    metadata: metadata as ResolvedMonitoring["metadata"],
+      process.env.TUI_TEST_LABEL ??
+      ([metadata.testFile, metadata.testName].filter(Boolean).join(" - ") || undefined),
+    metadata: {
+      ...metadata,
+      ...(metadata.tags === undefined ? {} : { tags: [...metadata.tags as string[]] }),
+    },
   };
 }
 

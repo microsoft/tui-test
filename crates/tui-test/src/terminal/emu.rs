@@ -10,7 +10,7 @@
 //! identical shell-integration behavior by construction rather than by
 //! reimplementation.
 
-use alacritty_terminal::vte::{Parser, Perform};
+use alacritty_terminal::vte::{Params, Parser, Perform};
 
 use crate::profile::{ColorSlot, Rgb};
 use crate::terminal::cell::{Color, EmuCell};
@@ -37,6 +37,77 @@ bitflags::bitflags! {
         const REPORT_ALTERNATE_KEYS = 1 << 2;
         const REPORT_ALL_KEYS_AS_ESC = 1 << 3;
         const REPORT_ASSOCIATED_TEXT = 1 << 4;
+    }
+}
+
+/// SGR mouse events currently requested by the child.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MouseMode {
+    #[default]
+    None,
+    Click,
+    Drag,
+    Motion,
+}
+
+#[derive(Default)]
+struct MouseModeState {
+    tracking: MouseMode,
+    sgr: bool,
+}
+
+impl Perform for MouseModeState {
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        if ignore || intermediates != b"?" || !matches!(action, 'h' | 'l') {
+            return;
+        }
+        let enabled = action == 'h';
+        for mode in params.iter().filter_map(|param| param.first()).copied() {
+            match mode {
+                9 | 1000 if enabled => self.tracking = MouseMode::Click,
+                1002 if enabled => self.tracking = MouseMode::Drag,
+                1003 if enabled => self.tracking = MouseMode::Motion,
+                9 | 1000 if self.tracking == MouseMode::Click => self.tracking = MouseMode::None,
+                1002 if self.tracking == MouseMode::Drag => self.tracking = MouseMode::None,
+                1003 if self.tracking == MouseMode::Motion => self.tracking = MouseMode::None,
+                1006 if enabled => self.sgr = true,
+                1005 | 1015 | 1016 if enabled => self.sgr = false,
+                1006 => self.sgr = false,
+                _ => {}
+            }
+        }
+    }
+
+    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        if !ignore && intermediates.is_empty() && byte == b'c' {
+            *self = Self::default();
+        }
+    }
+}
+
+pub(crate) struct MouseModeTracker {
+    parser: Parser,
+    state: MouseModeState,
+}
+
+impl MouseModeTracker {
+    pub(crate) fn new() -> Self {
+        Self {
+            parser: Parser::new(),
+            state: MouseModeState::default(),
+        }
+    }
+
+    pub(crate) fn process(&mut self, bytes: &[u8]) {
+        self.parser.advance(&mut self.state, bytes);
+    }
+
+    pub(crate) fn mode(&self) -> MouseMode {
+        if self.state.sgr {
+            self.state.tracking
+        } else {
+            MouseMode::None
+        }
     }
 }
 
@@ -259,5 +330,30 @@ pub trait Emulator: Send {
             Some(Color::Idx(i)) => self.color(ColorSlot::Indexed(i)),
             Some(Color::Rgb(r, g, b)) => Rgb::new(r, g, b),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracks_only_sgr_mouse_modes() {
+        let mut tracker = MouseModeTracker::new();
+        tracker.process(b"\x1b[?1000h");
+        assert_eq!(tracker.mode(), MouseMode::None);
+        tracker.process(b"\x1b[?1006h");
+        assert_eq!(tracker.mode(), MouseMode::Click);
+        tracker.process(b"\x1b[?1002h");
+        assert_eq!(tracker.mode(), MouseMode::Drag);
+        tracker.process(b"\x1b[?10");
+        tracker.process(b"03h");
+        assert_eq!(tracker.mode(), MouseMode::Motion);
+        tracker.process(b"\x1b[?1016h");
+        assert_eq!(tracker.mode(), MouseMode::None);
+        tracker.process(b"\x1b[?1006h\x1b[?1003l");
+        assert_eq!(tracker.mode(), MouseMode::None);
+        tracker.process(b"\x1b[?1000;1006h\x1bc");
+        assert_eq!(tracker.mode(), MouseMode::None);
     }
 }

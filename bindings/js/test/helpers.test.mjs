@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { uniqueSession } from "../dist/index.js";
+import { TuiTest, uniqueSession } from "../dist/index.js";
+import { NativeRuntime } from "../dist/native.js";
 import {
   closeAllTracked,
   createTerminal,
@@ -110,6 +111,7 @@ test(
   "withTerminal preserves the exact callback failure after monitor timeout",
   async () => {
     const original = new Error("original callback failure");
+    const stack = original.stack;
     let caught;
     try {
       await withTerminal(
@@ -130,6 +132,7 @@ test(
       caught = error;
     }
     assert.equal(caught, original);
+    assert.equal(caught.stack, stack);
     assert.equal(trackedCount(), 0);
   },
 );
@@ -149,6 +152,122 @@ test(
     assert.equal(trackedCount(), 0);
   },
 );
+
+test("withTerminal does not inspect a successful callback's cleanup failure", async () => {
+  const originalOpen = NativeRuntime.prototype.open;
+  const originalClose = NativeRuntime.prototype.close;
+  const originalInspect = TuiTest.prototype.inspectFailure;
+  const cleanup = new Error("successful callback cleanup failed");
+  let inspections = 0;
+  NativeRuntime.prototype.open = async () => ({
+    session: "cleanup-failure", ready: true, shell_pid: 1, recording: "",
+  });
+  NativeRuntime.prototype.close = async () => { throw cleanup; };
+  TuiTest.prototype.inspectFailure = async () => {
+    inspections++;
+    throw new Error("cleanup must not be classified as a callback failure");
+  };
+  try {
+    await assert.rejects(
+      withTerminal({ monitoring: { enabled: false } }, () => "passed"),
+      (error) => error === cleanup,
+    );
+    assert.equal(inspections, 0);
+    assert.equal(trackedCount(), 0);
+  } finally {
+    NativeRuntime.prototype.open = originalOpen;
+    NativeRuntime.prototype.close = originalClose;
+    TuiTest.prototype.inspectFailure = originalInspect;
+  }
+});
+
+test("withTerminal preserves throw undefined as a failure", async () => {
+  const originalOpen = NativeRuntime.prototype.open;
+  const originalClose = NativeRuntime.prototype.close;
+  NativeRuntime.prototype.open = async () => ({
+    session: "undefined-failure", ready: true, shell_pid: 1, recording: "",
+  });
+  NativeRuntime.prototype.close = async () => { throw new Error("secondary cleanup"); };
+  try {
+    await withTerminal({ monitoring: { enabled: false } }, () => {
+      throw undefined;
+    }).then(
+      () => assert.fail("throw undefined must reject"),
+      (error) => assert.equal(error, undefined),
+    );
+    assert.equal(trackedCount(), 0);
+  } finally {
+    NativeRuntime.prototype.open = originalOpen;
+    NativeRuntime.prototype.close = originalClose;
+  }
+});
+
+test("createTerminal attempts inspection of initialization failures before cleanup", async () => {
+  const originalOpen = NativeRuntime.prototype.open;
+  const originalBegin = NativeRuntime.prototype.beginMonitorWait;
+  const originalClose = NativeRuntime.prototype.close;
+  const failure = new Error("initialization failed");
+  const stack = failure.stack;
+  const calls = [];
+  NativeRuntime.prototype.open = async () => { throw failure; };
+  NativeRuntime.prototype.beginMonitorWait = async (outcome) => {
+    calls.push(["inspect", outcome]);
+    throw new Error("no monitorable target");
+  };
+  NativeRuntime.prototype.close = async () => {
+    calls.push(["close"]);
+    throw new Error("secondary cleanup failure");
+  };
+  try {
+    await assert.rejects(
+      createTerminal({ retries: 0, monitoring: { waitAtEnd: "failure" } }),
+      (error) => {
+        assert.equal(error, failure);
+        assert.equal(error.stack, stack);
+        return true;
+      },
+    );
+    assert.deepEqual(calls, [["inspect", "failed"], ["close"]]);
+    assert.equal(trackedCount(), 0);
+  } finally {
+    NativeRuntime.prototype.open = originalOpen;
+    NativeRuntime.prototype.beginMonitorWait = originalBegin;
+    NativeRuntime.prototype.close = originalClose;
+  }
+});
+
+test("a nonmonitorable program-open failure remains the original native failure", async () => {
+  const originalRun = NativeRuntime.prototype.run;
+  let originalFailure;
+  let stack;
+  NativeRuntime.prototype.run = async function (...args) {
+    try {
+      return await originalRun.apply(this, args);
+    } catch (error) {
+      originalFailure = error;
+      stack = error.stack;
+      throw error;
+    }
+  };
+  try {
+    await assert.rejects(
+      createTerminal({
+        program: [`__tui_test_missing_program_${process.pid}__`],
+        retries: 0,
+        monitoring: { enabled: true, waitAtEnd: "failure", firstAttachTimeout: 0 },
+      }),
+      (error) => {
+        assert.ok(originalFailure instanceof Error);
+        assert.equal(error, originalFailure);
+        assert.equal(error.stack, stack);
+        return true;
+      },
+    );
+    assert.equal(trackedCount(), 0);
+  } finally {
+    NativeRuntime.prototype.run = originalRun;
+  }
+});
 
 test(
   "createTerminal can run a raw program",

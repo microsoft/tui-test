@@ -72,9 +72,41 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `startRecording()`, `stopRecording()` | Record. |
 | `close()`, `closeQuiet()` | Close. |
 
-Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
+Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`,
+and `monitoring`.
 
 Recording modes: `disabled`, `on-failure`, and `always`.
+
+## Process-local monitoring
+
+```js
+import { withTerminal } from "@microsoft/tui-test/test";
+
+await withTerminal({
+  program: ["my-app"],
+  monitoring: {
+    enabled: true,
+    waitAtEnd: "failure",
+    firstAttachTimeout: 30_000,
+    holdWhileAttached: true,
+    label: "login validation",
+    metadata: { testName: "rejects an expired token" },
+  },
+}, async (terminal) => {
+  await terminal.getByText("Ready").expect();
+});
+```
+
+On failure, the helper prints an exact `tui-test monitor --interactive --id ...`
+command and retains the original terminal until inspection completes, then
+rethrows the same error. Use `finish({ outcome: "passed" | "failed", error? })`
+or `inspectFailure(error)` with custom runners. `close`, `closeQuiet`, and async
+disposal do not bypass an active inspection hold.
+
+`waitAtEnd` is `"never"` by default; `"always"` also delays successful cleanup.
+`firstAttachTimeout: null` explicitly waits indefinitely for a first attachment.
+Monitoring alone does not keep Node alive, and no terminal survives Node's exit.
+Use `tui-test sessions --waiting` to discover failures across workers.
 
 ## Input helpers
 

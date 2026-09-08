@@ -27,7 +27,7 @@ async with TuiTest.ephemeral() as terminal:
 ### `TuiTest`
 
 ```python
-TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=None, recording=None)
+TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=None, recording=None, monitoring=None)
 ```
 
 | Option | Type | Default |
@@ -38,6 +38,7 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=No
 | `profile` | `Profile \| dict` | built-in profile |
 | `artifacts` | `dict` | off |
 | `recording` | `AutomaticRecording \| dict` | `{"mode": "always"}` |
+| `monitoring` | `MonitoringOptions \| dict` | disabled |
 
 `artifacts["on_failure"]` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
 
@@ -58,11 +59,82 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=No
 | `await run(program, *args, **options)` | Run a program. |
 | `await close()` | Close the session. |
 | `await close_quiet()` | Close without raising. |
-| `async with TuiTest()` | Close on exit. |
+| `await finish(outcome="passed", error=None)` | Apply the end-of-test monitoring policy, then close. Re-raise `error` if supplied with `outcome="failed"`. |
+| `await inspect_failure(error)` | Inspect a failure according to policy, close, and re-raise the original exception. |
+| `async with TuiTest()` | Finish on exit using the context manager's exception, if any. |
 
 `open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
 
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
+
+#### Process-local monitoring
+
+```python
+from tui_test import MonitoringMetadata, MonitoringOptions
+from tui_test.testing import terminal
+
+async with terminal(
+    program=["my-app"],
+    monitoring=MonitoringOptions(
+        wait_at_end="failure",
+        label="login",
+        metadata=MonitoringMetadata(
+            test_file="test_login.py",
+            test_name="test_password",
+            framework="pytest",
+        ),
+    ),
+) as term:
+    await term.get_by_text("Welcome").expect()
+```
+
+Monitoring is opt-in. One lazy native IPC bridge serves the process's monitored
+sessions. The Python process and its existing native registry still own the PTYs;
+there is no Python daemon, subprocess handoff, or PTY transfer. The bridge alone
+does not keep the interpreter alive.
+
+A monitored child that starts but fails the readiness check remains available
+for failure inspection. A program that cannot start preserves its startup error
+without registering a terminal. Unmonitored startup behavior is unchanged.
+
+| Monitoring option | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `False` | Make this terminal discoverable by the CLI. |
+| `wait_at_end` | `"never"` | `"never"`, `"failure"`, or `"always"`. A non-`"never"` policy enables monitoring unless `enabled=False` is explicit. |
+| `first_attach_timeout` | `30_000` | Milliseconds to wait for the first long-lived monitor; a non-negative integer (not `bool`). `None` explicitly waits indefinitely. |
+| `hold_while_attached` | `True` | After attachment, keep the terminal until all long-lived monitors detach. |
+| `label` | unset | Human-readable terminal label. |
+| `metadata` | empty | `MonitoringMetadata` or a mapping of string `test_file`, `test_name`, `framework`, and `worker` fields. |
+
+`TUI_TEST_MONITORING=1` (or `true`), `TUI_TEST_WAIT_AT_END`,
+`TUI_TEST_FIRST_ATTACH_TIMEOUT`, and `TUI_TEST_LABEL` supply defaults. Explicit
+option fields override their corresponding environment values. An environment
+timeout must be a non-negative integer or `"infinite"`; Python `None` also
+explicitly selects an infinite wait.
+Unknown fields and invalid types are rejected. `TerminalOptions`,
+`create_terminal()`, and `set_terminal_defaults()` accept the same `monitoring`
+option.
+
+When a finish policy waits, stderr includes the exact copyable command:
+
+```text
+[tui-test] tui-test monitor --interactive --id <exact-attach-id>
+```
+
+The banner includes the outcome, label/test file when supplied, and first-attach
+wait duration. One-shot inspection does not acquire a long-lived attachment.
+Concurrent `close()`, `close_quiet()`, context-manager cleanup, and tracked/global
+cleanup cannot skip an inspection already in progress. Explicit `close()` does
+not infer an outcome or start a new first-attachment wait.
+
+Use `async with TuiTest(...)` or `testing.terminal(...)` for reliable failure
+context. For manual lifecycle management, call `await term.inspect_failure(error)`
+in an exception handler, or `await term.finish("failed", error=error)`. Both
+re-raise the same exception and retain its original traceback frames. Secondary
+monitoring/cleanup failures are reported separately; without a primary failure,
+they propagate. Cancellation and interpreter interrupts do not start new
+inspection waits. Interpreter-exit cleanup is forceful and never starts a hold;
+there is no inference from child exit status or global exception handlers.
 
 #### Input
 
@@ -283,6 +355,8 @@ terminal = TuiTest(
 | `Profile` | Scrollback and colors. |
 | `Timeouts` | Text, idle, command, exit, and ready timeouts. |
 | `AutomaticRecording` | Automatic recording mode and directory. |
+| `MonitoringOptions`, `MonitoringMetadata` | Opt-in discovery, inspection policy, and test metadata. |
+| `MonitoringOutcome`, `MonitoringWaitAtEnd` | Typed completion outcomes and inspection policies. |
 | `Colors` | Terminal palette. |
 | `MouseButton` | `"left"`, `"middle"`, or `"right"`. |
 | `TextPosition`, `TextSpan` | Match coordinates. |
@@ -300,4 +374,18 @@ terminal = TuiTest(
 
 All errors extend `TuiTestError`. Expectation errors can include `terminal.text` and `terminal.screenshot`.
 
-Sessions are local to the current process and cannot be controlled by the CLI. Cancelling a task does not stop an active terminal operation.
+Sessions remain owned by the current process. The CLI can discover, view, and
+interact with explicitly monitored sessions without taking ownership. Cancelling
+an inspection wakes its native wait and releases that generation's attachment
+hold so cleanup can finish even if monitor sockets remain open. Cancelling a
+concurrent cleanup waiter does not cancel another task's inspection. Other active terminal operations may
+continue after their Python task is cancelled.
+
+### Monitoring interoperability test
+
+Set `TUI_TEST_BIN` to the matching CLI executable to enable
+`tests\test_monitoring_cli.py`. It uses two process-local native PTYs: one owns the
+tested program, and the other runs the interactive CLI viewer. The test covers
+discovery, input forwarding, resize, detach, and preservation of the original
+Python exception. It needs no outer daemon and is skipped when `TUI_TEST_BIN` is
+unset.

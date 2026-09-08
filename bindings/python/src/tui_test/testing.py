@@ -11,15 +11,17 @@ from typing import (
     AsyncIterator,
     Dict,
     Iterable,
+    Mapping,
     Optional,
     Sequence,
     Set,
+    Union,
 )
 
 from ._config import IS_MACOS, IS_WINDOWS
 from ._ephemeral import unique_session
-from .client import TuiTest
-from .types import AutomaticRecording, Backend, Profile, Timeouts
+from .client import TuiTest, _atexit_close_all
+from .types import AutomaticRecording, Backend, MonitoringOptions, Profile, Timeouts
 
 __all__ = [
     "TerminalOptions",
@@ -55,6 +57,7 @@ class TerminalOptions:
     profile: Optional[Profile] = None
     artifacts: Optional[Dict[str, Any]] = None
     recording: Optional[AutomaticRecording] = None
+    monitoring: Optional[Union[MonitoringOptions, Mapping[str, Any]]] = None
 
 
 _DEFAULTABLE = frozenset(TerminalOptions.__dataclass_fields__)
@@ -97,21 +100,10 @@ def _install_safety_net() -> None:
 
 
 def _close_all_tracked_blocking() -> None:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        pass
-    else:  # pragma: no cover - atexit never runs inside a live loop
-        return
     with _tracked_lock:
-        pending = list(_tracked)
         _tracked.clear()
-    if not pending:
-        return
-    try:
-        asyncio.run(_close_quietly(pending))
-    except Exception:  # pragma: no cover - best effort at shutdown
-        pass
+    # Interpreter exit is forceful; never start a new event loop or inspection hold.
+    _atexit_close_all()
 
 
 async def _close_quietly(terminals: Iterable[TuiTest]) -> None:
@@ -154,6 +146,8 @@ def _client_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
         kwargs["artifacts"] = opts.artifacts
     if opts.recording is not None:
         kwargs["recording"] = opts.recording
+    if opts.monitoring is not None:
+        kwargs["monitoring"] = opts.monitoring
     return kwargs
 
 
@@ -184,9 +178,11 @@ async def create_terminal(**options: Any) -> TuiTest:
             await term.run(program[0], *program[1:], **spawn)
         else:
             await term.open(shell=opts.shell, **spawn)
-    except BaseException:
-        await term.close_quiet()
-        untrack_terminal(term)
+    except BaseException as error:
+        try:
+            await term.__aexit__(type(error), error, error.__traceback__)
+        finally:
+            untrack_terminal(term)
         raise
     return term
 
@@ -195,9 +191,14 @@ async def create_terminal(**options: Any) -> TuiTest:
 async def terminal(**options: Any) -> AsyncIterator[TuiTest]:
     term = await create_terminal(**options)
     try:
-        yield term
+        try:
+            yield term
+        except BaseException as error:
+            await term.__aexit__(type(error), error, error.__traceback__)
+            raise
+        else:
+            await term.finish()
     finally:
-        await term.close_quiet()
         untrack_terminal(term)
 
 

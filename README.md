@@ -153,7 +153,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run a program. |
-| `sessions` | List daemon sessions and monitoring-enabled JavaScript sessions. |
+| `sessions [--waiting] [--failed] [--owner OWNER]` | List daemon and monitoring-enabled process-local sessions. |
 | `close [--all]` | Close one or all sessions. |
 | `daemon start` | Start the session daemon. |
 | `daemon status` | Show daemon status. |
@@ -276,12 +276,28 @@ Timeout defaults:
 | `record start PATH [options]` | Start APNG, GIF, MP4, or asciinema recording. |
 | `record stop` | Finish the recording. |
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
-| `monitor [--interactive] [--id OWNER/SESSION]` | Watch a daemon or monitoring-enabled JavaScript session. |
+| `monitor [--interactive] [--id OWNER/SESSION]` | Watch a daemon or monitoring-enabled Rust, Python, or JavaScript session. |
 
-For JavaScript sessions, monitoring is explicitly enabled in the constructor
-or test helper. The terminal remains process-owned; the CLI discovers a lazy
-per-process bridge and reuses the same full-color monitor and interactive input
-handling as daemon sessions.
+Process-local monitoring is opt-in. One lazy bridge per test process exposes the
+existing terminals; it does not start a daemon, recreate a session, or transfer
+PTY ownership. Sessions disappear when their owning process exits.
+
+Use `tui-test sessions --waiting` to find a retained failure, then copy its exact
+attach command. `monitor` without a target offers a searchable picker in an
+interactive terminal. Selectors include `--failed`, `--waiting`, `--latest`,
+`--owner OWNER`, and `--cwd current`. Duplicate session names require an exact
+`--id` rather than choosing an arbitrary worker.
+
+Failure inspection delays cleanup and the original test failure while a human
+attaches. The default first-attachment window is 30 seconds; an explicitly
+unlimited wait is intended only for local debugging. Attached clients can hold
+cleanup until the last disconnect. Read-only monitors may coexist, while one
+interactive monitor owns keyboard, mouse, and child resizing at a time.
+
+JavaScript and Python constructor/test-helper options, and the Rust monitoring
+API, configure this behavior. `TUI_TEST_MONITORING`, `TUI_TEST_WAIT_AT_END`,
+`TUI_TEST_FIRST_ATTACH_TIMEOUT`, and `TUI_TEST_LABEL` provide environment defaults.
+Explicit settings take precedence; monitoring is disabled by default.
 
 `record start` accepts `--format`, `--fps`, `--speed`, `--idle-time-limit`, and `--zoom`. MP4 output requires `ffmpeg`.
 

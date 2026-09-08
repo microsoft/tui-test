@@ -16,7 +16,7 @@ import {
 } from "./config.js";
 import type { TimeoutClass } from "./config.js";
 import { uniqueSession } from "./ephemeral.js";
-import { ExpectationError, TuiTestError, UsageError } from "./errors.js";
+import { ExpectationError, NoSessionError, TuiTestError, UsageError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
 import type {
   RuntimeLocatorStage,
@@ -586,8 +586,7 @@ export class TuiTest {
   #runtime: NativeRuntime;
   #options: ClientOptions;
   #monitoring: ReturnType<typeof resolveMonitoring>;
-  #holdPromise: Promise<unknown> | undefined;
-  #holdGeneration: string | undefined;
+  #finishPromise: Promise<void> | undefined;
   #artifactCounter = 0;
 
   constructor(session?: string, opts: ClientOptions = {}) {
@@ -606,6 +605,7 @@ export class TuiTest {
           testName: this.#monitoring.metadata.testName,
           framework: this.#monitoring.metadata.framework,
           worker: this.#monitoring.metadata.worker,
+          tags: this.#monitoring.metadata.tags,
         }
       : undefined;
     this.#runtime = new NativeRuntime(
@@ -753,6 +753,10 @@ export class TuiTest {
   }
 
   async #spawn(action: () => Promise<OpenResult>, retries: number): Promise<OpenResult> {
+    if (this.#finishPromise) {
+      await this.#finishPromise;
+      this.#finishPromise = undefined;
+    }
     let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
@@ -761,6 +765,7 @@ export class TuiTest {
         lastError = error;
         if (attempt < retries) {
           await this.closeQuiet();
+          this.#finishPromise = undefined;
         }
       }
     }
@@ -810,18 +815,78 @@ export class TuiTest {
     return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0);
   }
 
-  async close(): Promise<void> {
-    if (this.#holdPromise) {
-      await this.#holdPromise;
+  close(): Promise<void> {
+    if (!this.#monitoring.enabled) {
+      return this.#finishPromise ?? this.#runtime.close();
     }
-    const generation = this.#holdGeneration;
-    if (generation) {
-      await this.#runtime.closeMonitorTarget(generation);
-      if (this.#holdGeneration === generation) {
-        this.#holdGeneration = undefined;
+    return this.#finishPromise ??= Promise.resolve().then(() => this.#complete());
+  }
+
+  async #complete(outcome?: "passed" | "failed"): Promise<void> {
+    const errors: unknown[] = [];
+    let generation: string | undefined;
+    const shouldWait =
+      outcome !== undefined &&
+      this.#monitoring.enabled &&
+      (this.#monitoring.waitAtEnd === "always" ||
+        (outcome === "failed" && this.#monitoring.waitAtEnd === "failure"));
+    const configureNoHold = this.#monitoring.enabled && !this.#monitoring.holdWhileAttached;
+    if (shouldWait || configureNoHold) {
+      // Native worker promises alone need not keep Node's event loop alive.
+      const keepAlive = shouldWait ? setInterval(() => {}, 2 ** 30) : undefined;
+      const timeout = shouldWait ? this.#monitoring.firstAttachTimeout : 0;
+      try {
+        const info = await this.#runtime.beginMonitorWait(
+          outcome ?? "passed",
+          timeout,
+          this.#monitoring.holdWhileAttached,
+        );
+        generation = info.generation;
+        if (shouldWait) {
+          console.error(
+            `[tui-test] ${outcome === "failed" ? "Test failed" : "Test completed"}; ` +
+              "terminal kept open for inspection",
+          );
+          if (this.#monitoring.label) {
+            console.error(`[tui-test] ${this.#monitoring.label}`);
+          }
+          if (this.#monitoring.metadata.testFile) {
+            console.error(`[tui-test] ${this.#monitoring.metadata.testFile}`);
+          }
+          console.error(`[tui-test] Attach: ${info.command}`);
+          console.error(
+            timeout === null
+              ? "[tui-test] Waiting for an attachment"
+              : `[tui-test] Waiting up to ${timeout}ms for an attachment`,
+          );
+        }
+        await this.#runtime.waitForMonitor(
+          info.generation,
+          timeout,
+          this.#monitoring.holdWhileAttached,
+        );
+      } catch (error) {
+        if (shouldWait || !(error instanceof NoSessionError)) {
+          errors.push(error);
+        }
+      } finally {
+        clearInterval(keepAlive);
       }
-    } else {
-      await this.#runtime.close();
+    }
+    try {
+      if (generation !== undefined) {
+        await this.#runtime.closeMonitorTarget(generation);
+      } else {
+        await this.#runtime.close();
+      }
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "terminal inspection and cleanup failed");
     }
   }
 
@@ -829,62 +894,29 @@ export class TuiTest {
     outcome: "passed" | "failed",
     primary: { present: boolean; value?: unknown },
   ): Promise<void> {
-    const shouldWait =
-      this.#monitoring.enabled &&
-      (this.#monitoring.waitAtEnd === "always" ||
-        (outcome === "failed" && this.#monitoring.waitAtEnd === "failure"));
-    if (shouldWait) {
-      try {
-        const info = await this.#runtime.beginMonitorWait(outcome);
-        this.#holdGeneration = info.generation;
-        const timeout = this.#monitoring.firstAttachTimeout;
-        console.error(
-          `[tui-test] ${outcome === "failed" ? "Test failed" : "Test completed"}; ` +
-            "terminal kept open for inspection",
-        );
-        if (this.#monitoring.label) {
-          console.error(`[tui-test] ${this.#monitoring.label}`);
-        }
-        if (this.#monitoring.metadata.testFile) {
-          console.error(`[tui-test] ${this.#monitoring.metadata.testFile}`);
-        }
-        console.error(`[tui-test] Attach: ${info.command}`);
-        console.error(
-          timeout === null
-            ? "[tui-test] Waiting for an attachment"
-            : `[tui-test] Waiting up to ${timeout}ms for an attachment`,
-        );
-        this.#holdPromise = this.#runtime.waitForMonitor(
-          info.generation,
-          timeout,
-          this.#monitoring.holdWhileAttached,
-        );
-        await this.#holdPromise;
-      } catch (error) {
-        console.error(
-          `[tui-test] monitor inspection failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      } finally {
-        this.#holdPromise = undefined;
-      }
-    }
-    try {
-      await this.close();
-    } catch (error) {
-      if (primary.present) {
-        console.error(
-          `[tui-test] terminal cleanup failed after primary failure: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      } else {
+    const handleSecondaryError = (error: unknown): void => {
+      if (!primary.present) {
         throw error;
       }
-    }
-    if (primary.present) {
-      throw primary.value;
+      console.error(
+        `[tui-test] terminal inspection or cleanup failed after primary failure: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    };
+    // Publish before beginning inspection so close/disposal also await initialization.
+    const completion = this.#finishPromise ??= Promise.resolve()
+      .then(() => this.#complete(outcome))
+      .catch(handleSecondaryError);
+    try {
+      await completion.catch(handleSecondaryError);
+      if (primary.present) {
+        throw primary.value;
+      }
+    } finally {
+      if (!this.#monitoring.enabled && this.#finishPromise === completion) {
+        this.#finishPromise = undefined;
+      }
     }
   }
 
@@ -1142,6 +1174,6 @@ export class TuiTest {
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
-    await this.closeQuiet();
+    await this.close();
   }
 }

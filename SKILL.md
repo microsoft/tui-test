@@ -17,9 +17,15 @@ Use `tui-test` to control and test a real terminal.
 | Rust code | `tui-test-rs` | [Rust](references/rust.md) |
 | Common tasks | Current project language | [Recipes](references/recipes.md) |
 
-Use the library that matches the project. Use the CLI when the terminal must persist across separate commands or be watched with `monitor`.
+Use the library that matches the project. Use standalone CLI sessions when the
+terminal must persist across separate commands. The CLI can also monitor an
+opt-in Rust, Python, or JavaScript library session.
 
-CLI and library sessions do not share state.
+Standalone CLI and library sessions have separate owners. Monitoring exposes
+the existing library-owned terminal through one process bridge; it does not
+transfer ownership or keep the session alive after that process exits. For
+failure inspection, use the language's monitoring options and copy the printed
+attach command, or run `tui-test sessions --waiting`.
 
 ## CLI
 

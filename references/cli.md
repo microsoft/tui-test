@@ -104,12 +104,36 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 | `record stop` | Finish it. |
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
 | `monitor` | Watch a session live. |
-| `monitor --interactive` | Send input to a session. |
+| `monitor --interactive` | Forward keyboard, paste, and supported SGR mouse input; Ctrl+] detaches. |
 | `monitor --interactive --id OWNER/SESSION` | Attach to an exact process session. |
+| `sessions --waiting` | Find sessions retained for inspection. |
+| `monitor --interactive --failed` | Choose a failed session. |
+| `monitor --interactive --latest` | Attach to the most recently completed or started matching session. |
 
-If no standalone daemon exists for `--session NAME`, `monitor` discovers an
-enabled JavaScript session with that exact name. Duplicate process session
-names produce an ambiguity error with copyable `--id` commands.
+`--session NAME` matches daemon and enabled process-local sessions. Duplicate
+names produce an ambiguity error with copyable `--id` commands, including when
+a daemon and a process session share a name. `--owner OWNER`, `--failed`,
+`--waiting`, and `--cwd current` filter discovery. With no target, an interactive
+terminal presents a fuzzy-search picker ranked by waiting failures, other
+waiting sessions, nearby running sessions, and recent activity.
+
+Interactive monitors apply the target's keyboard and paste modes before reading
+input. SGR mouse clicks, drags, and motion are enabled when requested by the
+target, with coordinates translated past the monitor's border. Viewer modes are
+restored on detach; read-only monitoring does not change input modes.
+
+For process-local sessions, one interactive attachment owns input and child
+resizing; multiple read-only attachments are allowed. A persistent attachment
+lease survives viewer resizes, so a resize cannot release a test's inspection
+hold. The session's owning Rust, Python, or JavaScript process must remain alive.
+
+Monitoring is disabled by default. Enable it through the language API or
+`TUI_TEST_MONITORING=1`; `TUI_TEST_WAIT_AT_END=failure` enables failure inspection.
+`TUI_TEST_FIRST_ATTACH_TIMEOUT` sets the first-attachment window in milliseconds
+(30,000 by default), and `TUI_TEST_LABEL` supplies a discovery label. Explicit
+API options override environment defaults. An unlimited first-attachment wait
+must be explicitly requested through the API or with
+`TUI_TEST_FIRST_ATTACH_TIMEOUT=infinite` for local debugging.
 
 ## Configure
 

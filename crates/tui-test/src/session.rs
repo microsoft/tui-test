@@ -15,7 +15,7 @@ use crate::record::{self, CaptureError, Recorder, StartRecording};
 use crate::render::raster::GridRenderer;
 use crate::shell::{self, Shell};
 use crate::terminal::backend::Backend;
-use crate::terminal::emu::Emulator;
+use crate::terminal::emu::{Emulator, MouseModeTracker};
 use crate::terminal::integration::CommandTracker;
 use crate::terminal::pty::{Pty, SpawnOptions};
 
@@ -32,6 +32,7 @@ pub struct TermState {
     /// Shell-integration state, derived from the raw PTY stream rather than
     /// the emulator, so it is identical across backends.
     pub tracker: CommandTracker,
+    pub(crate) mouse_mode: MouseModeTracker,
     pub observed_clipboard_revision: u64,
     pub last_change: Instant,
     pub awaiting_start: Option<u64>,
@@ -42,21 +43,67 @@ pub struct TermState {
 
 pub struct Session {
     pub shell: Option<Shell>,
-    pub cols: u16,
-    pub rows: u16,
     /// Per-class timeout defaults for the lifetime of this session.
     pub timeouts: crate::api::Timeouts,
     pub pty: Arc<Mutex<Pty>>,
     pub state: Arc<Mutex<TermState>>,
     pub cancelled: Arc<AtomicBool>,
     pub(crate) bells: BellTracker,
-    recorder: Recorder,
+    recorder: Arc<Mutex<Recorder>>,
+    resize_lock: Arc<Mutex<()>>,
     logger: Arc<Logger>,
     reader: Option<JoinHandle<()>>,
     _process_watcher: JoinHandle<()>,
 }
 
+#[derive(Clone)]
+pub(crate) struct ResizeTarget {
+    state: Arc<Mutex<TermState>>,
+    pty: Arc<Mutex<Pty>>,
+    recorder: Arc<Mutex<Recorder>>,
+    serial: Arc<Mutex<()>>,
+}
+
+impl ResizeTarget {
+    pub(crate) fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
+        let _serial = self
+            .serial
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let exited = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.recorder
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .on_resize(cols, rows);
+            state.emu.resize(cols, rows);
+            state.last_change = Instant::now();
+            state.highlight = None;
+            state.exited.is_some()
+        };
+        if !exited {
+            self.pty
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .resize(cols, rows)?;
+        }
+        Ok(())
+    }
+}
+
 impl Session {
+    pub(crate) fn resize_target(&self) -> ResizeTarget {
+        ResizeTarget {
+            state: self.state.clone(),
+            pty: self.pty.clone(),
+            recorder: self.recorder.clone(),
+            serial: self.resize_lock.clone(),
+        }
+    }
+
     /// The session default for `class`, else the environment, else the built-in.
     pub fn timeout_for(&self, class: crate::config::TimeoutClass) -> u64 {
         self.timeouts
@@ -84,6 +131,7 @@ impl Session {
         let state = Arc::new(Mutex::new(TermState {
             emu: backend.build_with_bells(cols, rows, &profile, bells.clone())?,
             tracker: CommandTracker::new(),
+            mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
             last_change: Instant::now(),
             awaiting_start: None,
@@ -166,6 +214,7 @@ impl Session {
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
                             st.emu.process(&buf[..n]);
                             st.tracker.feed(&buf[..n]);
+                            st.mouse_mode.process(&buf[..n]);
                             st.last_change = Instant::now();
                             st.highlight = None;
                             reader_recorder.on_data(&buf[..n]);
@@ -229,14 +278,13 @@ impl Session {
 
         Ok(Session {
             shell,
-            cols,
-            rows,
             timeouts,
             pty,
             state,
             cancelled,
             bells,
-            recorder,
+            recorder: Arc::new(Mutex::new(recorder)),
+            resize_lock: Arc::new(Mutex::new(())),
             logger,
             reader: Some(reader_handle),
             _process_watcher: process_watcher,
@@ -271,14 +319,7 @@ impl Session {
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
         self.logger.event(&format!("resize {cols}x{rows}"));
-        self.cols = cols;
-        self.rows = rows;
-        resize_emulator_and_record(&self.state, &self.recorder, cols, rows);
-        self.pty
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .resize(cols, rows)?;
-        Ok(())
+        self.resize_target().resize(cols, rows)
     }
 
     pub fn start_recording(
@@ -355,26 +396,30 @@ impl Session {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (cols, rows) = state.emu.size();
         let initial_output = record::cast::snapshot_to_ansi(state.emu.as_ref());
-        let result = self.recorder.start(StartRecording {
-            target_path,
-            capture_path,
-            format,
-            cols,
-            rows,
-            env,
-            initial_output,
-            #[cfg(feature = "recording-raster")]
-            zoom,
-            #[cfg(feature = "recording-raster")]
-            timeline: record::frames::TimelineOptions {
-                fps,
-                speed,
-                idle_time_limit,
-                ..record::frames::TimelineOptions::default()
-            },
-            #[cfg(feature = "recording-raster")]
-            ffmpeg_path,
-        });
+        let result = self
+            .recorder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .start(StartRecording {
+                target_path,
+                capture_path,
+                format,
+                cols,
+                rows,
+                env,
+                initial_output,
+                #[cfg(feature = "recording-raster")]
+                zoom,
+                #[cfg(feature = "recording-raster")]
+                timeline: record::frames::TimelineOptions {
+                    fps,
+                    speed,
+                    idle_time_limit,
+                    ..record::frames::TimelineOptions::default()
+                },
+                #[cfg(feature = "recording-raster")]
+                ffmpeg_path,
+            });
         drop(state);
         result.map_err(capture_error)
     }
@@ -384,7 +429,12 @@ impl Session {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let stopped = self.recorder.stop().map_err(capture_error)?;
+        let stopped = self
+            .recorder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .stop()
+            .map_err(capture_error)?;
         drop(state);
         if stopped.format == crate::api::RecordingFormat::Cast {
             return Ok(stopped.target_path.to_string_lossy().into_owned());
@@ -499,14 +549,22 @@ impl Session {
     }
 
     pub fn flush_recording(&self) -> Result<(), crate::api::TuiTestError> {
-        self.recorder.flush().map_err(capture_error)
+        self.recorder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .flush()
+            .map_err(capture_error)
     }
 
     pub fn automatic_recording_enabled(&self) -> bool {
-        self.recorder.automatic_enabled()
+        self.recorder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .automatic_enabled()
     }
 }
 
+#[cfg(test)]
 fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, cols: u16, rows: u16) {
     let mut state = state
         .lock()
@@ -531,7 +589,13 @@ impl Drop for Session {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .close();
-        drain_reader_and_recorder(&mut self.reader, &mut self.recorder);
+        drain_reader_and_recorder(
+            &mut self.reader,
+            &mut self
+                .recorder
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
     }
 }
 
@@ -661,6 +725,7 @@ mod tests {
         let state = Arc::new(Mutex::new(TermState {
             emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
             tracker: CommandTracker::new(),
+            mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
             last_change: Instant::now(),
             awaiting_start: None,

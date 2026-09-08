@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Union
+from enum import Enum
+from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 
 Color = Union[str, int]
 Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
@@ -11,6 +12,34 @@ UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
 AutomaticRecordingMode = Literal["disabled", "on-failure", "always"]
 LocatorDirection = Literal["within", "after", "before"]
+MonitoringWaitAtEnd = Literal["never", "failure", "always"]
+MonitoringOutcome = Literal["passed", "failed"]
+
+
+class _Unset(Enum):
+    VALUE = "unset"
+
+
+_UNSET = _Unset.VALUE
+
+
+@dataclass
+class MonitoringMetadata:
+    test_file: Optional[str] = None
+    test_name: Optional[str] = None
+    framework: Optional[str] = None
+    worker: Optional[str] = None
+
+
+@dataclass
+class MonitoringOptions:
+    # Omitted values inherit the environment; an explicit timeout=None is infinite.
+    enabled: Union[bool, _Unset] = _UNSET
+    wait_at_end: Union[MonitoringWaitAtEnd, _Unset] = _UNSET
+    first_attach_timeout: Union[int, None, _Unset] = _UNSET
+    hold_while_attached: Union[bool, _Unset] = _UNSET
+    label: Union[str, _Unset] = _UNSET
+    metadata: Union[MonitoringMetadata, Mapping[str, str], _Unset] = _UNSET
 
 
 @dataclass

@@ -287,6 +287,12 @@ impl Emulator for GhosttyEmu {
         self.sequences.state.current.clone()
     }
 
+    fn bracketed_paste_mode(&self) -> bool {
+        self.call_result("reading bracketed paste mode", |core| {
+            core.bracketed_paste_mode()
+        })
+    }
+
     fn cursor_visible(&self) -> bool {
         self.call_result("reading cursor visibility", |core| {
             Ok(core.frame()?.cursor_visible)
