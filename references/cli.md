@@ -11,6 +11,7 @@ Use the CLI for terminal work split across separate commands.
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run an app. |
 | `[global options] -- PROGRAM [ARGS...]` | Alias for `run`. |
+| `restart [--graceful-timeout MS]` | Restart the session. |
 | `sessions` | List sessions. |
 | `close [--all]` | Close sessions. |
 

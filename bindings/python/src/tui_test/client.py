@@ -40,6 +40,7 @@ from .types import (
     Cell,
     LocatorDirection,
     MouseButton,
+    OpenResult,
     Profile,
     RecordingFormat,
     State,
@@ -687,9 +688,9 @@ class TuiTest:
 
     async def _spawn(
         self,
-        start: Callable[[], Awaitable[Dict[str, Any]]],
+        start: Callable[[], Awaitable[OpenResult]],
         retries: int,
-    ) -> Dict[str, Any]:
+    ) -> OpenResult:
         attempts = retries + 1 if retries > 0 else 1
         for attempt in range(attempts):
             try:
@@ -715,7 +716,7 @@ class TuiTest:
         profile: Optional[Profile] = None,
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> OpenResult:
         env_values = _env_pairs(env)
         profile_values = _profile_values(
             profile if profile is not None else self._profile
@@ -753,7 +754,7 @@ class TuiTest:
         profile: Optional[Profile] = None,
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> OpenResult:
         env_values = _env_pairs(env)
         profile_values = _profile_values(
             profile if profile is not None else self._profile
@@ -777,6 +778,9 @@ class TuiTest:
             ),
             retries,
         )
+
+    async def restart(self, *, graceful_timeout: int = 5_000) -> OpenResult:
+        return await self._await(self._native.restart(graceful_timeout))
 
     async def close(self) -> None:
         await self._await(self._native.close())

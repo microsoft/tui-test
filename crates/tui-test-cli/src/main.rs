@@ -286,6 +286,9 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 recording: Box::new(settings.recording),
             }
         }
+        Command::Restart { graceful_timeout } => Request::Restart {
+            graceful_timeout_ms: graceful_timeout,
+        },
         Command::Close { .. } => Request::Close,
         // Every `daemon` subcommand is handled in `main`: they decide for
         // themselves whether to start a daemon, and requests built here always
@@ -1322,6 +1325,7 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
                   [--config F] [--profile P] [--restart]\n\
           run [--config F] [--profile P] [--restart] <program> [args...]\n\
           [global options] -- <program> [args...]  (direct run shorthand)\n\
+          restart [--graceful-timeout MS]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
           [--background COLOR | --transparent]\n\
