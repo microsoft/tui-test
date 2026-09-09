@@ -320,15 +320,33 @@ impl GhosttyCore {
             event.set_consumed_mods(GhosttyMods::SHIFT);
         }
 
-        // A key that produces text has to say so. Ghostty encodes nothing at
-        // all for a text-bearing key with no `utf8` set, and needs it for the
-        // associated-text and alternate-key parts of the Kitty protocol.
-        // `unshifted_codepoint` is what the key sits on, which is exactly what
-        // `KeyPress::key` already holds for a character.
-        let mut chars = press.key.chars();
-        if let (Some(ch), None) = (chars.next(), chars.next()) {
+        // The codepoint the key sits on. Ghostty builds the Kitty `CSI <code> u`
+        // form from it, so a key without one is encoded as its text alone and
+        // silently loses its modifiers: `Ctrl+Space` came out as a plain space.
+        //
+        // For a character the key *is* the codepoint. For a named key it is
+        // not — `space` is a word — so the text it produces stands in, which
+        // is how `space` gets U+0020. Named keys that produce no text, such as
+        // Enter and Tab, need nothing here: ghostty knows their codepoints
+        // from the `Key` itself.
+        //
+        // Taken from the key before the text so that `Shift+a` reports `a`
+        // rather than the `A` it produced.
+        let single = |s: &str| {
+            let mut chars = s.chars();
+            match (chars.next(), chars.next()) {
+                (Some(ch), None) => Some(ch),
+                _ => None,
+            }
+        };
+        if let Some(ch) = single(&press.key).or_else(|| press.text.as_deref().and_then(single)) {
             event.set_unshifted_codepoint(ch);
         }
+
+        // A key that produces text has to say so: ghostty encodes nothing at
+        // all for a text-bearing key with no `utf8` set, and needs it for the
+        // associated-text and alternate-key parts of the Kitty protocol. A
+        // release produces no text, only the key that was let go.
         if press.event != KeyEventKind::Release {
             if let Some(text) = press.text.as_deref() {
                 event.set_utf8(Some(text));

@@ -341,6 +341,7 @@ impl Emulator for GhosttyEmu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::KeyAction;
 
     crate::emulator_conformance_tests!(
         |cols, rows, profile| {
@@ -356,7 +357,7 @@ mod tests {
     );
 
     fn press(key: &str) -> KeyPress {
-        crate::input::keys::token_to_presses(key, crate::api::KeyAction::Down)
+        crate::input::keys::token_to_presses(key, KeyAction::Down)
             .expect("valid token")
             .remove(0)
     }
@@ -408,6 +409,50 @@ mod tests {
         for modifier in ["hyper", "meta"] {
             let event = press(&format!("{modifier}+a"));
             assert_eq!(emu.encode_key(&event), None, "{modifier} is not encodable");
+        }
+    }
+
+    /// A named key still sits on a codepoint. Without one ghostty encodes the
+    /// key as its bare text and the modifiers vanish, so `Ctrl+Space` arrives
+    /// as a plain space instead of `CSI 32;5u` and a release sends nothing at
+    /// all. Legacy mode never showed it because there the text *is* the answer.
+    #[test]
+    fn a_named_key_carries_its_codepoint_into_kitty_mode() {
+        let mut emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        emu.process(b"\x1b[>15u");
+
+        for (token, down, up) in [
+            ("space", &b"\x1b[32u"[..], &b"\x1b[32;1:3u"[..]),
+            ("ctrl+space", &b"\x1b[32;5u"[..], &b"\x1b[32;5:3u"[..]),
+            ("alt+space", &b"\x1b[32;3u"[..], &b"\x1b[32;3:3u"[..]),
+        ] {
+            for (action, want) in [(KeyAction::Down, down), (KeyAction::Up, up)] {
+                let presses =
+                    crate::input::keys::token_to_presses(token, action).expect("valid token");
+                let got: Option<Vec<u8>> = presses
+                    .iter()
+                    .map(|p| emu.encode_key(p))
+                    .collect::<Option<Vec<_>>>()
+                    .map(|parts| parts.concat());
+                assert_eq!(got.as_deref(), Some(want), "{token} {action:?}");
+            }
+        }
+    }
+
+    /// Legacy mode has no codepoint form, so the same keys stay bytes.
+    #[test]
+    fn a_named_key_keeps_its_legacy_bytes() {
+        let emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        for (token, want) in [
+            ("space", &b" "[..]),
+            ("ctrl+space", &b"\x00"[..]),
+            ("alt+space", &b"\x1b "[..]),
+        ] {
+            assert_eq!(
+                emu.encode_key(&press(token)).as_deref(),
+                Some(want),
+                "{token}"
+            );
         }
     }
 
