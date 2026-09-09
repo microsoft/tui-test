@@ -321,7 +321,9 @@ screen-history-limit = 10
 
 Recording modes are `disabled`, `on-failure`, and `always`. Default: `always`.
 
-`--json` assertion failures include structured details. With `--failure-artifacts`, tui-test writes a self-contained diagnostic directory containing `failure.json` and the requested report, screen, SVG, and optional recording evidence. These files can contain terminal output, titles, locator operands, and other user-supplied values; review them before uploading.
+`--json` assertion failures include structured details. With `--failure-artifacts`, bundle mode writes `failure.md` for agents, a self-contained `failure.html` for users, `failure.json`, `timeline.json`, `current.txt`, and `current.svg`. Open the HTML directly from disk to navigate assertion checkpoints, step through retained frames, and click cells for graphemes, widths, raw/resolved colors, style flags, and mismatch evidence. The pinned failure is selected initially. No server, CDN, or network connection is needed.
+
+Frames come from the original emulator, not an asciicast re-emulation. Recent sampled screens and passing assertion checkpoints are retained separately; omissions are explicit rather than replaced with a nearby frame. The optional `session.cast` supports continuous replay in an asciicast player. See [failure diagnostics](references/cli.md#failure-diagnostics) for retention, formats, and limits. These files can contain terminal output, titles, locator operands, and other user-supplied values; review them before uploading.
 
 The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
 

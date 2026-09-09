@@ -120,7 +120,23 @@ tui-test --json \
   expect text "Save" --fg green --timeout 5000
 ```
 
-Bundle mode writes `failure.json`, `report.md`, `current.txt`, and `current.svg`. Add `--failure-artifact-recording` to copy an immutable prefix of the automatic asciicast through the failure boundary. Other modes are `json`, `svg`, `text`, and `none`.
+Bundle mode writes:
+
+| File | Consumer |
+| --- | --- |
+| `failure.md` | Agent-first diagnosis, expected/actual values, assertion checkpoint links, full retained screen text, style mismatches, runtime/context, and omissions. |
+| `failure.html` | Offline viewer, initially at the pinned failure. Select assertion/wait checkpoints, compare before/after operation boundaries, step or play retained frames, and click cells (or use arrow keys / coordinate inputs) for all captured cell metadata. |
+| `failure.json` | Authoritative versioned manifest, committed last, including artifact hashes, sizes, omissions, sensitivity, and write errors. |
+| `timeline.json` | Versioned frame data used by the viewer: each `frames[]` entry has screen metadata, `svg`, a `cells[]` dictionary, and `grid[row][column]` indices into that dictionary. Cell colors retain `default`, ANSI indices, or RGB strings alongside resolved colors; widths distinguish wide glyphs from continuation cells. |
+| `current.txt`, `current.svg` | The pinned failure screen. |
+
+Artifact references use `report` for `failure.md`, `report_html` for `failure.html`, and `timeline` for `timeline.json`. Structured terminal history keeps recent samples in `screen_history.screens` and pinned assertion screens in the additive `screen_history.checkpoints`; reports merge these by screen sequence. The HTML embeds its data and assets and makes no network requests; it works from a `file:` URL even if moved away from the other files (sibling evidence links then require the bundle).
+
+The viewer uses tui-test's original emulator grids and SVG renderer, rather than reconstructing cell state in a second emulator. Asciinema-player supports seeking and markers, but does not expose cell metadata in its public API. Add `--failure-artifact-recording` to copy an immutable `session.cast` prefix through the failure boundary for continuous replay in an asciicast player. Recording is not required for frame inspection.
+
+Retention is bounded: at most 32 recent operations, 10 recent sampled screens by default (0-50 configurable, also bounded to 512 KiB with the current screen always retained), and 32 distinct assertion/wait checkpoints bounded to 8 MiB. Setting `--screen-history-limit 0` disables historical checkpoint retention too. Passing checkpoints capture the screen at operation return; failure uses the pinned evaluation. Sampled screens do not represent every PTY write. Missing frames, evicted checkpoints, and oversized grids are reported explicitly, never substituted or interpolated. Play advances retained frames every 400 ms, stopping at the next retained checkpoint, not at original recording speed.
+
+The timeline is capped at 8 MiB, HTML at 12 MiB, Markdown at 1 MiB, and the whole bundle at 112 MiB. Newest frames get the timeline budget first. Individual oversized SVGs or cell grids can be omitted while screen text and operation evidence remain. Other artifact modes (`json`, `svg`, `text`, and `none`) retain their existing behavior and do not generate the viewer.
 
 Failure bundles can contain locator operands, terminal output, titles, screenshots, snapshot evidence, diagnostic context, and recordings. Review them before uploading.
 

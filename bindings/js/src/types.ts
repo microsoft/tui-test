@@ -283,6 +283,7 @@ export interface FailureOperationEvent {
   readonly screen_before: number;
   readonly screen_at_return: number;
   readonly safe_summary: string;
+  readonly is_assertion?: boolean;
 }
 
 export interface FailureCursorDetails {
@@ -314,7 +315,9 @@ export interface FailureTerminalDetails {
     readonly limit: number;
     readonly dropped_screen_count: number;
     readonly dropped_row_count: number;
+    readonly dropped_checkpoint_count?: number;
     readonly screens: readonly FailureScreenSnapshot[];
+    readonly checkpoints?: readonly FailureScreenSnapshot[];
   };
 }
 
@@ -379,6 +382,8 @@ export interface FailureArtifactRef {
   readonly directory: string;
   readonly manifest?: string;
   readonly report?: string;
+  readonly report_html?: string;
+  readonly timeline?: string;
   readonly screen_text?: string;
   readonly screen_svg?: string;
   readonly recording?: string;

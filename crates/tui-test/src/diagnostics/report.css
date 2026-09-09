@@ -1,0 +1,57 @@
+:root { color-scheme: dark; font: 14px/1.5 system-ui, sans-serif; background: #10131a; color: #e5e9f2; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+header { padding: 28px 32px 24px; border-bottom: 1px solid #303747; background: #171c27; }
+h1 { font-size: 27px; margin: 8px 0; overflow-wrap: anywhere; }
+h2 { font-size: 17px; margin: 0 0 12px; }
+p { margin: 8px 0 14px; }
+#summary { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+.eyebrow { font-size: 11px; letter-spacing: .16em; color: #a7b5d1; }
+main { display: grid; grid-template-columns: 250px minmax(320px, 1fr) 310px; gap: 16px; padding: 20px; align-items: start; }
+.panel { background: #181d28; border: 1px solid #303747; border-radius: 10px; padding: 18px; min-width: 0; }
+.points-panel { max-height: 85vh; overflow: auto; position: sticky; top: 16px; }
+.evidence { grid-column: 1 / -1; }
+.muted { color: #b1bdd2; font-size: 12px; }
+.badges, .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.badge { padding: 3px 10px; border-radius: 20px; background: #293247; font-size: 12px; }
+.badge.fail { color: #ffb8bb; background: #502a35; }
+button, input { font: inherit; }
+button, .toolbar a { border: 1px solid #46526a; border-radius: 6px; padding: 6px 10px; color: inherit; background: #252e40; cursor: pointer; text-decoration: none; }
+button:hover:not(:disabled), .toolbar a:hover { background: #34425d; }
+button:disabled { opacity: .4; cursor: default; }
+button.primary { background: #65323f; border-color: #b96475; }
+a { color: #a9c5ff; }
+:focus-visible { outline: 2px solid #a6c7ff; outline-offset: 3px; }
+.toolbar { margin-bottom: 12px; }
+.toggle { font-size: 12px; }
+.point { display: block; width: 100%; text-align: left; margin: 8px 0; padding: 10px; background: #202736; border-left: 3px solid #7199cf; }
+.point .name { display: block; overflow-wrap: anywhere; }
+.point .result { display: block; margin-top: 4px; font-size: 11px; color: #a2d9ba; }
+.point.failed { border-left-color: #ff929e; }
+.point.failed .result { color: #ffb8bb; }
+.point[aria-current="true"] { background: #34415c; outline: 1px solid #a6c7ff; }
+.notice { background: #2b2930; border-left: 3px solid #bda876; padding: 10px 12px; font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.error { border-color: #ff929e; margin: 16px 20px; }
+#terminal { position: relative; width: 100%; line-height: 0; cursor: crosshair; border-radius: 6px; overflow: hidden; }
+#screen-image { width: 100%; height: auto; display: block; }
+#overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.selected-cell { fill: #a6c7ff; fill-opacity: .18; stroke: #e4edff; stroke-width: 1.5; }
+.mismatch-cell { fill: #ff5469; fill-opacity: .22; stroke: #ff929e; stroke-width: 1; }
+.frame-controls { flex-wrap: nowrap; margin-top: 14px; }
+.frame-controls button { font-size: 12px; flex-shrink: 0; }
+#frame-slider { width: 100%; min-width: 30px; accent-color: #a9c5ff; }
+input[type="number"] { width: 64px; display: block; background: #10151f; border: 1px solid #46526a; border-radius: 4px; color: inherit; padding: 4px; }
+.coordinates { align-items: end; }
+.coordinates label { font-size: 12px; color: #b1bdd2; }
+dl { display: grid; grid-template-columns: 42% minmax(0, 1fr); gap: 6px 10px; font-size: 12px; }
+dt { color: #b1bdd2; }
+dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; font-family: Consolas, monospace; }
+.swatch { display: inline-block; width: 12px; height: 12px; border: 1px solid #7f8da7; margin-right: 6px; vertical-align: middle; }
+pre { background: #10151f; padding: 12px; border-radius: 6px; font: 12px/1.6 Consolas, monospace; overflow: auto; max-height: 480px; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+#screen-text { white-space: pre; }
+details { border-top: 1px solid #303747; margin-top: 16px; padding-top: 10px; }
+summary { cursor: pointer; color: #c5d5f3; }
+[hidden] { display: none !important; }
+@media (max-width: 1200px) { main { grid-template-columns: 220px minmax(320px, 1fr); } .inspector { grid-column: 2; } }
+@media (max-width: 760px) { main { display: block; padding: 10px; } .panel { margin-bottom: 12px; } header { padding: 20px; } .points-panel { position: static; max-height: 280px; } .frame-controls button { padding: 6px; } }
+@media print { :root { color-scheme: light; background: white; color: black; } main { display: block; } .points-panel, button, input { display: none; } .panel { break-inside: avoid; margin: 12px 0; } pre { max-height: none; } }

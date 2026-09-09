@@ -40,7 +40,7 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_histo
 | `artifacts` | `dict` | off |
 | `recording` | `AutomaticRecording \| dict` | `{"mode": "always"}` |
 
-`artifacts["on_failure"]` is `"bundle"`, `"json"`, `"svg"`, `"text"`, or `"none"`. Bundle mode writes `failure.json`, `report.md`, `current.txt`, and `current.svg`. `include_recording=True` also copies an immutable prefix of the automatic cast. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+`artifacts["on_failure"]` is `"bundle"`, `"json"`, `"svg"`, `"text"`, or `"none"`. Bundle mode writes `failure.md` for agents, an offline `failure.html` assertion/frame viewer with clickable cell metadata, `failure.json`, `timeline.json`, `current.txt`, and `current.svg`. Error artifact references expose `report`, `report_html`, and `timeline` paths. Checkpoints and sampled frames are bounded; missing frames are shown explicitly. `include_recording=True` also copies an immutable prefix of the automatic cast for continuous replay. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
 
 #### Properties
 

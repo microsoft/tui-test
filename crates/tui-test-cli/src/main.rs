@@ -1267,6 +1267,12 @@ fn print_response(resp: &Response, json: bool) -> i32 {
             eprintln!("{msg}");
         }
         if let Some(artifact) = &resp.artifact {
+            if let Some(path) = artifact.report_html.as_deref() {
+                eprintln!("Failure report: {path}");
+            }
+            if let Some(path) = artifact.report.as_deref() {
+                eprintln!("Agent report: {path}");
+            }
             if let Some(path) = artifact.manifest.as_deref() {
                 eprintln!("Failure artifact: {path}");
             } else {

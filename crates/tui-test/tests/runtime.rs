@@ -245,6 +245,17 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
     };
     session.run(run_options(program, &args)).unwrap();
 
+    session
+        .execute(Operation::WaitLocator {
+            query: LocatorQuery::text("ready"),
+            not: false,
+            timeout_ms: Some(5_000),
+        })
+        .unwrap();
+    session
+        .execute(Operation::Resize { cols: 81, rows: 31 })
+        .unwrap();
+
     let error = session
         .execute(Operation::WaitLocator {
             query: LocatorQuery::text("never-present"),
@@ -291,9 +302,53 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
         .as_array()
         .is_some_and(|screens| !screens.is_empty()));
     let report = std::fs::read_to_string(artifact.report.as_ref().unwrap()).unwrap();
+    assert!(artifact.report.as_ref().unwrap().ends_with("failure.md"));
+    assert!(report.contains("## Assertion checkpoints"));
     assert!(report.contains("## Locator evaluation"));
     assert!(report.contains("## Terminal state"));
     assert!(report.contains("inspect_locator_stage"));
+    let html = std::fs::read_to_string(artifact.report_html.as_ref().unwrap()).unwrap();
+    assert!(html.contains("Cell inspector"));
+    let timeline: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(artifact.timeline.as_ref().unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(
+        timeline["failure_screen_sequence"],
+        details.operation.failed_screen_sequence
+    );
+    let frames = timeline["frames"].as_array().unwrap();
+    let checkpoint = details
+        .recent_operations
+        .iter()
+        .find(|op| op.name == "locator.wait" && op.result == "ok")
+        .unwrap();
+    assert!(checkpoint.is_assertion);
+    assert!(frames
+        .iter()
+        .any(|frame| frame["sequence"] == checkpoint.screen_at_return));
+    let failure = frames
+        .iter()
+        .find(|frame| frame["sequence"] == details.operation.failed_screen_sequence)
+        .unwrap();
+    assert_eq!(
+        failure["svg"],
+        std::fs::read_to_string(artifact.screen_svg.as_ref().unwrap()).unwrap()
+    );
+    assert_eq!(failure["size"]["cols"], 81);
+    assert_eq!(failure["grid"].as_array().unwrap().len(), 31);
+    for file in manifest["files"].as_array().unwrap() {
+        use sha2::Digest;
+        assert_eq!(file["status"], "written");
+        let bytes = std::fs::read(
+            std::path::Path::new(&artifact.directory).join(file["path"].as_str().unwrap()),
+        )
+        .unwrap();
+        assert_eq!(file["bytes"], bytes.len());
+        assert_eq!(
+            file["sha256"],
+            format!("sha256:{:x}", sha2::Sha256::digest(&bytes))
+        );
+    }
     let screen = std::fs::read_to_string(artifact.screen_text.as_ref().unwrap()).unwrap();
     assert_eq!(
         error

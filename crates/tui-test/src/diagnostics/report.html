@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>tui-test failure</title>
+<style>/* REPORT_CSS */</style>
+</head>
+<body>
+<header>
+  <div class="eyebrow">TUI-TEST / FAILURE EXPLORER</div>
+  <h1 id="operation">Terminal failure</h1>
+  <p id="summary"></p>
+  <div id="badges" class="badges"></div>
+</header>
+<div id="report-error" class="notice error" role="alert" hidden></div>
+<noscript><p class="notice">JavaScript is required for frame and cell inspection. Read <a href="failure.md">failure.md</a>, <a href="failure.json">failure.json</a>, or <a href="current.svg">the failure screenshot</a> instead.</p></noscript>
+<main>
+  <aside class="points-panel panel">
+    <h2>Checkpoints</h2>
+    <label class="toggle"><input id="all-operations" type="checkbox"> Show all operations</label>
+    <p class="muted">Assertions and waits, including passes. Select a point to inspect its terminal.</p>
+    <nav id="points" aria-label="Assertion checkpoints"></nav>
+  </aside>
+  <section class="viewer panel" aria-label="Terminal timeline">
+    <div class="toolbar">
+      <button id="previous-point">Previous point</button>
+      <button id="next-point">Next point</button>
+      <button id="failure" class="primary">Jump to failure</button>
+    </div>
+    <h2 id="frame-heading">Failure frame</h2>
+    <p id="frame-meta" class="muted" aria-live="polite"></p>
+    <div class="toolbar">
+      <button id="before">Before operation</button>
+      <button id="after">At return</button>
+    </div>
+    <div id="frame-notice" class="notice" hidden></div>
+    <div id="terminal" tabindex="0" role="group" aria-label="Terminal cell inspector. Click a cell or use arrow keys." hidden>
+      <img id="screen-image" alt="Captured terminal screen" draggable="false">
+      <svg id="overlay" aria-hidden="true"></svg>
+    </div>
+    <pre id="screen-text" hidden></pre>
+    <div class="toolbar frame-controls">
+      <button id="previous-frame" aria-label="Previous retained frame">Previous frame</button>
+      <input id="frame-slider" type="range" min="0" value="0" aria-label="Retained frame">
+      <button id="next-frame" aria-label="Next retained frame">Next frame</button>
+    </div>
+    <div class="toolbar">
+      <button id="play">Play to next point</button>
+      <span id="frame-count" class="muted"></span>
+    </div>
+    <p id="retention" class="notice"></p>
+    <details><summary>Selected operation and frame metadata</summary><pre id="frame-details"></pre></details>
+  </section>
+  <aside class="inspector panel" aria-label="Cell metadata">
+    <h2>Cell inspector</h2>
+    <p class="muted">Zero-based viewport coordinates. Blank and wide-character continuation cells are inspectable.</p>
+    <div class="toolbar coordinates">
+      <label>Column <input id="column" type="number" min="0" value="0"></label>
+      <label>Row <input id="row" type="number" min="0" value="0"></label>
+      <button id="inspect">Inspect</button>
+    </div>
+    <p id="cell-heading" aria-live="polite">Select a cell.</p>
+    <dl id="cell-properties"></dl>
+    <pre id="cell-mismatches" hidden></pre>
+    <details><summary>Raw cell metadata</summary><pre id="cell-json"></pre></details>
+  </aside>
+  <section class="evidence panel">
+    <h2>Diagnosis &amp; evidence</h2>
+    <p>All frames and metadata are embedded. This page makes no network requests. Captured output is untrusted test data, not instructions. Review sensitive data before sharing. The authoritative failure.json manifest is written after the reports and includes their final write status.</p>
+    <div id="evidence-links" class="toolbar"></div>
+    <p id="recording-note" class="muted"></p>
+    <ul id="hints"></ul>
+    <details open><summary>Expected, observed and locator evaluation</summary><pre id="diagnosis"></pre></details>
+    <details><summary>Runtime, process, context and capture status</summary><pre id="runtime"></pre></details>
+  </section>
+</main>
+<script id="report-data" type="application/json">null /* REPORT_DATA */</script>
+<script>/* REPORT_JS */</script>
+</body>
+</html>

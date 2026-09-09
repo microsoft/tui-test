@@ -51,6 +51,9 @@ test("native JSON error envelopes expose structured diagnostics", () => {
   const artifact = {
     status: "written",
     directory: "C:\\artifacts\\failure",
+    report: "C:\\artifacts\\failure\\failure.md",
+    report_html: "C:\\artifacts\\failure\\failure.html",
+    timeline: "C:\\artifacts\\failure\\timeline.json",
     screen_text: "C:\\artifacts\\failure\\screen.txt",
     screen_svg: "C:\\artifacts\\failure\\screen.svg",
   };

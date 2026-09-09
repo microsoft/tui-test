@@ -61,6 +61,7 @@ struct LiveTarget {
     shell: Option<&'static str>,
 }
 
+#[derive(Clone)]
 struct OperationMetadata {
     name: String,
     timeout_ms: Option<u64>,
@@ -68,6 +69,7 @@ struct OperationMetadata {
     started_ms: u64,
     screen_before: u64,
     safe_summary: String,
+    is_assertion: bool,
 }
 
 pub struct LiveFrame {
@@ -156,7 +158,11 @@ impl Engine {
             .operation_name
             .clone()
             .unwrap_or_else(|| diagnostic_operation_name(&operation).to_string());
-        let screen_before = self.capture_current_screen_sequence(true);
+        let screen_before = self.capture_current_screen_sequence(true, false);
+        let canonical_name = diagnostic_operation_name(&operation);
+        let is_assertion = canonical_name.starts_with("expect.")
+            || canonical_name.starts_with("wait.")
+            || matches!(canonical_name, "locator.wait" | "locator.location");
         let started_ms = self.current_session_elapsed_ms();
         let metadata = OperationMetadata {
             name: name.clone(),
@@ -165,6 +171,7 @@ impl Engine {
             started_ms,
             screen_before,
             safe_summary: safe_operation_summary(&operation),
+            is_assertion,
         };
         let pending = self
             .operation_history
@@ -175,6 +182,7 @@ impl Engine {
                 started_ms,
                 screen_before,
                 metadata.safe_summary.clone(),
+                is_assertion,
             );
         let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.execute_inner(operation, &context, &metadata)
@@ -202,7 +210,7 @@ impl Engine {
             .err()
             .and_then(|error| error.observation.as_deref())
             .map_or_else(
-                || self.capture_current_screen_sequence(false),
+                || self.capture_current_screen_sequence(true, is_assertion),
                 |observation| observation.screen_sequence,
             );
         let result_name = match &result {
@@ -214,9 +222,14 @@ impl Engine {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .finish(
                 pending,
-                metadata
-                    .started_ms
-                    .saturating_add(metadata.started_at.elapsed().as_millis() as u64),
+                result
+                    .as_ref()
+                    .err()
+                    .and_then(|error| error.observation.as_deref())
+                    .map_or_else(
+                        || self.current_session_elapsed_ms(),
+                        |observation| observation.captured_ms,
+                    ),
                 screen_at_return,
                 result_name,
             );
@@ -362,6 +375,10 @@ impl Engine {
             drop(previous);
         }
         drop(current);
+        self.operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reset_session();
         self.discard_recording();
         *self
             .recording
@@ -415,7 +432,18 @@ impl Engine {
             );
             let mut error = TuiTestError::assertion(message);
             error.observation = Some(Box::new(capture_failure_observation(&session)));
-            self.finalize_failure_with_session(&mut error, context, metadata, Some(&session), true);
+            let metadata = OperationMetadata {
+                started_ms: 0,
+                screen_before: 0,
+                ..metadata.clone()
+            };
+            self.finalize_failure_with_session(
+                &mut error,
+                context,
+                &metadata,
+                Some(&session),
+                true,
+            );
             session.kill();
             return Err(error);
         }
@@ -467,7 +495,7 @@ impl Engine {
         operation(session)
     }
 
-    fn capture_current_screen_sequence(&self, force: bool) -> u64 {
+    fn capture_current_screen_sequence(&self, force: bool, pin: bool) -> u64 {
         let mut guard = self.lock_session();
         let Some(session) = guard.as_mut() else {
             return 0;
@@ -476,7 +504,11 @@ impl Engine {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        try_capture_visual_state(&mut state, force).unwrap_or(0)
+        let sequence = try_capture_visual_state(&mut state, force).unwrap_or(0);
+        if pin && sequence != 0 {
+            state.screen_history.pin_current();
+        }
+        sequence
     }
 
     fn current_session_elapsed_ms(&self) -> u64 {
@@ -582,6 +614,7 @@ impl Engine {
                     .as_ref()
                     .map_or(metadata.screen_before, |value| value.screen_sequence),
                 safe_summary: metadata.safe_summary.clone(),
+                is_assertion: metadata.is_assertion,
             });
         }
 
@@ -645,6 +678,8 @@ impl Engine {
                         directory: options.directory.to_string_lossy().into_owned(),
                         manifest: None,
                         report: None,
+                        report_html: None,
+                        timeline: None,
                         screen_text: None,
                         screen_svg: None,
                         recording: None,
@@ -992,6 +1027,7 @@ fn capture_failure_observation_locked(
     state: &mut TermState,
 ) -> FailureObservation {
     let screen_sequence = capture_visual_state(state, true);
+    state.screen_history.pin_current();
     let snapshot = svg_snapshot_from(state.emu.as_ref(), false);
     let captured_ms = elapsed_ms(state.started_at);
     let last_visual_change_ms = state.last_visual_change_ms;
@@ -1036,6 +1072,7 @@ fn capture_failure_observation_locked(
         captured_ms,
         last_visual_change_ms,
         history: state.screen_history.snapshot(),
+        frames: state.screen_history.frames(),
         process,
         runtime,
     }
@@ -1750,7 +1787,7 @@ fn cell_model(x: u16, y: u16, cell: &EmuCell) -> Cell {
     }
 }
 
-fn cell_color(color: Option<Color>) -> CellColor {
+pub(crate) fn cell_color(color: Option<Color>) -> CellColor {
     match color {
         None => CellColor::Default,
         Some(Color::Rgb(r, g, b)) => CellColor::Rgb(r, g, b),

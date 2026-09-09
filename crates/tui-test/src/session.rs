@@ -581,6 +581,7 @@ pub(crate) fn capture_visual_state(state: &mut TermState, force: bool) -> u64 {
         cursor_visible,
         cursor_shape,
         elapsed,
+        crate::render::svg::RenderState::capture(state.emu.as_ref()),
     );
     if sequence != previous_sequence {
         state.last_visual_change_ms = elapsed;

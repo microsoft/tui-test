@@ -45,7 +45,9 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `artifacts` | `{ dir, onFailure?, includeRecording? }` | off |
 | `recording` | `{ mode?, directory? }` | `{ mode: "always" }` |
 
-`artifacts.onFailure` is `"bundle"`, `"json"`, `"svg"`, `"text"`, or `"none"`. Bundle mode writes `failure.json`, `report.md`, `current.txt`, and `current.svg`. `includeRecording: true` also copies an immutable prefix of the automatic cast. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+`artifacts.onFailure` is `"bundle"`, `"json"`, `"svg"`, `"text"`, or `"none"`. Bundle mode writes `failure.md` for agents, an offline `failure.html` assertion/frame viewer with clickable cell metadata, `failure.json`, `timeline.json`, `current.txt`, and `current.svg`. Error artifact references expose `report`, `report_html`, and `timeline` paths. Checkpoints and sampled frames are bounded; missing frames are shown explicitly. `includeRecording: true` also copies an immutable prefix of the automatic cast for continuous replay. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+
+The shared HTML viewer has a standalone browser suite: from `bindings/js`, run `npx playwright install chromium` then `npm run test:report`. It generates an artifact with the Rust core and opens it offline in Chromium; no native Node addon build is needed. `TUI_TEST_BROWSER_CHANNEL=msedge` can select an installed Edge browser instead. Playwright is a development-only dependency and is not bundled into reports.
 
 #### Properties
 

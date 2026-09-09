@@ -177,6 +177,9 @@ class FailureDiagnosticsTests(unittest.TestCase):
                 "artifact": {
                     "status": "partial",
                     "directory": "artifacts/failure",
+                    "report": "artifacts/failure/failure.md",
+                    "report_html": "artifacts/failure/failure.html",
+                    "timeline": "artifacts/failure/timeline.json",
                     "screen_svg": "artifacts/failure/current.svg",
                     "errors": ["recording omitted"],
                     "unknown_additive_field": True,
@@ -199,6 +202,9 @@ class FailureDiagnosticsTests(unittest.TestCase):
             error.artifact.status, FailureArtifactStatus.PARTIAL
         )
         self.assertEqual(error.artifact.errors, ("recording omitted",))
+        self.assertEqual(error.artifact.report, "artifacts/failure/failure.md")
+        self.assertEqual(error.artifact.report_html, "artifacts/failure/failure.html")
+        self.assertEqual(error.artifact.timeline, "artifacts/failure/timeline.json")
 
     def test_native_error_without_envelope_uses_legacy_message(self):
         native_error = client.native.NativeUsageError("legacy message")

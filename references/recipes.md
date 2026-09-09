@@ -107,4 +107,4 @@ const terminal = new TuiTest("test", {
 });
 ```
 
-Read `report.md` first. The bundle also includes machine-readable `failure.json`, the pinned terminal screen, and the cast when explicitly requested. Review terminal evidence before uploading it.
+Agents should read `failure.md` first and use `failure.json` / `timeline.json` for exact structured evidence. Users can open `failure.html` directly from disk, select assertion checkpoints, step through retained frames, and click cells for style and mismatch metadata. The bundle also includes the pinned terminal text/SVG and the cast when explicitly requested. Review terminal evidence before uploading it.

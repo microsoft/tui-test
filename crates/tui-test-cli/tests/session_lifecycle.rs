@@ -981,6 +981,30 @@ fn json_failure_writes_and_reports_a_diagnostic_bundle() {
     assert!(payload["artifact"]["report"]
         .as_str()
         .is_some_and(|path| std::path::Path::new(path).is_file()));
+    for (field, name) in [
+        ("report", "failure.md"),
+        ("report_html", "failure.html"),
+        ("timeline", "timeline.json"),
+    ] {
+        let path = std::path::Path::new(payload["artifact"][field].as_str().unwrap());
+        assert!(path.is_file());
+        assert_eq!(path.file_name().unwrap(), name);
+    }
+    let human = sandbox.run(&[
+        "--failure-artifacts",
+        artifacts,
+        "expect",
+        "text",
+        "never-present",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(human.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(stderr.contains("Failure report: "));
+    assert!(stderr.contains("failure.html"));
+    assert!(stderr.contains("Agent report: "));
+    assert!(stderr.contains("failure.md"));
 
     sandbox.ok(&["close"]);
 }

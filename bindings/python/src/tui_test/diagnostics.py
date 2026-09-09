@@ -126,6 +126,8 @@ class FailureArtifactRef:
     screen_svg: Optional[str] = None
     recording: Optional[str] = None
     errors: Tuple[str, ...] = ()
+    report_html: Optional[str] = None
+    timeline: Optional[str] = None
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "FailureArtifactRef":
@@ -140,6 +142,8 @@ class FailureArtifactRef:
             directory=_optional_string(value.get("directory")) or "",
             manifest=_optional_string(value.get("manifest")),
             report=_optional_string(value.get("report")),
+            report_html=_optional_string(value.get("report_html")),
+            timeline=_optional_string(value.get("timeline")),
             screen_text=_optional_string(value.get("screen_text")),
             screen_svg=_optional_string(value.get("screen_svg")),
             recording=_optional_string(value.get("recording")),

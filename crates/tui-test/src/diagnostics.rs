@@ -16,17 +16,22 @@ use crate::render::svg::RenderState;
 use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::CursorShape;
 
+mod report;
+
 pub const FAILURE_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_SCREEN_HISTORY_LIMIT: u16 = 10;
 pub const MAX_SCREEN_HISTORY_LIMIT: u16 = 50;
 
 const FAILURE_JSON_LIMIT: usize = 2 * 1024 * 1024;
 const REPORT_LIMIT: usize = 1024 * 1024;
+const TIMELINE_LIMIT: usize = 8 * 1024 * 1024;
+const HTML_LIMIT: usize = 12 * 1024 * 1024;
 const SCREEN_TEXT_LIMIT: usize = 1024 * 1024;
 const SCREEN_SVG_LIMIT: usize = 8 * 1024 * 1024;
 pub(crate) const RECORDING_COPY_LIMIT: u64 = 64 * 1024 * 1024;
-const ARTIFACT_TOTAL_LIMIT: u64 = 80 * 1024 * 1024;
+const ARTIFACT_TOTAL_LIMIT: u64 = 112 * 1024 * 1024;
 const MAX_HISTORY_BYTES: usize = 512 * 1024;
+const MAX_CHECKPOINT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CONTEXT_ENTRIES: usize = 16;
 const MAX_CONTEXT_KEY_BYTES: usize = 64;
 const MAX_CONTEXT_VALUE_BYTES: usize = 256;
@@ -188,11 +193,14 @@ pub struct OperationEvent {
     pub screen_before: u64,
     pub screen_at_return: u64,
     pub safe_summary: String,
+    #[serde(default)]
+    pub is_assertion: bool,
 }
 
 #[derive(Debug)]
 pub(crate) struct OperationHistory {
     next_sequence: u64,
+    generation: u64,
     entries: VecDeque<OperationEvent>,
 }
 
@@ -203,12 +211,15 @@ pub(crate) struct PendingOperation {
     started_ms: u64,
     screen_before: u64,
     safe_summary: String,
+    is_assertion: bool,
+    generation: u64,
 }
 
 impl OperationHistory {
     pub(crate) fn new() -> Self {
         Self {
             next_sequence: 1,
+            generation: 0,
             entries: VecDeque::new(),
         }
     }
@@ -219,6 +230,7 @@ impl OperationHistory {
         started_ms: u64,
         screen_before: u64,
         safe_summary: String,
+        is_assertion: bool,
     ) -> PendingOperation {
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1).max(1);
@@ -228,7 +240,14 @@ impl OperationHistory {
             started_ms,
             screen_before,
             safe_summary,
+            is_assertion,
+            generation: self.generation,
         }
+    }
+
+    pub(crate) fn reset_session(&mut self) {
+        self.entries.clear();
+        self.generation = self.generation.wrapping_add(1);
     }
 
     pub(crate) fn finish(
@@ -241,12 +260,21 @@ impl OperationHistory {
         self.entries.push_back(OperationEvent {
             sequence: pending.sequence,
             name: pending.name,
-            started_ms: pending.started_ms,
+            started_ms: if pending.generation == self.generation {
+                pending.started_ms
+            } else {
+                0
+            },
             ended_ms,
             result: result.into(),
-            screen_before: pending.screen_before,
+            screen_before: if pending.generation == self.generation {
+                pending.screen_before
+            } else {
+                0
+            },
             screen_at_return,
             safe_summary: pending.safe_summary,
+            is_assertion: pending.is_assertion,
         });
         while self.entries.len() > MAX_OPERATION_HISTORY {
             self.entries.pop_front();
@@ -285,7 +313,11 @@ pub struct ScreenHistoryDetails {
     pub limit: u16,
     pub dropped_screen_count: u64,
     pub dropped_row_count: u64,
+    #[serde(default)]
+    pub dropped_checkpoint_count: u64,
     pub screens: Vec<ScreenSnapshotDetails>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checkpoints: Vec<ScreenSnapshotDetails>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -591,6 +623,10 @@ pub struct FailureArtifactRef {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_html: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub screen_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screen_svg: Option<String>,
@@ -660,6 +696,7 @@ pub(crate) struct FailureObservation {
     pub captured_ms: u64,
     pub last_visual_change_ms: u64,
     pub history: ScreenHistoryDetails,
+    pub frames: Vec<ScreenFrame>,
     pub process: ProcessDiagnostics,
     pub runtime: RuntimeDiagnostics,
 }
@@ -714,14 +751,18 @@ pub(crate) struct ScreenHistory {
     dropped_screen_count: u64,
     dropped_row_count: u64,
     next_sequence: u64,
-    entries: VecDeque<ScreenEntry>,
+    entries: VecDeque<ScreenFrame>,
+    checkpoints: VecDeque<ScreenFrame>,
+    checkpoint_bytes: usize,
+    dropped_checkpoint_count: u64,
     bytes: usize,
 }
 
-#[derive(Debug)]
-struct ScreenEntry {
+#[derive(Debug, Clone)]
+pub(crate) struct ScreenFrame {
     details: ScreenSnapshotDetails,
     rows: Vec<Vec<EmuCell>>,
+    render_state: RenderState,
 }
 
 impl ScreenHistory {
@@ -732,6 +773,9 @@ impl ScreenHistory {
             dropped_row_count: 0,
             next_sequence: 1,
             entries: VecDeque::new(),
+            checkpoints: VecDeque::new(),
+            checkpoint_bytes: 0,
+            dropped_checkpoint_count: 0,
             bytes: 0,
         }
     }
@@ -746,6 +790,7 @@ impl ScreenHistory {
         cursor_visible: bool,
         cursor_shape: CursorShape,
         elapsed_ms: u64,
+        render_state: RenderState,
     ) -> u64 {
         let text = crate::assert::snapshot::serialize(&rows, cols, false, title.as_deref());
         if let Some(last) = self.entries.back_mut() {
@@ -757,6 +802,7 @@ impl ScreenHistory {
                 && last.details.cursor.row == cursor.1
                 && last.details.cursor.visible == cursor_visible
                 && last.details.cursor.shape == cursor_shape_name(cursor_shape)
+                && last.render_state == render_state
             {
                 last.details.last_seen_ms = elapsed_ms;
                 last.details.repeat_count = last.details.repeat_count.saturating_add(1);
@@ -764,7 +810,7 @@ impl ScreenHistory {
             }
         }
 
-        let changes = match self.entries.back() {
+        let mut changes = match self.entries.back() {
             None => vec!["initial".to_string()],
             Some(previous) => screen_changes(
                 &previous.rows,
@@ -777,6 +823,13 @@ impl ScreenHistory {
                 cursor_shape,
             ),
         };
+        if self
+            .entries
+            .back()
+            .is_some_and(|previous| previous.render_state != render_state)
+        {
+            changes.push("palette".to_string());
+        }
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1).max(1);
         let details = ScreenSnapshotDetails {
@@ -801,7 +854,11 @@ impl ScreenHistory {
         self.bytes = self
             .bytes
             .saturating_add(estimate_screen_bytes(&details, &rows));
-        self.entries.push_back(ScreenEntry { details, rows });
+        self.entries.push_back(ScreenFrame {
+            details,
+            rows,
+            render_state,
+        });
         self.evict();
         sequence
     }
@@ -834,17 +891,67 @@ impl ScreenHistory {
             limit: self.limit,
             dropped_screen_count: self.dropped_screen_count,
             dropped_row_count: self.dropped_row_count,
+            dropped_checkpoint_count: self.dropped_checkpoint_count,
             screens: self
                 .entries
                 .iter()
                 .map(|entry| entry.details.clone())
                 .collect(),
+            checkpoints: self
+                .checkpoints
+                .iter()
+                .map(|entry| entry.details.clone())
+                .collect(),
         }
+    }
+
+    pub(crate) fn pin_current(&mut self) {
+        let Some(frame) = self.entries.back() else {
+            return;
+        };
+        if self
+            .checkpoints
+            .back()
+            .is_some_and(|last| last.details.sequence == frame.details.sequence)
+        {
+            return;
+        }
+        let bytes = estimate_screen_bytes(&frame.details, &frame.rows);
+        if self.limit == 0 || bytes > MAX_CHECKPOINT_BYTES {
+            self.dropped_checkpoint_count = self.dropped_checkpoint_count.saturating_add(1);
+            return;
+        }
+        self.checkpoint_bytes += bytes;
+        self.checkpoints.push_back(frame.clone());
+        while self.checkpoints.len() > MAX_OPERATION_HISTORY
+            || self.checkpoint_bytes > MAX_CHECKPOINT_BYTES
+        {
+            if let Some(old) = self.checkpoints.pop_front() {
+                self.checkpoint_bytes -= estimate_screen_bytes(&old.details, &old.rows);
+                self.dropped_checkpoint_count = self.dropped_checkpoint_count.saturating_add(1);
+            }
+        }
+    }
+
+    fn retained(&self) -> BTreeMap<u64, &ScreenFrame> {
+        self.checkpoints
+            .iter()
+            .chain(&self.entries)
+            .map(|frame| (frame.details.sequence, frame))
+            .collect()
+    }
+
+    pub(crate) fn frames(&self) -> Vec<ScreenFrame> {
+        self.retained()
+            .values()
+            .map(|frame| (*frame).clone())
+            .collect()
     }
 }
 
 fn estimate_screen_bytes(details: &ScreenSnapshotDetails, rows: &[Vec<EmuCell>]) -> usize {
     details.text.len()
+        + std::mem::size_of::<RenderState>()
         + details.title.as_ref().map_or(0, String::len)
         + rows
             .iter()
@@ -969,6 +1076,8 @@ pub(crate) fn write_failure_artifact(
         directory: directory.to_string_lossy().into_owned(),
         manifest: None,
         report: None,
+        report_html: None,
+        timeline: None,
         screen_text: None,
         screen_svg: None,
         recording: None,
@@ -1116,11 +1225,79 @@ pub(crate) fn write_failure_artifact(
     }
 
     if options.wants_report() {
-        let report = render_report(inputs.details, &files);
+        let generated = report::timeline(inputs.observation).and_then(|timeline| {
+            inputs.details.truncated |= timeline.is_truncated();
+            let json = serde_json::to_vec(&timeline)?;
+            write_optional_file(
+                &directory,
+                "timeline",
+                "timeline.json",
+                &json,
+                TIMELINE_LIMIT as u64,
+                &mut total,
+                &mut files,
+                &mut reference.errors,
+            );
+            if files
+                .last()
+                .is_some_and(|file| file.status == ArtifactFileStatus::Written)
+            {
+                reference.timeline = Some(
+                    directory
+                        .join("timeline.json")
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+            let html = report::html(inputs.details, &timeline, &files, &reference.errors)?;
+            write_optional_file(
+                &directory,
+                "report_html",
+                "failure.html",
+                html.as_bytes(),
+                HTML_LIMIT as u64,
+                &mut total,
+                &mut files,
+                &mut reference.errors,
+            );
+            if files
+                .last()
+                .is_some_and(|file| file.status == ArtifactFileStatus::Written)
+            {
+                reference.report_html = Some(
+                    directory
+                        .join("failure.html")
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+            Ok::<(), serde_json::Error>(())
+        });
+        if let Err(error) = generated {
+            reference.errors.push(format!(
+                "failed to generate failure timeline/viewer: {error}"
+            ));
+            for (kind, path) in [
+                ("timeline", "timeline.json"),
+                ("report_html", "failure.html"),
+            ] {
+                if !files.iter().any(|file| file.path == path) {
+                    files.push(ArtifactFile {
+                        kind: kind.into(),
+                        path: path.into(),
+                        status: ArtifactFileStatus::Failed,
+                        bytes: None,
+                        sha256: None,
+                        reason: Some(error.to_string()),
+                    });
+                }
+            }
+        }
+        let report = report::markdown(inputs.details, &files);
         write_optional_file(
             &directory,
             "report",
-            "report.md",
+            "failure.md",
             report.as_bytes(),
             REPORT_LIMIT as u64,
             &mut total,
@@ -1131,7 +1308,7 @@ pub(crate) fn write_failure_artifact(
             .last()
             .is_some_and(|file| file.status == ArtifactFileStatus::Written)
         {
-            reference.report = Some(directory.join("report.md").to_string_lossy().into_owned());
+            reference.report = Some(directory.join("failure.md").to_string_lossy().into_owned());
         }
     }
 
@@ -1262,13 +1439,21 @@ fn sensitivity(details: &FailureDetails, files: &[ArtifactFile]) -> SensitivityD
     SensitivityDetails {
         contains_locator_operands: has_locator,
         contains_terminal_output: has_terminal,
-        contains_terminal_title: details
-            .terminal
-            .as_ref()
-            .is_some_and(|terminal| terminal.title.is_some()),
-        contains_visual_output: files
-            .iter()
-            .any(|file| file.kind == "screen_svg" && file.status == ArtifactFileStatus::Written),
+        contains_terminal_title: details.terminal.as_ref().is_some_and(|terminal| {
+            terminal.title.is_some()
+                || terminal
+                    .screen_history
+                    .screens
+                    .iter()
+                    .chain(&terminal.screen_history.checkpoints)
+                    .any(|screen| screen.title.is_some())
+        }),
+        contains_visual_output: files.iter().any(|file| {
+            matches!(
+                file.kind.as_str(),
+                "screen_svg" | "timeline" | "report_html"
+            ) && file.status == ArtifactFileStatus::Written
+        }),
         contains_recording_output: has_recording,
         contains_assertion_operands: has_locator || details.comparison.is_some(),
         contains_snapshot_evidence: details.reason == FailureReason::SnapshotMismatch,
@@ -1285,173 +1470,6 @@ fn sensitivity(details: &FailureDetails, files: &[ArtifactFile]) -> SensitivityD
         }
         .to_string(),
     }
-}
-
-fn render_report(details: &FailureDetails, files: &[ArtifactFile]) -> String {
-    let mut report = String::new();
-    report.push_str("# Terminal failure diagnostic\n\n");
-    report.push_str(&format!("**Diagnosis:** {}\n\n", details.summary));
-    report.push_str("| Field | Value |\n| --- | --- |\n");
-    report.push_str(&format!("| Operation | `{}` |\n", details.operation.name));
-    report.push_str(&format!(
-        "| Reason | `{}` |\n",
-        failure_reason_code(details.reason)
-    ));
-    report.push_str(&format!(
-        "| Elapsed | {} ms |\n",
-        details.operation.elapsed_ms
-    ));
-    if let Some(timeout) = details.operation.timeout_ms {
-        report.push_str(&format!("| Timeout | {timeout} ms |\n"));
-    }
-
-    if let Some(runtime) = &details.runtime {
-        report.push_str(&format!("| Backend | `{}` |\n", runtime.backend));
-        report.push_str(&format!("| tui-test | `{}` |\n", runtime.tui_test_version));
-    }
-    if let Some(process) = &details.process {
-        report.push_str(&format!("| Process | `{}` |\n", process.state));
-        if let Some(code) = process.exit_code {
-            report.push_str(&format!("| Exit code | `{code}` |\n"));
-        }
-    }
-
-    if let Some(locator) = &details.locator {
-        report.push_str("\n## Locator evaluation\n\n");
-        report.push_str(
-            "| Stage | Selector | Direction | Occurrence | Raw | Style | Selected |\n| --- | --- | --- | --- | ---: | ---: | ---: |\n",
-        );
-        for stage in &locator.stages {
-            report.push_str(&format!(
-                "| {} | `{}` | `{:?}` | `{:?}` | {} | {} | {} |\n",
-                stage.stage_index,
-                stage.selector.description().replace('`', "'"),
-                stage.direction,
-                stage.effective_occurrence,
-                stage.raw_candidate_count,
-                stage.style_candidate_count,
-                stage.selected_count,
-            ));
-        }
-        if let (Some(stage), Some(reason)) = (locator.failure_stage, locator.failure_reason) {
-            report.push_str(&format!(
-                "\nFailure occurred at stage {stage}: `{reason:?}`.\n"
-            ));
-        }
-        let mismatches = locator
-            .stages
-            .iter()
-            .flat_map(|stage| stage.mismatches.iter())
-            .collect::<Vec<_>>();
-        if !mismatches.is_empty() {
-            report.push_str("\n### Style mismatches\n\n");
-            report.push_str("| Cell | Property | Expected | Actual |\n| --- | --- | --- | --- |\n");
-            for mismatch in mismatches.into_iter().take(16) {
-                report.push_str(&format!(
-                    "| {},{} | `{}` | `{}` | `{}` |\n",
-                    mismatch.location.column,
-                    mismatch.location.row,
-                    mismatch.property,
-                    mismatch.expected.replace('`', "'"),
-                    mismatch.actual.replace('`', "'"),
-                ));
-            }
-        }
-    }
-
-    if let Some(comparison) = &details.comparison {
-        report.push_str("\n## Expected versus observed\n\n");
-        report.push_str(&format!("Comparison: `{}`\n\n", comparison.kind));
-        if let Some(expected) = &comparison.expected {
-            report.push_str(&format!("- Expected: `{}`\n", expected.replace('`', "'")));
-        }
-        if let Some(actual) = &comparison.actual {
-            report.push_str(&format!("- Actual: `{}`\n", actual.replace('`', "'")));
-        }
-    }
-
-    if !details.evaluation_transitions.is_empty() {
-        report.push_str("\n## What changed while waiting\n\n");
-        report
-            .push_str("| Time | Screen | Outcome | Stage counts |\n| ---: | ---: | --- | --- |\n");
-        for transition in &details.evaluation_transitions {
-            report.push_str(&format!(
-                "| {} ms | {} | `{}` | `{:?}` |\n",
-                transition.elapsed_ms,
-                transition.screen_sequence,
-                transition.outcome,
-                transition.stage_counts
-            ));
-        }
-    }
-
-    if let Some(terminal) = &details.terminal {
-        report.push_str("\n## Terminal state\n\n");
-        report.push_str(&format!(
-            "The screen was unchanged for {} ms before failure. {} distinct screens were retained.\n",
-            terminal.unchanged_for_ms,
-            terminal.screen_history.screens.len()
-        ));
-        if !terminal.screen_history.screens.is_empty() {
-            report.push_str(
-                "\n| Screen | First seen | Last seen | Changes | Preview |\n| ---: | ---: | ---: | --- | --- |\n",
-            );
-            for screen in &terminal.screen_history.screens {
-                let preview = screen
-                    .text
-                    .lines()
-                    .find(|line| !line.trim().is_empty())
-                    .unwrap_or("<blank>")
-                    .chars()
-                    .take(120)
-                    .collect::<String>()
-                    .replace('|', "\\|")
-                    .replace('`', "'");
-                report.push_str(&format!(
-                    "| {} | {} ms | {} ms | `{}` | {} |\n",
-                    screen.sequence,
-                    screen.first_seen_ms,
-                    screen.last_seen_ms,
-                    screen.changes.join(","),
-                    preview
-                ));
-            }
-        }
-    }
-
-    if !details.recent_operations.is_empty() {
-        report.push_str("\n## Recent operations\n\n");
-        report.push_str(
-            "| Operation | Result | Started | Ended | Summary |\n| --- | --- | ---: | ---: | --- |\n",
-        );
-        for operation in &details.recent_operations {
-            report.push_str(&format!(
-                "| `{}` | `{}` | {} ms | {} ms | {} |\n",
-                operation.name,
-                operation.result,
-                operation.started_ms,
-                operation.ended_ms,
-                operation.safe_summary.replace('|', "\\|")
-            ));
-        }
-    }
-
-    if !details.hints.is_empty() {
-        report.push_str("\n## Next actions\n\n");
-        for hint in &details.hints {
-            report.push_str(&format!("- **{}:** {}\n", hint.code, hint.message));
-        }
-    }
-
-    report.push_str("\n## Evidence\n\n");
-    for file in files {
-        let note = file
-            .reason
-            .as_deref()
-            .map_or(String::new(), |reason| format!(" ({reason})"));
-        report.push_str(&format!("- `{}`: `{:?}`{}\n", file.path, file.status, note));
-    }
-    report
 }
 
 fn failure_reason_code(reason: FailureReason) -> &'static str {
@@ -1511,15 +1529,43 @@ mod tests {
     #[test]
     fn screen_history_deduplicates_and_retains_style_changes() {
         let mut history = ScreenHistory::new(3);
+        let emu = AlacrittyEmu::new(1, 1, &Profile::default());
         let plain = vec![vec![EmuCell::blank()]];
-        let first = history.capture(plain.clone(), 1, None, (0, 0), true, CursorShape::Block, 1);
-        let repeated = history.capture(plain.clone(), 1, None, (0, 0), true, CursorShape::Block, 2);
+        let first = history.capture(
+            plain.clone(),
+            1,
+            None,
+            (0, 0),
+            true,
+            CursorShape::Block,
+            1,
+            RenderState::capture(&emu),
+        );
+        let repeated = history.capture(
+            plain.clone(),
+            1,
+            None,
+            (0, 0),
+            true,
+            CursorShape::Block,
+            2,
+            RenderState::capture(&emu),
+        );
         assert_eq!(first, repeated);
         assert_eq!(history.snapshot().screens[0].repeat_count, 2);
 
         let mut styled = plain;
         styled[0][0].attrs.insert(Attrs::BOLD);
-        let second = history.capture(styled, 1, None, (0, 0), true, CursorShape::Block, 3);
+        let second = history.capture(
+            styled,
+            1,
+            None,
+            (0, 0),
+            true,
+            CursorShape::Block,
+            3,
+            RenderState::capture(&emu),
+        );
         assert_ne!(first, second);
         let screens = history.snapshot().screens;
         assert_eq!(screens.len(), 2);
@@ -1538,6 +1584,128 @@ mod tests {
         let encoded = serde_json::to_string(&details).unwrap();
         let decoded: FailureDetails = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, details);
+    }
+
+    #[test]
+    fn checkpoints_survive_sample_eviction_and_remain_bounded() {
+        let emu = AlacrittyEmu::new(1, 1, &Profile::default());
+        let mut history = ScreenHistory::new(1);
+        for sequence in 1..=40 {
+            history.capture(
+                vec![vec![EmuCell {
+                    ch: sequence.to_string().into(),
+                    ..EmuCell::blank()
+                }]],
+                1,
+                None,
+                (0, 0),
+                false,
+                CursorShape::Block,
+                sequence,
+                RenderState::capture(&emu),
+            );
+            history.pin_current();
+        }
+        let snapshot = history.snapshot();
+        assert_eq!(snapshot.screens.len(), 1);
+        assert_eq!(snapshot.checkpoints.len(), MAX_OPERATION_HISTORY);
+        assert_eq!(snapshot.dropped_screen_count, 39);
+        assert_eq!(snapshot.dropped_checkpoint_count, 8);
+        assert_eq!(snapshot.checkpoints[0].sequence, 9);
+        assert!(history.checkpoint_bytes <= MAX_CHECKPOINT_BYTES);
+        let mut disabled = ScreenHistory::new(0);
+        for sequence in 1..=3 {
+            disabled.capture(
+                vec![vec![EmuCell::blank()]],
+                1,
+                Some(sequence.to_string()),
+                (0, 0),
+                false,
+                CursorShape::Block,
+                sequence,
+                RenderState::capture(&emu),
+            );
+            disabled.pin_current();
+        }
+        assert_eq!(disabled.snapshot().screens.len(), 1);
+        assert!(disabled.checkpoints.is_empty());
+        assert_eq!(disabled.snapshot().dropped_checkpoint_count, 3);
+
+        let mut large = ScreenHistory::new(1);
+        for sequence in 1..=16 {
+            let mut rows = vec![vec![EmuCell::blank(); 450]; 50];
+            rows[0][0].ch = sequence.to_string().into();
+            large.capture(
+                rows,
+                450,
+                None,
+                (0, 0),
+                false,
+                CursorShape::Block,
+                sequence,
+                RenderState::capture(&emu),
+            );
+            large.pin_current();
+            assert!(large.checkpoint_bytes <= MAX_CHECKPOINT_BYTES);
+        }
+        assert!(
+            large.checkpoints.len() < 16,
+            "the byte budget must evict before the count budget"
+        );
+        assert!(large.snapshot().dropped_checkpoint_count > 0);
+    }
+
+    #[test]
+    fn palette_only_changes_create_distinct_pinned_frames() {
+        let mut emu = AlacrittyEmu::new(1, 1, &Profile::default());
+        let mut history = ScreenHistory::new(1);
+        let rows = emu.viewable_rows();
+        history.capture(
+            rows.clone(),
+            1,
+            None,
+            (0, 0),
+            false,
+            CursorShape::Block,
+            1,
+            RenderState::capture(&emu),
+        );
+        history.pin_current();
+        emu.process(b"\x1b]10;#abcdef\x07");
+        history.capture(
+            rows,
+            1,
+            None,
+            (0, 0),
+            false,
+            CursorShape::Block,
+            2,
+            RenderState::capture(&emu),
+        );
+        let snapshot = history.snapshot();
+        assert_eq!(snapshot.screens.len(), 1);
+        assert_eq!(snapshot.checkpoints.len(), 1);
+        assert!(snapshot.screens[0].changes.contains(&"palette".to_string()));
+        assert_ne!(
+            history.frames()[0].render_state,
+            history.frames()[1].render_state
+        );
+    }
+
+    #[test]
+    fn operation_history_does_not_link_frames_across_session_restarts() {
+        let mut history = OperationHistory::new();
+        let old = history.begin("old".into(), 100, 50, "old".into(), true);
+        history.finish(old, 120, 51, "ok");
+        let restart = history.begin("run".into(), 130, 51, "restart".into(), false);
+        history.reset_session();
+        history.finish(restart, 10, 1, "ok");
+        let events = history.snapshot();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].started_ms, 0);
+        assert_eq!(events[0].screen_before, 0);
+        assert_eq!(events[0].screen_at_return, 1);
+        assert_eq!(events[0].sequence, 2);
     }
 
     #[test]
@@ -1568,8 +1736,11 @@ mod tests {
                 limit: 1,
                 dropped_screen_count: 0,
                 dropped_row_count: 0,
+                dropped_checkpoint_count: 0,
                 screens: Vec::new(),
+                checkpoints: Vec::new(),
             },
+            frames: Vec::new(),
             process: ProcessDiagnostics {
                 pid: None,
                 state: "running".to_string(),

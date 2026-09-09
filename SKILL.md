@@ -107,7 +107,7 @@ Do not use a fixed sleep when a wait can describe the state.
 
 Use `screenshot` for text or SVG. Use `record` for APNG, GIF, MP4, or asciinema. Use recording mode `on-failure` for test artifacts.
 
-For a failed assertion that must be understood offline, add `--failure-artifacts <dir>`. Read `report.md` first, inspect `failure.json` for exact locator and process evidence, then use `current.svg` or the optional cast when the report is insufficient. Add `--failure-artifact-recording` only when terminal output is safe to retain; diagnostic bundles can contain sensitive terminal text, titles, and locator operands.
+For a failed assertion that must be understood offline, add `--failure-artifacts <dir>`. Agents should read `failure.md` first, then `failure.json` for exact locator/process evidence and `timeline.json` for retained per-cell frame metadata. Users can open `failure.html` directly from disk to navigate assertion checkpoints, step frames, and inspect clicked cells. Missing history is explicit; sampled frames are not a complete recording. Add `--failure-artifact-recording` for a continuous cast only when terminal output is safe to retain; diagnostic bundles can contain sensitive terminal text, titles, and locator operands.
 
 ## References
 
