@@ -256,6 +256,12 @@ fn control_key(key: ControlKey, mods: Mods, event: KeyEventKind, mode: InputMode
         };
     }
 
+    // Enter, Tab and Backspace report no release until report-all is on, so
+    // that a program leaving event reporting set does not stop the user
+    // typing `reset` at a shell prompt. Kitty gates this on the chord rather
+    // than the key, so a modified one is still reported: `shift+tab` releases
+    // as `CSI 9;2:3u` while `tab` releases as nothing. Ghostty exempts the
+    // key whatever the modifiers, which the oracle records as a divergence.
     let safety_path = key.is_safety_key() && !report_all && !mods.any();
     if safety_path {
         return if event == KeyEventKind::Release {
@@ -453,11 +459,19 @@ fn character(ch: char, mods: Mods, event: KeyEventKind, mode: InputModes) -> Str
     }
 
     let legacy = legacy_character(ch, mods);
-    // Text-producing keys need report-all mode before repeat/release events
-    // can be represented separately from their UTF-8 text.
     let produces_text = !mods.disambiguates_character();
+    // A release has no text to carry — the text belongs to the press — so
+    // under event reporting an escape code is its only representation. A
+    // repeat is different: holding a key down means more text, so it stays
+    // text and is indistinguishable from a press, which is the point.
+    //
+    // The spec exempts Enter, Tab and Backspace from release reporting so
+    // that `reset` stays typable at a shell prompt; those take the safety-key
+    // path in `functional` rather than this one.
     let escape_encoded = mode.keyboard.contains(KeyboardMode::REPORT_ALL_KEYS_AS_ESC)
-        || (report_events && event != KeyEventKind::Press && !produces_text)
+        || (report_events
+            && (event == KeyEventKind::Release
+                || (event == KeyEventKind::Repeat && !produces_text)))
         || (mode.keyboard.contains(KeyboardMode::DISAMBIGUATE_ESC_CODES)
             && mods.disambiguates_character())
         || legacy.is_none();
@@ -1047,7 +1061,9 @@ mod tests {
     #[test]
     fn explicit_events_use_csi_u_when_event_reporting_is_enabled() {
         let events = KeyboardMode::REPORT_EVENT_TYPES;
-        assert_events(events, "a", "a", "a", "");
+        // A release carries no text, so it is reported even though the press
+        // and repeat of the same key are plain text.
+        assert_events(events, "a", "a", "a", "\u{1b}[97;1:3u");
         assert_events(
             events,
             "Ctrl+a",
@@ -1059,7 +1075,7 @@ mod tests {
         assert_events(events, "Enter", "\r", "\r", "");
 
         let disambiguated_events = events | KeyboardMode::DISAMBIGUATE_ESC_CODES;
-        assert_events(disambiguated_events, "a", "a", "a", "");
+        assert_events(disambiguated_events, "a", "a", "a", "\u{1b}[97;1:3u");
         assert_events(
             disambiguated_events,
             "Ctrl+a",
@@ -1176,7 +1192,7 @@ mod tests {
     }
 
     #[test]
-    fn press_reports_release_only_when_requested_and_representable() {
+    fn press_reports_release_only_when_event_types_are_requested() {
         assert_eq!(
             action_seq("Up", KeyAction::Press, KeyboardMode::empty()).unwrap(),
             "\u{1b}[A"
@@ -1187,7 +1203,10 @@ mod tests {
             action_seq("Up", KeyAction::Press, events).unwrap(),
             "\u{1b}[A\u{1b}[1;1:3A"
         );
-        assert_eq!(action_seq("a", KeyAction::Press, events).unwrap(), "a");
+        assert_eq!(
+            action_seq("a", KeyAction::Press, events).unwrap(),
+            "a\u{1b}[97;1:3u"
+        );
 
         let all_events = events | KeyboardMode::REPORT_ALL_KEYS_AS_ESC;
         assert_eq!(
@@ -1197,6 +1216,52 @@ mod tests {
         assert_eq!(
             action_seq("ab", KeyAction::Press, all_events).unwrap(),
             "\u{1b}[97u\u{1b}[97;1:3u\u{1b}[98u\u{1b}[98;1:3u"
+        );
+    }
+
+    /// A key release carries no text, so under `REPORT_EVENT_TYPES` it is
+    /// reported as an escape code even when the press of the same key was
+    /// plain text. The spec exempts Enter, Tab and Backspace from this so
+    /// that `reset` stays typable at a shell prompt after a program leaves
+    /// the mode set; report-all lifts the exemption.
+    #[test]
+    fn releases_are_reported_under_event_types_except_the_safety_keys() {
+        let events = KeyboardMode::REPORT_EVENT_TYPES;
+        for (token, release) in [
+            ("a", "\u{1b}[97;1:3u"),
+            ("Space", "\u{1b}[32;1:3u"),
+            ("Escape", "\u{1b}[27;1:3u"),
+            ("Enter", ""),
+            ("Tab", ""),
+            ("Backspace", ""),
+        ] {
+            assert_eq!(
+                action_seq(token, KeyAction::Up, events).unwrap(),
+                release,
+                "{token} release"
+            );
+        }
+
+        let all = events | KeyboardMode::REPORT_ALL_KEYS_AS_ESC;
+        for token in ["Enter", "Tab", "Backspace"] {
+            assert_ne!(
+                action_seq(token, KeyAction::Up, all).unwrap(),
+                "",
+                "{token} release once report-all lifts the exemption"
+            );
+        }
+    }
+
+    /// A repeat is not a release: holding a key down means more text, so a
+    /// text-producing key repeats as its text rather than as an escape code.
+    #[test]
+    fn repeats_of_text_keys_stay_text_under_event_types() {
+        let events = KeyboardMode::REPORT_EVENT_TYPES;
+        assert_eq!(action_seq("a", KeyAction::Repeat, events).unwrap(), "a");
+        assert_eq!(
+            action_seq("Ctrl+a", KeyAction::Repeat, events).unwrap(),
+            "\u{1b}[97;5:2u",
+            "a key with no text of its own still reports the repeat"
         );
     }
 
