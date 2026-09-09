@@ -791,7 +791,7 @@ pub struct Cursor {
     pub visible: bool,
     /// `block`, `underline`, or `bar` (`DECSCUSR`).
     pub shape: String,
-    /// The cursor colour as `#rrggbb`, after any `OSC 12` a program sent.
+    /// The cursor color as `#rrggbb`, after any `OSC 12` a program sent.
     pub color: String,
 }
 
@@ -862,7 +862,7 @@ pub struct State {
     /// Separate from `modes` because mouse tracking is not a set of
     /// independent switches: `CSI ?1002 h` replaces `CSI ?1000 h` rather than
     /// joining it, so reporting it as booleans would say two are on when the
-    /// terminal only honours the last.
+    /// terminal only honors the last.
     pub mouse_mode: String,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
