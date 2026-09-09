@@ -486,7 +486,7 @@ pub struct ClipboardWaitOptions {
 #[napi(object)]
 pub struct SnapshotOptions {
     pub update: Option<bool>,
-    pub include_colors: Option<bool>,
+    pub include_style: Option<bool>,
     pub include_title: Option<bool>,
     pub cwd: Option<String>,
 }
@@ -1626,7 +1626,7 @@ impl NativeSession {
     ) -> Result<SnapshotResult> {
         let options = options.unwrap_or(SnapshotOptions {
             update: None,
-            include_colors: None,
+            include_style: None,
             include_title: None,
             cwd: None,
         });
@@ -1636,7 +1636,7 @@ impl NativeSession {
             Operation::Snapshot {
                 name,
                 update: options.update.unwrap_or(false),
-                include_colors: options.include_colors.unwrap_or(false),
+                include_style: options.include_style.unwrap_or(false),
                 include_title: options.include_title.unwrap_or(false),
                 cwd: options.cwd,
             },

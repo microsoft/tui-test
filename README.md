@@ -254,7 +254,7 @@ Named keys include arrows, Home, End, PageUp, PageDown, Insert, Delete, Backspac
 | `expect exit-code CODE [--timeout MS]` | Assert the last exit code. |
 | `expect output TEXT [--regex]` | Assert command output. |
 | `expect bell COUNT [--timeout MS]` | Wait until the cumulative bell count reaches `COUNT`. |
-| `expect snapshot NAME [-u] [--include-colors] [--include-title]` | Assert a snapshot. |
+| `expect snapshot NAME [-u] [--include-style] [--include-title]` | Assert a snapshot. |
 
 Use `wait command` after `submit`, `wait exit` after `run`, and text locators for visible state. `wait idle` only means the screen stopped changing.
 

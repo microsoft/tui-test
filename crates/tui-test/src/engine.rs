@@ -978,14 +978,14 @@ fn dispatch(
         Operation::Snapshot {
             name,
             update,
-            include_colors,
+            include_style,
             include_title,
             cwd,
         } => Ok(OperationResult::Snapshot(do_snapshot(
             session,
             &name,
             update,
-            include_colors,
+            include_style,
             include_title,
             cwd,
         )?)),
@@ -2072,7 +2072,7 @@ fn do_snapshot(
     session: &TerminalSession,
     name: &str,
     update: bool,
-    include_colors: bool,
+    include_style: bool,
     include_title: bool,
     cwd: Option<String>,
 ) -> Result<SnapshotResult, TuiTestError> {
@@ -2080,7 +2080,7 @@ fn do_snapshot(
     // username, hostname, and absolute path, which would pin every baseline to
     // one machine and make it change on `cd` while the screen stayed the same.
     let (rows, title) = grid_with_title(session, false, include_title);
-    let content = snapshot::serialize(&rows, session.cols, include_colors, title.as_deref());
+    let content = snapshot::serialize(&rows, session.cols, include_style, title.as_deref());
     let base = cwd
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::current_dir().ok())

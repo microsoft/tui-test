@@ -1109,13 +1109,13 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (name, update, include_colors, include_title, cwd))]
+    #[pyo3(signature = (name, update, include_style, include_title, cwd))]
     fn snapshot<'py>(
         &self,
         py: Python<'py>,
         name: String,
         update: bool,
-        include_colors: bool,
+        include_style: bool,
         include_title: bool,
         cwd: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -1128,7 +1128,7 @@ impl NativeSession {
                     Operation::Snapshot {
                         name,
                         update,
-                        include_colors,
+                        include_style,
                         include_title,
                         cwd,
                     },

@@ -594,12 +594,12 @@ fn map_expect(what: ExpectCmd) -> Request {
         ExpectCmd::Snapshot {
             name,
             update,
-            include_colors,
+            include_style,
             include_title,
         } => Request::Snapshot {
             name,
             update,
-            include_colors,
+            include_style,
             include_title,
             cwd: std::env::current_dir()
                 .ok()
@@ -1229,7 +1229,7 @@ WAIT      wait title \"T\" [--regex --not --timeout MS]\n\
 EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex] | expect bell N\n\
-          expect snapshot NAME [-u] [--include-colors --include-title]\n\
+          expect snapshot NAME [-u] [--include-style --include-title]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\

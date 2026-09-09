@@ -81,13 +81,19 @@ fn baseline() -> EmuCell {
 /// Serialize a grid into a boxed text view, optionally followed by attributes.
 ///
 /// The attributes are a JSON object carrying whatever the box itself cannot
-/// record exactly: the full window title, and the color shifts when they are
-/// asked for. It is emitted only when there is something to put in it, so a
-/// plain snapshot is still just the box.
+/// record exactly: the full window title, and the per-cell style shifts when
+/// they are asked for. It is emitted only when there is something to put in
+/// it, so a plain snapshot is still just the box.
+///
+/// A style shift covers the colors, the SGR attributes, the underline and the
+/// link. The link is not an SGR attribute — `SGR 0` clears every other entry
+/// here and leaves it running — but it is carried on a cell the same way, so
+/// it is recorded with them rather than behind a second switch a reader has to
+/// remember to turn on.
 pub fn serialize(
     rows: &[Vec<EmuCell>],
     cols: u16,
-    include_colors: bool,
+    include_style: bool,
     title: Option<&str>,
 ) -> String {
     let mut lines = Vec::with_capacity(rows.len());
@@ -118,7 +124,7 @@ pub fn serialize(
     if let Some(title) = title {
         attributes.insert("title".to_string(), Value::String(title.to_string()));
     }
-    if include_colors && !shifts.is_empty() {
+    if include_style && !shifts.is_empty() {
         attributes.insert("colors".to_string(), Value::Object(shifts));
     }
     if attributes.is_empty() {

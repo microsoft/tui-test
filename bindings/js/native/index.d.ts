@@ -264,7 +264,7 @@ export interface Size {
 
 export interface SnapshotOptions {
   update?: boolean
-  includeColors?: boolean
+  includeStyle?: boolean
   includeTitle?: boolean
   cwd?: string
 }

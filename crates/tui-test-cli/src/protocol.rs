@@ -156,7 +156,7 @@ pub enum Request {
     Snapshot {
         name: String,
         update: bool,
-        include_colors: bool,
+        include_style: bool,
         #[serde(default)]
         include_title: bool,
         #[serde(default)]
@@ -361,13 +361,13 @@ impl Request {
             Request::Snapshot {
                 name,
                 update,
-                include_colors,
+                include_style,
                 include_title,
                 cwd,
             } => Ok(Operation::Snapshot {
                 name,
                 update,
-                include_colors,
+                include_style,
                 include_title,
                 cwd,
             }),

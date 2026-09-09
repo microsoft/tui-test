@@ -1020,12 +1020,12 @@ export class TuiTest {
 
   async expectSnapshot(
     name: string,
-    opts: { update?: boolean; includeColors?: boolean; includeTitle?: boolean } = {},
+    opts: { update?: boolean; includeStyle?: boolean; includeTitle?: boolean } = {},
   ): Promise<string> {
     return this.#guard("expectSnapshot", () =>
       this.#runtime.snapshot(name, {
         update: opts.update ?? false,
-        includeColors: opts.includeColors ?? false,
+        includeStyle: opts.includeStyle ?? false,
         includeTitle: opts.includeTitle ?? false,
         cwd: process.cwd(),
       }),

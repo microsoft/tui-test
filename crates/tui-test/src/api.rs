@@ -607,7 +607,7 @@ pub enum Operation {
     Snapshot {
         name: String,
         update: bool,
-        include_colors: bool,
+        include_style: bool,
         include_title: bool,
         cwd: Option<String>,
     },
