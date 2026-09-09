@@ -411,6 +411,10 @@ impl Emulator for XtermJsEmu {
         self.call::<String>("takeReplies").into_bytes()
     }
 
+    fn bracketed_paste_mode(&self) -> bool {
+        self.call("bracketedPaste")
+    }
+
     fn resize(&mut self, cols: u16, rows: u16) {
         self.invoke("resize", |emu, _| {
             emu.get::<_, Function>("resize")?.call((cols, rows))
@@ -553,6 +557,15 @@ mod tests {
 
         emulator.process(b"\x07");
         assert_eq!(bells.count(), 1);
+    }
+
+    #[test]
+    fn tracks_bracketed_paste_mode() {
+        let mut emulator = XtermJsEmu::new(10, 2, &Profile::default()).expect("create emulator");
+        emulator.process(b"\x1b[?2004h");
+        assert!(emulator.bracketed_paste_mode());
+        emulator.process(b"\x1b[?2004l");
+        assert!(!emulator.bracketed_paste_mode());
     }
 
     crate::emulator_conformance_tests!(

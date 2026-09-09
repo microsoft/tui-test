@@ -61,12 +61,14 @@ pub fn listen(socket: &str) -> anyhow::Result<interprocess::local_socket::Listen
     Ok(listener)
 }
 
-/// Read one request line from an accepted connection.
-pub fn read_request(conn: &Stream) -> anyhow::Result<Request> {
-    let mut reader = BufReader::new(conn);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    let req: Request = serde_json::from_str(line.trim())?;
+/// Keep the reader for streaming requests so any read-ahead remains available.
+pub fn read_request(reader: &mut impl BufRead) -> anyhow::Result<Request> {
+    let mut line = Vec::new();
+    reader.read_until(b'\n', &mut line)?;
+    if line.last() != Some(&b'\n') {
+        anyhow::bail!("connection closed before request");
+    }
+    let req: Request = serde_json::from_slice(&line)?;
     Ok(req)
 }
 
@@ -95,4 +97,44 @@ pub fn drain_peer(conn: Stream, timeout: Duration) {
         let _ = tx.send(());
     });
     let _ = rx.recv_timeout(timeout);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::MonitorInput;
+    use std::io::Cursor;
+
+    #[test]
+    fn monitor_handshake_retains_pipelined_input() {
+        let wire = b"{\"kind\":\"monitor_input_stream\",\"cols\":80,\"rows\":24}\n\
+            {\"kind\":\"write\",\"data\":[97,98]}\n\
+            {\"kind\":\"resize\",\"cols\":100,\"rows\":30}\n";
+        for capacity in [1, 16, wire.len()] {
+            let mut reader = BufReader::with_capacity(capacity, Cursor::new(wire));
+            assert!(matches!(
+                read_request(&mut reader).unwrap(),
+                Request::MonitorInputStream { cols: 80, rows: 24 }
+            ));
+            if capacity == wire.len() {
+                assert!(!reader.buffer().is_empty(), "exercise actual read-ahead");
+            }
+            let messages = serde_json::Deserializer::from_reader(reader)
+                .into_iter::<MonitorInput>()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert!(matches!(
+                messages.as_slice(),
+                [MonitorInput::Write { data }, MonitorInput::Resize { cols: 100, rows: 30 }]
+                    if data == b"ab"
+            ));
+        }
+    }
+
+    #[test]
+    fn monitor_handshake_requires_a_complete_request_line() {
+        for wire in [b"".as_slice(), b"{\"kind\":\"ping\"}"] {
+            assert!(read_request(&mut Cursor::new(wire)).is_err());
+        }
+    }
 }

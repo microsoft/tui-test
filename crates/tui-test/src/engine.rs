@@ -28,7 +28,7 @@ use crate::session::{
     TextHighlight,
 };
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
-use crate::terminal::emu::{ClipboardType, Emulator};
+use crate::terminal::emu::{ClipboardType, Emulator, KeyboardMode, MouseMode};
 use crate::terminal::locator::{self, Pattern};
 
 pub struct Engine {
@@ -58,6 +58,7 @@ struct InterruptTarget {
 
 struct LiveTarget {
     state: Arc<Mutex<TermState>>,
+    pty: Arc<Mutex<crate::terminal::pty::Pty>>,
     shell: Option<&'static str>,
 }
 
@@ -76,6 +77,9 @@ pub struct LiveFrame {
     pub grid: Vec<Vec<EmuCell>>,
     pub cursor: (u16, u16),
     pub size: (u16, u16),
+    pub keyboard_mode: KeyboardMode,
+    pub bracketed_paste: bool,
+    pub mouse_mode: MouseMode,
     pub exited: Option<i32>,
     pub shell: Option<&'static str>,
 }
@@ -449,6 +453,7 @@ impl Engine {
         }
         let live = LiveTarget {
             state: session.state.clone(),
+            pty: session.pty.clone(),
             shell: session.shell.map(|value| value.as_str()),
         };
         *self
@@ -830,10 +835,68 @@ impl Engine {
                 grid: highlighted_rows(&state, false),
                 cursor: state.emu.cursor(),
                 size: state.emu.size(),
+                keyboard_mode: state.emu.keyboard_mode(),
+                bracketed_paste: state.emu.bracketed_paste_mode(),
+                mouse_mode: state.mouse_mode.mode(),
                 exited: state.exited,
                 shell: target.shell,
             }
         })
+    }
+
+    pub fn monitor_mouse_size(&self) -> Option<(u16, u16)> {
+        let live = self
+            .live
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        live.as_ref().and_then(|target| {
+            let state = target
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (state.mouse_mode.mode() != MouseMode::None).then(|| state.emu.size())
+        })
+    }
+
+    /// Write viewer keystrokes straight to the pty: untracked and unlogged, so
+    /// a human watching cannot disturb what the agent is waiting on.
+    pub fn write_monitor_input_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        let Some((state, pty)) = ({
+            let live = self
+                .live
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            live.as_ref()
+                .map(|target| (Arc::clone(&target.state), Arc::clone(&target.pty)))
+        }) else {
+            return Ok(());
+        };
+        let exited = || {
+            state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .exited
+                .is_some()
+        };
+        if exited() {
+            return Ok(());
+        }
+        // A child that exits mid-write is a normal race, not a failure.
+        let written = pty
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .write(data);
+        match written {
+            Err(error)
+                if !matches!(
+                    error.kind(),
+                    std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::NotConnected
+                ) && !exited() =>
+            {
+                Err(TuiTestError::internal(error.to_string()))
+            }
+            _ => Ok(()),
+        }
     }
 
     pub fn log_event(&self, message: &str) {

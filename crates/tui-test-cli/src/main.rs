@@ -1,9 +1,13 @@
 mod agent_context;
+mod ansi;
 mod cli;
 mod config;
+#[cfg(windows)]
+mod console_input;
 mod daemon;
 mod ipc;
 mod monitor;
+mod monitor_input;
 mod protocol;
 mod skill;
 
@@ -105,7 +109,7 @@ fn main() {
             config::session_was_specified(&cli.session),
             cli.json,
         ),
-        Command::Monitor => monitor::run_client(&session),
+        Command::Monitor { interactive } => monitor::run_client(&session, interactive),
         command => run_remote(&session, command, cli.json, cli.verbose, execution_context),
     };
     std::process::exit(code);
@@ -1340,7 +1344,7 @@ EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
-WATCH     monitor (live full-color view in another terminal; q/Esc/Ctrl-C to detach)\n\
+WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
 GLOBAL    --session NAME | --json | --verbose | --failure-artifacts DIR\n\
           [--failure-artifact-mode bundle|json|svg|text|none]\n\
