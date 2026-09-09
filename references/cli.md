@@ -38,7 +38,7 @@ Common options:
 
 Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, `--blink`, and `--link`.
 
-`--link` matches a cell's OSC 8 target: `--link https://example.com` requires that link, and `--link ""` requires a cell that links nowhere. It applies to every cell of the match, blanks included, because a space inside a link is part of the link.
+`--link` matches a cell's OSC 8 target: `--link https://example.com` requires that link, and `--link ""` requires a cell that links nowhere. It applies to every cell of the match, blanks included, because a space inside a link is part of the link. The appearance options skip blanks, which cannot show them, so `A B` linked throughout with only the letters bold matches `--bold --link ...` just as it matches either alone.
 
 `click text` also accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks`, and `--timeout`.
 

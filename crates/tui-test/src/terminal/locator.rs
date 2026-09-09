@@ -169,19 +169,45 @@ where
         !cell.cell.ch.is_empty() && !cell.cell.ch.chars().all(char::is_whitespace)
     };
     let has_visible = matched.cells.iter().any(&visible);
-    // A blank is skipped because a color it cannot show says nothing about the
-    // match: the foreground of a space is invisible, so requiring it would make
-    // `A B` fail for a reason no reader could see. A link is not like that. It
-    // is a region of the screen rather than an appearance, and a space inside
-    // one is part of the link, so a blank that links elsewhere is a real
-    // difference and has to be checked. Without this, `A B` whose space alone
-    // carries a URI would satisfy "links nowhere".
-    let linked = style.link.is_some();
-    matched
-        .cells
-        .iter()
-        .filter(|cell| linked || !has_visible || visible(cell))
-        .all(|cell| style_matches(&cell.cell, style))
+    // The two halves of a style are asked about differently, because a blank
+    // can carry one and not the other.
+    //
+    // An appearance skips blanks: the foreground of a space is invisible, so
+    // requiring it would fail `A B` for a reason no reader could see, and a
+    // program that bolds the letters but not the space between them has drawn
+    // exactly what the query describes.
+    //
+    // A link is not an appearance. It is a region of the screen, and a space
+    // inside one is part of the link, so it is checked on every cell —
+    // otherwise `A B` whose space alone carries a URI would satisfy "links
+    // nowhere".
+    //
+    // Splitting the two rather than picking one policy for the whole match is
+    // what keeps them composable: `A B` linked throughout but bold only on the
+    // letters matches `--bold --link` exactly as it matches either alone.
+    let link = style.link.as_ref().map(|link| TextStyle {
+        link: Some(link.clone()),
+        ..TextStyle::default()
+    });
+    let appearance = TextStyle {
+        link: None,
+        ..style.clone()
+    };
+    let appearance = (!appearance.is_empty()).then_some(appearance);
+
+    matched.cells.iter().all(|cell| {
+        if let Some(link) = &link {
+            if !style_matches(&cell.cell, link) {
+                return false;
+            }
+        }
+        match &appearance {
+            Some(appearance) if !has_visible || visible(cell) => {
+                style_matches(&cell.cell, appearance)
+            }
+            _ => true,
+        }
+    })
 }
 
 fn relative_regions(
@@ -1011,5 +1037,71 @@ mod tests {
             1,
             "every cell linked, blanks included, matches"
         );
+    }
+
+    /// Asking about a link and an appearance together means the same as asking
+    /// about each alone.
+    ///
+    /// `A B` linked throughout, with the letters bold and the space not — the
+    /// usual shape, since a program has no reason to bold a space. The blank
+    /// is skipped for bold, which it cannot show, and checked for the link,
+    /// which it carries. Treating one policy as the match's own would fail the
+    /// combination while passing both halves.
+    #[test]
+    fn a_link_and_an_appearance_compose() {
+        let mut rows = grid(&["A B"]);
+        for cell in &mut rows[0] {
+            cell.hyperlink = Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: None,
+                uri: "https://example.com".into(),
+            }));
+        }
+        rows[0][0].attrs.insert(Attrs::BOLD);
+        rows[0][2].attrs.insert(Attrs::BOLD);
+
+        let locate = |style: TextStyle| {
+            locate_query(
+                &rows,
+                &LocatorQuery {
+                    selector: LocatorSelector::Text(TextSelector::new("A B")),
+                    occurrence: MatchOccurrence::Any,
+                    within: None,
+                    direction: LocatorDirection::Within,
+                    style,
+                },
+                &mut |cell, style: &TextStyle| {
+                    style
+                        .bold
+                        .is_none_or(|expected| expected == cell.has(Attrs::BOLD))
+                        && style
+                            .link
+                            .as_deref()
+                            .is_none_or(|expected| expected == cell.uri().unwrap_or_default())
+                },
+            )
+            .unwrap()
+            .len()
+        };
+        let bold = TextStyle {
+            bold: Some(true),
+            ..TextStyle::default()
+        };
+        let linked = TextStyle {
+            link: Some("https://example.com".to_string()),
+            ..TextStyle::default()
+        };
+        let both = TextStyle {
+            bold: Some(true),
+            link: Some("https://example.com".to_string()),
+            ..TextStyle::default()
+        };
+
+        assert_eq!(
+            locate(bold),
+            1,
+            "the space cannot show bold, so it is skipped"
+        );
+        assert_eq!(locate(linked), 1, "every cell carries the link");
+        assert_eq!(locate(both), 1, "so asking for both matches too");
     }
 }
