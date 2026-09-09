@@ -863,6 +863,10 @@ pub struct State {
     /// independent switches: `CSI ?1002 h` replaces `CSI ?1000 h` rather than
     /// joining it, so reporting it as booleans would say two are on when the
     /// terminal only honors the last.
+    ///
+    /// Independent of how the child asked for the reports to be encoded.
+    /// `CSI ?1000 h` on its own is `click`, whether or not `CSI ?1006 h`
+    /// followed it to ask for SGR coordinates.
     pub mouse_mode: String,
     pub timeouts: EffectiveTimeouts,
     pub text: String,

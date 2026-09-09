@@ -168,7 +168,7 @@ impl TerminalMode {
     }
 }
 
-/// SGR mouse events currently requested by the child.
+/// Mouse tracking level currently requested by the child.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum MouseMode {
     #[default]
@@ -242,7 +242,25 @@ impl MouseModeTracker {
         self.parser.advance(&mut self.state, bytes);
     }
 
+    /// The tracking level the child asked for.
+    ///
+    /// Independent of how the child asked for the reports to be encoded:
+    /// `CSI ?1000 h` on its own is click tracking whether or not `CSI ?1006 h`
+    /// followed it, and saying otherwise would report "none" for a program
+    /// that is plainly reading clicks.
     pub(crate) fn mode(&self) -> MouseMode {
+        self.state.tracking
+    }
+
+    /// The tracking level a viewer can relay, which is `None` unless the child
+    /// also asked for SGR encoding.
+    ///
+    /// The monitor mirrors the child's tracking onto the watching terminal and
+    /// forwards what comes back. It can only encode SGR, so relaying to a
+    /// child that asked for the legacy `CSI M` form would feed it reports it
+    /// cannot parse. That is a limit of the relay, not a statement about what
+    /// the child requested, which is why it is separate from `mode`.
+    pub(crate) fn relayable(&self) -> MouseMode {
         if self.state.sgr {
             self.state.tracking
         } else {
@@ -524,22 +542,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tracks_only_sgr_mouse_modes() {
+    fn tracking_is_reported_whatever_the_encoding() {
         let mut tracker = MouseModeTracker::new();
         tracker.process(b"\x1b[?1000h");
-        assert_eq!(tracker.mode(), MouseMode::None);
-        tracker.process(b"\x1b[?1006h");
-        assert_eq!(tracker.mode(), MouseMode::Click);
+        assert_eq!(
+            tracker.mode(),
+            MouseMode::Click,
+            "?1000h alone is click tracking, in the legacy encoding"
+        );
         tracker.process(b"\x1b[?1002h");
-        assert_eq!(tracker.mode(), MouseMode::Drag);
+        assert_eq!(tracker.mode(), MouseMode::Drag, "?1002h replaces ?1000h");
         tracker.process(b"\x1b[?10");
         tracker.process(b"03h");
-        assert_eq!(tracker.mode(), MouseMode::Motion);
+        assert_eq!(tracker.mode(), MouseMode::Motion, "split across writes");
+        tracker.process(b"\x1b[?1003l");
+        assert_eq!(tracker.mode(), MouseMode::None);
+        tracker.process(b"\x1b[?1000h\x1bc");
+        assert_eq!(tracker.mode(), MouseMode::None, "RIS clears tracking");
+    }
+
+    #[test]
+    fn only_sgr_encoded_tracking_can_be_relayed() {
+        let mut tracker = MouseModeTracker::new();
+        tracker.process(b"\x1b[?1000h");
+        assert_eq!(
+            tracker.relayable(),
+            MouseMode::None,
+            "the legacy encoding is not something the monitor can speak"
+        );
+        tracker.process(b"\x1b[?1006h");
+        assert_eq!(tracker.relayable(), MouseMode::Click);
+        tracker.process(b"\x1b[?1002h");
+        assert_eq!(tracker.relayable(), MouseMode::Drag);
         tracker.process(b"\x1b[?1016h");
-        assert_eq!(tracker.mode(), MouseMode::None);
-        tracker.process(b"\x1b[?1006h\x1b[?1003l");
-        assert_eq!(tracker.mode(), MouseMode::None);
-        tracker.process(b"\x1b[?1000;1006h\x1bc");
-        assert_eq!(tracker.mode(), MouseMode::None);
+        assert_eq!(
+            tracker.relayable(),
+            MouseMode::None,
+            "pixel coordinates are not the SGR cells the monitor sends"
+        );
+        assert_eq!(
+            tracker.mode(),
+            MouseMode::Drag,
+            "but the child is still tracking drags"
+        );
     }
 }

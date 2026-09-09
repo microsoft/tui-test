@@ -401,7 +401,7 @@ impl Engine {
                 size: state.emu.size(),
                 keyboard_mode: state.emu.keyboard_mode(),
                 bracketed_paste: state.emu.mode(TerminalMode::BracketedPaste),
-                mouse_mode: state.mouse_mode.mode(),
+                mouse_mode: state.mouse_mode.relayable(),
                 exited: state.exited,
                 shell: target.shell,
             }
@@ -418,7 +418,7 @@ impl Engine {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            (state.mouse_mode.mode() != MouseMode::None).then(|| state.emu.size())
+            (state.mouse_mode.relayable() != MouseMode::None).then(|| state.emu.size())
         })
     }
 
