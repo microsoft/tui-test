@@ -271,9 +271,27 @@ impl GhosttyCore {
     }
 
     pub(super) fn mode(&self, mode: TerminalMode) -> Result<bool> {
-        // Ghostty tracks `?1049` as the pair it is: a screen swap plus a
-        // cursor save. `ALT_SCREEN_SAVE` is the one `?1049` itself sets, and
-        // it is what a child that sent `?1049` gets told about.
+        // Ghostty honors all three ways into the alternate screen and tracks
+        // each under its own flag: `?47`, `?1047` and `?1049`. The question
+        // `alternate_screen` asks is whether the alternate screen is showing,
+        // so any of them answers it — reading only `?1049` reported "primary"
+        // while ghostty was plainly displaying the alternate buffer.
+        if mode == TerminalMode::AlternateScreen {
+            for flag in [
+                Mode::ALT_SCREEN_SAVE,
+                Mode::ALT_SCREEN,
+                Mode::ALT_SCREEN_LEGACY,
+            ] {
+                if self
+                    .terminal
+                    .mode(flag)
+                    .with_context(|| format!("reading {} mode", mode.name()))?
+                {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
+        }
         let ghostty_mode = match mode {
             TerminalMode::ApplicationCursorKeys => Mode::DECCKM,
             TerminalMode::ApplicationKeypad => Mode::KEYPAD_KEYS,
@@ -282,7 +300,7 @@ impl GhosttyCore {
             TerminalMode::Insert => Mode::INSERT,
             TerminalMode::FocusEvents => Mode::FOCUS_EVENT,
             TerminalMode::BracketedPaste => Mode::BRACKETED_PASTE,
-            TerminalMode::AlternateScreen => Mode::ALT_SCREEN_SAVE,
+            TerminalMode::AlternateScreen => unreachable!("handled above"),
             TerminalMode::CursorVisible => Mode::CURSOR_VISIBLE,
         };
         self.terminal

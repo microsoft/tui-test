@@ -143,10 +143,19 @@ Recording modes: `disabled`, `on-failure`, and `always`.
 | `bracketed_paste` | `CSI ?2004 h` | pastes are bracketed |
 | `alternate_screen` | `CSI ?1049 h` | the alternate screen is showing |
 
+`alternate_screen` reports whether the alternate screen is showing, however it
+was reached. `CSI ?1049 h` is what a full-screen program sends and every
+backend honors it; the older `CSI ?47 h` and `CSI ?1047 h` are honored by the
+ghostty and xterm.js backends and ignored by alacritty and rio, so prefer
+`?1049` in a test that has to behave the same everywhere.
+
 Mouse tracking is reported separately, as `mouse_mode`: `none`, `click`,
 `drag`, or `motion`. It is not in the table because it is not a set of
 independent switches — `CSI ?1002 h` replaces `CSI ?1000 h` rather than
 joining it, so booleans would claim two are on when only the last is honored.
+It reports the tracking level regardless of how the child asked for the
+reports to be encoded, so `CSI ?1000 h` alone is `click` whether or not
+`CSI ?1006 h` followed it.
 
 Read them with `get modes`, and assert one with `expect mode <NAME> [--off]`.
 The cursor has its own command, since position and shape have nowhere else to

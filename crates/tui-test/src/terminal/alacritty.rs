@@ -556,7 +556,10 @@ impl Emulator for AlacrittyEmu {
 mod tests {
     use super::*;
 
-    crate::emulator_conformance_tests!(|c, r, p| Box::new(AlacrittyEmu::new(c, r, p)));
+    crate::emulator_conformance_tests!(
+        |c, r, p| Box::new(AlacrittyEmu::new(c, r, p)),
+        &[crate::terminal::conformance::Divergence::NoLegacyAlternateScreen]
+    );
 
     #[test]
     fn multiple_bells_in_one_chunk_are_counted_individually() {
