@@ -390,6 +390,34 @@ macro_rules! emulator_conformance_tests {
             assert_eq!(rows[0][1].underline, U::Single, "SGR 4 means single");
         }
 
+        /// `SGR 0` does not close a hyperlink.
+        ///
+        /// A link looks like a style — it is opened by an escape sequence and
+        /// every cell written afterwards carries it — but it is not one, and
+        /// this is where the two come apart: the attribute reset that clears
+        /// every SGR attribute leaves the link running. Only `OSC 8` with an
+        /// empty URI closes it. That is why a link is recorded next to the
+        /// styles rather than as one of them.
+        #[test]
+        fn conformance_an_attribute_reset_does_not_close_a_hyperlink() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"\x1b]8;;https://example.com\x1b\\\x1b[1ma\x1b[0mb\x1b]8;;\x1b\\c");
+            let rows = e.viewable_rows();
+
+            assert!(rows[0][0].has($crate::terminal::cell::Attrs::BOLD));
+            assert_eq!(rows[0][0].uri(), Some("https://example.com"));
+            assert!(
+                !rows[0][1].has($crate::terminal::cell::Attrs::BOLD),
+                "SGR 0 clears the bold"
+            );
+            assert_eq!(
+                rows[0][1].uri(),
+                Some("https://example.com"),
+                "SGR 0 does not clear the link"
+            );
+            assert_eq!(rows[0][2].uri(), None, "only OSC 8 closes the link");
+        }
+
         /// Resetting the underline color must not be confusable with setting
         /// it to white.
         ///
