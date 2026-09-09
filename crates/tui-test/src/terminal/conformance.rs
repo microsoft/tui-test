@@ -1435,6 +1435,55 @@ macro_rules! emulator_conformance_tests {
             );
         }
 
+        /// A link spanning many cells is one allocation, not one per cell.
+        ///
+        /// Every cell of a run carries the same link, so a converter that
+        /// builds one per cell says the same thing N times at N allocations.
+        /// Pointer equality is the invariant: the cells share an `Arc`.
+        #[test]
+        fn conformance_a_link_run_shares_one_allocation() {
+            let mut e = conformance_emu(20, 3, 100);
+            e.process(b"\x1b]8;;https://example.com/a/long/path/past/inlining\x1b\\");
+            e.process(b"aaaaaaaaaaaaaaaaaaaa");
+            e.process(b"bbbbb");
+            e.process(b"\x1b]8;;\x1b\\");
+            let rows = e.viewable_rows();
+
+            let first = rows[0][0].hyperlink.clone().expect("the run is linked");
+            for (y, x) in [(0usize, 0usize), (0, 19), (1, 0), (1, 4)] {
+                let link = rows[y][x].hyperlink.clone().expect("cell is linked");
+                assert!(
+                    std::sync::Arc::ptr_eq(&first, &link),
+                    "cell {x},{y} rebuilt the link instead of sharing it"
+                );
+            }
+        }
+
+        /// Two links to the same place under different `id=` stay distinct.
+        ///
+        /// Reusing a link across cells must compare what identifies it, not
+        /// only where it points, or the second run would inherit the first
+        /// one's id.
+        #[test]
+        fn conformance_same_uri_under_different_ids_stays_distinct() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"\x1b]8;id=one;https://example.com\x1b\\A");
+            e.process(b"\x1b]8;id=two;https://example.com\x1b\\B");
+            e.process(b"\x1b]8;;\x1b\\");
+            let rows = e.viewable_rows();
+
+            assert_eq!(rows[0][0].uri(), Some("https://example.com"));
+            assert_eq!(rows[0][1].uri(), Some("https://example.com"));
+            if !CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::HyperlinkHasNoId)
+            {
+                let first = rows[0][0].hyperlink.clone().expect("A is linked");
+                let second = rows[0][1].hyperlink.clone().expect("B is linked");
+                assert_eq!(first.id.as_deref(), Some("one"));
+                assert_eq!(second.id.as_deref(), Some("two"));
+            }
+        }
+
         /// Erase resets cells to fully default, not merely to a space.
         #[test]
         fn conformance_erase_clears_cells() {

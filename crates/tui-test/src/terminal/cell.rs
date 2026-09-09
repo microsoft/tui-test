@@ -179,6 +179,40 @@ pub struct Hyperlink {
     pub uri: CompactString,
 }
 
+/// The last link built while converting a grid, so a run reuses one `Arc`.
+///
+/// A link covers every cell it spans, and a converter that builds a
+/// [`Hyperlink`] per cell rebuilds the same URI once per cell: an N-cell link
+/// costs N allocations to say one thing N times.
+///
+/// One entry is enough because a run is contiguous — that is what a run is —
+/// so the cache hits for every cell after the first, including across a wrap,
+/// where the next row continues the same link. Two links alternating cell by
+/// cell would miss every time and allocate as before; nothing writes that, and
+/// a map keyed by the link would cost a hash per cell to cover it.
+#[derive(Default)]
+pub(crate) struct LinkCache(Option<Arc<Hyperlink>>);
+
+impl LinkCache {
+    /// The link for a cell, reusing the cached one when it is the same link.
+    ///
+    /// Compares both fields rather than the URI alone, so two links that point
+    /// at the same place under different `id=` parameters stay distinct.
+    pub(crate) fn get(&mut self, id: Option<&str>, uri: &str) -> Arc<Hyperlink> {
+        if let Some(link) = &self.0 {
+            if link.uri == uri && link.id.as_deref() == id {
+                return Arc::clone(link);
+            }
+        }
+        let link = Arc::new(Hyperlink {
+            id: id.map(CompactString::from),
+            uri: CompactString::from(uri),
+        });
+        self.0 = Some(Arc::clone(&link));
+        link
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmuCell {
     /// The cell's grapheme. A blank cell holds `" "`; [`CONTINUATION`] (the

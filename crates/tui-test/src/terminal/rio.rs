@@ -17,7 +17,9 @@ use rio_vt::performer::handler::Processor;
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
+use crate::terminal::cell::{
+    Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
+};
 use crate::terminal::emu::{
     Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
 };
@@ -59,15 +61,17 @@ fn underline_from_rio(flags: StyleFlags) -> UnderlineStyle {
 /// a process-wide counter, exactly as alacritty does with `_alacritty`. It is
 /// dropped for the same reason: it is not what the child sent, it varies with
 /// parse order, and no other backend produces it.
-fn hyperlink_from_rio(link: &RioHyperlink) -> Arc<Hyperlink> {
+fn hyperlink_from_rio(link: &RioHyperlink, links: &mut LinkCache) -> Arc<Hyperlink> {
     let id = link.id();
-    Arc::new(Hyperlink {
-        id: (!id.ends_with("_rio")).then(|| id.to_compact_string()),
-        uri: link.uri().to_compact_string(),
-    })
+    links.get((!id.ends_with("_rio")).then_some(id), link.uri())
 }
 
-fn styled_cell(square: Square, style: Style, extras: &ExtrasTable) -> EmuCell {
+fn styled_cell(
+    square: Square,
+    style: Style,
+    extras: &ExtrasTable,
+    links: &mut LinkCache,
+) -> EmuCell {
     let ch = match square.wide() {
         Wide::Spacer => CompactString::const_new(CONTINUATION),
         Wide::LeadingSpacer => CompactString::const_new(" "),
@@ -110,13 +114,18 @@ fn styled_cell(square: Square, style: Style, extras: &ExtrasTable) -> EmuCell {
             .extras_id()
             .and_then(|id| extras.get(id))
             .and_then(|extra| extra.hyperlink.as_ref())
-            .map(hyperlink_from_rio),
+            .map(|link| hyperlink_from_rio(link, links)),
     }
 }
 
-fn cell_from_rio(square: Square, styles: &StyleSet, extras: &ExtrasTable) -> EmuCell {
+fn cell_from_rio(
+    square: Square,
+    styles: &StyleSet,
+    extras: &ExtrasTable,
+    links: &mut LinkCache,
+) -> EmuCell {
     match square.content_tag() {
-        ContentTag::Codepoint => styled_cell(square, styles.get(square.style_id()), extras),
+        ContentTag::Codepoint => styled_cell(square, styles.get(square.style_id()), extras, links),
         ContentTag::BgPalette => EmuCell {
             bg: Some(Color::from_index(square.bg_palette_index())),
             ..EmuCell::blank()
@@ -294,12 +303,13 @@ impl RioEmu {
         let styles = &self.term.grid.style_set;
         let extras = &self.term.grid.extras_table;
         let mut output = Vec::with_capacity((end - start).max(0) as usize);
+        let mut links = LinkCache::default();
         for line in start..end {
             let source = &self.term.grid[Line(line)];
             let mut row = Vec::with_capacity(self.cols as usize);
             for col in 0..self.cols as usize {
                 let square = source.inner.get(col).copied().unwrap_or_default();
-                row.push(cell_from_rio(square, styles, extras));
+                row.push(cell_from_rio(square, styles, extras, &mut links));
             }
             output.push(row);
         }

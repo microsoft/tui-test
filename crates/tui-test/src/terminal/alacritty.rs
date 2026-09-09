@@ -23,7 +23,9 @@ use compact_str::{CompactString, ToCompactString};
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
+use crate::terminal::cell::{
+    Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
+};
 use crate::terminal::emu::{
     Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
 };
@@ -95,15 +97,15 @@ fn underline_from_alac(c: &alacritty_terminal::term::cell::Cell) -> UnderlineSty
 /// synthesized one and reports `None` too. Telling them apart would mean
 /// parsing OSC 8 ourselves, which is a lot of machinery for a collision
 /// nobody will hit.
-fn hyperlink_from_alac(link: &alacritty_terminal::term::cell::Hyperlink) -> Arc<Hyperlink> {
+fn hyperlink_from_alac(
+    link: &alacritty_terminal::term::cell::Hyperlink,
+    links: &mut LinkCache,
+) -> Arc<Hyperlink> {
     let id = link.id();
-    Arc::new(Hyperlink {
-        id: (!id.ends_with("_alacritty")).then(|| id.to_compact_string()),
-        uri: link.uri().to_compact_string(),
-    })
+    links.get((!id.ends_with("_alacritty")).then_some(id), link.uri())
 }
 
-fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
+fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell, links: &mut LinkCache) -> EmuCell {
     let flags = c.flags;
     // Only WIDE_CHAR_SPACER is a continuation: it is the second column of a
     // wide char on this row. LEADING_WIDE_CHAR_SPACER is the opposite, a filler
@@ -144,7 +146,10 @@ fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
         underline: underline_from_alac(c),
         underline_color: c.underline_color().and_then(color_from_alac),
         attrs,
-        hyperlink: c.hyperlink().as_ref().map(hyperlink_from_alac),
+        hyperlink: c
+            .hyperlink()
+            .as_ref()
+            .map(|link| hyperlink_from_alac(link, links)),
     }
 }
 
@@ -340,11 +345,12 @@ impl AlacrittyEmu {
     fn rows_in_range(&self, start: i32, end: i32) -> Vec<Vec<EmuCell>> {
         let grid = self.term.grid();
         let mut out = Vec::with_capacity((end - start).max(0) as usize);
+        let mut links = LinkCache::default();
         for line in start..end {
             let mut row = Vec::with_capacity(self.cols as usize);
             for col in 0..self.cols as usize {
                 let cell = &grid[Line(line)][Column(col)];
-                row.push(cell_from_alac(cell));
+                row.push(cell_from_alac(cell, &mut links));
             }
             out.push(row);
         }

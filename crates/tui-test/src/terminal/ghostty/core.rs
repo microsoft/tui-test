@@ -20,7 +20,9 @@ use ghostty_vt::{RenderState, Terminal};
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
+use crate::terminal::cell::{
+    Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
+};
 use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape};
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
@@ -55,19 +57,15 @@ fn underline(style: Underline) -> UnderlineStyle {
     }
 }
 
-/// Links seen so far in one capture, keyed by URI.
-type LinkTable = std::collections::HashMap<CompactString, Arc<Hyperlink>>;
-
 /// Read a cell's OSC 8 URI off a grid reference.
 ///
-/// Links are interned in `links` for the length of one capture, so a link
-/// spanning N cells allocates its URI once and hands out clones of a single
-/// `Arc` rather than building N copies of the same string.
+/// A link spanning N cells reuses one `Arc` through `links` rather than
+/// building N copies of the same URI.
 ///
 /// Ghostty's FFI exposes the URI and nothing else, so the `id=` parameter is
 /// not recoverable here and every ghostty link reports `id: None`. That is
 /// declared as a conformance divergence rather than worked around.
-fn grid_hyperlink(grid: &GridRef<'_>, links: &mut LinkTable) -> Result<Option<Arc<Hyperlink>>> {
+fn grid_hyperlink(grid: &GridRef<'_>, links: &mut LinkCache) -> Result<Option<Arc<Hyperlink>>> {
     let mut inline = [0u8; 128];
     let uri = match grid.hyperlink_uri(&mut inline) {
         Ok(0) => return Ok(None),
@@ -83,15 +81,7 @@ fn grid_hyperlink(grid: &GridRef<'_>, links: &mut LinkTable) -> Result<Option<Ar
         }
         Err(error) => return Err(error).context("reading hyperlink URI"),
     };
-    if let Some(link) = links.get(&uri) {
-        return Ok(Some(Arc::clone(link)));
-    }
-    let link = Arc::new(Hyperlink {
-        id: None,
-        uri: uri.clone(),
-    });
-    links.insert(uri, Arc::clone(&link));
-    Ok(Some(link))
+    Ok(Some(links.get(None, &uri)))
 }
 
 fn cell_from_ghostty(
@@ -160,7 +150,7 @@ fn grid_graphemes(grid: &GridRef<'_>) -> Result<Vec<char>> {
     }
 }
 
-fn cell_from_grid(grid: &GridRef<'_>, links: &mut LinkTable) -> Result<EmuCell> {
+fn cell_from_grid(grid: &GridRef<'_>, links: &mut LinkCache) -> Result<EmuCell> {
     let cell = grid.cell().context("reading scrollback cell value")?;
     let graphemes = if matches!(
         cell.wide().context("reading scrollback cell width")?,
@@ -399,7 +389,7 @@ impl GhosttyCore {
             }
             output.push(output_row);
         }
-        let mut links = LinkTable::new();
+        let mut links = LinkCache::default();
         for y in linked_rows {
             let point_y = u32::try_from(y).context("viewport row exceeds Ghostty coordinates")?;
             for x in 0..cols {
@@ -440,7 +430,7 @@ impl GhosttyCore {
             .context("reading scrollback size")?;
         let history = available.min(self.profile.scrollback);
         let mut output = Vec::with_capacity(history + self.terminal.rows()? as usize);
-        let mut links = LinkTable::new();
+        let mut links = LinkCache::default();
         for y in available - history..available {
             let y = u32::try_from(y).context("scrollback exceeds Ghostty coordinates")?;
             let mut row = Vec::with_capacity(cols as usize);
