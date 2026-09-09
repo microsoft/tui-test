@@ -169,10 +169,18 @@ where
         !cell.cell.ch.is_empty() && !cell.cell.ch.chars().all(char::is_whitespace)
     };
     let has_visible = matched.cells.iter().any(&visible);
+    // A blank is skipped because a color it cannot show says nothing about the
+    // match: the foreground of a space is invisible, so requiring it would make
+    // `A B` fail for a reason no reader could see. A link is not like that. It
+    // is a region of the screen rather than an appearance, and a space inside
+    // one is part of the link, so a blank that links elsewhere is a real
+    // difference and has to be checked. Without this, `A B` whose space alone
+    // carries a URI would satisfy "links nowhere".
+    let linked = style.link.is_some();
     matched
         .cells
         .iter()
-        .filter(|cell| !has_visible || visible(cell))
+        .filter(|cell| linked || !has_visible || visible(cell))
         .all(|cell| style_matches(&cell.cell, style))
 }
 
@@ -947,5 +955,61 @@ mod tests {
         let found = locate_query_text(&rows, &query).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].value.start.column, 2);
+    }
+
+    /// A blank inside a match is skipped for a color, which it cannot show,
+    /// but not for a link, which it can carry. `A B` whose space alone links
+    /// somewhere is not a run that links nowhere.
+    #[test]
+    fn a_link_constraint_covers_the_blanks_inside_a_match() {
+        let link = |uri: &str| {
+            Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: None,
+                uri: uri.into(),
+            }))
+        };
+        let mut rows = grid(&["A B"]);
+        rows[0][1].hyperlink = link("https://example.com");
+
+        let locate = |rows: &[Vec<EmuCell>], query: &LocatorQuery| {
+            locate_query(rows, query, &mut |cell, style: &TextStyle| {
+                style
+                    .link
+                    .as_deref()
+                    .is_none_or(|expected| expected == cell.uri().unwrap_or_default())
+            })
+        };
+        let with_link = |link: &str| LocatorQuery {
+            selector: LocatorSelector::Text(TextSelector::new("A B")),
+            occurrence: MatchOccurrence::Any,
+            within: None,
+            direction: LocatorDirection::Within,
+            style: TextStyle {
+                link: Some(link.to_string()),
+                ..TextStyle::default()
+            },
+        };
+
+        assert!(
+            locate(&rows, &with_link("")).unwrap().is_empty(),
+            "the linked space means the run does not link nowhere"
+        );
+        assert!(
+            locate(&rows, &with_link("https://example.com"))
+                .unwrap()
+                .is_empty(),
+            "and the unlinked letters mean it is not all one link either"
+        );
+
+        for cell in &mut rows[0] {
+            cell.hyperlink = link("https://example.com");
+        }
+        assert_eq!(
+            locate(&rows, &with_link("https://example.com"))
+                .unwrap()
+                .len(),
+            1,
+            "every cell linked, blanks included, matches"
+        );
     }
 }
