@@ -243,7 +243,9 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
     } else {
         ("sh", vec!["-c", "printf 'ready\\n'; sleep 2"])
     };
-    session.run(run_options(program, &args)).unwrap();
+    let mut options = run_options(program, &args);
+    options.timeouts.text = Some(1234);
+    session.run(options).unwrap();
 
     session
         .execute(Operation::WaitLocator {
@@ -272,6 +274,13 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
     );
     assert!(details.locator.is_some());
     assert!(details.terminal.is_some());
+    let runtime = details.runtime.as_ref().unwrap();
+    assert_eq!(
+        runtime.session_name.as_deref(),
+        Some("failed-locator-bundle")
+    );
+    assert_eq!(runtime.timeouts.unwrap().text, 1234);
+    assert_eq!(details.operation.timeout_ms, Some(20));
 
     let artifact = error.artifact.as_ref().expect("failure artifact reference");
     let manifest = artifact
@@ -308,7 +317,7 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
     assert!(report.contains("## Terminal state"));
     assert!(report.contains("inspect_locator_stage"));
     let html = std::fs::read_to_string(artifact.report_html.as_ref().unwrap()).unwrap();
-    assert!(html.contains("Cell inspector"));
+    assert!(html.contains("aria-controls=\"cell-panel\""));
     let timeline: serde_json::Value =
         serde_json::from_slice(&std::fs::read(artifact.timeline.as_ref().unwrap()).unwrap())
             .unwrap();

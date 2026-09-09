@@ -25,11 +25,11 @@ pub const MAX_SCREEN_HISTORY_LIMIT: u16 = 50;
 const FAILURE_JSON_LIMIT: usize = 2 * 1024 * 1024;
 const REPORT_LIMIT: usize = 1024 * 1024;
 const TIMELINE_LIMIT: usize = 8 * 1024 * 1024;
-const HTML_LIMIT: usize = 12 * 1024 * 1024;
+const HTML_LIMIT: usize = 128 * 1024 * 1024;
 const SCREEN_TEXT_LIMIT: usize = 1024 * 1024;
 const SCREEN_SVG_LIMIT: usize = 8 * 1024 * 1024;
 pub(crate) const RECORDING_COPY_LIMIT: u64 = 64 * 1024 * 1024;
-const ARTIFACT_TOTAL_LIMIT: u64 = 112 * 1024 * 1024;
+const ARTIFACT_TOTAL_LIMIT: u64 = 256 * 1024 * 1024;
 const MAX_HISTORY_BYTES: usize = 512 * 1024;
 const MAX_CHECKPOINT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CONTEXT_ENTRIES: usize = 16;
@@ -349,6 +349,12 @@ pub struct ProcessDiagnostics {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeDiagnostics {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeouts: Option<crate::api::EffectiveTimeouts>,
     pub tui_test_version: String,
     pub backend: String,
     pub target_os: String,
@@ -1225,7 +1231,8 @@ pub(crate) fn write_failure_artifact(
     }
 
     if options.wants_report() {
-        let generated = report::timeline(inputs.observation).and_then(|timeline| {
+        let generated = (|| -> io::Result<()> {
+            let timeline = report::timeline(inputs.observation)?;
             inputs.details.truncated |= timeline.is_truncated();
             let json = serde_json::to_vec(&timeline)?;
             write_optional_file(
@@ -1249,7 +1256,31 @@ pub(crate) fn write_failure_artifact(
                         .into_owned(),
                 );
             }
-            let html = report::html(inputs.details, &timeline, &files, &reference.errors)?;
+            let markdown = report::markdown(inputs.details, &files);
+            write_optional_file(
+                &directory,
+                "report",
+                "failure.md",
+                markdown.as_bytes(),
+                REPORT_LIMIT as u64,
+                &mut total,
+                &mut files,
+                &mut reference.errors,
+            );
+            if files
+                .last()
+                .is_some_and(|file| file.status == ArtifactFileStatus::Written)
+            {
+                reference.report =
+                    Some(directory.join("failure.md").to_string_lossy().into_owned());
+            }
+            let html = report::html(
+                inputs.details,
+                &timeline,
+                &files,
+                &reference.errors,
+                &directory,
+            )?;
             write_optional_file(
                 &directory,
                 "report_html",
@@ -1271,14 +1302,15 @@ pub(crate) fn write_failure_artifact(
                         .into_owned(),
                 );
             }
-            Ok::<(), serde_json::Error>(())
-        });
+            Ok(())
+        })();
         if let Err(error) = generated {
             reference.errors.push(format!(
                 "failed to generate failure timeline/viewer: {error}"
             ));
             for (kind, path) in [
                 ("timeline", "timeline.json"),
+                ("report", "failure.md"),
                 ("report_html", "failure.html"),
             ] {
                 if !files.iter().any(|file| file.path == path) {
@@ -1292,23 +1324,6 @@ pub(crate) fn write_failure_artifact(
                     });
                 }
             }
-        }
-        let report = report::markdown(inputs.details, &files);
-        write_optional_file(
-            &directory,
-            "report",
-            "failure.md",
-            report.as_bytes(),
-            REPORT_LIMIT as u64,
-            &mut total,
-            &mut files,
-            &mut reference.errors,
-        );
-        if files
-            .last()
-            .is_some_and(|file| file.status == ArtifactFileStatus::Written)
-        {
-            reference.report = Some(directory.join("failure.md").to_string_lossy().into_owned());
         }
     }
 
@@ -1752,6 +1767,9 @@ mod tests {
                 last_command_exit: None,
             },
             runtime: RuntimeDiagnostics {
+                session_name: Some("recording-test".into()),
+                shell: None,
+                timeouts: None,
                 tui_test_version: "test".to_string(),
                 backend: "alacritty".to_string(),
                 target_os: std::env::consts::OS.to_string(),

@@ -42,6 +42,8 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_histo
 
 `artifacts["on_failure"]` is `"bundle"`, `"json"`, `"svg"`, `"text"`, or `"none"`. Bundle mode writes `failure.md` for agents, an offline `failure.html` assertion/frame viewer with clickable cell metadata, `failure.json`, `timeline.json`, `current.txt`, and `current.svg`. Error artifact references expose `report`, `report_html`, and `timeline` paths. Checkpoints and sampled frames are bounded; missing frames are shown explicitly. `include_recording=True` also copies an immutable prefix of the automatic cast for continuous replay. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
 
+`failure.html` can be distributed alone: its Attachments pane embeds the images, Markdown, structured evidence and included recording for offline preview/download. The trace layout shows expected/observed values alongside the terminal and labels the session, emulator, effective timeout defaults and failing assertion timeout. The embedded manifest snapshot excludes the HTML's own hash; the disk manifest includes it.
+
 #### Properties
 
 | Property | Type |

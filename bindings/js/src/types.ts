@@ -333,6 +333,9 @@ export interface FailureProcessDetails {
 }
 
 export interface FailureRuntimeDetails {
+  readonly session_name?: string;
+  readonly shell?: string;
+  readonly timeouts?: Readonly<EffectiveTimeouts>;
   readonly tui_test_version: string;
   readonly backend: string;
   readonly target_os: string;

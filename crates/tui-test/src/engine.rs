@@ -629,7 +629,10 @@ impl Engine {
         if let Some(observation) = &observation {
             details.terminal = Some(observation.terminal());
             details.process = Some(observation.process.clone());
-            details.runtime = Some(observation.runtime.clone());
+            details.runtime = Some(RuntimeDiagnostics {
+                session_name: Some(self.name.clone()),
+                ..observation.runtime.clone()
+            });
             if observation.process.cancelled {
                 details.reason = FailureReason::Cancelled;
             } else if observation.process.exit_code.is_some() {
@@ -1115,6 +1118,9 @@ fn capture_failure_observation_locked(
         last_command_exit: state.tracker.last_exit(),
     };
     let runtime = RuntimeDiagnostics {
+        session_name: None,
+        shell: session.shell.map(|shell| shell.as_str().to_string()),
+        timeouts: Some(effective_timeouts(session)),
         tui_test_version: env!("CARGO_PKG_VERSION").to_string(),
         backend: session.backend.as_str().to_string(),
         target_os: std::env::consts::OS.to_string(),

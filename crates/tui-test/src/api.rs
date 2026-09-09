@@ -805,7 +805,7 @@ pub struct TextMatch {
     pub spans: Vec<TextSpan>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EffectiveTimeouts {
     pub text: u64,
     pub idle: u64,

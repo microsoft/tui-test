@@ -107,4 +107,4 @@ const terminal = new TuiTest("test", {
 });
 ```
 
-Agents should read `failure.md` first and use `failure.json` / `timeline.json` for exact structured evidence. Users can open `failure.html` directly from disk, select assertion checkpoints, step through retained frames, and click cells for style and mismatch metadata. The bundle also includes the pinned terminal text/SVG and the cast when explicitly requested. Review terminal evidence before uploading it.
+Agents should read `failure.md` first and use `failure.json` / `timeline.json` for exact structured evidence. Users can open `failure.html` directly from disk, select actions or filmstrip frames, read explicit expected/observed values, and click cells for style and mismatch metadata. The HTML embeds the available evidence for offline preview/download, including the pinned terminal text/SVG and an explicitly requested cast; it can be distributed alone. Review terminal evidence before uploading it.
