@@ -84,8 +84,11 @@ class Cell:
     #: The OSC 8 URI this cell links to; ``""`` when it links nowhere.
     link: str = ""
     #: The link's ``id=`` parameter; ``""`` when the sequence carried none.
-    #: Identifies a link across a wrap rather than describing where it points,
-    #: and the ghostty backend cannot report it.
+    #: Identifies a link across a wrap rather than describing where it points:
+    #: a program that wraps its own links tags each run with a shared ``id=``.
+    #:
+    #: Backend-dependent. Ghostty reports a link's URI and nothing else, so
+    #: this is always empty there and no locator matches on it.
     link_id: str = ""
 
 

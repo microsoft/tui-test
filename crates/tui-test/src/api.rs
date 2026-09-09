@@ -852,8 +852,15 @@ pub struct Cell {
     /// The link's `id=` parameter, empty when the sequence carried none.
     ///
     /// Separate from `link` because it identifies a link across a wrap rather
-    /// than describing where the link points, and because the ghostty backend
-    /// can report the URI without it.
+    /// than describing where the link points: a program that wraps its own
+    /// links tags each run with a shared `id=` so a terminal can treat them as
+    /// one.
+    ///
+    /// Backend-dependent, unlike everything else on a cell. Ghostty's FFI
+    /// exposes a link's URI and nothing else, so this is always empty there
+    /// and "no `id=` was sent" cannot be told apart from "this backend cannot
+    /// see it". An assertion built on it will not mean the same thing on every
+    /// backend, which is why no locator matches on it.
     pub link_id: String,
 }
 
