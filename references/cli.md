@@ -204,10 +204,11 @@ tui-test expect colors --foreground 7 --cursor '#ff0000'
 tui-test expect colors --palette '1=#00ff00' --palette '200=#123456'
 ```
 
-Every color takes the same spellings `--fg` does — a hex value or an ANSI
-index — except `default`, which has nothing to refer to here since these
-slots *are* the defaults. An index is resolved against the session's own
-palette, so `--background 0` means the black this profile paints.
+Every color takes the same spellings `--fg` does — a hex value (`#rrggbb`),
+an RGB triple (`r,g,b`), or an ANSI index — except `default`, which has
+nothing to refer to here since these slots *are* the defaults. An index is
+resolved against the session's own palette, so `--background 0` means the
+black this profile paints.
 
 `expect colors` checks only the slots you name, and `--palette` is repeatable.
 All of them are matched together, so a program that recolors several at once

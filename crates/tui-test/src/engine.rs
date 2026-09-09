@@ -1196,15 +1196,18 @@ fn parse_mode(name: &str) -> Result<TerminalMode, TuiTestError> {
 /// (`OSC 4`) are reported only where they differ from the profile, so the
 /// answer names what a program changed instead of all 256 slots.
 fn colors_of(emu: &dyn Emulator, profile: &crate::profile::Profile) -> crate::api::TerminalColors {
-    use crate::profile::ColorSlot;
+    let colors = emu.colors();
     crate::api::TerminalColors {
-        foreground: emu.color(ColorSlot::Foreground).to_hex(),
-        background: emu.color(ColorSlot::Background).to_hex(),
-        cursor: emu.color(ColorSlot::Cursor).to_hex(),
-        palette: (0..=u8::MAX)
-            .filter_map(|index| {
-                let now = emu.color(ColorSlot::Indexed(index));
-                (now != profile.colors.rgb(index)).then(|| (index, now.to_hex()))
+        foreground: colors.foreground.to_hex(),
+        background: colors.background.to_hex(),
+        cursor: colors.cursor.to_hex(),
+        palette: colors
+            .palette
+            .iter()
+            .enumerate()
+            .filter_map(|(index, now)| {
+                let index = index as u8;
+                (*now != profile.colors.rgb(index)).then(|| (index, now.to_hex()))
             })
             .collect(),
     }
@@ -1223,7 +1226,14 @@ fn resolve_expected_color(
 ) -> Result<crate::profile::Rgb, TuiTestError> {
     use crate::assert::color::Expected;
     use crate::profile::ColorSlot;
-    match Expected::parse(spec).map_err(|error| TuiTestError::usage(error.to_string()))? {
+    // Not the parse error itself: it offers `default` as a spelling, which the
+    // next arm rejects, so a typo would be answered with advice that fails.
+    let invalid = || {
+        TuiTestError::usage(format!(
+            "terminal color must be ansi256 (0-255), hex (#rrggbb), or rgb (r,g,b) (got: {spec:?})"
+        ))
+    };
+    match Expected::parse(spec).map_err(|_| invalid())? {
         Expected::Default => Err(TuiTestError::usage(
             "'default' has no meaning for a terminal color; name a hex value or an ANSI index"
                 .to_string(),
@@ -1309,19 +1319,32 @@ fn expect_colors(
         return Ok(());
     }
     let ([fg, bg, cur], entries) = last.expect("the colors are read at least once");
-    // Report every slot that was asked about, so a failure says which one
-    // moved rather than only that something did.
-    let mut seen = format!(
-        "foreground {}, background {}, cursor {}",
-        fg.to_hex(),
-        bg.to_hex(),
-        cur.to_hex()
-    );
-    for (index, color) in entries {
-        seen.push_str(&format!(", palette {index} {}", color.to_hex()));
+    // Only the slots that were asked about: naming a foreground the caller
+    // never mentioned invites reading it as the thing that failed.
+    let mut parts = Vec::new();
+    for (label, wanted, actual) in [
+        ("foreground", wanted[0], fg),
+        ("background", wanted[1], bg),
+        ("cursor", wanted[2], cur),
+    ] {
+        if let Some(wanted) = wanted {
+            parts.push(format!(
+                "{label} {} (wanted {})",
+                actual.to_hex(),
+                wanted.to_hex()
+            ));
+        }
+    }
+    for ((index, wanted), (_, actual)) in wanted_palette.iter().zip(&entries) {
+        parts.push(format!(
+            "palette {index} {} (wanted {})",
+            actual.to_hex(),
+            wanted.to_hex()
+        ));
     }
     Err(TuiTestError::assertion(format!(
-        "colors did not match within {timeout_ms}ms; {seen}"
+        "colors did not match within {timeout_ms}ms; {}",
+        parts.join(", ")
     )))
 }
 
