@@ -422,7 +422,12 @@ impl Emulator for RioEmu {
     }
 
     fn cursor_shape(&self) -> CursorShape {
-        match self.term.cursor().content {
+        // `Term::cursor()` masks the shape to `Hidden` whenever the cursor is
+        // not drawn — hidden by `DECTCEM`, or scrolled out of view — which
+        // loses the shape the child actually asked for. `cursor_shape` is the
+        // unmasked field it derives that from, and whether the cursor is drawn
+        // is already reported by `TerminalMode::CursorVisible`.
+        match self.term.cursor_shape {
             RioCursorShape::Underline => CursorShape::Underline,
             RioCursorShape::Beam => CursorShape::Bar,
             RioCursorShape::Block | RioCursorShape::Hidden => CursorShape::Block,
@@ -446,9 +451,10 @@ impl Emulator for RioEmu {
 mod tests {
     use super::*;
 
-    crate::emulator_conformance_tests!(|cols, rows, profile| {
-        Box::new(RioEmu::new(cols, rows, profile))
-    });
+    crate::emulator_conformance_tests!(
+        |cols, rows, profile| { Box::new(RioEmu::new(cols, rows, profile)) },
+        &[crate::terminal::conformance::Divergence::NoLegacyAlternateScreen]
+    );
 
     #[test]
     fn multiple_bells_in_one_chunk_are_counted_individually() {

@@ -55,6 +55,18 @@ pub enum Divergence {
     /// bracketed paste, so this is the terminal's own state and not the
     /// mapping onto it.
     RisDoesNotResetCursorVisibility,
+
+    /// `CSI ?47 h` and `CSI ?1047 h` are ignored, so only `CSI ?1049 h`
+    /// reaches the alternate screen.
+    ///
+    /// The two older sequences predate the cursor save that `?1049` bundles
+    /// in. A backend that drops them stays on the primary screen and reports
+    /// `alternate_screen` false, which is an honest account of what it did —
+    /// the divergence is that it did nothing at all.
+    ///
+    /// Nothing in practice depends on it: every terminal here honors `?1049`,
+    /// and that is what a full-screen program sends.
+    NoLegacyAlternateScreen,
 }
 
 /// Generates the conformance tests for one backend. `$make` builds a boxed
@@ -1176,6 +1188,35 @@ macro_rules! emulator_conformance_tests {
             }
         }
 
+        /// Hiding the cursor does not change its shape.
+        ///
+        /// `DECTCEM` and `DECSCUSR` are separate: one says whether the cursor
+        /// is drawn, the other says what it looks like when it is. A program
+        /// that hides the cursor for a redraw and shows it again has not asked
+        /// for a different shape, so the shape it chose has to survive.
+        #[test]
+        fn conformance_hiding_the_cursor_keeps_its_shape() {
+            use $crate::terminal::emu::CursorShape;
+            let mut e = conformance_emu(10, 3, 100);
+            e.process(b"\x1b[5 q");
+            assert_eq!(e.cursor_shape(), CursorShape::Bar);
+
+            e.process(b"\x1b[?25l");
+            assert!(!e.mode($crate::terminal::emu::TerminalMode::CursorVisible));
+            assert_eq!(
+                e.cursor_shape(),
+                CursorShape::Bar,
+                "a hidden cursor still has the shape it was given"
+            );
+
+            e.process(b"\x1b[?25h");
+            assert_eq!(
+                e.cursor_shape(),
+                CursorShape::Bar,
+                "and showing it again does not reset the shape"
+            );
+        }
+
         /// A color query is answered with the session's configured color.
         ///
         /// Programs query the background to decide whether they are on a light
@@ -1630,6 +1671,48 @@ macro_rules! emulator_conformance_tests {
                 let second = rows[0][1].hyperlink.clone().expect("B is linked");
                 assert_eq!(first.id.as_deref(), Some("one"));
                 assert_eq!(second.id.as_deref(), Some("two"));
+            }
+        }
+
+        /// Every way onto the alternate screen is reported as being on it.
+        ///
+        /// `?1049` is what a full-screen program sends, and every backend
+        /// honors it. `?47` and `?1047` are the older spellings, without the
+        /// cursor save `?1049` bundles in; alacritty and rio ignore them
+        /// outright.
+        ///
+        /// What must hold everywhere is that the flag and the screen agree: a
+        /// backend that switches buffers has to say so. Ghostty tracks each
+        /// spelling under its own mode, so reading only `?1049` reported the
+        /// primary screen while the alternate one was showing.
+        #[test]
+        fn conformance_alt_screen_flag_follows_the_screen() {
+            use $crate::terminal::emu::TerminalMode;
+            let legacy_ignored = CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::NoLegacyAlternateScreen);
+
+            for (sequence, always) in [
+                (&b"\x1b[?47h"[..], false),
+                (b"\x1b[?1047h", false),
+                (b"\x1b[?1049h", true),
+            ] {
+                let mut e = conformance_emu(10, 3, 100);
+                e.process(b"primary");
+                e.process(sequence);
+                let text = conformance_text(&e.viewable_rows());
+                let showing_alt = !text.iter().any(|r| r.contains("primary"));
+                let name = String::from_utf8_lossy(sequence).to_string();
+
+                assert_eq!(
+                    e.mode(TerminalMode::AlternateScreen),
+                    showing_alt,
+                    "{name}: alternate_screen must agree with the visible screen"
+                );
+                if always || !legacy_ignored {
+                    assert!(showing_alt, "{name} reaches the alternate screen");
+                } else {
+                    assert!(!showing_alt, "{name} is ignored by this backend");
+                }
             }
         }
 
