@@ -345,12 +345,15 @@ impl GhosttyCore {
 
         // A key that produces text has to say so: ghostty encodes nothing at
         // all for a text-bearing key with no `utf8` set, and needs it for the
-        // associated-text and alternate-key parts of the Kitty protocol. A
-        // release produces no text, only the key that was let go.
-        if press.event != KeyEventKind::Release {
-            if let Some(text) = press.text.as_deref() {
-                event.set_utf8(Some(text));
-            }
+        // associated-text and alternate-key parts of the Kitty protocol.
+        //
+        // This is the text the key produces on the current layout rather than
+        // anything the event does with it, so it is set for a release too:
+        // ghostty derives the shifted alternate key from it, and withholding
+        // it made `Shift+a` release as `CSI 97;2:3u` instead of the
+        // `CSI 97:65;2:3u` its press had already reported.
+        if let Some(text) = press.text.as_deref() {
+            event.set_utf8(Some(text));
         }
 
         let mut encoder = Encoder::new().context("creating key encoder")?;

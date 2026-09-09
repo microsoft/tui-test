@@ -439,6 +439,31 @@ mod tests {
         }
     }
 
+    /// The text a key produces belongs to the key and the layout, not to the
+    /// press, so it is handed over for a release too: ghostty derives the
+    /// shifted alternate key from it, and withholding it made `Shift+a`
+    /// release as `CSI 97;2:3u` after its press had reported `CSI 97:65;2u`.
+    #[test]
+    fn a_release_still_reports_the_shifted_alternate_key() {
+        let mut emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        emu.process(b"\x1b[>15u");
+        for (token, down, up) in [
+            ("Shift+a", &b"\x1b[97:65;2u"[..], &b"\x1b[97:65;2:3u"[..]),
+            ("Shift+1", &b"\x1b[49:33;2u"[..], &b"\x1b[49:33;2:3u"[..]),
+        ] {
+            for (action, want) in [(KeyAction::Down, down), (KeyAction::Up, up)] {
+                let presses =
+                    crate::input::keys::token_to_presses(token, action).expect("valid token");
+                let got: Option<Vec<u8>> = presses
+                    .iter()
+                    .map(|p| emu.encode_key(p))
+                    .collect::<Option<Vec<_>>>()
+                    .map(|parts| parts.concat());
+                assert_eq!(got.as_deref(), Some(want), "{token} {action:?}");
+            }
+        }
+    }
+
     /// Legacy mode has no codepoint form, so the same keys stay bytes.
     #[test]
     fn a_named_key_keeps_its_legacy_bytes() {
