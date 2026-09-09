@@ -669,6 +669,17 @@ mod tests {
         "Alt+z",
         "Alt+0",
         "Alt+9",
+        // Space is a named key that still sits on a codepoint, and the one
+        // whose text is itself printable, so it is where "send the text" and
+        // "send an escape code" part company.
+        "Space",
+        "Shift+Space",
+        "Ctrl+Space",
+        "Alt+Space",
+        // Super is in ghostty's bitmask but has no legacy form, so ghostty
+        // declines it there and the oracle compares only the Kitty modes.
+        "Super+a",
+        "Ctrl+Super+a",
     ];
 
     /// Terminal states to compare under, as the bytes that set them.
