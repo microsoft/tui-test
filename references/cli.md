@@ -36,7 +36,9 @@ Common options:
 | `--match any\|unique\|first\|last` | Select matches. |
 | `--nth N` | Select a zero-based match. |
 
-Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, and `--blink`.
+Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, `--blink`, and `--link`.
+
+`--link` matches a cell's OSC 8 target: `--link https://example.com` requires that link, and `--link ""` requires a cell that links nowhere.
 
 `click text` also accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks`, and `--timeout`.
 
