@@ -719,32 +719,80 @@ mod tests {
     /// reporting is on; kitty and xterm omit them. As with the event type,
     /// this normalizes a spelling rather than a meaning.
     fn normalize_default_params(bytes: &[u8]) -> Vec<u8> {
-        let Some(rest) = bytes.strip_prefix(b"\x1b[1;1") else {
-            return bytes.to_vec();
-        };
-        // Only when what remains is the final byte, so a longer parameter
-        // list that merely starts `1;1` is left alone.
-        if rest.len() == 1 && (rest[0].is_ascii_alphabetic() || rest[0] == b'~') {
-            let mut out = b"\x1b[".to_vec();
-            out.extend_from_slice(rest);
-            return out;
+        const DEFAULT_PARAMS: &[u8] = b"\x1b[1;1";
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            // Rewritten wherever it appears rather than only at the start,
+            // since one action can encode as more than one sequence.
+            //
+            // Only when the final byte follows immediately, so a longer
+            // parameter list that merely starts `1;1` is left alone.
+            let is_default_params = bytes[i..].starts_with(DEFAULT_PARAMS)
+                && bytes
+                    .get(i + DEFAULT_PARAMS.len())
+                    .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'~');
+            if is_default_params {
+                out.extend_from_slice(b"\x1b[");
+                i += DEFAULT_PARAMS.len();
+                continue;
+            }
+            out.push(bytes[i]);
+            i += 1;
         }
-        bytes.to_vec()
+        out
     }
 
     /// Events where the two encoders genuinely disagree, with the reason.
     ///
     /// Kept as a named list rather than dropped from the matrix, so the
-    /// disagreement stays visible and a change to either side still shows up
-    /// as this list going stale.
-    const ORACLE_KNOWN_DIVERGENCES: &[(&str, &str, &str)] = &[(
-        "kitty report all",
-        "Space",
-        "ghostty sends the text ` `, the shared encoder sends `CSI 32u`. \
-         Report-all-keys means what it says: the Kitty spec has text-producing \
-         keys report as escape codes under this flag, so the shared encoder \
-         looks right and this is worth raising upstream.",
-    )];
+    /// disagreement stays visible and a change to either side shows up as this
+    /// list going stale rather than as silence.
+    ///
+    /// An entry has to be a disagreement between the two implementations, not
+    /// a gap on this side. The list started out holding `Space`, which turned
+    /// out to be this crate failing to hand ghostty the key's codepoint.
+    const ORACLE_KNOWN_DIVERGENCES: &[(&str, &str, &[KeyAction], &str)] = &[
+        (
+            "kitty events",
+            "Alt+Enter",
+            RELEASE_BEARING_ACTIONS,
+            SAFETY_KEY_RELEASE_DIVERGENCE,
+        ),
+        (
+            "kitty events",
+            "Alt+Backspace",
+            RELEASE_BEARING_ACTIONS,
+            SAFETY_KEY_RELEASE_DIVERGENCE,
+        ),
+        (
+            "kitty events",
+            "Shift+Tab",
+            RELEASE_BEARING_ACTIONS,
+            SAFETY_KEY_RELEASE_DIVERGENCE,
+        ),
+    ];
+
+    /// The two actions that carry a release, and so the two a disagreement
+    /// about releases can show up in.
+    const RELEASE_BEARING_ACTIONS: &[KeyAction] = &[KeyAction::Press, KeyAction::Up];
+
+    /// Enter, Tab and Backspace report no release until report-all is set, so
+    /// that a program leaving event reporting on cannot stop the user typing
+    /// `reset` at a shell prompt. The two implementations read the exemption
+    /// differently once a modifier is held.
+    ///
+    /// Kitty gates it on the chord: `key_encoding.c` wraps both exemption
+    /// blocks in `if (!ev->mods.value)`, so `shift+tab` still releases as
+    /// `CSI 9;2:3u`. Ghostty gates it on the key: `key_encode.zig` switches on
+    /// `event.key` alone with no modifier test, so nothing is sent.
+    ///
+    /// The shared encoder follows kitty, whose author wrote the spec, and the
+    /// spec's own wording ("the Enter, Tab and Backspace keys") is short of
+    /// deciding it. Worth raising upstream rather than papering over.
+    const SAFETY_KEY_RELEASE_DIVERGENCE: &str =
+        "kitty exempts only the unmodified key from release reporting, ghostty \
+         exempts the key whatever the modifiers";
 
     /// Hold the shared encoder against ghostty's, which is a reference
     /// implementation maintained by people who work on nothing else.
@@ -756,6 +804,14 @@ mod tests {
     ///
     /// It has already paid for itself: it caught `key press A` sending `a`,
     /// `Space` encoding to nothing, and `Alt+a` losing its modifier.
+    ///
+    /// Every action is compared, including `Press`, which is a key down and
+    /// its release and so the only one that puts two events side by side.
+    ///
+    /// An earlier version compared the key down alone. It recorded a `Space`
+    /// disagreement as a divergence to raise upstream when in fact this side
+    /// had failed to hand ghostty the key's codepoint, and the releases it was
+    /// not looking at disagreed too. Widening it found three more bugs.
     #[test]
     fn the_shared_encoder_agrees_with_ghostty() {
         use crate::api::KeyAction;
@@ -771,40 +827,50 @@ mod tests {
                 cursor_key_application: emu.cursor_key_application(),
             };
             for token in ORACLE_CASES {
-                let presses = keys::token_to_presses(token, KeyAction::Down).expect("valid token");
-                let Some(native) = presses
-                    .iter()
-                    .map(|press| emu.encode_key(press))
-                    .collect::<Option<Vec<_>>>()
-                else {
-                    continue;
-                };
-                compared += 1;
-                let native =
-                    normalize_default_params(&normalize_default_event_type(&native.concat()));
-                let shared = keys::token_to_seq_for_action_with_mode(token, KeyAction::Down, modes)
-                    .expect("valid token");
-                let known = ORACLE_KNOWN_DIVERGENCES
-                    .iter()
-                    .any(|(mode, case, _)| mode == mode_name && case == token);
-                if known {
-                    assert_ne!(
-                        native,
-                        shared.as_bytes(),
-                        "{mode_name} {token} now agrees; drop it from \
-                         ORACLE_KNOWN_DIVERGENCES"
-                    );
-                    continue;
-                }
-                if native != shared.as_bytes() {
-                    disagreements.push(format!(
-                        "  {mode_name:<24} {token:<12} ghostty {:<18?} shared {shared:?}",
-                        String::from_utf8_lossy(&native)
-                    ));
+                for action in [
+                    KeyAction::Press,
+                    KeyAction::Down,
+                    KeyAction::Repeat,
+                    KeyAction::Up,
+                ] {
+                    let presses = keys::token_to_presses(token, action).expect("valid token");
+                    let Some(native) = presses
+                        .iter()
+                        .map(|press| emu.encode_key(press))
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        continue;
+                    };
+                    compared += 1;
+                    let native =
+                        normalize_default_params(&normalize_default_event_type(&native.concat()));
+                    let shared = keys::token_to_seq_for_action_with_mode(token, action, modes)
+                        .expect("valid token");
+                    let known = ORACLE_KNOWN_DIVERGENCES
+                        .iter()
+                        .any(|(mode, case, kinds, _)| {
+                            mode == mode_name && case == token && kinds.contains(&action)
+                        });
+                    if known {
+                        assert_ne!(
+                            native,
+                            shared.as_bytes(),
+                            "{mode_name} {token} {action:?} now agrees; drop it from \
+                             ORACLE_KNOWN_DIVERGENCES"
+                        );
+                        continue;
+                    }
+                    if native != shared.as_bytes() {
+                        disagreements.push(format!(
+                            "  {mode_name:<24} {token:<12} {action:<6?} ghostty {:<18?} shared \
+                             {shared:?}",
+                            String::from_utf8_lossy(&native)
+                        ));
+                    }
                 }
             }
         }
-        assert!(compared > 400, "only {compared} events were comparable");
+        assert!(compared > 1500, "only {compared} events were comparable");
         assert!(
             disagreements.is_empty(),
             "the shared encoder disagrees with ghostty on {} of {compared} events:\n{}",
