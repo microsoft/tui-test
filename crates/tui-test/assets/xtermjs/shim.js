@@ -357,11 +357,24 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     },
 
     // A color a program set, or -1 when it has not touched this slot and the
-    // profile still decides. Kept as one call per slot: only a handful are
-    // ever read, and a whole-table crossing would cost more than it saves.
+    // profile still decides. One call per slot, for reading a handful.
     colorOverride: function (slot) {
       var v = overrides[slot];
       return v === undefined ? -1 : v;
+    },
+
+    // Every slot a program has changed, flattened as [slot, value, ...].
+    //
+    // Reading the whole table one slot at a time is 259 crossings; this is
+    // one, and it stays small because it carries only what was actually set.
+    colorOverrides: function () {
+      var out = [];
+      for (var slot in overrides) {
+        if (Object.prototype.hasOwnProperty.call(overrides, slot)) {
+          out.push(Number(slot), overrides[slot]);
+        }
+      }
+      return out;
     },
 
     // Row span of the visible screen; `full` prepends the scrollback.

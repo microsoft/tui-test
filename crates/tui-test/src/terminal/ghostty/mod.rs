@@ -17,7 +17,8 @@ use crate::input::keys::KeyPress;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::{
-    ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode, TerminalMode,
+    ClipboardType, ClipboardValidator, ColorTable, CursorShape, Emulator, KeyboardMode,
+    TerminalMode,
 };
 
 use self::core::GhosttyCore;
@@ -327,6 +328,10 @@ impl Emulator for GhosttyEmu {
 
     fn color(&self, slot: ColorSlot) -> Rgb {
         self.call_result("reading color", move |core| core.color(slot))
+    }
+
+    fn colors(&self) -> ColorTable {
+        self.call_result("reading colors", move |core| core.colors())
     }
 }
 
