@@ -188,6 +188,16 @@ test("playback visits intermediate frames and stops at the next retained asserti
   assert.equal((await frame()).operation.sequence, 5);
 });
 
+test("Fit keeps every terminal row visible when the trace pane becomes shorter", async () => {
+  await page.setViewportSize({ width: 1440, height: 720 });
+  await page.waitForFunction(() => {
+    const viewport = document.getElementById("viewport");
+    return viewport.scrollHeight <= viewport.clientHeight && viewport.scrollWidth <= viewport.clientWidth;
+  });
+  const cell = await page.locator("#terminal").boundingBox();
+  assert.ok(cell.height < 105, "the five-row terminal must scale down, not clip its bottom row");
+});
+
 test("standalone HTML previews and downloads every embedded file byte-for-byte", async () => {
   await page.locator("#attachments-tab").click();
   for (const name of ["current.txt", "current.svg", "failure.md", "timeline.json", "session.cast"]) {

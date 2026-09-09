@@ -207,8 +207,16 @@
   function zoom() {
     const frame = frames[index];
     if (!frame) return;
-    $("viewport").classList.toggle("fit", $("zoom").value === "fit");
-    $("terminal").style.width = `${frame.size.cols * geometry.cell_width * ($("zoom").value === "fit" ? 1 : Number($("zoom").value))}px`;
+    const viewport = $("viewport");
+    const fit = $("zoom").value === "fit";
+    const width = frame.size.cols * geometry.cell_width;
+    const height = frame.size.rows * geometry.cell_height;
+    const padding = getComputedStyle(viewport);
+    const availableWidth = viewport.clientWidth - parseFloat(padding.paddingLeft) - parseFloat(padding.paddingRight);
+    const availableHeight = viewport.clientHeight - parseFloat(padding.paddingTop) - parseFloat(padding.paddingBottom);
+    const scale = fit ? Math.min(1, Math.max(1, availableWidth) / width, Math.max(1, availableHeight) / height) : Number($("zoom").value);
+    viewport.classList.toggle("fit", fit);
+    $("terminal").style.width = `${width * scale}px`;
   }
 
   function showFrame(next, op = null, missingSequence = null) {
@@ -391,6 +399,7 @@
   $("assertions-only").addEventListener("change", renderActions);
   $("action-filter").addEventListener("input", renderActions);
   $("zoom").addEventListener("change", zoom);
+  new ResizeObserver(zoom).observe($("viewport"));
   for (const [id, delta] of [["previous-point", -1], ["next-point", 1]]) $(id).addEventListener("click", () => {
     const visible = visibleOperations();
     const position = visible.indexOf(selectedOperation);
