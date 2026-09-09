@@ -291,10 +291,18 @@ impl GhosttyCore {
     /// `Ok(None)` means ghostty cannot express this event and the caller
     /// should fall back rather than send something wrong.
     pub(super) fn encode_key(&self, press: &KeyPress) -> Result<Option<Vec<u8>>> {
-        // Ghostty's modifier bitmask has no Hyper or Meta, which the Kitty
-        // protocol does define. An event using one cannot be handed over
-        // without silently dropping the modifier.
-        if press.mods.has_kitty_only_modifier() {
+        // Ghostty's modifier bitmask has Ctrl, Alt, Shift and Super, but no
+        // Hyper or Meta, which the Kitty protocol does define. An event using
+        // one of those can never be handed over without dropping it.
+        if press.mods.hyper || press.mods.meta {
+            return Ok(None);
+        }
+        // Super is representable and encodes correctly in any Kitty mode, but
+        // the legacy encoding has no form that carries it: with no flags set
+        // ghostty answers `super+a` with nothing at all and `ctrl+super+a`
+        // with `CSI 97;5u`, which is `ctrl+a` with the Super quietly gone.
+        // Declining hands those to the shared encoder, which does carry it.
+        if press.mods.super_key && self.keyboard_mode()?.is_empty() {
             return Ok(None);
         }
         let Some(key) = ghostty_key(&press.key) else {

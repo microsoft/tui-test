@@ -464,6 +464,71 @@ mod tests {
         }
     }
 
+    /// Super is a modifier ghostty can carry, but only in a Kitty mode.
+    ///
+    /// The bitmask has Ctrl, Alt, Shift and Super, so a Kitty encoding reports
+    /// it. The legacy encoding has no form for it and drops it silently:
+    /// `super+a` came back empty and `ctrl+super+a` as `CSI 97;5u`, which is
+    /// `ctrl+a` with the Super gone. Declining there sends it to the shared
+    /// encoder, which carries it.
+    #[test]
+    fn super_encodes_in_a_kitty_mode_and_declines_in_legacy() {
+        let legacy = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        for token in ["super+a", "ctrl+super+a"] {
+            assert_eq!(
+                legacy.encode_key(&press(token)),
+                None,
+                "{token} has no legacy form that keeps Super"
+            );
+        }
+
+        let mut emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+        emu.process(b"\x1b[>1u");
+        for (token, want) in [
+            ("super+a", &b"\x1b[97;9u"[..]),
+            ("ctrl+super+a", &b"\x1b[97;13u"[..]),
+        ] {
+            assert_eq!(
+                emu.encode_key(&press(token)).as_deref(),
+                Some(want),
+                "{token} reports Super"
+            );
+        }
+    }
+
+    /// A key that produces text sends the text until keys are reported as
+    /// escape codes, however it is modified.
+    ///
+    /// `Shift+Space` looks like it should be `CSI 32;2u` everywhere, but kitty
+    /// returns text for any press that carries some unless the report-all-keys
+    /// flag is set (`send_text_standalone = !report_text` in `key_encoding.c`),
+    /// so a space is right until then. The release has no text and is an
+    /// escape code as soon as event types are reported.
+    #[test]
+    fn shift_space_sends_text_until_keys_are_escape_codes() {
+        for (flags, down, up) in [
+            (0u8, &b" "[..], &b""[..]),
+            (1, b" ", b""),
+            (3, b" ", b"\x1b[32;2:3u"),
+            (15, b"\x1b[32;2u", b"\x1b[32;2:3u"),
+        ] {
+            let mut emu = GhosttyEmu::new(10, 2, &Profile::default()).unwrap();
+            if flags > 0 {
+                emu.process(format!("\x1b[>{flags}u").as_bytes());
+            }
+            for (action, want) in [(KeyAction::Down, down), (KeyAction::Up, up)] {
+                let presses = crate::input::keys::token_to_presses("shift+space", action)
+                    .expect("valid token");
+                let got: Option<Vec<u8>> = presses
+                    .iter()
+                    .map(|p| emu.encode_key(p))
+                    .collect::<Option<Vec<_>>>()
+                    .map(|parts| parts.concat());
+                assert_eq!(got.as_deref(), Some(want), "flags {flags} {action:?}");
+            }
+        }
+    }
+
     /// Legacy mode has no codepoint form, so the same keys stay bytes.
     #[test]
     fn a_named_key_keeps_its_legacy_bytes() {
