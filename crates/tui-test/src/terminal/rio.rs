@@ -9,7 +9,7 @@ use rio_vt::config::colors::term::COUNT as COLOR_COUNT;
 use rio_vt::config::colors::{AnsiColor, ColorRgb, NamedColor as RioNamedColor};
 use rio_vt::crosswords::grid::ExtrasTable;
 use rio_vt::crosswords::pos::Line;
-use rio_vt::crosswords::square::{ContentTag, Square, Wide};
+use rio_vt::crosswords::square::{ContentTag, Hyperlink as RioHyperlink, Square, Wide};
 use rio_vt::crosswords::style::{Style, StyleFlags, StyleSet};
 use rio_vt::crosswords::{Crosswords, CrosswordsSize, Mode};
 use rio_vt::event::{EventListener, RioEvent, WindowId};
@@ -17,7 +17,7 @@ use rio_vt::performer::handler::Processor;
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
+use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
 use crate::terminal::emu::{
     Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
 };
@@ -53,6 +53,18 @@ fn underline_from_rio(flags: StyleFlags) -> UnderlineStyle {
     } else {
         UnderlineStyle::None
     }
+}
+
+/// rio invents an id for a link that arrived without one, appending `_rio` to
+/// a process-wide counter, exactly as alacritty does with `_alacritty`. It is
+/// dropped for the same reason: it is not what the child sent, it varies with
+/// parse order, and no other backend produces it.
+fn hyperlink_from_rio(link: &RioHyperlink) -> Arc<Hyperlink> {
+    let id = link.id();
+    Arc::new(Hyperlink {
+        id: (!id.ends_with("_rio")).then(|| id.to_compact_string()),
+        uri: link.uri().to_compact_string(),
+    })
 }
 
 fn styled_cell(square: Square, style: Style, extras: &ExtrasTable) -> EmuCell {
@@ -94,6 +106,11 @@ fn styled_cell(square: Square, style: Style, extras: &ExtrasTable) -> EmuCell {
         underline: underline_from_rio(style.flags),
         underline_color: style.underline_color.and_then(color_from_rio),
         attrs,
+        hyperlink: square
+            .extras_id()
+            .and_then(|id| extras.get(id))
+            .and_then(|extra| extra.hyperlink.as_ref())
+            .map(hyperlink_from_rio),
     }
 }
 

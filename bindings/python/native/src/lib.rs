@@ -1898,6 +1898,8 @@ fn cell_to_py(py: Python<'_>, cell: Cell) -> PyResult<Bound<'_, PyDict>> {
     value.set_item("underline", cell.underline)?;
     value.set_item("underline_style", cell.underline_style)?;
     set_color(&value, "underline_color", cell.underline_color)?;
+    value.set_item("link", cell.link)?;
+    value.set_item("link_id", cell.link_id)?;
     Ok(value)
 }
 

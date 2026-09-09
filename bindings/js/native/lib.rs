@@ -322,6 +322,11 @@ pub struct Cell {
     pub underline_style: UnderlineStyle,
     #[napi(js_name = "underline_color")]
     pub underline_color: Color,
+    /// The OSC 8 URI this cell links to, empty when it links nowhere.
+    pub link: String,
+    /// The link's `id=` parameter, empty when the sequence carried none.
+    #[napi(js_name = "link_id")]
+    pub link_id: String,
 }
 
 impl TryFrom<CoreCell> for Cell {
@@ -344,6 +349,8 @@ impl TryFrom<CoreCell> for Cell {
             underline: value.underline,
             underline_style: underline_style(value.underline_style)?,
             underline_color: color(value.underline_color),
+            link: value.link,
+            link_id: value.link_id,
         })
     }
 }

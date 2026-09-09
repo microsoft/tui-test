@@ -91,6 +91,10 @@ export interface Cell {
   underline: boolean
   underline_style: UnderlineStyle
   underline_color: Color
+  /** The OSC 8 URI this cell links to, empty when it links nowhere. */
+  link: string
+  /** The link's `id=` parameter, empty when the sequence carried none. */
+  link_id: string
 }
 
 export interface ClipboardWaitOptions {
