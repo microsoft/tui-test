@@ -89,7 +89,12 @@ pub enum TerminalMode {
     FocusEvents,
     /// `CSI ?2004 h`: pasted text is wrapped in `ESC [200~` and `ESC [201~`.
     BracketedPaste,
-    /// `CSI ?1049 h`: the alternate screen is showing.
+    /// The alternate screen is showing.
+    ///
+    /// Reached by `CSI ?1049 h`, and also by the older `CSI ?47 h` and
+    /// `CSI ?1047 h` on the backends that honor them. This reports the screen
+    /// itself rather than any one of those, so it is true however a program
+    /// got there.
     AlternateScreen,
     /// `DECTCEM` (`CSI ?25 h`): the cursor is drawn.
     ///
@@ -129,6 +134,11 @@ impl TerminalMode {
     }
 
     /// The sequence that turns this mode on, for tests and documentation.
+    ///
+    /// One sequence per mode, not every sequence that reaches it: the
+    /// alternate screen also answers to `CSI ?47 h` and `CSI ?1047 h`, and
+    /// `?1049` is named here because it is what a full-screen program sends
+    /// and the only one every backend honors.
     pub const fn set_sequence(self) -> &'static [u8] {
         match self {
             TerminalMode::ApplicationCursorKeys => b"\x1b[?1h",
@@ -144,6 +154,10 @@ impl TerminalMode {
     }
 
     /// The sequence that turns this mode off.
+    ///
+    /// The counterpart to [`Self::set_sequence`]. `CSI ?1049 l` leaves the
+    /// alternate screen whichever sequence entered it, since the three share
+    /// one screen.
     pub const fn reset_sequence(self) -> &'static [u8] {
         match self {
             TerminalMode::ApplicationCursorKeys => b"\x1b[?1l",

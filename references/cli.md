@@ -143,11 +143,13 @@ Recording modes: `disabled`, `on-failure`, and `always`.
 | `bracketed_paste` | `CSI ?2004 h` | pastes are bracketed |
 | `alternate_screen` | `CSI ?1049 h` | the alternate screen is showing |
 
+The `Sequence` column names one way to reach each mode, not every one.
 `alternate_screen` reports whether the alternate screen is showing, however it
-was reached. `CSI ?1049 h` is what a full-screen program sends and every
-backend honors it; the older `CSI ?47 h` and `CSI ?1047 h` are honored by the
-ghostty and xterm.js backends and ignored by alacritty and rio, so prefer
-`?1049` in a test that has to behave the same everywhere.
+was reached: `CSI ?1049 h` is what a full-screen program sends and every
+backend honors it, while the older `CSI ?47 h` and `CSI ?1047 h` are honored
+by the ghostty and xterm.js backends and ignored by alacritty and rio. Prefer
+`?1049` in a test that has to behave the same everywhere. `CSI ?1049 l` leaves
+the alternate screen whichever sequence entered it.
 
 Mouse tracking is reported separately, as `mouse_mode`: `none`, `click`,
 `drag`, or `motion`. It is not in the table because it is not a set of

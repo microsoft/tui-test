@@ -1674,17 +1674,19 @@ macro_rules! emulator_conformance_tests {
             }
         }
 
-        /// Every way onto the alternate screen is reported as being on it.
+        /// Every way onto the alternate screen is reported as being on it,
+        /// and leaving it is reported too.
         ///
         /// `?1049` is what a full-screen program sends, and every backend
         /// honors it. `?47` and `?1047` are the older spellings, without the
         /// cursor save `?1049` bundles in; alacritty and rio ignore them
         /// outright.
         ///
-        /// What must hold everywhere is that the flag and the screen agree: a
-        /// backend that switches buffers has to say so. Ghostty tracks each
-        /// spelling under its own mode, so reading only `?1049` reported the
-        /// primary screen while the alternate one was showing.
+        /// What must hold everywhere is that the flag and the screen agree, in
+        /// both directions. The three spellings share one screen but have
+        /// independent mode bits, so on ghostty `?47h` then `?1049l` leaves
+        /// the `?47` bit set with the primary screen showing — reading mode
+        /// bits answers the wrong question, in one direction or the other.
         #[test]
         fn conformance_alt_screen_flag_follows_the_screen() {
             use $crate::terminal::emu::TerminalMode;
@@ -1699,10 +1701,11 @@ macro_rules! emulator_conformance_tests {
                 let mut e = conformance_emu(10, 3, 100);
                 e.process(b"primary");
                 e.process(sequence);
-                let text = conformance_text(&e.viewable_rows());
-                let showing_alt = !text.iter().any(|r| r.contains("primary"));
                 let name = String::from_utf8_lossy(sequence).to_string();
 
+                let showing_alt = !conformance_text(&e.viewable_rows())
+                    .iter()
+                    .any(|r| r.contains("primary"));
                 assert_eq!(
                     e.mode(TerminalMode::AlternateScreen),
                     showing_alt,
@@ -1713,6 +1716,20 @@ macro_rules! emulator_conformance_tests {
                 } else {
                     assert!(!showing_alt, "{name} is ignored by this backend");
                 }
+
+                // Leaving has to be reported as leaving, whichever spelling
+                // got there: `?1049l` is what a program sends on the way out.
+                e.process(b"\x1b[?1049l");
+                assert!(
+                    conformance_text(&e.viewable_rows())
+                        .iter()
+                        .any(|r| r.contains("primary")),
+                    "{name}: ?1049l restores the primary screen"
+                );
+                assert!(
+                    !e.mode(TerminalMode::AlternateScreen),
+                    "{name}: and alternate_screen says so"
+                );
             }
         }
 

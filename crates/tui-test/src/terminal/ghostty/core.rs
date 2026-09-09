@@ -14,7 +14,7 @@ use ghostty_vt::key::{
     Mods as GhosttyMods, OptionAsAlt,
 };
 use ghostty_vt::render::{CellIterator, CursorVisualStyle, RowIterator};
-use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef};
+use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef, Screen};
 use ghostty_vt::style::{Palette, PaletteIndex, RgbColor, Style, StyleColor, Underline};
 use ghostty_vt::terminal::{
     ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Mode, Point,
@@ -271,26 +271,24 @@ impl GhosttyCore {
     }
 
     pub(super) fn mode(&self, mode: TerminalMode) -> Result<bool> {
-        // Ghostty honors all three ways into the alternate screen and tracks
-        // each under its own flag: `?47`, `?1047` and `?1049`. The question
-        // `alternate_screen` asks is whether the alternate screen is showing,
-        // so any of them answers it — reading only `?1049` reported "primary"
-        // while ghostty was plainly displaying the alternate buffer.
+        // Ghostty honors all three ways onto the alternate screen — `?47`,
+        // `?1047` and `?1049` — and they share one screen: each dispatches to
+        // `switchScreenMode`, which moves the same `screens.active_key`. The
+        // *mode bits* are what is separate. `setMode` sets one bit per mode
+        // before dispatching, and nothing syncs them, so `?47h` followed by
+        // `?1049l` leaves bit 47 set while the primary screen is showing.
+        //
+        // So no mode bit answers "which screen is showing": reading `?1049`
+        // alone missed the other two entries, and reading all three claimed
+        // the alternate screen after `?1049l` had left it. Ghostty tracks the
+        // active screen directly, which is the question being asked.
         if mode == TerminalMode::AlternateScreen {
-            for flag in [
-                Mode::ALT_SCREEN_SAVE,
-                Mode::ALT_SCREEN,
-                Mode::ALT_SCREEN_LEGACY,
-            ] {
-                if self
-                    .terminal
-                    .mode(flag)
-                    .with_context(|| format!("reading {} mode", mode.name()))?
-                {
-                    return Ok(true);
-                }
-            }
-            return Ok(false);
+            return Ok(matches!(
+                self.terminal
+                    .active_screen()
+                    .context("reading active screen")?,
+                Screen::Alternate
+            ));
         }
         let ghostty_mode = match mode {
             TerminalMode::ApplicationCursorKeys => Mode::DECCKM,
