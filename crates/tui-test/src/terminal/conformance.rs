@@ -40,6 +40,14 @@ pub enum Divergence {
     /// able to tell that two runs of cells belong to the same link when they
     /// are not adjacent.
     HyperlinkHasNoId,
+    /// The backend does not implement the Kitty keyboard protocol at all, so
+    /// it can never report a mode the child pushed.
+    ///
+    /// Unlike the other variants this one is visible to a user: key input
+    /// falls back to legacy encodings even for a child that asked for `CSI u`.
+    /// It belongs here rather than in a profile default because it is the
+    /// emulator's own limit, not a setting.
+    NoKittyKeyboard,
 }
 
 /// Generates the conformance tests for one backend. `$make` builds a boxed
@@ -416,6 +424,54 @@ macro_rules! emulator_conformance_tests {
                 "SGR 0 does not clear the link"
             );
             assert_eq!(rows[0][2].uri(), None, "only OSC 8 closes the link");
+        }
+
+        /// A child pushes Kitty keyboard modes with `CSI > Ps u` and pops them
+        /// with `CSI < u`. Every backend that implements the protocol has to
+        /// report the same flags, because `key press` encodes from them: a
+        /// backend that under-reports silently sends legacy keys to a child
+        /// that asked for `CSI u`.
+        #[test]
+        fn conformance_kitty_keyboard_modes_are_pushed_and_popped() {
+            if CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::NoKittyKeyboard)
+            {
+                return;
+            }
+            use $crate::terminal::emu::KeyboardMode as K;
+            let mut e = conformance_emu(10, 2, 100);
+            assert_eq!(e.keyboard_mode(), K::empty(), "nothing is on to start");
+
+            e.process(b"\x1b[>3u");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::DISAMBIGUATE_ESC_CODES | K::REPORT_EVENT_TYPES,
+                "1 and 2 are the two bits of 3"
+            );
+
+            e.process(b"\x1b[>31u");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::DISAMBIGUATE_ESC_CODES
+                    | K::REPORT_EVENT_TYPES
+                    | K::REPORT_ALTERNATE_KEYS
+                    | K::REPORT_ALL_KEYS_AS_ESC
+                    | K::REPORT_ASSOCIATED_TEXT,
+                "every flag maps to its own bit"
+            );
+
+            e.process(b"\x1b[<u");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::DISAMBIGUATE_ESC_CODES | K::REPORT_EVENT_TYPES,
+                "popping restores what was underneath"
+            );
+            e.process(b"\x1b[<u");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::empty(),
+                "popping the last leaves none"
+            );
         }
 
         /// Resetting the underline color must not be confusable with setting
