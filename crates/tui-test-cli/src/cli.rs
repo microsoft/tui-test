@@ -444,9 +444,76 @@ impl SignalArg {
     }
 }
 
+/// Parse an `INDEX=COLOR` palette expectation.
+///
+/// The color is left as written so it is resolved against the session's own
+/// palette later, the same way `--foreground` is.
+fn parse_palette_entry(value: &str) -> Result<(u8, String), String> {
+    let (index, color) = value
+        .split_once('=')
+        .ok_or_else(|| format!("expected INDEX=COLOR, got `{value}`"))?;
+    let index: u8 = index
+        .trim()
+        .parse()
+        .map_err(|_| format!("`{index}` is not a palette index in 0-255"))?;
+    if color.is_empty() {
+        return Err(format!("palette entry {index} names no color"));
+    }
+    Ok((index, color.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expect_colors_accepts_defaults_and_palette_entries() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "expect",
+            "colors",
+            "--foreground",
+            "#ff0000",
+            "--background",
+            "0",
+            "--palette",
+            "1=#00ff00",
+            "--palette",
+            "200=blue",
+        ])
+        .expect("parse color expectation");
+        let Some(Command::Expect {
+            what:
+                ExpectCmd::Colors {
+                    foreground,
+                    background,
+                    cursor,
+                    palette,
+                    ..
+                },
+        }) = cli.command
+        else {
+            panic!("expected `expect colors`");
+        };
+        assert_eq!(foreground.as_deref(), Some("#ff0000"));
+        assert_eq!(background.as_deref(), Some("0"));
+        assert_eq!(cursor, None);
+        assert_eq!(
+            palette,
+            [(1, "#00ff00".to_string()), (200, "blue".to_string())],
+            "--palette is repeatable and keeps the color as written"
+        );
+    }
+
+    /// An index outside a `u8` cannot name a palette slot, so it is rejected
+    /// where it is written rather than becoming a wait that never succeeds.
+    #[test]
+    fn a_palette_expectation_needs_an_index_and_a_color() {
+        assert!(parse_palette_entry("1=#00ff00").is_ok());
+        assert!(parse_palette_entry("#00ff00").is_err(), "no index");
+        assert!(parse_palette_entry("256=#00ff00").is_err(), "out of range");
+        assert!(parse_palette_entry("1=").is_err(), "no color");
+    }
 
     #[test]
     fn key_action_commands_parse() {
@@ -971,6 +1038,9 @@ pub enum GetArg {
     Clipboard,
     /// Every terminal mode and whether it is set.
     Modes,
+    /// The terminal's colors: the three defaults (OSC 10/11/12) and any
+    /// palette entry a program overrode (OSC 4).
+    Colors,
     /// Cumulative terminal bell count.
     Bells,
     /// Recorded terminal bell events (sequence + elapsed time).
@@ -1410,6 +1480,26 @@ pub enum ExpectCmd {
         /// Require the mode to be off instead of on.
         #[arg(long)]
         off: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
+    /// Assert the terminal's colors (OSC 4 and OSC 10/11/12).
+    ///
+    /// Every color takes the same spellings `--fg` does, minus `default`.
+    Colors {
+        /// Required default foreground.
+        #[arg(long)]
+        foreground: Option<String>,
+        /// Required default background.
+        #[arg(long)]
+        background: Option<String>,
+        /// Required cursor color.
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Required palette entry, as `INDEX=COLOR`. Repeatable.
+        #[arg(long, value_name = "INDEX=COLOR", value_parser = parse_palette_entry)]
+        palette: Vec<(u8, String)>,
         /// Timeout in milliseconds.
         #[arg(long, value_name = "MS")]
         timeout: Option<u64>,

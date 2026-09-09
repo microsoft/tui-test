@@ -179,6 +179,40 @@ Every key is always present, so `false` means off rather than unknown. The set
 is deliberately closed: a mode is listed only when all four backends report it
 identically, which the conformance suite checks.
 
+## Terminal colors
+
+`state` reports the colors the terminal is painting with, under `colors`:
+
+| Key | Sequence | Meaning |
+| --- | --- | --- |
+| `foreground` | `OSC 10` | the default foreground |
+| `background` | `OSC 11` | the default background |
+| `cursor` | `OSC 12` | the cursor color |
+| `palette` | `OSC 4` | palette entries a program overrode, keyed by index |
+
+The three defaults are always reported, resolved through the profile so a slot
+nothing has touched still has an answer. `palette` lists only the entries that
+differ from the profile, so it names what a program changed rather than all
+256 slots, and `OSC 104` empties it again.
+
+Read them with `get colors`, and assert them with `expect colors`:
+
+```sh
+tui-test get colors --json                       # foreground, background, cursor, palette
+tui-test expect colors --background '#1d1f21'
+tui-test expect colors --foreground 7 --cursor '#ff0000'
+tui-test expect colors --palette '1=#00ff00' --palette '200=#123456'
+```
+
+Every color takes the same spellings `--fg` does — a hex value or an ANSI
+index — except `default`, which has nothing to refer to here since these
+slots *are* the defaults. An index is resolved against the session's own
+palette, so `--background 0` means the black this profile paints.
+
+`expect colors` checks only the slots you name, and `--palette` is repeatable.
+All of them are matched together, so a program that recolors several at once
+is asserted as one state rather than a race between polls.
+
 ## Agent commands
 
 | Command | Use |

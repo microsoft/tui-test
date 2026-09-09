@@ -13,8 +13,8 @@ use tui_test::{
     ClipboardPattern, Cursor, ErrorKind, KeyAction, LocatorDirection, LocatorQuery,
     LocatorSelector, MatchOccurrence, MouseAction, MouseOptions, OpenOptions, OpenResult,
     Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
-    SnapshotResult, State, StyleSelector, TextMatch, TextSelector, TextStyle, Timeouts,
-    TuiTestError, WhitespaceMode,
+    SnapshotResult, State, StyleSelector, TerminalColors, TextMatch, TextSelector, TextStyle,
+    Timeouts, TuiTestError, WhitespaceMode,
 };
 
 pyo3::create_exception!(
@@ -1829,6 +1829,20 @@ fn cursor_dict(py: Python<'_>, cursor: Cursor) -> PyResult<Bound<'_, PyDict>> {
     Ok(value)
 }
 
+/// The terminal's colors, with the `OSC 4` palette keyed by index.
+fn colors_dict(py: Python<'_>, colors: TerminalColors) -> PyResult<Bound<'_, PyDict>> {
+    let value = PyDict::new(py);
+    value.set_item("foreground", colors.foreground)?;
+    value.set_item("background", colors.background)?;
+    value.set_item("cursor", colors.cursor)?;
+    let palette = PyDict::new(py);
+    for (index, color) in colors.palette {
+        palette.set_item(index, color)?;
+    }
+    value.set_item("palette", palette)?;
+    Ok(value)
+}
+
 fn size_dict(py: Python<'_>, size: Size) -> PyResult<Bound<'_, PyDict>> {
     let value = PyDict::new(py);
     value.set_item("cols", size.cols)?;
@@ -1870,6 +1884,7 @@ fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     }
     result.set_item("modes", modes)?;
     result.set_item("mouse_mode", value.mouse_mode)?;
+    result.set_item("colors", colors_dict(py, value.colors)?)?;
     let timeouts = PyDict::new(py);
     timeouts.set_item("text", value.timeouts.text)?;
     timeouts.set_item("idle", value.timeouts.idle)?;
