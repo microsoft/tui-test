@@ -14,7 +14,7 @@ use ghostty_vt::key::{
     Mods as GhosttyMods, OptionAsAlt,
 };
 use ghostty_vt::render::{CellIterator, CursorVisualStyle, RowIterator};
-use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef};
+use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef, Screen};
 use ghostty_vt::style::{Palette, PaletteIndex, RgbColor, Style, StyleColor, Underline};
 use ghostty_vt::terminal::{
     ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Mode, Point,
@@ -28,7 +28,7 @@ use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{
     Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
 };
-use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape, KeyboardMode};
+use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape, KeyboardMode, TerminalMode};
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
     RgbColor {
@@ -178,7 +178,6 @@ fn cell_from_grid(grid: &GridRef<'_>, links: &mut LinkCache) -> Result<EmuCell> 
 pub(super) struct Frame {
     pub(super) rows: Vec<Vec<EmuCell>>,
     pub(super) cursor: (u16, u16),
-    pub(super) cursor_visible: bool,
     pub(super) cursor_shape: CursorShape,
 }
 
@@ -271,10 +270,40 @@ impl GhosttyCore {
         self.frame = None;
     }
 
-    pub(super) fn bracketed_paste_mode(&self) -> Result<bool> {
+    pub(super) fn mode(&self, mode: TerminalMode) -> Result<bool> {
+        // Ghostty honors all three ways onto the alternate screen — `?47`,
+        // `?1047` and `?1049` — and they share one screen: each dispatches to
+        // `switchScreenMode`, which moves the same `screens.active_key`. The
+        // *mode bits* are what is separate. `setMode` sets one bit per mode
+        // before dispatching, and nothing syncs them, so `?47h` followed by
+        // `?1049l` leaves bit 47 set while the primary screen is showing.
+        //
+        // So no mode bit answers "which screen is showing": reading `?1049`
+        // alone missed the other two entries, and reading all three claimed
+        // the alternate screen after `?1049l` had left it. Ghostty tracks the
+        // active screen directly, which is the question being asked.
+        if mode == TerminalMode::AlternateScreen {
+            return Ok(matches!(
+                self.terminal
+                    .active_screen()
+                    .context("reading active screen")?,
+                Screen::Alternate
+            ));
+        }
+        let ghostty_mode = match mode {
+            TerminalMode::ApplicationCursorKeys => Mode::DECCKM,
+            TerminalMode::ApplicationKeypad => Mode::KEYPAD_KEYS,
+            TerminalMode::Origin => Mode::ORIGIN,
+            TerminalMode::Wraparound => Mode::WRAPAROUND,
+            TerminalMode::Insert => Mode::INSERT,
+            TerminalMode::FocusEvents => Mode::FOCUS_EVENT,
+            TerminalMode::BracketedPaste => Mode::BRACKETED_PASTE,
+            TerminalMode::AlternateScreen => unreachable!("handled above"),
+            TerminalMode::CursorVisible => Mode::CURSOR_VISIBLE,
+        };
         self.terminal
-            .mode(Mode::BRACKETED_PASTE)
-            .context("reading bracketed paste mode")
+            .mode(ghostty_mode)
+            .with_context(|| format!("reading {} mode", mode.name()))
     }
 
     pub(super) fn take_pending_writes(&mut self) -> Vec<u8> {
@@ -468,9 +497,6 @@ impl GhosttyCore {
                 .context("reading cursor row")?
                 .min(rows.saturating_sub(1)),
         );
-        let cursor_visible = snapshot
-            .cursor_visible()
-            .context("reading cursor visibility")?;
         let cursor_shape = match snapshot
             .cursor_visual_style()
             .context("reading cursor shape")?
@@ -552,7 +578,6 @@ impl GhosttyCore {
         Ok(Frame {
             rows: output,
             cursor,
-            cursor_visible,
             cursor_shape,
         })
     }

@@ -48,6 +48,25 @@ pub enum Divergence {
     /// It belongs here rather than in a profile default because it is the
     /// emulator's own limit, not a setting.
     NoKittyKeyboard,
+    /// `RIS` does not put `DECTCEM` back, so a hidden cursor stays hidden
+    /// through a reset that restores every other mode.
+    ///
+    /// Verified rather than inferred: on the same emulator `RIS` does clear
+    /// bracketed paste, so this is the terminal's own state and not the
+    /// mapping onto it.
+    RisDoesNotResetCursorVisibility,
+
+    /// `CSI ?47 h` and `CSI ?1047 h` are ignored, so only `CSI ?1049 h`
+    /// reaches the alternate screen.
+    ///
+    /// The two older sequences predate the cursor save that `?1049` bundles
+    /// in. A backend that drops them stays on the primary screen and reports
+    /// `alternate_screen` false, which is an honest account of what it did —
+    /// the divergence is that it did nothing at all.
+    ///
+    /// Nothing in practice depends on it: every terminal here honors `?1049`,
+    /// and that is what a full-screen program sends.
+    NoLegacyAlternateScreen,
 }
 
 /// Generates the conformance tests for one backend. `$make` builds a boxed
@@ -107,17 +126,54 @@ macro_rules! emulator_conformance_tests {
                 .contains(&$crate::terminal::conformance::Divergence::ClipboardUnsupported)
         }
 
+        /// A mode sequence still lands when a PTY read splits it, which is
+        /// where an emulator that scanned for whole sequences would fail.
+        /// Split one byte before the final letter, the last place the parser
+        /// can still be holding parameters.
         #[test]
-        fn conformance_bracketed_paste_mode_tracks_enable_disable_and_reset() {
-            let mut e = conformance_emu(10, 4, 100);
-            assert!(!e.bracketed_paste_mode());
-            e.process(b"\x1b[?20");
-            e.process(b"04h");
-            assert!(e.bracketed_paste_mode());
-            e.process(b"\x1b[?2004l");
-            assert!(!e.bracketed_paste_mode());
-            e.process(b"\x1b[?2004h\x1bc");
-            assert!(!e.bracketed_paste_mode());
+        fn conformance_terminal_modes_survive_a_split_read() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let set = mode.set_sequence();
+                let (head, tail) = set.split_at(set.len() - 1);
+                let mut e = conformance_emu(20, 4, 100);
+                e.process(head);
+                e.process(tail);
+                assert!(e.mode(mode), "{} lost across a split read", mode.name());
+            }
+        }
+
+        /// `RIS` puts every mode back to its default, which is how a program
+        /// that leaves the terminal in a strange state is recovered from.
+        #[test]
+        fn conformance_ris_resets_every_terminal_mode() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let mut e = conformance_emu(20, 4, 100);
+                // Drive it away from its default in whichever direction that is.
+                let away = if mode.default_enabled() {
+                    mode.reset_sequence()
+                } else {
+                    mode.set_sequence()
+                };
+                e.process(away);
+                assert_eq!(e.mode(mode), !mode.default_enabled());
+
+                e.process(b"\x1bc");
+                if mode == TerminalMode::CursorVisible
+                    && CONFORMANCE_DIVERGENCES.contains(
+                        &$crate::terminal::conformance::Divergence::RisDoesNotResetCursorVisibility,
+                    )
+                {
+                    continue;
+                }
+                assert_eq!(
+                    e.mode(mode),
+                    mode.default_enabled(),
+                    "RIS did not restore {}",
+                    mode.name()
+                );
+            }
         }
 
         /// The grid is always exactly `rows` x `cols`, regardless of content.
@@ -472,6 +528,55 @@ macro_rules! emulator_conformance_tests {
                 K::empty(),
                 "popping the last leaves none"
             );
+        }
+
+        /// Every mode in the vocabulary turns on and off on every backend.
+        ///
+        /// This case is the reason the vocabulary is a closed set: a mode
+        /// earns a variant by passing here on all four backends, so the enum
+        /// is a claim this test keeps honest rather than a wish list.
+        #[test]
+        fn conformance_terminal_modes_turn_on_and_off() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let mut e = conformance_emu(20, 4, 100);
+                assert_eq!(
+                    e.mode(mode),
+                    mode.default_enabled(),
+                    "{} starts at its documented default",
+                    mode.name()
+                );
+
+                e.process(mode.set_sequence());
+                assert!(e.mode(mode), "{} did not turn on", mode.name());
+
+                e.process(mode.reset_sequence());
+                assert!(!e.mode(mode), "{} did not turn off", mode.name());
+            }
+        }
+
+        /// Setting one mode leaves the others alone, so a backend that mapped
+        /// two of them onto the same flag fails here rather than silently
+        /// reporting one when a test asked about the other.
+        #[test]
+        fn conformance_terminal_modes_are_independent() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let mut e = conformance_emu(20, 4, 100);
+                e.process(mode.set_sequence());
+                for other in TerminalMode::ALL {
+                    if other == mode {
+                        continue;
+                    }
+                    assert_eq!(
+                        e.mode(other),
+                        other.default_enabled(),
+                        "setting {} also changed {}",
+                        mode.name(),
+                        other.name()
+                    );
+                }
+            }
         }
 
         /// Resetting the underline color must not be confusable with setting
@@ -1083,6 +1188,35 @@ macro_rules! emulator_conformance_tests {
             }
         }
 
+        /// Hiding the cursor does not change its shape.
+        ///
+        /// `DECTCEM` and `DECSCUSR` are separate: one says whether the cursor
+        /// is drawn, the other says what it looks like when it is. A program
+        /// that hides the cursor for a redraw and shows it again has not asked
+        /// for a different shape, so the shape it chose has to survive.
+        #[test]
+        fn conformance_hiding_the_cursor_keeps_its_shape() {
+            use $crate::terminal::emu::CursorShape;
+            let mut e = conformance_emu(10, 3, 100);
+            e.process(b"\x1b[5 q");
+            assert_eq!(e.cursor_shape(), CursorShape::Bar);
+
+            e.process(b"\x1b[?25l");
+            assert!(!e.mode($crate::terminal::emu::TerminalMode::CursorVisible));
+            assert_eq!(
+                e.cursor_shape(),
+                CursorShape::Bar,
+                "a hidden cursor still has the shape it was given"
+            );
+
+            e.process(b"\x1b[?25h");
+            assert_eq!(
+                e.cursor_shape(),
+                CursorShape::Bar,
+                "and showing it again does not reset the shape"
+            );
+        }
+
         /// A color query is answered with the session's configured color.
         ///
         /// Programs query the background to decide whether they are on a light
@@ -1537,6 +1671,65 @@ macro_rules! emulator_conformance_tests {
                 let second = rows[0][1].hyperlink.clone().expect("B is linked");
                 assert_eq!(first.id.as_deref(), Some("one"));
                 assert_eq!(second.id.as_deref(), Some("two"));
+            }
+        }
+
+        /// Every way onto the alternate screen is reported as being on it,
+        /// and leaving it is reported too.
+        ///
+        /// `?1049` is what a full-screen program sends, and every backend
+        /// honors it. `?47` and `?1047` are the older spellings, without the
+        /// cursor save `?1049` bundles in; alacritty and rio ignore them
+        /// outright.
+        ///
+        /// What must hold everywhere is that the flag and the screen agree, in
+        /// both directions. The three spellings share one screen but have
+        /// independent mode bits, so on ghostty `?47h` then `?1049l` leaves
+        /// the `?47` bit set with the primary screen showing — reading mode
+        /// bits answers the wrong question, in one direction or the other.
+        #[test]
+        fn conformance_alt_screen_flag_follows_the_screen() {
+            use $crate::terminal::emu::TerminalMode;
+            let legacy_ignored = CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::NoLegacyAlternateScreen);
+
+            for (sequence, always) in [
+                (&b"\x1b[?47h"[..], false),
+                (b"\x1b[?1047h", false),
+                (b"\x1b[?1049h", true),
+            ] {
+                let mut e = conformance_emu(10, 3, 100);
+                e.process(b"primary");
+                e.process(sequence);
+                let name = String::from_utf8_lossy(sequence).to_string();
+
+                let showing_alt = !conformance_text(&e.viewable_rows())
+                    .iter()
+                    .any(|r| r.contains("primary"));
+                assert_eq!(
+                    e.mode(TerminalMode::AlternateScreen),
+                    showing_alt,
+                    "{name}: alternate_screen must agree with the visible screen"
+                );
+                if always || !legacy_ignored {
+                    assert!(showing_alt, "{name} reaches the alternate screen");
+                } else {
+                    assert!(!showing_alt, "{name} is ignored by this backend");
+                }
+
+                // Leaving has to be reported as leaving, whichever spelling
+                // got there: `?1049l` is what a program sends on the way out.
+                e.process(b"\x1b[?1049l");
+                assert!(
+                    conformance_text(&e.viewable_rows())
+                        .iter()
+                        .any(|r| r.contains("primary")),
+                    "{name}: ?1049l restores the primary screen"
+                );
+                assert!(
+                    !e.mode(TerminalMode::AlternateScreen),
+                    "{name}: and alternate_screen says so"
+                );
             }
         }
 

@@ -1,6 +1,8 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::shell::Shell;
@@ -535,6 +537,7 @@ pub enum Operation {
     GetExitCode,
     GetCwd,
     GetCursor,
+    GetModes,
     GetSize,
     GetTitle,
     GetClipboard,
@@ -616,6 +619,20 @@ pub enum Operation {
         code: i32,
         timeout_ms: Option<u64>,
     },
+    /// Wait for a terminal mode to reach `enabled`.
+    ExpectMode {
+        mode: String,
+        enabled: bool,
+        timeout_ms: Option<u64>,
+    },
+    /// Wait for the cursor to match every property the caller named.
+    ExpectCursor {
+        visible: Option<bool>,
+        shape: Option<String>,
+        x: Option<u16>,
+        y: Option<u16>,
+        timeout_ms: Option<u64>,
+    },
     ExpectOutput {
         text: String,
         regex: bool,
@@ -664,7 +681,9 @@ impl Operation {
 pub enum OperationResult {
     Unit,
     Open(OpenResult),
-    State(State),
+    /// Boxed because it is much larger than every other variant, and a
+    /// `Result` of this enum is returned from every operation.
+    State(Box<State>),
     Text(String),
     PackedScreen(PackedScreen),
     Cells(Vec<Cell>),
@@ -676,6 +695,7 @@ pub enum OperationResult {
     Title(Option<String>),
     Clipboard(String),
     Cursor(Cursor),
+    Modes(BTreeMap<String, bool>),
     Size(Size),
     BellCount(u64),
     BellEvents(Vec<BellEvent>),
@@ -763,10 +783,16 @@ pub struct OpenResult {
     pub recording: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Cursor {
     pub x: u16,
     pub y: u16,
+    /// Whether the cursor is drawn (`DECTCEM`).
+    pub visible: bool,
+    /// `block`, `underline`, or `bar` (`DECSCUSR`).
+    pub shape: String,
+    /// The cursor color as `#rrggbb`, after any `OSC 12` a program sent.
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -826,6 +852,22 @@ pub struct State {
     pub exited: Option<i32>,
     pub ready: bool,
     pub bell_count: u64,
+    /// Terminal modes the child has turned on, by name.
+    ///
+    /// A map rather than a list, so a reader can tell "off" from "this build
+    /// does not know that mode" and every key is always present.
+    pub modes: BTreeMap<String, bool>,
+    /// Mouse tracking level: `none`, `click`, `drag`, or `motion`.
+    ///
+    /// Separate from `modes` because mouse tracking is not a set of
+    /// independent switches: `CSI ?1002 h` replaces `CSI ?1000 h` rather than
+    /// joining it, so reporting it as booleans would say two are on when the
+    /// terminal only honors the last.
+    ///
+    /// Independent of how the child asked for the reports to be encoded.
+    /// `CSI ?1000 h` on its own is `click`, whether or not `CSI ?1006 h`
+    /// followed it to ask for SGR coordinates.
+    pub mouse_mode: String,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }

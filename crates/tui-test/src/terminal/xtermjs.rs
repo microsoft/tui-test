@@ -29,7 +29,7 @@ use rquickjs::{Context, Ctx, Function, Object, Runtime};
 use crate::event::BellTracker;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{ClipboardValidator, CursorShape, Emulator};
+use crate::terminal::emu::{ClipboardValidator, CursorShape, Emulator, TerminalMode};
 
 const XTERM_BUNDLE: &str = include_str!("../../assets/xtermjs/xterm-headless.js");
 const UNICODE11: &str = include_str!("../../assets/xtermjs/addon-unicode11.js");
@@ -444,8 +444,17 @@ impl Emulator for XtermJsEmu {
         self.call::<String>("takeReplies").into_bytes()
     }
 
-    fn bracketed_paste_mode(&self) -> bool {
-        self.call("bracketedPaste")
+    fn mode(&self, mode: TerminalMode) -> bool {
+        // Not in xterm.js's `modes`; it lives on the core service instead.
+        if mode == TerminalMode::CursorVisible {
+            return self.call_or("cursorVisible", true);
+        }
+        self.invoke("mode", |emu, ctx| {
+            let name = rquickjs::String::from_str(ctx.clone(), mode.name())?;
+            emu.get::<_, Function>("mode")?.call((name,))
+        })
+        .unwrap_or(0i32)
+            != 0
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
@@ -475,10 +484,6 @@ impl Emulator for XtermJsEmu {
     fn title(&self) -> Option<String> {
         self.call::<Option<String>>("title")
             .filter(|title| !title.is_empty())
-    }
-
-    fn cursor_visible(&self) -> bool {
-        self.call_or("cursorVisible", true)
     }
 
     fn cursor_key_application(&self) -> bool {
@@ -596,15 +601,6 @@ mod tests {
         assert_eq!(bells.count(), 1);
     }
 
-    #[test]
-    fn tracks_bracketed_paste_mode() {
-        let mut emulator = XtermJsEmu::new(10, 2, &Profile::default()).expect("create emulator");
-        emulator.process(b"\x1b[?2004h");
-        assert!(emulator.bracketed_paste_mode());
-        emulator.process(b"\x1b[?2004l");
-        assert!(!emulator.bracketed_paste_mode());
-    }
-
     crate::emulator_conformance_tests!(
         |cols, rows, profile| {
             Box::new(XtermJsEmu::new(cols, rows, profile).expect("create xterm.js emulator"))
@@ -623,6 +619,9 @@ mod tests {
             // the bundle contains no handler for `CSI > u`, `CSI = u`, or
             // `CSI < u`, so the modes a child pushes are parsed and dropped.
             crate::terminal::conformance::Divergence::NoKittyKeyboard,
+            // `ESC c` clears every other mode on this backend but leaves a
+            // hidden cursor hidden.
+            crate::terminal::conformance::Divergence::RisDoesNotResetCursorVisibility,
         ]
     );
 }

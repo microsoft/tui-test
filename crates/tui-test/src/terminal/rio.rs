@@ -21,7 +21,7 @@ use crate::terminal::cell::{
     Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
 };
 use crate::terminal::emu::{
-    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
+    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode, TerminalMode,
 };
 
 fn clipboard_type(clipboard: RioClipboardType) -> ClipboardType {
@@ -379,8 +379,24 @@ impl Emulator for RioEmu {
         keyboard_mode
     }
 
-    fn bracketed_paste_mode(&self) -> bool {
-        self.term.mode().contains(Mode::BRACKETED_PASTE)
+    fn mode(&self, mode: TerminalMode) -> bool {
+        // rio reports a hidden cursor as a cursor *shape* rather than through
+        // `SHOW_CURSOR`, so this one does not come from the mode bitflags.
+        if mode == TerminalMode::CursorVisible {
+            return !matches!(self.term.cursor().content, RioCursorShape::Hidden);
+        }
+        let flag = match mode {
+            TerminalMode::ApplicationCursorKeys => Mode::APP_CURSOR,
+            TerminalMode::ApplicationKeypad => Mode::APP_KEYPAD,
+            TerminalMode::Origin => Mode::ORIGIN,
+            TerminalMode::Wraparound => Mode::LINE_WRAP,
+            TerminalMode::Insert => Mode::INSERT,
+            TerminalMode::FocusEvents => Mode::FOCUS_IN_OUT,
+            TerminalMode::BracketedPaste => Mode::BRACKETED_PASTE,
+            TerminalMode::AlternateScreen => Mode::ALT_SCREEN,
+            TerminalMode::CursorVisible => unreachable!("handled above"),
+        };
+        self.term.mode().contains(flag)
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
@@ -405,12 +421,13 @@ impl Emulator for RioEmu {
         (!self.term.title.is_empty()).then(|| self.term.title.clone())
     }
 
-    fn cursor_visible(&self) -> bool {
-        !matches!(self.term.cursor().content, RioCursorShape::Hidden)
-    }
-
     fn cursor_shape(&self) -> CursorShape {
-        match self.term.cursor().content {
+        // `Term::cursor()` masks the shape to `Hidden` whenever the cursor is
+        // not drawn — hidden by `DECTCEM`, or scrolled out of view — which
+        // loses the shape the child actually asked for. `cursor_shape` is the
+        // unmasked field it derives that from, and whether the cursor is drawn
+        // is already reported by `TerminalMode::CursorVisible`.
+        match self.term.cursor_shape {
             RioCursorShape::Underline => CursorShape::Underline,
             RioCursorShape::Beam => CursorShape::Bar,
             RioCursorShape::Block | RioCursorShape::Hidden => CursorShape::Block,
@@ -434,9 +451,10 @@ impl Emulator for RioEmu {
 mod tests {
     use super::*;
 
-    crate::emulator_conformance_tests!(|cols, rows, profile| {
-        Box::new(RioEmu::new(cols, rows, profile))
-    });
+    crate::emulator_conformance_tests!(
+        |cols, rows, profile| { Box::new(RioEmu::new(cols, rows, profile)) },
+        &[crate::terminal::conformance::Divergence::NoLegacyAlternateScreen]
+    );
 
     #[test]
     fn multiple_bells_in_one_chunk_are_counted_individually() {
@@ -447,14 +465,5 @@ mod tests {
 
         assert_eq!(bells.count(), 2);
         assert_eq!(bells.sequence(), 2);
-    }
-
-    #[test]
-    fn tracks_bracketed_paste_mode() {
-        let mut emulator = RioEmu::new(10, 2, &Profile::default());
-        emulator.process(b"\x1b[?2004h");
-        assert!(emulator.bracketed_paste_mode());
-        emulator.process(b"\x1b[?2004l");
-        assert!(!emulator.bracketed_paste_mode());
     }
 }

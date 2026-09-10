@@ -120,6 +120,9 @@ export type Color =
 export interface Cursor {
   x: number
   y: number
+  visible: boolean
+  shape: string
+  color: string
 }
 
 export interface EffectiveTimeouts {
@@ -296,6 +299,8 @@ export interface State {
   exited: number | null
   ready: boolean
   bell_count: number
+  modes: Record<string, boolean>
+  mouse_mode: string
   timeouts: EffectiveTimeouts
   text: string
 }

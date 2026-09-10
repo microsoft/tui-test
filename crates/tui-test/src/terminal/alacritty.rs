@@ -27,7 +27,7 @@ use crate::terminal::cell::{
     Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
 };
 use crate::terminal::emu::{
-    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
+    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode, TerminalMode,
 };
 
 fn clipboard_type(clipboard: AlacClipboardType) -> ClipboardType {
@@ -455,8 +455,21 @@ impl Emulator for AlacrittyEmu {
         keyboard_mode
     }
 
-    fn bracketed_paste_mode(&self) -> bool {
-        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    fn mode(&self, mode: TerminalMode) -> bool {
+        let flag = match mode {
+            TerminalMode::ApplicationCursorKeys => TermMode::APP_CURSOR,
+            TerminalMode::ApplicationKeypad => TermMode::APP_KEYPAD,
+            TerminalMode::Origin => TermMode::ORIGIN,
+            TerminalMode::Wraparound => TermMode::LINE_WRAP,
+            TerminalMode::Insert => TermMode::INSERT,
+            TerminalMode::FocusEvents => TermMode::FOCUS_IN_OUT,
+            TerminalMode::BracketedPaste => TermMode::BRACKETED_PASTE,
+            TerminalMode::AlternateScreen => TermMode::ALT_SCREEN,
+            // `Hidden` is a shape alacritty uses for a cursor it will not
+            // draw, so this flag means the same thing as `DECTCEM`.
+            TerminalMode::CursorVisible => TermMode::SHOW_CURSOR,
+        };
+        self.term.mode().contains(flag)
     }
 
     fn title(&self) -> Option<String> {
@@ -543,7 +556,10 @@ impl Emulator for AlacrittyEmu {
 mod tests {
     use super::*;
 
-    crate::emulator_conformance_tests!(|c, r, p| Box::new(AlacrittyEmu::new(c, r, p)));
+    crate::emulator_conformance_tests!(
+        |c, r, p| Box::new(AlacrittyEmu::new(c, r, p)),
+        &[crate::terminal::conformance::Divergence::NoLegacyAlternateScreen]
+    );
 
     #[test]
     fn multiple_bells_in_one_chunk_are_counted_individually() {
@@ -663,15 +679,6 @@ mod tests {
 
         emu.process(b"\x1b[=8u");
         assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_ALL_KEYS_AS_ESC);
-    }
-
-    #[test]
-    fn tracks_bracketed_paste_mode() {
-        let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
-        emu.process(b"\x1b[?2004h");
-        assert!(emu.bracketed_paste_mode());
-        emu.process(b"\x1b[?2004l");
-        assert!(!emu.bracketed_paste_mode());
     }
 
     #[test]

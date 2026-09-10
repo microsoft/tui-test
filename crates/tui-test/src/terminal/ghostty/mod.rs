@@ -17,7 +17,7 @@ use crate::input::keys::KeyPress;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::{
-    ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
+    ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode, TerminalMode,
 };
 
 use self::core::GhosttyCore;
@@ -307,16 +307,8 @@ impl Emulator for GhosttyEmu {
         self.sequences.state.current.clone()
     }
 
-    fn bracketed_paste_mode(&self) -> bool {
-        self.call_result("reading bracketed paste mode", |core| {
-            core.bracketed_paste_mode()
-        })
-    }
-
-    fn cursor_visible(&self) -> bool {
-        self.call_result("reading cursor visibility", |core| {
-            Ok(core.frame()?.cursor_visible)
-        })
+    fn mode(&self, mode: TerminalMode) -> bool {
+        self.call_result("reading terminal mode", move |core| core.mode(mode))
     }
 
     fn cursor_shape(&self) -> CursorShape {

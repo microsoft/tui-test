@@ -969,6 +969,8 @@ pub enum GetArg {
     Title,
     /// Current clipboard.
     Clipboard,
+    /// Every terminal mode and whether it is set.
+    Modes,
     /// Cumulative terminal bell count.
     Bells,
     /// Recorded terminal bell events (sequence + elapsed time).
@@ -1401,6 +1403,38 @@ pub enum ExpectCmd {
         regex: bool,
     },
     /// Wait until the cumulative terminal bell count reaches this value.
+    /// Assert a terminal mode is set.
+    Mode {
+        /// Mode name, as reported by `get modes`.
+        name: String,
+        /// Require the mode to be off instead of on.
+        #[arg(long)]
+        off: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
+    /// Assert the cursor's position, visibility, or shape.
+    Cursor {
+        /// Require the cursor to be drawn.
+        #[arg(long, conflicts_with = "hidden")]
+        visible: bool,
+        /// Require the cursor to be hidden.
+        #[arg(long)]
+        hidden: bool,
+        /// Required shape: block, underline, or bar.
+        #[arg(long)]
+        shape: Option<String>,
+        /// Required column.
+        #[arg(long)]
+        x: Option<u16>,
+        /// Required row.
+        #[arg(long)]
+        y: Option<u16>,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     Bell {
         /// Minimum cumulative bell count.
         count: u64,

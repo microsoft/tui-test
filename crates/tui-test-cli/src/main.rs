@@ -340,6 +340,7 @@ fn map_field(field: GetArg) -> GetField {
         GetArg::ExitCode => GetField::ExitCode,
         GetArg::Cwd => GetField::Cwd,
         GetArg::Cursor => GetField::Cursor,
+        GetArg::Modes => GetField::Modes,
         GetArg::Size => GetField::Size,
         GetArg::Title => GetField::Title,
         GetArg::Clipboard => GetField::Clipboard,
@@ -588,6 +589,32 @@ fn map_expect(what: ExpectCmd) -> Request {
             timeout_ms: timeout,
         },
         ExpectCmd::Output { text, regex } => Request::ExpectOutput { text, regex },
+        ExpectCmd::Mode { name, off, timeout } => Request::ExpectMode {
+            mode: name,
+            enabled: !off,
+            timeout_ms: timeout,
+        },
+        ExpectCmd::Cursor {
+            visible,
+            hidden,
+            shape,
+            x,
+            y,
+            timeout,
+        } => Request::ExpectCursor {
+            // `--visible` and `--hidden` are separate flags rather than one
+            // optional boolean so that naming neither leaves visibility
+            // unchecked, which is what a caller asserting only a shape wants.
+            visible: match (visible, hidden) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            },
+            shape,
+            x,
+            y,
+            timeout_ms: timeout,
+        },
         ExpectCmd::Bell { count, timeout } => Request::ExpectBellCount {
             count,
             timeout_ms: timeout,

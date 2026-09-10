@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Union
 
 Color = Union[str, int]
@@ -148,7 +148,7 @@ class TextMatch:
 class State:
     cols: int
     rows: int
-    cursor: Dict[str, int]
+    cursor: Dict[str, Any]
     title: Optional[str]
     cwd: Optional[str]
     last_command: Optional[str]
@@ -159,6 +159,8 @@ class State:
     text: str
     session_shell: Optional[str]
     bell_count: int = 0
+    modes: Dict[str, bool] = field(default_factory=dict)
+    mouse_mode: str = "none"
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "State":
@@ -173,6 +175,8 @@ class State:
             exited=d.get("exited"),
             ready=d.get("ready", False),
             bell_count=d.get("bell_count", 0),
+            modes=d.get("modes", {}),
+            mouse_mode=d.get("mouse_mode", "none"),
             timeouts=Timeouts(**d["timeouts"]),
             text=d.get("text", ""),
             session_shell=d.get("session_shell"),

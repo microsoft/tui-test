@@ -80,7 +80,7 @@ Most waits accept `--timeout MS`. `expect`, `click`, and `highlight` retry. `fin
 
 | Command | Use |
 | --- | --- |
-| `state` | Read session state and text. |
+| `state` | Read session state, terminal modes, and text. |
 | `text [--full]` | Read terminal text. |
 | `cells X Y [W H]` | Read cells and styles. |
 | `get FIELD` | Read one field. |
@@ -126,6 +126,58 @@ directory = "./artifacts"
 ```
 
 Recording modes: `disabled`, `on-failure`, and `always`.
+
+## Terminal modes
+
+`state` reports the modes the child has turned on, under `modes`:
+
+| Key | Sequence | Meaning |
+| --- | --- | --- |
+| `application_cursor_keys` | `CSI ?1 h` | cursor keys send `SS3` |
+| `cursor_visible` | `CSI ?25 h` | the cursor is drawn (on by default) |
+| `application_keypad` | `ESC =` | keypad sends application sequences |
+| `origin` | `CSI ?6 h` | cursor confined to the scroll region |
+| `wraparound` | `CSI ?7 h` | text wraps at the right margin (on by default) |
+| `insert` | `CSI 4 h` | printed text shifts the line right |
+| `focus_events` | `CSI ?1004 h` | focus changes are reported to the child |
+| `bracketed_paste` | `CSI ?2004 h` | pastes are bracketed |
+| `alternate_screen` | `CSI ?1049 h` | the alternate screen is showing |
+
+The `Sequence` column names one way to reach each mode, not every one.
+`alternate_screen` reports whether the alternate screen is showing, however it
+was reached: `CSI ?1049 h` is what a full-screen program sends and every
+backend honors it, while the older `CSI ?47 h` and `CSI ?1047 h` are honored
+by the ghostty and xterm.js backends and ignored by alacritty and rio. Prefer
+`?1049` in a test that has to behave the same everywhere. `CSI ?1049 l` leaves
+the alternate screen whichever sequence entered it.
+
+Mouse tracking is reported separately, as `mouse_mode`: `none`, `click`,
+`drag`, or `motion`. It is not in the table because it is not a set of
+independent switches — `CSI ?1002 h` replaces `CSI ?1000 h` rather than
+joining it, so booleans would claim two are on when only the last is honored.
+It reports the tracking level regardless of how the child asked for the
+reports to be encoded, so `CSI ?1000 h` alone is `click` whether or not
+`CSI ?1006 h` followed it.
+
+Read them with `get modes`, and assert one with `expect mode <NAME> [--off]`.
+The cursor has its own command, since position and shape have nowhere else to
+live:
+
+```sh
+tui-test get cursor --json          # x, y, visible, shape, color
+tui-test expect cursor --hidden
+tui-test expect cursor --visible --shape bar
+tui-test expect cursor --x 4 --y 0
+tui-test expect mode alternate_screen
+tui-test expect mode bracketed_paste --off
+```
+
+`expect cursor` checks only the properties you name, so asserting a shape
+leaves visibility and position alone.
+
+Every key is always present, so `false` means off rather than unknown. The set
+is deliberately closed: a mode is listed only when all four backends report it
+identically, which the conformance suite checks.
 
 ## Agent commands
 
