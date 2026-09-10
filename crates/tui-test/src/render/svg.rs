@@ -1041,3 +1041,34 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod golden {
+    use super::*;
+    use crate::profile::Profile;
+    use crate::terminal::alacritty::AlacrittyEmu;
+    use crate::terminal::emu::Emulator;
+
+    /// A frame exercising the parts of the renderer a style change could move:
+    /// chrome, colors, every text attribute, a wide char and a cursor.
+    pub(crate) fn sample() -> String {
+        let mut emu = AlacrittyEmu::new(20, 3, &Profile::default());
+        emu.process(b"\x1b]0;golden\x07");
+        emu.process("\x1b[1mbold\x1b[0m \x1b[3mit\x1b[0m \x1b[4mul\x1b[0m 你".as_bytes());
+        emu.process(b"\r\n\x1b[31;44mcolor\x1b[0m");
+        render_svg(
+            &emu.viewable_rows(),
+            20,
+            &emu as &dyn RenderColors,
+            Some((0, 1)),
+            Some("golden"),
+        )
+    }
+
+    #[test]
+    fn print_golden() {
+        if std::env::var_os("TUI_TEST_PRINT_GOLDEN").is_some() {
+            println!("GOLDEN_START{}GOLDEN_END", sample());
+        }
+    }
+}
