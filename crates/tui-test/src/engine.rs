@@ -793,6 +793,33 @@ fn dispatch(
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             Ok(OperationResult::Cursor(cursor_model(state.emu.as_ref())))
         }
+        Operation::GetColors => {
+            let state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(OperationResult::Colors(colors_of(
+                state.emu.as_ref(),
+                &state.profile,
+            )))
+        }
+        Operation::ExpectColors {
+            foreground,
+            background,
+            cursor,
+            palette,
+            timeout_ms,
+        } => {
+            expect_colors(
+                session,
+                foreground.as_deref(),
+                background.as_deref(),
+                cursor.as_deref(),
+                &palette,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
         Operation::GetModes => {
             let state = session
                 .state
@@ -1075,6 +1102,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
             .map(|mode| (mode.name().to_string(), state.emu.mode(mode)))
             .collect(),
         mouse_mode: state.mouse_mode.mode().name().to_string(),
+        colors: colors_of(state.emu.as_ref(), &state.profile),
         timeouts: effective_timeouts(session),
         text: text_of(&state.emu.viewable_rows()),
     }
@@ -1159,6 +1187,165 @@ fn parse_mode(name: &str) -> Result<TerminalMode, TuiTestError> {
                 "unknown terminal mode '{name}'; expected one of: {known}"
             ))
         })
+}
+
+/// The terminal's colors, resolved through the profile so a slot nothing
+/// has overridden still has an answer.
+///
+/// The three defaults (`OSC 10/11/12`) are always reported. Palette entries
+/// (`OSC 4`) are reported only where they differ from the profile, so the
+/// answer names what a program changed instead of all 256 slots.
+fn colors_of(emu: &dyn Emulator, profile: &crate::profile::Profile) -> crate::api::TerminalColors {
+    let colors = emu.colors();
+    crate::api::TerminalColors {
+        foreground: colors.foreground.to_hex(),
+        background: colors.background.to_hex(),
+        cursor: colors.cursor.to_hex(),
+        palette: colors
+            .palette
+            .iter()
+            .enumerate()
+            .filter_map(|(index, now)| {
+                let index = index as u8;
+                (*now != profile.colors.rgb(index)).then(|| (index, now.to_hex()))
+            })
+            .collect(),
+    }
+}
+
+/// Resolve a color a caller named into a concrete value.
+///
+/// Takes the same spellings `--fg` and `--bg` do, minus `default`: a terminal
+/// color is what `default` would resolve *to*, so there is nothing for it to
+/// refer to. An ANSI index resolves through the session's own palette, so
+/// `--background 0` means the black this profile paints rather than a fixed
+/// one.
+fn resolve_expected_color(
+    spec: &str,
+    emu: &dyn Emulator,
+) -> Result<crate::profile::Rgb, TuiTestError> {
+    use crate::assert::color::Expected;
+    use crate::profile::ColorSlot;
+    // Not the parse error itself: it offers `default` as a spelling, which the
+    // next arm rejects, so a typo would be answered with advice that fails.
+    let invalid = || {
+        TuiTestError::usage(format!(
+            "terminal color must be ansi256 (0-255), hex (#rrggbb), or rgb (r,g,b) (got: {spec:?})"
+        ))
+    };
+    match Expected::parse(spec).map_err(|_| invalid())? {
+        Expected::Default => Err(TuiTestError::usage(
+            "'default' has no meaning for a terminal color; name a hex value or an ANSI index"
+                .to_string(),
+        )),
+        Expected::Ansi256(index) => Ok(emu.color(ColorSlot::Indexed(index))),
+        Expected::Hex(r, g, b) | Expected::Rgb(r, g, b) => Ok(crate::profile::Rgb::new(r, g, b)),
+    }
+}
+
+/// Wait for the terminal's colors to match every slot the caller named.
+///
+/// The three defaults (`OSC 10/11/12`) and any number of palette entries
+/// (`OSC 4`) are matched together, so a program that recolors several slots
+/// at once is asserted as a single state rather than a race between polls.
+fn expect_colors(
+    session: &TerminalSession,
+    foreground: Option<&str>,
+    background: Option<&str>,
+    cursor: Option<&str>,
+    palette: &[(u8, String)],
+    timeout_ms: u64,
+) -> Result<(), TuiTestError> {
+    use crate::profile::ColorSlot;
+    if foreground.is_none() && background.is_none() && cursor.is_none() && palette.is_empty() {
+        return Err(TuiTestError::usage(
+            "expect colors needs at least one of --foreground, --background, --cursor, or --palette",
+        ));
+    }
+    // Resolve once, so a malformed color is a usage error rather than a wait
+    // that can never succeed, and an indexed color is read against the
+    // palette in force now rather than re-resolved on every poll.
+    let (wanted, wanted_palette) = {
+        let state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let resolve = |spec: Option<&str>| -> Result<Option<crate::profile::Rgb>, TuiTestError> {
+            spec.map(|spec| resolve_expected_color(spec, state.emu.as_ref()))
+                .transpose()
+        };
+        let defaults = [resolve(foreground)?, resolve(background)?, resolve(cursor)?];
+        let entries = palette
+            .iter()
+            .map(|(index, spec)| Ok((*index, resolve_expected_color(spec, state.emu.as_ref())?)))
+            .collect::<Result<Vec<_>, TuiTestError>>()?;
+        (defaults, entries)
+    };
+
+    let mut matched = false;
+    let mut last = None;
+    poll_until(
+        || {
+            let (actual, actual_palette) = {
+                let state = session
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let defaults = [
+                    state.emu.color(ColorSlot::Foreground),
+                    state.emu.color(ColorSlot::Background),
+                    state.emu.color(ColorSlot::Cursor),
+                ];
+                let entries = wanted_palette
+                    .iter()
+                    .map(|(index, _)| (*index, state.emu.color(ColorSlot::Indexed(*index))))
+                    .collect::<Vec<_>>();
+                (defaults, entries)
+            };
+            matched = wanted
+                .iter()
+                .zip(actual)
+                .all(|(expected, actual)| expected.is_none_or(|expected| expected == actual))
+                && wanted_palette
+                    .iter()
+                    .zip(&actual_palette)
+                    .all(|((_, expected), (_, actual))| expected == actual);
+            last = Some((actual, actual_palette));
+            matched || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if matched {
+        return Ok(());
+    }
+    let ([fg, bg, cur], entries) = last.expect("the colors are read at least once");
+    // Only the slots that were asked about: naming a foreground the caller
+    // never mentioned invites reading it as the thing that failed.
+    let mut parts = Vec::new();
+    for (label, wanted, actual) in [
+        ("foreground", wanted[0], fg),
+        ("background", wanted[1], bg),
+        ("cursor", wanted[2], cur),
+    ] {
+        if let Some(wanted) = wanted {
+            parts.push(format!(
+                "{label} {} (wanted {})",
+                actual.to_hex(),
+                wanted.to_hex()
+            ));
+        }
+    }
+    for ((index, wanted), (_, actual)) in wanted_palette.iter().zip(&entries) {
+        parts.push(format!(
+            "palette {index} {} (wanted {})",
+            actual.to_hex(),
+            wanted.to_hex()
+        ));
+    }
+    Err(TuiTestError::assertion(format!(
+        "colors did not match within {timeout_ms}ms; {}",
+        parts.join(", ")
+    )))
 }
 
 fn modes_of(emu: &dyn Emulator) -> std::collections::BTreeMap<String, bool> {
@@ -2442,6 +2629,81 @@ mod tests {
             !svg.contains("#ff00ff"),
             "later cursor state must not leak in: {svg}"
         );
+    }
+
+    /// `OSC 10/11/12` move the three defaults, and each reset frees only its
+    /// own slot back to the profile.
+    #[test]
+    fn reported_colors_follow_the_dynamic_color_sequences() {
+        let profile = Profile::default();
+        let mut emu = AlacrittyEmu::new(10, 2, &profile);
+        let before = colors_of(&emu, &profile);
+
+        emu.process(b"\x1b]10;#111111\x07\x1b]11;#222222\x07\x1b]12;#333333\x07");
+        let set = colors_of(&emu, &profile);
+        assert_eq!(set.foreground, "#111111");
+        assert_eq!(set.background, "#222222");
+        assert_eq!(set.cursor, "#333333");
+
+        emu.process(b"\x1b]111\x07");
+        let reset = colors_of(&emu, &profile);
+        assert_eq!(
+            reset.background, before.background,
+            "111 restores the profile background"
+        );
+        assert_eq!(reset.foreground, "#111111", "and leaves the others alone");
+        assert_eq!(reset.cursor, "#333333");
+    }
+
+    /// The palette is reported as what a program changed, so an untouched
+    /// terminal reports nothing and `OSC 104` empties it again.
+    #[test]
+    fn reported_palette_names_only_the_entries_a_program_moved() {
+        let profile = Profile::default();
+        let mut emu = AlacrittyEmu::new(10, 2, &profile);
+        assert!(
+            colors_of(&emu, &profile).palette.is_empty(),
+            "nothing has overridden the palette yet"
+        );
+
+        emu.process(b"\x1b]4;1;#00ff00\x07");
+        assert_eq!(
+            colors_of(&emu, &profile).palette,
+            [(1, "#00ff00".to_string())].into_iter().collect(),
+            "only the slot that moved is named"
+        );
+
+        emu.process(b"\x1b]104\x07");
+        assert!(
+            colors_of(&emu, &profile).palette.is_empty(),
+            "104 restores the whole palette"
+        );
+    }
+
+    /// A caller names a color the same way `--fg` lets them, and an index
+    /// resolves through this session's palette rather than a fixed table.
+    #[test]
+    fn an_expected_color_accepts_hex_and_an_ansi_index() {
+        let profile = Profile::default();
+        let emu = AlacrittyEmu::new(10, 2, &profile);
+        assert_eq!(
+            resolve_expected_color("#010203", &emu).unwrap(),
+            crate::profile::Rgb::new(1, 2, 3)
+        );
+        assert_eq!(
+            resolve_expected_color("1", &emu).unwrap(),
+            emu.color(crate::profile::ColorSlot::Indexed(1)),
+            "an index reads the session's own palette"
+        );
+    }
+
+    /// `default` is the one spelling that cannot mean anything here: these
+    /// slots *are* the defaults, so there is nothing for it to refer to.
+    #[test]
+    fn default_is_rejected_as_a_terminal_color() {
+        let emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        let error = resolve_expected_color("default", &emu).unwrap_err();
+        assert!(format!("{error:?}").contains("no meaning"), "{error:?}");
     }
 
     #[test]

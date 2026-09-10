@@ -28,7 +28,9 @@ use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{
     Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
 };
-use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape, KeyboardMode, TerminalMode};
+use crate::terminal::emu::{
+    Clipboard, ClipboardType, ColorTable, CursorShape, KeyboardMode, TerminalMode,
+};
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
     RgbColor {
@@ -643,6 +645,23 @@ impl GhosttyCore {
             .map(from_ghostty_rgb)
             .or(configured)
             .ok_or_else(|| anyhow!("Ghostty returned no color for {slot:?}"))
+    }
+    /// Every color at once, reading the palette a single time.
+    ///
+    /// `color` fetches `color_palette()` on every indexed lookup, which is
+    /// fine once and wasteful 256 times over. Ghostty always has a value for
+    /// an indexed slot, so the palette answers those directly; only the three
+    /// defaults can be unset and fall back to the profile.
+    pub(super) fn colors(&self) -> Result<ColorTable> {
+        let palette = self.terminal.color_palette().context("reading palette")?;
+        Ok(ColorTable {
+            foreground: self.color(ColorSlot::Foreground)?,
+            background: self.color(ColorSlot::Background)?,
+            cursor: self.color(ColorSlot::Cursor)?,
+            palette: std::array::from_fn(|index| {
+                from_ghostty_rgb(palette.get(PaletteIndex(index as u8)))
+            }),
+        })
     }
 }
 

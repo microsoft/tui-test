@@ -161,6 +161,7 @@ class State:
     bell_count: int = 0
     modes: Dict[str, bool] = field(default_factory=dict)
     mouse_mode: str = "none"
+    colors: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "State":
@@ -177,6 +178,7 @@ class State:
             bell_count=d.get("bell_count", 0),
             modes=d.get("modes", {}),
             mouse_mode=d.get("mouse_mode", "none"),
+            colors=d.get("colors", {}),
             timeouts=Timeouts(**d["timeouts"]),
             text=d.get("text", ""),
             session_shell=d.get("session_shell"),

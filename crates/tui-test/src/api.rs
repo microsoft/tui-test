@@ -538,6 +538,7 @@ pub enum Operation {
     GetCwd,
     GetCursor,
     GetModes,
+    GetColors,
     GetSize,
     GetTitle,
     GetClipboard,
@@ -625,6 +626,15 @@ pub enum Operation {
         enabled: bool,
         timeout_ms: Option<u64>,
     },
+    /// Wait for the terminal's colors to match those named.
+    ExpectColors {
+        foreground: Option<String>,
+        background: Option<String>,
+        cursor: Option<String>,
+        /// `OSC 4` palette entries to match, as `(index, color)`.
+        palette: Vec<(u8, String)>,
+        timeout_ms: Option<u64>,
+    },
     /// Wait for the cursor to match every property the caller named.
     ExpectCursor {
         visible: Option<bool>,
@@ -696,6 +706,7 @@ pub enum OperationResult {
     Clipboard(String),
     Cursor(Cursor),
     Modes(BTreeMap<String, bool>),
+    Colors(TerminalColors),
     Size(Size),
     BellCount(u64),
     BellEvents(Vec<BellEvent>),
@@ -783,6 +794,29 @@ pub struct OpenResult {
     pub recording: String,
 }
 
+/// The colors the terminal paints with.
+///
+/// Grouped because they are one concept — the colors a program chooses
+/// rather than the ones a cell names — set by sibling sequences and reset by
+/// `OSC 104` and `OSC 110/111/112`. A slot nothing has overridden reports the
+/// color the session's profile gives it, so every field always has an
+/// answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TerminalColors {
+    /// The default foreground (`OSC 10`).
+    pub foreground: String,
+    /// The default background (`OSC 11`).
+    pub background: String,
+    /// The cursor color (`OSC 12`).
+    pub cursor: String,
+    /// Palette entries a program moved with `OSC 4`, keyed by index.
+    ///
+    /// Only the entries that differ from the profile are listed: a program
+    /// that recolors slot 1 is interesting, and the 255 it left alone are
+    /// not.
+    pub palette: std::collections::BTreeMap<u8, String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Cursor {
     pub x: u16,
@@ -868,6 +902,9 @@ pub struct State {
     /// `CSI ?1000 h` on its own is `click`, whether or not `CSI ?1006 h`
     /// followed it to ask for SGR coordinates.
     pub mouse_mode: String,
+    /// The terminal's colors, as `#rrggbb`: the three defaults and any
+    /// palette entry a program overrode.
+    pub colors: TerminalColors,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }

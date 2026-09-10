@@ -301,8 +301,25 @@ export interface State {
   bell_count: number
   modes: Record<string, boolean>
   mouse_mode: string
+  colors: TerminalColors
   timeouts: EffectiveTimeouts
   text: string
+}
+
+/** The colors the terminal is painting with. */
+export interface TerminalColors {
+  /** The default foreground (`OSC 10`). */
+  foreground: string
+  /** The default background (`OSC 11`). */
+  background: string
+  /** The cursor color (`OSC 12`). */
+  cursor: string
+  /**
+   * Palette entries a program overrode (`OSC 4`), keyed by index.
+   *
+   * Only entries that differ from the profile are listed.
+   */
+  palette: Record<string, string>
 }
 
 export interface TextMatch {

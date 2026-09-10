@@ -341,6 +341,7 @@ fn map_field(field: GetArg) -> GetField {
         GetArg::Cwd => GetField::Cwd,
         GetArg::Cursor => GetField::Cursor,
         GetArg::Modes => GetField::Modes,
+        GetArg::Colors => GetField::Colors,
         GetArg::Size => GetField::Size,
         GetArg::Title => GetField::Title,
         GetArg::Clipboard => GetField::Clipboard,
@@ -592,6 +593,19 @@ fn map_expect(what: ExpectCmd) -> Request {
         ExpectCmd::Mode { name, off, timeout } => Request::ExpectMode {
             mode: name,
             enabled: !off,
+            timeout_ms: timeout,
+        },
+        ExpectCmd::Colors {
+            foreground,
+            background,
+            cursor,
+            palette,
+            timeout,
+        } => Request::ExpectColors {
+            foreground,
+            background,
+            cursor,
+            palette,
             timeout_ms: timeout,
         },
         ExpectCmd::Cursor {

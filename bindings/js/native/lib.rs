@@ -21,9 +21,9 @@ use tui_test::{
     Operation, OperationResult, RecordingFormat as CoreRecordingFormat,
     RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
     Size as CoreSize, SnapshotResult as CoreSnapshotResult, State as CoreState,
-    StyleSelector as CoreStyleSelector, TextMatch as CoreTextMatch,
-    TextSelector as CoreTextSelector, TextStyle as CoreTextStyle, Timeouts as CoreTimeouts,
-    TuiTestError, WhitespaceMode as CoreWhitespaceMode,
+    StyleSelector as CoreStyleSelector, TerminalColors as CoreTerminalColors,
+    TextMatch as CoreTextMatch, TextSelector as CoreTextSelector, TextStyle as CoreTextStyle,
+    Timeouts as CoreTimeouts, TuiTestError, WhitespaceMode as CoreWhitespaceMode,
 };
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
@@ -255,8 +255,39 @@ pub struct State {
     pub modes: HashMap<String, bool>,
     #[napi(js_name = "mouse_mode")]
     pub mouse_mode: String,
+    pub colors: TerminalColors,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
+}
+
+/// The colors the terminal is painting with.
+#[napi(object)]
+pub struct TerminalColors {
+    /// The default foreground (`OSC 10`).
+    pub foreground: String,
+    /// The default background (`OSC 11`).
+    pub background: String,
+    /// The cursor color (`OSC 12`).
+    pub cursor: String,
+    /// Palette entries a program overrode (`OSC 4`), keyed by index.
+    ///
+    /// Only entries that differ from the profile are listed.
+    pub palette: HashMap<String, String>,
+}
+
+impl From<CoreTerminalColors> for TerminalColors {
+    fn from(value: CoreTerminalColors) -> Self {
+        Self {
+            foreground: value.foreground,
+            background: value.background,
+            cursor: value.cursor,
+            palette: value
+                .palette
+                .into_iter()
+                .map(|(index, color)| (index.to_string(), color))
+                .collect(),
+        }
+    }
 }
 
 impl From<CoreState> for State {
@@ -275,6 +306,7 @@ impl From<CoreState> for State {
             bell_count: value.bell_count as f64,
             modes: value.modes.into_iter().collect(),
             mouse_mode: value.mouse_mode,
+            colors: value.colors.into(),
             timeouts: value.timeouts.into(),
             text: value.text,
         }

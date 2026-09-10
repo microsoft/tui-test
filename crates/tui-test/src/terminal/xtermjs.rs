@@ -29,7 +29,7 @@ use rquickjs::{Context, Ctx, Function, Object, Runtime};
 use crate::event::BellTracker;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{ClipboardValidator, CursorShape, Emulator, TerminalMode};
+use crate::terminal::emu::{ClipboardValidator, ColorTable, CursorShape, Emulator, TerminalMode};
 
 const XTERM_BUNDLE: &str = include_str!("../../assets/xtermjs/xterm-headless.js");
 const UNICODE11: &str = include_str!("../../assets/xtermjs/addon-unicode11.js");
@@ -520,6 +520,38 @@ impl Emulator for XtermJsEmu {
             ),
             _ => configured,
         }
+    }
+
+    fn colors(&self) -> ColorTable {
+        let colors = &self.profile.colors;
+        let mut table = ColorTable {
+            foreground: colors.foreground,
+            background: colors.background,
+            cursor: colors.cursor,
+            palette: std::array::from_fn(|index| colors.rgb(index as u8)),
+        };
+        // One crossing carrying only the slots a program changed, rather than
+        // 259 asking about slots it mostly has not.
+        let flat: Vec<i32> = self.call("colorOverrides");
+        for [slot, value] in flat.as_chunks::<2>().0 {
+            let (slot, value) = (*slot, *value);
+            if value < 0 {
+                continue;
+            }
+            let rgb = Rgb::new(
+                ((value >> 16) & 0xff) as u8,
+                ((value >> 8) & 0xff) as u8,
+                (value & 0xff) as u8,
+            );
+            match slot as usize {
+                FOREGROUND => table.foreground = rgb,
+                BACKGROUND => table.background = rgb,
+                CURSOR => table.cursor = rgb,
+                index if index < 256 => table.palette[index] = rgb,
+                _ => {}
+            }
+        }
+        table
     }
 
     fn viewable_rows(&self) -> Vec<Vec<EmuCell>> {

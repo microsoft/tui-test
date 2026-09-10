@@ -283,6 +283,18 @@ impl MouseModeTracker {
     }
 }
 
+/// Every color a terminal currently paints with.
+///
+/// Read as a unit so a backend that crosses a process or language boundary
+/// pays for one crossing rather than 259.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColorTable {
+    pub foreground: Rgb,
+    pub background: Rgb,
+    pub cursor: Rgb,
+    pub palette: [Rgb; 256],
+}
+
 /// Clipboard target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardType {
@@ -531,6 +543,24 @@ pub trait Emulator: Send {
     /// program was told.
     ///
     fn color(&self, slot: ColorSlot) -> Rgb;
+
+    /// Every color at once: the three defaults and all 256 palette entries.
+    ///
+    /// Reading them one slot at a time costs a boundary crossing per slot, and
+    /// there are 259. On the ghostty backend each one is a worker round trip,
+    /// which put a single read of the terminal's colors at milliseconds; a
+    /// backend that pays to cross overrides this and crosses once.
+    ///
+    /// The default asks one slot at a time, which is what a backend reading
+    /// its own memory should do.
+    fn colors(&self) -> ColorTable {
+        ColorTable {
+            foreground: self.color(ColorSlot::Foreground),
+            background: self.color(ColorSlot::Background),
+            cursor: self.color(ColorSlot::Cursor),
+            palette: std::array::from_fn(|index| self.color(ColorSlot::Indexed(index as u8))),
+        }
+    }
 
     /// Resolve a cell's color, where `None` is the terminal default.
     ///
