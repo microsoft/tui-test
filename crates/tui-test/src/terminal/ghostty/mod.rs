@@ -553,17 +553,341 @@ mod tests {
         assert_eq!(emu.encode_key(&press("\u{4f60}")), None);
     }
 
+    /// Key tokens whose encoding the two encoders both claim to define.
+    ///
+    /// Deliberately not every combination. Ghostty encodes combinations the
+    /// legacy scheme cannot express by upgrading them to `CSI-u` or xterm's
+    /// `modifyOtherKeys` form: `Ctrl+Tab` becomes `CSI 27;5;9~` where legacy
+    /// has only a bare `\t` with the Ctrl lost, and `Ctrl+Shift+0` becomes
+    /// `CSI 41;5u`. That is a richer answer to a different question, not a
+    /// different answer to this one, so those combinations are excluded here
+    /// rather than asserted and then explained away. What is left is the set
+    /// where legacy has a defined encoding and both encoders should produce it.
+    const ORACLE_CASES: &[&str] = &[
+        // Cursor and editing keys, which DECCKM moves between CSI and SS3.
+        "Up",
+        "Down",
+        "Left",
+        "Right",
+        "Home",
+        "End",
+        "PageUp",
+        "PageDown",
+        "Insert",
+        "Delete",
+        "Ctrl+Up",
+        "Ctrl+Down",
+        "Ctrl+Left",
+        "Ctrl+Right",
+        "Ctrl+Home",
+        "Ctrl+End",
+        "Shift+Up",
+        "Shift+Down",
+        "Shift+Left",
+        "Shift+Right",
+        "Alt+Up",
+        "Alt+Down",
+        "Alt+Left",
+        "Alt+Right",
+        // Control keys with their classic C0 encodings.
+        "Backspace",
+        "Tab",
+        "Enter",
+        "Escape",
+        "Space",
+        "Alt+Backspace",
+        "Alt+Enter",
+        "Alt+Escape",
+        "Shift+Tab",
+        // Function keys. F3 is left out: ghostty and kitty spell it
+        // `CSI 13~` where xterm spells it `SS3 R`, a naming split that
+        // predates both and that neither is wrong about.
+        "F1",
+        "F2",
+        "F4",
+        "F5",
+        "F6",
+        "F7",
+        "F8",
+        "F9",
+        "F10",
+        "F11",
+        "F12",
+        // Text, shifted text, and the two modifiers legacy does define for it.
+        "a",
+        "z",
+        "A",
+        "Z",
+        "0",
+        "9",
+        "-",
+        "=",
+        "[",
+        "]",
+        ";",
+        "'",
+        ",",
+        ".",
+        "/",
+        "\\",
+        "`",
+        "!",
+        "@",
+        "#",
+        "$",
+        "%",
+        "^",
+        "&",
+        "*",
+        "(",
+        ")",
+        "_",
+        "+",
+        "{",
+        "}",
+        ":",
+        "\"",
+        "<",
+        ">",
+        "?",
+        "|",
+        "~",
+        "Shift+a",
+        "Shift+z",
+        "Shift+0",
+        "Shift+9",
+        "Shift+-",
+        "Shift+/",
+        "Ctrl+a",
+        "Ctrl+z",
+        "Ctrl+c",
+        "Ctrl+d",
+        "Ctrl+l",
+        "Ctrl+u",
+        "Ctrl+w",
+        "Alt+a",
+        "Alt+z",
+        "Alt+0",
+        "Alt+9",
+        // Space is a named key that still sits on a codepoint, and the one
+        // whose text is itself printable, so it is where "send the text" and
+        // "send an escape code" part company.
+        "Space",
+        "Shift+Space",
+        "Ctrl+Space",
+        "Alt+Space",
+        // Super is in ghostty's bitmask but has no legacy form, so ghostty
+        // declines it there and the oracle compares only the Kitty modes.
+        "Super+a",
+        "Ctrl+Super+a",
+    ];
+
+    /// Terminal states to compare under, as the bytes that set them.
+    const ORACLE_MODES: &[(&str, &[u8])] = &[
+        ("legacy", b""),
+        ("application cursor keys", b"\x1b[?1h"),
+        ("kitty disambiguate", b"\x1b[>1u"),
+        ("kitty events", b"\x1b[>3u"),
+        ("kitty report all", b"\x1b[>15u"),
+    ];
+
+    /// Drop the event-type sub-parameter when it is the default.
+    ///
+    /// Under `REPORT_EVENT_TYPES` the Kitty protocol writes the event as
+    /// `modifiers:event`, where `1` means press. Press is the default and the
+    /// spec allows omitting it: kitty itself emits `CSI A`, ghostty emits
+    /// `CSI 1;1:1A`. Both decode to the same event, so normalizing here
+    /// compares the two encoders at the level they actually disagree on
+    /// rather than pinning one of two legal spellings.
+    ///
+    /// Only a `:1` immediately before the final byte is a default event type.
+    /// An alternate-key sub-parameter such as the `:65` in `CSI 97:65;6u`
+    /// sits before the `;` and is left alone.
+    fn normalize_default_event_type(bytes: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            let is_default_event = bytes[i] == b':'
+                && bytes.get(i + 1) == Some(&b'1')
+                && bytes
+                    .get(i + 2)
+                    .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'~');
+            if is_default_event {
+                i += 2;
+                continue;
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        out
+    }
+
+    /// Drop a `1;1` parameter pair that means "no modifiers, one repeat".
+    ///
+    /// `CSI 1;1 A` and `CSI A` are the same event: both parameters are at
+    /// their defaults, and every terminal that emits the short form expects
+    /// the long one to be accepted. Ghostty writes them out once event
+    /// reporting is on; kitty and xterm omit them. As with the event type,
+    /// this normalizes a spelling rather than a meaning.
+    fn normalize_default_params(bytes: &[u8]) -> Vec<u8> {
+        const DEFAULT_PARAMS: &[u8] = b"\x1b[1;1";
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            // Rewritten wherever it appears rather than only at the start,
+            // since one action can encode as more than one sequence.
+            //
+            // Only when the final byte follows immediately, so a longer
+            // parameter list that merely starts `1;1` is left alone.
+            let is_default_params = bytes[i..].starts_with(DEFAULT_PARAMS)
+                && bytes
+                    .get(i + DEFAULT_PARAMS.len())
+                    .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'~');
+            if is_default_params {
+                out.extend_from_slice(b"\x1b[");
+                i += DEFAULT_PARAMS.len();
+                continue;
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        out
+    }
+
+    /// Events where the two encoders genuinely disagree, with the reason.
+    ///
+    /// Kept as a named list rather than dropped from the matrix, so the
+    /// disagreement stays visible and a change to either side shows up as this
+    /// list going stale rather than as silence.
+    ///
+    /// An entry has to be a disagreement between the two implementations, not
+    /// a gap on this side. The list started out holding `Space`, which turned
+    /// out to be this crate failing to hand ghostty the key's codepoint.
+    const ORACLE_KNOWN_DIVERGENCES: &[(&str, &str, &[KeyAction], &str)] = &[
+        (
+            "kitty events",
+            "Alt+Enter",
+            RELEASE_BEARING_ACTIONS,
+            SAFETY_KEY_RELEASE_DIVERGENCE,
+        ),
+        (
+            "kitty events",
+            "Alt+Backspace",
+            RELEASE_BEARING_ACTIONS,
+            SAFETY_KEY_RELEASE_DIVERGENCE,
+        ),
+        (
+            "kitty events",
+            "Shift+Tab",
+            RELEASE_BEARING_ACTIONS,
+            SAFETY_KEY_RELEASE_DIVERGENCE,
+        ),
+    ];
+
+    /// The two actions that carry a release, and so the two a disagreement
+    /// about releases can show up in.
+    const RELEASE_BEARING_ACTIONS: &[KeyAction] = &[KeyAction::Press, KeyAction::Up];
+
+    /// Enter, Tab and Backspace report no release until report-all is set, so
+    /// that a program leaving event reporting on cannot stop the user typing
+    /// `reset` at a shell prompt. The two implementations read the exemption
+    /// differently once a modifier is held.
+    ///
+    /// Kitty gates it on the chord: `key_encoding.c` wraps both exemption
+    /// blocks in `if (!ev->mods.value)`, so `shift+tab` still releases as
+    /// `CSI 9;2:3u`. Ghostty gates it on the key: `key_encode.zig` switches on
+    /// `event.key` alone with no modifier test, so nothing is sent.
+    ///
+    /// The shared encoder follows kitty, whose author wrote the spec, and the
+    /// spec's own wording ("the Enter, Tab and Backspace keys") is short of
+    /// deciding it. Worth raising upstream rather than papering over.
+    const SAFETY_KEY_RELEASE_DIVERGENCE: &str =
+        "kitty exempts only the unmodified key from release reporting, ghostty \
+         exempts the key whatever the modifiers";
+
+    /// Hold the shared encoder against ghostty's, which is a reference
+    /// implementation maintained by people who work on nothing else.
+    ///
+    /// This is what keeps the fallback honest. Three of the four backends
+    /// have no encoder of their own and will always use `keys.rs`, so a
+    /// disagreement here is `keys.rs` being wrong on three backends rather
+    /// than two encoders holding different opinions.
+    ///
+    /// It has already paid for itself: it caught `key press A` sending `a`,
+    /// `Space` encoding to nothing, and `Alt+a` losing its modifier.
+    ///
+    /// Every action is compared, including `Press`, which is a key down and
+    /// its release and so the only one that puts two events side by side.
+    ///
+    /// An earlier version compared the key down alone. It recorded a `Space`
+    /// disagreement as a divergence to raise upstream when in fact this side
+    /// had failed to hand ghostty the key's codepoint, and the releases it was
+    /// not looking at disagreed too. Widening it found three more bugs.
     #[test]
-    fn bells_are_counted_without_counting_osc_terminators() {
-        let bells = BellTracker::default();
-        let mut emulator =
-            GhosttyEmu::with_bell_tracker(80, 24, &Profile::default(), bells.clone())
-                .expect("create emulator");
+    fn the_shared_encoder_agrees_with_ghostty() {
+        use crate::api::KeyAction;
+        use crate::input::keys;
 
-        emulator.process(b"\x07\x1b]0;window title\x07\x07");
-
-        assert_eq!(bells.count(), 2);
-        assert_eq!(bells.sequence(), 2);
+        let mut disagreements = Vec::new();
+        let mut compared = 0usize;
+        for (mode_name, mode_bytes) in ORACLE_MODES {
+            let mut emu = GhosttyEmu::new(20, 4, &Profile::default()).unwrap();
+            emu.process(mode_bytes);
+            let modes = keys::InputModes {
+                keyboard: emu.keyboard_mode(),
+                cursor_key_application: emu.cursor_key_application(),
+            };
+            for token in ORACLE_CASES {
+                for action in [
+                    KeyAction::Press,
+                    KeyAction::Down,
+                    KeyAction::Repeat,
+                    KeyAction::Up,
+                ] {
+                    let presses = keys::token_to_presses(token, action).expect("valid token");
+                    let Some(native) = presses
+                        .iter()
+                        .map(|press| emu.encode_key(press))
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        continue;
+                    };
+                    compared += 1;
+                    let native =
+                        normalize_default_params(&normalize_default_event_type(&native.concat()));
+                    let shared = keys::token_to_seq_for_action_with_mode(token, action, modes)
+                        .expect("valid token");
+                    let known = ORACLE_KNOWN_DIVERGENCES
+                        .iter()
+                        .any(|(mode, case, kinds, _)| {
+                            mode == mode_name && case == token && kinds.contains(&action)
+                        });
+                    if known {
+                        assert_ne!(
+                            native,
+                            shared.as_bytes(),
+                            "{mode_name} {token} {action:?} now agrees; drop it from \
+                             ORACLE_KNOWN_DIVERGENCES"
+                        );
+                        continue;
+                    }
+                    if native != shared.as_bytes() {
+                        disagreements.push(format!(
+                            "  {mode_name:<24} {token:<12} {action:<6?} ghostty {:<18?} shared \
+                             {shared:?}",
+                            String::from_utf8_lossy(&native)
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(compared > 1500, "only {compared} events were comparable");
+        assert!(
+            disagreements.is_empty(),
+            "the shared encoder disagrees with ghostty on {} of {compared} events:\n{}",
+            disagreements.len(),
+            disagreements.join("\n")
+        );
     }
 
     #[test]

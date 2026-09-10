@@ -263,7 +263,6 @@ pub trait Emulator: Send {
     fn bracketed_paste_mode(&self) -> bool {
         false
     }
-
     /// Encode one key event with the backend's own key encoder.
     ///
     /// `None` means the backend has no encoder, or has one that cannot express
