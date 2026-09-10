@@ -163,6 +163,23 @@ pub struct WindowStyle {
     pub divider: Rgb,
 }
 
+impl WindowStyle {
+    /// The traffic lights to draw, empty when they are turned off or there is
+    /// no title bar to hold them.
+    pub fn traffic_lights(&self) -> &[Rgb] {
+        const LIGHTS: [Rgb; 3] = [
+            Rgb::new(236, 106, 94),
+            Rgb::new(244, 191, 79),
+            Rgb::new(97, 197, 84),
+        ];
+        if self.title_bar && self.traffic_lights {
+            &LIGHTS
+        } else {
+            &[]
+        }
+    }
+}
+
 impl Default for WindowStyle {
     fn default() -> Self {
         Self {

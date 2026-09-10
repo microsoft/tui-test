@@ -1,8 +1,9 @@
 #[cfg(feature = "recording-font-jetbrains-mono-styles")]
 use super::font::{FontSystem, GlyphKey};
-use super::{FrameRenderer, GridRenderer, RgbaFrame, CANVAS_BACKGROUND, CANVAS_PADDING};
+use super::{FrameRenderer, GridRenderer, RgbaFrame};
 use crate::profile::Profile;
 use crate::record::frames::Frame;
+use crate::render::style::Style;
 use crate::render::svg::{RenderColors, RenderState};
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::cell::{Attrs, Color, EmuCell, CONTINUATION};
@@ -60,7 +61,7 @@ fn scaled_renderers_multiply_output_dimensions() {
 #[test]
 fn fractional_zoom_shrinks_output_without_changing_grid_dimensions() {
     let standard = GridRenderer::new(80, 30);
-    let half = GridRenderer::with_zoom(80, 30, 0.5).unwrap();
+    let half = GridRenderer::with_zoom(80, 30, 0.5, Style::default()).unwrap();
     assert_eq!(
         half.pixel_size(),
         (
@@ -104,10 +105,12 @@ fn adjacent_background_cells_are_seamless_at_fractional_zoom() {
     ];
 
     for zoom in [1.02, 1.25] {
-        let mut renderer = GridRenderer::with_zoom(backgrounds.len() as u16, rows, zoom).unwrap();
+        let mut renderer =
+            GridRenderer::with_zoom(backgrounds.len() as u16, rows, zoom, Style::default())
+                .unwrap();
         let image = renderer.render(&frame(grid.clone())).unwrap();
         let (panel_width, panel_height) =
-            crate::render::svg::pixel_size(backgrounds.len() as u16, rows);
+            crate::render::svg::pixel_size(backgrounds.len() as u16, rows, &Style::default());
         let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
         let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
         let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
@@ -152,9 +155,9 @@ fn block_cursor_is_aligned_with_background_cells_at_fractional_zoom() {
         let cursor = content
             .render_state
             .color(crate::profile::ColorSlot::Cursor);
-        let mut renderer = GridRenderer::with_zoom(4, 1, zoom).unwrap();
+        let mut renderer = GridRenderer::with_zoom(4, 1, zoom, Style::default()).unwrap();
         let image = renderer.render(&content).unwrap();
-        let (panel_width, panel_height) = crate::render::svg::pixel_size(4, 1);
+        let (panel_width, panel_height) = crate::render::svg::pixel_size(4, 1, &Style::default());
         let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
         let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
         let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
@@ -188,7 +191,7 @@ fn block_cursor_is_aligned_with_background_cells_at_fractional_zoom() {
 #[test]
 fn invalid_zoom_is_rejected() {
     for zoom in [0.0, -1.0, f64::INFINITY, f64::NAN] {
-        assert!(GridRenderer::with_zoom(1, 1, zoom).is_err());
+        assert!(GridRenderer::with_zoom(1, 1, zoom, Style::default()).is_err());
     }
 }
 
@@ -201,17 +204,20 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
     let expected_background = content.render_state.resolve(None, false);
     let image = renderer.render(&content).unwrap();
     let (width, height) = image.dimensions();
-    let (panel_width, panel_height) = crate::render::svg::pixel_size(2, 1);
+    let (panel_width, panel_height) = crate::render::svg::pixel_size(2, 1, &Style::default());
     let origin_x = (width - panel_width) / 2;
     let origin_y = (height - panel_height) / 2;
 
-    assert_eq!(CANVAS_BACKGROUND, crate::profile::Rgb::new(104, 103, 170));
+    assert_eq!(
+        Style::default().background,
+        crate::profile::Rgb::new(104, 103, 170)
+    );
     assert_eq!(
         pixel_at(&image, 0, 0),
         [
-            CANVAS_BACKGROUND.r,
-            CANVAS_BACKGROUND.g,
-            CANVAS_BACKGROUND.b,
+            Style::default().background.r,
+            Style::default().background.g,
+            Style::default().background.b,
             255
         ]
     );
@@ -223,7 +229,7 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
         pixel_at(
             &image,
             origin_x + panel_width / 2,
-            origin_y + crate::render::svg::HEADER_H as u32 - 1
+            origin_y + Style::default().header_height() as u32 - 1
         ),
         [0, 0, 0, 255]
     );
@@ -231,7 +237,7 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
         pixel_at(
             &image,
             origin_x + (crate::render::svg::MARGIN_X + 5.0) as u32,
-            origin_y + (crate::render::svg::HEADER_H / 2.0) as u32
+            origin_y + (Style::default().header_height() / 2.0) as u32
         ),
         [105, 17, 10, 255]
     );
@@ -239,7 +245,7 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
         pixel_at(
             &image,
             origin_x + panel_width / 2,
-            origin_y + crate::render::svg::HEADER_H as u32 + 1
+            origin_y + Style::default().header_height() as u32 + 1
         ),
         [
             expected_background.r,
@@ -253,7 +259,8 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
             &image,
             origin_x + panel_width / 2,
             origin_y
-                + (crate::render::svg::HEADER_H + crate::render::svg::CONTENT_PADDING_TOP) as u32
+                + (Style::default().header_height() + crate::render::svg::CONTENT_PADDING_TOP)
+                    as u32
                 + 1
         ),
         [1, 2, 3, 255]
@@ -372,9 +379,9 @@ fn frame_palette_and_cursor_state_change_the_pixels() {
     assert_ne!(first_pixels, second_pixels);
 
     let width = renderer.pixel_size().0 as usize;
-    let x = (CANVAS_PADDING + super::super::svg::MARGIN_X as u32) as usize;
-    let y = (CANVAS_PADDING
-        + super::super::svg::HEADER_H as u32
+    let x = (Style::default().padding + super::super::svg::MARGIN_X as u32) as usize;
+    let y = (Style::default().padding
+        + Style::default().header_height() as u32
         + super::super::svg::CONTENT_PADDING_TOP as u32) as usize;
     let cursor = (y * width + x) * 4;
     assert_eq!(&first_pixels[cursor..cursor + 3], &[255, 0, 255]);
@@ -419,15 +426,16 @@ fn color_to_pixel(color: Color) -> [u8; 4] {
 }
 
 fn grid_x(origin_x: f32, column: usize, scale: f32) -> u32 {
-    (origin_x + (super::super::svg::MARGIN_X + column as f32 * super::super::svg::CELL_W) * scale)
+    (origin_x
+        + (super::super::svg::MARGIN_X + column as f32 * Style::default().cell_width()) * scale)
         .round() as u32
 }
 
 fn grid_y(origin_y: f32, row: usize, scale: f32) -> u32 {
     (origin_y
-        + (super::super::svg::HEADER_H
+        + (Style::default().header_height()
             + super::super::svg::CONTENT_PADDING_TOP
-            + row as f32 * super::super::svg::CELL_H)
+            + row as f32 * Style::default().cell_height())
             * scale)
         .round() as u32
 }

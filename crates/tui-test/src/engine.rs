@@ -2541,12 +2541,19 @@ fn screenshot(
         Some(path) => {
             let zoom = crate::api::resolve_zoom(zoom)?;
             let snapshot = svg_snapshot(session, full);
-            let svg = crate::render::svg::render_svg_with_zoom(
+            let style = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .style
+                .clone();
+            let svg = crate::render::svg::render_svg(
                 &snapshot.rows,
                 snapshot.cols,
                 &snapshot.render_state,
                 snapshot.cursor,
                 snapshot.title.as_deref(),
+                &style,
                 zoom,
             );
             std::fs::write(&path, svg)
@@ -2617,6 +2624,8 @@ mod tests {
             &snapshot.render_state,
             snapshot.cursor,
             snapshot.title.as_deref(),
+            &crate::render::style::Style::default(),
+            1.0,
         );
 
         assert_eq!(svg.matches('X').count(), 2, "text plus block redraw: {svg}");

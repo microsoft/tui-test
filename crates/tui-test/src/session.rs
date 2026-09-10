@@ -32,6 +32,8 @@ pub struct TermState {
     /// The profile this session started with, kept so a palette entry a
     /// program overrode can be told apart from one it never touched.
     pub(crate) profile: Profile,
+    /// How this session's screenshots and recordings are drawn.
+    pub(crate) style: crate::render::style::Style,
     /// Shell-integration state, derived from the raw PTY stream rather than
     /// the emulator, so it is identical across backends.
     pub tracker: CommandTracker,
@@ -88,6 +90,7 @@ impl Session {
         let state = Arc::new(Mutex::new(TermState {
             emu: backend.build_with_bells(cols, rows, &profile, bells.clone())?,
             profile,
+            style: crate::render::style::Style::default(),
             tracker: CommandTracker::new(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
@@ -373,6 +376,8 @@ impl Session {
             #[cfg(feature = "recording-raster")]
             zoom,
             #[cfg(feature = "recording-raster")]
+            style: state.style.clone(),
+            #[cfg(feature = "recording-raster")]
             timeline: record::frames::TimelineOptions {
                 fps,
                 speed,
@@ -409,7 +414,12 @@ impl Session {
                 let cast = record::cast::read(&stopped.capture_path)?;
                 let frames = record::frames::from_cast(cast, &stopped.timeline)?;
                 let (max_cols, max_rows) = record::frames::max_dimensions(&frames)?;
-                let mut renderer = GridRenderer::with_zoom(max_cols, max_rows, 2.0 * stopped.zoom)?;
+                let mut renderer = GridRenderer::with_zoom(
+                    max_cols,
+                    max_rows,
+                    2.0 * stopped.zoom,
+                    stopped.style.clone(),
+                )?;
                 crate::render::encode::encode(
                     &temporary_path,
                     stopped.format,
@@ -668,6 +678,7 @@ mod tests {
         let state = Arc::new(Mutex::new(TermState {
             emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
             profile: Profile::default(),
+            style: crate::render::style::Style::default(),
             tracker: CommandTracker::new(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,

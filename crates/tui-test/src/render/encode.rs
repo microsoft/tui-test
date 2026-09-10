@@ -303,6 +303,7 @@ fn gif_timeline(frames: &[Frame]) -> Vec<GifStep> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::style::Style;
     use std::io::BufReader;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -455,16 +456,16 @@ mod tests {
                     );
                     let pixel = decode_first_png_pixel(
                         &path,
-                        (crate::render::raster::CANVAS_PADDING + 20) * scale,
-                        (crate::render::raster::CANVAS_PADDING + 48) * scale,
+                        (Style::default().padding + 20) * scale,
+                        (Style::default().padding + 48) * scale,
                     );
                     assert_eq!(&pixel[..3], &[200, 10, 20]);
                 }
                 RecordingFormat::Gif => {
                     let decoded = decode_gif(
                         &path,
-                        (crate::render::raster::CANVAS_PADDING + 20) * scale,
-                        (crate::render::raster::CANVAS_PADDING + 48) * scale,
+                        (Style::default().padding + 20) * scale,
+                        (Style::default().padding + 48) * scale,
                     );
                     assert_eq!(decoded.frames, 2);
                     assert_eq!(decoded.dimensions, renderer.pixel_size());

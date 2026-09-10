@@ -20,7 +20,7 @@ use draw::{
 };
 use font::{FontSystem, GlyphKey};
 
-pub(crate) use svg::{CANVAS_BACKGROUND, CANVAS_PADDING};
+use crate::render::style::Style;
 
 #[derive(Debug)]
 pub struct RgbaFrame {
@@ -56,6 +56,7 @@ pub struct GridRenderer {
     height: u32,
     pixmap: Pixmap,
     fonts: FontSystem,
+    style: Style,
 }
 
 impl GridRenderer {
@@ -64,16 +65,17 @@ impl GridRenderer {
     }
 
     pub fn with_scale(cols: u16, rows: usize, scale: u32) -> Self {
-        Self::with_zoom(cols, rows, f64::from(scale))
+        Self::with_zoom(cols, rows, f64::from(scale), Style::default())
             .expect("recording raster scale must fit output dimensions")
     }
 
-    pub fn with_zoom(cols: u16, rows: usize, zoom: f64) -> anyhow::Result<Self> {
+    pub fn with_zoom(cols: u16, rows: usize, zoom: f64, style: Style) -> anyhow::Result<Self> {
         if !zoom.is_finite() || zoom <= 0.0 || zoom > f64::from(f32::MAX) {
             anyhow::bail!("recording zoom must be finite and greater than zero");
         }
-        let (base_width, base_height) = svg::pixel_size(cols, rows);
-        let padding = CANVAS_PADDING
+        let (base_width, base_height) = svg::pixel_size(cols, rows, &style);
+        let padding = style
+            .padding
             .checked_mul(2)
             .expect("recording canvas padding must fit in u32");
         let width = base_width
@@ -94,6 +96,7 @@ impl GridRenderer {
                 anyhow::anyhow!("terminal recording dimensions must fit a pixmap")
             })?,
             fonts: FontSystem::new(),
+            style,
         })
     }
 }
@@ -115,15 +118,16 @@ impl FrameRenderer for GridRenderer {
 
         let scale = self.scale;
         let colors = &frame.render_state;
-        let (base_width, base_height) = svg::pixel_size(cols, rows);
+        let style = &self.style;
+        let (base_width, base_height) = svg::pixel_size(cols, rows, style);
         let panel_width = scaled_dimension(base_width, f64::from(self.scale), "frame width")?;
         let panel_height = scaled_dimension(base_height, f64::from(self.scale), "frame height")?;
         let origin_x = (self.width - panel_width) as f32 / 2.0;
         let origin_y = (self.height - panel_height) as f32 / 2.0;
         self.pixmap.fill(tiny_skia::Color::from_rgba8(
-            CANVAS_BACKGROUND.r,
-            CANVAS_BACKGROUND.g,
-            CANVAS_BACKGROUND.b,
+            style.background.r,
+            style.background.g,
+            style.background.b,
             255,
         ));
         draw_shadow(
@@ -133,6 +137,7 @@ impl FrameRenderer for GridRenderer {
             panel_width as f32,
             panel_height as f32,
             scale,
+            style,
         );
         fill_rounded_rect(
             &mut self.pixmap,
@@ -140,7 +145,7 @@ impl FrameRenderer for GridRenderer {
             origin_y,
             panel_width as f32,
             panel_height as f32,
-            svg::WINDOW_RADIUS * scale,
+            style.border.radius * scale,
             colors.resolve(None, false),
         );
         fill_top_rounded_rect(
@@ -148,27 +153,27 @@ impl FrameRenderer for GridRenderer {
             origin_x,
             origin_y,
             panel_width as f32,
-            (svg::HEADER_H - svg::TITLE_DIVIDER_H) * scale,
-            svg::WINDOW_RADIUS * scale,
-            svg::TITLE_BG,
+            (style.header_height() - style.divider_height()) * scale,
+            style.border.radius * scale,
+            style.window.background,
         );
         fill_antialiased_rect(
             &mut self.pixmap,
             origin_x,
-            origin_y + (svg::HEADER_H - svg::TITLE_DIVIDER_H) * scale,
+            origin_y + (style.header_height() - style.divider_height()) * scale,
             panel_width as f32,
-            svg::TITLE_DIVIDER_H * scale,
-            svg::TITLE_DIVIDER,
+            style.divider_height() * scale,
+            style.window.divider,
         );
-        for (index, color) in svg::TRAFFIC_LIGHTS.iter().copied().enumerate() {
+        for (index, color) in style.window.traffic_lights().iter().copied().enumerate() {
             let cx = origin_x + (svg::MARGIN_X + 5.0 + index as f32 * 20.0) * scale;
-            let cy = origin_y + svg::HEADER_H / 2.0 * scale;
+            let cy = origin_y + style.header_height() / 2.0 * scale;
             fill_circle(&mut self.pixmap, cx, cy, svg::DOT_R * scale, color);
         }
         fill_circle(
             &mut self.pixmap,
             origin_x + (svg::MARGIN_X + 5.0) * scale,
-            origin_y + svg::HEADER_H / 2.0 * scale,
+            origin_y + style.header_height() / 2.0 * scale,
             svg::RED_DOT_R * scale,
             svg::RED_DOT_COLOR,
         );
@@ -185,6 +190,7 @@ impl FrameRenderer for GridRenderer {
             origin_y,
             scale,
             &mut missing,
+            style,
         );
 
         let blank = EmuCell::blank();
@@ -200,10 +206,10 @@ impl FrameRenderer for GridRenderer {
                     run += 1;
                 }
                 if background != colors.resolve(None, false) {
-                    let left = grid_x(origin_x, x, scale);
-                    let right = grid_x(origin_x, x + run, scale);
-                    let top = grid_y(origin_y, y, scale);
-                    let bottom = grid_y(origin_y, y + 1, scale);
+                    let left = grid_x(origin_x, x, scale, style);
+                    let right = grid_x(origin_x, x + run, scale, style);
+                    let top = grid_y(origin_y, y, scale, style);
+                    let bottom = grid_y(origin_y, y + 1, scale, style);
                     fill_pixel_rect(&mut self.pixmap, left, top, right, bottom, background);
                 }
                 x += run;
@@ -217,8 +223,8 @@ impl FrameRenderer for GridRenderer {
                 if cell.ch.as_str() == CONTINUATION {
                     continue;
                 }
-                let style = svg::style_of(cell, colors);
-                if style.invisible {
+                let paint = svg::cell_paint(cell, colors);
+                if paint.invisible {
                     continue;
                 }
                 let span = if row
@@ -229,16 +235,20 @@ impl FrameRenderer for GridRenderer {
                 } else {
                     1
                 };
-                let cell_origin_x = origin_x + (svg::MARGIN_X + x as f32 * svg::CELL_W) * scale;
+                let cell_origin_x =
+                    origin_x + (svg::MARGIN_X + x as f32 * style.cell_width()) * scale;
                 let cell_origin_y = origin_y
-                    + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + y as f32 * svg::CELL_H) * scale;
-                let cell_width = svg::CELL_W * span as f32 * scale;
-                let cell_height = svg::CELL_H * scale;
-                let baseline = origin_y
-                    + (svg::HEADER_H
+                    + (style.header_height()
                         + svg::CONTENT_PADDING_TOP
-                        + y as f32 * svg::CELL_H
-                        + svg::FONT_BASELINE)
+                        + y as f32 * style.cell_height())
+                        * scale;
+                let cell_width = style.cell_width() * span as f32 * scale;
+                let cell_height = style.cell_height() * scale;
+                let baseline = origin_y
+                    + (style.header_height()
+                        + svg::CONTENT_PADDING_TOP
+                        + y as f32 * style.cell_height()
+                        + style.baseline())
                         * scale;
 
                 if unsupported_grapheme(cell.ch.as_str()) {
@@ -251,8 +261,8 @@ impl FrameRenderer for GridRenderer {
                     }
                     let key = GlyphKey {
                         character,
-                        bold: style.bold,
-                        italic: style.italic,
+                        bold: paint.bold,
+                        italic: paint.italic,
                     };
                     match fonts.resolve(key) {
                         Some(glyph) => draw_glyph(
@@ -263,8 +273,8 @@ impl FrameRenderer for GridRenderer {
                             cell_width,
                             cell_height,
                             baseline,
-                            style.fg,
-                            svg::FONT_SIZE,
+                            paint.fg,
+                            style.font_size,
                             scale,
                         ),
                         None => {
@@ -273,24 +283,24 @@ impl FrameRenderer for GridRenderer {
                     }
                 }
 
-                if style.underline {
+                if paint.underline {
                     fill_antialiased_rect(
                         pixmap,
                         cell_origin_x,
                         cell_origin_y + cell_height - 3.0 * scale,
                         cell_width,
                         scale.max(1.0),
-                        style.fg,
+                        paint.fg,
                     );
                 }
-                if style.strike {
+                if paint.strike {
                     fill_antialiased_rect(
                         pixmap,
                         cell_origin_x,
-                        baseline - svg::FONT_SIZE * 0.32 * scale,
+                        baseline - style.font_size * 0.32 * scale,
                         cell_width,
                         scale.max(1.0),
-                        style.fg,
+                        paint.fg,
                     );
                 }
             }
@@ -307,6 +317,7 @@ impl FrameRenderer for GridRenderer {
                 origin_y,
                 scale,
                 &mut missing,
+                style,
             );
         }
 
@@ -334,12 +345,14 @@ impl FrameRenderer for GridRenderer {
     }
 }
 
-fn grid_x(origin_x: f32, column: usize, scale: f32) -> u32 {
-    (origin_x + (svg::MARGIN_X + column as f32 * svg::CELL_W) * scale).round() as u32
+fn grid_x(origin_x: f32, column: usize, scale: f32, style: &Style) -> u32 {
+    (origin_x + (svg::MARGIN_X + column as f32 * style.cell_width()) * scale).round() as u32
 }
 
-fn grid_y(origin_y: f32, row: usize, scale: f32) -> u32 {
-    (origin_y + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + row as f32 * svg::CELL_H) * scale)
+fn grid_y(origin_y: f32, row: usize, scale: f32, style: &Style) -> u32 {
+    (origin_y
+        + (style.header_height() + svg::CONTENT_PADDING_TOP + row as f32 * style.cell_height())
+            * scale)
         .round() as u32
 }
 
@@ -354,6 +367,7 @@ fn draw_cursor(
     panel_origin_y: f32,
     scale: f32,
     missing: &mut BTreeSet<String>,
+    style: &Style,
 ) {
     let Some(row) = grid.get(cy) else {
         return;
@@ -370,15 +384,16 @@ fn draw_cursor(
         1
     };
     let column = usize::from(cx);
-    let origin_x = panel_origin_x + (svg::MARGIN_X + f32::from(cx) * svg::CELL_W) * scale;
+    let origin_x = panel_origin_x + (svg::MARGIN_X + f32::from(cx) * style.cell_width()) * scale;
     let origin_y = panel_origin_y
-        + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + cy as f32 * svg::CELL_H) * scale;
-    let cell_width = svg::CELL_W * span as f32 * scale;
-    let cell_height = svg::CELL_H * scale;
-    let left = grid_x(panel_origin_x, column, scale);
-    let right = grid_x(panel_origin_x, column + span, scale);
-    let top = grid_y(panel_origin_y, cy, scale);
-    let bottom = grid_y(panel_origin_y, cy + 1, scale);
+        + (style.header_height() + svg::CONTENT_PADDING_TOP + cy as f32 * style.cell_height())
+            * scale;
+    let cell_width = style.cell_width() * span as f32 * scale;
+    let cell_height = style.cell_height() * scale;
+    let left = grid_x(panel_origin_x, column, scale, style);
+    let right = grid_x(panel_origin_x, column + span, scale, style);
+    let top = grid_y(panel_origin_y, cy, scale, style);
+    let bottom = grid_y(panel_origin_y, cy + 1, scale, style);
     let thickness = (2.0 * scale).round().max(1.0) as u32;
     let color = colors.color(ColorSlot::Cursor);
     match colors.cursor_shape() {
@@ -412,8 +427,8 @@ fn draw_cursor(
     if cell.ch.as_str() == CONTINUATION || cell.ch.chars().all(char::is_whitespace) {
         return;
     }
-    let style = svg::style_of(cell, colors);
-    if style.invisible {
+    let paint = svg::cell_paint(cell, colors);
+    if paint.invisible {
         return;
     }
     if unsupported_grapheme(cell.ch.as_str()) {
@@ -421,7 +436,10 @@ fn draw_cursor(
         return;
     }
     let baseline = panel_origin_y
-        + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + cy as f32 * svg::CELL_H + svg::FONT_BASELINE)
+        + (style.header_height()
+            + svg::CONTENT_PADDING_TOP
+            + cy as f32 * style.cell_height()
+            + style.baseline())
             * scale;
     for character in cell.ch.chars() {
         if is_default_ignorable(character) {
@@ -429,8 +447,8 @@ fn draw_cursor(
         }
         let key = GlyphKey {
             character,
-            bold: style.bold,
-            italic: style.italic,
+            bold: paint.bold,
+            italic: paint.italic,
         };
         match fonts.resolve(key) {
             Some(glyph) => draw_glyph(
@@ -442,7 +460,7 @@ fn draw_cursor(
                 cell_height,
                 baseline,
                 svg::bg_of(cell, colors),
-                svg::FONT_SIZE,
+                style.font_size,
                 scale,
             ),
             None => {
@@ -452,8 +470,16 @@ fn draw_cursor(
     }
 }
 
-fn draw_shadow(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, scale: f32) {
-    for (spread, offset_y, alpha) in svg::SHADOW_LAYERS {
+fn draw_shadow(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    scale: f32,
+    style: &Style,
+) {
+    for &(spread, offset_y, alpha) in style.shadow_layers() {
         let spread = spread * scale;
         fill_rounded_rect_alpha(
             pixmap,
@@ -461,8 +487,8 @@ fn draw_shadow(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, sca
             y - spread + offset_y * scale,
             width + spread * 2.0,
             height + spread * 2.0,
-            svg::WINDOW_RADIUS * scale + spread,
-            svg::SHADOW_COLOR,
+            style.border.radius * scale + spread,
+            style.shadow.color,
             alpha,
         );
     }
@@ -480,14 +506,15 @@ fn draw_title(
     origin_y: f32,
     scale: f32,
     missing: &mut BTreeSet<String>,
+    style: &Style,
 ) {
-    let Some(title) = svg::visible_title(title, cols, rows, panel_width) else {
+    let Some(title) = svg::visible_title(title, cols, rows, panel_width, style) else {
         return;
     };
-    let advance = svg::title_advance();
+    let advance = svg::title_advance(style);
     let title_width = crate::terminal::cell::display_width(&title) as f32 * advance * scale;
     let mut x = origin_x + (panel_width * scale - title_width) / 2.0;
-    let baseline = origin_y + (svg::HEADER_H / 2.0 + svg::TITLE_FONT_SIZE * 0.35) * scale;
+    let baseline = origin_y + (style.header_height() / 2.0 + style.title_font_size * 0.35) * scale;
 
     for character in title.chars() {
         let columns = crate::terminal::cell::display_width(&character.to_string()).max(1);
@@ -505,10 +532,10 @@ fn draw_title(
                     x,
                     origin_y,
                     width,
-                    svg::HEADER_H * scale,
+                    style.header_height() * scale,
                     baseline,
-                    svg::TITLE_FG,
-                    svg::TITLE_FONT_SIZE,
+                    style.window.foreground,
+                    style.title_font_size,
                     scale,
                 ),
                 None => {

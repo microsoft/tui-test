@@ -38,6 +38,11 @@ pub(crate) struct StartRecording {
     pub initial_output: String,
     #[cfg(feature = "recording-raster")]
     pub zoom: f64,
+    /// How the frames are drawn. Carried on the request rather than written
+    /// into the capture, so a `.cast` stays a plain asciicast any player can
+    /// read and the styling is applied when the frames are rendered.
+    #[cfg(feature = "recording-raster")]
+    pub style: crate::render::style::Style,
     #[cfg(feature = "recording-raster")]
     pub timeline: frames::TimelineOptions,
     #[cfg(feature = "recording-raster")]
@@ -52,6 +57,8 @@ pub(crate) struct StoppedRecording {
     pub format: RecordingFormat,
     #[cfg(feature = "recording-raster")]
     pub zoom: f64,
+    #[cfg(feature = "recording-raster")]
+    pub style: crate::render::style::Style,
     #[cfg(feature = "recording-raster")]
     pub timeline: frames::TimelineOptions,
     #[cfg(feature = "recording-raster")]
@@ -300,6 +307,8 @@ mod tests {
                 #[cfg(feature = "recording-raster")]
                 zoom: 1.0,
                 #[cfg(feature = "recording-raster")]
+                style: crate::render::style::Style::default(),
+                #[cfg(feature = "recording-raster")]
                 timeline: frames::TimelineOptions::default(),
                 #[cfg(feature = "recording-raster")]
                 ffmpeg_path: None,
@@ -336,6 +345,8 @@ mod tests {
             initial_output: String::new(),
             #[cfg(feature = "recording-raster")]
             zoom: 1.0,
+            #[cfg(feature = "recording-raster")]
+            style: crate::render::style::Style::default(),
             #[cfg(feature = "recording-raster")]
             timeline: frames::TimelineOptions::default(),
             #[cfg(feature = "recording-raster")]
@@ -379,6 +390,8 @@ mod tests {
                 initial_output: String::new(),
                 #[cfg(feature = "recording-raster")]
                 zoom: 1.0,
+                #[cfg(feature = "recording-raster")]
+                style: crate::render::style::Style::default(),
                 #[cfg(feature = "recording-raster")]
                 timeline: frames::TimelineOptions::default(),
                 #[cfg(feature = "recording-raster")]
