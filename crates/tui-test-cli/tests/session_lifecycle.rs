@@ -13,6 +13,18 @@ use tui_test::Backend;
 
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
+#[test]
+fn cli_startup_fits_the_default_process_stack() {
+    for argument in ["--help", "--version"] {
+        let output = Command::new(BIN).arg(argument).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{argument} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 static SANDBOX_SEQ: AtomicU32 = AtomicU32::new(0);

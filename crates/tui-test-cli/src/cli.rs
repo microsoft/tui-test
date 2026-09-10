@@ -149,6 +149,27 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+#[derive(Args)]
+pub struct ScreenshotArgs {
+    /// Write an SVG image to this path (alias for --out).
+    pub path: Option<String>,
+    /// Write an SVG image to this path.
+    #[arg(short, long)]
+    pub out: Option<String>,
+    /// Include scrollback, not just the visible viewport.
+    #[arg(long)]
+    pub full: bool,
+    /// Scale the SVG dimensions while keeping the same terminal cells.
+    #[arg(long)]
+    pub zoom: Option<f64>,
+    /// Canvas background color (#rgb or #rrggbb).
+    #[arg(long, conflicts_with = "transparent")]
+    pub background: Option<String>,
+    /// Leave the SVG canvas transparent.
+    #[arg(long)]
+    pub transparent: bool,
+}
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Spawn a shell session (auto-starts the daemon).
@@ -246,25 +267,7 @@ pub enum Command {
     },
     /// Capture a screenshot: terminal text to stdout, or a full-color SVG image
     /// when an output path is given (crisp at any zoom).
-    Screenshot {
-        /// Write an SVG image to this path (alias for --out).
-        path: Option<String>,
-        /// Write an SVG image to this path.
-        #[arg(short, long)]
-        out: Option<String>,
-        /// Include scrollback, not just the visible viewport.
-        #[arg(long)]
-        full: bool,
-        /// Scale the SVG dimensions while keeping the same terminal cells.
-        #[arg(long)]
-        zoom: Option<f64>,
-        /// Canvas background color (#rgb or #rrggbb).
-        #[arg(long, conflicts_with = "transparent")]
-        background: Option<String>,
-        /// Leave the SVG canvas transparent.
-        #[arg(long)]
-        transparent: bool,
-    },
+    Screenshot(ScreenshotArgs),
     /// Start or stop an animated terminal recording.
     Record {
         #[command(subcommand)]
@@ -818,10 +821,10 @@ mod tests {
         .expect("parse screenshot zoom");
         assert!(matches!(
             cli.command,
-            Some(Command::Screenshot {
+            Some(Command::Screenshot(ScreenshotArgs {
                 zoom: Some(0.5),
                 ..
-            })
+            }))
         ));
     }
 

@@ -19,7 +19,8 @@ use clap::{CommandFactory, Parser};
 
 use cli::{
     Cli, ClickCmd, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, HighlightCmd, KeyCmd, MatchArg,
-    MouseCmd, RecordCmd, TextQueryArgs, TextSelectorArgs, TextStyleArgs, WaitCmd, WhitespaceArg,
+    MouseCmd, RecordCmd, ScreenshotArgs, TextQueryArgs, TextSelectorArgs, TextStyleArgs, WaitCmd,
+    WhitespaceArg,
 };
 use protocol::{GetField, MouseAction, Request, Response};
 use tui_test::{
@@ -294,14 +295,14 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         }
         Command::State => Request::State,
         Command::Text { full } => Request::Text { full },
-        Command::Screenshot {
+        Command::Screenshot(ScreenshotArgs {
             path,
             out,
             full,
             zoom,
             background,
             transparent,
-        } => {
+        }) => {
             let path = out.or(path);
             if (zoom.is_some() || background.is_some() || transparent) && path.is_none() {
                 anyhow::bail!(
