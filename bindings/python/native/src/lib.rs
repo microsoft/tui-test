@@ -241,15 +241,11 @@ impl NativeSession {
     ) -> PyResult<Bound<'py, PyAny>> {
         let graceful_timeout_ms = capture_integer(&graceful_timeout_ms);
         let name = self.name.clone();
-        let monitoring = self.monitoring.clone();
-        let target = self.target.clone();
         future_blocking(
             py,
             move || {
                 execute_open(
                     &name,
-                    monitoring,
-                    target,
                     Operation::Restart {
                         graceful_timeout_ms: integer_u64(
                             &graceful_timeout_ms,
