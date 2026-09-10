@@ -811,10 +811,6 @@ export class TuiTest {
     return this.#runtime.restart(opts.gracefulTimeout ?? 5_000);
   }
 
-  async close(): Promise<void> {
-    await this.#runtime.close();
-  }
-
   async closeQuiet(): Promise<void> {
     try {
       await this.close();
