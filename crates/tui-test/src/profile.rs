@@ -330,22 +330,18 @@ impl Default for Profile {
 }
 
 /// A profile as represented in `tui-test.toml`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ConfigProfile {
-    pub scrollback: usize,
+    pub scrollback: Option<usize>,
     pub colors: Colors,
     pub timeouts: crate::api::Timeouts,
-}
-
-impl Default for ConfigProfile {
-    fn default() -> Self {
-        Self {
-            scrollback: DEFAULT_SCROLLBACK,
-            colors: Colors::default(),
-            timeouts: crate::api::Timeouts::default(),
-        }
-    }
+    /// Recording settings for this profile.
+    ///
+    /// Absent means the file's own `[recording]` decides, so a project can set
+    /// one policy at the top and let a single profile depart from it without
+    /// restating the rest.
+    pub recording: Option<crate::api::AutomaticRecording>,
 }
 
 /// Concrete session settings resolved from a config profile.
@@ -360,11 +356,11 @@ impl From<ConfigProfile> for Settings {
     fn from(value: ConfigProfile) -> Self {
         Self {
             profile: Profile {
-                scrollback: value.scrollback,
+                scrollback: value.scrollback.unwrap_or(DEFAULT_SCROLLBACK),
                 colors: value.colors,
             },
             timeouts: value.timeouts,
-            recording: crate::api::AutomaticRecording::default(),
+            recording: value.recording.unwrap_or_default(),
         }
     }
 }
@@ -414,7 +410,7 @@ impl ConfigFile {
     /// The named profile and its session timeout defaults.
     pub fn settings(&self, name: Option<&str>) -> anyhow::Result<Settings> {
         let profile = match name {
-            Some(name) => self.profiles.get(name).copied().ok_or_else(|| {
+            Some(name) => self.profiles.get(name).cloned().ok_or_else(|| {
                 let known: Vec<&str> = self.profiles.keys().map(String::as_str).collect();
                 if known.is_empty() {
                     anyhow::anyhow!("no profile {name:?}; the config file defines none")
@@ -425,11 +421,19 @@ impl ConfigFile {
             None => Ok(self
                 .profiles
                 .get(DEFAULT_PROFILE)
-                .copied()
+                .cloned()
                 .unwrap_or_default()),
         }?;
+        // The profile's own `[recording]` wins whole, and the file's is the
+        // default for every profile that does not state one. Replacing rather
+        // than merging field by field keeps "which settings am I recording
+        // under" answerable by reading a single table.
+        let has_profile_recording = profile.recording.is_some();
+        let file_recording = self.recording.clone();
         let mut settings: Settings = profile.into();
-        settings.recording = self.recording.clone();
+        if !has_profile_recording {
+            settings.recording = file_recording;
+        }
         Ok(settings)
     }
 }
@@ -509,19 +513,26 @@ pub fn resolve_settings(
     }
 }
 
+/// The recording policy in force when no session recorded where its output
+/// went, used to explain why there is nothing to show.
+///
+/// Resolved through `settings` rather than off the file's own `[recording]`,
+/// so a `[profiles.default.recording]` is honored here exactly as it is when a
+/// session opens. A session opened under a *named* profile is not knowable
+/// from here, which is why this is only ever a fallback explanation.
 pub fn resolve_recording(
     explicit_config: Option<&Path>,
     cwd: &Path,
 ) -> anyhow::Result<crate::api::AutomaticRecording> {
     if let Some(path) = explicit_config {
-        return Ok(ConfigFile::load(path)?.recording);
+        return Ok(ConfigFile::load(path)?.settings(None)?.recording);
     }
     if let Some(path) = std::env::var_os("TUI_TEST_CONFIG").map(PathBuf::from) {
-        return Ok(ConfigFile::load(&path)?.recording);
+        return Ok(ConfigFile::load(&path)?.settings(None)?.recording);
     }
     for path in default_search_paths(cwd) {
         if path.is_file() {
-            return Ok(ConfigFile::load(&path)?.recording);
+            return Ok(ConfigFile::load(&path)?.settings(None)?.recording);
         }
     }
     Ok(crate::api::AutomaticRecording::default())
@@ -632,6 +643,35 @@ mod tests {
     #[test]
     fn empty_recording_directory_is_rejected() {
         assert!(ConfigFile::parse("[recording]\ndirectory = \"\"\n").is_err());
+    }
+
+    /// A profile's own `[recording]` replaces the file's, and a profile
+    /// without one inherits it. Replacing whole rather than merging keeps the
+    /// answer to "what am I recording under" in one table.
+    #[test]
+    fn a_profile_recording_overrides_the_file_default() {
+        let config = ConfigFile::parse(
+            "[recording]\nmode = \"on-failure\"\ndirectory = \"artifacts\"\n\
+             \n[profiles.docs.recording]\nmode = \"always\"\n\
+             \n[profiles.ci]\nscrollback = 50\n",
+        )
+        .unwrap();
+
+        let docs = config.settings(Some("docs")).unwrap().recording;
+        assert_eq!(docs.mode, crate::api::AutomaticRecordingMode::Always);
+        assert_eq!(
+            docs.directory, None,
+            "the profile's table replaces the file's rather than merging into it"
+        );
+
+        let ci = config.settings(Some("ci")).unwrap().recording;
+        assert_eq!(ci.mode, crate::api::AutomaticRecordingMode::OnFailure);
+        assert_eq!(ci.directory, Some(PathBuf::from("artifacts")));
+        assert_eq!(
+            config.settings(Some("ci")).unwrap().profile.scrollback,
+            50,
+            "and the rest of the profile still applies"
+        );
     }
 
     #[test]
