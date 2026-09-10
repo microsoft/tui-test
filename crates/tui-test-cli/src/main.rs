@@ -513,6 +513,7 @@ fn map_style(args: TextStyleArgs) -> TextStyle {
         hidden: args.hidden,
         strikethrough: args.strikethrough,
         blink: args.blink,
+        link: args.link,
     }
 }
 

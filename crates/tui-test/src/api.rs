@@ -384,6 +384,26 @@ pub struct TextStyle {
     pub hidden: Option<bool>,
     pub strikethrough: Option<bool>,
     pub blink: Option<bool>,
+    /// The OSC 8 URI a cell must link to.
+    ///
+    /// A link is not an SGR attribute: `SGR 0` clears every other field here
+    /// and leaves the link running, and only `OSC 8` with an empty URI closes
+    /// it. It is matched alongside them because it is carried on a cell the
+    /// same way — set on the cursor, inherited by everything written while it
+    /// is open — so `{ bold: true, link: "..." }` is one query rather than two
+    /// that have to be intersected by hand.
+    ///
+    /// An empty string means "links nowhere", so a cell can be required to be
+    /// plain as well as required to be a link. That is why this is a
+    /// `String` rather than an `Option` used as the absence marker: the
+    /// `Option` already means "the caller did not ask".
+    ///
+    /// The `id=` parameter is deliberately not matchable. It exists to join
+    /// the runs of one logical link, which is worth asserting on in principle,
+    /// but the ghostty backend cannot report it at all, so a query against it
+    /// would quietly mean different things on different backends. It stays
+    /// readable on a cell, where being backend-dependent is visible.
+    pub link: Option<String>,
 }
 
 impl TextStyle {

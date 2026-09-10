@@ -79,6 +79,8 @@ export interface TextStyleExpectation {
   hidden?: boolean;
   strikethrough?: boolean;
   blink?: boolean;
+  /** Required OSC 8 link target. Pass `""` to require no link. */
+  link?: string;
 }
 
 export interface LocatorWaitOptions {
@@ -320,6 +322,7 @@ function textStyleValue(style: TextStyleExpectation): RuntimeLocatorStyle {
     hidden: style.hidden,
     strikethrough: style.strikethrough,
     blink: style.blink,
+    link: style.link,
   };
 }
 

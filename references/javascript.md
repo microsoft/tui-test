@@ -35,7 +35,7 @@ const locator = terminal
 | Method | Use |
 | --- | --- |
 | `getByText(text, options?)` | Match text or regex. |
-| `getByStyle(style, options?)` | Match colors or attributes. |
+| `getByStyle(style, options?)` | Match colors, attributes, or an OSC 8 `link`. |
 | `any()` | Keep all matches. |
 | `unique()` | Require one match. |
 | `first()`, `last()`, `nth(index)` | Select a match. |
