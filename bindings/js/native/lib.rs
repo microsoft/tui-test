@@ -322,6 +322,17 @@ pub struct Cell {
     pub underline_style: UnderlineStyle,
     #[napi(js_name = "underline_color")]
     pub underline_color: Color,
+    /// The OSC 8 URI this cell links to, empty when it links nowhere.
+    pub link: String,
+    /// The link's `id=` parameter, empty when the sequence carried none.
+    ///
+    /// Identifies a link across a wrap rather than describing where it points:
+    /// a program that wraps its own links tags each run with a shared `id=`.
+    ///
+    /// Backend-dependent. Ghostty reports a link's URI and nothing else, so
+    /// this is always empty there and no locator matches on it.
+    #[napi(js_name = "link_id")]
+    pub link_id: String,
 }
 
 impl TryFrom<CoreCell> for Cell {
@@ -344,6 +355,8 @@ impl TryFrom<CoreCell> for Cell {
             underline: value.underline,
             underline_style: underline_style(value.underline_style)?,
             underline_color: color(value.underline_color),
+            link: value.link,
+            link_id: value.link_id,
         })
     }
 }
@@ -479,7 +492,7 @@ pub struct ClipboardWaitOptions {
 #[napi(object)]
 pub struct SnapshotOptions {
     pub update: Option<bool>,
-    pub include_colors: Option<bool>,
+    pub include_style: Option<bool>,
     pub include_title: Option<bool>,
     pub cwd: Option<String>,
 }
@@ -1619,7 +1632,7 @@ impl NativeSession {
     ) -> Result<SnapshotResult> {
         let options = options.unwrap_or(SnapshotOptions {
             update: None,
-            include_colors: None,
+            include_style: None,
             include_title: None,
             cwd: None,
         });
@@ -1629,7 +1642,7 @@ impl NativeSession {
             Operation::Snapshot {
                 name,
                 update: options.update.unwrap_or(false),
-                include_colors: options.include_colors.unwrap_or(false),
+                include_style: options.include_style.unwrap_or(false),
                 include_title: options.include_title.unwrap_or(false),
                 cwd: options.cwd,
             },

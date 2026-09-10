@@ -118,7 +118,7 @@ The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, 
 
 `waitClipboard()` waits for the next change. A string matches text. A `RegExp` keeps its JavaScript flags.
 
-Snapshot options are `update`, `includeColors`, and `includeTitle`.
+Snapshot options are `update`, `includeStyle`, and `includeTitle`.
 
 #### Capture
 

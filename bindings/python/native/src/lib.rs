@@ -1109,13 +1109,13 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (name, update, include_colors, include_title, cwd))]
+    #[pyo3(signature = (name, update, include_style, include_title, cwd))]
     fn snapshot<'py>(
         &self,
         py: Python<'py>,
         name: String,
         update: bool,
-        include_colors: bool,
+        include_style: bool,
         include_title: bool,
         cwd: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -1128,7 +1128,7 @@ impl NativeSession {
                     Operation::Snapshot {
                         name,
                         update,
-                        include_colors,
+                        include_style,
                         include_title,
                         cwd,
                     },
@@ -1898,6 +1898,8 @@ fn cell_to_py(py: Python<'_>, cell: Cell) -> PyResult<Bound<'_, PyDict>> {
     value.set_item("underline", cell.underline)?;
     value.set_item("underline_style", cell.underline_style)?;
     set_color(&value, "underline_color", cell.underline_color)?;
+    value.set_item("link", cell.link)?;
+    value.set_item("link_id", cell.link_id)?;
     Ok(value)
 }
 

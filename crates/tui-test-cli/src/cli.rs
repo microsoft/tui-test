@@ -1393,9 +1393,9 @@ pub enum ExpectCmd {
         /// Write the current screen as the new snapshot.
         #[arg(short = 'u', long)]
         update: bool,
-        /// Include cell colors in the snapshot.
+        /// Include each cell's colors, attributes and link in the snapshot.
         #[arg(long)]
-        include_colors: bool,
+        include_style: bool,
         /// Include the window title in the snapshot's frame. Off by default:
         /// a shell prompt often sets the title to a hostname and path, which
         /// would tie the snapshot to one machine.

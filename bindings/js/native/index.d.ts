@@ -91,6 +91,18 @@ export interface Cell {
   underline: boolean
   underline_style: UnderlineStyle
   underline_color: Color
+  /** The OSC 8 URI this cell links to, empty when it links nowhere. */
+  link: string
+  /**
+   * The link's `id=` parameter, empty when the sequence carried none.
+   *
+   * Identifies a link across a wrap rather than describing where it points:
+   * a program that wraps its own links tags each run with a shared `id=`.
+   *
+   * Backend-dependent. Ghostty reports a link's URI and nothing else, so
+   * this is always empty there and no locator matches on it.
+   */
+  link_id: string
 }
 
 export interface ClipboardWaitOptions {
@@ -260,7 +272,7 @@ export interface Size {
 
 export interface SnapshotOptions {
   update?: boolean
-  includeColors?: boolean
+  includeStyle?: boolean
   includeTitle?: boolean
   cwd?: string
 }

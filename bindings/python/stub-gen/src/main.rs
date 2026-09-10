@@ -211,7 +211,7 @@ mod stubs {
                     self,
                     name: str,
                     update: bool,
-                    include_colors: bool,
+                    include_style: bool,
                     include_title: bool,
                     cwd: typing.Optional[str],
                 ) -> typing.Awaitable[str]: ...

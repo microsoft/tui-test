@@ -94,7 +94,7 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 | `expect output TEXT` | Assert command output. |
 | `expect exit-code CODE` | Assert the last exit code. |
 | `expect bell COUNT` | Wait until the cumulative bell count reaches `COUNT`. |
-| `expect snapshot NAME [-u] [--include-colors] [--include-title]` | Assert a snapshot. |
+| `expect snapshot NAME [-u] [--include-style] [--include-title]` | Assert a snapshot. |
 
 ## Capture
 

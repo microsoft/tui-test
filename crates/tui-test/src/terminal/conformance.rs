@@ -33,6 +33,13 @@ pub enum Divergence {
 
     /// Clipboard access is unavailable.
     ClipboardUnsupported,
+
+    /// The backend reports a hyperlink's URI but not its `id=` parameter.
+    ///
+    /// Nothing about where the link points is lost. What is lost is being
+    /// able to tell that two runs of cells belong to the same link when they
+    /// are not adjacent.
+    HyperlinkHasNoId,
 }
 
 /// Generates the conformance tests for one backend. `$make` builds a boxed
@@ -307,6 +314,108 @@ macro_rules! emulator_conformance_tests {
             );
             assert_eq!(rows[0][3].underline, U::None, "0 resets everything");
             assert_eq!(rows[0][3].underline_color, None);
+        }
+
+        /// `OSC 8 ; params ; URI ST` opens a link, and the same sequence with
+        /// an empty URI closes it. Every cell written in between carries it.
+        #[test]
+        fn conformance_hyperlinks_cover_the_cells_they_open_over() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"a\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\b");
+            let rows = e.viewable_rows();
+
+            assert_eq!(rows[0][0].uri(), None, "text before the link is plain");
+            for x in 1..5 {
+                assert_eq!(
+                    rows[0][x].uri(),
+                    Some("https://example.com"),
+                    "column {x} is inside the link"
+                );
+            }
+            assert_eq!(rows[0][5].uri(), None, "an empty URI closes the link");
+        }
+
+        /// The `id=` parameter is reported as the child sent it. A link that
+        /// carried none reports none rather than an invented value: alacritty
+        /// and rio both synthesize an id for their own use, and letting that
+        /// through would put a backend's private counter in a snapshot.
+        #[test]
+        fn conformance_hyperlink_ids_are_only_what_the_child_sent() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"\x1b]8;;https://a.example\x1b\\A\x1b]8;;\x1b\\");
+            e.process(b"\x1b]8;id=anchor;https://b.example\x1b\\B\x1b]8;;\x1b\\");
+            let rows = e.viewable_rows();
+
+            let plain = rows[0][0].hyperlink.clone().expect("A is linked");
+            assert_eq!(plain.uri, "https://a.example");
+            assert_eq!(plain.id, None, "no id= was sent, so none is reported");
+
+            let anchored = rows[0][1].hyperlink.clone().expect("B is linked");
+            assert_eq!(anchored.uri, "https://b.example");
+            if !CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::HyperlinkHasNoId)
+            {
+                assert_eq!(anchored.id.as_deref(), Some("anchor"));
+            }
+        }
+
+        /// A link is a property of the cell, not of the run: closing one and
+        /// opening another has to leave each cell pointing where it was
+        /// written, and text after the last link has to be plain again.
+        #[test]
+        fn conformance_adjacent_hyperlinks_stay_separate() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(
+                b"\x1b]8;;https://one.example\x1b\\1\x1b]8;;https://two.example\x1b\\2\x1b]8;;\x1b\\3",
+            );
+            let rows = e.viewable_rows();
+            assert_eq!(rows[0][0].uri(), Some("https://one.example"));
+            assert_eq!(rows[0][1].uri(), Some("https://two.example"));
+            assert_eq!(rows[0][2].uri(), None);
+        }
+
+        /// A link and an underline are independent: SGR 4 inside a link is
+        /// still a single underline, not whatever shape the backend happens
+        /// to draw links with.
+        #[test]
+        fn conformance_a_hyperlink_does_not_change_the_underline() {
+            use $crate::terminal::cell::UnderlineStyle as U;
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"\x1b]8;;https://example.com\x1b\\p\x1b[4mq\x1b[0m\x1b]8;;\x1b\\");
+            let rows = e.viewable_rows();
+
+            assert_eq!(rows[0][0].uri(), Some("https://example.com"));
+            assert_eq!(rows[0][0].underline, U::None, "a link is not an underline");
+            assert_eq!(rows[0][1].uri(), Some("https://example.com"));
+            assert_eq!(rows[0][1].underline, U::Single, "SGR 4 means single");
+        }
+
+        /// `SGR 0` does not close a hyperlink.
+        ///
+        /// A link looks like a style — it is opened by an escape sequence and
+        /// every cell written afterwards carries it — but it is not one, and
+        /// this is where the two come apart: the attribute reset that clears
+        /// every SGR attribute leaves the link running. Only `OSC 8` with an
+        /// empty URI closes it. That is why a link is recorded next to the
+        /// styles rather than as one of them.
+        #[test]
+        fn conformance_an_attribute_reset_does_not_close_a_hyperlink() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"\x1b]8;;https://example.com\x1b\\\x1b[1ma\x1b[0mb\x1b]8;;\x1b\\c");
+            let rows = e.viewable_rows();
+
+            assert!(rows[0][0].has($crate::terminal::cell::Attrs::BOLD));
+            assert_eq!(rows[0][0].uri(), Some("https://example.com"));
+            assert!(
+                !rows[0][1].has($crate::terminal::cell::Attrs::BOLD),
+                "SGR 0 clears the bold"
+            );
+            assert_eq!(
+                rows[0][1].uri(),
+                Some("https://example.com"),
+                "SGR 0 does not clear the link"
+            );
+            assert_eq!(rows[0][2].uri(), None, "only OSC 8 closes the link");
         }
 
         /// Resetting the underline color must not be confusable with setting
@@ -1324,6 +1433,55 @@ macro_rules! emulator_conformance_tests {
                 back.iter().any(|r| r.contains("primary")),
                 "leaving alt screen restores primary content"
             );
+        }
+
+        /// A link spanning many cells is one allocation, not one per cell.
+        ///
+        /// Every cell of a run carries the same link, so a converter that
+        /// builds one per cell says the same thing N times at N allocations.
+        /// Pointer equality is the invariant: the cells share an `Arc`.
+        #[test]
+        fn conformance_a_link_run_shares_one_allocation() {
+            let mut e = conformance_emu(20, 3, 100);
+            e.process(b"\x1b]8;;https://example.com/a/long/path/past/inlining\x1b\\");
+            e.process(b"aaaaaaaaaaaaaaaaaaaa");
+            e.process(b"bbbbb");
+            e.process(b"\x1b]8;;\x1b\\");
+            let rows = e.viewable_rows();
+
+            let first = rows[0][0].hyperlink.clone().expect("the run is linked");
+            for (y, x) in [(0usize, 0usize), (0, 19), (1, 0), (1, 4)] {
+                let link = rows[y][x].hyperlink.clone().expect("cell is linked");
+                assert!(
+                    std::sync::Arc::ptr_eq(&first, &link),
+                    "cell {x},{y} rebuilt the link instead of sharing it"
+                );
+            }
+        }
+
+        /// Two links to the same place under different `id=` stay distinct.
+        ///
+        /// Reusing a link across cells must compare what identifies it, not
+        /// only where it points, or the second run would inherit the first
+        /// one's id.
+        #[test]
+        fn conformance_same_uri_under_different_ids_stays_distinct() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"\x1b]8;id=one;https://example.com\x1b\\A");
+            e.process(b"\x1b]8;id=two;https://example.com\x1b\\B");
+            e.process(b"\x1b]8;;\x1b\\");
+            let rows = e.viewable_rows();
+
+            assert_eq!(rows[0][0].uri(), Some("https://example.com"));
+            assert_eq!(rows[0][1].uri(), Some("https://example.com"));
+            if !CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::HyperlinkHasNoId)
+            {
+                let first = rows[0][0].hyperlink.clone().expect("A is linked");
+                let second = rows[0][1].hyperlink.clone().expect("B is linked");
+                assert_eq!(first.id.as_deref(), Some("one"));
+                assert_eq!(second.id.as_deref(), Some("two"));
+            }
         }
 
         /// Erase resets cells to fully default, not merely to a space.

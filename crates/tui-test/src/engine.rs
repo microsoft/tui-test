@@ -978,14 +978,14 @@ fn dispatch(
         Operation::Snapshot {
             name,
             update,
-            include_colors,
+            include_style,
             include_title,
             cwd,
         } => Ok(OperationResult::Snapshot(do_snapshot(
             session,
             &name,
             update,
-            include_colors,
+            include_style,
             include_title,
             cwd,
         )?)),
@@ -1092,6 +1092,13 @@ fn cell_model(x: u16, y: u16, cell: &EmuCell) -> Cell {
         underline: cell.underline.is_underlined(),
         underline_style: cell.underline.name().to_string(),
         underline_color: cell_color(cell.underline_color),
+        link: cell.uri().unwrap_or_default().to_string(),
+        link_id: cell
+            .hyperlink
+            .as_ref()
+            .and_then(|link| link.id.as_deref())
+            .unwrap_or_default()
+            .to_string(),
     }
 }
 
@@ -2065,7 +2072,7 @@ fn do_snapshot(
     session: &TerminalSession,
     name: &str,
     update: bool,
-    include_colors: bool,
+    include_style: bool,
     include_title: bool,
     cwd: Option<String>,
 ) -> Result<SnapshotResult, TuiTestError> {
@@ -2073,7 +2080,7 @@ fn do_snapshot(
     // username, hostname, and absolute path, which would pin every baseline to
     // one machine and make it change on `cd` while the screen stayed the same.
     let (rows, title) = grid_with_title(session, false, include_title);
-    let content = snapshot::serialize(&rows, session.cols, include_colors, title.as_deref());
+    let content = snapshot::serialize(&rows, session.cols, include_style, title.as_deref());
     let base = cwd
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
@@ -2254,6 +2261,10 @@ mod tests {
             underline: UnderlineStyle::Curly,
             underline_color: Some(Color::Rgb(1, 2, 3)),
             attrs: Attrs::all(),
+            hyperlink: Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: Some("anchor".into()),
+                uri: "https://example.com".into(),
+            })),
         };
         let value = cell_model(3, 4, &cell);
         assert_eq!(value.x, 3);
