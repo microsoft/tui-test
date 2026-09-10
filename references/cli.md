@@ -56,6 +56,7 @@ Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style
 | `mouse down\|up X Y [options]` | Press or release a button. |
 | `mouse drag X1 Y1 X2 Y2 [options]` | Drag. |
 | `mouse scroll up\|down [--amount N]` | Scroll. |
+
 | `resize COLS ROWS` | Resize. |
 | `signal NAME` | Send a signal. |
 
