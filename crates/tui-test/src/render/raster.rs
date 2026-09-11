@@ -73,11 +73,13 @@ impl GridRenderer {
         if !zoom.is_finite() || zoom <= 0.0 || zoom > f64::from(f32::MAX) {
             anyhow::bail!("recording zoom must be finite and greater than zero");
         }
+        // Before pixel_size, which is where an unbounded font size overflows.
+        style.validate().map_err(|error| anyhow::anyhow!(error))?;
         let (base_width, base_height) = svg::pixel_size(cols, rows, &style);
         let padding = style
             .padding
             .checked_mul(2)
-            .expect("recording canvas padding must fit in u32");
+            .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
         let width = base_width
             .checked_add(padding)
             .ok_or_else(|| anyhow::anyhow!("recording width must fit in u32"))?;
@@ -148,50 +150,57 @@ impl FrameRenderer for GridRenderer {
             style.border.radius * scale,
             colors.resolve(None, false),
         );
-        fill_top_rounded_rect(
-            &mut self.pixmap,
-            origin_x,
-            origin_y,
-            panel_width as f32,
-            (style.header_height() - style.divider_height()) * scale,
-            style.border.radius * scale,
-            style.window.background,
-        );
-        fill_antialiased_rect(
-            &mut self.pixmap,
-            origin_x,
-            origin_y + (style.header_height() - style.divider_height()) * scale,
-            panel_width as f32,
-            style.divider_height() * scale,
-            style.window.divider,
-        );
-        for (index, color) in style.window.traffic_lights().iter().copied().enumerate() {
-            let cx = origin_x + (svg::MARGIN_X + 5.0 + index as f32 * 20.0) * scale;
-            let cy = origin_y + style.header_height() / 2.0 * scale;
-            fill_circle(&mut self.pixmap, cx, cy, svg::DOT_R * scale, color);
-        }
-        fill_circle(
-            &mut self.pixmap,
-            origin_x + (svg::MARGIN_X + 5.0) * scale,
-            origin_y + style.header_height() / 2.0 * scale,
-            svg::RED_DOT_R * scale,
-            svg::RED_DOT_COLOR,
-        );
-
+        // One decision, as in the SVG path: with no title bar there is no
+        // rounded strip, no divider, no controls and no title text, rather
+        // than each of them drawn at a collapsed height over the grid.
         let mut missing = BTreeSet::new();
-        draw_title(
-            &mut self.pixmap,
-            &mut self.fonts,
-            frame.title.as_deref(),
-            cols,
-            rows,
-            base_width as f32,
-            origin_x,
-            origin_y,
-            scale,
-            &mut missing,
-            style,
-        );
+        if style.window.title_bar {
+            fill_top_rounded_rect(
+                &mut self.pixmap,
+                origin_x,
+                origin_y,
+                panel_width as f32,
+                (style.header_height() - style.divider_height()) * scale,
+                style.border.radius * scale,
+                style.window.background,
+            );
+            fill_antialiased_rect(
+                &mut self.pixmap,
+                origin_x,
+                origin_y + (style.header_height() - style.divider_height()) * scale,
+                panel_width as f32,
+                style.divider_height() * scale,
+                style.window.divider,
+            );
+            let lights = style.window.traffic_lights();
+            for (index, color) in lights.iter().copied().enumerate() {
+                let cx = origin_x + (svg::MARGIN_X + 5.0 + index as f32 * 20.0) * scale;
+                let cy = origin_y + style.header_height() / 2.0 * scale;
+                fill_circle(&mut self.pixmap, cx, cy, svg::DOT_R * scale, color);
+            }
+            if !lights.is_empty() {
+                fill_circle(
+                    &mut self.pixmap,
+                    origin_x + (svg::MARGIN_X + 5.0) * scale,
+                    origin_y + style.header_height() / 2.0 * scale,
+                    svg::RED_DOT_R * scale,
+                    svg::RED_DOT_COLOR,
+                );
+            }
+            draw_title(
+                &mut self.pixmap,
+                &mut self.fonts,
+                frame.title.as_deref(),
+                cols,
+                rows,
+                base_width as f32,
+                origin_x,
+                origin_y,
+                scale,
+                &mut missing,
+                style,
+            );
+        }
 
         let blank = EmuCell::blank();
         for (y, row) in grid.iter().enumerate() {
@@ -479,7 +488,7 @@ fn draw_shadow(
     scale: f32,
     style: &Style,
 ) {
-    for &(spread, offset_y, alpha) in style.shadow_layers() {
+    for (spread, offset_y, alpha) in style.shadow_layers() {
         let spread = spread * scale;
         fill_rounded_rect_alpha(
             pixmap,

@@ -6,21 +6,12 @@
 //! rendering with [`Style::default`] has to produce the same bytes as before
 //! this existed, and a test holds that.
 //!
-//! Configured under a profile's recording section:
-//!
-//! ```toml
-//! [profiles.docs.recording.style]
-//! font-size = 18
-//! background = "#1d1f21"
-//! padding = 32
-//!
-//! [profiles.docs.recording.style.font]
-//! family = "Cascadia Code"
-//! bold = "Cascadia Code Bold"
-//!
-//! [profiles.docs.recording.style.window]
-//! title-bar = false
-//! ```
+//! Not yet reachable from `tui-test.toml`. The renderers read it, sessions
+//! carry it, and it will be configured under a profile's recording section,
+//! but nothing deserializes it into a session yet, so every render currently
+//! uses [`Style::default`]. Keys are spelled as in the rest of the config
+//! file — `font_size`, not `font-size` — matching how
+//! [`crate::profile::Colors`] spells `bright_black`.
 
 use std::path::{Path, PathBuf};
 
@@ -30,9 +21,10 @@ use crate::profile::Rgb;
 
 /// The font stack used when nothing names one.
 ///
-/// A list rather than a single family because an SVG is read by whatever
-/// renders it, which may have none of these installed; the raster path picks
-/// the first it can actually load.
+/// A CSS-style list rather than one family because this is written straight
+/// into the SVG's `font-family`, where the reader picks the first it has. The
+/// raster path does not read it: that path resolves faces through its own
+/// catalog, so a family named here moves an SVG and not yet a recording.
 pub const DEFAULT_FONT_FAMILY: &str =
     "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,'DejaVu Sans Mono',monospace";
 
@@ -44,6 +36,12 @@ const DEFAULT_FONT_SIZE: f32 = 17.0;
 /// constants, so changing the size alone tore the layout. Keeping them as
 /// ratios means one knob moves the whole grid, and at 17px they multiply back
 /// to exactly 10.0 and 21.0 in `f32`, so existing output is unchanged.
+/// Ceilings that keep a config value from reaching arithmetic it would break.
+/// Generous enough that no real recording comes near them.
+const MAX_FONT_SIZE: f32 = 1_000.0;
+const MAX_LENGTH: f32 = 10_000.0;
+const MAX_PADDING: u32 = 10_000;
+
 const CELL_W_RATIO: f32 = 10.0 / DEFAULT_FONT_SIZE;
 const CELL_H_RATIO: f32 = 21.0 / DEFAULT_FONT_SIZE;
 
@@ -55,7 +53,7 @@ const CELL_H_RATIO: f32 = 21.0 / DEFAULT_FONT_SIZE;
 /// patches among them — and because a reader may want a different italic than
 /// the one the family provides.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields)]
 pub struct FontFamilies {
     /// The family for unstyled text, and the fallback for the other three.
     pub family: String,
@@ -149,7 +147,7 @@ pub fn font_search_dirs(cwd: &Path) -> Vec<PathBuf> {
 
 /// The window chrome drawn around the grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields)]
 pub struct WindowStyle {
     /// Draw the title bar. With it off the grid keeps its own margin but the
     /// bar, its divider and the traffic lights are all gone, and the panel is
@@ -197,7 +195,7 @@ impl Default for WindowStyle {
 /// Off by default: the panel has never had one, and a zero width keeps it that
 /// way rather than drawing a hairline nobody asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields)]
 pub struct BorderStyle {
     pub width: f32,
     pub color: Rgb,
@@ -216,17 +214,21 @@ impl Default for BorderStyle {
 }
 
 /// The drop shadow under the panel.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+///
+/// `offset` moves it down, `spread` widens it. The softness comes from
+/// stacking rounded rectangles that each grow a little and fade a little,
+/// which every SVG renderer can draw and the raster path reproduces exactly.
+/// That stack is derived rather than configured: it is a drawing trick, and
+/// publishing it as config would freeze it into the file format forever.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct ShadowStyle {
     pub enabled: bool,
     pub color: Rgb,
-    /// Layers as `(spread, offset-y, alpha)`, drawn largest first.
-    ///
-    /// There is no blur: the softness comes from stacking rounded rectangles
-    /// that each grow a little and fade a little, which every SVG renderer can
-    /// draw and the raster path can reproduce exactly.
-    pub layers: Vec<(f32, f32, u8)>,
+    /// How far below the panel the shadow sits.
+    pub offset: f32,
+    /// How far beyond the panel's edges it reaches.
+    pub spread: f32,
 }
 
 impl Default for ShadowStyle {
@@ -234,19 +236,37 @@ impl Default for ShadowStyle {
         Self {
             enabled: true,
             color: Rgb::new(8, 8, 18),
-            layers: vec![
-                (7.0, 5.0, 18),
-                (5.0, 4.0, 20),
-                (3.0, 3.0, 22),
-                (1.0, 2.0, 24),
-            ],
+            offset: 5.0,
+            spread: 7.0,
         }
+    }
+}
+
+impl ShadowStyle {
+    /// The stacked rectangles, as `(spread, offset, alpha)` drawn largest
+    /// first.
+    ///
+    /// Four layers, each stepping two sevenths of the spread and a fifth of
+    /// the offset inward while gaining alpha. Those fractions are what
+    /// reproduce the original 7/5/3/1 by 5/4/3/2 stack exactly at the
+    /// defaults.
+    fn layers(&self) -> [(f32, f32, u8); 4] {
+        let spread_step = self.spread * 2.0 / 7.0;
+        let offset_step = self.offset / 5.0;
+        std::array::from_fn(|index| {
+            let step = index as f32;
+            (
+                self.spread - step * spread_step,
+                self.offset - step * offset_step,
+                18 + index as u8 * 2,
+            )
+        })
     }
 }
 
 /// Everything about how output is drawn.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
+#[serde(default, deny_unknown_fields)]
 pub struct Style {
     pub font: FontFamilies,
     /// Grid font size in pixels. Cell width and height follow it.
@@ -278,6 +298,57 @@ impl Default for Style {
 }
 
 impl Style {
+    /// Reject a style that cannot be drawn.
+    ///
+    /// Follows the same shape as `resolve_zoom`: finite, positive, and
+    /// bounded. Without it a config file reaches the renderers with values
+    /// they cannot express — a non-finite size writes a literal `NaN` into the
+    /// SVG, a zero or negative one collapses the grid to nothing, and an
+    /// enormous padding overflows the canvas arithmetic. Each of those failed
+    /// far from the config that caused it, or not at all.
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value) in [
+            ("font_size", self.font_size),
+            ("title_font_size", self.title_font_size),
+        ] {
+            if !value.is_finite() || value <= 0.0 {
+                return Err(format!("{name} must be finite and greater than zero"));
+            }
+            if value > MAX_FONT_SIZE {
+                return Err(format!("{name} must not exceed {MAX_FONT_SIZE}"));
+            }
+        }
+        for (name, value) in [
+            ("border.width", self.border.width),
+            ("border.radius", self.border.radius),
+            ("shadow.offset", self.shadow.offset),
+            ("shadow.spread", self.shadow.spread),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(format!("{name} must be finite and not negative"));
+            }
+            if value > MAX_LENGTH {
+                return Err(format!("{name} must not exceed {MAX_LENGTH}"));
+            }
+        }
+        if self.padding > MAX_PADDING {
+            return Err(format!("padding must not exceed {MAX_PADDING}"));
+        }
+        if self.font.family.trim().is_empty() {
+            return Err("font.family must name a font".to_string());
+        }
+        for (name, family) in [
+            ("font.bold", &self.font.bold),
+            ("font.italic", &self.font.italic),
+            ("font.bold_italic", &self.font.bold_italic),
+        ] {
+            if family.as_deref().is_some_and(|f| f.trim().is_empty()) {
+                return Err(format!("{name} must name a font when it is set"));
+            }
+        }
+        Ok(())
+    }
+
     pub fn cell_width(&self) -> f32 {
         self.font_size * CELL_W_RATIO
     }
@@ -309,11 +380,12 @@ impl Style {
         }
     }
 
-    pub fn shadow_layers(&self) -> &[(f32, f32, u8)] {
+    /// The shadow's stacked rectangles, empty when it is turned off.
+    pub fn shadow_layers(&self) -> Vec<(f32, f32, u8)> {
         if self.shadow.enabled {
-            &self.shadow.layers
+            self.shadow.layers().to_vec()
         } else {
-            &[]
+            Vec::new()
         }
     }
 }
@@ -397,28 +469,6 @@ mod tests {
     }
 
     #[test]
-    fn the_config_spelling_is_kebab_case() {
-        let style: Style = toml::from_str(
-            "font-size = 20\npadding = 8\n\
-             [font]\nfamily = \"Berkeley Mono\"\nbold-italic = \"Berkeley Mono Oblique\"\n\
-             [window]\ntitle-bar = false\n\
-             [border]\nwidth = 2\ncolor = \"#ff0000\"\n",
-        )
-        .unwrap();
-        assert_eq!(style.font_size, 20.0);
-        assert_eq!(style.font.family, "Berkeley Mono");
-        assert_eq!(style.font.resolve(true, true), "Berkeley Mono Oblique");
-        assert!(!style.window.title_bar);
-        assert_eq!(style.border.width, 2.0);
-        assert_eq!(style.border.color, Rgb::new(255, 0, 0));
-        assert_eq!(
-            style.background,
-            Style::default().background,
-            "anything unnamed keeps its default"
-        );
-    }
-
-    #[test]
     fn font_files_resolve_against_the_config_that_named_them() {
         let mut font = FontFamilies {
             files: vec![
@@ -466,11 +516,107 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_style_key_is_rejected() {
-        let error = toml::from_str::<Style>("font_size = 20\n").unwrap_err();
-        assert!(
-            error.to_string().contains("font_size"),
-            "the snake_case spelling is not silently ignored: {error}"
+    fn the_config_spelling_matches_the_rest_of_the_file() {
+        // Colors spells bright_black, so Style spells font_size. One config
+        // file should not carry two naming conventions.
+        let style: Style = toml::from_str(
+            "font_size = 20\npadding = 8\n\
+             [font]\nfamily = \"Berkeley Mono\"\nbold_italic = \"Berkeley Mono Oblique\"\n\
+             [window]\ntitle_bar = false\n\
+             [border]\nwidth = 2\ncolor = \"#ff0000\"\n\
+             [shadow]\nenabled = false\noffset = 2\n",
+        )
+        .unwrap();
+        assert_eq!(style.font_size, 20.0);
+        assert_eq!(style.font.resolve(true, true), "Berkeley Mono Oblique");
+        assert!(!style.window.title_bar);
+        assert_eq!(style.border.width, 2.0);
+        assert!(!style.shadow.enabled);
+        assert_eq!(style.shadow.offset, 2.0);
+        assert_eq!(
+            style.background,
+            Style::default().background,
+            "anything unnamed keeps its default"
         );
+    }
+
+    #[test]
+    fn a_kebab_case_key_is_rejected() {
+        let error = toml::from_str::<Style>("font-size = 20\n").unwrap_err();
+        assert!(
+            error.to_string().contains("font-size"),
+            "the file's convention is snake_case: {error}"
+        );
+    }
+
+    /// The shadow's layer stack is derived, and at the defaults it has to
+    /// reproduce the four rectangles the renderer used to hold as a constant.
+    #[test]
+    fn the_default_shadow_reproduces_the_original_stack() {
+        assert_eq!(
+            Style::default().shadow_layers(),
+            vec![
+                (7.0, 5.0, 18),
+                (5.0, 4.0, 20),
+                (3.0, 3.0, 22),
+                (1.0, 2.0, 24)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_wider_shadow_scales_every_layer() {
+        let style = Style {
+            shadow: ShadowStyle {
+                spread: 14.0,
+                offset: 10.0,
+                ..ShadowStyle::default()
+            },
+            ..Style::default()
+        };
+        let layers = style.shadow_layers();
+        assert_eq!(
+            layers[0],
+            (14.0, 10.0, 18),
+            "the outermost follows the knobs"
+        );
+        assert_eq!(
+            layers[3].0, 2.0,
+            "and the innermost steps in proportionally"
+        );
+    }
+
+    /// A config file is user input, so every value that reaches the renderers
+    /// has to be one they can draw.
+    #[test]
+    fn a_style_that_cannot_be_drawn_is_rejected() {
+        let bad = [
+            ("font_size = nan", "font_size"),
+            ("font_size = inf", "font_size"),
+            ("font_size = 0", "font_size"),
+            ("font_size = -17", "font_size"),
+            ("font_size = 1e10", "font_size"),
+            ("title_font_size = 0", "title_font_size"),
+            ("padding = 4294967295", "padding"),
+            ("[border]\nwidth = -1", "border.width"),
+            ("[border]\nradius = nan", "border.radius"),
+            ("[shadow]\noffset = inf", "shadow.offset"),
+            ("[shadow]\nspread = -3", "shadow.spread"),
+            ("[font]\nfamily = \"\"", "font.family"),
+            ("[font]\nbold = \"  \"", "font.bold"),
+        ];
+        for (source, expected) in bad {
+            let style: Style = toml::from_str(source).expect("parses as TOML");
+            let error = style
+                .validate()
+                .expect_err(&format!("{source:?} must be rejected"));
+            assert!(
+                error.contains(expected),
+                "{source:?} should name {expected}, said {error:?}"
+            );
+        }
+        Style::default()
+            .validate()
+            .expect("the default is drawable");
     }
 }

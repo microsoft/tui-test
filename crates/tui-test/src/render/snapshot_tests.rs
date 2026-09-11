@@ -34,7 +34,13 @@ fn single_frame_gif_and_png_renders_match_snapshots() {
                 )),
                 cursor: case.cursor,
             };
-            let mut renderer = GridRenderer::with_zoom(COLS, ROWS, case.zoom).unwrap();
+            let mut renderer = GridRenderer::with_zoom(
+                COLS,
+                ROWS,
+                case.zoom,
+                crate::render::style::Style::default(),
+            )
+            .unwrap();
             encode::encode(&output, format, &[frame], &mut renderer, 30, None).unwrap();
             let actual = std::fs::read(&output).unwrap();
             std::fs::remove_file(output).unwrap();

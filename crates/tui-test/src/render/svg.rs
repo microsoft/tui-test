@@ -449,7 +449,7 @@ pub(crate) fn render_svg(
         r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
         hex(canvas_background)
     );
-    for &(spread, offset_y, alpha) in style.shadow_layers() {
+    for (spread, offset_y, alpha) in style.shadow_layers() {
         let shadow_x = padding - spread;
         let shadow_y = padding - spread + offset_y;
         let shadow_width = panel_width + spread * 2.0;
@@ -467,42 +467,53 @@ pub(crate) fn render_svg(
         r#"<g transform="translate({padding:.0} {padding:.0})"><rect width="{panel_width:.0}" height="{panel_height:.0}" rx="{radius:.0}" fill="{}"/>"#,
         hex(colors.resolve(None, false))
     );
-    let title_bottom = header_h - divider_h;
-    let right_curve = panel_width - radius;
-    let _ = write!(
-        out,
-        r#"<path d="M0 {radius:.1} Q0 0 {radius:.1} 0 H{right_curve:.1} Q{panel_width:.1} 0 {panel_width:.1} {radius:.1} V{title_bottom:.1} H0 Z" fill="{}"/>"#,
-        hex(title_bg)
-    );
-    let _ = write!(
-        out,
-        r#"<rect y="{title_bottom:.1}" width="{panel_width:.0}" height="{divider_h:.1}" fill="{}"/>"#,
-        hex(title_divider)
-    );
-    for (i, dot) in style.window.traffic_lights().iter().copied().enumerate() {
-        let cx = MARGIN_X + 5.0 + i as f32 * 20.0;
+    // The whole title bar is one decision. Each piece used to be drawn
+    // unconditionally, so turning the bar off left a strip of title color
+    // across the grid's top corners, the close button's dot at 0,0, and the
+    // title written over the first row of content.
+    if style.window.title_bar {
+        let title_bottom = header_h - divider_h;
+        let right_curve = panel_width - radius;
         let _ = write!(
             out,
-            r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{DOT_R:.1}" fill="{}"/>"#,
-            hex(dot),
-            cy = header_h / 2.0,
+            r#"<path d="M0 {radius:.1} Q0 0 {radius:.1} 0 H{right_curve:.1} Q{panel_width:.1} 0 {panel_width:.1} {radius:.1} V{title_bottom:.1} H0 Z" fill="{}"/>"#,
+            hex(title_bg)
+        );
+        let _ = write!(
+            out,
+            r#"<rect y="{title_bottom:.1}" width="{panel_width:.0}" height="{divider_h:.1}" fill="{}"/>"#,
+            hex(title_divider)
+        );
+        let lights = style.window.traffic_lights();
+        for (i, dot) in lights.iter().copied().enumerate() {
+            let cx = MARGIN_X + 5.0 + i as f32 * 20.0;
+            let _ = write!(
+                out,
+                r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{DOT_R:.1}" fill="{}"/>"#,
+                hex(dot),
+                cy = header_h / 2.0,
+            );
+        }
+        // The darker centre of the close button belongs with the lights, not
+        // beside them, or it survives them being turned off.
+        if !lights.is_empty() {
+            let _ = write!(
+                out,
+                r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{RED_DOT_R:.1}" fill="{}"/>"#,
+                hex(RED_DOT_COLOR),
+                cx = MARGIN_X + 5.0,
+                cy = header_h / 2.0,
+            );
+        }
+        write_title(
+            &mut out,
+            title,
+            cols as u16,
+            rows.len().max(1),
+            panel_width,
+            style,
         );
     }
-    let _ = write!(
-        out,
-        r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{RED_DOT_R:.1}" fill="{}"/>"#,
-        hex(RED_DOT_COLOR),
-        cx = MARGIN_X + 5.0,
-        cy = header_h / 2.0,
-    );
-    write_title(
-        &mut out,
-        title,
-        cols as u16,
-        rows.len().max(1),
-        panel_width,
-        style,
-    );
 
     for (y, row) in rows.iter().enumerate() {
         let mut x = 0;
