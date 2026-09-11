@@ -191,6 +191,27 @@ class TypedCallTests(unittest.TestCase):
         self.assertEqual(args[0], "vim")
         self.assertEqual(args[1], ["file.txt"])
 
+    def test_restart_forwards_timeout_and_preserves_result(self):
+        terminal = _CapturingClient("s")
+        terminal.fake.reply = {
+            "shell_pid": 42,
+            "session": "s",
+            "ready": True,
+            "recording": "",
+        }
+        result = run(terminal.restart(graceful_timeout=123))
+        self.assertEqual(terminal.fake.calls, [("restart", (123,))])
+        self.assertIs(result, terminal.fake.reply)
+
+    def test_restart_preserves_native_errors(self):
+        terminal = _CapturingClient("s")
+        error = RuntimeError("restart failed")
+        terminal.fake.error = error
+        with self.assertRaises(RuntimeError) as raised:
+            run(terminal.restart())
+        self.assertIs(raised.exception, error)
+        self.assertEqual(terminal.fake.calls, [("restart", (5000,))])
+
     def test_constructor_profile_is_forwarded_to_run(self):
         terminal = _CapturingClient(
             "s", profile=Profile(colors=Colors(background="#112233"))

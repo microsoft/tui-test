@@ -53,6 +53,7 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | --- | --- |
 | `open(**options)` | Open a shell. |
 | `run(program, *args, **options)` | Run an app. |
+| `restart(graceful_timeout=5000)` | Restart the session. |
 | `submit(text=None)` | Type and press Enter. |
 | `type(text)`, `write(data)` | Send text or bytes. |
 | `resize(cols, rows)` | Resize. |
@@ -71,6 +72,8 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `close()`, `close_quiet()` | Close. |
 
 Capture options: `background` and `transparent` (SVG, APNG, and GIF).
+
+`restart(graceful_timeout=5000)` returns an `OpenResult` typed dictionary, preserving the last successful spawn's original working directory, options, and latest terminal size. The timeout is milliseconds after Ctrl-C before forced replacement; `0` skips the wait. Child exit preserves restart metadata; `close()` clears it. The terminal and automatic recording start fresh.
 
 Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
 
