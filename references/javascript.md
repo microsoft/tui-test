@@ -35,7 +35,7 @@ const locator = terminal
 | Method | Use |
 | --- | --- |
 | `getByText(text, options?)` | Match text or regex. |
-| `getByStyle(style, options?)` | Match colors, attributes, or an OSC 8 `link`. |
+| `getByStyle(style, options?)` | Match colors, attributes, or `link` targets. |
 | `any()` | Keep all matches. |
 | `unique()` | Require one match. |
 | `first()`, `last()`, `nth(index)` | Select a match. |
@@ -69,7 +69,7 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `waitTitle()`, `waitClipboard()`, `waitBell()` | Wait for events. |
 | `expectTitle()`, `expectOutput()`, `expectExitCode()` | Assert state. |
 | `expectBellCount()`, `expectSnapshot()` | Assert bells or snapshots. |
-| `screenshot()` | Read text or save SVG. |
+| `screenshot()` | Read text or save SVG or PNG. |
 | `startRecording()`, `stopRecording()` | Record. |
 | `close()`, `closeQuiet()` | Close. |
 

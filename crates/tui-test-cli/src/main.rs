@@ -1327,7 +1327,7 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           [global options] -- <program> [args...]  (direct run shorthand)\n\
           restart [--graceful-timeout MS]\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
-INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
+INSPECT   state | text [--full] | screenshot [-o file.svg|file.png] [--full] [--zoom N]\n\
           [--background COLOR | --transparent]\n\
           find text \"T\" [selector/style options] | cells X Y [W H]\n\
           get command|output|exit-code|cwd|cursor|size|title|clipboard|bells|bell-events\n\
