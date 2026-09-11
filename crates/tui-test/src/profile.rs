@@ -526,6 +526,12 @@ impl ConfigFile {
     /// The named profile and its session timeout defaults.
     pub fn settings(&self, name: Option<&str>) -> anyhow::Result<Settings> {
         let profile = match name {
+            // Naming the default explicitly is the same as not naming one.
+            // Otherwise `--profile default` failed on every config that did
+            // not declare the profile the flag already defaults to.
+            Some(name) if name == DEFAULT_PROFILE && !self.profiles.contains_key(name) => {
+                Ok(ConfigProfile::default())
+            }
             Some(name) => self.profiles.get(name).cloned().ok_or_else(|| {
                 let known: Vec<&str> = self.profiles.keys().map(String::as_str).collect();
                 if known.is_empty() {
@@ -903,6 +909,28 @@ mod tests {
         assert_eq!(docs.style.font_size, 24.0);
         assert_eq!(docs.style.canvas_background, Rgb::new(0x10, 0x10, 0x14));
         assert_eq!(docs.style.canvas_top(), 32);
+    }
+
+    #[test]
+    fn naming_the_default_profile_matches_omitting_it() {
+        let config = ConfigFile::parse(
+            "[recording]\nmode = \"always\"\n\n[profiles.docs.recording]\nmode = \"disabled\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config
+                .settings(Some(DEFAULT_PROFILE))
+                .unwrap()
+                .recording
+                .mode,
+            config.settings(None).unwrap().recording.mode,
+            "the flag's own default must not be an error on a config without it"
+        );
+        assert!(
+            config.settings(Some("nope")).is_err(),
+            "any other unknown profile is still an error"
+        );
     }
 
     #[test]
