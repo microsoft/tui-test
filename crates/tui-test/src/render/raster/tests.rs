@@ -580,3 +580,53 @@ fn the_raster_canvas_is_drawn_from_its_style() {
         "the configured background is painted into the padding"
     );
 }
+
+/// The border has to reach real pixels, not just the SVG text.
+#[test]
+fn a_border_is_stroked_onto_the_raster_canvas() {
+    use crate::render::style::BorderStyle;
+
+    let border = BorderStyle {
+        width: 4.0,
+        color: crate::profile::Rgb::new(255, 0, 0),
+        radius: 0.0,
+    };
+    let style = Style {
+        border,
+        padding: 10,
+        ..Style::default()
+    };
+    let mut renderer = GridRenderer::with_zoom(6, 2, 1.0, style.clone()).unwrap();
+    let image = renderer
+        .render(&frame(vec![vec![EmuCell::blank(); 6]; 2]))
+        .unwrap();
+
+    let (panel_width, _) = crate::render::svg::pixel_size(6, 2, &style);
+    // The panel is centered, so its left edge sits one padding in. Two pixels
+    // further is the middle of a four-wide stroke.
+    let middle_of_stroke = (image.dimensions().0 - panel_width) / 2 + 2;
+    assert_eq!(
+        pixel_at(&image, middle_of_stroke, image.dimensions().1 / 2),
+        color_to_pixel(Color::Rgb(255, 0, 0)),
+        "the configured border color is painted along the panel edge"
+    );
+
+    let mut plain = GridRenderer::with_zoom(
+        6,
+        2,
+        1.0,
+        Style {
+            padding: 10,
+            ..Style::default()
+        },
+    )
+    .unwrap();
+    let unbordered = plain
+        .render(&frame(vec![vec![EmuCell::blank(); 6]; 2]))
+        .unwrap();
+    assert_ne!(
+        pixel_at(&unbordered, middle_of_stroke, unbordered.dimensions().1 / 2),
+        color_to_pixel(Color::Rgb(255, 0, 0)),
+        "and asking for no border leaves that edge alone"
+    );
+}

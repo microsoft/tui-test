@@ -573,6 +573,22 @@ pub(crate) fn render_svg(
         write_cursor(&mut out, rows, at, colors, &nerd_font, style);
     }
 
+    // Last, so the content it frames cannot paint over it. The rect is inset
+    // by half the stroke because SVG centers a stroke on its path, and a
+    // border that straddled the panel edge would bleed into the padding.
+    if style.border.width > 0.0 {
+        let inset = style.border.width / 2.0;
+        let _ = write!(
+            out,
+            r#"<rect x="{inset:.2}" y="{inset:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="none" stroke="{}" stroke-width="{:.2}"/>"#,
+            (panel_width - style.border.width).max(0.0),
+            (panel_height - style.border.width).max(0.0),
+            (radius - inset).max(0.0),
+            hex(style.border.color),
+            style.border.width,
+        );
+    }
+
     out.push_str("</g></svg>");
     out
 }
@@ -1407,6 +1423,51 @@ mod tests {
         assert!(
             cast.contains(r#"rx="36.0""#),
             "the outermost layer is spread past the corner radius: {cast}"
+        );
+    }
+
+    /// `border.width` and `border.color` were accepted, validated and then
+    /// ignored by both renderers.
+    #[test]
+    fn a_border_is_stroked_when_one_is_asked_for() {
+        use crate::render::style::BorderStyle;
+        let rows = vec![vec![cell("x", None, None); 4]];
+        let draw = |border: BorderStyle| {
+            render_svg(
+                &rows,
+                4,
+                &colors(),
+                None,
+                Some("t"),
+                &Style {
+                    border,
+                    ..Style::default()
+                },
+                1.0,
+            )
+        };
+
+        assert!(
+            !draw(BorderStyle::default()).contains("stroke"),
+            "the default asks for no border and gets none"
+        );
+
+        let bordered = draw(BorderStyle {
+            width: 4.0,
+            color: crate::profile::Rgb::new(255, 0, 0),
+            radius: 8.0,
+        });
+        assert!(
+            bordered.contains(r##"stroke="#ff0000""##),
+            "the configured color is used: {bordered}"
+        );
+        assert!(
+            bordered.contains(r#"stroke-width="4.00""#),
+            "the configured width is used: {bordered}"
+        );
+        assert!(
+            bordered.contains(r#"x="2.00" y="2.00""#),
+            "and the stroke is inset by half its width so it stays on the panel: {bordered}"
         );
     }
 }

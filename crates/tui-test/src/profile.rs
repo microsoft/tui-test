@@ -335,12 +335,13 @@ impl Default for Profile {
 /// profile inherits the ones it does not name. Whole-table replacement would
 /// mean that naming a directory also reset the mode the file established.
 ///
-/// `style` is deliberately not merged that way. It is one coherent look, and
-/// half of one theme over half of another is a look nobody chose: a profile
-/// that names any style key states the whole style, and a profile that names
-/// none inherits the file's entire style. There is no way to express "the
-/// file's theme but one color different", which is the honest trade for never
-/// producing a chimera.
+/// `style` inherits the same way, key by key and at every depth: a profile
+/// naming `font_size` keeps the file's background and padding. It once
+/// replaced the file's style whole, on the theory that a look is a coherent
+/// thing, but a partial TOML table conventionally reads as an override, the
+/// two policies beside it merge, and the value a profile silently fell back
+/// to was the built-in default rather than the file's -- so the rule produced
+/// a look nobody chose precisely when it claimed to prevent one.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RecordingConfig {
@@ -348,6 +349,22 @@ pub struct RecordingConfig {
     pub directory: Option<PathBuf>,
     /// How screenshots and recordings taken under this profile are drawn.
     pub style: Option<crate::render::style::Style>,
+}
+
+/// Fill every key `overlay` does not name from `base`, recursing into
+/// sub-tables so depth does not change the rule.
+fn fill_missing(overlay: &mut toml::Value, base: &toml::Value) {
+    let (toml::Value::Table(overlay), toml::Value::Table(base)) = (overlay, base) else {
+        return;
+    };
+    for (key, value) in base {
+        match overlay.get_mut(key) {
+            Some(existing) => fill_missing(existing, value),
+            None => {
+                overlay.insert(key.clone(), value.clone());
+            }
+        }
+    }
 }
 
 impl RecordingConfig {
@@ -417,8 +434,46 @@ pub struct ConfigFile {
 }
 
 impl ConfigFile {
+    /// A profile naming one style key means "the file's look, with that key
+    /// changed" -- not "the built-in defaults, with that key changed". By the
+    /// time the typed config exists serde has already filled in every key the
+    /// profile left out, so which keys it actually named is recovered from the
+    /// raw document. Parsing twice keeps the typed parse as the one that
+    /// reports errors, with its spans intact.
+    fn inherit_profile_styles(&mut self, toml_text: &str) -> anyhow::Result<()> {
+        let document: toml::Value = match toml::from_str(toml_text) {
+            Ok(document) => document,
+            Err(_) => return Ok(()),
+        };
+        let Some(base) = document
+            .get("recording")
+            .and_then(|recording| recording.get("style"))
+        else {
+            return Ok(());
+        };
+        let raw_profiles = document.get("profiles").and_then(toml::Value::as_table);
+        for (name, profile) in self.profiles.iter_mut() {
+            let Some(named) = raw_profiles
+                .and_then(|profiles| profiles.get(name))
+                .and_then(|profile| profile.get("recording"))
+                .and_then(|recording| recording.get("style"))
+            else {
+                continue;
+            };
+            let mut merged = named.clone();
+            fill_missing(&mut merged, base);
+            profile.recording.style = Some(
+                merged
+                    .try_into()
+                    .map_err(|error| anyhow::anyhow!("profile {name:?}: {error}"))?,
+            );
+        }
+        Ok(())
+    }
+
     pub fn parse(toml_text: &str) -> anyhow::Result<Self> {
-        let config: Self = toml::from_str(toml_text)?;
+        let mut config: Self = toml::from_str(toml_text)?;
+        config.inherit_profile_styles(toml_text)?;
         config.recording.validate()?;
         // Every profile's own table too. Validating only the file's left an
         // invalid per-profile value to surface when a session opened, far
@@ -707,20 +762,32 @@ mod tests {
     /// key does not leave the rest of the file's theme showing through, which
     /// would be a look neither config asked for.
     #[test]
-    fn a_profile_style_replaces_the_file_style_whole() {
+    fn a_profile_style_overrides_the_file_style_key_by_key() {
         let config = ConfigFile::parse(
-            "[recording.style]\nfont_size = 20\nbackground = \"#ff0000\"\n\
+            "[recording.style]\nfont_size = 20\nbackground = \"#ff0000\"\npadding = 12\n\
+             \n[recording.style.window]\ntitle_bar = false\nforeground = \"#00ff00\"\n\
              \n[profiles.docs.recording.style]\nfont_size = 24\n\
+             \n[profiles.docs.recording.style.window]\nforeground = \"#0000ff\"\n\
              \n[profiles.plain]\n",
         )
         .unwrap();
 
         let docs = config.settings(Some("docs")).unwrap().style;
-        assert_eq!(docs.font_size, 24.0);
+        assert_eq!(docs.font_size, 24.0, "the key the profile names wins");
         assert_eq!(
             docs.background,
-            crate::render::style::Style::default().background,
-            "the rest of the profile's style is the default, not the file's"
+            Rgb::new(255, 0, 0),
+            "a key the profile does not name keeps the file's value"
+        );
+        assert_eq!(docs.padding, 12);
+        assert_eq!(
+            docs.window.foreground,
+            Rgb::new(0, 0, 255),
+            "the rule reaches into sub-tables"
+        );
+        assert!(
+            !docs.window.title_bar,
+            "and a sibling inside that sub-table still comes from the file"
         );
 
         let plain = config.settings(Some("plain")).unwrap().style;

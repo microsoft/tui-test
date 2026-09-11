@@ -16,7 +16,7 @@ mod font;
 use draw::{
     draw_glyph, fill_antialiased_rect, fill_circle, fill_pixel_rect, fill_rounded_rect,
     fill_rounded_rect_alpha, fill_top_rounded_rect, format_glyph_sequence, is_default_ignorable,
-    unpremultiply, unsupported_grapheme,
+    stroke_rounded_rect, unpremultiply, unsupported_grapheme,
 };
 use font::{FontSystem, GlyphKey};
 
@@ -348,6 +348,20 @@ impl FrameRenderer for GridRenderer {
                 scale,
                 &mut missing,
                 style,
+            );
+        }
+
+        // Last, so the content it frames cannot paint over it.
+        if style.border.width > 0.0 {
+            stroke_rounded_rect(
+                &mut self.pixmap,
+                origin_x,
+                origin_y,
+                panel_width as f32,
+                panel_height as f32,
+                style.border.radius * scale,
+                style.border.color,
+                style.border.width * scale,
             );
         }
 
