@@ -342,6 +342,164 @@ fn opening_a_live_named_session_reuses_it_unless_restart_is_requested() {
 }
 
 #[test]
+fn restart_without_spawn_metadata_is_a_specific_no_session_error() {
+    let session = Session::new("native-restart-without-metadata");
+    let error = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 10,
+        })
+        .expect_err("restart must require metadata");
+    assert_eq!(error.kind, ErrorKind::NoSession);
+    assert!(error.message.contains("no restart metadata"));
+}
+
+#[test]
+fn named_restart_without_spawn_metadata_reports_the_specific_error() {
+    let registry = SessionRegistry::default();
+    let never_opened = registry.session("native-never-opened-restart");
+
+    let error = never_opened
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 10,
+        })
+        .expect_err("restart must require metadata");
+    assert_eq!(error.kind, ErrorKind::NoSession);
+    assert!(error.message.contains("no restart metadata"));
+
+    let removed = registry.session("native-removed-restart");
+    removed
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            ..OpenOptions::default()
+        })
+        .expect("open terminal before removal");
+    removed.close().expect("remove named terminal");
+
+    let error = removed
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 10,
+        })
+        .expect_err("restart after removal must require metadata");
+    assert_eq!(error.kind, ErrorKind::NoSession);
+    assert!(error.message.contains("no restart metadata"));
+}
+
+#[test]
+fn restarting_a_shell_changes_pid_and_restores_prompt_integration() {
+    let session = Session::new("native-shell-restart");
+    let first = session
+        .open(OpenOptions {
+            cols: 91,
+            rows: 27,
+            ..OpenOptions::default()
+        })
+        .expect("open shell");
+    assert!(first.ready);
+
+    let OperationResult::Open(restarted) = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 0,
+        })
+        .expect("restart shell")
+    else {
+        panic!("unexpected restart result");
+    };
+    assert_ne!(restarted.shell_pid, first.shell_pid);
+    assert!(restarted.ready);
+
+    session
+        .execute(Operation::Submit {
+            data: Some("echo shell-restart-ready".to_string()),
+        })
+        .expect("submit after restart");
+    session
+        .execute(Operation::WaitCommand {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for command after restart");
+    assert!(matches!(
+        session.execute(Operation::State).expect("state after restart"),
+        OperationResult::State(state)
+            if state.cols == 91
+                && state.rows == 27
+                && state.ready
+                && state.text.contains("shell-restart-ready")
+    ));
+
+    session.close().expect("close restarted shell");
+}
+
+#[test]
+fn restart_replays_the_last_successful_spawn_after_reuse_and_failure() {
+    let session = Session::new("native-restart-spawn-history");
+    let first = session
+        .open(OpenOptions {
+            cols: 91,
+            rows: 27,
+            ..OpenOptions::default()
+        })
+        .expect("open original shell");
+    let reused = session
+        .run(run_options("tui-test-program-that-does-not-exist", &[]))
+        .expect("reuse the live shell");
+    assert_eq!(reused.shell_pid, first.shell_pid);
+    session
+        .execute(Operation::Resize { cols: 99, rows: 31 })
+        .expect("resize original shell");
+
+    let mut invalid = run_options("tui-test-program-that-does-not-exist", &[]);
+    invalid.restart = true;
+    assert_eq!(session.run(invalid).unwrap_err().kind, ErrorKind::Internal);
+
+    let OperationResult::Open(restarted) = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 0,
+        })
+        .expect("restart the last successful spawn")
+    else {
+        panic!("unexpected restart result");
+    };
+    assert_ne!(restarted.shell_pid, first.shell_pid);
+    assert!(
+        restarted.ready,
+        "restart should restore the shell, not the failed program"
+    );
+    assert!(matches!(
+        session.execute(Operation::State).expect("restarted state"),
+        OperationResult::State(state) if state.cols == 99 && state.rows == 31
+    ));
+    session.close().expect("close restarted shell");
+}
+
+#[test]
+fn restarting_an_exited_program_skips_the_grace_period() {
+    let session = Session::new("native-restart-exited");
+    let options = if cfg!(windows) {
+        run_options("cmd", &["/d", "/c", "exit 7"])
+    } else {
+        run_options("sh", &["-c", "exit 7"])
+    };
+    let first = session.run(options).expect("run short-lived program");
+    wait_for_exit(&session);
+    assert_eq!(process_exit_code(&session), Some(7));
+
+    let start = Instant::now();
+    let OperationResult::Open(restarted) = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 60_000,
+        })
+        .expect("restart exited program")
+    else {
+        panic!("unexpected restart result");
+    };
+    assert!(start.elapsed() < Duration::from_secs(10));
+    assert_ne!(restarted.shell_pid, first.shell_pid);
+    wait_for_exit(&session);
+    assert_eq!(process_exit_code(&session), Some(7));
+    session.close().expect("close exited program");
+}
+
+#[test]
 fn unrelated_session_state_does_not_wait_behind_another_session() {
     let registry = Arc::new(SessionRegistry::default());
     for name in ["waiting", "responsive"] {

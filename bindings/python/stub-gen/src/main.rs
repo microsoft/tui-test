@@ -87,6 +87,7 @@ mod stubs {
         pyo3_stub_gen_derive::gen_methods_from_python! {
             r#"
             import typing
+            import tui_test
 
             class NativeSession:
                 def __new__(
@@ -113,7 +114,7 @@ mod stubs {
                     command_timeout: typing.Optional[int],
                     exit_timeout: typing.Optional[int],
                     ready_timeout: typing.Optional[int],
-                ) -> typing.Awaitable[typing.Dict[str, typing.Any]]: ...
+                ) -> typing.Awaitable[tui_test.OpenResult]: ...
 
                 def run(
                     self,
@@ -133,8 +134,9 @@ mod stubs {
                     command_timeout: typing.Optional[int],
                     exit_timeout: typing.Optional[int],
                     ready_timeout: typing.Optional[int],
-                ) -> typing.Awaitable[typing.Dict[str, typing.Any]]: ...
+                ) -> typing.Awaitable[tui_test.OpenResult]: ...
 
+                def restart(self, graceful_timeout_ms: int) -> typing.Awaitable[tui_test.OpenResult]: ...
                 def close(self) -> typing.Awaitable[None]: ...
                 def state(self) -> typing.Awaitable[typing.Dict[str, typing.Any]]: ...
                 def text(self, full: bool) -> typing.Awaitable[str]: ...

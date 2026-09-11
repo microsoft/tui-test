@@ -18,6 +18,7 @@ export type {
   TitleOptions,
   RecordingFormat,
   RecordingOptions,
+  RestartOptions,
   ScreenshotOptions,
 } from "./client.js";
 export { uniqueSession } from "./ephemeral.js";

@@ -1,6 +1,7 @@
 //! PTY spawning and control via `portable-pty`.
 
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
@@ -27,6 +28,15 @@ impl Pty {
         args: &[String],
         opts: &SpawnOptions,
     ) -> anyhow::Result<(Pty, Box<dyn Read + Send>)> {
+        Self::spawn_with_cwd(target, args, opts, opts.cwd.as_deref().map(Path::new))
+    }
+
+    pub(crate) fn spawn_with_cwd(
+        target: &str,
+        args: &[String],
+        opts: &SpawnOptions,
+        cwd: Option<&Path>,
+    ) -> anyhow::Result<(Pty, Box<dyn Read + Send>)> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows: opts.rows,
@@ -46,7 +56,7 @@ impl Pty {
         for (k, v) in &opts.env {
             cmd.env(k, v);
         }
-        if let Some(cwd) = &opts.cwd {
+        if let Some(cwd) = cwd {
             cmd.cwd(cwd);
         } else if let Ok(cwd) = std::env::current_dir() {
             cmd.cwd(cwd);
@@ -75,13 +85,22 @@ impl Pty {
         rows: u16,
         cwd: Option<String>,
     ) -> anyhow::Result<(Pty, Box<dyn Read + Send>)> {
+        Self::spawn_launch_with_cwd(launch, cols, rows, cwd.map(PathBuf::from))
+    }
+
+    pub(crate) fn spawn_launch_with_cwd(
+        launch: &Launch,
+        cols: u16,
+        rows: u16,
+        cwd: Option<PathBuf>,
+    ) -> anyhow::Result<(Pty, Box<dyn Read + Send>)> {
         let opts = SpawnOptions {
             cols,
             rows,
-            cwd,
+            cwd: None,
             env: launch.env.clone(),
         };
-        Pty::spawn(&launch.target, &launch.args, &opts)
+        Self::spawn_with_cwd(&launch.target, &launch.args, &opts, cwd.as_deref())
     }
 
     pub fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
