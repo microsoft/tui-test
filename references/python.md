@@ -33,7 +33,7 @@ locator = (
 | Method | Use |
 | --- | --- |
 | `get_by_text(text, **options)` | Match text or regex. |
-| `get_by_style(style, **options)` | Match colors, attributes, or an OSC 8 `link`. |
+| `get_by_style(style, **options)` | Match colors, attributes, or `link` targets. |
 | `any()` | Keep all matches. |
 | `unique()` | Require one match. |
 | `first()`, `last()`, `nth(index)` | Select a match. |
