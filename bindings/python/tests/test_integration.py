@@ -699,6 +699,45 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
+    def test_restart_preserves_cwd_after_the_caller_changes_directory(self):
+        async def scenario():
+            original = os.getcwd()
+            with tempfile.TemporaryDirectory() as root:
+                start = Path(root) / "start"
+                other = Path(root) / "other"
+                start.mkdir()
+                other.mkdir()
+                for command in ("open", "run"):
+                    for cwd in (None, "."):
+                        with self.subTest(command=command, cwd=cwd):
+                            su = self._client()
+                            try:
+                                os.chdir(start)
+                                if command == "open":
+                                    await su.open(shell=SHELL, cwd=cwd)
+                                else:
+                                    await su.run(
+                                        sys.executable,
+                                        "-c",
+                                        "import os, sys, time; "
+                                        "print('cwd-preserved' if os.path.samefile('.', sys.argv[1]) "
+                                        "else 'cwd-changed', flush=True); time.sleep(60)",
+                                        str(start),
+                                        cwd=cwd,
+                                    )
+                                    await su.get_by_text("cwd-preserved").wait(timeout=5000)
+                                os.chdir(other)
+                                await su.restart(graceful_timeout=0)
+                                if command == "open":
+                                    self.assertTrue(os.path.samefile(await su.get_cwd(), start))
+                                else:
+                                    await su.get_by_text("cwd-preserved").wait(timeout=5000)
+                            finally:
+                                os.chdir(original)
+                                await su.close_quiet()
+
+        run(scenario())
+
     def test_signal_and_wait_exit_are_typed_operations(self):
         async def scenario():
             async with self._client() as su:

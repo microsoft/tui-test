@@ -35,27 +35,33 @@ pub struct Engine {
 }
 
 #[derive(Clone)]
-enum SpawnSpec {
+struct SpawnSpec {
+    command: SpawnCommand,
+    resolved_cwd: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+enum SpawnCommand {
     Open(OpenOptions),
     Run(RunOptions),
 }
 
 impl SpawnSpec {
     fn restart(mut self) -> Self {
-        match &mut self {
-            Self::Open(options) => options.restart = true,
-            Self::Run(options) => options.restart = true,
+        match &mut self.command {
+            SpawnCommand::Open(options) => options.restart = true,
+            SpawnCommand::Run(options) => options.restart = true,
         }
         self
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
-        match self {
-            Self::Open(options) => {
+        match &mut self.command {
+            SpawnCommand::Open(options) => {
                 options.cols = cols;
                 options.rows = rows;
             }
-            Self::Run(options) => {
+            SpawnCommand::Run(options) => {
                 options.cols = cols;
                 options.rows = rows;
             }
@@ -224,11 +230,17 @@ impl Engine {
     }
 
     fn open(&self, options: OpenOptions) -> Result<OpenResult, TuiTestError> {
-        self.spawn(SpawnSpec::Open(options))
+        self.spawn(SpawnSpec {
+            command: SpawnCommand::Open(options),
+            resolved_cwd: None,
+        })
     }
 
     fn run(&self, options: RunOptions) -> Result<OpenResult, TuiTestError> {
-        self.spawn(SpawnSpec::Run(options))
+        self.spawn(SpawnSpec {
+            command: SpawnCommand::Run(options),
+            resolved_cwd: None,
+        })
     }
 
     fn restart(&self, graceful_timeout_ms: u64) -> Result<OpenResult, TuiTestError> {
@@ -261,7 +273,7 @@ impl Engine {
         self.spawn(spec.restart())
     }
 
-    fn spawn(&self, spec: SpawnSpec) -> Result<OpenResult, TuiTestError> {
+    fn spawn(&self, mut spec: SpawnSpec) -> Result<OpenResult, TuiTestError> {
         let (
             shell,
             program,
@@ -275,8 +287,8 @@ impl Engine {
             restart,
             timeouts,
             recording,
-        ) = match &spec {
-            SpawnSpec::Open(options) => (
+        ) = match &spec.command {
+            SpawnCommand::Open(options) => (
                 options.shell,
                 None,
                 options.backend,
@@ -290,7 +302,7 @@ impl Engine {
                 options.timeouts,
                 options.recording.clone(),
             ),
-            SpawnSpec::Run(options) => {
+            SpawnCommand::Run(options) => {
                 let mut program = Vec::with_capacity(options.args.len() + 1);
                 program.push(options.program.clone());
                 program.extend(options.args.clone());
@@ -322,6 +334,13 @@ impl Engine {
                 });
             }
         }
+        let cwd = match &spec.resolved_cwd {
+            Some(cwd) => cwd.clone(),
+            None => std::path::absolute(cwd.as_deref().unwrap_or(".")).map_err(|error| {
+                TuiTestError::internal(format!("failed to resolve session cwd: {error}"))
+            })?,
+        };
+        spec.resolved_cwd = Some(cwd.clone());
         let recording_required = recording.directory.is_some();
         let recording_path = self.resolve_recording_path(&recording)?;
 
@@ -354,7 +373,7 @@ impl Engine {
             profile,
             cols,
             rows,
-            cwd,
+            Some(cwd),
             env,
             timeouts,
             self.logger.clone(),
@@ -2767,7 +2786,8 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .expect("stored spawn spec");
-        let SpawnSpec::Open(stored) = stored else {
+        assert_eq!(stored.resolved_cwd, Some(PathBuf::from(&cwd)));
+        let SpawnCommand::Open(stored) = stored.command else {
             panic!("expected stored open options");
         };
         assert_eq!(stored.backend, options.backend);

@@ -176,7 +176,6 @@ class NativeSurfaceTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-
     def test_restart_validates_timeout_before_session_lookup(self):
         async def scenario():
             session = _native.NativeSession(unique_session("native-restart-number"))
@@ -212,6 +211,21 @@ class NativeStubTests(unittest.TestCase):
             stub,
         )
         self.assertIn("typing.Awaitable[", stub)
+
+    def test_spawn_results_use_the_public_open_result_type(self):
+        stub = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "tui_test"
+            / "_native.pyi"
+        ).read_text(encoding="utf-8")
+        self.assertIn("import tui_test\n", stub)
+        for method in ("open", "run", "restart"):
+            declaration = next(
+                line for line in stub.splitlines()
+                if line.strip().startswith(f"def {method}(")
+            )
+            self.assertIn("typing.Awaitable[tui_test.OpenResult]", declaration)
 
 
 if __name__ == "__main__":

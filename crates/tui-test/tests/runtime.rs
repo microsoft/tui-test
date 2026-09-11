@@ -430,6 +430,76 @@ fn restarting_a_shell_changes_pid_and_restores_prompt_integration() {
 }
 
 #[test]
+fn restart_replays_the_last_successful_spawn_after_reuse_and_failure() {
+    let session = Session::new("native-restart-spawn-history");
+    let first = session
+        .open(OpenOptions {
+            cols: 91,
+            rows: 27,
+            ..OpenOptions::default()
+        })
+        .expect("open original shell");
+    let reused = session
+        .run(run_options("tui-test-program-that-does-not-exist", &[]))
+        .expect("reuse the live shell");
+    assert_eq!(reused.shell_pid, first.shell_pid);
+    session
+        .execute(Operation::Resize { cols: 99, rows: 31 })
+        .expect("resize original shell");
+
+    let mut invalid = run_options("tui-test-program-that-does-not-exist", &[]);
+    invalid.restart = true;
+    assert_eq!(session.run(invalid).unwrap_err().kind, ErrorKind::Internal);
+
+    let OperationResult::Open(restarted) = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 0,
+        })
+        .expect("restart the last successful spawn")
+    else {
+        panic!("unexpected restart result");
+    };
+    assert_ne!(restarted.shell_pid, first.shell_pid);
+    assert!(
+        restarted.ready,
+        "restart should restore the shell, not the failed program"
+    );
+    assert!(matches!(
+        session.execute(Operation::State).expect("restarted state"),
+        OperationResult::State(state) if state.cols == 99 && state.rows == 31
+    ));
+    session.close().expect("close restarted shell");
+}
+
+#[test]
+fn restarting_an_exited_program_skips_the_grace_period() {
+    let session = Session::new("native-restart-exited");
+    let options = if cfg!(windows) {
+        run_options("cmd", &["/d", "/c", "exit 7"])
+    } else {
+        run_options("sh", &["-c", "exit 7"])
+    };
+    let first = session.run(options).expect("run short-lived program");
+    wait_for_exit(&session);
+    assert_eq!(process_exit_code(&session), Some(7));
+
+    let start = Instant::now();
+    let OperationResult::Open(restarted) = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 60_000,
+        })
+        .expect("restart exited program")
+    else {
+        panic!("unexpected restart result");
+    };
+    assert!(start.elapsed() < Duration::from_secs(10));
+    assert_ne!(restarted.shell_pid, first.shell_pid);
+    wait_for_exit(&session);
+    assert_eq!(process_exit_code(&session), Some(7));
+    session.close().expect("close exited program");
+}
+
+#[test]
 fn unrelated_session_state_does_not_wait_behind_another_session() {
     let registry = Arc::new(SessionRegistry::default());
     for name in ["waiting", "responsive"] {

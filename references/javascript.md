@@ -75,6 +75,8 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 
 Capture options: `background` and `transparent` (SVG, APNG, and GIF).
 
+`restart({ gracefulTimeout: 5000 })` returns an `OpenResult`, preserving the last successful spawn's original working directory, options, and latest terminal size. The timeout is milliseconds after Ctrl-C before forced replacement; `0` skips the wait. Child exit preserves restart metadata; `close()` clears it. The terminal and automatic recording start fresh.
+
 Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
 
 Recording modes: `disabled`, `on-failure`, and `always`.

@@ -17,6 +17,8 @@ Use the CLI for terminal work split across separate commands.
 
 Use `--session NAME` to select a session. `open` and `run` reuse it unless `--restart` is set.
 
+`restart` replays the last successful spawn, preserving its original working directory, options, and latest terminal size. It sends Ctrl-C and waits up to 5000 ms before forcing replacement; `--graceful-timeout 0` skips the wait. It works after child exit, but not after `close` or daemon shutdown. The terminal and automatic recording start fresh.
+
 ## Locate text
 
 ```sh

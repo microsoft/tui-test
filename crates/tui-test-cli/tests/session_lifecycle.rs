@@ -701,6 +701,43 @@ fn restart_gracefully_recreates_a_run_with_its_metadata() {
 }
 
 #[test]
+fn restart_forcibly_replaces_a_child_that_ignores_interrupts() {
+    let sandbox = Sandbox::new("restart-force");
+    let marker = sandbox.home.join("interrupt.txt");
+    let starts = sandbox.home.join("starts.txt");
+    let (program, args) = restart_helper(&sandbox.home);
+    let mut owned = vec![
+        "--json".to_string(),
+        "run".to_string(),
+        "--env".to_string(),
+        "TUI_RESTART_TOKEN=force".to_string(),
+        "--env".to_string(),
+        "TUI_RESTART_IGNORE_INT=1".to_string(),
+        "--env".to_string(),
+        format!("TUI_RESTART_MARKER={}", marker.display()),
+        "--env".to_string(),
+        format!("TUI_RESTART_STARTS={}", starts.display()),
+        program,
+    ];
+    owned.extend(args);
+    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+    let first: serde_json::Value = serde_json::from_str(&sandbox.ok(&refs)).unwrap();
+    sandbox.wait_for_text("restart-ready", "30000");
+
+    let start = Instant::now();
+    let restarted: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "restart", "--graceful-timeout", "1000"]))
+            .unwrap();
+    let elapsed = start.elapsed();
+    assert!(elapsed >= Duration::from_millis(1000), "{elapsed:?}");
+    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    assert_ne!(restarted["data"]["shell_pid"], first["data"]["shell_pid"]);
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "graceful");
+    sandbox.wait_for_text("restart-ready", "30000");
+    assert_eq!(std::fs::read_to_string(starts).unwrap().lines().count(), 2);
+}
+
+#[test]
 fn wait_ready_succeeds_on_an_open_shell() {
     let sandbox = Sandbox::new("ready");
     sandbox.ok(&["open"]);
@@ -1425,7 +1462,7 @@ while ($true) {
     if ($key.Key -eq [ConsoleKey]::C -and
         ($key.Modifiers -band [ConsoleModifiers]::Control)) {
         [IO.File]::WriteAllText($env:TUI_RESTART_MARKER, "graceful")
-        exit 0
+        if ($env:TUI_RESTART_IGNORE_INT -ne "1") { exit 0 }
     }
 }
 "#,
@@ -1454,7 +1491,7 @@ fn restart_helper(root: &std::path::Path) -> (String, Vec<String>) {
 set -eu
 size="$(stty size)"
 printf 'arg=%s;token=%s;cwd=%s;size=%s\n' "$1" "$TUI_RESTART_TOKEN" "$PWD" "$size" >> "$TUI_RESTART_STARTS"
-trap 'printf "graceful" > "$TUI_RESTART_MARKER"; exit 0' INT
+trap 'printf "graceful" > "$TUI_RESTART_MARKER"; if [ "${TUI_RESTART_IGNORE_INT:-0}" != 1 ]; then exit 0; fi' INT
 printf 'restart-ready\n'
 while :; do
     IFS= read -r _ || :

@@ -163,6 +163,8 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 
 `open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, and `--timeout-<class> MS`. `open` also accepts `--shell`.
 
+`restart` replays the last successful spawn with its original working directory, options, and latest terminal size. It sends Ctrl-C, waits up to 5000 ms, then forcibly replaces a child that is still running; `--graceful-timeout 0` skips the wait. An exited child can be restarted, but `close` or stopping the daemon clears the restart metadata. Each restart starts a fresh terminal and automatic recording.
+
 ### Text locators
 
 ```sh
