@@ -16,6 +16,7 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
         program: program.to_string(),
         args: args.iter().map(|arg| (*arg).to_string()).collect(),
         profile: defaults.profile,
+        style: defaults.style,
         cols: defaults.cols,
         rows: defaults.rows,
         cwd: defaults.cwd,

@@ -76,6 +76,7 @@ impl Session {
         program: Option<Vec<String>>,
         backend: Backend,
         profile: Profile,
+        style: crate::render::style::Style,
         cols: u16,
         rows: u16,
         cwd: Option<String>,
@@ -90,7 +91,7 @@ impl Session {
         let state = Arc::new(Mutex::new(TermState {
             emu: backend.build_with_bells(cols, rows, &profile, bells.clone())?,
             profile,
-            style: crate::render::style::Style::default(),
+            style,
             tracker: CommandTracker::new(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,

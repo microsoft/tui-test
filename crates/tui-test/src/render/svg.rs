@@ -1172,6 +1172,129 @@ mod tests {
             "it is escaped instead: {svg}"
         );
     }
+
+    /// Each knob has to reach the output. The golden pins the default, which
+    /// would keep passing if the renderer ignored every configured value, so
+    /// this renders non-default styles and looks for the difference.
+    #[test]
+    fn a_configured_style_changes_what_is_drawn() {
+        use crate::render::style::{BorderStyle, FontFamilies, ShadowStyle, WindowStyle};
+        // Wide enough that the title fits, or its color is never painted.
+        let rows = vec![vec![cell("x", None, None); 40]];
+        let draw =
+            |style: &Style| render_svg(&rows, 40, &colors(), None, Some("title"), style, 1.0);
+        let plain = draw(&Style::default());
+
+        let bigger = draw(&Style {
+            font_size: 34.0,
+            ..Style::default()
+        });
+        assert!(
+            bigger.contains(r#"font-size="34px""#),
+            "the font size reaches the root: {bigger}"
+        );
+
+        let recolored = draw(&Style {
+            background: Rgb::new(1, 2, 3),
+            ..Style::default()
+        });
+        assert!(
+            recolored.contains("#010203"),
+            "the canvas background is painted"
+        );
+        assert!(!plain.contains("#010203"));
+
+        let padded = draw(&Style {
+            padding: 40,
+            ..Style::default()
+        });
+        assert!(
+            padded.contains("translate(40 40)"),
+            "padding offsets the panel: {padded}"
+        );
+
+        let bare = draw(&Style {
+            window: WindowStyle {
+                title_bar: false,
+                ..WindowStyle::default()
+            },
+            ..Style::default()
+        });
+        assert!(!bare.contains("#69110a"), "no close button without a bar");
+        assert!(!bare.contains(">title"), "and no title drawn over the grid");
+
+        let no_lights = draw(&Style {
+            window: WindowStyle {
+                traffic_lights: false,
+                ..WindowStyle::default()
+            },
+            ..Style::default()
+        });
+        assert!(
+            !no_lights.contains("#ec6a5e"),
+            "the lights can be turned off"
+        );
+        assert!(
+            no_lights.contains("#d9d9e8"),
+            "while the bar they sit on stays"
+        );
+
+        let themed = draw(&Style {
+            window: WindowStyle {
+                background: Rgb::new(9, 9, 9),
+                foreground: Rgb::new(8, 8, 8),
+                divider: Rgb::new(7, 7, 7),
+                ..WindowStyle::default()
+            },
+            ..Style::default()
+        });
+        for expected in ["#090909", "#080808", "#070707"] {
+            assert!(themed.contains(expected), "{expected} is painted: {themed}");
+        }
+
+        let unshadowed = draw(&Style {
+            shadow: ShadowStyle {
+                enabled: false,
+                ..ShadowStyle::default()
+            },
+            ..Style::default()
+        });
+        assert!(
+            !unshadowed.contains("#080812"),
+            "the shadow can be turned off"
+        );
+        assert!(plain.contains("#080812"));
+
+        let recast = draw(&Style {
+            shadow: ShadowStyle {
+                color: Rgb::new(4, 5, 6),
+                ..ShadowStyle::default()
+            },
+            ..Style::default()
+        });
+        assert!(
+            recast.contains("#040506"),
+            "the shadow color reaches the output"
+        );
+
+        let rounded = draw(&Style {
+            border: BorderStyle {
+                radius: 2.0,
+                ..BorderStyle::default()
+            },
+            ..Style::default()
+        });
+        assert!(rounded.contains(r#"rx="2""#), "the corner radius applies");
+
+        let lettered = draw(&Style {
+            font: FontFamilies {
+                family: "Berkeley Mono".into(),
+                ..FontFamilies::default()
+            },
+            ..Style::default()
+        });
+        assert!(lettered.contains(r#"font-family="Berkeley Mono""#));
+    }
 }
 
 #[cfg(test)]

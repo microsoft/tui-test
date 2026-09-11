@@ -329,40 +329,76 @@ impl Default for Profile {
     }
 }
 
+/// Recording settings as written in the config file.
+///
+/// Every field is optional so that a profile can change one without restating
+/// the rest. Whole-table replacement would mean that setting a font size also
+/// reset the recording mode the file had established, which is not what
+/// writing one key looks like it should do.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RecordingConfig {
+    pub mode: Option<crate::api::AutomaticRecordingMode>,
+    pub directory: Option<PathBuf>,
+    /// How screenshots and recordings taken under this profile are drawn.
+    pub style: Option<crate::render::style::Style>,
+}
+
+impl RecordingConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        if self
+            .directory
+            .as_ref()
+            .is_some_and(|d| d.as_os_str().is_empty())
+        {
+            anyhow::bail!("recording directory must not be empty");
+        }
+        if let Some(style) = &self.style {
+            style.validate().map_err(|error| anyhow::anyhow!(error))?;
+        }
+        Ok(())
+    }
+
+    /// A relative directory means "beside this config", wherever the process
+    /// happens to be running from.
+    fn anchor(&mut self, parent: &Path) {
+        if let Some(directory) = self.directory.as_mut() {
+            if directory.is_relative() {
+                *directory = parent.join(&*directory);
+            }
+        }
+    }
+
+    /// This table's values, falling back to `base` field by field.
+    fn over(&self, base: &RecordingConfig) -> Self {
+        Self {
+            mode: self.mode.or(base.mode),
+            directory: self.directory.clone().or_else(|| base.directory.clone()),
+            style: self.style.clone().or_else(|| base.style.clone()),
+        }
+    }
+}
+
 /// A profile as represented in `tui-test.toml`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ConfigProfile {
     pub scrollback: Option<usize>,
     pub colors: Colors,
     pub timeouts: crate::api::Timeouts,
-    /// Recording settings for this profile.
-    ///
-    /// Absent means the file's own `[recording]` decides, so a project can set
-    /// one policy at the top and let a single profile depart from it without
-    /// restating the rest.
-    pub recording: Option<crate::api::AutomaticRecording>,
+    /// Recording settings for this profile, each field falling back to the
+    /// file's own `[recording]` when it names none.
+    pub recording: RecordingConfig,
 }
 
 /// Concrete session settings resolved from a config profile.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Settings {
     pub profile: Profile,
     pub timeouts: crate::api::Timeouts,
     pub recording: crate::api::AutomaticRecording,
-}
-
-impl From<ConfigProfile> for Settings {
-    fn from(value: ConfigProfile) -> Self {
-        Self {
-            profile: Profile {
-                scrollback: value.scrollback.unwrap_or(DEFAULT_SCROLLBACK),
-                colors: value.colors,
-            },
-            timeouts: value.timeouts,
-            recording: value.recording.unwrap_or_default(),
-        }
-    }
+    /// How this session's screenshots and recordings are drawn.
+    pub style: crate::render::style::Style,
 }
 
 /// A parsed config file.
@@ -370,7 +406,7 @@ impl From<ConfigProfile> for Settings {
 #[serde(default, deny_unknown_fields)]
 pub struct ConfigFile {
     pub profiles: BTreeMap<String, ConfigProfile>,
-    pub recording: crate::api::AutomaticRecording,
+    pub recording: RecordingConfig,
 }
 
 impl ConfigFile {
@@ -378,14 +414,13 @@ impl ConfigFile {
         let config: Self = toml::from_str(toml_text)?;
         config.recording.validate()?;
         // Every profile's own table too. Validating only the file's left an
-        // invalid per-profile directory to surface when a session opened,
-        // far from the config that caused it.
+        // invalid per-profile value to surface when a session opened, far
+        // from the config that caused it.
         for (name, profile) in &config.profiles {
-            if let Some(recording) = &profile.recording {
-                recording
-                    .validate()
-                    .map_err(|error| anyhow::anyhow!("profile {name:?}: {error}"))?;
-            }
+            profile
+                .recording
+                .validate()
+                .map_err(|error| anyhow::anyhow!("profile {name:?}: {error}"))?;
         }
         Ok(config)
     }
@@ -408,18 +443,9 @@ impl ConfigFile {
         // process happens to be running from. That has to hold for a
         // profile's table as much as the file's, or the same suite writes
         // recordings somewhere else when run from another directory.
-        let anchor = |recording: &mut crate::api::AutomaticRecording| {
-            if let Some(directory) = recording.directory.as_mut() {
-                if directory.is_relative() {
-                    *directory = parent.join(&*directory);
-                }
-            }
-        };
-        anchor(&mut config.recording);
+        config.recording.anchor(&parent);
         for profile in config.profiles.values_mut() {
-            if let Some(recording) = profile.recording.as_mut() {
-                anchor(recording);
-            }
+            profile.recording.anchor(&parent);
         }
         Ok(config)
     }
@@ -447,17 +473,19 @@ impl ConfigFile {
                 .cloned()
                 .unwrap_or_default()),
         }?;
-        // The profile's own `[recording]` wins whole, and the file's is the
-        // default for every profile that does not state one. Replacing rather
-        // than merging field by field keeps "which settings am I recording
-        // under" answerable by reading a single table.
-        let has_profile_recording = profile.recording.is_some();
-        let file_recording = self.recording.clone();
-        let mut settings: Settings = profile.into();
-        if !has_profile_recording {
-            settings.recording = file_recording;
-        }
-        Ok(settings)
+        let recording = profile.recording.over(&self.recording);
+        Ok(Settings {
+            profile: Profile {
+                scrollback: profile.scrollback.unwrap_or(DEFAULT_SCROLLBACK),
+                colors: profile.colors,
+            },
+            timeouts: profile.timeouts,
+            recording: crate::api::AutomaticRecording {
+                mode: recording.mode.unwrap_or_default(),
+                directory: recording.directory,
+            },
+            style: recording.style.unwrap_or_default(),
+        })
     }
 }
 
@@ -668,38 +696,6 @@ mod tests {
         assert!(ConfigFile::parse("[recording]\ndirectory = \"\"\n").is_err());
     }
 
-    /// A profile's own `[recording]` replaces the file's, and a profile
-    /// without one inherits it. Replacing whole rather than merging keeps the
-    /// answer to "what am I recording under" in one table.
-    #[test]
-    fn a_profile_recording_overrides_the_file_default() {
-        let config = ConfigFile::parse(
-            "[recording]\nmode = \"on-failure\"\ndirectory = \"artifacts\"\n\
-             \n[profiles.docs.recording]\nmode = \"always\"\n\
-             \n[profiles.ci]\nscrollback = 50\n",
-        )
-        .unwrap();
-
-        let docs = config.settings(Some("docs")).unwrap().recording;
-        assert_eq!(docs.mode, crate::api::AutomaticRecordingMode::Always);
-        assert_eq!(
-            docs.directory, None,
-            "the profile's table replaces the file's rather than merging into it"
-        );
-
-        let ci = config.settings(Some("ci")).unwrap().recording;
-        assert_eq!(ci.mode, crate::api::AutomaticRecordingMode::OnFailure);
-        assert_eq!(ci.directory, Some(PathBuf::from("artifacts")));
-        assert_eq!(
-            config.settings(Some("ci")).unwrap().profile.scrollback,
-            50,
-            "and the rest of the profile still applies"
-        );
-    }
-
-    /// A profile's recording table gets the same treatment as the file's:
-    /// rejected at parse when invalid, and anchored to the config's directory
-    /// when relative. Both were previously applied only to the file's table.
     #[test]
     fn a_profile_recording_is_validated_and_anchored() {
         let error = ConfigFile::parse("[profiles.docs.recording]\ndirectory = \"\"\n")
@@ -707,6 +703,13 @@ mod tests {
         assert!(
             error.to_string().contains("docs"),
             "the error names the profile: {error}"
+        );
+
+        let error = ConfigFile::parse("[profiles.docs.recording.style]\nfont_size = 0\n")
+            .expect_err("a style that cannot be drawn is rejected at parse");
+        assert!(
+            error.to_string().contains("font_size"),
+            "the error names the value: {error}"
         );
 
         let dir = std::env::temp_dir().join(format!("tui-test-anchor-{}", std::process::id()));
@@ -719,15 +722,49 @@ mod tests {
         .unwrap();
         let config = ConfigFile::load(&path).unwrap();
         assert_eq!(
-            config.profiles["docs"]
-                .recording
-                .as_ref()
-                .unwrap()
-                .directory,
+            config.profiles["docs"].recording.directory,
             Some(dir.join("artifacts")),
             "a relative directory anchors to the config, not the working directory"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A profile changes the recording settings it names and inherits the
+    /// rest. Replacing the table whole would mean that setting a font size
+    /// silently reset the mode the file had established.
+    #[test]
+    fn a_profile_recording_inherits_field_by_field() {
+        let config = ConfigFile::parse(
+            "[recording]\nmode = \"on-failure\"\ndirectory = \"artifacts\"\n\
+             \n[profiles.docs.recording.style]\nfont_size = 24\n\
+             \n[profiles.ci.recording]\nmode = \"always\"\n",
+        )
+        .unwrap();
+
+        let docs = config.settings(Some("docs")).unwrap();
+        assert_eq!(docs.style.font_size, 24.0, "the profile's style applies");
+        assert_eq!(
+            docs.recording.mode,
+            crate::api::AutomaticRecordingMode::OnFailure,
+            "and naming only a style leaves the file's mode alone"
+        );
+        assert_eq!(docs.recording.directory, Some(PathBuf::from("artifacts")));
+
+        let ci = config.settings(Some("ci")).unwrap();
+        assert_eq!(
+            ci.recording.mode,
+            crate::api::AutomaticRecordingMode::Always
+        );
+        assert_eq!(
+            ci.recording.directory,
+            Some(PathBuf::from("artifacts")),
+            "changing the mode leaves the directory alone"
+        );
+        assert_eq!(
+            ci.style,
+            crate::render::style::Style::default(),
+            "and a profile naming no style gets the default"
+        );
     }
 
     #[test]
