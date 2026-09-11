@@ -2700,8 +2700,11 @@ fn screenshot(
                         zoom,
                         background,
                     );
-                    std::fs::write(&path, svg)
-                        .map_err(|error| TuiTestError::internal(error.to_string()))?;
+                    crate::render::output::write_atomic(std::path::Path::new(&path), |output| {
+                        output.write_all(svg.as_bytes())?;
+                        Ok(())
+                    })
+                    .map_err(|error| TuiTestError::internal(error.to_string()))?;
                 }
                 ScreenshotFormat::Png => {
                     #[cfg(feature = "recording-raster")]

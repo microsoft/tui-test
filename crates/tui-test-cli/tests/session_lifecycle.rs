@@ -335,6 +335,8 @@ fn screenshots_dispatch_by_extension_without_changing_svg_output() {
 
     let svg = sandbox.home.join("screen.svg");
     let extensionless = sandbox.home.join("screen");
+    std::fs::write(&svg, "previous SVG").unwrap();
+    std::fs::write(&extensionless, "previous SVG").unwrap();
     sandbox.ok(&["screenshot", svg.to_str().unwrap()]);
     sandbox.ok(&["screenshot", extensionless.to_str().unwrap()]);
     let svg_bytes = std::fs::read(&svg).unwrap();
@@ -350,6 +352,7 @@ fn screenshots_dispatch_by_extension_without_changing_svg_output() {
     );
 
     let png = sandbox.home.join("screen.PNG");
+    std::fs::write(&png, "previous PNG").unwrap();
     sandbox.ok(&["screenshot", png.to_str().unwrap(), "--zoom", "2"]);
     let png_bytes = std::fs::read(&png).unwrap();
     assert_eq!(&png_bytes[..8], b"\x89PNG\r\n\x1a\n");
@@ -379,6 +382,49 @@ fn screenshots_dispatch_by_extension_without_changing_svg_output() {
         String::from_utf8_lossy(&output.stderr).contains("unsupported screenshot extension '.gif'")
     );
     assert!(!unsupported.exists());
+}
+
+#[test]
+fn failed_screenshots_preserve_existing_outputs() {
+    let sandbox = Sandbox::new("screenshot-failure");
+    let program = r#"printf "ascii-ready\n"; read -r _; printf "\364\217\277\275\nmissing-ready\n"; sleep 30"#;
+    sandbox.ok(&[
+        "run", "--cols", "40", "--rows", "6", "--", "bash", "--norc", "-c", program,
+    ]);
+    sandbox.wait_for_text("ascii-ready", "5000");
+
+    let svg = sandbox.home.join("screen.svg");
+    let png = sandbox.home.join("screen.png");
+    for path in [&svg, &png] {
+        sandbox.ok(&["screenshot", path.to_str().unwrap()]);
+        let previous = std::fs::read(path).unwrap();
+        let permissions = std::fs::metadata(path).unwrap().permissions();
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(path, readonly).unwrap();
+        let output = sandbox.run(&["screenshot", path.to_str().unwrap()]);
+        std::fs::set_permissions(path, permissions).unwrap();
+        assert_eq!(output.status.code(), Some(5));
+        assert_eq!(std::fs::read(path).unwrap(), previous);
+    }
+
+    let previous = std::fs::read(&png).unwrap();
+    sandbox.ok(&["submit"]);
+    sandbox.wait_for_text("missing-ready", "5000");
+    for path in [&png, &sandbox.home.join("new.png")] {
+        let output = sandbox.run(&["screenshot", path.to_str().unwrap()]);
+        assert_eq!(output.status.code(), Some(5));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("could not render glyphs"));
+    }
+    assert_eq!(std::fs::read(&png).unwrap(), previous);
+    assert!(!sandbox.home.join("new.png").exists());
+    assert!(!std::fs::read_dir(&sandbox.home).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".tui-test-")
+    }));
 }
 
 #[test]
