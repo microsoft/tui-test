@@ -187,6 +187,20 @@ top = 16
 left = 24
 ```
 
+Defaults: `canvas_padding` is 24 on every side; `content_padding` is 8 at the
+top, 15 at the sides and 14 at the bottom. Either accepts `0`, which trims
+that gap entirely — `canvas_padding = 0` leaves the window filling the image,
+and `content_padding = 0` puts the first cell against the window edge. With
+`title_bar = false`, one number insets the grid evenly on all four sides:
+
+```toml
+[recording.style]
+content_padding = 15
+
+[recording.style.window]
+title_bar = false
+```
+
 The terminal's own colors are separate, under `[profiles.<name>.colors]`: a
 recording has three backgrounds, and `canvas_background` is the outermost.
 

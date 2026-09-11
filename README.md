@@ -458,6 +458,13 @@ at one scale, not fitted to a column:
 
 <img alt="the same session at four font sizes" src="static/style-font-sizes.png" width="860">
 
+Two gaps, each defaulting differently: `canvas_padding` is 24 on every side,
+and `content_padding` is 8 top, 15 at the sides and 14 at the bottom. Set
+either to `0` to trim the frame, and set `content_padding` to one number to
+inset the grid evenly once the title bar is gone:
+
+<img alt="the same session with the padding removed and with even padding" src="static/style-padding.png" width="700">
+
 Recordings are drawn from the same style, so a `.gif` matches its screenshot:
 
 | Default | Midnight | Bordered |
