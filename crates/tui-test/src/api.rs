@@ -669,6 +669,7 @@ pub enum Operation {
         full: bool,
         path: Option<String>,
         zoom: Option<f64>,
+        background: Option<CaptureBackground>,
     },
     StartRecording {
         path: String,
@@ -677,6 +678,7 @@ pub enum Operation {
         speed: Option<f64>,
         idle_time_limit: Option<f64>,
         zoom: Option<f64>,
+        background: Option<CaptureBackground>,
     },
     StopRecording,
 }
@@ -1003,6 +1005,24 @@ pub enum RecordingFormat {
     Cast,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "color")]
+pub enum CaptureBackground {
+    Color(crate::profile::Rgb),
+    Transparent,
+}
+
+impl CaptureBackground {
+    pub fn parse(value: &str) -> Result<Self, TuiTestError> {
+        if value.eq_ignore_ascii_case("transparent") {
+            return Ok(Self::Transparent);
+        }
+        crate::profile::Rgb::parse(value)
+            .map(Self::Color)
+            .map_err(TuiTestError::usage)
+    }
+}
+
 impl RecordingFormat {
     pub fn infer(path: &str) -> Option<Self> {
         let extension = std::path::Path::new(path)
@@ -1092,6 +1112,65 @@ pub enum MouseAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_background_accepts_hex_rgb_and_transparency() {
+        for (value, expected) in [
+            ("#1aF", "#11aaff"),
+            ("123456", "#123456"),
+            (" #AbCdEf ", "#abcdef"),
+            ("#000000", "#000000"),
+            ("#ffffff", "#ffffff"),
+        ] {
+            let background = CaptureBackground::parse(value).unwrap();
+            assert_eq!(
+                background,
+                CaptureBackground::Color(crate::profile::Rgb::parse(expected).unwrap()),
+                "{value:?}"
+            );
+            let json = serde_json::to_string(&background).unwrap();
+            assert_eq!(
+                serde_json::from_str::<CaptureBackground>(&json).unwrap(),
+                background
+            );
+        }
+        for value in ["transparent", "TRANSPARENT"] {
+            assert_eq!(
+                CaptureBackground::parse(value).unwrap(),
+                CaptureBackground::Transparent
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_capture_background_colors_are_usage_errors() {
+        for value in [
+            "",
+            " ",
+            "#",
+            "#12",
+            "#1234",
+            "#12345",
+            "#1234567",
+            "#12345678",
+            "#ggg",
+            "#ff00zz",
+            "##fff",
+            "#-12345",
+            "#12é34",
+            "１２３",
+            "256,0,0",
+            "-1,0,0",
+            "1,2",
+            "1,2,3,4",
+            "1.5,0,0",
+            "rgb(256,0,0)",
+        ] {
+            let error = CaptureBackground::parse(value).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Usage, "{value:?}");
+            assert!(error.message.contains("color"), "{value:?}: {error}");
+        }
+    }
 
     #[test]
     fn clipboard_patterns_infer_matching_from_the_rust_type() {

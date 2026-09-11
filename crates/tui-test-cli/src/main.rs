@@ -11,6 +11,7 @@ mod monitor_input;
 mod protocol;
 mod skill;
 
+use std::ffi::OsString;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -18,12 +19,13 @@ use clap::{CommandFactory, Parser};
 
 use cli::{
     Cli, ClickCmd, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, HighlightCmd, KeyCmd, MatchArg,
-    MouseCmd, RecordCmd, TextQueryArgs, TextSelectorArgs, TextStyleArgs, WaitCmd, WhitespaceArg,
+    MouseCmd, RecordCmd, ScreenshotArgs, TextQueryArgs, TextSelectorArgs, TextStyleArgs, WaitCmd,
+    WhitespaceArg,
 };
 use protocol::{GetField, MouseAction, Request, Response};
 use tui_test::{
-    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, MouseOptions, TextAnchor,
-    TextScope, TextSelector, TextStyle, WhitespaceMode,
+    CaptureBackground, LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence,
+    MouseOptions, TextAnchor, TextScope, TextSelector, TextStyle, WhitespaceMode,
 };
 
 /// Agent skill router, installed as `SKILL.md`.
@@ -53,7 +55,7 @@ const SKILL_REFERENCES: &[(&str, &str)] = &[
 ];
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(command_line_args());
     let session = config::session_name_from_env(cli.session.clone());
 
     let Some(command) = cli.command else {
@@ -106,6 +108,44 @@ fn main() {
         command => run_remote(&session, command, cli.json, cli.verbose),
     };
     std::process::exit(code);
+}
+
+fn command_line_args() -> Vec<OsString> {
+    command_line_args_from(std::env::args_os())
+}
+
+fn command_line_args_from(args: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
+    let mut args = args.into_iter().collect::<Vec<_>>();
+    let Some(separator) = args.iter().position(|arg| arg == "--") else {
+        return args;
+    };
+    if has_command_before_separator(&args[1..separator]) {
+        return args;
+    }
+    args.insert(separator, OsString::from("run"));
+    args
+}
+
+fn has_command_before_separator(args: &[OsString]) -> bool {
+    let mut skip_value = false;
+    for arg in args {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        let value = arg.to_string_lossy();
+        if value == "--session" {
+            skip_value = true;
+        } else if value == "--json"
+            || value == "--verbose"
+            || value == "-v"
+            || value.starts_with("--session=")
+        {
+        } else if !value.starts_with('-') {
+            return true;
+        }
+    }
+    false
 }
 
 /// Build the request for a daemon-backed command, then send it.
@@ -257,17 +297,26 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         }
         Command::State => Request::State,
         Command::Text { full } => Request::Text { full },
-        Command::Screenshot {
+        Command::Screenshot(ScreenshotArgs {
             path,
             out,
             full,
             zoom,
-        } => {
+            background,
+            transparent,
+        }) => {
             let path = out.or(path);
-            if zoom.is_some() && path.is_none() {
-                anyhow::bail!("screenshot --zoom requires --out or a path");
+            if (zoom.is_some() || background.is_some() || transparent) && path.is_none() {
+                anyhow::bail!(
+                    "screenshot --zoom, --background, and --transparent require --out or a path"
+                );
             }
-            Request::Screenshot { full, path, zoom }
+            Request::Screenshot {
+                full,
+                path,
+                zoom,
+                background: capture_background(background, transparent)?,
+            }
         }
         Command::Record {
             cmd:
@@ -278,6 +327,8 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                     speed,
                     idle_time_limit,
                     zoom,
+                    background,
+                    transparent,
                 },
         } => Request::StartRecording {
             path: resolve_client_path(path)?,
@@ -286,6 +337,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             speed,
             idle_time_limit,
             zoom,
+            background: capture_background(background, transparent)?,
         },
         Command::Record {
             cmd: RecordCmd::Stop,
@@ -320,6 +372,18 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         _ => anyhow::bail!("unsupported command"),
     };
     Ok(req)
+}
+
+fn capture_background(
+    background: Option<String>,
+    transparent: bool,
+) -> anyhow::Result<Option<CaptureBackground>> {
+    if transparent {
+        return Ok(Some(CaptureBackground::Transparent));
+    }
+    background
+        .map(|value| CaptureBackground::parse(&value).map_err(anyhow::Error::msg))
+        .transpose()
 }
 
 fn resolve_client_path(path: String) -> anyhow::Result<String> {
@@ -1259,8 +1323,10 @@ fn usage_text() -> &'static str {
 SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
                   [--config F] [--profile P] [--restart]\n\
           run [--config F] [--profile P] [--restart] <program> [args...]\n\
+          [global options] -- <program> [args...]  (direct run shorthand)\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg] [--full] [--zoom N]\n\
+          [--background COLOR | --transparent]\n\
           find text \"T\" [selector/style options] | cells X Y [W H]\n\
           get command|output|exit-code|cwd|cursor|size|title|clipboard|bells|bell-events\n\
 INPUT     type \"text\" | submit [\"text\"]\n\
@@ -1276,6 +1342,7 @@ EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
           expect snapshot NAME [-u] [--include-style --include-title]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
+          [--background COLOR | --transparent]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
 WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
@@ -1322,9 +1389,74 @@ mod tests {
         assert!(build_request(command)
             .unwrap_err()
             .to_string()
-            .contains("requires --out"));
+            .contains("require --out"));
     }
 
+    #[test]
+    fn capture_background_flags_map_to_requests() {
+        let screenshot = Cli::try_parse_from([
+            "tui-test",
+            "screenshot",
+            "screen.svg",
+            "--background",
+            "#123456",
+        ])
+        .unwrap();
+        assert!(matches!(
+            build_request(screenshot.command.unwrap()).unwrap(),
+            Request::Screenshot {
+                background: Some(CaptureBackground::Color(color)),
+                ..
+            } if color.to_hex() == "#123456"
+        ));
+
+        let recording =
+            Cli::try_parse_from(["tui-test", "record", "start", "demo.gif", "--transparent"])
+                .unwrap();
+        assert!(matches!(
+            build_request(recording.command.unwrap()).unwrap(),
+            Request::StartRecording {
+                background: Some(CaptureBackground::Transparent),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn top_level_separator_expands_to_run() {
+        let args = command_line_args_from(
+            ["tui-test", "--session", "demo", "--", "vim", "--clean"]
+                .into_iter()
+                .map(OsString::from),
+        );
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Run {
+                program,
+                args,
+                ..
+            }) if program == "vim" && args == ["--clean"]
+        ));
+    }
+
+    #[test]
+    fn separator_after_a_subcommand_is_not_rewritten() {
+        let args = command_line_args_from(
+            ["tui-test", "run", "--", "vim", "--clean"]
+                .into_iter()
+                .map(OsString::from),
+        );
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Run {
+                program,
+                args,
+                ..
+            }) if program == "vim" && args == ["--clean"]
+        ));
+    }
     #[test]
     fn a_rich_payload_prints_its_fields_before_the_screen() {
         let rendered = format_data(&json!({

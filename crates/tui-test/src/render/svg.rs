@@ -11,6 +11,7 @@
 use std::fmt::Write;
 
 use super::nerd_font::NerdFont;
+use crate::api::CaptureBackground;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::render::style::Style;
 use crate::terminal::cell::{truncate_to_columns, Attrs, Color, EmuCell, CONTINUATION};
@@ -432,6 +433,7 @@ fn write_cursor(
 ///
 /// Its row is a `usize` because it indexes `rows`, which for a full-history
 /// render is as long as the scrollback and so is not bounded by the screen.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_svg(
     rows: &[Vec<EmuCell>],
     cols: u16,
@@ -440,6 +442,7 @@ pub(crate) fn render_svg(
     title: Option<&str>,
     style: &Style,
     zoom: f64,
+    background: Option<CaptureBackground>,
 ) -> String {
     let cell_w = style.cell_width();
     let cell_h = style.cell_height();
@@ -447,7 +450,6 @@ pub(crate) fn render_svg(
     let header_h = style.header_height();
     let divider_h = style.divider_height();
     let radius = style.border.radius;
-    let canvas_background = style.canvas_background;
     let shadow_color = style.shadow.color;
     let title_bg = style.window.background;
     let title_divider = style.window.divider;
@@ -472,11 +474,25 @@ pub(crate) fn render_svg(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{font_size}px">"#
     );
     nerd_font.write_defs(&mut out);
-    let _ = write!(
-        out,
-        r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
-        hex(canvas_background)
-    );
+    // A capture may override the configured canvas, including with nothing at
+    // all; naming none leaves the style in charge.
+    match background {
+        Some(CaptureBackground::Transparent) => {}
+        Some(CaptureBackground::Color(color)) => {
+            let _ = write!(
+                out,
+                r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
+                hex(color)
+            );
+        }
+        None => {
+            let _ = write!(
+                out,
+                r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
+                hex(style.canvas_background)
+            );
+        }
+    }
     for (spread, offset_y, alpha) in style.shadow_layers() {
         let shadow_x = pad_left - spread;
         let shadow_y = pad_top - spread + offset_y;
@@ -666,7 +682,16 @@ mod tests {
         let cursor_fill = hex(Profile::default().colors.cursor);
 
         let mut emu = colors();
-        let block = render_svg(&rows, 1, &emu, Some((0, 0)), None, &Style::default(), 1.0);
+        let block = render_svg(
+            &rows,
+            1,
+            &emu,
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(
             block.contains(&format!(
                 r#"width="10.00" height="21.00" fill="{cursor_fill}""#
@@ -675,7 +700,16 @@ mod tests {
         );
 
         emu.process(b"\x1b[4 q");
-        let underline = render_svg(&rows, 1, &emu, Some((0, 0)), None, &Style::default(), 1.0);
+        let underline = render_svg(
+            &rows,
+            1,
+            &emu,
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(
             underline.contains(&format!(
                 r#"width="10.00" height="2.00" fill="{cursor_fill}""#
@@ -684,7 +718,16 @@ mod tests {
         );
 
         emu.process(b"\x1b[6 q");
-        let bar = render_svg(&rows, 1, &emu, Some((0, 0)), None, &Style::default(), 1.0);
+        let bar = render_svg(
+            &rows,
+            1,
+            &emu,
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(
             bar.contains(&format!(
                 r#"width="2.00" height="21.00" fill="{cursor_fill}""#
@@ -707,6 +750,7 @@ mod tests {
             None,
             &Style::default(),
             1.0,
+            None,
         );
         let background = hex(Profile::default().colors.background);
         assert!(
@@ -727,6 +771,7 @@ mod tests {
             None,
             &Style::default(),
             1.0,
+            None,
         );
         assert!(
             !svg.contains('X'),
@@ -747,6 +792,7 @@ mod tests {
             None,
             &Style::default(),
             1.0,
+            None,
         );
 
         for attribute in [
@@ -781,6 +827,7 @@ mod tests {
             None,
             &Style::default(),
             1.0,
+            None,
         );
         let cursor_fill = hex(Profile::default().colors.cursor);
         assert!(
@@ -814,6 +861,7 @@ mod tests {
             None,
             &Style::default(),
             1.0,
+            None,
         );
         assert_eq!(
             svg.matches("<use href=\"#nf-f115\"").count(),
@@ -853,6 +901,7 @@ mod tests {
             None,
             &Style::default(),
             1.0,
+            None,
         );
         let expected = header_h() + Style::default().content_top() + row as f32 * cell_h();
         assert!(
@@ -874,19 +923,38 @@ mod tests {
         emu.process(b"\x1b]12;#ff00ff\x07");
 
         assert!(
-            render_svg(&rows, 1, &emu, Some((0, 0)), None, &Style::default(), 1.0,)
-                .contains("#ff00ff"),
+            render_svg(
+                &rows,
+                1,
+                &emu,
+                Some((0, 0)),
+                None,
+                &Style::default(),
+                1.0,
+                None
+            )
+            .contains("#ff00ff"),
             "the cursor is drawn when there is one to draw"
         );
         assert!(
-            !render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0,).contains("#ff00ff"),
+            !render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0, None)
+                .contains("#ff00ff"),
             "a terminal not showing a cursor gets none"
         );
         // A row past the end of the grid: reachable if a caller miscounts the
         // scrollback offset, and not worth a panic.
         assert!(
-            !render_svg(&rows, 1, &emu, Some((0, 9)), None, &Style::default(), 1.0,)
-                .contains("#ff00ff"),
+            !render_svg(
+                &rows,
+                1,
+                &emu,
+                Some((0, 9)),
+                None,
+                &Style::default(),
+                1.0,
+                None
+            )
+            .contains("#ff00ff"),
             "an out-of-range position is ignored"
         );
     }
@@ -899,10 +967,17 @@ mod tests {
         let rows = vec![vec![cell("x", None, None)]];
         let mut emu = colors();
         emu.process(b"\x1b]12;#ff00ff\x07");
-        assert!(
-            render_svg(&rows, 1, &emu, Some((0, 0)), None, &Style::default(), 1.0,)
-                .contains("#ff00ff")
-        );
+        assert!(render_svg(
+            &rows,
+            1,
+            &emu,
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None
+        )
+        .contains("#ff00ff"));
     }
 
     /// A program that repaints the terminal repaints the screenshot.
@@ -917,14 +992,14 @@ mod tests {
         let mut emu = colors();
         let rows = vec![vec![cell("x", Some(Color::from_index(1)), None)]];
 
-        let before = render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0);
+        let before = render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0, None);
         assert!(before.contains(&hex(Profile::default().colors.red)));
         assert!(before.contains(&hex(Profile::default().colors.background)));
 
         // The program picks its own background and recolors palette slot 1.
         emu.process(b"\x1b]11;#3b0764\x07\x1b]4;1;#22c55e\x07");
 
-        let after = render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0);
+        let after = render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0, None);
         assert!(
             after.contains("#3b0764"),
             "the window is painted with the background the program set"
@@ -949,7 +1024,7 @@ mod tests {
         emu.process(b"\x1b]11;#3b0764\x07\x1b]4;1;#22c55e\x07");
         emu.process(b"\x1b]111\x07\x1b]104;1\x07");
 
-        let after = render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0);
+        let after = render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0, None);
         assert!(after.contains(&hex(Profile::default().colors.background)));
         assert!(after.contains(&hex(Profile::default().colors.red)));
     }
@@ -960,7 +1035,16 @@ mod tests {
             cell("h", Some(Color::from_index(1)), None),
             cell("i", Some(Color::from_index(1)), None),
         ]];
-        let svg = render_svg(&rows, 2, &colors(), None, None, &Style::default(), 1.0);
+        let svg = render_svg(
+            &rows,
+            2,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(svg.starts_with("<svg"));
         assert!(svg.ends_with("</svg>"));
         assert!(svg.contains("textLength"));
@@ -976,8 +1060,26 @@ mod tests {
     #[test]
     fn zoom_changes_output_size_without_changing_the_view_box() {
         let rows = vec![vec![cell("x", None, None)]];
-        let svg = render_svg(&rows, 1, &colors(), None, None, &Style::default(), 0.5);
-        let full = render_svg(&rows, 1, &colors(), None, None, &Style::default(), 1.0);
+        let svg = render_svg(
+            &rows,
+            1,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            0.5,
+            None,
+        );
+        let full = render_svg(
+            &rows,
+            1,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         let view_box = {
             let start = full.find("viewBox=\"").expect("a viewBox");
             let rest = &full[start..];
@@ -1004,6 +1106,40 @@ mod tests {
     }
 
     #[test]
+    fn canvas_background_can_be_custom_or_transparent() {
+        let rows = vec![vec![cell("x", None, None)]];
+        let draw = |background| {
+            render_svg(
+                &rows,
+                1,
+                &colors(),
+                None,
+                None,
+                &Style::default(),
+                1.0,
+                background,
+            )
+        };
+
+        let custom = draw(Some(CaptureBackground::Color(Rgb::new(1, 2, 3))));
+        assert!(
+            custom.contains(r##"fill="#010203"/>"##),
+            "a capture may name its own canvas: {custom}"
+        );
+
+        let transparent = draw(Some(CaptureBackground::Transparent));
+        assert!(
+            !transparent.contains(&hex(Style::default().canvas_background)),
+            "or none at all: {transparent}"
+        );
+
+        assert!(
+            draw(None).contains(&hex(Style::default().canvas_background)),
+            "and naming none leaves the style in charge"
+        );
+    }
+
+    #[test]
     fn emits_window_chrome() {
         let svg = render_svg(
             &[vec![cell(" ", None, None)]],
@@ -1013,6 +1149,7 @@ mod tests {
             None,
             &Style::default(),
             1.0,
+            None,
         );
         assert!(svg.contains("<circle"));
         // Derived, so a deliberate change to a default gap does not read as a
@@ -1053,6 +1190,7 @@ mod tests {
             None,
             &Style::default(),
             1.0,
+            None,
         );
         let expected_baseline = header_h() + Style::default().content_top() + font_baseline();
         assert!(svg.contains(&format!(r#"y="{expected_baseline:.2}""#)));
@@ -1061,7 +1199,16 @@ mod tests {
     #[test]
     fn escapes_markup_characters() {
         let rows = vec![vec![cell("<", None, None)]];
-        let svg = render_svg(&rows, 1, &colors(), None, None, &Style::default(), 1.0);
+        let svg = render_svg(
+            &rows,
+            1,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(svg.contains("&lt;"));
         assert!(!svg.contains("><</text>"));
     }
@@ -1069,7 +1216,16 @@ mod tests {
     #[test]
     fn background_run_emitted_for_non_default_bg() {
         let rows = vec![vec![cell(" ", None, Some(Color::from_index(4)))]];
-        let svg = render_svg(&rows, 1, &colors(), None, None, &Style::default(), 1.0);
+        let svg = render_svg(
+            &rows,
+            1,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(
             svg.contains(&hex(Emulator::color(&colors(), ColorSlot::Indexed(4)))),
             "slot 4 is painted with the profile color"
@@ -1084,7 +1240,16 @@ mod tests {
             cell(glyph, None, None),
             cell("b", None, None),
         ]];
-        let svg = render_svg(&rows, 3, &colors(), None, None, &Style::default(), 1.0);
+        let svg = render_svg(
+            &rows,
+            3,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
 
         assert!(svg.contains(r#"<path id="nf-f115" d=""#));
         assert!(svg.contains(r##"<use href="#nf-f115""##));
@@ -1105,6 +1270,7 @@ mod tests {
             None,
             &Style::default(),
             1.0,
+            None,
         );
 
         assert_eq!(svg.matches(r#"<path id="nf-f115""#).count(), 1);
@@ -1122,6 +1288,7 @@ mod tests {
             None,
             &Style::default(),
             1.0,
+            None,
         );
 
         assert!(svg.contains(glyph));
@@ -1134,7 +1301,16 @@ mod tests {
     #[test]
     fn draws_the_window_title_centred_in_the_bar() {
         let rows = vec![vec![cell("x", None, None); 40]];
-        let bare = render_svg(&rows, 40, &colors(), None, None, &Style::default(), 1.0);
+        let bare = render_svg(
+            &rows,
+            40,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         let titled = render_svg(
             &rows,
             40,
@@ -1143,6 +1319,7 @@ mod tests {
             Some("vim: notes.md"),
             &Style::default(),
             1.0,
+            None,
         );
 
         assert!(
@@ -1179,6 +1356,7 @@ mod tests {
             Some(long),
             &Style::default(),
             1.0,
+            None,
         );
 
         assert!(!svg.contains(long), "the full title cannot have been drawn");
@@ -1212,6 +1390,7 @@ mod tests {
             Some(&"你".repeat(40)),
             &Style::default(),
             1.0,
+            None,
         );
         let drawn = svg
             .split("text-anchor=\"middle\" xml:space=\"preserve\">")
@@ -1249,6 +1428,7 @@ mod tests {
             Some("</text><script>x</script>"),
             &Style::default(),
             1.0,
+            None,
         );
 
         assert!(!svg.contains("<script>"), "no injected element: {svg}");
@@ -1267,7 +1447,7 @@ mod tests {
         // Wide enough that the title fits, or its color is never painted.
         let rows = vec![vec![cell("x", None, None); 40]];
         let draw =
-            |style: &Style| render_svg(&rows, 40, &colors(), None, Some("title"), style, 1.0);
+            |style: &Style| render_svg(&rows, 40, &colors(), None, Some("title"), style, 1.0, None);
         let plain = draw(&Style::default());
 
         let bigger = draw(&Style {
@@ -1403,6 +1583,7 @@ mod tests {
                 ..Style::default()
             },
             1.0,
+            None,
         );
         assert!(
             !svg.contains(r#"onload="alert(1)""#),
@@ -1429,7 +1610,7 @@ mod tests {
             .style;
 
         let rows = vec![vec![cell("x", None, None); 4]];
-        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0);
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0, None);
 
         assert!(svg.contains(r#"font-size="24px""#), "font_size: {svg}");
         assert!(svg.contains("translate(40 40)"), "padding: {svg}");
@@ -1444,7 +1625,7 @@ mod tests {
         use crate::render::style::ShadowStyle;
         let rows = vec![vec![cell("x", None, None); 40]];
         let draw =
-            |style: &Style| render_svg(&rows, 40, &colors(), None, Some("title"), style, 1.0);
+            |style: &Style| render_svg(&rows, 40, &colors(), None, Some("title"), style, 1.0, None);
 
         let titled = draw(&Style {
             title_font_size: 21.0,
@@ -1494,6 +1675,7 @@ mod tests {
                     ..Style::default()
                 },
                 1.0,
+                None,
             )
         };
 
@@ -1540,7 +1722,7 @@ mod tests {
             },
             ..Style::default()
         };
-        let svg = render_svg(&rows, 2, &colors(), None, Some("t"), &style, 1.0);
+        let svg = render_svg(&rows, 2, &colors(), None, Some("t"), &style, 1.0, None);
 
         assert!(
             svg.contains(r#"font-family="Base Mono""#),
@@ -1572,7 +1754,7 @@ mod tests {
             }),
             ..Style::default()
         };
-        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0);
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0, None);
 
         assert!(
             svg.contains("translate(30 10)"),
@@ -1591,7 +1773,16 @@ mod tests {
                 parts.next().unwrap().parse().unwrap(),
             )
         };
-        let plain = render_svg(&rows, 4, &colors(), None, Some("t"), &Style::default(), 1.0);
+        let plain = render_svg(
+            &rows,
+            4,
+            &colors(),
+            None,
+            Some("t"),
+            &Style::default(),
+            1.0,
+            None,
+        );
         let (plain_w, plain_h) = box_of(&plain);
         let (wide_w, wide_h) = box_of(&svg);
         assert_eq!(
@@ -1609,7 +1800,7 @@ mod tests {
             }),
             ..Style::default()
         };
-        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &one, 1.0);
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &one, 1.0, None);
         assert!(
             svg.contains("translate(24 24)"),
             "the sides it did not name keep the default: {svg}"
@@ -1643,7 +1834,7 @@ mod tests {
             }),
             ..Style::default()
         };
-        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0);
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0, None);
 
         // The first run starts at the left gap, and its baseline sits below the
         // title bar by the top gap.
@@ -1696,6 +1887,7 @@ mod golden {
             Some("golden"),
             &Style::default(),
             1.0,
+            None,
         );
         let golden = concat!(
             env!("CARGO_MANIFEST_DIR"),

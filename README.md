@@ -153,6 +153,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run a program. |
+| `[global options] -- PROGRAM [ARGS...]` | Alias for `run`. |
 | `sessions` | List sessions. |
 | `close [--all]` | Close one or all sessions. |
 | `daemon start` | Start the session daemon. |
@@ -272,13 +273,13 @@ Timeout defaults:
 
 | Command | Description |
 | --- | --- |
-| `screenshot [PATH] [-o PATH] [--full] [--zoom N]` | Print text or save SVG. |
-| `record start PATH [options]` | Start APNG, GIF, MP4, or asciinema recording. |
+| `screenshot [PATH] [-o PATH] [--full] [--zoom N] [--background COLOR \| --transparent]` | Print text or save SVG. |
+| `record start PATH [options] [--background COLOR \| --transparent]` | Start APNG, GIF, MP4, or asciinema recording. |
 | `record stop` | Finish the recording. |
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
 | `monitor [--interactive]` | Watch a CLI session or send input with `--interactive`. |
 
-`record start` accepts `--format`, `--fps`, `--speed`, `--idle-time-limit`, and `--zoom`. MP4 output requires `ffmpeg`.
+`record start` options: `--format`, `--fps`, `--speed`, `--idle-time-limit`, `--zoom`, `--background`, and `--transparent`. MP4 requires `ffmpeg` and does not support transparency. Cast recordings do not support canvas options.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `--format` overrides it.
 

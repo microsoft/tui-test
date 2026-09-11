@@ -315,7 +315,7 @@ class TypedCallTests(unittest.TestCase):
             [
                 (
                     "start_recording",
-                    ("demo.png", "apng", 24, 2.0, 3.0, 0.5),
+                    ("demo.png", "apng", 24, 2.0, 3.0, 0.5, None, False),
                 ),
                 ("stop_recording", ()),
             ],
@@ -326,13 +326,28 @@ class TypedCallTests(unittest.TestCase):
         run(terminal.screenshot("screen.svg", full=True, zoom=0.5))
         self.assertEqual(
             terminal.fake.calls,
-            [("screenshot", ("screen.svg", True, 0.5))],
+            [("screenshot", ("screen.svg", True, 0.5, None, False))],
         )
 
     def test_screenshot_rejects_zoom_without_path(self):
         terminal = _CapturingClient("s")
         with self.assertRaisesRegex(ValueError, "requires a path"):
             run(terminal.screenshot(zoom=0.5))
+
+    def test_capture_background_options_are_forwarded(self):
+        terminal = _CapturingClient("s")
+        run(terminal.screenshot("screen.svg", background="#123456"))
+        run(terminal.start_recording("demo.gif", transparent=True))
+        self.assertEqual(
+            terminal.fake.calls,
+            [
+                ("screenshot", ("screen.svg", False, None, "#123456", False)),
+                (
+                    "start_recording",
+                    ("demo.gif", None, None, None, None, None, None, True),
+                ),
+            ],
+        )
 
 
 class ClientTimeoutTests(unittest.TestCase):
