@@ -241,6 +241,69 @@ The `docs` profile records always, still writes to `./artifacts`, and draws at
 24px over the `#101014` canvas with 32px of padding. Inheritance is key by key
 at every depth, so naming one style key keeps the rest of the file's look.
 
+A fuller example, where each profile names a different mix:
+
+```toml
+# What every profile gets unless it says otherwise.
+[recording]
+mode = "on-failure"
+directory = "./artifacts"
+
+[recording.style]
+font_size = 17
+canvas_background = "#101014"
+canvas_padding = 30
+
+[recording.style.window]
+background = "#1a1a22"
+foreground = "#d8d8e8"
+divider = "#2a2a36"
+
+# Docs: always record, somewhere else, in bigger type.
+[profiles.docs.recording]
+mode = "always"
+directory = "./docs/media"
+
+[profiles.docs.recording.style]
+font_size = 24
+
+# CI: keep the file's mode and directory, strip the chrome so artifacts stay small.
+[profiles.ci.recording.style]
+canvas_padding = 8
+
+[profiles.ci.recording.style.window]
+title_bar = false
+
+[profiles.ci.recording.style.shadow]
+enabled = false
+
+# Demo: a light look for slides.
+[profiles.demo.recording]
+mode = "always"
+
+[profiles.demo.recording.style]
+canvas_background = "#f6f6f8"
+font_size = 20
+
+[profiles.demo.recording.style.window]
+background = "#e8e8ef"
+foreground = "#33333a"
+
+[profiles.demo.recording.style.border]
+width = 2
+color = "#8a8aa0"
+```
+
+| Profile | mode | directory | what it keeps from the file |
+| --- | --- | --- | --- |
+| `docs` | `always` | `./docs/media` | the canvas, its padding, the title bar colors |
+| `ci` | `on-failure` | `./artifacts` | the font size and the title bar colors it did not name |
+| `demo` | `always` | `./artifacts` | the padding and the divider it did not name |
+
+`--profile` selects one, and `default` is what it selects when the flag is
+absent. Naming a profile the file does not define is an error, except for
+`default` itself.
+
 ## Terminal modes
 
 `state` reports the modes the child has turned on, under `modes`:

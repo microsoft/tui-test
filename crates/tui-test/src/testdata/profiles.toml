@@ -1,0 +1,48 @@
+# What every profile gets unless it says otherwise.
+[recording]
+mode = "on-failure"
+directory = "./artifacts"
+
+[recording.style]
+font_size = 17
+canvas_background = "#101014"
+canvas_padding = 30
+
+[recording.style.window]
+background = "#1a1a22"
+foreground = "#d8d8e8"
+divider = "#2a2a36"
+
+# Docs: always record, somewhere else, in bigger type.
+[profiles.docs.recording]
+mode = "always"
+directory = "./docs/media"
+
+[profiles.docs.recording.style]
+font_size = 24
+
+# CI: keep the file's mode and directory, strip the chrome so artifacts stay small.
+[profiles.ci.recording.style]
+canvas_padding = 8
+
+[profiles.ci.recording.style.window]
+title_bar = false
+
+[profiles.ci.recording.style.shadow]
+enabled = false
+
+# Demo: a light look for slides.
+[profiles.demo.recording]
+mode = "always"
+
+[profiles.demo.recording.style]
+canvas_background = "#f6f6f8"
+font_size = 20
+
+[profiles.demo.recording.style.window]
+background = "#e8e8ef"
+foreground = "#33333a"
+
+[profiles.demo.recording.style.border]
+width = 2
+color = "#8a8aa0"

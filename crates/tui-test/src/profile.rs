@@ -911,6 +911,54 @@ mod tests {
         assert_eq!(docs.style.canvas_top(), 32);
     }
 
+    /// The per-profile examples in `references/cli.md`. Each profile names a
+    /// different mix of keys, so between them they cover overriding a policy,
+    /// overriding a style key, and naming neither.
+    #[test]
+    fn the_documented_profile_overrides_resolve_as_written() {
+        let config = ConfigFile::parse(include_str!("testdata/profiles.toml"))
+            .expect("the documented example parses");
+        let mode = |name| config.settings(Some(name)).unwrap().recording.mode;
+        let style = |name| config.settings(Some(name)).unwrap().style;
+        let directory = |name| config.settings(Some(name)).unwrap().recording.directory;
+
+        // docs: overrides both policies and one style key.
+        assert_eq!(mode("docs"), crate::api::AutomaticRecordingMode::Always);
+        assert_eq!(directory("docs"), Some(PathBuf::from("./docs/media")));
+        assert_eq!(style("docs").font_size, 24.0);
+        assert_eq!(
+            style("docs").canvas_background,
+            Rgb::new(0x10, 0x10, 0x14),
+            "and keeps the canvas the file set"
+        );
+        assert_eq!(style("docs").canvas_top(), 30);
+
+        // ci: names no policy at all, so both come from the file.
+        assert_eq!(mode("ci"), crate::api::AutomaticRecordingMode::OnFailure);
+        assert_eq!(directory("ci"), Some(PathBuf::from("./artifacts")));
+        assert_eq!(style("ci").canvas_top(), 8, "its own gap");
+        assert!(!style("ci").window.title_bar);
+        assert!(!style("ci").shadow.enabled);
+        assert_eq!(
+            style("ci").window.background,
+            Rgb::new(0x1a, 0x1a, 0x22),
+            "a sibling inside the same sub-table still comes from the file"
+        );
+        assert_eq!(style("ci").font_size, 17.0);
+
+        // demo: a look of its own, still inheriting the file's directory.
+        assert_eq!(mode("demo"), crate::api::AutomaticRecordingMode::Always);
+        assert_eq!(directory("demo"), Some(PathBuf::from("./artifacts")));
+        assert_eq!(style("demo").canvas_background, Rgb::new(0xf6, 0xf6, 0xf8));
+        assert_eq!(style("demo").border.width, 2.0);
+        assert_eq!(
+            style("demo").window.divider,
+            Rgb::new(0x2a, 0x2a, 0x36),
+            "the divider it did not name comes from the file"
+        );
+        assert_eq!(style("demo").canvas_top(), 30);
+    }
+
     #[test]
     fn naming_the_default_profile_matches_omitting_it() {
         let config = ConfigFile::parse(

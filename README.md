@@ -338,6 +338,11 @@ A profile can carry its own `[recording]`, inheriting every key it does not
 name. See [the CLI reference](references/cli.md#styling-screenshots-and-recordings)
 for the full set.
 
+Each profile overrides only what it names, so one file can hold a look for
+docs, a smaller one for CI artifacts, and a light one for slides:
+
+<img alt="three profiles overriding the same file-level recording settings" src="static/style-profiles.png" width="860">
+
 Every screenshot below is the same session, drawn from a different style.
 
 <table>
