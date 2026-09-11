@@ -449,6 +449,16 @@ spread = 22
 
 <img alt="tui-test drawn at poster size with a deep shadow" src="static/style-poster.svg" width="460">
 
+Each option on its own, one change from the default:
+
+<img alt="every tui-test style option shown one change at a time" src="static/style-options.png" width="860">
+
+Recordings are drawn from the same style, so a `.gif` matches its screenshot:
+
+| Default | Midnight | Bordered |
+| --- | --- | --- |
+| <img alt="a tui-test recording in the default style" src="static/style-anim-default.gif" width="280"> | <img alt="a tui-test recording in the midnight style" src="static/style-anim-midnight.gif" width="280"> | <img alt="a tui-test recording in the bordered style" src="static/style-anim-bordered.gif" width="280"> |
+
 The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
 
 ### Shells and backends
