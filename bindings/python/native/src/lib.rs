@@ -1148,7 +1148,6 @@ impl NativeSession {
         background: Option<String>,
         transparent: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let background = capture_background(background, transparent).map_err(shell_error_to_py)?;
         let name = self.name.clone();
         future_blocking(
             py,
@@ -1159,7 +1158,7 @@ impl NativeSession {
                         full,
                         path,
                         zoom,
-                        background,
+                        background: capture_background(background, transparent)?,
                     },
                 )
             },
@@ -1182,7 +1181,6 @@ impl NativeSession {
         transparent: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let fps = capture_optional_integer(fps);
-        let background = capture_background(background, transparent).map_err(shell_error_to_py)?;
         let name = self.name.clone();
         future_blocking(
             py,
@@ -1199,7 +1197,7 @@ impl NativeSession {
                         speed,
                         idle_time_limit,
                         zoom,
-                        background,
+                        background: capture_background(background, transparent)?,
                     },
                 )
             },

@@ -14,6 +14,36 @@ use tui_test::Backend;
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
 #[test]
+fn invalid_capture_backgrounds_fail_before_starting_a_session() {
+    let sandbox = Sandbox::new("invalid-capture-background");
+    let screenshot = sandbox.home.join("screen.svg");
+    let recording = sandbox.home.join("recording.gif");
+    for value in [
+        "",
+        "#12",
+        "#ff00zz",
+        "#12345678",
+        "#12é34",
+        "256,0,0",
+        "rgb(-1,0,0)",
+    ] {
+        let background = format!("--background={value}");
+        for args in [
+            vec!["screenshot", screenshot.to_str().unwrap(), &background],
+            vec!["record", "start", recording.to_str().unwrap(), &background],
+        ] {
+            let output = sandbox.run(&args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}");
+            let message = String::from_utf8_lossy(&output.stderr);
+            assert!(message.contains("color"), "{args:?}: {message}");
+        }
+    }
+    assert!(!screenshot.exists());
+    assert!(!recording.exists());
+    assert_eq!(sandbox.ok(&["sessions"]).trim(), "no active sessions");
+}
+
+#[test]
 fn cli_startup_fits_the_default_process_stack() {
     for argument in ["--help", "--version"] {
         let output = Command::new(BIN).arg(argument).output().unwrap();
