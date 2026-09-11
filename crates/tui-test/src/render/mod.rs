@@ -1,4 +1,5 @@
 mod nerd_font;
+pub(crate) mod output;
 pub mod svg;
 
 #[cfg(feature = "recording-raster")]

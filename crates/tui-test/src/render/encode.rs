@@ -43,17 +43,18 @@ pub(crate) fn encode_png(
     frame: &Frame,
     renderer: &mut dyn FrameRenderer,
 ) -> anyhow::Result<()> {
-    let (width, height) = renderer.pixel_size();
-    let output = BufWriter::new(File::create(path)?);
-    let mut encoder = png::Encoder::new(output, width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
-    let mut writer = encoder.write_header()?;
     let image = renderer.render(frame)?;
-    writer.write_image_data(image.as_raw())?;
-    writer.finish()?;
-    Ok(())
+    let (width, height) = renderer.pixel_size();
+    super::output::write_atomic(path, |output| {
+        let mut encoder = png::Encoder::new(output, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(image.as_raw())?;
+        writer.finish()?;
+        Ok(())
+    })
 }
 
 fn encode_mp4(
@@ -517,6 +518,51 @@ mod tests {
         assert_eq!(&pixel[..3], &[200, 10, 20]);
 
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn failed_png_renders_and_encodes_preserve_the_destination() {
+        struct FailingRenderer {
+            fail_render: bool,
+        }
+
+        impl FrameRenderer for FailingRenderer {
+            fn render(&mut self, frame: &Frame) -> anyhow::Result<super::super::raster::RgbaFrame> {
+                if self.fail_render {
+                    anyhow::bail!("injected render failure");
+                }
+                GridRenderer::new(1, 1).render(frame)
+            }
+
+            fn pixel_size(&self) -> (u32, u32) {
+                (1, 1)
+            }
+        }
+
+        for existing in [false, true] {
+            for fail_render in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let path = directory.path().join("screen.png");
+                let frame = frame(Color::Rgb(200, 10, 20), Duration::ZERO);
+                let previous = if existing {
+                    encode_png(&path, &frame, &mut GridRenderer::new(1, 1)).unwrap();
+                    Some(std::fs::read(&path).unwrap())
+                } else {
+                    None
+                };
+                encode_png(&path, &frame, &mut FailingRenderer { fail_render }).unwrap_err();
+
+                if let Some(previous) = previous {
+                    assert_eq!(std::fs::read(&path).unwrap(), previous);
+                } else {
+                    assert!(!path.exists());
+                }
+                assert_eq!(
+                    std::fs::read_dir(directory.path()).unwrap().count(),
+                    usize::from(existing)
+                );
+            }
+        }
     }
 
     #[test]

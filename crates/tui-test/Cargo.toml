@@ -41,6 +41,7 @@ rquickjs = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
 toml.workspace = true
 tiny-skia = { workspace = true, optional = true }
 ttf-parser.workspace = true
