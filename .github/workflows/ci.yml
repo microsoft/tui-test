@@ -58,6 +58,9 @@ jobs:
       - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
       - run: cargo build
       - run: cargo test --workspace -- --test-threads=1
+      # The recording renderer and its font catalog are behind a feature that
+      # is off by default, so the line above never compiles them in.
+      - run: cargo test -p tui-test-rs --features recording-font-jetbrains-mono-styles -- --test-threads=1
 
       - name: Install Python binding
         run: python -m pip install --disable-pip-version-check -e ./bindings/python
