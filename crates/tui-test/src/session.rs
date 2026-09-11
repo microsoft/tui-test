@@ -86,7 +86,7 @@ impl Session {
         profile: Profile,
         cols: u16,
         rows: u16,
-        cwd: Option<String>,
+        cwd: Option<PathBuf>,
         env: Vec<(String, String)>,
         timeouts: crate::api::Timeouts,
         logger: Arc<Logger>,
@@ -128,15 +128,15 @@ impl Session {
                 let opts = SpawnOptions {
                     cols,
                     rows,
-                    cwd,
+                    cwd: None,
                     env,
                 };
-                Pty::spawn(target, args, &opts)
+                Pty::spawn_with_cwd(target, args, &opts, cwd.as_deref())
             } else {
                 let sh = shell.unwrap_or_else(shell::default_shell);
                 let mut launch = shell::shell_launch(sh)?;
                 launch.env.extend(env);
-                Pty::spawn_launch(&launch, cols, rows, cwd)
+                Pty::spawn_launch_with_cwd(&launch, cols, rows, cwd)
             }
         })();
         let (pty, reader) = match spawned {

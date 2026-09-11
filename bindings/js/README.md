@@ -61,6 +61,7 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `TuiTest.ephemeral(prefix?, options?)` | Create a unique session. |
 | `open(options?)` | Open a shell. |
 | `run(program, args?, options?)` | Run a program. |
+| `restart(options?)` | Restart the session. |
 | `close()` | Close the session. |
 | `closeQuiet()` | Close without throwing. |
 | `[Symbol.asyncDispose]()` | Close from `await using`. |

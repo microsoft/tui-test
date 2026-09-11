@@ -475,6 +475,17 @@ impl SessionRegistry {
                 self.get_or_create_locked(name.to_string())
                     .execute(operation)
             }
+            Operation::Restart { .. } => {
+                let _lifecycle = self
+                    .inner
+                    .lifecycle
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let session = self.lock_sessions().get(name).cloned();
+                session
+                    .ok_or_else(TuiTestError::no_restart_metadata)?
+                    .execute(operation)
+            }
             Operation::Close => self.close_locked(name).map(|_| OperationResult::Unit),
             other => {
                 let session = {
@@ -761,6 +772,36 @@ mod tests {
         assert_eq!(registry.recording("retained").unwrap(), "retained");
         assert!(registry.sessions().is_empty());
 
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn missing_restarts_do_not_create_sessions_or_hide_completed_recordings() {
+        let registry = SessionRegistry::default();
+        let path = std::env::temp_dir().join(format!(
+            "tui-test-restart-retained-recording-{}.cast",
+            std::process::id()
+        ));
+        std::fs::write(&path, "retained").unwrap();
+        registry.remember_recording("retained".to_string(), path.clone());
+
+        for _ in 0..3 {
+            let error = registry
+                .execute(
+                    "retained",
+                    Operation::Restart {
+                        graceful_timeout_ms: 10,
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(error.kind, ErrorKind::NoSession);
+            assert!(error.message.contains("no restart metadata"));
+            assert!(!registry.lock_sessions().contains_key("retained"));
+            assert_eq!(registry.recording("retained").unwrap(), "retained");
+            assert!(path.exists());
+        }
+
+        assert!(registry.lock_sessions().is_empty());
         let _ = std::fs::remove_file(path);
     }
 
