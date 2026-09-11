@@ -35,6 +35,24 @@ const ALL_TIMEOUT_ENV_VARS = [
 
 const CLASSES = ["text", "idle", "command", "exit", "ready"];
 
+test("invalid capture backgrounds reject with UsageError before session lookup", async () => {
+  const terminal = new TuiTest(uniqueSession("invalid-capture-background"));
+  for (const background of [
+    "", "#12", "#ff00zz", "#12345678", "#12é34", "256,0,0", "rgb(-1,0,0)",
+  ]) {
+    for (const capture of [
+      () => terminal.screenshot("screen.svg", { background }),
+      () => terminal.startRecording("recording.gif", { background }),
+    ]) {
+      await assert.rejects(
+        capture,
+        (error) => error instanceof UsageError && error.message.includes("color"),
+        JSON.stringify(background),
+      );
+    }
+  }
+});
+
 function withEnv(vars, fn) {
   const saved = {};
   for (const key of Object.keys(vars)) {

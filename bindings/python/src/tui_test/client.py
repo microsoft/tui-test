@@ -937,10 +937,16 @@ class TuiTest:
         *,
         full: bool = False,
         zoom: Optional[float] = None,
+        background: Optional[str] = None,
+        transparent: bool = False,
     ) -> str:
-        if zoom is not None and path is None:
-            raise ValueError("screenshot zoom requires a path")
-        return await self._await(self._native.screenshot(path, full, zoom))
+        if (zoom is not None or background is not None or transparent) and path is None:
+            raise ValueError("screenshot customization requires a path")
+        if background is not None and transparent:
+            raise ValueError("screenshot background and transparent options conflict")
+        return await self._await(
+            self._native.screenshot(path, full, zoom, background, transparent)
+        )
 
     async def start_recording(
         self,
@@ -951,10 +957,21 @@ class TuiTest:
         speed: Optional[float] = None,
         idle_time_limit: Optional[float] = None,
         zoom: Optional[float] = None,
+        background: Optional[str] = None,
+        transparent: bool = False,
     ) -> None:
+        if background is not None and transparent:
+            raise ValueError("recording background and transparent options conflict")
         await self._await(
             self._native.start_recording(
-                path, format, fps, speed, idle_time_limit, zoom
+                path,
+                format,
+                fps,
+                speed,
+                idle_time_limit,
+                zoom,
+                background,
+                transparent,
             )
         )
 
