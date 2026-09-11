@@ -1,5 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::style::FontFamilies;
@@ -131,7 +134,9 @@ pub(crate) fn catalog_for(font: &FontFamilies) -> Arc<Catalog> {
     let mut catalogs = CATALOGS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .expect("font catalog cache");
+        // A panic while a catalog was being built must not make every later
+        // render panic too: the map itself is still consistent.
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(existing) = catalogs.get(font) {
         return Arc::clone(existing);
     }
@@ -143,16 +148,34 @@ pub(crate) fn catalog_for(font: &FontFamilies) -> Arc<Catalog> {
     catalog
 }
 
+/// No real font comes close to this. The cap exists because the path comes from
+/// a config file, and a config file is found in the working directory: checking
+/// out an untrusted repository must not let it name `/dev/zero` and exhaust
+/// memory.
+const MAX_FONT_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Read a font a config named, rather than handing fontdb the path. fontdb
+/// reads to the end of whatever it is given, so it is the wrong thing to point
+/// at an arbitrary path: only a regular file is read, and only up to the cap.
+/// A path that names nothing is not an error, for the same reason a family no
+/// face provides is not -- the style falls back.
+fn load_named_font(database: &mut fontdb::Database, path: &Path) {
+    // A fifo never returns and a device never ends, so neither is opened.
+    if !path.metadata().is_ok_and(|meta| meta.is_file()) {
+        return;
+    }
+    let mut data = Vec::new();
+    let read =
+        File::open(path).and_then(|file| file.take(MAX_FONT_FILE_BYTES).read_to_end(&mut data));
+    if read.is_ok() {
+        database.load_font_data(data);
+    }
+}
+
 fn build_catalog(font: &FontFamilies) -> Catalog {
     let mut database = base_database().clone();
     for path in &font.files {
-        // A path that names nothing is not an error, for the same reason a
-        // family no face provides is not: the style falls back.
-        if path.is_dir() {
-            database.load_fonts_dir(path);
-        } else {
-            let _ = database.load_font_file(path);
-        }
+        load_named_font(&mut database, path);
     }
 
     let candidates = std::array::from_fn(|index| {
@@ -205,21 +228,67 @@ fn style_index(bold: bool, italic: bool) -> usize {
     usize::from(bold) | (usize::from(italic) << 1)
 }
 
-fn preferred_families(font: &FontFamilies, bold: bool, italic: bool) -> Vec<String> {
-    // A style that names its own family outranks the environment variable,
-    // which exists for reaching the catalog when no config can. A style that
-    // names none leaves the variable exactly as authoritative as it was.
-    let default_family = FontFamilies::default().family;
-    // A family is a CSS font stack, because that is what the SVG path passes
-    // straight into font-family. Split it so face selection sees the same
-    // preference order the SVG does rather than one unmatchable string.
-    let named = [font.resolve(bold, italic), font.family.as_str()]
+/// Split a CSS font stack, which is what a family is: the SVG path passes it
+/// straight into `font-family`, so face selection has to read it the same way
+/// rather than as one unmatchable string. Commas inside quotes are part of the
+/// name, not separators.
+fn split_font_stack(stack: &str) -> Vec<String> {
+    let mut families = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for character in stack.chars() {
+        match character {
+            '\'' | '"' if quote == Some(character) => quote = None,
+            '\'' | '"' if quote.is_none() => quote = Some(character),
+            ',' if quote.is_none() => families.push(std::mem::take(&mut current)),
+            _ => current.push(character),
+        }
+    }
+    families.push(current);
+    families
         .into_iter()
-        .filter(|family| *family != default_family)
-        .flat_map(|family| family.split(','))
-        .map(|family| family.trim().trim_matches(['\'', '"']).to_string())
-        .filter(|family| !family.is_empty() && family != "monospace")
-        .collect::<Vec<_>>();
+        .map(|family| family.trim().to_string())
+        .filter(|family| !family.is_empty() && !is_css_generic(family))
+        .collect()
+}
+
+/// A CSS generic names a class of font rather than a face, so it can never
+/// match one. The SVG reader resolves these itself; here they are noise.
+fn is_css_generic(family: &str) -> bool {
+    matches!(
+        family.to_ascii_lowercase().as_str(),
+        "serif"
+            | "sans-serif"
+            | "monospace"
+            | "cursive"
+            | "fantasy"
+            | "system-ui"
+            | "ui-serif"
+            | "ui-sans-serif"
+            | "ui-monospace"
+            | "ui-rounded"
+            | "math"
+            | "emoji"
+            | "fangsong"
+    )
+}
+
+fn preferred_families(font: &FontFamilies, bold: bool, italic: bool) -> Vec<String> {
+    // A style that names its own fonts outranks the environment variable, which
+    // exists for reaching the catalog when no config can. A style that names
+    // none leaves the variable exactly as authoritative as it was.
+    let named = if font == &FontFamilies::default() {
+        Vec::new()
+    } else {
+        let resolved = font.resolve(bold, italic);
+        let mut stacks = vec![resolved];
+        // Only when the variant named a family of its own; otherwise resolve
+        // already returned the base and splitting it twice is wasted work.
+        if resolved != font.family {
+            stacks.push(font.family.as_str());
+        }
+        stacks.into_iter().flat_map(split_font_stack).collect()
+    };
     let configured = std::env::var("TUI_TEST_RECORDING_FONT_FAMILIES")
         .ok()
         .into_iter()
@@ -480,5 +549,45 @@ mod tests {
             !Arc::ptr_eq(&one, &other),
             "and different fonts get their own"
         );
+    }
+
+    /// A config file is found in the working directory, so checking out an
+    /// untrusted repository must not let it name a path that never ends.
+    #[test]
+    fn a_font_file_that_is_not_a_regular_file_is_not_read() {
+        let mut database = fontdb::Database::new();
+        let before = database.len();
+
+        // Reading either of these to the end never terminates. fontdb would.
+        for path in ["/dev/zero", "/dev/urandom"] {
+            let path = Path::new(path);
+            if path.exists() {
+                load_named_font(&mut database, path);
+            }
+        }
+        load_named_font(&mut database, Path::new("/definitely/not/here.ttf"));
+        load_named_font(&mut database, Path::new("/"));
+
+        assert_eq!(
+            database.len(),
+            before,
+            "a device, a directory and a missing path all load nothing"
+        );
+    }
+
+    #[test]
+    fn a_font_file_that_is_a_real_file_is_read() {
+        let dir = std::env::temp_dir().join(format!("tui-test-font-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bundled.ttf");
+        // A real face, so this proves the bounded read still produces a font
+        // rather than only proving that nothing loads.
+        std::fs::write(&path, crate::render::nerd_font::FONT_DATA).unwrap();
+
+        let mut database = fontdb::Database::new();
+        load_named_font(&mut database, &path);
+        assert!(!database.is_empty(), "a regular font file still loads");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

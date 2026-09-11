@@ -175,6 +175,14 @@ recording has three backgrounds, and `canvas_background` is the outermost.
 Naming a font family that no installed or loaded face provides is not an error.
 It falls back, exactly as an unavailable system font does.
 
+Use a monospace font. Cell width is derived from `font_size` by a fixed ratio
+and glyphs are scaled horizontally to fit it, so a proportional face draws
+distorted rather than overflowing.
+
+`files` are read for recordings, which rasterize the glyphs themselves. An SVG
+screenshot can only name a font, so it renders with `family` as installed on
+whatever opens it.
+
 ### Per-profile recording
 
 A profile may carry its own `[recording]`, inheriting every key it does not

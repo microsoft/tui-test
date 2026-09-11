@@ -1530,8 +1530,11 @@ mod golden {
     /// The appearance was moved out of the source and into [`Style`], which is
     /// only safe if the defaults reproduce it: a refactor that shifted a
     /// margin by a pixel would silently restyle every existing recording, and
-    /// nothing else in the suite compares whole output. Regenerate the file
-    /// deliberately if the default look is meant to change.
+    /// nothing else in the suite compares whole output.
+    ///
+    /// Set `TUI_TEST_UPDATE_GOLDEN=1` to rewrite the file when the default look
+    /// is meant to change, so the new bytes land in a diff a reviewer can read
+    /// rather than being pasted out of an assertion message.
     #[test]
     fn the_default_style_renders_the_original_bytes() {
         let mut emu = AlacrittyEmu::new(20, 3, &Profile::default());
@@ -1547,6 +1550,14 @@ mod golden {
             &Style::default(),
             1.0,
         );
+        let golden = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/render/testdata/default-style.svg"
+        );
+        if std::env::var_os("TUI_TEST_UPDATE_GOLDEN").is_some() {
+            std::fs::write(golden, &rendered).expect("rewrite the golden");
+            return;
+        }
         assert_eq!(rendered, include_str!("testdata/default-style.svg"));
     }
 }
