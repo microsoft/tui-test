@@ -331,10 +331,16 @@ impl Default for Profile {
 
 /// Recording settings as written in the config file.
 ///
-/// Every field is optional so that a profile can change one without restating
-/// the rest. Whole-table replacement would mean that setting a font size also
-/// reset the recording mode the file had established, which is not what
-/// writing one key looks like it should do.
+/// `mode` and `directory` are independent policies, so each is optional and a
+/// profile inherits the ones it does not name. Whole-table replacement would
+/// mean that naming a directory also reset the mode the file established.
+///
+/// `style` is deliberately not merged that way. It is one coherent look, and
+/// half of one theme over half of another is a look nobody chose: a profile
+/// that names any style key states the whole style, and a profile that names
+/// none inherits the file's entire style. There is no way to express "the
+/// file's theme but one color different", which is the honest trade for never
+/// producing a chimera.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RecordingConfig {
@@ -369,7 +375,8 @@ impl RecordingConfig {
         }
     }
 
-    /// This table's values, falling back to `base` field by field.
+    /// This table's values, falling back to `base`: the policies field by
+    /// field, the style whole.
     fn over(&self, base: &RecordingConfig) -> Self {
         Self {
             mode: self.mode.or(base.mode),
@@ -694,6 +701,31 @@ mod tests {
     #[test]
     fn empty_recording_directory_is_rejected() {
         assert!(ConfigFile::parse("[recording]\ndirectory = \"\"\n").is_err());
+    }
+
+    /// A style is inherited or replaced whole, never half-merged. Naming one
+    /// key does not leave the rest of the file's theme showing through, which
+    /// would be a look neither config asked for.
+    #[test]
+    fn a_profile_style_replaces_the_file_style_whole() {
+        let config = ConfigFile::parse(
+            "[recording.style]\nfont_size = 20\nbackground = \"#ff0000\"\n\
+             \n[profiles.docs.recording.style]\nfont_size = 24\n\
+             \n[profiles.plain]\n",
+        )
+        .unwrap();
+
+        let docs = config.settings(Some("docs")).unwrap().style;
+        assert_eq!(docs.font_size, 24.0);
+        assert_eq!(
+            docs.background,
+            crate::render::style::Style::default().background,
+            "the rest of the profile's style is the default, not the file's"
+        );
+
+        let plain = config.settings(Some("plain")).unwrap().style;
+        assert_eq!(plain.font_size, 20.0, "naming no style inherits the file's");
+        assert_eq!(plain.background, Rgb::new(255, 0, 0));
     }
 
     #[test]

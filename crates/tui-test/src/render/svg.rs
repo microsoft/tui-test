@@ -177,6 +177,25 @@ pub(crate) fn cell_paint(cell: &EmuCell, colors: &dyn RenderColors) -> CellPaint
     }
 }
 
+/// Escape a value going into a double-quoted XML attribute.
+///
+/// [`escape`] is for text content, where a quote is harmless. Inside an
+/// attribute a quote closes it, so a font family named `Foo" onload="x` would
+/// otherwise write arbitrary markup into the document.
+fn escape_attribute(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -424,7 +443,7 @@ pub(crate) fn render_svg(
     let shadow_color = style.shadow.color;
     let title_bg = style.window.background;
     let title_divider = style.window.divider;
-    let font_family = style.font.family.as_str();
+    let font_family = escape_attribute(&style.font.family);
     let nerd_font = NerdFont::new(rows, font_size);
     let cols = cols as usize;
     let x0 = MARGIN_X;
@@ -1294,6 +1313,36 @@ mod tests {
             ..Style::default()
         });
         assert!(lettered.contains(r#"font-family="Berkeley Mono""#));
+    }
+
+    /// A font family is a configured string that lands inside a quoted XML
+    /// attribute, so a quote in it would close the attribute and let the rest
+    /// become markup. Text escaping is not enough there: a quote is harmless
+    /// in content and fatal in an attribute.
+    #[test]
+    fn a_font_family_cannot_break_out_of_its_attribute() {
+        use crate::render::style::FontFamilies;
+        let rows = vec![vec![cell("x", None, None); 2]];
+        let svg = render_svg(
+            &rows,
+            2,
+            &colors(),
+            None,
+            None,
+            &Style {
+                font: FontFamilies {
+                    family: r#"Evil" onload="alert(1)"#.into(),
+                    ..FontFamilies::default()
+                },
+                ..Style::default()
+            },
+            1.0,
+        );
+        assert!(
+            !svg.contains(r#"onload="alert(1)""#),
+            "the quote must not close the attribute: {svg}"
+        );
+        assert!(svg.contains("&quot;"), "it is escaped instead: {svg}");
     }
 }
 

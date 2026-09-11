@@ -22,6 +22,12 @@ use font::{FontSystem, GlyphKey};
 
 use crate::render::style::Style;
 
+/// The largest canvas that will be allocated, in pixels.
+///
+/// Generous: a 4K frame is 8 megapixels, so this allows more than ten of them
+/// and still caps the buffer at about 400 MB.
+const MAX_PIXELS: u64 = 100_000_000;
+
 #[derive(Debug)]
 pub struct RgbaFrame {
     width: u32,
@@ -88,6 +94,16 @@ impl GridRenderer {
             .ok_or_else(|| anyhow::anyhow!("recording height must fit in u32"))?;
         let width = scaled_dimension(width, zoom, "width")?;
         let height = scaled_dimension(height, zoom, "height")?;
+        // Each axis can pass its own bound while the area is enormous: a
+        // 500x200 grid at the largest allowed font and padding is under
+        // u32::MAX on both axes and still a 312 GB pixmap. The product is what
+        // gets allocated, so the product is what has to be bounded.
+        let pixels = u64::from(width) * u64::from(height);
+        if pixels > MAX_PIXELS {
+            anyhow::bail!(
+                "recording is {width}x{height}, which is {pixels} pixels; the limit is {MAX_PIXELS}"
+            );
+        }
         Ok(Self {
             max_cols: cols,
             max_rows: rows,

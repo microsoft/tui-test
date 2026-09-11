@@ -439,3 +439,35 @@ fn grid_y(origin_y: f32, row: usize, scale: f32) -> u32 {
             * scale)
         .round() as u32
 }
+
+/// Each axis can pass its own bound while the area is enormous. A grid this
+/// size at the largest allowed font and padding is under u32::MAX on both
+/// axes and still tens of gigabytes of pixmap, which the process would
+/// otherwise only discover by touching the pages.
+#[test]
+fn an_enormous_canvas_is_refused_before_it_is_allocated() {
+    let huge = Style {
+        font_size: 999.0,
+        padding: 10_000,
+        ..Style::default()
+    };
+    let Err(error) = GridRenderer::with_zoom(500, 200, 1.0, huge) else {
+        panic!("a canvas that large must not be allocated");
+    };
+    assert!(
+        error.to_string().contains("pixels"),
+        "the error says how big it was: {error}"
+    );
+
+    GridRenderer::with_zoom(
+        120,
+        40,
+        2.0,
+        Style {
+            font_size: 40.0,
+            ..Style::default()
+        },
+    )
+    .map(|_| ())
+    .expect("a genuinely large recording still renders");
+}

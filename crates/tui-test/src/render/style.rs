@@ -334,6 +334,11 @@ impl Style {
         if self.padding > MAX_PADDING {
             return Err(format!("padding must not exceed {MAX_PADDING}"));
         }
+        // A positive font size can still be too small to draw with: a
+        // subnormal one leaves cells that round to nothing.
+        if self.cell_width() < 1.0 || self.cell_height() < 1.0 {
+            return Err("font_size is too small to draw a cell".to_string());
+        }
         if self.font.family.trim().is_empty() {
             return Err("font.family must name a font".to_string());
         }
@@ -596,6 +601,7 @@ mod tests {
             ("font_size = 0", "font_size"),
             ("font_size = -17", "font_size"),
             ("font_size = 1e10", "font_size"),
+            ("font_size = 1e-40", "too small"),
             ("title_font_size = 0", "title_font_size"),
             ("padding = 4294967295", "padding"),
             ("[border]\nwidth = -1", "border.width"),
