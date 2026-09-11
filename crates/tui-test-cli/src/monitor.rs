@@ -25,7 +25,10 @@ use crate::protocol::MonitorInput;
 /// mode is only re-applied when the target changes it.
 #[derive(Default)]
 pub(crate) struct ModeMirror {
-    applied: Option<(KeyboardMode, bool, MouseMode)>,
+    keyboard: Option<KeyboardMode>,
+    cursor_key_application: Option<bool>,
+    bracketed_paste: Option<bool>,
+    mouse: Option<MouseMode>,
 }
 
 /// Render a framed, full-color view of `frame` clipped to the `viewer` size.
@@ -54,19 +57,27 @@ pub fn render_frame(
     let mut out = String::with_capacity(inner_w * inner_h * 4);
     if interactive {
         let keyboard = frame.map_or_else(KeyboardMode::empty, |f| f.keyboard_mode);
+        let cursor_key_application = frame.is_some_and(|f| f.cursor_key_application);
         let paste = frame.is_some_and(|f| f.bracketed_paste);
         let mouse = frame.map_or(MouseMode::None, |f| f.mouse_mode);
-        if modes.applied.map(|(mode, _, _)| mode) != Some(keyboard) {
+        if modes.keyboard != Some(keyboard) {
             out.push_str(&ansi::kitty_keyboard_mode(keyboard.bits()));
         }
-        if modes.applied.map(|(_, paste, _)| paste) != Some(paste) {
+        if modes.cursor_key_application != Some(cursor_key_application) {
+            out.push_str(if cursor_key_application {
+                ansi::APPLICATION_CURSOR_ENABLE
+            } else {
+                ansi::APPLICATION_CURSOR_DISABLE
+            });
+        }
+        if modes.bracketed_paste != Some(paste) {
             out.push_str(if paste {
                 ansi::BRACKETED_PASTE_ENABLE
             } else {
                 ansi::BRACKETED_PASTE_DISABLE
             });
         }
-        if modes.applied.map(|(_, _, mouse)| mouse) != Some(mouse) {
+        if modes.mouse != Some(mouse) {
             out.push_str(ansi::MOUSE_DISABLE);
             out.push_str(match mouse {
                 MouseMode::None => "",
@@ -75,7 +86,10 @@ pub fn render_frame(
                 MouseMode::Motion => ansi::MOUSE_MOTION_ENABLE,
             });
         }
-        modes.applied = Some((keyboard, paste, mouse));
+        modes.keyboard = Some(keyboard);
+        modes.cursor_key_application = Some(cursor_key_application);
+        modes.bracketed_paste = Some(paste);
+        modes.mouse = Some(mouse);
     }
     out.push_str(ansi::HOME);
     header(&mut out, frame, session, inner_w);
@@ -355,6 +369,7 @@ fn enter_viewer(out: &mut impl Write, initial_frame: Option<&[u8]>) -> std::io::
         crossterm::cursor::Hide
     )?;
     if let Some(frame) = initial_frame {
+        out.write_all(ansi::APPLICATION_CURSOR_SAVE)?;
         out.write_all(ansi::BRACKETED_PASTE_SAVE)?;
         out.write_all(ansi::MOUSE_SAVE)?;
         // Push saves the viewer's old flags and selects zero. Apply the target's
@@ -369,6 +384,8 @@ fn enter_viewer(out: &mut impl Write, initial_frame: Option<&[u8]>) -> std::io::
 fn leave_viewer(out: &mut impl Write, interactive: bool) {
     if interactive {
         let _ = out.write_all(ansi::KITTY_KEYBOARD_POP);
+        let _ = out.write_all(ansi::APPLICATION_CURSOR_DISABLE.as_bytes());
+        let _ = out.write_all(ansi::APPLICATION_CURSOR_RESTORE);
         let _ = out.write_all(ansi::BRACKETED_PASTE_DISABLE.as_bytes());
         let _ = out.write_all(ansi::BRACKETED_PASTE_RESTORE);
         let _ = out.write_all(ansi::MOUSE_DISABLE.as_bytes());
@@ -893,6 +910,7 @@ mod tests {
             cursor: (0, 0),
             size: (40, 1),
             keyboard_mode: KeyboardMode::empty(),
+            cursor_key_application: false,
             bracketed_paste: false,
             mouse_mode: MouseMode::None,
             exited: None,
@@ -927,6 +945,7 @@ mod tests {
             cursor: (0, 0),
             size: (1, 1),
             keyboard_mode: KeyboardMode::empty(),
+            cursor_key_application: false,
             bracketed_paste: false,
             mouse_mode: MouseMode::None,
             exited: None,
@@ -951,6 +970,7 @@ mod tests {
             cursor: (0, 0),
             size: (1, 1),
             keyboard_mode: KeyboardMode::empty(),
+            cursor_key_application: false,
             bracketed_paste: false,
             mouse_mode: MouseMode::None,
             exited: None,
@@ -961,19 +981,23 @@ mod tests {
             render_frame(frame, (10, 5), "s", true, modes)
         };
 
-        assert!(render(Some(&frame), &mut modes)
-            .starts_with(b"\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[H"));
+        assert!(render(Some(&frame), &mut modes).starts_with(
+            b"\x1b[=0u\x1b[?1l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[H"
+        ));
         assert!(render(Some(&frame), &mut modes).starts_with(b"\x1b[H"));
 
         frame.keyboard_mode =
             KeyboardMode::DISAMBIGUATE_ESC_CODES | KeyboardMode::REPORT_ASSOCIATED_TEXT;
+        frame.cursor_key_application = true;
         frame.bracketed_paste = true;
         frame.mouse_mode = MouseMode::Drag;
         assert!(render(Some(&frame), &mut modes).starts_with(
-            b"\x1b[=17u\x1b[?2004h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1006h\x1b[?1002h\x1b[H"
+            b"\x1b[=17u\x1b[?1h\x1b[?2004h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1006h\x1b[?1002h\x1b[H"
         ));
-        assert!(render(None, &mut modes)
-            .starts_with(b"\x1b[=0u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[H"));
+        assert!(render(Some(&frame), &mut modes).starts_with(b"\x1b[H"));
+        assert!(render(None, &mut modes).starts_with(
+            b"\x1b[=0u\x1b[?1l\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[H"
+        ));
         assert!(render_frame(
             Some(&frame),
             (10, 5),
@@ -984,21 +1008,123 @@ mod tests {
         .starts_with(b"\x1b[H"));
     }
 
+    #[test]
+    fn interactive_decckm_and_kitty_modes_change_independently() {
+        use tui_test::input::keys::{self, InputModes};
+        use tui_test::profile::Profile;
+        use tui_test::Backend;
+
+        for &backend in Backend::ALL {
+            let mut viewer = backend.build(20, 6, &Profile::default()).unwrap();
+            let mut frame = Frame {
+                grid: Vec::new(),
+                cursor: (0, 0),
+                size: (10, 2),
+                keyboard_mode: KeyboardMode::empty(),
+                cursor_key_application: false,
+                bracketed_paste: false,
+                mouse_mode: MouseMode::None,
+                exited: None,
+                shell: None,
+            };
+            let mut modes = ModeMirror::default();
+            for (application, flags, up) in [
+                (false, 0, "\x1b[A"),
+                (true, 0, "\x1bOA"),
+                (true, 1, "\x1b[A"),
+                (false, 1, "\x1b[A"),
+                (false, 31, "\x1b[A"),
+                (true, 31, "\x1b[A"),
+                (true, 0, "\x1bOA"),
+                (false, 0, "\x1b[A"),
+            ] {
+                // The bundled xterm.js does not implement Kitty.
+                if backend == Backend::Xtermjs && flags != 0 {
+                    continue;
+                }
+                frame.keyboard_mode = KeyboardMode::from_bits(flags).unwrap();
+                frame.cursor_key_application = application;
+                viewer.process(&render_frame(Some(&frame), (20, 6), "s", true, &mut modes));
+                assert_eq!(viewer.keyboard_mode(), frame.keyboard_mode, "{backend:?}");
+                assert_eq!(viewer.cursor_key_application(), application, "{backend:?}");
+                let input_modes = InputModes {
+                    keyboard: viewer.keyboard_mode(),
+                    cursor_key_application: viewer.cursor_key_application(),
+                };
+                assert_eq!(
+                    keys::token_to_seq_with_mode("Up", input_modes).unwrap(),
+                    up,
+                    "{backend:?}, {input_modes:?}"
+                );
+                assert_eq!(
+                    keys::token_to_seq_with_mode("Ctrl+Up", input_modes).unwrap(),
+                    "\x1b[1;5A",
+                    "{backend:?}, {input_modes:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn interactive_input_forwards_cursor_and_kitty_events_unchanged() {
+        for bytes in [
+            b"\x1bOA\x1bOB\x1bOC\x1bOD\x1bOH\x1bOF".as_slice(),
+            b"\x1b[A\x1b[B\x1b[C\x1b[D\x1b[H\x1b[F",
+            b"\x1b[1;5A\x1b[1;5:2A\x1b[1;5:3A",
+            b"\x1b[97;1u\x1b[97;1:2u\x1b[97;1:3u",
+            b"\x1b[97:65:97;2;65u\x1b[233;1;233u",
+            b"\x1b[27u\x1b[13u\x1b[9u\x1b[57364;5u",
+        ] {
+            for split in 0..=bytes.len() {
+                let (stdin_tx, stdin) = mpsc::channel();
+                let (sender, receiver) = mpsc::channel();
+                let mut input = InteractiveInput {
+                    stdin,
+                    stream: InputStream {
+                        sender,
+                        connected: Arc::new(AtomicBool::new(true)),
+                        initial_frame: Vec::new(),
+                    },
+                    parser: InputParser::default(),
+                };
+                let mut mouse = MouseRemapper::new((20, 6));
+                for chunk in [&bytes[..split], &bytes[split..]] {
+                    stdin_tx.send(Ok(chunk.to_vec())).unwrap();
+                    assert!(input.poll().unwrap().is_none());
+                }
+                let mut forwarded = Vec::new();
+                for message in receiver.try_iter() {
+                    match message {
+                        MonitorInput::Write { data } => {
+                            forwarded.extend(mouse.push(&data, Some((18, 4))));
+                        }
+                        MonitorInput::Resize { .. } => panic!("unexpected resize"),
+                    }
+                }
+                assert_eq!(forwarded, bytes, "split {split}");
+            }
+        }
+    }
+
     /// Interactive mode restores viewer input modes; read-only mode leaves them
     /// untouched.
     #[test]
     fn viewer_saves_and_restores_terminal_modes() {
         let mut output = Vec::new();
-        enter_viewer(&mut output, Some(b"\x1b[=17u")).unwrap();
+        enter_viewer(&mut output, Some(b"\x1b[=17u\x1b[?1h")).unwrap();
         leave_viewer(&mut output, true);
         let text = String::from_utf8(output).unwrap();
         let push = std::str::from_utf8(ansi::KITTY_KEYBOARD_SAVE_AND_RESET).unwrap();
         let pop = std::str::from_utf8(ansi::KITTY_KEYBOARD_POP).unwrap();
         let order = [
+            "\x1b[?1s",
             "\x1b[?2004s",
             push,
             "\x1b[=17u",
+            "\x1b[?1h",
             pop,
+            "\x1b[?1l",
+            "\x1b[?1r",
             "\x1b[?2004l",
             "\x1b[?2004r",
             "\x1b[?1049l",
@@ -1012,9 +1138,19 @@ mod tests {
         let mut read_only = Vec::new();
         enter_viewer(&mut read_only, None).unwrap();
         leave_viewer(&mut read_only, false);
-        assert!(!read_only
-            .windows(b"\x1b[?2004".len())
-            .any(|window| window == b"\x1b[?2004"));
+        for sequence in [
+            ansi::APPLICATION_CURSOR_SAVE,
+            ansi::APPLICATION_CURSOR_DISABLE.as_bytes(),
+            ansi::APPLICATION_CURSOR_RESTORE,
+            ansi::BRACKETED_PASTE_SAVE,
+            ansi::BRACKETED_PASTE_RESTORE,
+            ansi::KITTY_KEYBOARD_SAVE_AND_RESET,
+            ansi::KITTY_KEYBOARD_POP,
+        ] {
+            assert!(!read_only
+                .windows(sequence.len())
+                .any(|window| window == sequence));
+        }
     }
 
     #[test]
@@ -1023,13 +1159,15 @@ mod tests {
         let mut emu = AlacrittyEmu::new(20, 5, &tui_test::profile::Profile::default());
         emu.process(b"\x1b[>3u");
         let mut output = Vec::new();
-        enter_viewer(&mut output, Some(b"\x1b[=17u")).unwrap();
+        enter_viewer(&mut output, Some(b"\x1b[=17u\x1b[?1h")).unwrap();
         emu.process(&output);
         assert_eq!(emu.keyboard_mode().bits(), 17);
+        assert!(emu.cursor_key_application());
         output.clear();
         leave_viewer(&mut output, true);
         emu.process(&output);
         assert_eq!(emu.keyboard_mode().bits(), 3);
+        assert!(!emu.cursor_key_application());
     }
 
     #[test]

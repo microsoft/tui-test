@@ -110,10 +110,14 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 | `monitor` | Watch a session live. |
 | `monitor --interactive` | Forward keyboard, paste, and supported SGR mouse input; Ctrl+] detaches. |
 
-Interactive monitors apply the target's keyboard and paste modes before reading
-input. SGR mouse clicks, drags, and motion are enabled when requested by the
-target, with coordinates translated past the monitor's border. Viewer modes are
-restored on detach; read-only monitoring does not change input modes.
+Interactive monitors apply the target's DECCKM (application cursor keys), Kitty
+keyboard flags, and paste mode before reading input and keep them in sync as the
+target changes them. Keyboard bytes, including Kitty press/repeat/release reports,
+are forwarded unchanged except for the detach chord. Kitty input requires a
+viewer terminal that supports the protocol. SGR mouse clicks, drags, and motion
+are enabled when requested by the target, with coordinates translated past the
+monitor's border. Viewer modes are restored on detach; read-only monitoring does
+not change input modes.
 
 ## Configure
 
