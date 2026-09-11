@@ -387,7 +387,9 @@ fn screenshots_dispatch_by_extension_without_changing_svg_output() {
 #[test]
 fn failed_screenshots_preserve_existing_outputs() {
     let sandbox = Sandbox::new("screenshot-failure");
-    let program = r#"printf "ascii-ready\n"; read -r _; printf "\364\217\277\275\nmissing-ready\n"; sleep 30"#;
+    // Combining sequences are rejected regardless of the installed fallback fonts.
+    let program =
+        r#"printf "ascii-ready\n"; read -r _; printf "e\314\201\nunsupported-ready\n"; sleep 30"#;
     sandbox.ok(&[
         "run", "--cols", "40", "--rows", "6", "--", "bash", "--norc", "-c", program,
     ]);
@@ -410,11 +412,12 @@ fn failed_screenshots_preserve_existing_outputs() {
 
     let previous = std::fs::read(&png).unwrap();
     sandbox.ok(&["submit"]);
-    sandbox.wait_for_text("missing-ready", "5000");
+    sandbox.wait_for_text("unsupported-ready", "5000");
     for path in [&png, &sandbox.home.join("new.png")] {
         let output = sandbox.run(&["screenshot", path.to_str().unwrap()]);
-        assert_eq!(output.status.code(), Some(5));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("could not render glyphs"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(5), "{stderr}");
+        assert!(stderr.contains("U+0065 U+0301"), "{stderr}");
     }
     assert_eq!(std::fs::read(&png).unwrap(), previous);
     assert!(!sandbox.home.join("new.png").exists());
