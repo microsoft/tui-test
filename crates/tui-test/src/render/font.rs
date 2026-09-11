@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::sync::{Arc, OnceLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock};
+
+use super::style::FontFamilies;
 
 pub(crate) const FAMILY: &str = "JetBrains Mono";
 
@@ -106,41 +108,79 @@ impl Catalog {
     }
 }
 
-pub(crate) fn catalog() -> &'static Catalog {
-    static CATALOG: OnceLock<Catalog> = OnceLock::new();
-    CATALOG.get_or_init(|| {
+/// The bundled, nerd and system faces. Scanning the system is the expensive
+/// part and does not depend on the style, so it happens once for the process;
+/// a style naming its own font files gets a clone of this with those files
+/// added rather than paying for the scan again.
+fn base_database() -> &'static fontdb::Database {
+    static BASE: OnceLock<fontdb::Database> = OnceLock::new();
+    BASE.get_or_init(|| {
         let mut database = fontdb::Database::new();
         load_bundled_fonts(&mut database);
         database.load_font_data(super::nerd_font::FONT_DATA.to_vec());
         database.load_system_fonts();
-
-        let preferred = preferred_families();
-        let candidates = std::array::from_fn(|index| {
-            let bold = index & 1 != 0;
-            let italic = index & 2 != 0;
-            let mut faces = database.faces().collect::<Vec<_>>();
-            faces.sort_by(|left, right| {
-                face_score(left, &preferred, bold, italic)
-                    .partial_cmp(&face_score(right, &preferred, bold, italic))
-                    .unwrap_or(Ordering::Equal)
-            });
-            faces.into_iter().map(|face| face.id).collect()
-        });
-        let nerd_faces = database
-            .faces()
-            .filter(|face| {
-                face.families
-                    .iter()
-                    .any(|(family, _)| family.contains("Nerd Font"))
-            })
-            .map(|face| face.id)
-            .collect();
-        Catalog {
-            database: Arc::new(database),
-            candidates,
-            nerd_faces,
-        }
+        database
     })
+}
+
+/// The catalog to draw a style with. Which faces win depends on the families
+/// that style names, so the ordering cannot be computed once for the process.
+/// Keyed by the style's fonts: a run uses one, or one per profile.
+pub(crate) fn catalog_for(font: &FontFamilies) -> Arc<Catalog> {
+    static CATALOGS: OnceLock<Mutex<HashMap<FontFamilies, Arc<Catalog>>>> = OnceLock::new();
+    let mut catalogs = CATALOGS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("font catalog cache");
+    if let Some(existing) = catalogs.get(font) {
+        return Arc::clone(existing);
+    }
+    // Built while holding the lock. Ranking every face is slow enough that
+    // letting concurrent callers each build their own copy costs far more
+    // than making them wait for the one that will be cached anyway.
+    let catalog = Arc::new(build_catalog(font));
+    catalogs.insert(font.clone(), Arc::clone(&catalog));
+    catalog
+}
+
+fn build_catalog(font: &FontFamilies) -> Catalog {
+    let mut database = base_database().clone();
+    for path in &font.files {
+        // A path that names nothing is not an error, for the same reason a
+        // family no face provides is not: the style falls back.
+        if path.is_dir() {
+            database.load_fonts_dir(path);
+        } else {
+            let _ = database.load_font_file(path);
+        }
+    }
+
+    let candidates = std::array::from_fn(|index| {
+        let bold = index & 1 != 0;
+        let italic = index & 2 != 0;
+        let preferred = preferred_families(font, bold, italic);
+        let mut faces = database.faces().collect::<Vec<_>>();
+        faces.sort_by(|left, right| {
+            face_score(left, &preferred, bold, italic)
+                .partial_cmp(&face_score(right, &preferred, bold, italic))
+                .unwrap_or(Ordering::Equal)
+        });
+        faces.into_iter().map(|face| face.id).collect()
+    });
+    let nerd_faces = database
+        .faces()
+        .filter(|face| {
+            face.families
+                .iter()
+                .any(|(family, _)| family.contains("Nerd Font"))
+        })
+        .map(|face| face.id)
+        .collect();
+    Catalog {
+        database: Arc::new(database),
+        candidates,
+        nerd_faces,
+    }
 }
 
 fn load_bundled_fonts(database: &mut fontdb::Database) {
@@ -165,7 +205,16 @@ fn style_index(bold: bool, italic: bool) -> usize {
     usize::from(bold) | (usize::from(italic) << 1)
 }
 
-fn preferred_families() -> Vec<String> {
+fn preferred_families(font: &FontFamilies, bold: bool, italic: bool) -> Vec<String> {
+    // A style that names its own family outranks the environment variable,
+    // which exists for reaching the catalog when no config can. A style that
+    // names none leaves the variable exactly as authoritative as it was.
+    let default_family = FontFamilies::default().family;
+    let named = [font.resolve(bold, italic), font.family.as_str()]
+        .into_iter()
+        .filter(|family| *family != default_family)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     let configured = std::env::var("TUI_TEST_RECORDING_FONT_FAMILIES")
         .ok()
         .into_iter()
@@ -177,7 +226,9 @@ fn preferred_families() -> Vec<String> {
                 .map(str::to_string)
                 .collect::<Vec<_>>()
         });
-    configured
+    named
+        .into_iter()
+        .chain(configured)
         .chain(
             [
                 FAMILY,
@@ -266,7 +317,7 @@ mod tests {
 
     #[test]
     fn catalog_contains_the_bundled_nerd_face() {
-        let catalog = catalog();
+        let catalog = catalog_for(&FontFamilies::default());
         assert!(!catalog.nerd_faces.is_empty());
     }
 
@@ -358,5 +409,55 @@ mod tests {
             .faces()
             .map(|face| face.post_script_name.clone())
             .collect()
+    }
+
+    /// The raster path used to pick faces with no reference to the style, so a
+    /// screenshot and a recording of the same session disagreed about the font.
+    #[test]
+    fn a_configured_family_outranks_the_environment_and_the_defaults() {
+        let font = FontFamilies {
+            family: "Berkeley Mono".into(),
+            bold: Some("Berkeley Mono Bold".into()),
+            ..FontFamilies::default()
+        };
+
+        let plain = preferred_families(&font, false, false);
+        assert_eq!(plain.first().map(String::as_str), Some("Berkeley Mono"));
+
+        let bold = preferred_families(&font, true, false);
+        assert_eq!(
+            bold.first().map(String::as_str),
+            Some("Berkeley Mono Bold"),
+            "a bold run prefers the family named for it"
+        );
+        assert_eq!(
+            bold.get(1).map(String::as_str),
+            Some("Berkeley Mono"),
+            "and falls back to the base family before anything built in"
+        );
+
+        // A style naming nothing must leave the existing order alone, which is
+        // what keeps TUI_TEST_RECORDING_FONT_FAMILIES authoritative.
+        let default = preferred_families(&FontFamilies::default(), false, false);
+        assert_eq!(default.first().map(String::as_str), Some(FAMILY));
+    }
+
+    #[test]
+    fn catalogs_are_cached_per_style_and_differ_between_them() {
+        let one = catalog_for(&FontFamilies::default());
+        let again = catalog_for(&FontFamilies::default());
+        assert!(
+            Arc::ptr_eq(&one, &again),
+            "the same fonts reuse the catalog rather than rescanning"
+        );
+
+        let other = catalog_for(&FontFamilies {
+            family: "Berkeley Mono".into(),
+            ..FontFamilies::default()
+        });
+        assert!(
+            !Arc::ptr_eq(&one, &other),
+            "and different fonts get their own"
+        );
     }
 }

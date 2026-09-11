@@ -299,7 +299,7 @@ fn bold_and_italic_change_the_rasterized_glyph() {
 #[cfg(feature = "recording-font-jetbrains-mono-styles")]
 #[test]
 fn bundled_styles_do_not_need_synthetic_bold_or_italic() {
-    let mut fonts = FontSystem::new();
+    let mut fonts = FontSystem::new(&Style::default().font);
     for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
         let glyph = fonts
             .resolve(GlyphKey {

@@ -259,9 +259,18 @@ fn write_text_run(
             (false, true) => r#" text-decoration="line-through""#,
             (false, false) => "",
         };
+        // Only when the variant names a family of its own; otherwise the root
+        // font-family already says it, and repeating it on every run would
+        // bloat the document for no change in what is drawn.
+        let resolved = style.font.resolve(paint.bold, paint.italic);
+        let family = if resolved == style.font.family {
+            String::new()
+        } else {
+            format!(r#" font-family="{}""#, escape_attribute(resolved))
+        };
         let _ = write!(
             out,
-            r#"<text x="{tx:.2}" y="{baseline:.2}" fill="{fg}"{weight}{italic}{deco} textLength="{width:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{esc}</text>"#,
+            r#"<text x="{tx:.2}" y="{baseline:.2}" fill="{fg}"{family}{weight}{italic}{deco} textLength="{width:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{esc}</text>"#,
             esc = escape(&text)
         );
     }
@@ -1468,6 +1477,42 @@ mod tests {
         assert!(
             bordered.contains(r#"x="2.00" y="2.00""#),
             "and the stroke is inset by half its width so it stays on the panel: {bordered}"
+        );
+    }
+
+    /// `font.bold` and friends were accepted and never drawn.
+    #[test]
+    fn a_variant_font_is_asked_for_only_where_it_differs() {
+        use crate::render::style::FontFamilies;
+        let rows = vec![vec![
+            cell("a", None, None),
+            EmuCell {
+                attrs: Attrs::BOLD,
+                ..cell("b", None, None)
+            },
+        ]];
+        let style = Style {
+            font: FontFamilies {
+                family: "Base Mono".into(),
+                bold: Some("Heavy Mono".into()),
+                ..FontFamilies::default()
+            },
+            ..Style::default()
+        };
+        let svg = render_svg(&rows, 2, &colors(), None, Some("t"), &style, 1.0);
+
+        assert!(
+            svg.contains(r#"font-family="Base Mono""#),
+            "the root carries the base family: {svg}"
+        );
+        assert!(
+            svg.contains(r#"font-family="Heavy Mono" font-weight="bold""#),
+            "and a bold run asks for the bold family: {svg}"
+        );
+        assert_eq!(
+            svg.matches("font-family=").count(),
+            2,
+            "the plain run inherits the root rather than repeating it: {svg}"
         );
     }
 }

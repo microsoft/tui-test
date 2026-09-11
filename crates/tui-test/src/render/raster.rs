@@ -118,7 +118,7 @@ impl GridRenderer {
             pixmap: Pixmap::new(width, height).ok_or_else(|| {
                 anyhow::anyhow!("terminal recording dimensions must fit a pixmap")
             })?,
-            fonts: FontSystem::new(),
+            fonts: FontSystem::new(&style.font),
             style,
         })
     }

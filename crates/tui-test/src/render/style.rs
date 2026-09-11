@@ -52,7 +52,7 @@ const CELL_H_RATIO: f32 = 21.0 / DEFAULT_FONT_SIZE;
 /// rather than as one family with weights — Berkeley Mono and the Nerd Font
 /// patches among them — and because a reader may want a different italic than
 /// the one the family provides.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FontFamilies {
     /// The family for unstyled text, and the fallback for the other three.
@@ -122,27 +122,6 @@ impl FontFamilies {
             }
         }
     }
-}
-
-/// Directories tui-test looks in for fonts, nearest first.
-///
-/// The same places a config file is looked for, each with a `fonts/`
-/// subdirectory: a project can carry fonts next to its `tui-test.toml`, and
-/// `~/.tui-test/fonts` covers a font a user wants everywhere without
-/// installing it system-wide. Missing directories are skipped, so none of
-/// these has to exist.
-pub fn font_search_dirs(cwd: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![cwd.join("fonts")];
-    if std::env::var_os("TUI_TEST_HOME").is_none() {
-        if let Some(config_home) = dirs::config_dir() {
-            dirs.push(config_home.join("tui-test").join("fonts"));
-        }
-    }
-    let home = crate::config::home_dir().join("fonts");
-    if !dirs.contains(&home) {
-        dirs.push(home);
-    }
-    dirs
 }
 
 /// The window chrome drawn around the grid.
@@ -508,20 +487,6 @@ mod tests {
         };
         let named: Vec<&str> = font.named().collect();
         assert_eq!(named, ["Regular", "Bold", "BoldItalic"]);
-    }
-
-    /// The project directory comes first so a repository's own fonts win, and
-    /// the tui-test home is always searched so a user font needs no install.
-    #[test]
-    fn fonts_are_searched_beside_the_config() {
-        let project = std::env::temp_dir().join("project");
-        let dirs = font_search_dirs(&project);
-        assert_eq!(dirs[0], project.join("fonts"));
-        assert!(
-            dirs.iter().any(|dir| dir.ends_with("fonts")),
-            "every entry is a fonts directory: {dirs:?}"
-        );
-        assert!(dirs.len() >= 2, "the home directory is always searched");
     }
 
     #[test]

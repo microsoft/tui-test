@@ -390,6 +390,11 @@ impl RecordingConfig {
                 *directory = parent.join(&*directory);
             }
         }
+        // Font files for the same reason: a repository carrying its own font
+        // renders the same wherever the checkout sits.
+        if let Some(style) = self.style.as_mut() {
+            style.font.resolve_paths(parent);
+        }
     }
 
     /// This table's values, falling back to `base`: the policies field by
@@ -816,7 +821,8 @@ mod tests {
         let path = dir.join(CONFIG_FILE);
         std::fs::write(
             &path,
-            "[profiles.docs.recording]\ndirectory = \"artifacts\"\n",
+            "[profiles.docs.recording]\ndirectory = \"artifacts\"\n\
+             \n[profiles.docs.recording.style.font]\nfiles = [\"fonts/Berkeley.ttf\"]\n",
         )
         .unwrap();
         let config = ConfigFile::load(&path).unwrap();
@@ -824,6 +830,17 @@ mod tests {
             config.profiles["docs"].recording.directory,
             Some(dir.join("artifacts")),
             "a relative directory anchors to the config, not the working directory"
+        );
+        assert_eq!(
+            config.profiles["docs"]
+                .recording
+                .style
+                .as_ref()
+                .unwrap()
+                .font
+                .files,
+            vec![dir.join("fonts").join("Berkeley.ttf")],
+            "and so does a font the repository carries"
         );
         std::fs::remove_dir_all(&dir).ok();
     }
