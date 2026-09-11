@@ -453,6 +453,11 @@ Each option on its own, one change from the default. The gap around the window i
 
 <img alt="every tui-test style option shown one change at a time" src="static/style-options.png" width="860">
 
+`font_size` drives the cell size, so the whole image grows with it. These are
+at one scale, not fitted to a column:
+
+<img alt="the same session at four font sizes" src="static/style-font-sizes.png" width="860">
+
 Recordings are drawn from the same style, so a `.gif` matches its screenshot:
 
 | Default | Midnight | Bordered |
