@@ -6,7 +6,8 @@ import type {
   ClipboardWaitOptions,
   Cursor,
   EffectiveTimeouts,
-  LocatorStage,
+  LocatorExpression,
+  LocatorNode,
   LocatorStyle,
   MouseClickOptions,
   OpenOptions,
@@ -33,10 +34,11 @@ type RuntimeRunOptions = Omit<RunOptions, "backend"> & { backend?: string };
 type RuntimeRecordingOptions = Omit<RecordingOptions, "format"> & {
   format?: "apng" | "gif" | "mp4" | "cast";
 };
-export type RuntimeLocatorStage = Omit<LocatorStage, "kind" | "direction"> & {
-  kind: "text" | "style";
+export type RuntimeLocatorNode = Omit<LocatorNode, "kind" | "direction"> & {
+  kind: "text" | "style" | "link" | "and" | "or" | "filter";
   direction?: "within" | "after" | "before";
 };
+export type RuntimeLocatorExpression = { nodes: RuntimeLocatorNode[]; root: number };
 export type RuntimeLocatorStyle = LocatorStyle;
 
 const ERROR_PREFIX = "__tui_test_native_error__:";
@@ -186,49 +188,49 @@ export class NativeRuntime {
     return this.#call((session) => session.text(full));
   }
 
-  findLocator(stages: RuntimeLocatorStage[]): Promise<TextMatch[]> {
+  findLocator(expression: RuntimeLocatorExpression): Promise<TextMatch[]> {
     return this.#call((session) =>
-      session.findLocator(stages as LocatorStage[]),
+      session.findLocator(expression as LocatorExpression),
     );
   }
 
   waitLocator(
-    stages: RuntimeLocatorStage[],
+    expression: RuntimeLocatorExpression,
     not = false,
     timeoutMs?: number,
   ): Promise<void> {
     return this.#call((session) =>
-      session.waitLocator(stages as LocatorStage[], not, timeoutMs),
+      session.waitLocator(expression as LocatorExpression, not, timeoutMs),
     );
   }
 
   clickLocator(
-    stages: RuntimeLocatorStage[],
+    expression: RuntimeLocatorExpression,
     button = 0,
     clicks = 1,
     timeoutMs?: number,
   ): Promise<void> {
     return this.#call((session) =>
-      session.clickLocator(stages as LocatorStage[], button, clicks, timeoutMs),
+      session.clickLocator(expression as LocatorExpression, button, clicks, timeoutMs),
     );
   }
 
   highlightLocator(
-    stages: RuntimeLocatorStage[],
+    expression: RuntimeLocatorExpression,
     timeoutMs?: number,
   ): Promise<TextMatch[]> {
     return this.#call((session) =>
-      session.highlightLocator(stages as LocatorStage[], timeoutMs),
+      session.highlightLocator(expression as LocatorExpression, timeoutMs),
     );
   }
 
   expectLocator(
-    stages: RuntimeLocatorStage[],
+    expression: RuntimeLocatorExpression,
     not = false,
     timeoutMs?: number,
   ): Promise<void> {
     return this.#call((session) =>
-      session.expectLocator(stages as LocatorStage[], not, timeoutMs),
+      session.expectLocator(expression as LocatorExpression, not, timeoutMs),
     );
   }
 

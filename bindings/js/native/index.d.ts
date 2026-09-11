@@ -9,11 +9,11 @@ export declare class NativeSession {
   close(): Promise<void>
   state(): Promise<State>
   text(full?: boolean | undefined | null): Promise<string>
-  findLocator(stages: Array<LocatorStage>): Promise<Array<TextMatch>>
-  waitLocator(stages: Array<LocatorStage>, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
-  clickLocator(stages: Array<LocatorStage>, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
-  highlightLocator(stages: Array<LocatorStage>, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
-  expectLocator(stages: Array<LocatorStage>, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  findLocator(expression: LocatorExpression): Promise<Array<TextMatch>>
+  waitLocator(expression: LocatorExpression, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  clickLocator(expression: LocatorExpression, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  highlightLocator(expression: LocatorExpression, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
+  expectLocator(expression: LocatorExpression, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
   packedScreen(full?: boolean | undefined | null): Promise<PackedScreen>
   cells(x: number, y: number, w?: number | undefined | null, h?: number | undefined | null): Promise<Array<Cell>>
   getCommand(): Promise<string | null>
@@ -134,8 +134,13 @@ export interface EffectiveTimeouts {
   ready: number
 }
 
-export interface LocatorStage {
-  kind: LocatorStageKind
+export interface LocatorExpression {
+  nodes: Array<LocatorNode>
+  root: number
+}
+
+export interface LocatorNode {
+  kind: LocatorNodeKind
   direction?: LocatorStageDirection
   text?: string
   regex?: boolean
@@ -144,17 +149,28 @@ export interface LocatorStage {
   occurrence?: string
   nth?: number
   style?: LocatorStyle
+  link?: string
+  within?: number
+  left?: number
+  right?: number
+  input?: number
+  has?: number
+  hasNot?: number
+}
+
+export declare const enum LocatorNodeKind {
+  Text = 'text',
+  Style = 'style',
+  Link = 'link',
+  And = 'and',
+  Or = 'or',
+  Filter = 'filter'
 }
 
 export declare const enum LocatorStageDirection {
   Within = 'within',
   After = 'after',
   Before = 'before'
-}
-
-export declare const enum LocatorStageKind {
-  Text = 'text',
-  Style = 'style'
 }
 
 export interface LocatorStyle {

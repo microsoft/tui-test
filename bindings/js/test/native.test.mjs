@@ -3,6 +3,35 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import { TuiTest } from "../dist/index.js";
+import { NativeSession } from "../native/index.js";
+
+test("locator expressions reject invalid fields and references", async () => {
+  const session = new NativeSession(`invalid-expression-${process.pid}`);
+  for (const node of [
+    { kind: "style", style: { bold: true, link: "test:link" } },
+    { kind: "text", text: "x", style: { bold: true } },
+    { kind: "link" },
+    { kind: "and", left: 0, right: 0 },
+    { kind: "filter", hasText: "x" },
+  ]) {
+    await assert.rejects(async () => session.findLocator({ nodes: [node], root: 0 }));
+  }
+});
+
+test("composition validates ownership and locator-only filters without reading", () => {
+  const term = new TuiTest(`compose-${process.pid}`);
+  const other = new TuiTest(term.session);
+  const bold = term.getByStyle({ bold: true });
+  const link = term.getByLink("test:link");
+  assert.doesNotThrow(() => bold.and(link).or(term.getByText("fallback")).filter({ has: link }));
+  assert.throws(() => bold.and(other.getByLink("test:link")), /same terminal owner/);
+  assert.throws(() => bold.or(other.getByText("x")), /same terminal owner/);
+  assert.throws(() => bold.filter({ has: other.getByText("x") }), /same terminal owner/);
+  assert.throws(() => bold.filter({}), /requires has or hasNot/);
+  assert.throws(() => bold.filter({ has: link, link: "test:link" }), /unknown filter property/);
+  assert.throws(() => term.getByStyle({ bold: true, link: "test:link" }), /unknown style property/);
+  assert.throws(() => term.getByLink(undefined), /URI string/);
+});
 
 test("generated native declarations expose typed operations", async () => {
   const declarations = await readFile(
@@ -66,7 +95,7 @@ test("generated native declarations expose typed operations", async () => {
   assert.doesNotMatch(declarations, /Promise<unknown>/);
   assert.match(
     declarations,
-    /findLocator\(stages: Array<LocatorStage>\)/,
+    /findLocator\(expression: LocatorExpression\)/,
   );
   assert.doesNotMatch(declarations, /(?:queryJson|requestJson): string/);
   assert.match(
@@ -85,6 +114,10 @@ test("public declarations expose reusable get-by locators", async () => {
   for (const method of [
     "getByText",
     "getByStyle",
+    "getByLink",
+    "and",
+    "or",
+    "filter",
     "any",
     "unique",
     "first",
@@ -116,6 +149,12 @@ test("public declarations expose reusable get-by locators", async () => {
   assert.doesNotMatch(textOptions ?? "", /occurrence/);
   assert.doesNotMatch(styleOptions ?? "", /occurrence/);
   assert.doesNotMatch(expectOptions ?? "", /style/);
+  const filterOptions = declarations.match(/export interface LocatorFilterOptions \{([^}]*)\}/s)?.[1];
+  assert.match(filterOptions ?? "", /has\?: Locator/);
+  assert.match(filterOptions ?? "", /hasNot\?: Locator/);
+  assert.doesNotMatch(filterOptions ?? "", /(?:style|link|hasText|hasNotText)\??:/);
+  const styleFields = declarations.match(/export interface TextStyleExpectation \{([^}]*)\}/s)?.[1];
+  assert.doesNotMatch(styleFields ?? "", /\blink\??:/);
 });
 
 test("public facade omits generic request dispatchers", async () => {

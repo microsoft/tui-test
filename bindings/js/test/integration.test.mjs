@@ -671,6 +671,43 @@ test("get-by locators are lazy, chainable, and actionable", async () => {
   }
 });
 
+test("link locators compose cell sets and filter whole candidates", async () => {
+  const uri = "https://example.com";
+  const output = `\x1b[1mA\x1b]8;;${uri}\x1b\\B\x1b[22mC\x1b]8;;\x1b\\\r\n` +
+    `\x1b]8;;${uri}\x1b\\\x1b[1mA\x1b[22m \x1b[1mB\x1b[0m\x1b]8;;\x1b\\\r\n`;
+  for (const backend of ["alacritty", "ghostty", "rio", "xtermjs"]) {
+    const su = new TuiTest(uniqueSession("link-composition"), { backend });
+    try {
+      const script = `setTimeout(() => process.stdout.write(${JSON.stringify(output)}), 150);setInterval(() => {}, 1000)`;
+      await su.run(process.execPath, ["-e", script]);
+      const row = su.getByText("ABC");
+      const bold = su.getByStyle({ bold: true });
+      const link = su.getByLink(uri);
+      const intersection = row.and(bold).and(link);
+      await intersection.wait({ timeout: 3000 });
+      assert.equal((await intersection.location()).text, "B", backend);
+      assert.deepEqual((await intersection.locations())[0].spans, [{ row: 0, start: 1, end: 2 }]);
+      assert.equal((await row.and(bold).or(row.and(link)).location()).text, "ABC");
+      assert.equal((await row.filter({ has: link, hasNot: su.getByText("absent") }).location()).text, "ABC");
+      assert.equal(await row.filter({ hasNot: link }).count(), 0);
+      assert.equal(await row.getByLink(uri).count(), 0);
+      assert.equal(await row.getByLink("").count(), 0);
+      assert.equal(await su.getByText("AB").filter({ has: su.getByText("C") }).count(), 0);
+      const spaced = su.getByText("A B");
+      assert.equal((await spaced.getByStyle({ bold: true }).getByLink(uri).location()).text, "A B");
+      const pieces = spaced.and(bold).and(link);
+      assert.deepEqual((await pieces.locations()).map(match => match.text), ["A", "B"]);
+      await assert.rejects(pieces.location(), /match once/);
+      await intersection.click({ timeout: 100 });
+      await intersection.highlight({ timeout: 100 });
+      assert.equal((await (await pieces.all())[1].location()).text, "B");
+      await intersection.expect({ timeout: 100 });
+    } finally {
+      await su.closeQuiet();
+    }
+  }
+});
+
 test("panic containment rejects as InternalError and Node keeps running", async () => {
   const name = uniqueSession("panic-probe");
   const runtime = new NativeRuntime(name);

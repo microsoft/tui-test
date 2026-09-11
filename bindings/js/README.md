@@ -153,12 +153,54 @@ await save.click();
 | --- | --- |
 | `terminal.getByText(text, options?)` | `regex`, `full`, `whitespace` |
 | `terminal.getByStyle(style, options?)` | `full` |
+| `terminal.getByLink(uri, options?)` | `full` |
 | `locator.getByText(text, options?)` | `regex`, `full`, `whitespace`, `direction` |
 | `locator.getByStyle(style, options?)` | `full`, `direction` |
+| `locator.getByLink(uri, options?)` | `full`, `direction` |
 
 `whitespace` is `"exact"` or `"normalize"`. `direction` is `"within"`, `"after"`, or `"before"`.
 
 Style fields are `foreground`, `background`, `bold`, `dim`, `italic`, `underlineStyle`, `underlineColor`, `inverse`, `hidden`, `strikethrough`, and `blink`.
+
+`getByLink(uri)` matches the exact OSC 8 target, not URL-shaped text.
+`getByLink("")` requires no link. Standalone style/link selectors find contiguous
+per-row runs. Chained style/link selectors with the default `within` direction
+keep a parent match only when the whole match meets the requirement. Appearance
+checks skip blanks when visible characters are present; links check every cell.
+
+#### Compose locators
+
+```js
+const link = terminal.getByLink("https://example.com");
+const bold = terminal.getByStyle({ bold: true });
+const boldLinkCells = bold.and(link);
+const either = link.or(terminal.getByText("Help"));
+const sections = terminal.getByText("Docs and Help");
+const containsLink = sections.filter({ has: link });
+const withoutOldText = sections.filter({ hasNot: terminal.getByText("old") });
+const entirelyLinked = sections.getByLink("https://example.com");
+```
+
+`.and()` intersects cells; `.or()` unions and deduplicates cells. Both rebuild
+maximal contiguous runs within each physical row. Adjacent alternatives merge,
+even if their original matches were separate; gaps and row boundaries do not.
+This differs from Playwright's element-identity composition: counts and click
+targets refer to the resulting runs, not the original alternatives. Composed
+text uses exact-grid whitespace rather than operand normalization.
+
+`.filter({ has?, hasNot? })` keeps whole candidates containing an inner match,
+or containing no inner match, respectively. Both conditions apply when supplied.
+The inner query runs inside each candidate and may match the entire candidate.
+No link, text, or style fields are accepted by `filter`; use locators instead.
+For partially linked `"Docs"`, `filter({ has: link })` keeps `"Docs"`,
+`getByLink(uri)` rejects it, and `.and(link)` returns only the linked cells.
+
+Operands must come from the same `TuiTest` instance. Expressions remain lazy
+and immutable and evaluate against one fresh terminal snapshot. Selection
+stays where it is written: `a.first().and(b)` differs from `a.and(b).first()`.
+If any branch requests `full`, the entire expression uses the full grid.
+Explicit operand errors, including `unique()` failures, propagate through
+composition. `location()` and `click()` still require one final run.
 
 #### Select matches
 

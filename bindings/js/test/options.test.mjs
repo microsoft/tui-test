@@ -208,7 +208,7 @@ test("mouse helpers encode named buttons and modifiers", async () => {
     });
     const locatorCall = calls.at(-1);
     assert.equal(locatorCall[0], "locator");
-    assert.equal(locatorCall[1].at(-1).occurrence, "unique");
+    assert.equal(locatorCall[1].nodes[locatorCall[1].root].occurrence, "unique");
     assert.deepEqual(locatorCall.slice(2), [29, 2, 50]);
 
     await assert.rejects(
