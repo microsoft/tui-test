@@ -127,6 +127,79 @@ directory = "./artifacts"
 
 Recording modes: `disabled`, `on-failure`, and `always`.
 
+### Styling screenshots and recordings
+
+`[recording.style]` sets how screenshots and recordings are drawn. Every key is
+optional; the defaults are shown.
+
+```toml
+[recording.style]
+font_size = 17           # cell width and height follow it
+title_font_size = 13
+canvas_background = "#6867aa"   # the area around the window
+canvas_padding = 24             # its width on every side
+
+[recording.style.font]
+# A CSS font stack, passed straight into the SVG and read left to right when
+# picking faces for a raster recording. The default is:
+#   "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,'DejaVu Sans Mono',monospace"
+family = "Berkeley Mono, monospace"
+# bold, italic and bold_italic fall back to family when unset.
+bold = "JetBrains Mono ExtraBold"
+# Extra fonts to load, on top of the installed ones. A relative path is
+# resolved against this config file, so a repository can carry its own font.
+files = ["fonts/BerkeleyMono.ttf"]
+
+[recording.style.window]
+title_bar = true         # false draws the grid with no chrome at all
+traffic_lights = true
+background = "#d9d9e8"   # the title bar, not the canvas or the terminal
+foreground = "#414145"
+divider = "#000000"
+
+[recording.style.border]
+width = 0                # 0 draws no border
+color = "#000000"
+radius = 8               # the panel's corners, border or not
+
+[recording.style.shadow]
+enabled = true
+color = "#080812"
+offset = 5
+spread = 7
+```
+
+The terminal's own colors are separate, under `[profiles.<name>.colors]`: a
+recording has three backgrounds, and `canvas_background` is the outermost.
+
+Naming a font family that no installed or loaded face provides is not an error.
+It falls back, exactly as an unavailable system font does.
+
+### Per-profile recording
+
+A profile may carry its own `[recording]`, inheriting every key it does not
+name:
+
+```toml
+[recording]
+mode = "on-failure"
+directory = "./artifacts"
+
+[recording.style]
+canvas_background = "#101014"
+canvas_padding = 32
+
+[profiles.docs.recording]
+mode = "always"
+
+[profiles.docs.recording.style]
+font_size = 24
+```
+
+The `docs` profile records always, still writes to `./artifacts`, and draws at
+24px over the `#101014` canvas with 32px of padding. Inheritance is key by key
+at every depth, so naming one style key keeps the rest of the file's look.
+
 ## Terminal modes
 
 `state` reports the modes the child has turned on, under `modes`:

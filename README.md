@@ -312,6 +312,31 @@ directory = "./artifacts"
 
 Recording modes are `disabled`, `on-failure`, and `always`. Default: `always`.
 
+How screenshots and recordings are drawn is configurable too, from the font
+down to the window chrome:
+
+```toml
+[recording.style]
+font_size = 20
+canvas_background = "#101014"
+canvas_padding = 32
+
+[recording.style.font]
+family = "Berkeley Mono"
+files = ["fonts/BerkeleyMono.ttf"]
+
+[recording.style.window]
+traffic_lights = false
+
+[recording.style.border]
+width = 1
+color = "#454550"
+```
+
+A profile can carry its own `[recording]`, inheriting every key it does not
+name. See [the CLI reference](references/cli.md#styling-screenshots-and-recordings)
+for the full set.
+
 The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
 
 ### Shells and backends

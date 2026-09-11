@@ -210,10 +210,15 @@ fn preferred_families(font: &FontFamilies, bold: bool, italic: bool) -> Vec<Stri
     // which exists for reaching the catalog when no config can. A style that
     // names none leaves the variable exactly as authoritative as it was.
     let default_family = FontFamilies::default().family;
+    // A family is a CSS font stack, because that is what the SVG path passes
+    // straight into font-family. Split it so face selection sees the same
+    // preference order the SVG does rather than one unmatchable string.
     let named = [font.resolve(bold, italic), font.family.as_str()]
         .into_iter()
         .filter(|family| *family != default_family)
-        .map(str::to_string)
+        .flat_map(|family| family.split(','))
+        .map(|family| family.trim().trim_matches(['\'', '"']).to_string())
+        .filter(|family| !family.is_empty() && family != "monospace")
         .collect::<Vec<_>>();
     let configured = std::env::var("TUI_TEST_RECORDING_FONT_FAMILIES")
         .ok()
@@ -423,6 +428,22 @@ mod tests {
 
         let plain = preferred_families(&font, false, false);
         assert_eq!(plain.first().map(String::as_str), Some("Berkeley Mono"));
+
+        // A family is a CSS font stack, so face selection has to read it the
+        // same way the SVG does rather than as one unmatchable string.
+        let stack = preferred_families(
+            &FontFamilies {
+                family: "'Berkeley Mono', Menlo, monospace".into(),
+                ..FontFamilies::default()
+            },
+            false,
+            false,
+        );
+        assert_eq!(
+            &stack[..2],
+            &["Berkeley Mono".to_string(), "Menlo".to_string()],
+            "quotes and spacing are stripped and the generic name dropped"
+        );
 
         let bold = preferred_families(&font, true, false);
         assert_eq!(

@@ -845,9 +845,57 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A profile changes the recording settings it names and inherits the
-    /// rest. Replacing the table whole would mean that setting a font size
-    /// silently reset the mode the file had established.
+    /// The defaults written down in `references/cli.md`. Documentation that
+    /// drifts from the code is worse than none, so the numbers in it are
+    /// pinned here rather than trusted.
+    #[test]
+    fn the_documented_defaults_are_the_real_ones() {
+        let style = crate::render::style::Style::default();
+        assert_eq!(style.font_size, 17.0);
+        assert_eq!(style.title_font_size, 13.0);
+        assert_eq!(style.canvas_background, Rgb::new(0x68, 0x67, 0xaa));
+        assert_eq!(style.canvas_padding, 24);
+        assert_eq!(
+            style.font.family,
+            "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,'DejaVu Sans Mono',monospace"
+        );
+        assert!(style.window.title_bar);
+        assert!(style.window.traffic_lights);
+        assert_eq!(style.window.background, Rgb::new(0xd9, 0xd9, 0xe8));
+        assert_eq!(style.window.foreground, Rgb::new(0x41, 0x41, 0x45));
+        assert_eq!(style.window.divider, Rgb::new(0, 0, 0));
+        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.border.color, Rgb::new(0, 0, 0));
+        assert_eq!(style.border.radius, 8.0);
+        assert!(style.shadow.enabled);
+        assert_eq!(style.shadow.color, Rgb::new(0x08, 0x08, 0x12));
+        assert_eq!(style.shadow.offset, 5.0);
+        assert_eq!(style.shadow.spread, 7.0);
+    }
+
+    /// The per-profile example in `references/cli.md`, and the claim the prose
+    /// around it makes about what the profile ends up with.
+    #[test]
+    fn the_documented_per_profile_example_does_what_it_says() {
+        let config = ConfigFile::parse(
+            "[recording]\nmode = \"on-failure\"\ndirectory = \"./artifacts\"\n\
+             \n[recording.style]\ncanvas_background = \"#101014\"\ncanvas_padding = 32\n\
+             \n[profiles.docs.recording]\nmode = \"always\"\n\
+             \n[profiles.docs.recording.style]\nfont_size = 24\n",
+        )
+        .expect("the documented example parses");
+
+        let docs = config.settings(Some("docs")).unwrap();
+        assert_eq!(
+            docs.recording.mode,
+            crate::api::AutomaticRecordingMode::Always
+        );
+        assert_eq!(docs.recording.directory, Some(PathBuf::from("./artifacts")));
+        assert_eq!(docs.style.font_size, 24.0);
+        assert_eq!(docs.style.canvas_background, Rgb::new(0x10, 0x10, 0x14));
+        assert_eq!(docs.style.canvas_padding, 32);
+    }
+
     #[test]
     fn a_profile_that_names_no_style_keeps_the_file_style() {
         let config = ConfigFile::parse(
@@ -865,6 +913,9 @@ mod tests {
         assert_eq!(ops.recording.directory, Some(PathBuf::from("shots")));
     }
 
+    /// A profile changes the recording settings it names and inherits the
+    /// rest. Replacing the table whole would mean that setting a font size
+    /// silently reset the mode the file had established.
     #[test]
     fn a_profile_recording_inherits_field_by_field() {
         let config = ConfigFile::parse(
