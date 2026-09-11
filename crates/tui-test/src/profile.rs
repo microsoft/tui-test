@@ -377,6 +377,16 @@ impl ConfigFile {
     pub fn parse(toml_text: &str) -> anyhow::Result<Self> {
         let config: Self = toml::from_str(toml_text)?;
         config.recording.validate()?;
+        // Every profile's own table too. Validating only the file's left an
+        // invalid per-profile directory to surface when a session opened,
+        // far from the config that caused it.
+        for (name, profile) in &config.profiles {
+            if let Some(recording) = &profile.recording {
+                recording
+                    .validate()
+                    .map_err(|error| anyhow::anyhow!("profile {name:?}: {error}"))?;
+            }
+        }
         Ok(config)
     }
 
@@ -390,12 +400,25 @@ impl ConfigFile {
             .map_err(|e| anyhow::anyhow!("could not read {}: {e}", path.display()))?;
         let mut config =
             Self::parse(&text).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
-        if let Some(directory) = config.recording.directory.as_mut() {
-            if directory.is_relative() {
-                *directory = path
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .join(&*directory);
+        let parent = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        // A relative directory means "beside this config", wherever the
+        // process happens to be running from. That has to hold for a
+        // profile's table as much as the file's, or the same suite writes
+        // recordings somewhere else when run from another directory.
+        let anchor = |recording: &mut crate::api::AutomaticRecording| {
+            if let Some(directory) = recording.directory.as_mut() {
+                if directory.is_relative() {
+                    *directory = parent.join(&*directory);
+                }
+            }
+        };
+        anchor(&mut config.recording);
+        for profile in config.profiles.values_mut() {
+            if let Some(recording) = profile.recording.as_mut() {
+                anchor(recording);
             }
         }
         Ok(config)
@@ -672,6 +695,39 @@ mod tests {
             50,
             "and the rest of the profile still applies"
         );
+    }
+
+    /// A profile's recording table gets the same treatment as the file's:
+    /// rejected at parse when invalid, and anchored to the config's directory
+    /// when relative. Both were previously applied only to the file's table.
+    #[test]
+    fn a_profile_recording_is_validated_and_anchored() {
+        let error = ConfigFile::parse("[profiles.docs.recording]\ndirectory = \"\"\n")
+            .expect_err("an empty directory is rejected wherever it is written");
+        assert!(
+            error.to_string().contains("docs"),
+            "the error names the profile: {error}"
+        );
+
+        let dir = std::env::temp_dir().join(format!("tui-test-anchor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILE);
+        std::fs::write(
+            &path,
+            "[profiles.docs.recording]\ndirectory = \"artifacts\"\n",
+        )
+        .unwrap();
+        let config = ConfigFile::load(&path).unwrap();
+        assert_eq!(
+            config.profiles["docs"]
+                .recording
+                .as_ref()
+                .unwrap()
+                .directory,
+            Some(dir.join("artifacts")),
+            "a relative directory anchors to the config, not the working directory"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
