@@ -582,18 +582,29 @@ fn map_style(args: TextStyleArgs) -> TextStyle {
         hidden: args.hidden,
         strikethrough: args.strikethrough,
         blink: args.blink,
-        link: args.link,
     }
 }
 
 fn map_query(args: TextQueryArgs, default: MatchOccurrence) -> LocatorQuery {
     let occurrence = map_occurrence(args.selector.match_mode, args.selector.nth, default);
-    LocatorQuery {
+    let query = LocatorQuery {
         selector: LocatorSelector::Text(map_selector(args.text, args.selector)),
-        occurrence,
+        occurrence: if args.link.is_some() {
+            MatchOccurrence::Any
+        } else {
+            occurrence.clone()
+        },
         within: None,
         direction: LocatorDirection::Within,
         style: map_style(*args.style),
+    };
+    match args.link {
+        Some(uri) => LocatorQuery {
+            occurrence,
+            within: Some(Box::new(query)),
+            ..LocatorQuery::link(uri)
+        },
+        None => query,
     }
 }
 

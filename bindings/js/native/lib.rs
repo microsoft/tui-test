@@ -506,7 +506,6 @@ pub struct LocatorStyle {
     pub hidden: Option<bool>,
     pub strikethrough: Option<bool>,
     pub blink: Option<bool>,
-    pub link: Option<String>,
 }
 
 #[napi(object)]
@@ -714,7 +713,6 @@ fn core_style(style: LocatorStyle) -> CoreTextStyle {
         hidden: style.hidden,
         strikethrough: style.strikethrough,
         blink: style.blink,
-        link: style.link,
     }
 }
 

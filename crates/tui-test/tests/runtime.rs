@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 
 use tui_test::{
     global_registry, AutomaticRecording, AutomaticRecordingMode, ErrorKind, LocatorDirection,
-    LocatorExpectOptions, LocatorQuery, MatchOccurrence, OpenOptions, Operation, OperationResult,
-    RunOptions, Session, SessionRegistry, TextSelector, TextStyle, Timeouts,
+    LocatorExpectOptions, LocatorFilterOptions, LocatorQuery, MatchOccurrence, OpenOptions,
+    Operation, OperationResult, RunOptions, Session, SessionRegistry, TextSelector, TextStyle,
+    Timeouts,
 };
 
 fn run_options(program: &str, args: &[&str]) -> RunOptions {
@@ -25,6 +26,79 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
         timeouts: defaults.timeouts,
         recording: defaults.recording,
     }
+}
+
+#[test]
+fn locator_composition_is_owner_checked_and_immutable() {
+    let session = Session::new("same-name");
+    let other = Session::new("same-name");
+    let text = session.get_by_text("Docs");
+    let link = session.clone().get_by_link("test:link");
+    assert!(text.and(&link).is_ok());
+    assert!(text.or(&other.get_by_text("Docs")).is_err());
+    assert!(text
+        .filter(LocatorFilterOptions {
+            has: Some(other.get_by_link("test:link")),
+            has_not: None
+        })
+        .is_err());
+    assert!(text.filter(LocatorFilterOptions::default()).is_err());
+    let selected = text.and(&link).unwrap().first();
+    assert_eq!(selected.query().occurrence, MatchOccurrence::First);
+    assert_eq!(text.query().occurrence, MatchOccurrence::Any);
+    let registry = SessionRegistry::default();
+    let a = registry.session("a");
+    assert!(a.get_by_text("x").and(&a.clone().get_by_link("")).is_ok());
+    assert!(a
+        .get_by_text("x")
+        .and(&registry.session("b").get_by_link(""))
+        .is_err());
+}
+
+#[test]
+fn link_locator_expressions_drive_live_actions() {
+    let session = Session::new(format!("native-link-locator-{}", std::process::id()));
+    let options = if cfg!(windows) {
+        run_options("powershell.exe", &["-NoProfile", "-Command",
+            "[Console]::Write(([string][char]27+'[1mA'+[char]27+']8;;test:link'+[char]7+'B'+[char]27+'[22mC'+[char]27+']8;;'+[char]7)); Start-Sleep -Seconds 30"])
+    } else {
+        run_options(
+            "sh",
+            &[
+                "-c",
+                "printf '\\033[1mA\\033]8;;test:link\\007B\\033[22mC\\033]8;;\\007'; sleep 30",
+            ],
+        )
+    };
+    session.run(options).unwrap();
+    let result = (|| -> Result<(), tui_test::TuiTestError> {
+        let bold = session.get_by_style(TextStyle {
+            bold: Some(true),
+            ..Default::default()
+        });
+        let link = session.get_by_link("test:link");
+        let intersection = bold.and(&link)?;
+        intersection.wait_with_timeout(Some(5_000))?;
+        assert_eq!(intersection.location()?.text, "B");
+        assert_eq!(bold.or(&link)?.location()?.text, "ABC");
+        let parent = session.get_by_text("ABC");
+        assert_eq!(
+            parent
+                .filter(LocatorFilterOptions {
+                    has: Some(link),
+                    has_not: None
+                })?
+                .location()?
+                .text,
+            "ABC"
+        );
+        assert_eq!(parent.get_by_link("test:link").count()?, 0);
+        intersection.click()?;
+        intersection.highlight()?;
+        Ok(())
+    })();
+    session.close().unwrap();
+    result.unwrap();
 }
 
 fn wait_for_exit(session: &Session) {

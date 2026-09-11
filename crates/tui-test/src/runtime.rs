@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, Weak};
 use sha2::{Digest, Sha256};
 
 use crate::api::{
-    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, MouseOptions, OpenOptions,
-    OpenResult, Operation, OperationResult, RunOptions, StyleSelector, TextMatch, TextSelector,
-    TuiTestError,
+    LinkSelector, LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, MouseOptions,
+    OpenOptions, OpenResult, Operation, OperationResult, RunOptions, StyleSelector, TextMatch,
+    TextSelector, TuiTestError,
 };
 use crate::engine::Engine;
 use crate::logger::Logger;
@@ -51,6 +51,15 @@ enum LocatorTarget {
 }
 
 impl LocatorTarget {
+    fn same_owner(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Session(left), Self::Session(right)) => Arc::ptr_eq(&left.engine, &right.engine),
+            (Self::Handle(left), Self::Handle(right)) => {
+                Arc::ptr_eq(&left.registry.inner, &right.registry.inner) && left.name == right.name
+            }
+            _ => false,
+        }
+    }
     fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
         match self {
             Self::Session(session) => session.execute(operation),
@@ -67,6 +76,13 @@ pub struct Locator {
     query: LocatorQuery,
 }
 
+/// Keep candidates containing `has` and containing no `has_not` matches.
+#[derive(Clone, Default)]
+pub struct LocatorFilterOptions {
+    pub has: Option<Locator>,
+    pub has_not: Option<Locator>,
+}
+
 impl Locator {
     fn new(target: LocatorTarget, query: LocatorQuery) -> Self {
         Self { target, query }
@@ -74,6 +90,70 @@ impl Locator {
 
     pub fn query(&self) -> &LocatorQuery {
         &self.query
+    }
+
+    fn require_same_owner(&self, other: &Self) -> Result<(), TuiTestError> {
+        if self.target.same_owner(&other.target) {
+            Ok(())
+        } else {
+            Err(TuiTestError::usage(
+                "locator operands must belong to the same terminal owner",
+            ))
+        }
+    }
+
+    /// Intersect selected cells and form contiguous per-row runs.
+    pub fn and(&self, other: &Self) -> Result<Self, TuiTestError> {
+        self.require_same_owner(other)?;
+        Ok(Self::new(
+            self.target.clone(),
+            self.query.clone().and(other.query.clone()),
+        ))
+    }
+
+    /// Union selected cells and form contiguous per-row runs.
+    pub fn or(&self, other: &Self) -> Result<Self, TuiTestError> {
+        self.require_same_owner(other)?;
+        Ok(Self::new(
+            self.target.clone(),
+            self.query.clone().or(other.query.clone()),
+        ))
+    }
+
+    pub fn filter(&self, options: LocatorFilterOptions) -> Result<Self, TuiTestError> {
+        if options.has.is_none() && options.has_not.is_none() {
+            return Err(TuiTestError::usage("filter requires has or hasNot"));
+        }
+        for locator in options.has.iter().chain(options.has_not.iter()) {
+            self.require_same_owner(locator)?;
+        }
+        Ok(Self::new(
+            self.target.clone(),
+            self.query.clone().filter(
+                options.has.map(|locator| locator.query),
+                options.has_not.map(|locator| locator.query),
+            ),
+        ))
+    }
+
+    /// Require every cell of each current match to have this link.
+    pub fn get_by_link(&self, selector: impl Into<LinkSelector>) -> Self {
+        self.get_by_link_relative(selector, LocatorDirection::Within)
+    }
+
+    pub fn get_by_link_relative(
+        &self,
+        selector: impl Into<LinkSelector>,
+        direction: LocatorDirection,
+    ) -> Self {
+        Self::new(
+            self.target.clone(),
+            LocatorQuery {
+                within: Some(Box::new(self.query.clone())),
+                direction,
+                ..LocatorQuery::link(selector)
+            },
+        )
     }
 
     pub fn get_by_text(&self, selector: impl Into<TextSelector>) -> Self {
@@ -265,6 +345,12 @@ impl Locator {
 }
 
 impl Session {
+    pub fn get_by_link(&self, selector: impl Into<LinkSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Session(self.clone()),
+            LocatorQuery::link(selector),
+        )
+    }
     pub fn new(name: impl Into<String>) -> Self {
         let name = name.into();
         let recording_path = native_recording_path(&name);
@@ -359,6 +445,12 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
+    pub fn get_by_link(&self, selector: impl Into<LinkSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Handle(self.clone()),
+            LocatorQuery::link(selector),
+        )
+    }
     pub fn name(&self) -> &str {
         &self.name
     }

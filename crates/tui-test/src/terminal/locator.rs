@@ -100,9 +100,21 @@ pub fn locate_query<F>(
 where
     F: FnMut(&EmuCell, &TextStyle) -> bool,
 {
+    locate_query_within(rows, query, None, style_matches)
+}
+
+fn locate_query_within<F>(
+    rows: &[Vec<EmuCell>],
+    query: &LocatorQuery,
+    enclosing: Option<&[(usize, usize)]>,
+    style_matches: &mut F,
+) -> anyhow::Result<Vec<LocatedMatch>>
+where
+    F: FnMut(&EmuCell, &TextStyle) -> bool,
+{
     let mut parents = match query.within.as_deref() {
         Some(parent) => {
-            let mut parents = locate_query(rows, parent, style_matches)?;
+            let mut parents = locate_query_within(rows, parent, enclosing, style_matches)?;
             if parents.is_empty() {
                 return Ok(Vec::new());
             }
@@ -111,10 +123,21 @@ where
         }
         None => None,
     };
-    let allowed = parents.as_ref().map(|parents| {
+    let relative = parents.as_ref().map(|parents| {
         let width = rows.iter().map(Vec::len).max().unwrap_or(0);
         relative_regions(parents, query.direction, width.saturating_mul(rows.len()))
     });
+    let allowed = match (relative, enclosing) {
+        (Some(relative), Some(enclosing)) => Some(
+            relative
+                .iter()
+                .flat_map(|region| intersect_ranges(std::slice::from_ref(region), enclosing))
+                .collect(),
+        ),
+        (Some(relative), None) => Some(relative),
+        (None, Some(enclosing)) => Some(enclosing.to_vec()),
+        (None, None) => None,
+    };
     let occurrence = query.occurrence.clone();
     let select_early = query.style.is_empty();
     let mut selected_early = false;
@@ -146,6 +169,64 @@ where
                 style_matches,
             )?
         }
+        LocatorSelector::Link(selector)
+            if query.direction == LocatorDirection::Within && parents.is_some() =>
+        {
+            let mut matches = parents.take().expect("parent matches are present");
+            matches.retain(|matched| {
+                matched
+                    .cells
+                    .iter()
+                    .all(|cell| cell_has_link(&cell.cell, &selector.uri))
+            });
+            matches
+        }
+        LocatorSelector::Link(selector) => {
+            locate_cells_within(rows, allowed.as_deref(), &mut |cell| {
+                cell_has_link(cell, &selector.uri)
+            })?
+        }
+        LocatorSelector::And { left, right } | LocatorSelector::Or { left, right } => {
+            let left = locate_query_within(rows, left, allowed.as_deref(), style_matches)?;
+            let right = locate_query_within(rows, right, allowed.as_deref(), style_matches)?;
+            let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+            let left = coverage(&left, width);
+            let right = coverage(&right, width);
+            let ranges = if matches!(&query.selector, LocatorSelector::And { .. }) {
+                intersect_ranges(&left, &right)
+            } else {
+                normalize_ranges(left.into_iter().chain(right).collect())
+            };
+            materialize_runs(rows, &ranges)
+        }
+        LocatorSelector::Filter {
+            input,
+            has,
+            has_not,
+        } => {
+            let candidates = locate_query_within(rows, input, allowed.as_deref(), style_matches)?;
+            let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+            let mut retained = Vec::new();
+            for candidate in candidates {
+                let scope = coverage(std::slice::from_ref(&candidate), width);
+                let positive = match has {
+                    Some(inner) => {
+                        !locate_query_within(rows, inner, Some(&scope), style_matches)?.is_empty()
+                    }
+                    None => true,
+                };
+                let negative = match has_not {
+                    Some(inner) => {
+                        locate_query_within(rows, inner, Some(&scope), style_matches)?.is_empty()
+                    }
+                    None => true,
+                };
+                if positive && negative {
+                    retained.push(candidate);
+                }
+            }
+            retained
+        }
     };
     if !query.style.is_empty() {
         matches.retain(|matched| located_match_has_style(matched, &query.style, style_matches));
@@ -169,45 +250,97 @@ where
         !cell.cell.ch.is_empty() && !cell.cell.ch.chars().all(char::is_whitespace)
     };
     let has_visible = matched.cells.iter().any(&visible);
-    // The two halves of a style are asked about differently, because a blank
-    // can carry one and not the other.
-    //
-    // An appearance skips blanks: the foreground of a space is invisible, so
-    // requiring it would fail `A B` for a reason no reader could see, and a
-    // program that bolds the letters but not the space between them has drawn
-    // exactly what the query describes.
-    //
-    // A link is not an appearance. It is a region of the screen, and a space
-    // inside one is part of the link, so it is checked on every cell —
-    // otherwise `A B` whose space alone carries a URI would satisfy "links
-    // nowhere".
-    //
-    // Splitting the two rather than picking one policy for the whole match is
-    // what keeps them composable: `A B` linked throughout but bold only on the
-    // letters matches `--bold --link` exactly as it matches either alone.
-    let link = style.link.as_ref().map(|link| TextStyle {
-        link: Some(link.clone()),
-        ..TextStyle::default()
-    });
-    let appearance = TextStyle {
-        link: None,
-        ..style.clone()
-    };
-    let appearance = (!appearance.is_empty()).then_some(appearance);
+    matched
+        .cells
+        .iter()
+        .filter(|cell| !has_visible || visible(cell))
+        .all(|cell| style_matches(&cell.cell, style))
+}
 
-    matched.cells.iter().all(|cell| {
-        if let Some(link) = &link {
-            if !style_matches(&cell.cell, link) {
-                return false;
-            }
+fn cell_has_link(cell: &EmuCell, uri: &str) -> bool {
+    cell.uri().unwrap_or_default() == uri
+}
+
+fn normalize_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in ranges.into_iter().filter(|(start, end)| start < end) {
+        if let Some(last) = merged.last_mut().filter(|last| start <= last.1) {
+            last.1 = last.1.max(end);
+        } else {
+            merged.push((start, end));
         }
-        match &appearance {
-            Some(appearance) if !has_visible || visible(cell) => {
-                style_matches(&cell.cell, appearance)
-            }
-            _ => true,
+    }
+    merged
+}
+
+fn intersect_ranges(left: &[(usize, usize)], right: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let left = normalize_ranges(left.to_vec());
+    let right = normalize_ranges(right.to_vec());
+    let (mut i, mut j) = (0, 0);
+    let mut result = Vec::new();
+    while i < left.len() && j < right.len() {
+        let start = left[i].0.max(right[j].0);
+        let end = left[i].1.min(right[j].1);
+        if start < end {
+            result.push((start, end));
         }
-    })
+        if left[i].1 <= right[j].1 {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    result
+}
+
+fn coverage(matches: &[LocatedMatch], width: usize) -> Vec<(usize, usize)> {
+    normalize_ranges(
+        matches
+            .iter()
+            .flat_map(|matched| {
+                matched.value.spans.iter().map(|span| {
+                    let row = span.row as usize * width;
+                    (row + span.start as usize, row + span.end as usize)
+                })
+            })
+            .collect(),
+    )
+}
+
+fn materialize_runs(rows: &[Vec<EmuCell>], ranges: &[(usize, usize)]) -> Vec<LocatedMatch> {
+    let flat = flatten(rows, WhitespaceMode::Exact);
+    if flat.width == 0 {
+        return Vec::new();
+    }
+    let mut matches = Vec::new();
+    for &(mut start, end) in ranges {
+        while start < end {
+            let row_end = end.min((start / flat.width + 1) * flat.width);
+            if let Some(matched) = materialize(rows, &flat, (start, row_end)) {
+                matches.push(matched);
+            }
+            start = row_end;
+        }
+    }
+    matches
+}
+
+fn locate_cells_within<F>(
+    rows: &[Vec<EmuCell>],
+    allowed: Option<&[(usize, usize)]>,
+    predicate: &mut F,
+) -> anyhow::Result<Vec<LocatedMatch>>
+where
+    F: FnMut(&EmuCell) -> bool,
+{
+    locate_style_within(
+        rows,
+        &StyleSelector::default(),
+        allowed,
+        None,
+        &mut |cell, _| predicate(cell),
+    )
 }
 
 fn relative_regions(
@@ -254,20 +387,31 @@ fn locate_text_within(
         return Ok(Vec::new());
     };
     let pattern = selector_pattern(&selector.text, selector.regex, selector.whitespace)?;
-    let ranges: Vec<_> = pattern
-        .ranges(&flat.chars)
-        .into_iter()
-        .filter(|(match_start, match_end)| *match_start >= start && *match_end <= end)
-        .filter(|range| {
-            allowed.is_none_or(|allowed| {
-                source_range(&flat, *range).is_some_and(|(source_start, source_end)| {
-                    allowed.iter().any(|(allowed_start, allowed_end)| {
-                        source_start >= *allowed_start && source_end <= *allowed_end
-                    })
-                })
+    let search_regions = match allowed {
+        Some(regions) => regions
+            .iter()
+            .map(|&(a, b)| {
+                (
+                    start.max(flat.sources.partition_point(|source| *source < a)),
+                    end.min(flat.sources.partition_point(|source| *source < b)),
+                )
             })
-        })
-        .collect();
+            .collect(),
+        None => vec![(start, end)],
+    };
+    let mut ranges = Vec::new();
+    for (start, end) in search_regions {
+        if start < end {
+            ranges.extend(
+                pattern
+                    .ranges(&flat.chars[start..end])
+                    .into_iter()
+                    .map(|(a, b)| (a + start, b + start)),
+            );
+        }
+    }
+    ranges.sort_unstable();
+    ranges.dedup();
     let ranges = if let Some(occurrence) = occurrence {
         select(ranges, occurrence, &pattern.describe())?
     } else {
@@ -997,23 +1141,10 @@ mod tests {
         let mut rows = grid(&["A B"]);
         rows[0][1].hyperlink = link("https://example.com");
 
-        let locate = |rows: &[Vec<EmuCell>], query: &LocatorQuery| {
-            locate_query(rows, query, &mut |cell, style: &TextStyle| {
-                style
-                    .link
-                    .as_deref()
-                    .is_none_or(|expected| expected == cell.uri().unwrap_or_default())
-            })
-        };
+        let locate = locate_query_text;
         let with_link = |link: &str| LocatorQuery {
-            selector: LocatorSelector::Text(TextSelector::new("A B")),
-            occurrence: MatchOccurrence::Any,
-            within: None,
-            direction: LocatorDirection::Within,
-            style: TextStyle {
-                link: Some(link.to_string()),
-                ..TextStyle::default()
-            },
+            within: Some(Box::new(LocatorQuery::text("A B"))),
+            ..LocatorQuery::link(link)
         };
 
         assert!(
@@ -1059,49 +1190,228 @@ mod tests {
         rows[0][0].attrs.insert(Attrs::BOLD);
         rows[0][2].attrs.insert(Attrs::BOLD);
 
-        let locate = |style: TextStyle| {
-            locate_query(
-                &rows,
-                &LocatorQuery {
-                    selector: LocatorSelector::Text(TextSelector::new("A B")),
-                    occurrence: MatchOccurrence::Any,
-                    within: None,
-                    direction: LocatorDirection::Within,
-                    style,
-                },
-                &mut |cell, style: &TextStyle| {
-                    style
-                        .bold
-                        .is_none_or(|expected| expected == cell.has(Attrs::BOLD))
-                        && style
-                            .link
-                            .as_deref()
-                            .is_none_or(|expected| expected == cell.uri().unwrap_or_default())
-                },
-            )
-            .unwrap()
-            .len()
+        let bold = LocatorQuery {
+            within: Some(Box::new(LocatorQuery::text("A B"))),
+            ..LocatorQuery::style(TextStyle {
+                bold: Some(true),
+                ..Default::default()
+            })
         };
-        let bold = TextStyle {
-            bold: Some(true),
-            ..TextStyle::default()
+        let linked = LocatorQuery {
+            within: Some(Box::new(LocatorQuery::text("A B"))),
+            ..LocatorQuery::link("https://example.com")
         };
-        let linked = TextStyle {
-            link: Some("https://example.com".to_string()),
-            ..TextStyle::default()
+        let both = LocatorQuery {
+            within: Some(Box::new(bold.clone())),
+            ..LocatorQuery::link("https://example.com")
         };
-        let both = TextStyle {
-            bold: Some(true),
-            link: Some("https://example.com".to_string()),
-            ..TextStyle::default()
-        };
+        for query in [bold, linked, both] {
+            assert_eq!(
+                locate_query_text(&rows, &query).unwrap()[0].value.text,
+                "A B"
+            );
+        }
+    }
 
+    fn linked_grid() -> Vec<Vec<EmuCell>> {
+        let mut rows = grid(&["ABC"]);
+        for cell in &mut rows[0][..2] {
+            cell.attrs.insert(Attrs::BOLD);
+        }
+        for cell in &mut rows[0][1..] {
+            cell.hyperlink = Some(std::sync::Arc::new(super::super::cell::Hyperlink {
+                id: None,
+                uri: "test:link".into(),
+            }));
+        }
+        rows
+    }
+
+    fn texts(rows: &[Vec<EmuCell>], query: &LocatorQuery) -> Vec<String> {
+        locate_query_text(rows, query)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.value.text)
+            .collect()
+    }
+
+    #[test]
+    fn cell_intersection_and_union_regroup_matches() {
+        let rows = linked_grid();
+        let bold = LocatorQuery::style(TextStyle {
+            bold: Some(true),
+            ..Default::default()
+        });
+        let link = LocatorQuery::link("test:link");
+        assert_eq!(texts(&rows, &bold.clone().and(link.clone())), ["B"]);
+        assert_eq!(texts(&rows, &link.clone().and(bold.clone())), ["B"]);
+        assert_eq!(texts(&rows, &bold.clone().or(link.clone())), ["ABC"]);
+        assert_eq!(texts(&rows, &link.clone().or(bold)), ["ABC"]);
+        assert_eq!(texts(&rows, &link.clone().or(link)), ["BC"]);
+        let query = LocatorQuery::text("A").or(LocatorQuery::text("C"));
+        assert_eq!(texts(&rows, &query), ["A", "C"]);
         assert_eq!(
-            locate(bold),
-            1,
-            "the space cannot show bold, so it is skipped"
+            texts(
+                &grid(&["AB", "CD"]),
+                &LocatorQuery::text("ABCD").or(LocatorQuery::text("absent"))
+            ),
+            ["AB", "CD"]
         );
-        assert_eq!(locate(linked), 1, "every cell carries the link");
-        assert_eq!(locate(both), 1, "so asking for both matches too");
+    }
+
+    #[test]
+    fn containment_preserves_parents_and_differs_from_coverage() {
+        let rows = linked_grid();
+        let parent = LocatorQuery::text("ABC");
+        let link = LocatorQuery::link("test:link");
+        assert_eq!(
+            texts(&rows, &parent.clone().filter(Some(link.clone()), None)),
+            ["ABC"]
+        );
+        assert!(texts(&rows, &parent.clone().filter(None, Some(link.clone()))).is_empty());
+        let whole = LocatorQuery {
+            within: Some(Box::new(parent.clone())),
+            ..link.clone()
+        };
+        assert!(texts(&rows, &whole).is_empty());
+        assert_eq!(texts(&rows, &parent.clone().and(link)), ["BC"]);
+        assert_eq!(
+            texts(
+                &rows,
+                &parent
+                    .clone()
+                    .filter(Some(parent.clone()), Some(LocatorQuery::text("absent")))
+            ),
+            ["ABC"]
+        );
+        assert!(texts(
+            &rows,
+            &parent.clone().filter(Some(parent.clone()), Some(parent))
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn filters_do_not_search_outside_the_candidate() {
+        let rows = grid(&["AAAB"]);
+        let parent = LocatorQuery::text("AAB");
+        assert_eq!(
+            texts(
+                &rows,
+                &parent.clone().filter(
+                    Some(LocatorQuery::text(TextSelector {
+                        text: "^AA".into(),
+                        regex: true,
+                        ..TextSelector::new("")
+                    })),
+                    None
+                )
+            ),
+            ["AAB"]
+        );
+        assert!(texts(
+            &rows,
+            &LocatorQuery::text("AAA").filter(Some(LocatorQuery::text("B")), None)
+        )
+        .is_empty());
+        let after = LocatorQuery {
+            within: Some(Box::new(LocatorQuery::text("AAA"))),
+            direction: LocatorDirection::After,
+            ..LocatorQuery::text("B")
+        };
+        assert!(texts(&rows, &LocatorQuery::text("AAA").filter(Some(after), None)).is_empty());
+    }
+
+    #[test]
+    fn composition_respects_selection_and_operand_errors() {
+        let rows = grid(&["ABA"]);
+        let a = LocatorQuery::text("A");
+        let b = LocatorQuery::text("B");
+        let mut union = a.clone().or(b.clone());
+        union.occurrence = MatchOccurrence::First;
+        assert_eq!(texts(&rows, &union), ["ABA"]);
+        let first = LocatorQuery {
+            occurrence: MatchOccurrence::First,
+            ..a.clone()
+        };
+        assert_eq!(texts(&rows, &first.or(b.clone())), ["AB"]);
+        let unique = LocatorQuery {
+            occurrence: MatchOccurrence::Unique,
+            ..a
+        };
+        assert!(locate_query_text(&rows, &unique.or(b)).is_err());
+    }
+
+    #[test]
+    fn set_algebra_agrees_with_small_cell_masks() {
+        let rows = grid(&["ABCD"]);
+        let query = |mask: u8| {
+            (0..4)
+                .filter(|i| mask & (1 << i) != 0)
+                .map(|i| LocatorQuery::text(char::from(b'A' + i).to_string()))
+                .reduce(LocatorQuery::or)
+                .unwrap_or_else(|| LocatorQuery::text("absent"))
+        };
+        for a in 0..16 {
+            for b in 0..16 {
+                for (actual, expected) in [
+                    (query(a).and(query(b)), a & b),
+                    (query(a).or(query(b)), a | b),
+                ] {
+                    let found = locate_query_text(&rows, &actual).unwrap();
+                    let mask = found
+                        .iter()
+                        .flat_map(|m| &m.cells)
+                        .fold(0u8, |mask, cell| mask | (1 << cell.x));
+                    assert_eq!(mask, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn normalized_candidates_keep_their_shape_until_composed() {
+        let rows = grid(&["A  B"]);
+        let normalized = LocatorQuery::text(TextSelector {
+            whitespace: WhitespaceMode::Normalize,
+            ..TextSelector::new("A B")
+        });
+        assert_eq!(
+            texts(
+                &rows,
+                &normalized
+                    .clone()
+                    .filter(Some(LocatorQuery::text("A  B")), None)
+            ),
+            ["A B"]
+        );
+        let composed = locate_query_text(&rows, &normalized.and(LocatorQuery::link(""))).unwrap();
+        assert_eq!(composed[0].value.text, "A  B");
+        assert_eq!(composed[0].value.spans[0].end, 4);
+    }
+
+    #[test]
+    fn containment_does_not_merge_adjacent_inner_parent_regions() {
+        let rows = grid(&["XX"]);
+        let inner = LocatorQuery {
+            within: Some(Box::new(LocatorQuery::text("X"))),
+            ..LocatorQuery::text("XX")
+        };
+        assert!(texts(&rows, &LocatorQuery::text("XX").filter(Some(inner), None)).is_empty());
+    }
+
+    #[test]
+    fn composition_preserves_physical_columns_and_missing_cells() {
+        let mut rows = grid(&["xyz", "q"]);
+        rows[0][0].ch = "\u{754c}".into();
+        rows[0][1].ch = "".into();
+        rows[0][2].ch = "e\u{301}".into();
+        let query = LocatorQuery::link("").or(LocatorQuery::text("absent"));
+        let found = locate_query_text(&rows, &query).unwrap();
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].value.spans[0].end, 3);
+        assert_eq!(found[1].value.spans[0].end, 1);
+        assert_eq!(found[0].cells[2].cell.ch, "e\u{301}");
+        assert_eq!(found[0].cells[1].cell.ch, "");
     }
 }

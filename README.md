@@ -196,6 +196,9 @@ Locator options:
 
 Style options are `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, and `--blink`. Boolean styles accept `=false`.
 
+`--link URI` separately requires every matched cell, including spaces, to
+have that OSC 8 target. `--link ""` requires no link.
+
 `expect text` also accepts `--not` and `--timeout MS`. `click text` accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks N`, and `--timeout MS`. `highlight text` accepts `--timeout MS`.
 
 ### Keyboard and mouse
