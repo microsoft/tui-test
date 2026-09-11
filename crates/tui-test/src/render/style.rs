@@ -41,6 +41,7 @@ const DEFAULT_FONT_SIZE: f32 = 17.0;
 const MAX_FONT_SIZE: f32 = 1_000.0;
 const MAX_LENGTH: f32 = 10_000.0;
 const MAX_PADDING: u32 = 10_000;
+const DEFAULT_CANVAS_PADDING: u32 = 24;
 
 const CELL_W_RATIO: f32 = 10.0 / DEFAULT_FONT_SIZE;
 const CELL_H_RATIO: f32 = 21.0 / DEFAULT_FONT_SIZE;
@@ -243,6 +244,101 @@ impl ShadowStyle {
     }
 }
 
+/// The gap between the window and the edge of the image.
+///
+/// One number covers every side. A table sets them individually, and a side it
+/// does not name keeps the default, so widening only the bottom does not
+/// silently collapse the other three.
+///
+/// ```toml
+/// canvas_padding = 24
+///
+/// # or
+/// [recording.style.canvas_padding]
+/// bottom = 48
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CanvasPadding {
+    Uniform(u32),
+    Sides(PaddingSides),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PaddingSides {
+    pub top: u32,
+    pub right: u32,
+    pub bottom: u32,
+    pub left: u32,
+}
+
+impl Default for PaddingSides {
+    fn default() -> Self {
+        Self {
+            top: DEFAULT_CANVAS_PADDING,
+            right: DEFAULT_CANVAS_PADDING,
+            bottom: DEFAULT_CANVAS_PADDING,
+            left: DEFAULT_CANVAS_PADDING,
+        }
+    }
+}
+
+impl Default for CanvasPadding {
+    fn default() -> Self {
+        Self::Uniform(DEFAULT_CANVAS_PADDING)
+    }
+}
+
+impl CanvasPadding {
+    pub fn top(self) -> u32 {
+        match self {
+            Self::Uniform(value) => value,
+            Self::Sides(sides) => sides.top,
+        }
+    }
+
+    pub fn right(self) -> u32 {
+        match self {
+            Self::Uniform(value) => value,
+            Self::Sides(sides) => sides.right,
+        }
+    }
+
+    pub fn bottom(self) -> u32 {
+        match self {
+            Self::Uniform(value) => value,
+            Self::Sides(sides) => sides.bottom,
+        }
+    }
+
+    pub fn left(self) -> u32 {
+        match self {
+            Self::Uniform(value) => value,
+            Self::Sides(sides) => sides.left,
+        }
+    }
+
+    /// Both horizontal sides, and both vertical ones: what a canvas has to
+    /// grow by to hold the window.
+    pub fn horizontal(self) -> Option<u32> {
+        self.left().checked_add(self.right())
+    }
+
+    pub fn vertical(self) -> Option<u32> {
+        self.top().checked_add(self.bottom())
+    }
+
+    fn sides(self) -> [(&'static str, u32); 4] {
+        [
+            ("top", self.top()),
+            ("right", self.right()),
+            ("bottom", self.bottom()),
+            ("left", self.left()),
+        ]
+    }
+}
+
 /// Everything about how output is drawn.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -258,7 +354,7 @@ pub struct Style {
     /// own under `[colors]`.
     pub canvas_background: Rgb,
     /// The width of that area on every side of the panel.
-    pub canvas_padding: u32,
+    pub canvas_padding: CanvasPadding,
     pub window: WindowStyle,
     pub border: BorderStyle,
     pub shadow: ShadowStyle,
@@ -271,7 +367,7 @@ impl Default for Style {
             font_size: DEFAULT_FONT_SIZE,
             title_font_size: 13.0,
             canvas_background: Rgb::new(104, 103, 170),
-            canvas_padding: 24,
+            canvas_padding: CanvasPadding::default(),
             window: WindowStyle::default(),
             border: BorderStyle::default(),
             shadow: ShadowStyle::default(),
@@ -313,8 +409,12 @@ impl Style {
                 return Err(format!("{name} must not exceed {MAX_LENGTH}"));
             }
         }
-        if self.canvas_padding > MAX_PADDING {
-            return Err(format!("canvas_padding must not exceed {MAX_PADDING}"));
+        for (side, value) in self.canvas_padding.sides() {
+            if value > MAX_PADDING {
+                return Err(format!(
+                    "canvas_padding {side} must not exceed {MAX_PADDING}"
+                ));
+            }
         }
         // A positive font size can still be too small to draw with: a
         // subnormal one leaves cells that round to nothing.
@@ -392,7 +492,7 @@ mod tests {
         assert_eq!(style.baseline(), (21.0 - 17.0) / 2.0 + 17.0 * 0.78);
         assert_eq!(style.header_height(), 34.0);
         assert_eq!(style.divider_height(), 1.0);
-        assert_eq!(style.canvas_padding, 24);
+        assert_eq!(style.canvas_padding, CanvasPadding::Uniform(24));
         assert_eq!(style.border.radius, 8.0);
         assert_eq!(style.border.width, 0.0, "no border was drawn before");
         assert_eq!(style.shadow_layers().len(), 4);

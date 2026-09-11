@@ -456,16 +456,16 @@ mod tests {
                     );
                     let pixel = decode_first_png_pixel(
                         &path,
-                        (Style::default().canvas_padding + 20) * scale,
-                        (Style::default().canvas_padding + 48) * scale,
+                        (Style::default().canvas_padding.left() + 20) * scale,
+                        (Style::default().canvas_padding.top() + 48) * scale,
                     );
                     assert_eq!(&pixel[..3], &[200, 10, 20]);
                 }
                 RecordingFormat::Gif => {
                     let decoded = decode_gif(
                         &path,
-                        (Style::default().canvas_padding + 20) * scale,
-                        (Style::default().canvas_padding + 48) * scale,
+                        (Style::default().canvas_padding.left() + 20) * scale,
+                        (Style::default().canvas_padding.top() + 48) * scale,
                     );
                     assert_eq!(decoded.frames, 2);
                     assert_eq!(decoded.dimensions, renderer.pixel_size());

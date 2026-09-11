@@ -449,7 +449,7 @@ spread = 22
 
 <img alt="tui-test drawn at poster size with a deep shadow" src="static/style-poster.svg" width="460">
 
-Each option on its own, one change from the default:
+Each option on its own, one change from the default. The gap around the window is one number for every side, or a table naming the sides that differ:
 
 <img alt="every tui-test style option shown one change at a time" src="static/style-options.png" width="860">
 

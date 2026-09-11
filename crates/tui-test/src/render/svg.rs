@@ -460,9 +460,10 @@ pub(crate) fn render_svg(
     let panel_width = MARGIN_X * 2.0 + cols as f32 * cell_w;
     let panel_height =
         header_h + CONTENT_PADDING_TOP + MARGIN_BOTTOM + rows.len().max(1) as f32 * cell_h;
-    let padding = canvas_padding as f32;
-    let width = panel_width + padding * 2.0;
-    let height = panel_height + padding * 2.0;
+    let pad_left = canvas_padding.left() as f32;
+    let pad_top = canvas_padding.top() as f32;
+    let width = panel_width + pad_left + canvas_padding.right() as f32;
+    let height = panel_height + pad_top + canvas_padding.bottom() as f32;
     let output_width = svg_dimension(f64::from(width) * zoom);
     let output_height = svg_dimension(f64::from(height) * zoom);
 
@@ -478,8 +479,8 @@ pub(crate) fn render_svg(
         hex(canvas_background)
     );
     for (spread, offset_y, alpha) in style.shadow_layers() {
-        let shadow_x = padding - spread;
-        let shadow_y = padding - spread + offset_y;
+        let shadow_x = pad_left - spread;
+        let shadow_y = pad_top - spread + offset_y;
         let shadow_width = panel_width + spread * 2.0;
         let shadow_height = panel_height + spread * 2.0;
         let shadow_radius = radius + spread;
@@ -492,7 +493,7 @@ pub(crate) fn render_svg(
     }
     let _ = write!(
         out,
-        r#"<g transform="translate({padding:.0} {padding:.0})"><rect width="{panel_width:.0}" height="{panel_height:.0}" rx="{radius:.0}" fill="{}"/>"#,
+        r#"<g transform="translate({pad_left:.0} {pad_top:.0})"><rect width="{panel_width:.0}" height="{panel_height:.0}" rx="{radius:.0}" fill="{}"/>"#,
         hex(colors.resolve(None, false))
     );
     // The whole title bar is one decision. Each piece used to be drawn
@@ -1249,7 +1250,7 @@ mod tests {
         assert!(!plain.contains("#010203"));
 
         let padded = draw(&Style {
-            canvas_padding: 40,
+            canvas_padding: crate::render::style::CanvasPadding::Uniform(40),
             ..Style::default()
         });
         assert!(
@@ -1513,6 +1514,65 @@ mod tests {
             svg.matches("font-family=").count(),
             2,
             "the plain run inherits the root rather than repeating it: {svg}"
+        );
+    }
+
+    /// One number used to set every gap, so a wider bottom meant a wider
+    /// everything.
+    #[test]
+    fn each_gap_around_the_window_can_differ() {
+        use crate::render::style::{CanvasPadding, PaddingSides};
+        let rows = vec![vec![cell("x", None, None); 4]];
+        let style = Style {
+            canvas_padding: CanvasPadding::Sides(PaddingSides {
+                top: 10,
+                right: 20,
+                bottom: 60,
+                left: 30,
+            }),
+            ..Style::default()
+        };
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0);
+
+        assert!(
+            svg.contains("translate(30 10)"),
+            "the window sits at the left and top gaps: {svg}"
+        );
+
+        // Measured against the default rather than recomputed: the default is
+        // 24 on every side, so each axis differs by the gaps it actually got.
+        let box_of = |svg: &str| -> (f32, f32) {
+            let start = svg.find("viewBox=\"0 0 ").expect("a viewBox") + 13;
+            let rest = &svg[start..];
+            let end = rest.find('"').expect("a closing quote");
+            let mut parts = rest[..end].split(' ');
+            (
+                parts.next().unwrap().parse().unwrap(),
+                parts.next().unwrap().parse().unwrap(),
+            )
+        };
+        let plain = render_svg(&rows, 4, &colors(), None, Some("t"), &Style::default(), 1.0);
+        let (plain_w, plain_h) = box_of(&plain);
+        let (wide_w, wide_h) = box_of(&svg);
+        assert_eq!(
+            (wide_w - plain_w, wide_h - plain_h),
+            ((30.0 + 20.0) - 48.0, (10.0 + 60.0) - 48.0),
+            "each axis grows by its own two gaps, not by one of them doubled"
+        );
+
+        // A table naming one side leaves the rest at the default rather than
+        // collapsing them to zero.
+        let one = Style {
+            canvas_padding: CanvasPadding::Sides(PaddingSides {
+                bottom: 60,
+                ..PaddingSides::default()
+            }),
+            ..Style::default()
+        };
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &one, 1.0);
+        assert!(
+            svg.contains("translate(24 24)"),
+            "the sides it did not name keep the default: {svg}"
         );
     }
 }

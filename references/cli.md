@@ -137,7 +137,7 @@ optional; the defaults are shown.
 font_size = 17           # cell width and height follow it
 title_font_size = 13
 canvas_background = "#6867aa"   # the area around the window
-canvas_padding = 24             # its width on every side
+canvas_padding = 24             # the gap around the window, on every side
 
 [recording.style.font]
 # A CSS font stack, passed straight into the SVG and read left to right when
@@ -167,6 +167,15 @@ enabled = true
 color = "#080812"
 offset = 5
 spread = 7
+```
+
+Each gap around the window can differ. A table sets them individually, and a
+side it does not name keeps the default, so widening the bottom alone does not
+collapse the other three:
+
+```toml
+[recording.style.canvas_padding]
+bottom = 48
 ```
 
 The terminal's own colors are separate, under `[profiles.<name>.colors]`: a

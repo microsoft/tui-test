@@ -784,7 +784,7 @@ mod tests {
             Rgb::new(255, 0, 0),
             "a key the profile does not name keeps the file's value"
         );
-        assert_eq!(docs.canvas_padding, 12);
+        assert_eq!(docs.canvas_padding.top(), 12);
         assert_eq!(
             docs.window.foreground,
             Rgb::new(0, 0, 255),
@@ -854,7 +854,7 @@ mod tests {
         assert_eq!(style.font_size, 17.0);
         assert_eq!(style.title_font_size, 13.0);
         assert_eq!(style.canvas_background, Rgb::new(0x68, 0x67, 0xaa));
-        assert_eq!(style.canvas_padding, 24);
+        assert_eq!(style.canvas_padding.top(), 24);
         assert_eq!(
             style.font.family,
             "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,'DejaVu Sans Mono',monospace"
@@ -893,7 +893,7 @@ mod tests {
         assert_eq!(docs.recording.directory, Some(PathBuf::from("./artifacts")));
         assert_eq!(docs.style.font_size, 24.0);
         assert_eq!(docs.style.canvas_background, Rgb::new(0x10, 0x10, 0x14));
-        assert_eq!(docs.style.canvas_padding, 32);
+        assert_eq!(docs.style.canvas_padding.top(), 32);
     }
 
     #[test]

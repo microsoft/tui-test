@@ -3,7 +3,7 @@ use super::font::{FontSystem, GlyphKey};
 use super::{FrameRenderer, GridRenderer, RgbaFrame};
 use crate::profile::Profile;
 use crate::record::frames::Frame;
-use crate::render::style::Style;
+use crate::render::style::{CanvasPadding, Style};
 use crate::render::svg::{RenderColors, RenderState};
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::cell::{Attrs, Color, EmuCell, CONTINUATION};
@@ -379,8 +379,8 @@ fn frame_palette_and_cursor_state_change_the_pixels() {
     assert_ne!(first_pixels, second_pixels);
 
     let width = renderer.pixel_size().0 as usize;
-    let x = (Style::default().canvas_padding + super::super::svg::MARGIN_X as u32) as usize;
-    let y = (Style::default().canvas_padding
+    let x = (Style::default().canvas_padding.left() + super::super::svg::MARGIN_X as u32) as usize;
+    let y = (Style::default().canvas_padding.top()
         + Style::default().header_height() as u32
         + super::super::svg::CONTENT_PADDING_TOP as u32) as usize;
     let cursor = (y * width + x) * 4;
@@ -448,7 +448,7 @@ fn grid_y(origin_y: f32, row: usize, scale: f32) -> u32 {
 fn an_enormous_canvas_is_refused_before_it_is_allocated() {
     let huge = Style {
         font_size: 999.0,
-        canvas_padding: 10_000,
+        canvas_padding: CanvasPadding::Uniform(10_000),
         ..Style::default()
     };
     let Err(error) = GridRenderer::with_zoom(500, 200, 1.0, huge) else {
@@ -497,7 +497,7 @@ fn both_renderers_agree_on_size_for_the_same_style() {
         (
             "padded",
             Style {
-                canvas_padding: 40,
+                canvas_padding: CanvasPadding::Uniform(40),
                 ..Style::default()
             },
         ),
@@ -549,7 +549,7 @@ fn both_renderers_agree_on_size_for_the_same_style() {
 fn the_raster_canvas_is_drawn_from_its_style() {
     let style = Style {
         font_size: 34.0,
-        canvas_padding: 40,
+        canvas_padding: CanvasPadding::Uniform(40),
         canvas_background: crate::profile::Rgb::new(1, 2, 3),
         ..Style::default()
     };
@@ -560,8 +560,8 @@ fn the_raster_canvas_is_drawn_from_its_style() {
     assert_eq!(
         renderer.dimensions(),
         (
-            panel_width + 2 * style.canvas_padding,
-            panel_height + 2 * style.canvas_padding
+            panel_width + style.canvas_padding.horizontal().unwrap(),
+            panel_height + style.canvas_padding.vertical().unwrap()
         ),
         "the canvas is the styled panel plus the styled padding on every side"
     );
@@ -593,7 +593,7 @@ fn a_border_is_stroked_onto_the_raster_canvas() {
     };
     let style = Style {
         border,
-        canvas_padding: 10,
+        canvas_padding: CanvasPadding::Uniform(10),
         ..Style::default()
     };
     let mut renderer = GridRenderer::with_zoom(6, 2, 1.0, style.clone()).unwrap();
@@ -616,7 +616,7 @@ fn a_border_is_stroked_onto_the_raster_canvas() {
         2,
         1.0,
         Style {
-            canvas_padding: 10,
+            canvas_padding: CanvasPadding::Uniform(10),
             ..Style::default()
         },
     )
@@ -628,5 +628,56 @@ fn a_border_is_stroked_onto_the_raster_canvas() {
         pixel_at(&unbordered, middle_of_stroke, unbordered.dimensions().1 / 2),
         color_to_pixel(Color::Rgb(255, 0, 0)),
         "and asking for no border leaves that edge alone"
+    );
+}
+
+/// The raster path centres the window on its canvas, which is the same thing
+/// as "at the gap" only while every gap is equal.
+#[test]
+fn the_raster_window_sits_at_its_own_gaps() {
+    use crate::render::style::PaddingSides;
+
+    let style = Style {
+        canvas_padding: CanvasPadding::Sides(PaddingSides {
+            top: 10,
+            right: 20,
+            bottom: 60,
+            left: 30,
+        }),
+        canvas_background: crate::profile::Rgb::new(1, 2, 3),
+        // Off, so a tinted pixel means the panel rather than its shadow.
+        shadow: crate::render::style::ShadowStyle {
+            enabled: false,
+            ..crate::render::style::ShadowStyle::default()
+        },
+        ..Style::default()
+    };
+    let mut renderer = GridRenderer::with_zoom(6, 2, 1.0, style.clone()).unwrap();
+    let (panel_width, panel_height) = crate::render::svg::pixel_size(6, 2, &style);
+
+    assert_eq!(
+        renderer.dimensions(),
+        (panel_width + 30 + 20, panel_height + 10 + 60),
+        "each axis grows by its own two gaps"
+    );
+
+    let image = renderer
+        .render(&frame(vec![vec![EmuCell::blank(); 6]; 2]))
+        .unwrap();
+    let canvas = color_to_pixel(Color::Rgb(1, 2, 3));
+
+    // One pixel inside the left gap is canvas; one pixel past it is the panel.
+    assert_eq!(pixel_at(&image, 29, panel_height / 2 + 10), canvas);
+    assert_ne!(
+        pixel_at(&image, 31, panel_height / 2 + 10),
+        canvas,
+        "the window starts at the left gap, not at the midpoint of the canvas"
+    );
+    // The bottom gap is wider than the top, so the row below the panel is
+    // still canvas while the matching row above it is too.
+    assert_eq!(pixel_at(&image, panel_width / 2 + 30, 9), canvas);
+    assert_eq!(
+        pixel_at(&image, panel_width / 2 + 30, image.dimensions().1 - 2),
+        canvas
     );
 }

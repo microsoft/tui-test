@@ -87,15 +87,19 @@ impl GridRenderer {
         // Before pixel_size, which is where an unbounded font size overflows.
         style.validate().map_err(|error| anyhow::anyhow!(error))?;
         let (base_width, base_height) = svg::pixel_size(cols, rows, &style);
-        let padding = style
+        let horizontal = style
             .canvas_padding
-            .checked_mul(2)
+            .horizontal()
+            .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
+        let vertical = style
+            .canvas_padding
+            .vertical()
             .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
         let width = base_width
-            .checked_add(padding)
+            .checked_add(horizontal)
             .ok_or_else(|| anyhow::anyhow!("recording width must fit in u32"))?;
         let height = base_height
-            .checked_add(padding)
+            .checked_add(vertical)
             .ok_or_else(|| anyhow::anyhow!("recording height must fit in u32"))?;
         let width = scaled_dimension(width, zoom, "width")?;
         let height = scaled_dimension(height, zoom, "height")?;
@@ -145,8 +149,18 @@ impl FrameRenderer for GridRenderer {
         let (base_width, base_height) = svg::pixel_size(cols, rows, style);
         let panel_width = scaled_dimension(base_width, f64::from(self.scale), "frame width")?;
         let panel_height = scaled_dimension(base_height, f64::from(self.scale), "frame height")?;
-        let origin_x = (self.width - panel_width) as f32 / 2.0;
-        let origin_y = (self.height - panel_height) as f32 / 2.0;
+        // The window sits at its own left and top gap. A frame smaller than the
+        // canvas -- the terminal shrank mid-recording -- is still centred, but
+        // within the area the gaps leave rather than the whole image. With
+        // equal gaps this is the midpoint it always was.
+        let pad_left = style.canvas_padding.left() as f32 * scale;
+        let pad_top = style.canvas_padding.top() as f32 * scale;
+        let pad_right = style.canvas_padding.right() as f32 * scale;
+        let pad_bottom = style.canvas_padding.bottom() as f32 * scale;
+        let content_width = (self.width as f32 - pad_left - pad_right).max(0.0);
+        let content_height = (self.height as f32 - pad_top - pad_bottom).max(0.0);
+        let origin_x = pad_left + (content_width - panel_width as f32).max(0.0) / 2.0;
+        let origin_y = pad_top + (content_height - panel_height as f32).max(0.0) / 2.0;
         self.pixmap.fill(tiny_skia::Color::from_rgba8(
             style.canvas_background.r,
             style.canvas_background.g,
