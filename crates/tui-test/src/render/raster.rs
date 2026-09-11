@@ -88,12 +88,10 @@ impl GridRenderer {
         style.validate().map_err(|error| anyhow::anyhow!(error))?;
         let (base_width, base_height) = svg::pixel_size(cols, rows, &style);
         let horizontal = style
-            .canvas_padding
-            .horizontal()
+            .canvas_horizontal()
             .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
         let vertical = style
-            .canvas_padding
-            .vertical()
+            .canvas_vertical()
             .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
         let width = base_width
             .checked_add(horizontal)
@@ -153,10 +151,10 @@ impl FrameRenderer for GridRenderer {
         // canvas -- the terminal shrank mid-recording -- is still centred, but
         // within the area the gaps leave rather than the whole image. With
         // equal gaps this is the midpoint it always was.
-        let pad_left = style.canvas_padding.left() as f32 * scale;
-        let pad_top = style.canvas_padding.top() as f32 * scale;
-        let pad_right = style.canvas_padding.right() as f32 * scale;
-        let pad_bottom = style.canvas_padding.bottom() as f32 * scale;
+        let pad_left = style.canvas_left() as f32 * scale;
+        let pad_top = style.canvas_top() as f32 * scale;
+        let pad_right = style.canvas_right() as f32 * scale;
+        let pad_bottom = style.canvas_bottom() as f32 * scale;
         let content_width = (self.width as f32 - pad_left - pad_right).max(0.0);
         let content_height = (self.height as f32 - pad_top - pad_bottom).max(0.0);
         let origin_x = pad_left + (content_width - panel_width as f32).max(0.0) / 2.0;
@@ -209,14 +207,14 @@ impl FrameRenderer for GridRenderer {
             );
             let lights = style.window.traffic_lights();
             for (index, color) in lights.iter().copied().enumerate() {
-                let cx = origin_x + (svg::MARGIN_X + 5.0 + index as f32 * 20.0) * scale;
+                let cx = origin_x + (style.content_left() + 5.0 + index as f32 * 20.0) * scale;
                 let cy = origin_y + style.header_height() / 2.0 * scale;
                 fill_circle(&mut self.pixmap, cx, cy, svg::DOT_R * scale, color);
             }
             if !lights.is_empty() {
                 fill_circle(
                     &mut self.pixmap,
-                    origin_x + (svg::MARGIN_X + 5.0) * scale,
+                    origin_x + (style.content_left() + 5.0) * scale,
                     origin_y + style.header_height() / 2.0 * scale,
                     svg::RED_DOT_R * scale,
                     svg::RED_DOT_COLOR,
@@ -280,17 +278,17 @@ impl FrameRenderer for GridRenderer {
                     1
                 };
                 let cell_origin_x =
-                    origin_x + (svg::MARGIN_X + x as f32 * style.cell_width()) * scale;
+                    origin_x + (style.content_left() + x as f32 * style.cell_width()) * scale;
                 let cell_origin_y = origin_y
                     + (style.header_height()
-                        + svg::CONTENT_PADDING_TOP
+                        + style.content_top()
                         + y as f32 * style.cell_height())
                         * scale;
                 let cell_width = style.cell_width() * span as f32 * scale;
                 let cell_height = style.cell_height() * scale;
                 let baseline = origin_y
                     + (style.header_height()
-                        + svg::CONTENT_PADDING_TOP
+                        + style.content_top()
                         + y as f32 * style.cell_height()
                         + style.baseline())
                         * scale;
@@ -404,13 +402,12 @@ impl FrameRenderer for GridRenderer {
 }
 
 fn grid_x(origin_x: f32, column: usize, scale: f32, style: &Style) -> u32 {
-    (origin_x + (svg::MARGIN_X + column as f32 * style.cell_width()) * scale).round() as u32
+    (origin_x + (style.content_left() + column as f32 * style.cell_width()) * scale).round() as u32
 }
 
 fn grid_y(origin_y: f32, row: usize, scale: f32, style: &Style) -> u32 {
     (origin_y
-        + (style.header_height() + svg::CONTENT_PADDING_TOP + row as f32 * style.cell_height())
-            * scale)
+        + (style.header_height() + style.content_top() + row as f32 * style.cell_height()) * scale)
         .round() as u32
 }
 
@@ -442,10 +439,10 @@ fn draw_cursor(
         1
     };
     let column = usize::from(cx);
-    let origin_x = panel_origin_x + (svg::MARGIN_X + f32::from(cx) * style.cell_width()) * scale;
+    let origin_x =
+        panel_origin_x + (style.content_left() + f32::from(cx) * style.cell_width()) * scale;
     let origin_y = panel_origin_y
-        + (style.header_height() + svg::CONTENT_PADDING_TOP + cy as f32 * style.cell_height())
-            * scale;
+        + (style.header_height() + style.content_top() + cy as f32 * style.cell_height()) * scale;
     let cell_width = style.cell_width() * span as f32 * scale;
     let cell_height = style.cell_height() * scale;
     let left = grid_x(panel_origin_x, column, scale, style);
@@ -495,7 +492,7 @@ fn draw_cursor(
     }
     let baseline = panel_origin_y
         + (style.header_height()
-            + svg::CONTENT_PADDING_TOP
+            + style.content_top()
             + cy as f32 * style.cell_height()
             + style.baseline())
             * scale;

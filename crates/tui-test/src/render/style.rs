@@ -41,7 +41,6 @@ const DEFAULT_FONT_SIZE: f32 = 17.0;
 const MAX_FONT_SIZE: f32 = 1_000.0;
 const MAX_LENGTH: f32 = 10_000.0;
 const MAX_PADDING: u32 = 10_000;
-const DEFAULT_CANVAS_PADDING: u32 = 24;
 
 const CELL_W_RATIO: f32 = 10.0 / DEFAULT_FONT_SIZE;
 const CELL_H_RATIO: f32 = 21.0 / DEFAULT_FONT_SIZE;
@@ -244,11 +243,11 @@ impl ShadowStyle {
     }
 }
 
-/// The gap between the window and the edge of the image.
+/// A gap on four sides.
 ///
 /// One number covers every side. A table sets them individually, and a side it
-/// does not name keeps the default, so widening only the bottom does not
-/// silently collapse the other three.
+/// does not name keeps that gap's own default, which is why the sides are
+/// optional: the canvas and the window's inside do not default alike.
 ///
 /// ```toml
 /// canvas_padding = 24
@@ -259,85 +258,64 @@ impl ShadowStyle {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum CanvasPadding {
+pub enum Padding {
     Uniform(u32),
     Sides(PaddingSides),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PaddingSides {
-    pub top: u32,
-    pub right: u32,
-    pub bottom: u32,
-    pub left: u32,
+    pub top: Option<u32>,
+    pub right: Option<u32>,
+    pub bottom: Option<u32>,
+    pub left: Option<u32>,
 }
 
-impl Default for PaddingSides {
-    fn default() -> Self {
-        Self {
-            top: DEFAULT_CANVAS_PADDING,
-            right: DEFAULT_CANVAS_PADDING,
-            bottom: DEFAULT_CANVAS_PADDING,
-            left: DEFAULT_CANVAS_PADDING,
-        }
-    }
-}
-
-impl Default for CanvasPadding {
-    fn default() -> Self {
-        Self::Uniform(DEFAULT_CANVAS_PADDING)
-    }
-}
-
-impl CanvasPadding {
-    pub fn top(self) -> u32 {
+impl Padding {
+    fn side(self, pick: fn(PaddingSides) -> Option<u32>, fallback: u32) -> u32 {
         match self {
             Self::Uniform(value) => value,
-            Self::Sides(sides) => sides.top,
+            Self::Sides(sides) => pick(sides).unwrap_or(fallback),
         }
     }
 
-    pub fn right(self) -> u32 {
-        match self {
-            Self::Uniform(value) => value,
-            Self::Sides(sides) => sides.right,
-        }
-    }
-
-    pub fn bottom(self) -> u32 {
-        match self {
-            Self::Uniform(value) => value,
-            Self::Sides(sides) => sides.bottom,
-        }
-    }
-
-    pub fn left(self) -> u32 {
-        match self {
-            Self::Uniform(value) => value,
-            Self::Sides(sides) => sides.left,
-        }
-    }
-
-    /// Both horizontal sides, and both vertical ones: what a canvas has to
-    /// grow by to hold the window.
-    pub fn horizontal(self) -> Option<u32> {
-        self.left().checked_add(self.right())
-    }
-
-    pub fn vertical(self) -> Option<u32> {
-        self.top().checked_add(self.bottom())
-    }
-
-    fn sides(self) -> [(&'static str, u32); 4] {
+    fn each(self, fallback: Sides) -> [(&'static str, u32); 4] {
         [
-            ("top", self.top()),
-            ("right", self.right()),
-            ("bottom", self.bottom()),
-            ("left", self.left()),
+            ("top", self.side(|s| s.top, fallback.top)),
+            ("right", self.side(|s| s.right, fallback.right)),
+            ("bottom", self.side(|s| s.bottom, fallback.bottom)),
+            ("left", self.side(|s| s.left, fallback.left)),
         ]
     }
 }
+
+/// The default gap on each side, for a `Padding` that names none.
+#[derive(Debug, Clone, Copy)]
+struct Sides {
+    top: u32,
+    right: u32,
+    bottom: u32,
+    left: u32,
+}
+
+/// Around the window.
+const CANVAS_SIDES: Sides = Sides {
+    top: 24,
+    right: 24,
+    bottom: 24,
+    left: 24,
+};
+
+/// Between the window and the grid inside it. Wider at the sides than at the
+/// top and bottom because a character sits tight in its cell horizontally and
+/// the rows already carry their own leading.
+const CONTENT_SIDES: Sides = Sides {
+    top: 8,
+    right: 15,
+    bottom: 14,
+    left: 15,
+};
 
 /// Everything about how output is drawn.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -354,7 +332,9 @@ pub struct Style {
     /// own under `[colors]`.
     pub canvas_background: Rgb,
     /// The width of that area on every side of the panel.
-    pub canvas_padding: CanvasPadding,
+    pub canvas_padding: Padding,
+    /// The gap between the window and the grid drawn inside it.
+    pub content_padding: Padding,
     pub window: WindowStyle,
     pub border: BorderStyle,
     pub shadow: ShadowStyle,
@@ -367,7 +347,8 @@ impl Default for Style {
             font_size: DEFAULT_FONT_SIZE,
             title_font_size: 13.0,
             canvas_background: Rgb::new(104, 103, 170),
-            canvas_padding: CanvasPadding::default(),
+            canvas_padding: Padding::Uniform(CANVAS_SIDES.top),
+            content_padding: Padding::Sides(PaddingSides::default()),
             window: WindowStyle::default(),
             border: BorderStyle::default(),
             shadow: ShadowStyle::default(),
@@ -409,11 +390,14 @@ impl Style {
                 return Err(format!("{name} must not exceed {MAX_LENGTH}"));
             }
         }
-        for (side, value) in self.canvas_padding.sides() {
-            if value > MAX_PADDING {
-                return Err(format!(
-                    "canvas_padding {side} must not exceed {MAX_PADDING}"
-                ));
+        for (name, padding, fallback) in [
+            ("canvas_padding", self.canvas_padding, CANVAS_SIDES),
+            ("content_padding", self.content_padding, CONTENT_SIDES),
+        ] {
+            for (side, value) in padding.each(fallback) {
+                if value > MAX_PADDING {
+                    return Err(format!("{name} {side} must not exceed {MAX_PADDING}"));
+                }
             }
         }
         // A positive font size can still be too small to draw with: a
@@ -447,6 +431,49 @@ impl Style {
     /// Where a glyph sits inside its cell, measured from the cell's top.
     pub fn baseline(&self) -> f32 {
         (self.cell_height() - self.font_size) / 2.0 + self.font_size * 0.78
+    }
+
+    /// The gap around the window, resolved per side.
+    pub fn canvas_top(&self) -> u32 {
+        self.canvas_padding.side(|s| s.top, CANVAS_SIDES.top)
+    }
+
+    pub fn canvas_right(&self) -> u32 {
+        self.canvas_padding.side(|s| s.right, CANVAS_SIDES.right)
+    }
+
+    pub fn canvas_bottom(&self) -> u32 {
+        self.canvas_padding.side(|s| s.bottom, CANVAS_SIDES.bottom)
+    }
+
+    pub fn canvas_left(&self) -> u32 {
+        self.canvas_padding.side(|s| s.left, CANVAS_SIDES.left)
+    }
+
+    /// What the canvas grows by to hold the window, or `None` past `u32`.
+    pub fn canvas_horizontal(&self) -> Option<u32> {
+        self.canvas_left().checked_add(self.canvas_right())
+    }
+
+    pub fn canvas_vertical(&self) -> Option<u32> {
+        self.canvas_top().checked_add(self.canvas_bottom())
+    }
+
+    pub fn content_top(&self) -> f32 {
+        self.content_padding.side(|s| s.top, CONTENT_SIDES.top) as f32
+    }
+
+    pub fn content_right(&self) -> f32 {
+        self.content_padding.side(|s| s.right, CONTENT_SIDES.right) as f32
+    }
+
+    pub fn content_bottom(&self) -> f32 {
+        self.content_padding
+            .side(|s| s.bottom, CONTENT_SIDES.bottom) as f32
+    }
+
+    pub fn content_left(&self) -> f32 {
+        self.content_padding.side(|s| s.left, CONTENT_SIDES.left) as f32
     }
 
     /// The height the title bar occupies, zero when it is not drawn.
@@ -492,7 +519,7 @@ mod tests {
         assert_eq!(style.baseline(), (21.0 - 17.0) / 2.0 + 17.0 * 0.78);
         assert_eq!(style.header_height(), 34.0);
         assert_eq!(style.divider_height(), 1.0);
-        assert_eq!(style.canvas_padding, CanvasPadding::Uniform(24));
+        assert_eq!(style.canvas_top(), 24);
         assert_eq!(style.border.radius, 8.0);
         assert_eq!(style.border.width, 0.0, "no border was drawn before");
         assert_eq!(style.shadow_layers().len(), 4);

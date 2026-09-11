@@ -16,9 +16,6 @@ use crate::render::style::Style;
 use crate::terminal::cell::{truncate_to_columns, Attrs, Color, EmuCell, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator};
 
-pub(crate) const MARGIN_X: f32 = 15.0;
-pub(crate) const CONTENT_PADDING_TOP: f32 = 4.0;
-const MARGIN_BOTTOM: f32 = 14.0;
 pub(crate) const DOT_R: f32 = 7.0;
 pub(crate) const RED_DOT_R: f32 = 2.5;
 pub(crate) const RED_DOT_COLOR: Rgb = Rgb::new(105, 17, 10);
@@ -26,7 +23,10 @@ pub(crate) const RED_DOT_COLOR: Rgb = Rgb::new(105, 17, 10);
 /// with the terminal content itself.
 /// Where the rightmost traffic light ends. A centred title is kept clear of
 /// this on both sides, so it can never be drawn over the controls.
-const DOTS_RIGHT: f32 = MARGIN_X + 5.0 + 2.0 * 20.0 + DOT_R;
+/// How far the traffic lights reach from the panel edge.
+fn dots_right(style: &Style) -> f32 {
+    style.content_left() + 5.0 + 2.0 * 20.0 + DOT_R
+}
 
 fn hex(c: Rgb) -> String {
     c.to_hex()
@@ -235,8 +235,8 @@ fn write_text_run(
     let header_h = style.header_height();
     let font_baseline = style.baseline();
     let fg = hex(paint.fg);
-    let tx = MARGIN_X + start as f32 * cell_w;
-    let baseline = header_h + CONTENT_PADDING_TOP + y as f32 * cell_h + font_baseline;
+    let tx = style.content_left() + start as f32 * cell_w;
+    let baseline = header_h + style.content_top() + y as f32 * cell_h + font_baseline;
     let width = (end - start) as f32 * cell_w;
     let original_text = run_text(row, start, end);
     let (text, run_x_adjust) = nerd_font.prepare_run(&original_text, width, cell_w);
@@ -280,8 +280,8 @@ fn write_text_run(
                 out,
                 c,
                 (
-                    MARGIN_X + i as f32 * cell_w,
-                    header_h + CONTENT_PADDING_TOP + y as f32 * cell_h,
+                    style.content_left() + i as f32 * cell_w,
+                    header_h + style.content_top() + y as f32 * cell_h,
                 ),
                 (cell_w, cell_h),
                 run_x_adjust,
@@ -328,7 +328,7 @@ pub(crate) fn visible_title(
     style: &Style,
 ) -> Option<String> {
     const GAP: f32 = 8.0;
-    let available = width - 2.0 * (DOTS_RIGHT + GAP);
+    let available = width - 2.0 * (dots_right(style) + GAP);
     let fits = (available / title_advance(style)).floor().max(0.0) as usize;
     if fits == 0 {
         return None;
@@ -395,8 +395,8 @@ fn write_cursor(
         1.0
     };
     let w = span * cell_w;
-    let x = MARGIN_X + cx as f32 * cell_w;
-    let y = header_h + CONTENT_PADDING_TOP + cy as f32 * cell_h;
+    let x = style.content_left() + cx as f32 * cell_w;
+    let y = header_h + style.content_top() + cy as f32 * cell_h;
     let fill = hex(colors.color(ColorSlot::Cursor));
 
     let (rx, ry, rw, rh) = match colors.cursor_shape() {
@@ -447,7 +447,6 @@ pub(crate) fn render_svg(
     let header_h = style.header_height();
     let divider_h = style.divider_height();
     let radius = style.border.radius;
-    let canvas_padding = style.canvas_padding;
     let canvas_background = style.canvas_background;
     let shadow_color = style.shadow.color;
     let title_bg = style.window.background;
@@ -455,15 +454,15 @@ pub(crate) fn render_svg(
     let font_family = escape_attribute(&style.font.family);
     let nerd_font = NerdFont::new(rows, font_size);
     let cols = cols as usize;
-    let x0 = MARGIN_X;
-    let y0 = header_h + CONTENT_PADDING_TOP;
-    let panel_width = MARGIN_X * 2.0 + cols as f32 * cell_w;
+    let x0 = style.content_left();
+    let y0 = header_h + style.content_top();
+    let panel_width = style.content_left() + style.content_right() + cols as f32 * cell_w;
     let panel_height =
-        header_h + CONTENT_PADDING_TOP + MARGIN_BOTTOM + rows.len().max(1) as f32 * cell_h;
-    let pad_left = canvas_padding.left() as f32;
-    let pad_top = canvas_padding.top() as f32;
-    let width = panel_width + pad_left + canvas_padding.right() as f32;
-    let height = panel_height + pad_top + canvas_padding.bottom() as f32;
+        header_h + style.content_top() + style.content_bottom() + rows.len().max(1) as f32 * cell_h;
+    let pad_left = style.canvas_left() as f32;
+    let pad_top = style.canvas_top() as f32;
+    let width = panel_width + pad_left + style.canvas_right() as f32;
+    let height = panel_height + pad_top + style.canvas_bottom() as f32;
     let output_width = svg_dimension(f64::from(width) * zoom);
     let output_height = svg_dimension(f64::from(height) * zoom);
 
@@ -515,7 +514,7 @@ pub(crate) fn render_svg(
         );
         let lights = style.window.traffic_lights();
         for (i, dot) in lights.iter().copied().enumerate() {
-            let cx = MARGIN_X + 5.0 + i as f32 * 20.0;
+            let cx = style.content_left() + 5.0 + i as f32 * 20.0;
             let _ = write!(
                 out,
                 r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{DOT_R:.1}" fill="{}"/>"#,
@@ -530,7 +529,7 @@ pub(crate) fn render_svg(
                 out,
                 r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{RED_DOT_R:.1}" fill="{}"/>"#,
                 hex(RED_DOT_COLOR),
-                cx = MARGIN_X + 5.0,
+                cx = style.content_left() + 5.0,
                 cy = header_h / 2.0,
             );
         }
@@ -608,9 +607,11 @@ pub(crate) fn pixel_size(cols: u16, rows: usize, style: &Style) -> (u32, u32) {
     let cell_w = style.cell_width();
     let cell_h = style.cell_height();
     let header_h = style.header_height();
-    let width = (MARGIN_X * 2.0 + f32::from(cols) * cell_w).ceil() as u32;
-    let height = (header_h + CONTENT_PADDING_TOP + MARGIN_BOTTOM + rows.max(1) as f32 * cell_h)
-        .ceil() as u32;
+    let width =
+        (style.content_left() + style.content_right() + f32::from(cols) * cell_w).ceil() as u32;
+    let height =
+        (header_h + style.content_top() + style.content_bottom() + rows.max(1) as f32 * cell_h)
+            .ceil() as u32;
     (width + width % 2, height + height % 2)
 }
 
@@ -853,7 +854,7 @@ mod tests {
             &Style::default(),
             1.0,
         );
-        let expected = header_h() + CONTENT_PADDING_TOP + row as f32 * cell_h();
+        let expected = header_h() + Style::default().content_top() + row as f32 * cell_h();
         assert!(
             svg.contains(&format!(r#"<rect x="15.00" y="{expected:.2}""#)),
             "the cursor sits on row {row}, not on a wrapped one"
@@ -976,7 +977,30 @@ mod tests {
     fn zoom_changes_output_size_without_changing_the_view_box() {
         let rows = vec![vec![cell("x", None, None)]];
         let svg = render_svg(&rows, 1, &colors(), None, None, &Style::default(), 0.5);
-        assert!(svg.contains(r#"width="44" height="60.5" viewBox="0 0 88 121""#));
+        let full = render_svg(&rows, 1, &colors(), None, None, &Style::default(), 1.0);
+        let view_box = {
+            let start = full.find("viewBox=\"").expect("a viewBox");
+            let rest = &full[start..];
+            rest[..rest[9..].find('"').expect("a close") + 10].to_string()
+        };
+        let (w, h) = {
+            let inner = view_box
+                .trim_start_matches("viewBox=\"0 0 ")
+                .trim_end_matches('"');
+            let mut parts = inner.split(' ');
+            (
+                parts.next().unwrap().parse::<f32>().unwrap(),
+                parts.next().unwrap().parse::<f32>().unwrap(),
+            )
+        };
+        assert!(
+            svg.contains(&format!(
+                r#"width="{}" height="{}" {view_box}"#,
+                w / 2.0,
+                h / 2.0
+            )),
+            "halving the zoom halves the drawn size and leaves the view box: {svg}"
+        );
     }
 
     #[test]
@@ -991,7 +1015,22 @@ mod tests {
             1.0,
         );
         assert!(svg.contains("<circle"));
-        assert!(svg.contains(r##"<rect width="88" height="121" fill="#6867aa"/>"##));
+        // Derived, so a deliberate change to a default gap does not read as a
+        // broken chrome test.
+        let style = Style::default();
+        let canvas_width = style.content_left() + style.content_right() + style.cell_width();
+        let canvas_height = style.header_height()
+            + style.content_top()
+            + style.content_bottom()
+            + style.cell_height();
+        let width = canvas_width + (style.canvas_left() + style.canvas_right()) as f32;
+        let height = canvas_height + (style.canvas_top() + style.canvas_bottom()) as f32;
+        assert!(
+            svg.contains(&format!(
+                r##"<rect width="{width:.0}" height="{height:.0}" fill="#6867aa"/>"##
+            )),
+            "the canvas is the panel plus its gaps: {svg}"
+        );
         assert!(svg.contains(r#"<g transform="translate(24 24)">"#));
         assert!(svg.contains(r##"fill="#080812" fill-opacity="0.070588""##));
         assert!(svg.contains(&hex(Profile::default().colors.background)));
@@ -1015,7 +1054,7 @@ mod tests {
             &Style::default(),
             1.0,
         );
-        let expected_baseline = header_h() + CONTENT_PADDING_TOP + font_baseline();
+        let expected_baseline = header_h() + Style::default().content_top() + font_baseline();
         assert!(svg.contains(&format!(r#"y="{expected_baseline:.2}""#)));
     }
 
@@ -1185,13 +1224,14 @@ mod tests {
     /// The drawn title must sit inside the space between the traffic lights
     /// and the mirrored margin on the right.
     fn assert_fits_clear_of_the_controls(drawn: &str, cols: f32) {
-        let panel = MARGIN_X * 2.0 + cols * cell_w();
+        let panel =
+            Style::default().content_left() + Style::default().content_right() + cols * cell_w();
         let drawn_width =
             crate::terminal::cell::display_width(drawn) as f32 * title_advance(&geometry());
         assert!(
-            drawn_width <= panel - 2.0 * DOTS_RIGHT,
+            drawn_width <= panel - 2.0 * dots_right(&Style::default()),
             "title {drawn:?} is {drawn_width} wide, past the {} available",
-            panel - 2.0 * DOTS_RIGHT
+            panel - 2.0 * dots_right(&Style::default())
         );
     }
 
@@ -1250,7 +1290,7 @@ mod tests {
         assert!(!plain.contains("#010203"));
 
         let padded = draw(&Style {
-            canvas_padding: crate::render::style::CanvasPadding::Uniform(40),
+            canvas_padding: crate::render::style::Padding::Uniform(40),
             ..Style::default()
         });
         assert!(
@@ -1521,14 +1561,14 @@ mod tests {
     /// everything.
     #[test]
     fn each_gap_around_the_window_can_differ() {
-        use crate::render::style::{CanvasPadding, PaddingSides};
+        use crate::render::style::{Padding, PaddingSides};
         let rows = vec![vec![cell("x", None, None); 4]];
         let style = Style {
-            canvas_padding: CanvasPadding::Sides(PaddingSides {
-                top: 10,
-                right: 20,
-                bottom: 60,
-                left: 30,
+            canvas_padding: Padding::Sides(PaddingSides {
+                top: Some(10),
+                right: Some(20),
+                bottom: Some(60),
+                left: Some(30),
             }),
             ..Style::default()
         };
@@ -1563,9 +1603,9 @@ mod tests {
         // A table naming one side leaves the rest at the default rather than
         // collapsing them to zero.
         let one = Style {
-            canvas_padding: CanvasPadding::Sides(PaddingSides {
-                bottom: 60,
-                ..PaddingSides::default()
+            canvas_padding: Padding::Sides(PaddingSides {
+                bottom: Some(60),
+                ..crate::render::style::PaddingSides::default()
             }),
             ..Style::default()
         };
@@ -1574,6 +1614,53 @@ mod tests {
             svg.contains("translate(24 24)"),
             "the sides it did not name keep the default: {svg}"
         );
+    }
+
+    /// The gap inside the window was three constants, and the one above the
+    /// grid was the smallest of them, so text sat against the title bar and
+    /// against the top edge when there was no title bar at all.
+    #[test]
+    fn the_gap_inside_the_window_is_configurable_on_every_side() {
+        use crate::render::style::{Padding, PaddingSides};
+        let rows = vec![vec![cell("x", None, None); 4]];
+        let default = Style::default();
+        assert_eq!(
+            (
+                default.content_top(),
+                default.content_right(),
+                default.content_bottom(),
+                default.content_left()
+            ),
+            (8.0, 15.0, 14.0, 15.0),
+            "the default top gap is no longer a quarter of the side gaps"
+        );
+
+        let style = Style {
+            content_padding: Padding::Sides(PaddingSides {
+                top: Some(40),
+                left: Some(30),
+                ..PaddingSides::default()
+            }),
+            ..Style::default()
+        };
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0);
+
+        // The first run starts at the left gap, and its baseline sits below the
+        // title bar by the top gap.
+        assert!(
+            svg.contains(r#"<text x="30.00""#),
+            "the grid starts at the left gap: {svg}"
+        );
+        let baseline = style.header_height() + 40.0 + style.baseline();
+        assert!(
+            svg.contains(&format!(r#"y="{baseline:.2}""#)),
+            "and below the title bar by the top gap: {svg}"
+        );
+
+        // A side the table does not name keeps its own default rather than the
+        // one the named sides happen to use.
+        assert_eq!(style.content_bottom(), 14.0);
+        assert_eq!(style.content_right(), 15.0);
     }
 }
 

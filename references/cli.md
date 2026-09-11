@@ -138,6 +138,7 @@ font_size = 17           # cell width and height follow it
 title_font_size = 13
 canvas_background = "#6867aa"   # the area around the window
 canvas_padding = 24             # the gap around the window, on every side
+# content_padding: the gap inside it, per side below (top 8, sides 15, bottom 14)
 
 [recording.style.font]
 # A CSS font stack, passed straight into the SVG and read left to right when
@@ -169,13 +170,21 @@ offset = 5
 spread = 7
 ```
 
-Each gap around the window can differ. A table sets them individually, and a
-side it does not name keeps the default, so widening the bottom alone does not
-collapse the other three:
+There are two gaps, and each side of either can differ. A table sets the sides
+individually, and a side it does not name keeps its own default, so widening
+the bottom alone does not collapse the other three:
 
 ```toml
+# Around the window.
 [recording.style.canvas_padding]
 bottom = 48
+
+# Between the window and the grid inside it. The default is wider at the sides
+# than above and below, because a character sits tight in its cell
+# horizontally while the rows already carry their own leading.
+[recording.style.content_padding]
+top = 16
+left = 24
 ```
 
 The terminal's own colors are separate, under `[profiles.<name>.colors]`: a

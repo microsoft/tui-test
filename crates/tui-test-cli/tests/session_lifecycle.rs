@@ -1825,7 +1825,9 @@ fn a_window_title_is_tracked_asserted_and_drawn() {
             backend.as_str()
         );
         assert!(
-            image.contains(r#"width="239" height="365" viewBox="0 0 478 730""#),
+            // The default style at zoom 0.5; update deliberately if a
+            // default gap moves.
+            image.contains(r#"width="239" height="367" viewBox="0 0 478 734""#),
             "{} changed the SVG dimensions at zoom 0.5: {image}",
             backend.as_str()
         );
