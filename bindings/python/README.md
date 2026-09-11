@@ -161,12 +161,10 @@ await save.click()
 
 `TextStyle` fields are `foreground`, `background`, `bold`, `dim`, `italic`, `underline_style`, `underline_color`, `inverse`, `hidden`, `strikethrough`, and `blink`.
 
-`get_by_link(uri)` matches the exact OSC 8 target, not URL-shaped text.
-`get_by_link("")` requires no link. Standalone style/link selectors find
-contiguous per-row runs. Chained style/link selectors with the default
-`within` direction retain an entire parent match only when it meets the
-requirement. Appearance checks skip blanks when visible characters are
-present; links check every cell.
+`get_by_link(uri)` matches an exact OSC 8 target, not visible URL text;
+`get_by_link("")` requires no link. Root style/link selectors find runs within
+each row. Chained calls with the default `within` direction check whole
+matches. Styles skip blanks if visible text exists; links check every cell.
 
 #### Compose locators
 
@@ -181,24 +179,21 @@ without_old_text = sections.filter(has_not=terminal.get_by_text("old"))
 entirely_linked = sections.get_by_link("https://example.com")
 ```
 
-`and_()` intersects cells; `or_()` unions and deduplicates cells. Both rebuild
-maximal contiguous runs within each physical row. Adjacent alternatives merge,
-even across original match boundaries; gaps and separate rows do not. Counts
-and click targets refer to these new runs. Composed text uses exact-grid
-whitespace rather than operand normalization.
+`and_()` keeps shared cells; `or_()` combines cells without duplicates. Adjacent
+cells merge within each physical row, even across original matches. Gaps and
+row breaks split runs. Counts and clicks use these runs; text keeps exact
+whitespace.
 
-`filter(has=..., has_not=...)` retains whole candidates containing an inner
-match, or containing no inner match. Both conditions apply when supplied. The
-inner query runs inside each candidate and may match the entire candidate.
-No link, text, or style fields are accepted by `filter`. For partially linked
-`"Docs"`, `filter(has=link)` keeps `"Docs"`, `get_by_link(uri)` rejects it,
-and `and_(link)` returns only the linked cells.
+`filter` accepts only locators. `has` requires a match inside each candidate;
+`has_not` requires none. Both conditions apply when supplied, and the inner
+match may cover the whole candidate. For partially linked `"Docs"`,
+`filter(has=link)` keeps the whole word, `get_by_link(uri)` rejects it, and
+`and_(link)` returns its linked cells.
 
-Operands must come from the same `TuiTest` instance. Expressions are lazy and
-immutable and evaluate against one fresh terminal snapshot. Selection stays
-where written: `a.first().and_(b)` differs from `a.and_(b).first()`. If any
-branch requests `full`, the entire expression uses the full grid. Explicit
-operand errors propagate. `location()` and `click()` require one final run.
+Use locators from one `TuiTest`. Composition leaves them unchanged and reads
+one fresh snapshot when used. Selection order matters: `a.first().and_(b)`
+differs from `a.and_(b).first()`. Any `full` branch includes scrollback for the
+whole query. Errors propagate.
 
 #### Select matches
 
