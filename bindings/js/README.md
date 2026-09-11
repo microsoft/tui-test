@@ -68,8 +68,6 @@ new TuiTest(session?: string, options?: ClientOptions)
 
 `open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
 
-`restart({ gracefulTimeout: 5000 })` returns an `OpenResult` and replays the last successful spawn with its original working directory, options, and latest terminal size. The timeout is in milliseconds after Ctrl-C, before forced replacement; use `0` to skip the wait. Restart works after child exit, but raises `NoSessionError` after `close()` or before a successful spawn. The terminal and automatic recording start fresh.
-
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
 
 #### Input
