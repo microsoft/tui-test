@@ -66,6 +66,11 @@ pub struct GridRenderer {
 }
 
 impl GridRenderer {
+    /// The canvas this renderer draws onto.
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     pub fn new(cols: u16, rows: usize) -> Self {
         Self::with_scale(cols, rows, 1)
     }

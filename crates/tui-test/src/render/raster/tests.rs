@@ -471,3 +471,112 @@ fn an_enormous_canvas_is_refused_before_it_is_allocated() {
     .map(|_| ())
     .expect("a genuinely large recording still renders");
 }
+
+/// A screenshot and a recording of the same terminal under the same config
+/// have to describe the same canvas. They are not byte-identical in size:
+/// `pixel_size` rounds each axis up to an even number because video encoders
+/// demand it, and an SVG has no such constraint. That rounding is the only
+/// licensed difference, so this pins it — the two renderers compute their
+/// geometry separately, and nothing else would catch them drifting apart.
+#[test]
+fn both_renderers_agree_on_size_for_the_same_style() {
+    use crate::render::style::WindowStyle;
+
+    let cases = [
+        ("default", Style::default()),
+        (
+            "no chrome",
+            Style {
+                window: WindowStyle {
+                    title_bar: false,
+                    ..WindowStyle::default()
+                },
+                ..Style::default()
+            },
+        ),
+        (
+            "padded",
+            Style {
+                padding: 40,
+                ..Style::default()
+            },
+        ),
+        (
+            "large font",
+            Style {
+                font_size: 30.0,
+                ..Style::default()
+            },
+        ),
+    ];
+
+    for (name, style) in cases {
+        let rows = vec![vec![EmuCell::blank(); 8]; 3];
+        let svg = crate::render::svg::render_svg(
+            &rows,
+            8,
+            &Profile::default(),
+            None,
+            Some("t"),
+            &style,
+            1.0,
+        );
+        // The root dimensions can be fractional; the raster canvas is whole
+        // pixels, so it takes the ceiling before rounding up to even.
+        let attr = |key: &str| -> f64 {
+            let at = svg.find(&format!("{key}=\"")).expect("dimension attribute");
+            let rest = &svg[at + key.len() + 2..];
+            rest[..rest.find('"').unwrap()].parse().expect("a number")
+        };
+
+        let renderer =
+            GridRenderer::with_zoom(8, 3, 1.0, style).expect("the raster canvas is buildable");
+        let even = |value: f64| {
+            let whole = value.ceil() as u32;
+            whole + whole % 2
+        };
+        assert_eq!(
+            (even(attr("width")), even(attr("height"))),
+            renderer.dimensions(),
+            "{name}: the recording is the screenshot's canvas rounded up to even"
+        );
+    }
+}
+
+/// Every other raster test builds its renderer with `Style::default()`, so a
+/// `GridRenderer` that ignored its style entirely would keep them all green.
+#[test]
+fn the_raster_canvas_is_drawn_from_its_style() {
+    let style = Style {
+        font_size: 34.0,
+        padding: 40,
+        background: crate::profile::Rgb::new(1, 2, 3),
+        ..Style::default()
+    };
+    let mut renderer = GridRenderer::with_zoom(4, 2, 1.0, style.clone()).unwrap();
+    let plain = GridRenderer::new(4, 2);
+
+    let (panel_width, panel_height) = crate::render::svg::pixel_size(4, 2, &style);
+    assert_eq!(
+        renderer.dimensions(),
+        (
+            panel_width + 2 * style.padding,
+            panel_height + 2 * style.padding
+        ),
+        "the canvas is the styled panel plus the styled padding on every side"
+    );
+    assert_ne!(
+        renderer.dimensions(),
+        plain.dimensions(),
+        "a larger font and padding grow the canvas"
+    );
+
+    let image = renderer
+        .render(&frame(vec![vec![EmuCell::blank(); 4]; 2]))
+        .unwrap();
+    assert_eq!(
+        pixel_at(&image, 1, 1),
+        color_to_pixel(Color::Rgb(1, 2, 3)),
+        "the configured background is painted into the padding"
+    );
+}

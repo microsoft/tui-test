@@ -475,24 +475,27 @@ mod tests {
 
     #[test]
     fn font_files_resolve_against_the_config_that_named_them() {
+        // Built by joining rather than written out: a literal "/opt/x" is
+        // relative on Windows, which has no drive letter for it, and a
+        // literal expectation would compare separators byte for byte.
+        let config_dir = std::env::temp_dir().join("config");
+        let absolute = std::env::temp_dir().join("Absolute.ttf");
+        assert!(absolute.is_absolute(), "the fixture is absolute everywhere");
+
         let mut font = FontFamilies {
             files: vec![
-                PathBuf::from("fonts/Berkeley.ttf"),
-                PathBuf::from("/opt/fonts/Absolute.ttf"),
+                PathBuf::from("fonts").join("Berkeley.ttf"),
+                absolute.clone(),
             ],
             ..FontFamilies::default()
         };
-        font.resolve_paths(Path::new("/repo/config"));
+        font.resolve_paths(&config_dir);
         assert_eq!(
             font.files[0],
-            PathBuf::from("/repo/config/fonts/Berkeley.ttf"),
+            config_dir.join("fonts").join("Berkeley.ttf"),
             "a repository carrying its own font renders the same wherever it sits"
         );
-        assert_eq!(
-            font.files[1],
-            PathBuf::from("/opt/fonts/Absolute.ttf"),
-            "an absolute path is left alone"
-        );
+        assert_eq!(font.files[1], absolute, "an absolute path is left alone");
     }
 
     #[test]
@@ -511,8 +514,9 @@ mod tests {
     /// the tui-test home is always searched so a user font needs no install.
     #[test]
     fn fonts_are_searched_beside_the_config() {
-        let dirs = font_search_dirs(Path::new("/repo"));
-        assert_eq!(dirs[0], PathBuf::from("/repo/fonts"));
+        let project = std::env::temp_dir().join("project");
+        let dirs = font_search_dirs(&project);
+        assert_eq!(dirs[0], project.join("fonts"));
         assert!(
             dirs.iter().any(|dir| dir.ends_with("fonts")),
             "every entry is a fonts directory: {dirs:?}"

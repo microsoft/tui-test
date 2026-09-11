@@ -1344,6 +1344,71 @@ mod tests {
         );
         assert!(svg.contains("&quot;"), "it is escaped instead: {svg}");
     }
+
+    /// A config file has to reach the picture. Every other test here starts
+    /// from a `Style` built in Rust, so the whole chain from TOML to output
+    /// could be broken — a hop substituting `Style::default()` — and they
+    /// would all still pass.
+    #[test]
+    fn a_style_from_a_config_file_reaches_the_output() {
+        let config = crate::profile::ConfigFile::parse(
+            "[profiles.docs.recording.style]\nfont_size = 24\npadding = 40\n\
+             background = \"#101112\"\n\
+             \n[profiles.docs.recording.style.window]\ntitle_bar = false\n",
+        )
+        .expect("the config parses");
+        let style = config
+            .settings(Some("docs"))
+            .expect("the profile resolves")
+            .style;
+
+        let rows = vec![vec![cell("x", None, None); 4]];
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0);
+
+        assert!(svg.contains(r#"font-size="24px""#), "font_size: {svg}");
+        assert!(svg.contains("translate(40 40)"), "padding: {svg}");
+        assert!(svg.contains("#101112"), "background: {svg}");
+        assert!(!svg.contains("#d9d9e8"), "title_bar = false: {svg}");
+    }
+
+    /// Knobs the broader test does not reach, each of which would otherwise
+    /// only be pinned for its default by the golden.
+    #[test]
+    fn the_remaining_knobs_reach_the_output() {
+        use crate::render::style::ShadowStyle;
+        let rows = vec![vec![cell("x", None, None); 40]];
+        let draw =
+            |style: &Style| render_svg(&rows, 40, &colors(), None, Some("title"), style, 1.0);
+
+        let titled = draw(&Style {
+            title_font_size: 21.0,
+            ..Style::default()
+        });
+        assert!(
+            titled.contains(r#"font-size="21px""#),
+            "the title font size is its own knob: {titled}"
+        );
+
+        // The shadow's geometry is derived, so this proves the derivation is
+        // wired into the renderer rather than only unit-tested.
+        let default_shadow = draw(&Style::default());
+        let cast = draw(&Style {
+            shadow: ShadowStyle {
+                offset: 20.0,
+                spread: 28.0,
+                ..ShadowStyle::default()
+            },
+            ..Style::default()
+        });
+        assert_ne!(
+            default_shadow, cast,
+            "changing the shadow's offset and spread moves the rectangles"
+        );
+        assert!(
+            cast.contains(r#"rx="36.0""#),
+            "the outermost layer is spread past the corner radius: {cast}"
+        );
+    }
 }
 
 #[cfg(test)]

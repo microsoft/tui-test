@@ -765,6 +765,23 @@ mod tests {
     /// rest. Replacing the table whole would mean that setting a font size
     /// silently reset the mode the file had established.
     #[test]
+    fn a_profile_that_names_no_style_keeps_the_file_style() {
+        let config = ConfigFile::parse(
+            "[recording]\nmode = \"on-failure\"\n\
+             \n[recording.style]\nfont_size = 30\n\
+             \n[profiles.ops.recording]\ndirectory = \"shots\"\n",
+        )
+        .unwrap();
+
+        let ops = config.settings(Some("ops")).unwrap();
+        assert_eq!(
+            ops.style.font_size, 30.0,
+            "a profile adjusting only where recordings land keeps the file's look"
+        );
+        assert_eq!(ops.recording.directory, Some(PathBuf::from("shots")));
+    }
+
+    #[test]
     fn a_profile_recording_inherits_field_by_field() {
         let config = ConfigFile::parse(
             "[recording]\nmode = \"on-failure\"\ndirectory = \"artifacts\"\n\
