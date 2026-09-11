@@ -199,6 +199,13 @@ Style options are `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-st
 `--link URI` separately requires every matched cell, including spaces, to
 have that OSC 8 target. `--link ""` requires no link.
 
+Programmatic locators add `getByLink()` / `get_by_link()`, cell-set
+intersection and union (`and`/`or` in Rust and JavaScript, `and_`/`or_` in
+Python), and locator-only `filter` containment. AND/OR form new contiguous
+per-row runs; filters preserve whole matches. See the
+[JavaScript](bindings/js/README.md#compose-locators) and
+[Python](bindings/python/README.md#compose-locators) composition examples.
+
 `expect text` also accepts `--not` and `--timeout MS`. `click text` accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks N`, and `--timeout MS`. `highlight text` accepts `--timeout MS`.
 
 ### Keyboard and mouse

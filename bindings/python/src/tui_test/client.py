@@ -226,19 +226,19 @@ def _text_query_value(
     full: bool,
     whitespace: str,
     direction: LocatorDirection,
-    within: Optional[List[Dict[str, object]]],
-) -> List[Dict[str, object]]:
-    stages = copy.deepcopy(within) if within is not None else []
-    stages.append(
+    within: Optional["_LocatorQuery"],
+) -> "_LocatorQuery":
+    return _append_node(
+        within,
         _text_stage_value(
             text,
             regex=regex,
             full=full,
             whitespace=whitespace,
             direction=direction,
-        )
+        ),
+        relative=True,
     )
-    return stages
 
 
 def _style_query_value(
@@ -246,24 +246,98 @@ def _style_query_value(
     *,
     full: bool,
     direction: LocatorDirection,
-    within: Optional[List[Dict[str, object]]],
-) -> List[Dict[str, object]]:
+    within: Optional["_LocatorQuery"],
+) -> "_LocatorQuery":
+    if not isinstance(style, TextStyle):
+        raise TypeError("style must be a TextStyle")
     style_value = asdict(style)
+    if set(vars(style)) - set(TextStyle.__dataclass_fields__):
+        raise ValueError("unknown style property")
     if not any(value is not None for value in style_value.values()):
         raise ValueError("get_by_style requires at least one style property")
     if direction not in ("within", "after", "before"):
         raise ValueError("locator direction must be within, after, or before")
-    stages = copy.deepcopy(within) if within is not None else []
-    stages.append(
+    return _append_node(
+        within,
         {
             "kind": "style",
             "direction": direction,
             "style": style_value,
             "full": full,
             **_occurrence_fields("any"),
-        }
+        },
+        relative=True,
     )
-    return stages
+
+
+def _link_query_value(
+    uri: str,
+    *,
+    full: bool,
+    direction: LocatorDirection,
+    within: Optional["_LocatorQuery"],
+) -> "_LocatorQuery":
+    if not isinstance(uri, str):
+        raise TypeError("get_by_link requires a URI string")
+    if direction not in ("within", "after", "before"):
+        raise ValueError("locator direction must be within, after, or before")
+    return _append_node(
+        within,
+        {
+            "kind": "link",
+            "link": uri,
+            "full": full,
+            "direction": direction,
+            **_occurrence_fields("any"),
+        },
+        relative=True,
+    )
+
+
+class _LocatorQuery:
+    def __init__(self, nodes: List[Dict[str, object]], root: int) -> None:
+        self.nodes = nodes
+        self.root = root
+
+    def payload(self) -> Dict[str, object]:
+        return {"nodes": self.nodes, "root": self.root}
+
+    def current(self) -> Dict[str, object]:
+        return self.nodes[self.root]
+
+
+def _append_node(
+    query: Optional[_LocatorQuery],
+    node: Dict[str, object],
+    *,
+    relative: bool = False,
+) -> _LocatorQuery:
+    result = copy.deepcopy(query) if query is not None else _LocatorQuery([], 0)
+    if len(result.nodes) >= 256:
+        raise ValueError("locator expression exceeds 256 nodes")
+    if relative:
+        if query is None and node.get("direction", "within") != "within":
+            raise ValueError("locator direction requires a parent locator")
+        if query is not None:
+            node["within"] = result.root
+    result.root = len(result.nodes)
+    result.nodes.append(node)
+    return result
+
+
+def _append_operand(query: _LocatorQuery, other: _LocatorQuery) -> int:
+    offset = len(query.nodes)
+    if offset + len(other.nodes) >= 256:
+        raise ValueError("locator expression exceeds 256 nodes")
+    for node in copy.deepcopy(other.nodes):
+        for field in ("within", "left", "right", "input", "has", "has_not"):
+            reference = node.get(field)
+            if reference is not None:
+                if not isinstance(reference, int):
+                    raise TypeError("locator operand reference must be an integer")
+                node[field] = reference + offset
+        query.nodes.append(node)
+    return offset + other.root
 
 
 def _extract_terminal_text(message: Optional[str]) -> Optional[str]:
@@ -414,24 +488,24 @@ class _Mouse:
 
 
 class Locator:
-    """A lazy text/style query resolved against the current terminal grid."""
+    """A lazy cell query resolved against the current terminal grid."""
 
     def __init__(
-        self, client: "TuiTest", query: List[Dict[str, object]]
+        self, client: "TuiTest", query: _LocatorQuery
     ) -> None:
         self._client = client
         self._query = copy.deepcopy(query)
 
     def _with_occurrence(self, occurrence: _Occurrence) -> "Locator":
         query = copy.deepcopy(self._query)
-        query[-1].update(_occurrence_fields(occurrence))
+        query.current().update(_occurrence_fields(occurrence))
         return Locator(self._client, query)
 
-    def _strict_query(self) -> List[Dict[str, object]]:
+    def _strict_query(self) -> Dict[str, object]:
         query = copy.deepcopy(self._query)
-        if query[-1]["occurrence"] == "any":
-            query[-1]["occurrence"] = "unique"
-        return query
+        if query.current()["occurrence"] == "any":
+            query.current()["occurrence"] = "unique"
+        return query.payload()
 
     def any(self) -> "Locator":
         return self._with_occurrence("any")
@@ -482,10 +556,80 @@ class Locator:
             within=self._query,
         )
 
+    def get_by_link(
+        self,
+        uri: str,
+        *,
+        full: bool = False,
+        direction: LocatorDirection = "within",
+    ) -> "Locator":
+        return Locator(
+            self._client,
+            _link_query_value(
+                uri, full=full, direction=direction, within=self._query,
+            ),
+        )
+
+    def _operand(self, other: "Locator") -> _LocatorQuery:
+        if not isinstance(other, Locator) or other._client is not self._client:
+            raise ValueError(
+                "locator operands must belong to the same terminal owner"
+            )
+        return other._query
+
+    def _combine(self, kind: str, other: "Locator") -> "Locator":
+        query = copy.deepcopy(self._query)
+        right = _append_operand(query, self._operand(other))
+        return Locator(
+            self._client,
+            _append_node(query, {
+                "kind": kind,
+                "left": query.root,
+                "right": right,
+                **_occurrence_fields("any"),
+            }),
+        )
+
+    def and_(self, other: "Locator") -> "Locator":
+        """Intersect selected cells and form contiguous per-row runs."""
+        return self._combine("and", other)
+
+    def or_(self, other: "Locator") -> "Locator":
+        """Union selected cells and form contiguous per-row runs."""
+        return self._combine("or", other)
+
+    def filter(
+        self,
+        *,
+        has: Optional["Locator"] = None,
+        has_not: Optional["Locator"] = None,
+    ) -> "Locator":
+        """Keep whole matches containing has and containing no has_not matches."""
+        if has is None and has_not is None:
+            raise ValueError("filter requires has or has_not")
+        query = copy.deepcopy(self._query)
+        positive = (
+            None if has is None else _append_operand(query, self._operand(has))
+        )
+        negative = (
+            None if has_not is None
+            else _append_operand(query, self._operand(has_not))
+        )
+        return Locator(
+            self._client,
+            _append_node(query, {
+                "kind": "filter",
+                "input": query.root,
+                "has": positive,
+                "has_not": negative,
+                **_occurrence_fields("any"),
+            }),
+        )
+
     async def locations(self) -> List[TextMatch]:
         values = await self._client._guarded(
             "locator.locations",
-            self._client._native.find_locator(self._query),
+            self._client._native.find_locator(self._query.payload()),
         )
         return [TextMatch.from_dict(value) for value in values]
 
@@ -496,12 +640,13 @@ class Locator:
             self._client._native.find_locator(query),
         )
         if len(values) != 1:
-            current = self._query[-1]
-            description = (
-                repr(current["text"])
-                if current["kind"] == "text"
-                else "style"
-            )
+            current = self._query.current()
+            if current["kind"] == "text":
+                description = repr(current["text"])
+            elif current["kind"] == "link":
+                description = "link {!r}".format(current["link"])
+            else:
+                description = str(current["kind"])
             message = "locator.location: no match found for {}".format(
                 description
             )
@@ -523,7 +668,7 @@ class Locator:
 
     async def all(self) -> List["Locator"]:
         matches = await self.locations()
-        if self._query[-1]["occurrence"] == "any":
+        if self._query.current()["occurrence"] == "any":
             return [self.nth(index) for index in range(len(matches))]
         return [Locator(self._client, self._query) for _ in matches]
 
@@ -538,7 +683,7 @@ class Locator:
         await self._client._guarded(
             "locator.wait",
             self._client._native.wait_locator(
-                self._query,
+                self._query.payload(),
                 state == "hidden",
                 self._client._timeout("text", timeout),
             ),
@@ -575,7 +720,7 @@ class Locator:
         await self._client._guarded(
             "locator.highlight",
             self._client._native.highlight_locator(
-                self._query,
+                self._query.payload(),
                 self._client._timeout("text", timeout),
             ),
         )
@@ -589,7 +734,7 @@ class Locator:
         await self._client._guarded(
             "locator.expect",
             self._client._native.expect_locator(
-                self._query,
+                self._query.payload(),
                 not_,
                 self._client._timeout("text", timeout),
             ),
@@ -843,7 +988,7 @@ class TuiTest:
         full: bool,
         whitespace: str,
         direction: LocatorDirection,
-        within: Optional[List[Dict[str, object]]],
+        within: Optional[_LocatorQuery],
     ) -> Locator:
         return Locator(
             self,
@@ -870,13 +1015,19 @@ class TuiTest:
             within=None,
         )
 
+    def get_by_link(self, uri: str, *, full: bool = False) -> Locator:
+        return Locator(
+            self,
+            _link_query_value(uri, full=full, direction="within", within=None),
+        )
+
     def _make_style_locator(
         self,
         style: TextStyle,
         *,
         full: bool,
         direction: LocatorDirection,
-        within: Optional[List[Dict[str, object]]],
+        within: Optional[_LocatorQuery],
     ) -> Locator:
         return Locator(
             self,

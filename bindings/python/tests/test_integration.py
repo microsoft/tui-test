@@ -235,6 +235,42 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
+    def test_link_locators_compose_and_filter(self):
+        async def scenario():
+            uri = "https://example.com"
+            output = (
+                "\x1b[1mA\x1b]8;;" + uri + "\x1b\\B\x1b[22mC\x1b]8;;\x1b\\\r\n"
+                "\x1b]8;;" + uri + "\x1b\\\x1b[1mA\x1b[22m \x1b[1mB\x1b[0m\x1b]8;;\x1b\\\r\n"
+            )
+            script = "import sys,time; time.sleep(.15); sys.stdout.write({!r}); sys.stdout.flush(); time.sleep(30)".format(output)
+            async with self._client() as su:
+                await su.run(sys.executable, "-c", script)
+                row = su.get_by_text("ABC")
+                bold = su.get_by_style(TextStyle(bold=True))
+                link = su.get_by_link(uri)
+                intersection = row.and_(bold).and_(link)
+                await intersection.wait(timeout=3000)
+                match = await intersection.location()
+                self.assertEqual(match.text, "B")
+                self.assertEqual((match.start.row, match.start.column, match.end.column), (0, 1, 2))
+                self.assertEqual((await row.and_(bold).or_(row.and_(link)).location()).text, "ABC")
+                self.assertEqual((await row.filter(has=link, has_not=su.get_by_text("absent")).location()).text, "ABC")
+                self.assertEqual(await row.filter(has_not=link).count(), 0)
+                self.assertEqual(await row.get_by_link(uri).count(), 0)
+                self.assertEqual(await row.get_by_link("").count(), 0)
+                spaced = su.get_by_text("A B")
+                self.assertEqual((await spaced.get_by_style(TextStyle(bold=True)).get_by_link(uri).location()).text, "A B")
+                pieces = spaced.and_(bold).and_(link)
+                self.assertEqual([match.text for match in await pieces.locations()], ["A", "B"])
+                with self.assertRaises(ExpectationError):
+                    await pieces.location()
+                await intersection.click(timeout=100)
+                await intersection.highlight(timeout=100)
+                await intersection.expect(timeout=100)
+                self.assertEqual((await (await pieces.all())[1].location()).text, "B")
+
+        run(scenario())
+
     def test_locators_support_scoped_text_matches_and_style_assertions(self):
         async def scenario():
             script = (
