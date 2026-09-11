@@ -125,7 +125,7 @@ Snapshot options are `update`, `includeStyle`, and `includeTitle`.
 
 | Method | Description |
 | --- | --- |
-| `screenshot(path?, { full?, zoom?, background?, transparent? })` | Return text or save SVG. |
+| `screenshot(path?, { full?, zoom?, background?, transparent? })` | Return text or save SVG or PNG. |
 | `startRecording(path, options?)` | Start APNG, GIF, MP4, or asciinema recording. |
 | `stopRecording()` | Finish the recording and return its path. |
 

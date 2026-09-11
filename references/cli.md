@@ -88,7 +88,7 @@ Most waits accept `--timeout MS`. `expect`, `click`, and `highlight` retry. `fin
 | `text [--full]` | Read terminal text. |
 | `cells X Y [W H]` | Read cells and styles. |
 | `get FIELD` | Read one field. |
-| `screenshot [PATH] [--background COLOR \| --transparent]` | Read text or save SVG. |
+| `screenshot [PATH] [--background COLOR \| --transparent]` | Read text or save SVG or PNG. |
 
 Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `clipboard`, `bells`, and `bell-events`.
 

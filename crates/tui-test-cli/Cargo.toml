@@ -32,3 +32,6 @@ tui-test = { workspace = true, features = [
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_Console"] }
+
+[dev-dependencies]
+png.workspace = true

@@ -2033,6 +2033,7 @@ dependencies = [
  "dialoguer",
  "dirs",
  "interprocess",
+ "png",
  "serde",
  "serde_json",
  "sha2",
