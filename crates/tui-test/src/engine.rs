@@ -28,7 +28,9 @@ use crate::session::{
     TextHighlight,
 };
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
-use crate::terminal::emu::{ClipboardType, Emulator, KeyboardMode, MouseMode};
+use crate::terminal::emu::{
+    ClipboardType, CursorShape, Emulator, KeyboardMode, MouseMode, TerminalMode,
+};
 use crate::terminal::locator::{self, Pattern};
 
 pub struct Engine {
@@ -839,8 +841,8 @@ impl Engine {
                 cursor: state.emu.cursor(),
                 size: state.emu.size(),
                 keyboard_mode: state.emu.keyboard_mode(),
-                bracketed_paste: state.emu.bracketed_paste_mode(),
-                mouse_mode: state.mouse_mode.mode(),
+                bracketed_paste: state.emu.mode(TerminalMode::BracketedPaste),
+                mouse_mode: state.mouse_mode.relayable(),
                 exited: state.exited,
                 shell: target.shell,
             }
@@ -857,7 +859,7 @@ impl Engine {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            (state.mouse_mode.mode() != MouseMode::None).then(|| state.emu.size())
+            (state.mouse_mode.relayable() != MouseMode::None).then(|| state.emu.size())
         })
     }
 
@@ -1125,7 +1127,7 @@ fn capture_failure_observation_locked(
         backend: session.backend.as_str().to_string(),
         target_os: std::env::consts::OS.to_string(),
         target_arch: std::env::consts::ARCH.to_string(),
-        terminal_profile_fingerprint: profile_fingerprint(&session.profile),
+        terminal_profile_fingerprint: profile_fingerprint(&state.profile),
     };
     FailureObservation {
         rows: snapshot.rows,
@@ -1278,6 +1280,8 @@ fn diagnostic_operation_name(operation: &Operation) -> &'static str {
         Operation::GetExitCode => "get.exit_code",
         Operation::GetCwd => "get.cwd",
         Operation::GetCursor => "get.cursor",
+        Operation::GetModes => "get.modes",
+        Operation::GetColors => "get.colors",
         Operation::GetSize => "get.size",
         Operation::GetTitle => "get.title",
         Operation::GetClipboard => "get.clipboard",
@@ -1304,6 +1308,9 @@ fn diagnostic_operation_name(operation: &Operation) -> &'static str {
         Operation::HighlightLocator { .. } => "locator.highlight",
         Operation::ExpectTitle { .. } => "expect.title",
         Operation::ExpectExitCode { .. } => "expect.exit_code",
+        Operation::ExpectMode { .. } => "expect.mode",
+        Operation::ExpectColors { .. } => "expect.colors",
+        Operation::ExpectCursor { .. } => "expect.cursor",
         Operation::ExpectOutput { .. } => "expect.output",
         Operation::ExpectBellCount { .. } => "expect.bell_count",
         Operation::Snapshot { .. } => "expect.snapshot",
@@ -1328,6 +1335,9 @@ fn operation_timeout(operation: &Operation) -> Option<u64> {
         | Operation::HighlightLocator { timeout_ms, .. }
         | Operation::ExpectTitle { timeout_ms, .. }
         | Operation::ExpectExitCode { timeout_ms, .. }
+        | Operation::ExpectMode { timeout_ms, .. }
+        | Operation::ExpectColors { timeout_ms, .. }
+        | Operation::ExpectCursor { timeout_ms, .. }
         | Operation::ExpectBellCount { timeout_ms, .. } => *timeout_ms,
         _ => None,
     }
@@ -1499,7 +1509,7 @@ fn dispatch(
     operation: Operation,
 ) -> Result<OperationResult, TuiTestError> {
     match operation {
-        Operation::State => Ok(OperationResult::State(state(session))),
+        Operation::State => Ok(OperationResult::State(Box::new(state(session)))),
         Operation::Text { full } => Ok(OperationResult::Text(text_of(&grid(session, full)))),
         Operation::PackedScreen { full } => {
             Ok(OperationResult::PackedScreen(packed_screen(session, full)))
@@ -1543,13 +1553,75 @@ fn dispatch(
         Operation::GetTitle => Ok(OperationResult::Title(title_of(session))),
         Operation::GetClipboard => Ok(OperationResult::Clipboard(get_clipboard(session)?)),
         Operation::GetCursor => {
-            let (x, y) = session
+            let state = session
                 .state
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .emu
-                .cursor();
-            Ok(OperationResult::Cursor(Cursor { x, y }))
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(OperationResult::Cursor(cursor_model(state.emu.as_ref())))
+        }
+        Operation::GetColors => {
+            let state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(OperationResult::Colors(colors_of(
+                state.emu.as_ref(),
+                &state.profile,
+            )))
+        }
+        Operation::ExpectColors {
+            foreground,
+            background,
+            cursor,
+            palette,
+            timeout_ms,
+        } => {
+            expect_colors(
+                session,
+                foreground.as_deref(),
+                background.as_deref(),
+                cursor.as_deref(),
+                &palette,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
+        Operation::GetModes => {
+            let state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(OperationResult::Modes(modes_of(state.emu.as_ref())))
+        }
+        Operation::ExpectMode {
+            mode,
+            enabled,
+            timeout_ms,
+        } => {
+            expect_mode(
+                session,
+                &mode,
+                enabled,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
+        }
+        Operation::ExpectCursor {
+            visible,
+            shape,
+            x,
+            y,
+            timeout_ms,
+        } => {
+            expect_cursor(
+                session,
+                visible,
+                shape.as_deref(),
+                x,
+                y,
+                timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+            )?;
+            Ok(OperationResult::Unit)
         }
         Operation::GetSize => {
             let (cols, rows) = session
@@ -1739,14 +1811,14 @@ fn dispatch(
         Operation::Snapshot {
             name,
             update,
-            include_colors,
+            include_style,
             include_title,
             cwd,
         } => Ok(OperationResult::Snapshot(do_snapshot(
             session,
             &name,
             update,
-            include_colors,
+            include_style,
             include_title,
             cwd,
         )?)),
@@ -1780,14 +1852,13 @@ fn state(session: &TerminalSession) -> crate::api::State {
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (x, y) = state.emu.cursor();
     let (cols, rows) = state.emu.size();
     let bells = session.bells.snapshot();
     crate::api::State {
         session_shell: session.shell.map(|value| value.as_str().to_string()),
         cols,
         rows,
-        cursor: Cursor { x, y },
+        cursor: cursor_model(state.emu.as_ref()),
         title: state.emu.title(),
         cwd: state.tracker.cwd().map(str::to_string),
         last_command: state.tracker.last_command().map(str::to_string),
@@ -1795,6 +1866,12 @@ fn state(session: &TerminalSession) -> crate::api::State {
         exited: state.exited,
         ready: state.tracker.is_ready(),
         bell_count: bells.count,
+        modes: crate::terminal::emu::TerminalMode::ALL
+            .into_iter()
+            .map(|mode| (mode.name().to_string(), state.emu.mode(mode)))
+            .collect(),
+        mouse_mode: state.mouse_mode.mode().name().to_string(),
+        colors: colors_of(state.emu.as_ref(), &state.profile),
         timeouts: effective_timeouts(session),
         text: text_of(&state.emu.viewable_rows()),
     }
@@ -1853,6 +1930,291 @@ fn cell_model(x: u16, y: u16, cell: &EmuCell) -> Cell {
         underline: cell.underline.is_underlined(),
         underline_style: cell.underline.name().to_string(),
         underline_color: cell_color(cell.underline_color),
+        link: cell.uri().unwrap_or_default().to_string(),
+        link_id: cell
+            .hyperlink
+            .as_ref()
+            .and_then(|link| link.id.as_deref())
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+/// Resolve a mode name, so an unknown one is a usage error naming the set
+/// rather than a silent `false`.
+fn parse_mode(name: &str) -> Result<TerminalMode, TuiTestError> {
+    TerminalMode::ALL
+        .into_iter()
+        .find(|mode| mode.name() == name)
+        .ok_or_else(|| {
+            let known = TerminalMode::ALL
+                .iter()
+                .map(|mode| mode.name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            TuiTestError::usage(format!(
+                "unknown terminal mode '{name}'; expected one of: {known}"
+            ))
+        })
+}
+
+/// The terminal's colors, resolved through the profile so a slot nothing
+/// has overridden still has an answer.
+///
+/// The three defaults (`OSC 10/11/12`) are always reported. Palette entries
+/// (`OSC 4`) are reported only where they differ from the profile, so the
+/// answer names what a program changed instead of all 256 slots.
+fn colors_of(emu: &dyn Emulator, profile: &crate::profile::Profile) -> crate::api::TerminalColors {
+    let colors = emu.colors();
+    crate::api::TerminalColors {
+        foreground: colors.foreground.to_hex(),
+        background: colors.background.to_hex(),
+        cursor: colors.cursor.to_hex(),
+        palette: colors
+            .palette
+            .iter()
+            .enumerate()
+            .filter_map(|(index, now)| {
+                let index = index as u8;
+                (*now != profile.colors.rgb(index)).then(|| (index, now.to_hex()))
+            })
+            .collect(),
+    }
+}
+
+/// Resolve a color a caller named into a concrete value.
+///
+/// Takes the same spellings `--fg` and `--bg` do, minus `default`: a terminal
+/// color is what `default` would resolve *to*, so there is nothing for it to
+/// refer to. An ANSI index resolves through the session's own palette, so
+/// `--background 0` means the black this profile paints rather than a fixed
+/// one.
+fn resolve_expected_color(
+    spec: &str,
+    emu: &dyn Emulator,
+) -> Result<crate::profile::Rgb, TuiTestError> {
+    use crate::assert::color::Expected;
+    use crate::profile::ColorSlot;
+    // Not the parse error itself: it offers `default` as a spelling, which the
+    // next arm rejects, so a typo would be answered with advice that fails.
+    let invalid = || {
+        TuiTestError::usage(format!(
+            "terminal color must be ansi256 (0-255), hex (#rrggbb), or rgb (r,g,b) (got: {spec:?})"
+        ))
+    };
+    match Expected::parse(spec).map_err(|_| invalid())? {
+        Expected::Default => Err(TuiTestError::usage(
+            "'default' has no meaning for a terminal color; name a hex value or an ANSI index"
+                .to_string(),
+        )),
+        Expected::Ansi256(index) => Ok(emu.color(ColorSlot::Indexed(index))),
+        Expected::Hex(r, g, b) | Expected::Rgb(r, g, b) => Ok(crate::profile::Rgb::new(r, g, b)),
+    }
+}
+
+/// Wait for the terminal's colors to match every slot the caller named.
+///
+/// The three defaults (`OSC 10/11/12`) and any number of palette entries
+/// (`OSC 4`) are matched together, so a program that recolors several slots
+/// at once is asserted as a single state rather than a race between polls.
+fn expect_colors(
+    session: &TerminalSession,
+    foreground: Option<&str>,
+    background: Option<&str>,
+    cursor: Option<&str>,
+    palette: &[(u8, String)],
+    timeout_ms: u64,
+) -> Result<(), TuiTestError> {
+    use crate::profile::ColorSlot;
+    if foreground.is_none() && background.is_none() && cursor.is_none() && palette.is_empty() {
+        return Err(TuiTestError::usage(
+            "expect colors needs at least one of --foreground, --background, --cursor, or --palette",
+        ));
+    }
+    // Resolve once, so a malformed color is a usage error rather than a wait
+    // that can never succeed, and an indexed color is read against the
+    // palette in force now rather than re-resolved on every poll.
+    let (wanted, wanted_palette) = {
+        let state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let resolve = |spec: Option<&str>| -> Result<Option<crate::profile::Rgb>, TuiTestError> {
+            spec.map(|spec| resolve_expected_color(spec, state.emu.as_ref()))
+                .transpose()
+        };
+        let defaults = [resolve(foreground)?, resolve(background)?, resolve(cursor)?];
+        let entries = palette
+            .iter()
+            .map(|(index, spec)| Ok((*index, resolve_expected_color(spec, state.emu.as_ref())?)))
+            .collect::<Result<Vec<_>, TuiTestError>>()?;
+        (defaults, entries)
+    };
+
+    let mut matched = false;
+    let mut last = None;
+    poll_until(
+        || {
+            let (actual, actual_palette) = {
+                let state = session
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let defaults = [
+                    state.emu.color(ColorSlot::Foreground),
+                    state.emu.color(ColorSlot::Background),
+                    state.emu.color(ColorSlot::Cursor),
+                ];
+                let entries = wanted_palette
+                    .iter()
+                    .map(|(index, _)| (*index, state.emu.color(ColorSlot::Indexed(*index))))
+                    .collect::<Vec<_>>();
+                (defaults, entries)
+            };
+            matched = wanted
+                .iter()
+                .zip(actual)
+                .all(|(expected, actual)| expected.is_none_or(|expected| expected == actual))
+                && wanted_palette
+                    .iter()
+                    .zip(&actual_palette)
+                    .all(|((_, expected), (_, actual))| expected == actual);
+            last = Some((actual, actual_palette));
+            matched || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if matched {
+        return Ok(());
+    }
+    let ([fg, bg, cur], entries) = last.expect("the colors are read at least once");
+    // Only the slots that were asked about: naming a foreground the caller
+    // never mentioned invites reading it as the thing that failed.
+    let mut parts = Vec::new();
+    for (label, wanted, actual) in [
+        ("foreground", wanted[0], fg),
+        ("background", wanted[1], bg),
+        ("cursor", wanted[2], cur),
+    ] {
+        if let Some(wanted) = wanted {
+            parts.push(format!(
+                "{label} {} (wanted {})",
+                actual.to_hex(),
+                wanted.to_hex()
+            ));
+        }
+    }
+    for ((index, wanted), (_, actual)) in wanted_palette.iter().zip(&entries) {
+        parts.push(format!(
+            "palette {index} {} (wanted {})",
+            actual.to_hex(),
+            wanted.to_hex()
+        ));
+    }
+    Err(TuiTestError::assertion(format!(
+        "colors did not match within {timeout_ms}ms; {}",
+        parts.join(", ")
+    )))
+}
+
+fn modes_of(emu: &dyn Emulator) -> std::collections::BTreeMap<String, bool> {
+    TerminalMode::ALL
+        .into_iter()
+        .map(|mode| (mode.name().to_string(), emu.mode(mode)))
+        .collect()
+}
+
+fn expect_mode(
+    session: &TerminalSession,
+    name: &str,
+    enabled: bool,
+    timeout_ms: u64,
+) -> Result<(), TuiTestError> {
+    let mode = parse_mode(name)?;
+    let reached = |session: &TerminalSession| {
+        session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .emu
+            .mode(mode)
+            == enabled
+    };
+    let mut matched = false;
+    poll_until(
+        || {
+            matched = reached(session);
+            matched || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if matched {
+        return Ok(());
+    }
+    Err(TuiTestError::assertion(format!(
+        "{} did not turn {} within {timeout_ms}ms",
+        mode.name(),
+        if enabled { "on" } else { "off" }
+    )))
+}
+
+fn expect_cursor(
+    session: &TerminalSession,
+    visible: Option<bool>,
+    shape: Option<&str>,
+    x: Option<u16>,
+    y: Option<u16>,
+    timeout_ms: u64,
+) -> Result<(), TuiTestError> {
+    if let Some(shape) = shape {
+        if CursorShape::parse(shape).is_none() {
+            return Err(TuiTestError::usage(format!(
+                "unknown cursor shape '{shape}'; expected block, underline, or bar"
+            )));
+        }
+    }
+    let mut last = None;
+    let mut matched = false;
+    poll_until(
+        || {
+            let cursor = {
+                let state = session
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                cursor_model(state.emu.as_ref())
+            };
+            matched = visible.is_none_or(|want| want == cursor.visible)
+                && shape.is_none_or(|want| want == cursor.shape)
+                && x.is_none_or(|want| want == cursor.x)
+                && y.is_none_or(|want| want == cursor.y);
+            last = Some(cursor);
+            matched || session_stopped(session)
+        },
+        timeout_ms,
+    );
+    if matched {
+        return Ok(());
+    }
+    let cursor = last.expect("the cursor is read at least once");
+    Err(TuiTestError::assertion(format!(
+        "cursor did not match within {timeout_ms}ms; it is at {},{}, {}, shape {}",
+        cursor.x,
+        cursor.y,
+        if cursor.visible { "visible" } else { "hidden" },
+        cursor.shape
+    )))
+}
+
+/// The cursor as a caller sees it: where it is, and how it is drawn.
+fn cursor_model(emu: &dyn Emulator) -> Cursor {
+    let (x, y) = emu.cursor();
+    Cursor {
+        x,
+        y,
+        visible: emu.cursor_visible(),
+        shape: emu.cursor_shape().name().to_string(),
+        color: emu.color(crate::profile::ColorSlot::Cursor).to_hex(),
     }
 }
 
@@ -1869,18 +2231,45 @@ fn key_action(
     tokens: Vec<String>,
     action: crate::api::KeyAction,
 ) -> Result<(), TuiTestError> {
-    let keyboard_mode = session
-        .state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .emu
-        .keyboard_mode();
-    let sequence = keys::tokens_to_seq_for_action_with_mode(&tokens, action, keyboard_mode)
-        .map_err(|error| TuiTestError::usage(error.to_string()))?;
+    // A backend with its own key encoder is preferred, per token, because it
+    // reads terminal state the shared encoder does not model: ghostty's
+    // applies keypad application mode, `modifyOtherKeys`, and the alt-escape
+    // prefix. A backend that has no encoder, or cannot express a particular
+    // event, answers `None` and that token falls back.
+    let mut sequence: Vec<u8> = Vec::new();
+    {
+        let state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let modes = keys::InputModes {
+            keyboard: state.emu.keyboard_mode(),
+            cursor_key_application: state.emu.cursor_key_application(),
+        };
+        for token in &tokens {
+            let presses = keys::token_to_presses(token, action)
+                .map_err(|error| TuiTestError::usage(error.to_string()))?;
+            let encoded: Option<Vec<Vec<u8>>> = presses
+                .iter()
+                .map(|press| state.emu.encode_key(press))
+                .collect();
+            match encoded {
+                // All or nothing per token: a token half-encoded by the
+                // backend and half by the fallback would interleave two
+                // encodings of the same keypress.
+                Some(parts) => sequence.extend(parts.concat()),
+                None => {
+                    let text = keys::token_to_seq_for_action_with_mode(token, action, modes)
+                        .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                    sequence.extend_from_slice(text.as_bytes());
+                }
+            }
+        }
+    }
     if sequence.is_empty() {
         Ok(())
     } else {
-        act(session.write(sequence.as_bytes()))
+        act(session.write(&sequence))
     }
 }
 
@@ -3158,6 +3547,20 @@ fn evaluate_cell_style(
             ));
         }
     }
+    if let Some(expected) = style.link.as_deref() {
+        let actual = cell.uri().unwrap_or_default();
+        if expected != actual {
+            mismatches.push(style_mismatch(
+                cell,
+                x,
+                y,
+                "link",
+                expected.into(),
+                actual.into(),
+                None,
+            ));
+        }
+    }
     for (property, spec, actual, foreground) in [
         ("foreground", &style.foreground, cell.fg, true),
         ("background", &style.background, cell.bg, false),
@@ -3334,7 +3737,7 @@ fn do_snapshot(
     session: &TerminalSession,
     name: &str,
     update: bool,
-    include_colors: bool,
+    include_style: bool,
     include_title: bool,
     cwd: Option<String>,
 ) -> Result<SnapshotResult, TuiTestError> {
@@ -3346,7 +3749,7 @@ fn do_snapshot(
     let content = snapshot::serialize(
         &observation.rows,
         observation.cols,
-        include_colors,
+        include_style,
         title.as_deref(),
     );
     let base = cwd
@@ -3527,6 +3930,81 @@ mod tests {
         );
     }
 
+    /// `OSC 10/11/12` move the three defaults, and each reset frees only its
+    /// own slot back to the profile.
+    #[test]
+    fn reported_colors_follow_the_dynamic_color_sequences() {
+        let profile = Profile::default();
+        let mut emu = AlacrittyEmu::new(10, 2, &profile);
+        let before = colors_of(&emu, &profile);
+
+        emu.process(b"\x1b]10;#111111\x07\x1b]11;#222222\x07\x1b]12;#333333\x07");
+        let set = colors_of(&emu, &profile);
+        assert_eq!(set.foreground, "#111111");
+        assert_eq!(set.background, "#222222");
+        assert_eq!(set.cursor, "#333333");
+
+        emu.process(b"\x1b]111\x07");
+        let reset = colors_of(&emu, &profile);
+        assert_eq!(
+            reset.background, before.background,
+            "111 restores the profile background"
+        );
+        assert_eq!(reset.foreground, "#111111", "and leaves the others alone");
+        assert_eq!(reset.cursor, "#333333");
+    }
+
+    /// The palette is reported as what a program changed, so an untouched
+    /// terminal reports nothing and `OSC 104` empties it again.
+    #[test]
+    fn reported_palette_names_only_the_entries_a_program_moved() {
+        let profile = Profile::default();
+        let mut emu = AlacrittyEmu::new(10, 2, &profile);
+        assert!(
+            colors_of(&emu, &profile).palette.is_empty(),
+            "nothing has overridden the palette yet"
+        );
+
+        emu.process(b"\x1b]4;1;#00ff00\x07");
+        assert_eq!(
+            colors_of(&emu, &profile).palette,
+            [(1, "#00ff00".to_string())].into_iter().collect(),
+            "only the slot that moved is named"
+        );
+
+        emu.process(b"\x1b]104\x07");
+        assert!(
+            colors_of(&emu, &profile).palette.is_empty(),
+            "104 restores the whole palette"
+        );
+    }
+
+    /// A caller names a color the same way `--fg` lets them, and an index
+    /// resolves through this session's palette rather than a fixed table.
+    #[test]
+    fn an_expected_color_accepts_hex_and_an_ansi_index() {
+        let profile = Profile::default();
+        let emu = AlacrittyEmu::new(10, 2, &profile);
+        assert_eq!(
+            resolve_expected_color("#010203", &emu).unwrap(),
+            crate::profile::Rgb::new(1, 2, 3)
+        );
+        assert_eq!(
+            resolve_expected_color("1", &emu).unwrap(),
+            emu.color(crate::profile::ColorSlot::Indexed(1)),
+            "an index reads the session's own palette"
+        );
+    }
+
+    /// `default` is the one spelling that cannot mean anything here: these
+    /// slots *are* the defaults, so there is nothing for it to refer to.
+    #[test]
+    fn default_is_rejected_as_a_terminal_color() {
+        let emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        let error = resolve_expected_color("default", &emu).unwrap_err();
+        assert!(format!("{error:?}").contains("no meaning"), "{error:?}");
+    }
+
     #[test]
     fn cell_model_reports_the_whole_vocabulary() {
         let cell = EmuCell {
@@ -3536,6 +4014,10 @@ mod tests {
             underline: UnderlineStyle::Curly,
             underline_color: Some(Color::Rgb(1, 2, 3)),
             attrs: Attrs::all(),
+            hyperlink: Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: Some("anchor".into()),
+                uri: "https://example.com".into(),
+            })),
         };
         let value = cell_model(3, 4, &cell);
         assert_eq!(value.x, 3);
@@ -3619,6 +4101,86 @@ mod tests {
             .mismatches
             .iter()
             .any(|mismatch| mismatch.property == "bold"));
+    }
+
+    /// A link is matched by where it points, so a locator can find the cells
+    /// of one link and ignore an identical-looking one pointing elsewhere.
+    #[test]
+    fn style_locators_match_a_cell_by_its_link() {
+        let emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        let linked = EmuCell {
+            ch: "x".into(),
+            hyperlink: Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: None,
+                uri: "https://example.com".into(),
+            })),
+            ..EmuCell::blank()
+        };
+
+        let with_link = |uri: &str| TextStyle {
+            link: Some(uri.into()),
+            ..TextStyle::default()
+        };
+        assert!(cell_matches_style(
+            &linked,
+            &with_link("https://example.com"),
+            &emu
+        ));
+        assert!(!cell_matches_style(
+            &linked,
+            &with_link("https://other.example"),
+            &emu
+        ));
+    }
+
+    /// An empty link is a real requirement, not an absent one: it asks for a
+    /// cell that links nowhere, which is how a test asserts that a link was
+    /// closed rather than merely that some other link was not found.
+    #[test]
+    fn an_empty_link_requires_a_cell_that_links_nowhere() {
+        let emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        let plain = EmuCell {
+            ch: "x".into(),
+            ..EmuCell::blank()
+        };
+        let linked = EmuCell {
+            hyperlink: Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: None,
+                uri: "https://example.com".into(),
+            })),
+            ..plain.clone()
+        };
+        let unlinked = TextStyle {
+            link: Some(String::new()),
+            ..TextStyle::default()
+        };
+
+        assert!(cell_matches_style(&plain, &unlinked, &emu));
+        assert!(!cell_matches_style(&linked, &unlinked, &emu));
+    }
+
+    /// A style that says nothing about links keeps matching either kind, so
+    /// adding the field does not narrow every existing query.
+    #[test]
+    fn a_style_without_a_link_still_matches_a_linked_cell() {
+        let emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        let linked = EmuCell {
+            ch: "x".into(),
+            attrs: Attrs::BOLD,
+            hyperlink: Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: None,
+                uri: "https://example.com".into(),
+            })),
+            ..EmuCell::blank()
+        };
+        assert!(cell_matches_style(
+            &linked,
+            &TextStyle {
+                bold: Some(true),
+                ..TextStyle::default()
+            },
+            &emu,
+        ));
     }
 
     #[test]

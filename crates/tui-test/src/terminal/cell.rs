@@ -7,6 +7,7 @@
 
 use bitflags::bitflags;
 use compact_str::CompactString;
+use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
 
 /// The 16 themeable palette slots (ANSI 0-15).
@@ -161,6 +162,57 @@ bitflags! {
 /// The grapheme stored in the cell that follows a double-width character.
 pub const CONTINUATION: &str = "";
 
+/// An OSC 8 hyperlink attached to a cell.
+///
+/// The `id` is the sequence's `id=` parameter and exists so that two runs of
+/// cells can be known to belong to the same link even when they are not
+/// adjacent, which is how a link that wraps a line stays one link. It is not
+/// the link's identity: cells carrying the same `uri` with no `id` are
+/// ordinary unrelated links.
+///
+/// Only these two survive parsing. OSC 8 allows arbitrary `key=value` params
+/// before the URI, but every emulator tui-test supports keeps `id` and drops
+/// the rest before a cell can be read back, so there is nothing to report.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Hyperlink {
+    pub id: Option<CompactString>,
+    pub uri: CompactString,
+}
+
+/// The last link built while converting a grid, so a run reuses one `Arc`.
+///
+/// A link covers every cell it spans, and a converter that builds a
+/// [`Hyperlink`] per cell rebuilds the same URI once per cell: an N-cell link
+/// costs N allocations to say one thing N times.
+///
+/// One entry is enough because a run is contiguous — that is what a run is —
+/// so the cache hits for every cell after the first, including across a wrap,
+/// where the next row continues the same link. Two links alternating cell by
+/// cell would miss every time and allocate as before; nothing writes that, and
+/// a map keyed by the link would cost a hash per cell to cover it.
+#[derive(Default)]
+pub(crate) struct LinkCache(Option<Arc<Hyperlink>>);
+
+impl LinkCache {
+    /// The link for a cell, reusing the cached one when it is the same link.
+    ///
+    /// Compares both fields rather than the URI alone, so two links that point
+    /// at the same place under different `id=` parameters stay distinct.
+    pub(crate) fn get(&mut self, id: Option<&str>, uri: &str) -> Arc<Hyperlink> {
+        if let Some(link) = &self.0 {
+            if link.uri == uri && link.id.as_deref() == id {
+                return Arc::clone(link);
+            }
+        }
+        let link = Arc::new(Hyperlink {
+            id: id.map(CompactString::from),
+            uri: CompactString::from(uri),
+        });
+        self.0 = Some(Arc::clone(&link));
+        link
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmuCell {
     /// The cell's grapheme. A blank cell holds `" "`; [`CONTINUATION`] (the
@@ -176,6 +228,14 @@ pub struct EmuCell {
     /// grapheme it colors.
     pub underline_color: Option<Color>,
     pub attrs: Attrs,
+    /// The OSC 8 hyperlink this cell sits inside, if any.
+    ///
+    /// Behind an `Arc` because a link covers a run of cells rather than one:
+    /// storing it inline would put a copy of the URI in every cell of the run
+    /// and grow `EmuCell` by more than it currently occupies. alacritty and
+    /// rio already hand out reference-counted links, so this is also what
+    /// they cost to clone.
+    pub hyperlink: Option<Arc<Hyperlink>>,
 }
 
 impl EmuCell {
@@ -188,11 +248,17 @@ impl EmuCell {
             underline: UnderlineStyle::None,
             underline_color: None,
             attrs: Attrs::empty(),
+            hyperlink: None,
         }
     }
 
     pub fn has(&self, attr: Attrs) -> bool {
         self.attrs.contains(attr)
+    }
+
+    /// The URI this cell links to, if it links anywhere.
+    pub fn uri(&self) -> Option<&str> {
+        Some(self.hyperlink.as_ref()?.uri.as_str())
     }
 }
 

@@ -1251,13 +1251,13 @@ class TuiTest:
         name: str,
         *,
         update: bool = False,
-        include_colors: bool = False,
+        include_style: bool = False,
         include_title: bool = False,
     ) -> str:
         return await self._guarded(
             "expect_snapshot",
             self._native.snapshot(
-                name, update, include_colors, include_title, os.getcwd()
+                name, update, include_style, include_title, os.getcwd()
             ),
         )
 

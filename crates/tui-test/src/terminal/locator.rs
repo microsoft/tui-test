@@ -412,17 +412,26 @@ where
         !cell.cell.ch.is_empty() && !cell.cell.ch.chars().all(char::is_whitespace)
     };
     let has_visible = matched.cells.iter().any(&visible);
+    // Links cover blanks too; appearance predicates only inspect visible text.
+    let link = style.link.as_ref().map(|link| TextStyle {
+        link: Some(link.clone()),
+        ..TextStyle::default()
+    });
+    let appearance = TextStyle {
+        link: None,
+        ..style.clone()
+    };
     let mut all_matched = true;
     let mut mismatches = Vec::new();
-    for cell in matched
-        .cells
-        .iter()
-        .filter(|cell| !has_visible || visible(cell))
-    {
-        let evaluation = style_evaluate(&cell.cell, style, cell.x, cell.y);
-        if !evaluation.matched {
-            all_matched = false;
-            mismatches.extend(evaluation.mismatches);
+    for cell in &matched.cells {
+        let appearance =
+            (!appearance.is_empty() && (!has_visible || visible(cell))).then_some(&appearance);
+        for predicate in [link.as_ref(), appearance].into_iter().flatten() {
+            let evaluation = style_evaluate(&cell.cell, predicate, cell.x, cell.y);
+            if !evaluation.matched {
+                all_matched = false;
+                mismatches.extend(evaluation.mismatches);
+            }
         }
     }
     CellStyleEvaluation {
@@ -1247,5 +1256,127 @@ mod tests {
         let found = locate_query_text(&rows, &query).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].value.start.column, 2);
+    }
+
+    /// A blank inside a match is skipped for a color, which it cannot show,
+    /// but not for a link, which it can carry. `A B` whose space alone links
+    /// somewhere is not a run that links nowhere.
+    #[test]
+    fn a_link_constraint_covers_the_blanks_inside_a_match() {
+        let link = |uri: &str| {
+            Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: None,
+                uri: uri.into(),
+            }))
+        };
+        let mut rows = grid(&["A B"]);
+        rows[0][1].hyperlink = link("https://example.com");
+
+        let locate = |rows: &[Vec<EmuCell>], query: &LocatorQuery| {
+            locate_query(rows, query, &mut |cell, style: &TextStyle| {
+                style
+                    .link
+                    .as_deref()
+                    .is_none_or(|expected| expected == cell.uri().unwrap_or_default())
+            })
+        };
+        let with_link = |link: &str| LocatorQuery {
+            selector: LocatorSelector::Text(TextSelector::new("A B")),
+            occurrence: MatchOccurrence::Any,
+            within: None,
+            direction: LocatorDirection::Within,
+            style: TextStyle {
+                link: Some(link.to_string()),
+                ..TextStyle::default()
+            },
+        };
+
+        assert!(
+            locate(&rows, &with_link("")).unwrap().is_empty(),
+            "the linked space means the run does not link nowhere"
+        );
+        assert!(
+            locate(&rows, &with_link("https://example.com"))
+                .unwrap()
+                .is_empty(),
+            "and the unlinked letters mean it is not all one link either"
+        );
+
+        for cell in &mut rows[0] {
+            cell.hyperlink = link("https://example.com");
+        }
+        assert_eq!(
+            locate(&rows, &with_link("https://example.com"))
+                .unwrap()
+                .len(),
+            1,
+            "every cell linked, blanks included, matches"
+        );
+    }
+
+    /// Asking about a link and an appearance together means the same as asking
+    /// about each alone.
+    ///
+    /// `A B` linked throughout, with the letters bold and the space not — the
+    /// usual shape, since a program has no reason to bold a space. The blank
+    /// is skipped for bold, which it cannot show, and checked for the link,
+    /// which it carries. Treating one policy as the match's own would fail the
+    /// combination while passing both halves.
+    #[test]
+    fn a_link_and_an_appearance_compose() {
+        let mut rows = grid(&["A B"]);
+        for cell in &mut rows[0] {
+            cell.hyperlink = Some(std::sync::Arc::new(crate::terminal::cell::Hyperlink {
+                id: None,
+                uri: "https://example.com".into(),
+            }));
+        }
+        rows[0][0].attrs.insert(Attrs::BOLD);
+        rows[0][2].attrs.insert(Attrs::BOLD);
+
+        let locate = |style: TextStyle| {
+            locate_query(
+                &rows,
+                &LocatorQuery {
+                    selector: LocatorSelector::Text(TextSelector::new("A B")),
+                    occurrence: MatchOccurrence::Any,
+                    within: None,
+                    direction: LocatorDirection::Within,
+                    style,
+                },
+                &mut |cell, style: &TextStyle| {
+                    style
+                        .bold
+                        .is_none_or(|expected| expected == cell.has(Attrs::BOLD))
+                        && style
+                            .link
+                            .as_deref()
+                            .is_none_or(|expected| expected == cell.uri().unwrap_or_default())
+                },
+            )
+            .unwrap()
+            .len()
+        };
+        let bold = TextStyle {
+            bold: Some(true),
+            ..TextStyle::default()
+        };
+        let linked = TextStyle {
+            link: Some("https://example.com".to_string()),
+            ..TextStyle::default()
+        };
+        let both = TextStyle {
+            bold: Some(true),
+            link: Some("https://example.com".to_string()),
+            ..TextStyle::default()
+        };
+
+        assert_eq!(
+            locate(bold),
+            1,
+            "the space cannot show bold, so it is skipped"
+        );
+        assert_eq!(locate(linked), 1, "every cell carries the link");
+        assert_eq!(locate(both), 1, "so asking for both matches too");
     }
 }

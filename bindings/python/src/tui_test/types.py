@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Union
 
 Color = Union[str, int]
@@ -81,6 +81,15 @@ class Cell:
     #: independently of ``underline_style``, so a cell that set SGR 58 without
     #: an underline still reports the color it would use.
     underline_color: Color
+    #: The OSC 8 URI this cell links to; ``""`` when it links nowhere.
+    link: str = ""
+    #: The link's ``id=`` parameter; ``""`` when the sequence carried none.
+    #: Identifies a link across a wrap rather than describing where it points:
+    #: a program that wraps its own links tags each run with a shared ``id=``.
+    #:
+    #: Backend-dependent. Ghostty reports a link's URI and nothing else, so
+    #: this is always empty there and no locator matches on it.
+    link_id: str = ""
 
 
 @dataclass
@@ -102,6 +111,7 @@ class TextStyle:
     hidden: Optional[bool] = None
     strikethrough: Optional[bool] = None
     blink: Optional[bool] = None
+    link: Optional[str] = None
 
 
 @dataclass
@@ -138,7 +148,7 @@ class TextMatch:
 class State:
     cols: int
     rows: int
-    cursor: Dict[str, int]
+    cursor: Dict[str, Any]
     title: Optional[str]
     cwd: Optional[str]
     last_command: Optional[str]
@@ -149,6 +159,9 @@ class State:
     text: str
     session_shell: Optional[str]
     bell_count: int = 0
+    modes: Dict[str, bool] = field(default_factory=dict)
+    mouse_mode: str = "none"
+    colors: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "State":
@@ -163,6 +176,9 @@ class State:
             exited=d.get("exited"),
             ready=d.get("ready", False),
             bell_count=d.get("bell_count", 0),
+            modes=d.get("modes", {}),
+            mouse_mode=d.get("mouse_mode", "none"),
+            colors=d.get("colors", {}),
             timeouts=Timeouts(**d["timeouts"]),
             text=d.get("text", ""),
             session_shell=d.get("session_shell"),

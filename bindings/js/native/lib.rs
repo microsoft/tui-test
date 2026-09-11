@@ -5,6 +5,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use napi::bindgen_prelude::{spawn_blocking, Buffer, Either};
 use napi::{Error, Result, Status};
+use std::collections::HashMap;
+
 use napi_derive::napi;
 use tui_test::profile::{Profile as CoreProfile, Rgb};
 use tui_test::shell::Shell as CoreShell;
@@ -22,9 +24,9 @@ use tui_test::{
     Operation, OperationResult, RecordingFormat as CoreRecordingFormat,
     RunOptions as CoreRunOptions, ScreenshotResult as CoreScreenshotResult, SessionHandle,
     Size as CoreSize, SnapshotResult as CoreSnapshotResult, State as CoreState,
-    StyleSelector as CoreStyleSelector, TextMatch as CoreTextMatch,
-    TextSelector as CoreTextSelector, TextStyle as CoreTextStyle, Timeouts as CoreTimeouts,
-    TuiTestError, WhitespaceMode as CoreWhitespaceMode,
+    StyleSelector as CoreStyleSelector, TerminalColors as CoreTerminalColors,
+    TextMatch as CoreTextMatch, TextSelector as CoreTextSelector, TextStyle as CoreTextStyle,
+    Timeouts as CoreTimeouts, TuiTestError, WhitespaceMode as CoreWhitespaceMode,
 };
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
@@ -176,6 +178,9 @@ impl From<CoreOpenResult> for OpenResult {
 pub struct Cursor {
     pub x: u16,
     pub y: u16,
+    pub visible: bool,
+    pub shape: String,
+    pub color: String,
 }
 
 impl From<CoreCursor> for Cursor {
@@ -183,6 +188,9 @@ impl From<CoreCursor> for Cursor {
         Self {
             x: value.x,
             y: value.y,
+            visible: value.visible,
+            shape: value.shape,
+            color: value.color,
         }
     }
 }
@@ -256,8 +264,42 @@ pub struct State {
     pub ready: bool,
     #[napi(js_name = "bell_count")]
     pub bell_count: f64,
+    pub modes: HashMap<String, bool>,
+    #[napi(js_name = "mouse_mode")]
+    pub mouse_mode: String,
+    pub colors: TerminalColors,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
+}
+
+/// The colors the terminal is painting with.
+#[napi(object)]
+pub struct TerminalColors {
+    /// The default foreground (`OSC 10`).
+    pub foreground: String,
+    /// The default background (`OSC 11`).
+    pub background: String,
+    /// The cursor color (`OSC 12`).
+    pub cursor: String,
+    /// Palette entries a program overrode (`OSC 4`), keyed by index.
+    ///
+    /// Only entries that differ from the profile are listed.
+    pub palette: HashMap<String, String>,
+}
+
+impl From<CoreTerminalColors> for TerminalColors {
+    fn from(value: CoreTerminalColors) -> Self {
+        Self {
+            foreground: value.foreground,
+            background: value.background,
+            cursor: value.cursor,
+            palette: value
+                .palette
+                .into_iter()
+                .map(|(index, color)| (index.to_string(), color))
+                .collect(),
+        }
+    }
 }
 
 impl From<CoreState> for State {
@@ -274,6 +316,9 @@ impl From<CoreState> for State {
             exited: value.exited,
             ready: value.ready,
             bell_count: value.bell_count as f64,
+            modes: value.modes.into_iter().collect(),
+            mouse_mode: value.mouse_mode,
+            colors: value.colors.into(),
             timeouts: value.timeouts.into(),
             text: value.text,
         }
@@ -334,6 +379,17 @@ pub struct Cell {
     pub underline_style: UnderlineStyle,
     #[napi(js_name = "underline_color")]
     pub underline_color: Color,
+    /// The OSC 8 URI this cell links to, empty when it links nowhere.
+    pub link: String,
+    /// The link's `id=` parameter, empty when the sequence carried none.
+    ///
+    /// Identifies a link across a wrap rather than describing where it points:
+    /// a program that wraps its own links tags each run with a shared `id=`.
+    ///
+    /// Backend-dependent. Ghostty reports a link's URI and nothing else, so
+    /// this is always empty there and no locator matches on it.
+    #[napi(js_name = "link_id")]
+    pub link_id: String,
 }
 
 impl TryFrom<CoreCell> for Cell {
@@ -356,6 +412,8 @@ impl TryFrom<CoreCell> for Cell {
             underline: value.underline,
             underline_style: underline_style(value.underline_style)?,
             underline_color: color(value.underline_color),
+            link: value.link,
+            link_id: value.link_id,
         })
     }
 }
@@ -460,6 +518,7 @@ pub struct LocatorStyle {
     pub hidden: Option<bool>,
     pub strikethrough: Option<bool>,
     pub blink: Option<bool>,
+    pub link: Option<String>,
 }
 
 #[napi(object)]
@@ -491,7 +550,7 @@ pub struct ClipboardWaitOptions {
 #[napi(object)]
 pub struct SnapshotOptions {
     pub update: Option<bool>,
-    pub include_colors: Option<bool>,
+    pub include_style: Option<bool>,
     pub include_title: Option<bool>,
     pub cwd: Option<String>,
 }
@@ -666,6 +725,7 @@ fn core_style(style: LocatorStyle) -> CoreTextStyle {
         hidden: style.hidden,
         strikethrough: style.strikethrough,
         blink: style.blink,
+        link: style.link,
     }
 }
 
@@ -1045,7 +1105,7 @@ impl NativeSession {
             "state",
             Operation::State,
             |result| match result {
-                OperationResult::State(value) => Ok(value.into()),
+                OperationResult::State(value) => Ok((*value).into()),
                 _ => Err(unexpected("state")),
             },
         )
@@ -1811,7 +1871,7 @@ impl NativeSession {
     ) -> Result<SnapshotResult> {
         let options = options.unwrap_or(SnapshotOptions {
             update: None,
-            include_colors: None,
+            include_style: None,
             include_title: None,
             cwd: None,
         });
@@ -1822,7 +1882,7 @@ impl NativeSession {
             Operation::Snapshot {
                 name,
                 update: options.update.unwrap_or(false),
-                include_colors: options.include_colors.unwrap_or(false),
+                include_style: options.include_style.unwrap_or(false),
                 include_title: options.include_title.unwrap_or(false),
                 cwd: options.cwd,
             },

@@ -14,8 +14,8 @@ use tui_test::{
     FailureArtifactMode, FailureArtifactOptions, KeyAction, LocatorDirection, LocatorQuery,
     LocatorSelector, MatchOccurrence, MouseAction, MouseOptions, OpenOptions, OpenResult,
     Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
-    SnapshotResult, State, StyleSelector, TextMatch, TextSelector, TextStyle, Timeouts,
-    TuiTestError, WhitespaceMode,
+    SnapshotResult, State, StyleSelector, TerminalColors, TextMatch, TextSelector, TextStyle,
+    Timeouts, TuiTestError, WhitespaceMode,
 };
 
 pyo3::create_exception!(
@@ -1201,13 +1201,13 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (name, update, include_colors, include_title, cwd))]
+    #[pyo3(signature = (name, update, include_style, include_title, cwd))]
     fn snapshot<'py>(
         &self,
         py: Python<'py>,
         name: String,
         update: bool,
-        include_colors: bool,
+        include_style: bool,
         include_title: bool,
         cwd: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -1220,7 +1220,7 @@ impl NativeSession {
                     Operation::Snapshot {
                         name,
                         update,
-                        include_colors,
+                        include_style,
                         include_title,
                         cwd,
                     },
@@ -1578,6 +1578,7 @@ fn core_style(dict: &Bound<'_, PyDict>) -> Result<TextStyle, TuiTestError> {
         hidden: py_bool(dict, "hidden")?,
         strikethrough: py_bool(dict, "strikethrough")?,
         blink: py_bool(dict, "blink")?,
+        link: py_string(dict, "link")?,
     })
 }
 
@@ -1797,7 +1798,7 @@ fn execute_open(
 
 fn execute_state(session: &NativeSession, operation: Operation) -> Result<State, TuiTestError> {
     match session.execute(operation)? {
-        OperationResult::State(value) => Ok(value),
+        OperationResult::State(value) => Ok(*value),
         _ => Err(unexpected_result("terminal state")),
     }
 }
@@ -1994,6 +1995,23 @@ fn cursor_dict(py: Python<'_>, cursor: Cursor) -> PyResult<Bound<'_, PyDict>> {
     let value = PyDict::new(py);
     value.set_item("x", cursor.x)?;
     value.set_item("y", cursor.y)?;
+    value.set_item("visible", cursor.visible)?;
+    value.set_item("shape", cursor.shape)?;
+    value.set_item("color", cursor.color)?;
+    Ok(value)
+}
+
+/// The terminal's colors, with the `OSC 4` palette keyed by index.
+fn colors_dict(py: Python<'_>, colors: TerminalColors) -> PyResult<Bound<'_, PyDict>> {
+    let value = PyDict::new(py);
+    value.set_item("foreground", colors.foreground)?;
+    value.set_item("background", colors.background)?;
+    value.set_item("cursor", colors.cursor)?;
+    let palette = PyDict::new(py);
+    for (index, color) in colors.palette {
+        palette.set_item(index, color)?;
+    }
+    value.set_item("palette", palette)?;
     Ok(value)
 }
 
@@ -2032,6 +2050,13 @@ fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     result.set_item("exited", value.exited)?;
     result.set_item("ready", value.ready)?;
     result.set_item("bell_count", value.bell_count)?;
+    let modes = PyDict::new(py);
+    for (name, enabled) in value.modes {
+        modes.set_item(name, enabled)?;
+    }
+    result.set_item("modes", modes)?;
+    result.set_item("mouse_mode", value.mouse_mode)?;
+    result.set_item("colors", colors_dict(py, value.colors)?)?;
     let timeouts = PyDict::new(py);
     timeouts.set_item("text", value.timeouts.text)?;
     timeouts.set_item("idle", value.timeouts.idle)?;
@@ -2070,6 +2095,8 @@ fn cell_to_py(py: Python<'_>, cell: Cell) -> PyResult<Bound<'_, PyDict>> {
     value.set_item("underline", cell.underline)?;
     value.set_item("underline_style", cell.underline_style)?;
     set_color(&value, "underline_color", cell.underline_color)?;
+    value.set_item("link", cell.link)?;
+    value.set_item("link_id", cell.link_id)?;
     Ok(value)
 }
 

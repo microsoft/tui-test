@@ -854,6 +854,7 @@ mod tests {
             underline: UnderlineStyle::Curly,
             underline_color: Some(Color::Rgb(1, 2, 3)),
             attrs: Attrs::all(),
+            hyperlink: None,
         };
         let value = FrameCell::capture(&cell, 1, &Profile::default());
         assert_eq!(value.flags.len(), 7);

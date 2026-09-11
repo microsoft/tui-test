@@ -21,15 +21,15 @@
 //! `Sync`-in-spirit: every entry point below takes `&mut self`, so the daemon's
 //! existing mutex is still what serializes access.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use compact_str::{CompactString, ToCompactString};
 use rquickjs::{Context, Ctx, Function, Object, Runtime};
 
 use crate::event::BellTracker;
 use crate::profile::{ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{ClipboardValidator, CursorShape, Emulator};
+use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
+use crate::terminal::emu::{ClipboardValidator, ColorTable, CursorShape, Emulator, TerminalMode};
 
 const XTERM_BUNDLE: &str = include_str!("../../assets/xtermjs/xterm-headless.js");
 const UNICODE11: &str = include_str!("../../assets/xtermjs/addon-unicode11.js");
@@ -42,7 +42,7 @@ const SHIM: &str = include_str!("../../assets/xtermjs/shim.js");
 const UNICODE11_CAPTURE: &str = "globalThis.__unicode11 = module.exports.Unicode11Addon;";
 
 /// Ints per cell in the packed `meta` array, mirroring `pack()` in the shim.
-const STRIDE: usize = 6;
+const STRIDE: usize = 7;
 
 /// Where the three dynamic colors sit in the flat table handed to the shim,
 /// which continues past the 256 palette slots. The numbering is this
@@ -326,29 +326,58 @@ impl XtermJsEmu {
             let batch_end = (batch + PACK_BATCH_ROWS as i32).min(end);
             let packed = self
                 .ctx
-                .with(|ctx| -> rquickjs::Result<(String, Vec<i32>)> {
+                .with(|ctx| -> rquickjs::Result<(String, Vec<i32>, String)> {
                     let emu: Object = ctx.globals().get("__emu")?;
                     let packed: rquickjs::Array =
                         emu.get::<_, Function>("pack")?.call((batch, batch_end))?;
-                    Ok((packed.get(0)?, packed.get(1)?))
+                    Ok((packed.get(0)?, packed.get(1)?, packed.get(2)?))
                 });
-            let (chars, meta) = match packed {
+            let (chars, meta, links) = match packed {
                 Ok(p) => p,
                 Err(_) => return Vec::new(),
             };
-            decode_into(&mut out, &chars, &meta, cols);
+            decode_into(&mut out, &chars, &meta, &decode_links(&links), cols);
         }
         out
     }
 }
 
+/// Rebuild the batch's link table, whose entries the packed cells index by
+/// their position in it, one-based so that `0` means "no link".
+///
+/// Each entry is the `id=` parameter, empty when the sequence carried none,
+/// then NUL, then the URI. Entries are separated by `\u{1}`, which cannot
+/// appear in either: xterm.js parses an OSC payload only up to a C0 byte.
+fn decode_links(packed: &str) -> Vec<Arc<Hyperlink>> {
+    if packed.is_empty() {
+        return Vec::new();
+    }
+    packed
+        .split('\u{1}')
+        .map(|entry| {
+            let (id, uri) = entry.split_once('\0').unwrap_or(("", entry));
+            Arc::new(Hyperlink {
+                id: (!id.is_empty()).then(|| id.to_compact_string()),
+                uri: uri.to_compact_string(),
+            })
+        })
+        .collect()
+}
+
 /// Decode a packed batch into whole rows, appending to `out`.
-fn decode_into(out: &mut Vec<Vec<EmuCell>>, chars: &str, meta: &[i32], cols: usize) {
+fn decode_into(
+    out: &mut Vec<Vec<EmuCell>>,
+    chars: &str,
+    meta: &[i32],
+    links: &[Arc<Hyperlink>],
+    cols: usize,
+) {
     let mut cells = chars.split('\0');
     let mut row = Vec::with_capacity(cols);
     for m in meta.as_chunks::<STRIDE>().0 {
         let ch = cells.next().unwrap_or("");
-        let (width, fg, bg, ul_color, ul_style, flags) = (m[0], m[1], m[2], m[3], m[4], m[5]);
+        let (width, fg, bg, ul_color, ul_style, flags, link) =
+            (m[0], m[1], m[2], m[3], m[4], m[5], m[6]);
 
         // Width alone does not identify a continuation. xterm.js also reports
         // width 0 for a genuine zero-width grapheme that had no base character
@@ -372,6 +401,10 @@ fn decode_into(out: &mut Vec<Vec<EmuCell>>, chars: &str, meta: &[i32], cols: usi
             underline: underline(ul_style),
             underline_color: color(ul_color, flags, UL_PALETTE, UL_RGB),
             attrs: attrs(flags),
+            hyperlink: usize::try_from(link)
+                .ok()
+                .and_then(|link| links.get(link.checked_sub(1)?))
+                .cloned(),
         });
 
         if row.len() == cols {
@@ -411,8 +444,17 @@ impl Emulator for XtermJsEmu {
         self.call::<String>("takeReplies").into_bytes()
     }
 
-    fn bracketed_paste_mode(&self) -> bool {
-        self.call("bracketedPaste")
+    fn mode(&self, mode: TerminalMode) -> bool {
+        // Not in xterm.js's `modes`; it lives on the core service instead.
+        if mode == TerminalMode::CursorVisible {
+            return self.call_or("cursorVisible", true);
+        }
+        self.invoke("mode", |emu, ctx| {
+            let name = rquickjs::String::from_str(ctx.clone(), mode.name())?;
+            emu.get::<_, Function>("mode")?.call((name,))
+        })
+        .unwrap_or(0i32)
+            != 0
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
@@ -444,8 +486,8 @@ impl Emulator for XtermJsEmu {
             .filter(|title| !title.is_empty())
     }
 
-    fn cursor_visible(&self) -> bool {
-        self.call_or("cursorVisible", true)
+    fn cursor_key_application(&self) -> bool {
+        self.call_or("cursorKeyApplication", 0) != 0
     }
 
     fn cursor_shape(&self) -> CursorShape {
@@ -478,6 +520,38 @@ impl Emulator for XtermJsEmu {
             ),
             _ => configured,
         }
+    }
+
+    fn colors(&self) -> ColorTable {
+        let colors = &self.profile.colors;
+        let mut table = ColorTable {
+            foreground: colors.foreground,
+            background: colors.background,
+            cursor: colors.cursor,
+            palette: std::array::from_fn(|index| colors.rgb(index as u8)),
+        };
+        // One crossing carrying only the slots a program changed, rather than
+        // 259 asking about slots it mostly has not.
+        let flat: Vec<i32> = self.call("colorOverrides");
+        for [slot, value] in flat.as_chunks::<2>().0 {
+            let (slot, value) = (*slot, *value);
+            if value < 0 {
+                continue;
+            }
+            let rgb = Rgb::new(
+                ((value >> 16) & 0xff) as u8,
+                ((value >> 8) & 0xff) as u8,
+                (value & 0xff) as u8,
+            );
+            match slot as usize {
+                FOREGROUND => table.foreground = rgb,
+                BACKGROUND => table.background = rgb,
+                CURSOR => table.cursor = rgb,
+                index if index < 256 => table.palette[index] = rgb,
+                _ => {}
+            }
+        }
+        table
     }
 
     fn viewable_rows(&self) -> Vec<Vec<EmuCell>> {
@@ -559,15 +633,6 @@ mod tests {
         assert_eq!(bells.count(), 1);
     }
 
-    #[test]
-    fn tracks_bracketed_paste_mode() {
-        let mut emulator = XtermJsEmu::new(10, 2, &Profile::default()).expect("create emulator");
-        emulator.process(b"\x1b[?2004h");
-        assert!(emulator.bracketed_paste_mode());
-        emulator.process(b"\x1b[?2004l");
-        assert!(!emulator.bracketed_paste_mode());
-    }
-
     crate::emulator_conformance_tests!(
         |cols, rows, profile| {
             Box::new(XtermJsEmu::new(cols, rows, profile).expect("create xterm.js emulator"))
@@ -582,6 +647,13 @@ mod tests {
             crate::terminal::conformance::Divergence::UnderlineColorNeedsAStyle,
             // Clipboard access is unavailable.
             crate::terminal::conformance::Divergence::ClipboardUnsupported,
+            // xterm.js has no Kitty keyboard protocol implementation at all:
+            // the bundle contains no handler for `CSI > u`, `CSI = u`, or
+            // `CSI < u`, so the modes a child pushes are parsed and dropped.
+            crate::terminal::conformance::Divergence::NoKittyKeyboard,
+            // `ESC c` clears every other mode on this backend but leaves a
+            // hidden cursor hidden.
+            crate::terminal::conformance::Divergence::RisDoesNotResetCursorVisibility,
         ]
     );
 }

@@ -2,14 +2,19 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use compact_str::CompactString;
 use ghostty_vt::error::Error as GhosttyError;
+use ghostty_vt::key::{
+    Action as GhosttyKeyAction, Encoder, Event as GhosttyKeyEvent, Key, KittyKeyFlags,
+    Mods as GhosttyMods, OptionAsAlt,
+};
 use ghostty_vt::render::{CellIterator, CursorVisualStyle, RowIterator};
-use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef};
+use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef, Screen};
 use ghostty_vt::style::{Palette, PaletteIndex, RgbColor, Style, StyleColor, Underline};
 use ghostty_vt::terminal::{
     ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Mode, Point,
@@ -18,9 +23,14 @@ use ghostty_vt::terminal::{
 use ghostty_vt::{RenderState, Terminal};
 
 use crate::event::BellTracker;
+use crate::input::keys::{KeyEventKind, KeyPress, Mods};
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{Clipboard, ClipboardType, CursorShape};
+use crate::terminal::cell::{
+    Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
+};
+use crate::terminal::emu::{
+    Clipboard, ClipboardType, ColorTable, CursorShape, KeyboardMode, TerminalMode,
+};
 
 fn to_ghostty_rgb(color: Rgb) -> RgbColor {
     RgbColor {
@@ -54,7 +64,39 @@ fn underline(style: Underline) -> UnderlineStyle {
     }
 }
 
-fn cell_from_ghostty(cell: GhosttyCell, style: Style, graphemes: &[char]) -> Result<EmuCell> {
+/// Read a cell's OSC 8 URI off a grid reference.
+///
+/// A link spanning N cells reuses one `Arc` through `links` rather than
+/// building N copies of the same URI.
+///
+/// Ghostty's FFI exposes the URI and nothing else, so the `id=` parameter is
+/// not recoverable here and every ghostty link reports `id: None`. That is
+/// declared as a conformance divergence rather than worked around.
+fn grid_hyperlink(grid: &GridRef<'_>, links: &mut LinkCache) -> Result<Option<Arc<Hyperlink>>> {
+    let mut inline = [0u8; 128];
+    let uri = match grid.hyperlink_uri(&mut inline) {
+        Ok(0) => return Ok(None),
+        Ok(len) => {
+            CompactString::from_utf8(&inline[..len]).context("hyperlink URI is not UTF-8")?
+        }
+        Err(GhosttyError::OutOfSpace { required }) => {
+            let mut buf = vec![0u8; required];
+            let len = grid
+                .hyperlink_uri(&mut buf)
+                .context("reading hyperlink URI")?;
+            CompactString::from_utf8(&buf[..len]).context("hyperlink URI is not UTF-8")?
+        }
+        Err(error) => return Err(error).context("reading hyperlink URI"),
+    };
+    Ok(Some(links.get(None, &uri)))
+}
+
+fn cell_from_ghostty(
+    cell: GhosttyCell,
+    style: Style,
+    graphemes: &[char],
+    hyperlink: Option<Arc<Hyperlink>>,
+) -> Result<EmuCell> {
     let ch = match cell.wide().context("reading cell width")? {
         CellWide::SpacerTail => CompactString::const_new(CONTINUATION),
         CellWide::SpacerHead => CompactString::const_new(" "),
@@ -95,6 +137,7 @@ fn cell_from_ghostty(cell: GhosttyCell, style: Style, graphemes: &[char]) -> Res
         underline: underline(style.underline),
         underline_color: cell_color(style.underline_color),
         attrs,
+        hyperlink,
     })
 }
 
@@ -114,7 +157,7 @@ fn grid_graphemes(grid: &GridRef<'_>) -> Result<Vec<char>> {
     }
 }
 
-fn cell_from_grid(grid: &GridRef<'_>) -> Result<EmuCell> {
+fn cell_from_grid(grid: &GridRef<'_>, links: &mut LinkCache) -> Result<EmuCell> {
     let cell = grid.cell().context("reading scrollback cell value")?;
     let graphemes = if matches!(
         cell.wide().context("reading scrollback cell width")?,
@@ -124,10 +167,12 @@ fn cell_from_grid(grid: &GridRef<'_>) -> Result<EmuCell> {
     } else {
         grid_graphemes(grid)?
     };
+    let hyperlink = grid_hyperlink(grid, links)?;
     cell_from_ghostty(
         cell,
         grid.style().context("reading scrollback cell style")?,
         &graphemes,
+        hyperlink,
     )
 }
 
@@ -135,7 +180,6 @@ fn cell_from_grid(grid: &GridRef<'_>) -> Result<EmuCell> {
 pub(super) struct Frame {
     pub(super) rows: Vec<Vec<EmuCell>>,
     pub(super) cursor: (u16, u16),
-    pub(super) cursor_visible: bool,
     pub(super) cursor_shape: CursorShape,
 }
 
@@ -228,14 +272,181 @@ impl GhosttyCore {
         self.frame = None;
     }
 
-    pub(super) fn bracketed_paste_mode(&self) -> Result<bool> {
+    pub(super) fn mode(&self, mode: TerminalMode) -> Result<bool> {
+        // Ghostty honors all three ways onto the alternate screen — `?47`,
+        // `?1047` and `?1049` — and they share one screen: each dispatches to
+        // `switchScreenMode`, which moves the same `screens.active_key`. The
+        // *mode bits* are what is separate. `setMode` sets one bit per mode
+        // before dispatching, and nothing syncs them, so `?47h` followed by
+        // `?1049l` leaves bit 47 set while the primary screen is showing.
+        //
+        // So no mode bit answers "which screen is showing": reading `?1049`
+        // alone missed the other two entries, and reading all three claimed
+        // the alternate screen after `?1049l` had left it. Ghostty tracks the
+        // active screen directly, which is the question being asked.
+        if mode == TerminalMode::AlternateScreen {
+            return Ok(matches!(
+                self.terminal
+                    .active_screen()
+                    .context("reading active screen")?,
+                Screen::Alternate
+            ));
+        }
+        let ghostty_mode = match mode {
+            TerminalMode::ApplicationCursorKeys => Mode::DECCKM,
+            TerminalMode::ApplicationKeypad => Mode::KEYPAD_KEYS,
+            TerminalMode::Origin => Mode::ORIGIN,
+            TerminalMode::Wraparound => Mode::WRAPAROUND,
+            TerminalMode::Insert => Mode::INSERT,
+            TerminalMode::FocusEvents => Mode::FOCUS_EVENT,
+            TerminalMode::BracketedPaste => Mode::BRACKETED_PASTE,
+            TerminalMode::AlternateScreen => unreachable!("handled above"),
+            TerminalMode::CursorVisible => Mode::CURSOR_VISIBLE,
+        };
         self.terminal
-            .mode(Mode::BRACKETED_PASTE)
-            .context("reading bracketed paste mode")
+            .mode(ghostty_mode)
+            .with_context(|| format!("reading {} mode", mode.name()))
     }
 
     pub(super) fn take_pending_writes(&mut self) -> Vec<u8> {
         std::mem::take(&mut *self.pending.borrow_mut())
+    }
+
+    /// Encode a key event with ghostty's own encoder.
+    ///
+    /// `set_options_from_terminal` is the point of routing here: it reads the
+    /// modes off the live terminal, so this applies keypad application mode,
+    /// `modifyOtherKeys`, and the alt-escape prefix, none of which the shared
+    /// encoder models.
+    ///
+    /// `Ok(None)` means ghostty cannot express this event and the caller
+    /// should fall back rather than send something wrong.
+    pub(super) fn encode_key(&self, press: &KeyPress) -> Result<Option<Vec<u8>>> {
+        // Ghostty's modifier bitmask has Ctrl, Alt, Shift and Super, but no
+        // Hyper or Meta, which the Kitty protocol does define. An event using
+        // one of those can never be handed over without dropping it.
+        if press.mods.hyper || press.mods.meta {
+            return Ok(None);
+        }
+        // Super is representable and encodes correctly in any Kitty mode, but
+        // the legacy encoding has no form that carries it: with no flags set
+        // ghostty answers `super+a` with nothing at all and `ctrl+super+a`
+        // with `CSI 97;5u`, which is `ctrl+a` with the Super quietly gone.
+        // Declining hands those to the shared encoder, which does carry it.
+        if press.mods.super_key && self.keyboard_mode()?.is_empty() {
+            return Ok(None);
+        }
+        let Some(key) = ghostty_key(&press.key) else {
+            return Ok(None);
+        };
+
+        let mut event = GhosttyKeyEvent::new().context("creating key event")?;
+        event
+            .set_key(key)
+            .set_action(match press.event {
+                KeyEventKind::Press => GhosttyKeyAction::Press,
+                KeyEventKind::Repeat => GhosttyKeyAction::Repeat,
+                KeyEventKind::Release => GhosttyKeyAction::Release,
+            })
+            .set_mods(ghostty_mods(press.mods));
+
+        // Shift that went into producing the text is *consumed*: it made `A`
+        // out of `a` and is not reported separately. Without this a plain
+        // `Shift+a` encodes as `CSI 97;2u` instead of the text `A`, and the
+        // Kitty spec is explicit that a text-producing key still sends its
+        // text when only disambiguation is on.
+        if press.mods.shift && press.text.as_deref().is_some_and(|text| text != press.key) {
+            event.set_consumed_mods(GhosttyMods::SHIFT);
+        }
+
+        // The codepoint the key sits on. Ghostty builds the Kitty `CSI <code> u`
+        // form from it, so a key without one is encoded as its text alone and
+        // silently loses its modifiers: `Ctrl+Space` came out as a plain space.
+        //
+        // For a character the key *is* the codepoint. For a named key it is
+        // not — `space` is a word — so the text it produces stands in, which
+        // is how `space` gets U+0020. Named keys that produce no text, such as
+        // Enter and Tab, need nothing here: ghostty knows their codepoints
+        // from the `Key` itself.
+        //
+        // Taken from the key before the text so that `Shift+a` reports `a`
+        // rather than the `A` it produced.
+        let single = |s: &str| {
+            let mut chars = s.chars();
+            match (chars.next(), chars.next()) {
+                (Some(ch), None) => Some(ch),
+                _ => None,
+            }
+        };
+        if let Some(ch) = single(&press.key).or_else(|| press.text.as_deref().and_then(single)) {
+            event.set_unshifted_codepoint(ch);
+        }
+
+        // A key that produces text has to say so: ghostty encodes nothing at
+        // all for a text-bearing key with no `utf8` set, and needs it for the
+        // associated-text and alternate-key parts of the Kitty protocol.
+        //
+        // This is the text the key produces on the current layout rather than
+        // anything the event does with it, so it is set for a release too:
+        // ghostty derives the shifted alternate key from it, and withholding
+        // it made `Shift+a` release as `CSI 97;2:3u` instead of the
+        // `CSI 97:65;2:3u` its press had already reported.
+        if let Some(text) = press.text.as_deref() {
+            event.set_utf8(Some(text));
+        }
+
+        let mut encoder = Encoder::new().context("creating key encoder")?;
+        encoder.set_options_from_terminal(&self.terminal);
+        // `set_options_from_terminal` resets this to `False`, which is a
+        // macOS GUI question rather than a terminal one: with it off, Alt is
+        // Option and composes text instead of prefixing ESC. A headless
+        // session has no keyboard and no compose behavior, so Alt is Alt.
+        encoder.set_macos_option_as_alt(OptionAsAlt::True);
+        let mut out = Vec::with_capacity(16);
+        encoder
+            .encode_to_vec(&event, &mut out)
+            .context("encoding key event")?;
+        Ok(Some(out))
+    }
+
+    pub(super) fn cursor_key_application(&self) -> Result<bool> {
+        self.terminal
+            .mode(Mode::DECCKM)
+            .context("reading cursor key mode")
+    }
+
+    /// Kitty keyboard flags the child has pushed onto ghostty's mode stack.
+    pub(super) fn keyboard_mode(&self) -> Result<KeyboardMode> {
+        let flags = self
+            .terminal
+            .kitty_keyboard_flags()
+            .context("reading Kitty keyboard flags")?;
+        let mut mode = KeyboardMode::empty();
+        for (ghostty_flag, keyboard_flag) in [
+            (
+                KittyKeyFlags::DISAMBIGUATE,
+                KeyboardMode::DISAMBIGUATE_ESC_CODES,
+            ),
+            (
+                KittyKeyFlags::REPORT_EVENTS,
+                KeyboardMode::REPORT_EVENT_TYPES,
+            ),
+            (
+                KittyKeyFlags::REPORT_ALTERNATES,
+                KeyboardMode::REPORT_ALTERNATE_KEYS,
+            ),
+            (
+                KittyKeyFlags::REPORT_ALL,
+                KeyboardMode::REPORT_ALL_KEYS_AS_ESC,
+            ),
+            (
+                KittyKeyFlags::REPORT_ASSOCIATED,
+                KeyboardMode::REPORT_ASSOCIATED_TEXT,
+            ),
+        ] {
+            mode.set(keyboard_flag, flags.contains(ghostty_flag));
+        }
+        Ok(mode)
     }
 
     pub(super) fn set_clipboard(&mut self, clipboard: ClipboardType, text: String) {
@@ -288,9 +499,6 @@ impl GhosttyCore {
                 .context("reading cursor row")?
                 .min(rows.saturating_sub(1)),
         );
-        let cursor_visible = snapshot
-            .cursor_visible()
-            .context("reading cursor visibility")?;
         let cursor_shape = match snapshot
             .cursor_visual_style()
             .context("reading cursor shape")?
@@ -301,11 +509,26 @@ impl GhosttyCore {
         };
 
         let mut output = Vec::with_capacity(rows as usize);
+        // Rows that carry an OSC 8 link, to be filled in after iteration.
+        // Ghostty's render path exposes a cell's style and graphemes but not
+        // its hyperlink, so the URI has to come from a grid reference, which
+        // costs an FFI call per cell. `Row::has_hyperlink` narrows that to the
+        // rows that have one, and it is allowed false positives but not false
+        // negatives, so a row it skips genuinely has no link.
+        let mut linked_rows = Vec::new();
         let mut row_iter = self
             .row_iter
             .update(&snapshot)
             .context("starting row iteration")?;
         while let Some(row) = row_iter.next() {
+            if row
+                .raw_row()
+                .context("reading row")?
+                .has_hyperlink()
+                .context("reading row hyperlink flag")?
+            {
+                linked_rows.push(output.len());
+            }
             let mut output_row = Vec::with_capacity(cols as usize);
             let mut cells = self
                 .cell_iter
@@ -325,6 +548,7 @@ impl GhosttyCore {
                     raw,
                     cell.style().context("reading cell style")?,
                     &graphemes,
+                    None,
                 )?);
             }
             if output_row.len() != cols as usize {
@@ -334,6 +558,17 @@ impl GhosttyCore {
                 ));
             }
             output.push(output_row);
+        }
+        let mut links = LinkCache::default();
+        for y in linked_rows {
+            let point_y = u32::try_from(y).context("viewport row exceeds Ghostty coordinates")?;
+            for x in 0..cols {
+                let grid = self
+                    .terminal
+                    .grid_ref(Point::Viewport(PointCoordinate { x, y: point_y }))
+                    .context("reading viewport cell")?;
+                output[y][x as usize].hyperlink = grid_hyperlink(&grid, &mut links)?;
+            }
         }
         if output.len() != rows as usize {
             return Err(anyhow!(
@@ -345,7 +580,6 @@ impl GhosttyCore {
         Ok(Frame {
             rows: output,
             cursor,
-            cursor_visible,
             cursor_shape,
         })
     }
@@ -365,6 +599,7 @@ impl GhosttyCore {
             .context("reading scrollback size")?;
         let history = available.min(self.profile.scrollback);
         let mut output = Vec::with_capacity(history + self.terminal.rows()? as usize);
+        let mut links = LinkCache::default();
         for y in available - history..available {
             let y = u32::try_from(y).context("scrollback exceeds Ghostty coordinates")?;
             let mut row = Vec::with_capacity(cols as usize);
@@ -373,7 +608,7 @@ impl GhosttyCore {
                     .terminal
                     .grid_ref(Point::History(PointCoordinate { x, y }))
                     .context("reading scrollback cell")?;
-                row.push(cell_from_grid(&grid)?);
+                row.push(cell_from_grid(&grid, &mut links)?);
             }
             output.push(row);
         }
@@ -411,6 +646,117 @@ impl GhosttyCore {
             .or(configured)
             .ok_or_else(|| anyhow!("Ghostty returned no color for {slot:?}"))
     }
+    /// Every color at once, reading the palette a single time.
+    ///
+    /// `color` fetches `color_palette()` on every indexed lookup, which is
+    /// fine once and wasteful 256 times over. Ghostty always has a value for
+    /// an indexed slot, so the palette answers those directly; only the three
+    /// defaults can be unset and fall back to the profile.
+    pub(super) fn colors(&self) -> Result<ColorTable> {
+        let palette = self.terminal.color_palette().context("reading palette")?;
+        Ok(ColorTable {
+            foreground: self.color(ColorSlot::Foreground)?,
+            background: self.color(ColorSlot::Background)?,
+            cursor: self.color(ColorSlot::Cursor)?,
+            palette: std::array::from_fn(|index| {
+                from_ghostty_rgb(palette.get(PaletteIndex(index as u8)))
+            }),
+        })
+    }
+}
+
+fn ghostty_mods(mods: Mods) -> GhosttyMods {
+    let mut out = GhosttyMods::empty();
+    out.set(GhosttyMods::CTRL, mods.ctrl);
+    out.set(GhosttyMods::ALT, mods.alt);
+    out.set(GhosttyMods::SHIFT, mods.shift);
+    out.set(GhosttyMods::SUPER, mods.super_key);
+    out
+}
+
+/// The ghostty key for one of tui-test's lowercased key names.
+///
+/// Ghostty's `Key` is a physical key code in the W3C spelling, so this is a
+/// translation of naming rather than of meaning. `None` means ghostty has no
+/// key for it and the caller falls back to the shared encoder.
+fn ghostty_key(name: &str) -> Option<Key> {
+    Some(match name {
+        "up" => Key::ArrowUp,
+        "down" => Key::ArrowDown,
+        "left" => Key::ArrowLeft,
+        "right" => Key::ArrowRight,
+        "home" => Key::Home,
+        "end" => Key::End,
+        "pageup" => Key::PageUp,
+        "pagedown" => Key::PageDown,
+        "insert" => Key::Insert,
+        "delete" => Key::Delete,
+        "backspace" => Key::Backspace,
+        "tab" => Key::Tab,
+        "enter" | "return" => Key::Enter,
+        "space" => Key::Space,
+        "escape" | "esc" => Key::Escape,
+        "f1" => Key::F1,
+        "f2" => Key::F2,
+        "f3" => Key::F3,
+        "f4" => Key::F4,
+        "f5" => Key::F5,
+        "f6" => Key::F6,
+        "f7" => Key::F7,
+        "f8" => Key::F8,
+        "f9" => Key::F9,
+        "f10" => Key::F10,
+        "f11" => Key::F11,
+        "f12" => Key::F12,
+        "a" => Key::A,
+        "b" => Key::B,
+        "c" => Key::C,
+        "d" => Key::D,
+        "e" => Key::E,
+        "f" => Key::F,
+        "g" => Key::G,
+        "h" => Key::H,
+        "i" => Key::I,
+        "j" => Key::J,
+        "k" => Key::K,
+        "l" => Key::L,
+        "m" => Key::M,
+        "n" => Key::N,
+        "o" => Key::O,
+        "p" => Key::P,
+        "q" => Key::Q,
+        "r" => Key::R,
+        "s" => Key::S,
+        "t" => Key::T,
+        "u" => Key::U,
+        "v" => Key::V,
+        "w" => Key::W,
+        "x" => Key::X,
+        "y" => Key::Y,
+        "z" => Key::Z,
+        "0" => Key::Digit0,
+        "1" => Key::Digit1,
+        "2" => Key::Digit2,
+        "3" => Key::Digit3,
+        "4" => Key::Digit4,
+        "5" => Key::Digit5,
+        "6" => Key::Digit6,
+        "7" => Key::Digit7,
+        "8" => Key::Digit8,
+        "9" => Key::Digit9,
+        "`" => Key::Backquote,
+        "\\" => Key::Backslash,
+        "[" => Key::BracketLeft,
+        "]" => Key::BracketRight,
+        "," => Key::Comma,
+        "=" => Key::Equal,
+        "-" => Key::Minus,
+        "." => Key::Period,
+        "'" => Key::Quote,
+        ";" => Key::Semicolon,
+        "/" => Key::Slash,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

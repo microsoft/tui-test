@@ -91,6 +91,18 @@ export interface Cell {
   underline: boolean
   underline_style: UnderlineStyle
   underline_color: Color
+  /** The OSC 8 URI this cell links to, empty when it links nowhere. */
+  link: string
+  /**
+   * The link's `id=` parameter, empty when the sequence carried none.
+   *
+   * Identifies a link across a wrap rather than describing where it points:
+   * a program that wraps its own links tags each run with a shared `id=`.
+   *
+   * Backend-dependent. Ghostty reports a link's URI and nothing else, so
+   * this is always empty there and no locator matches on it.
+   */
+  link_id: string
 }
 
 export interface ClipboardWaitOptions {
@@ -108,6 +120,9 @@ export type Color =
 export interface Cursor {
   x: number
   y: number
+  visible: boolean
+  shape: string
+  color: string
 }
 
 export interface EffectiveTimeouts {
@@ -159,6 +174,7 @@ export interface LocatorStyle {
   hidden?: boolean
   strikethrough?: boolean
   blink?: boolean
+  link?: string
 }
 
 export interface MouseClickOptions {
@@ -268,7 +284,7 @@ export interface Size {
 
 export interface SnapshotOptions {
   update?: boolean
-  includeColors?: boolean
+  includeStyle?: boolean
   includeTitle?: boolean
   cwd?: string
 }
@@ -291,8 +307,27 @@ export interface State {
   exited: number | null
   ready: boolean
   bell_count: number
+  modes: Record<string, boolean>
+  mouse_mode: string
+  colors: TerminalColors
   timeouts: EffectiveTimeouts
   text: string
+}
+
+/** The colors the terminal is painting with. */
+export interface TerminalColors {
+  /** The default foreground (`OSC 10`). */
+  foreground: string
+  /** The default background (`OSC 11`). */
+  background: string
+  /** The cursor color (`OSC 12`). */
+  cursor: string
+  /**
+   * Palette entries a program overrode (`OSC 4`), keyed by index.
+   *
+   * Only entries that differ from the profile are listed.
+   */
+  palette: Record<string, string>
 }
 
 export interface TextMatch {

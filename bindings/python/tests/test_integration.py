@@ -664,7 +664,11 @@ class IntegrationTests(unittest.TestCase):
                 self.assertIsInstance(await su.get_cwd(), (str, type(None)))
                 self.assertEqual(await su.get_size(), {"cols": 90, "rows": 27})
                 cursor = await su.get_cursor()
-                self.assertEqual(set(cursor), {"x", "y"})
+                self.assertEqual(
+                    set(cursor), {"x", "y", "visible", "shape", "color"}
+                )
+                self.assertIsInstance(cursor["visible"], bool)
+                self.assertIn(cursor["shape"], {"block", "underline", "bar"})
                 cells = await su.cells(0, 0, 2, 1)
                 self.assertTrue(cells)
                 self.assertIsInstance(cells[0].fg, (str, int))

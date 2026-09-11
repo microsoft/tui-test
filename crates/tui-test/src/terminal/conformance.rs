@@ -33,6 +33,40 @@ pub enum Divergence {
 
     /// Clipboard access is unavailable.
     ClipboardUnsupported,
+
+    /// The backend reports a hyperlink's URI but not its `id=` parameter.
+    ///
+    /// Nothing about where the link points is lost. What is lost is being
+    /// able to tell that two runs of cells belong to the same link when they
+    /// are not adjacent.
+    HyperlinkHasNoId,
+    /// The backend does not implement the Kitty keyboard protocol at all, so
+    /// it can never report a mode the child pushed.
+    ///
+    /// Unlike the other variants this one is visible to a user: key input
+    /// falls back to legacy encodings even for a child that asked for `CSI u`.
+    /// It belongs here rather than in a profile default because it is the
+    /// emulator's own limit, not a setting.
+    NoKittyKeyboard,
+    /// `RIS` does not put `DECTCEM` back, so a hidden cursor stays hidden
+    /// through a reset that restores every other mode.
+    ///
+    /// Verified rather than inferred: on the same emulator `RIS` does clear
+    /// bracketed paste, so this is the terminal's own state and not the
+    /// mapping onto it.
+    RisDoesNotResetCursorVisibility,
+
+    /// `CSI ?47 h` and `CSI ?1047 h` are ignored, so only `CSI ?1049 h`
+    /// reaches the alternate screen.
+    ///
+    /// The two older sequences predate the cursor save that `?1049` bundles
+    /// in. A backend that drops them stays on the primary screen and reports
+    /// `alternate_screen` false, which is an honest account of what it did —
+    /// the divergence is that it did nothing at all.
+    ///
+    /// Nothing in practice depends on it: every terminal here honors `?1049`,
+    /// and that is what a full-screen program sends.
+    NoLegacyAlternateScreen,
 }
 
 /// Generates the conformance tests for one backend. `$make` builds a boxed
@@ -92,17 +126,54 @@ macro_rules! emulator_conformance_tests {
                 .contains(&$crate::terminal::conformance::Divergence::ClipboardUnsupported)
         }
 
+        /// A mode sequence still lands when a PTY read splits it, which is
+        /// where an emulator that scanned for whole sequences would fail.
+        /// Split one byte before the final letter, the last place the parser
+        /// can still be holding parameters.
         #[test]
-        fn conformance_bracketed_paste_mode_tracks_enable_disable_and_reset() {
-            let mut e = conformance_emu(10, 4, 100);
-            assert!(!e.bracketed_paste_mode());
-            e.process(b"\x1b[?20");
-            e.process(b"04h");
-            assert!(e.bracketed_paste_mode());
-            e.process(b"\x1b[?2004l");
-            assert!(!e.bracketed_paste_mode());
-            e.process(b"\x1b[?2004h\x1bc");
-            assert!(!e.bracketed_paste_mode());
+        fn conformance_terminal_modes_survive_a_split_read() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let set = mode.set_sequence();
+                let (head, tail) = set.split_at(set.len() - 1);
+                let mut e = conformance_emu(20, 4, 100);
+                e.process(head);
+                e.process(tail);
+                assert!(e.mode(mode), "{} lost across a split read", mode.name());
+            }
+        }
+
+        /// `RIS` puts every mode back to its default, which is how a program
+        /// that leaves the terminal in a strange state is recovered from.
+        #[test]
+        fn conformance_ris_resets_every_terminal_mode() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let mut e = conformance_emu(20, 4, 100);
+                // Drive it away from its default in whichever direction that is.
+                let away = if mode.default_enabled() {
+                    mode.reset_sequence()
+                } else {
+                    mode.set_sequence()
+                };
+                e.process(away);
+                assert_eq!(e.mode(mode), !mode.default_enabled());
+
+                e.process(b"\x1bc");
+                if mode == TerminalMode::CursorVisible
+                    && CONFORMANCE_DIVERGENCES.contains(
+                        &$crate::terminal::conformance::Divergence::RisDoesNotResetCursorVisibility,
+                    )
+                {
+                    continue;
+                }
+                assert_eq!(
+                    e.mode(mode),
+                    mode.default_enabled(),
+                    "RIS did not restore {}",
+                    mode.name()
+                );
+            }
         }
 
         /// The grid is always exactly `rows` x `cols`, regardless of content.
@@ -307,6 +378,205 @@ macro_rules! emulator_conformance_tests {
             );
             assert_eq!(rows[0][3].underline, U::None, "0 resets everything");
             assert_eq!(rows[0][3].underline_color, None);
+        }
+
+        /// `OSC 8 ; params ; URI ST` opens a link, and the same sequence with
+        /// an empty URI closes it. Every cell written in between carries it.
+        #[test]
+        fn conformance_hyperlinks_cover_the_cells_they_open_over() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"a\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\b");
+            let rows = e.viewable_rows();
+
+            assert_eq!(rows[0][0].uri(), None, "text before the link is plain");
+            for x in 1..5 {
+                assert_eq!(
+                    rows[0][x].uri(),
+                    Some("https://example.com"),
+                    "column {x} is inside the link"
+                );
+            }
+            assert_eq!(rows[0][5].uri(), None, "an empty URI closes the link");
+        }
+
+        /// The `id=` parameter is reported as the child sent it. A link that
+        /// carried none reports none rather than an invented value: alacritty
+        /// and rio both synthesize an id for their own use, and letting that
+        /// through would put a backend's private counter in a snapshot.
+        #[test]
+        fn conformance_hyperlink_ids_are_only_what_the_child_sent() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"\x1b]8;;https://a.example\x1b\\A\x1b]8;;\x1b\\");
+            e.process(b"\x1b]8;id=anchor;https://b.example\x1b\\B\x1b]8;;\x1b\\");
+            let rows = e.viewable_rows();
+
+            let plain = rows[0][0].hyperlink.clone().expect("A is linked");
+            assert_eq!(plain.uri, "https://a.example");
+            assert_eq!(plain.id, None, "no id= was sent, so none is reported");
+
+            let anchored = rows[0][1].hyperlink.clone().expect("B is linked");
+            assert_eq!(anchored.uri, "https://b.example");
+            if !CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::HyperlinkHasNoId)
+            {
+                assert_eq!(anchored.id.as_deref(), Some("anchor"));
+            }
+        }
+
+        /// A link is a property of the cell, not of the run: closing one and
+        /// opening another has to leave each cell pointing where it was
+        /// written, and text after the last link has to be plain again.
+        #[test]
+        fn conformance_adjacent_hyperlinks_stay_separate() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(
+                b"\x1b]8;;https://one.example\x1b\\1\x1b]8;;https://two.example\x1b\\2\x1b]8;;\x1b\\3",
+            );
+            let rows = e.viewable_rows();
+            assert_eq!(rows[0][0].uri(), Some("https://one.example"));
+            assert_eq!(rows[0][1].uri(), Some("https://two.example"));
+            assert_eq!(rows[0][2].uri(), None);
+        }
+
+        /// A link and an underline are independent: SGR 4 inside a link is
+        /// still a single underline, not whatever shape the backend happens
+        /// to draw links with.
+        #[test]
+        fn conformance_a_hyperlink_does_not_change_the_underline() {
+            use $crate::terminal::cell::UnderlineStyle as U;
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"\x1b]8;;https://example.com\x1b\\p\x1b[4mq\x1b[0m\x1b]8;;\x1b\\");
+            let rows = e.viewable_rows();
+
+            assert_eq!(rows[0][0].uri(), Some("https://example.com"));
+            assert_eq!(rows[0][0].underline, U::None, "a link is not an underline");
+            assert_eq!(rows[0][1].uri(), Some("https://example.com"));
+            assert_eq!(rows[0][1].underline, U::Single, "SGR 4 means single");
+        }
+
+        /// `SGR 0` does not close a hyperlink.
+        ///
+        /// A link looks like a style — it is opened by an escape sequence and
+        /// every cell written afterwards carries it — but it is not one, and
+        /// this is where the two come apart: the attribute reset that clears
+        /// every SGR attribute leaves the link running. Only `OSC 8` with an
+        /// empty URI closes it. That is why a link is recorded next to the
+        /// styles rather than as one of them.
+        #[test]
+        fn conformance_an_attribute_reset_does_not_close_a_hyperlink() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"\x1b]8;;https://example.com\x1b\\\x1b[1ma\x1b[0mb\x1b]8;;\x1b\\c");
+            let rows = e.viewable_rows();
+
+            assert!(rows[0][0].has($crate::terminal::cell::Attrs::BOLD));
+            assert_eq!(rows[0][0].uri(), Some("https://example.com"));
+            assert!(
+                !rows[0][1].has($crate::terminal::cell::Attrs::BOLD),
+                "SGR 0 clears the bold"
+            );
+            assert_eq!(
+                rows[0][1].uri(),
+                Some("https://example.com"),
+                "SGR 0 does not clear the link"
+            );
+            assert_eq!(rows[0][2].uri(), None, "only OSC 8 closes the link");
+        }
+
+        /// A child pushes Kitty keyboard modes with `CSI > Ps u` and pops them
+        /// with `CSI < u`. Every backend that implements the protocol has to
+        /// report the same flags, because `key press` encodes from them: a
+        /// backend that under-reports silently sends legacy keys to a child
+        /// that asked for `CSI u`.
+        #[test]
+        fn conformance_kitty_keyboard_modes_are_pushed_and_popped() {
+            if CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::NoKittyKeyboard)
+            {
+                return;
+            }
+            use $crate::terminal::emu::KeyboardMode as K;
+            let mut e = conformance_emu(10, 2, 100);
+            assert_eq!(e.keyboard_mode(), K::empty(), "nothing is on to start");
+
+            e.process(b"\x1b[>3u");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::DISAMBIGUATE_ESC_CODES | K::REPORT_EVENT_TYPES,
+                "1 and 2 are the two bits of 3"
+            );
+
+            e.process(b"\x1b[>31u");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::DISAMBIGUATE_ESC_CODES
+                    | K::REPORT_EVENT_TYPES
+                    | K::REPORT_ALTERNATE_KEYS
+                    | K::REPORT_ALL_KEYS_AS_ESC
+                    | K::REPORT_ASSOCIATED_TEXT,
+                "every flag maps to its own bit"
+            );
+
+            e.process(b"\x1b[<u");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::DISAMBIGUATE_ESC_CODES | K::REPORT_EVENT_TYPES,
+                "popping restores what was underneath"
+            );
+            e.process(b"\x1b[<u");
+            assert_eq!(
+                e.keyboard_mode(),
+                K::empty(),
+                "popping the last leaves none"
+            );
+        }
+
+        /// Every mode in the vocabulary turns on and off on every backend.
+        ///
+        /// This case is the reason the vocabulary is a closed set: a mode
+        /// earns a variant by passing here on all four backends, so the enum
+        /// is a claim this test keeps honest rather than a wish list.
+        #[test]
+        fn conformance_terminal_modes_turn_on_and_off() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let mut e = conformance_emu(20, 4, 100);
+                assert_eq!(
+                    e.mode(mode),
+                    mode.default_enabled(),
+                    "{} starts at its documented default",
+                    mode.name()
+                );
+
+                e.process(mode.set_sequence());
+                assert!(e.mode(mode), "{} did not turn on", mode.name());
+
+                e.process(mode.reset_sequence());
+                assert!(!e.mode(mode), "{} did not turn off", mode.name());
+            }
+        }
+
+        /// Setting one mode leaves the others alone, so a backend that mapped
+        /// two of them onto the same flag fails here rather than silently
+        /// reporting one when a test asked about the other.
+        #[test]
+        fn conformance_terminal_modes_are_independent() {
+            use $crate::terminal::emu::TerminalMode;
+            for mode in TerminalMode::ALL {
+                let mut e = conformance_emu(20, 4, 100);
+                e.process(mode.set_sequence());
+                for other in TerminalMode::ALL {
+                    if other == mode {
+                        continue;
+                    }
+                    assert_eq!(
+                        e.mode(other),
+                        other.default_enabled(),
+                        "setting {} also changed {}",
+                        mode.name(),
+                        other.name()
+                    );
+                }
+            }
         }
 
         /// Resetting the underline color must not be confusable with setting
@@ -918,6 +1188,35 @@ macro_rules! emulator_conformance_tests {
             }
         }
 
+        /// Hiding the cursor does not change its shape.
+        ///
+        /// `DECTCEM` and `DECSCUSR` are separate: one says whether the cursor
+        /// is drawn, the other says what it looks like when it is. A program
+        /// that hides the cursor for a redraw and shows it again has not asked
+        /// for a different shape, so the shape it chose has to survive.
+        #[test]
+        fn conformance_hiding_the_cursor_keeps_its_shape() {
+            use $crate::terminal::emu::CursorShape;
+            let mut e = conformance_emu(10, 3, 100);
+            e.process(b"\x1b[5 q");
+            assert_eq!(e.cursor_shape(), CursorShape::Bar);
+
+            e.process(b"\x1b[?25l");
+            assert!(!e.mode($crate::terminal::emu::TerminalMode::CursorVisible));
+            assert_eq!(
+                e.cursor_shape(),
+                CursorShape::Bar,
+                "a hidden cursor still has the shape it was given"
+            );
+
+            e.process(b"\x1b[?25h");
+            assert_eq!(
+                e.cursor_shape(),
+                CursorShape::Bar,
+                "and showing it again does not reset the shape"
+            );
+        }
+
         /// A color query is answered with the session's configured color.
         ///
         /// Programs query the background to decide whether they are on a light
@@ -1324,6 +1623,114 @@ macro_rules! emulator_conformance_tests {
                 back.iter().any(|r| r.contains("primary")),
                 "leaving alt screen restores primary content"
             );
+        }
+
+        /// A link spanning many cells is one allocation, not one per cell.
+        ///
+        /// Every cell of a run carries the same link, so a converter that
+        /// builds one per cell says the same thing N times at N allocations.
+        /// Pointer equality is the invariant: the cells share an `Arc`.
+        #[test]
+        fn conformance_a_link_run_shares_one_allocation() {
+            let mut e = conformance_emu(20, 3, 100);
+            e.process(b"\x1b]8;;https://example.com/a/long/path/past/inlining\x1b\\");
+            e.process(b"aaaaaaaaaaaaaaaaaaaa");
+            e.process(b"bbbbb");
+            e.process(b"\x1b]8;;\x1b\\");
+            let rows = e.viewable_rows();
+
+            let first = rows[0][0].hyperlink.clone().expect("the run is linked");
+            for (y, x) in [(0usize, 0usize), (0, 19), (1, 0), (1, 4)] {
+                let link = rows[y][x].hyperlink.clone().expect("cell is linked");
+                assert!(
+                    std::sync::Arc::ptr_eq(&first, &link),
+                    "cell {x},{y} rebuilt the link instead of sharing it"
+                );
+            }
+        }
+
+        /// Two links to the same place under different `id=` stay distinct.
+        ///
+        /// Reusing a link across cells must compare what identifies it, not
+        /// only where it points, or the second run would inherit the first
+        /// one's id.
+        #[test]
+        fn conformance_same_uri_under_different_ids_stays_distinct() {
+            let mut e = conformance_emu(20, 2, 100);
+            e.process(b"\x1b]8;id=one;https://example.com\x1b\\A");
+            e.process(b"\x1b]8;id=two;https://example.com\x1b\\B");
+            e.process(b"\x1b]8;;\x1b\\");
+            let rows = e.viewable_rows();
+
+            assert_eq!(rows[0][0].uri(), Some("https://example.com"));
+            assert_eq!(rows[0][1].uri(), Some("https://example.com"));
+            if !CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::HyperlinkHasNoId)
+            {
+                let first = rows[0][0].hyperlink.clone().expect("A is linked");
+                let second = rows[0][1].hyperlink.clone().expect("B is linked");
+                assert_eq!(first.id.as_deref(), Some("one"));
+                assert_eq!(second.id.as_deref(), Some("two"));
+            }
+        }
+
+        /// Every way onto the alternate screen is reported as being on it,
+        /// and leaving it is reported too.
+        ///
+        /// `?1049` is what a full-screen program sends, and every backend
+        /// honors it. `?47` and `?1047` are the older spellings, without the
+        /// cursor save `?1049` bundles in; alacritty and rio ignore them
+        /// outright.
+        ///
+        /// What must hold everywhere is that the flag and the screen agree, in
+        /// both directions. The three spellings share one screen but have
+        /// independent mode bits, so on ghostty `?47h` then `?1049l` leaves
+        /// the `?47` bit set with the primary screen showing — reading mode
+        /// bits answers the wrong question, in one direction or the other.
+        #[test]
+        fn conformance_alt_screen_flag_follows_the_screen() {
+            use $crate::terminal::emu::TerminalMode;
+            let legacy_ignored = CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::NoLegacyAlternateScreen);
+
+            for (sequence, always) in [
+                (&b"\x1b[?47h"[..], false),
+                (b"\x1b[?1047h", false),
+                (b"\x1b[?1049h", true),
+            ] {
+                let mut e = conformance_emu(10, 3, 100);
+                e.process(b"primary");
+                e.process(sequence);
+                let name = String::from_utf8_lossy(sequence).to_string();
+
+                let showing_alt = !conformance_text(&e.viewable_rows())
+                    .iter()
+                    .any(|r| r.contains("primary"));
+                assert_eq!(
+                    e.mode(TerminalMode::AlternateScreen),
+                    showing_alt,
+                    "{name}: alternate_screen must agree with the visible screen"
+                );
+                if always || !legacy_ignored {
+                    assert!(showing_alt, "{name} reaches the alternate screen");
+                } else {
+                    assert!(!showing_alt, "{name} is ignored by this backend");
+                }
+
+                // Leaving has to be reported as leaving, whichever spelling
+                // got there: `?1049l` is what a program sends on the way out.
+                e.process(b"\x1b[?1049l");
+                assert!(
+                    conformance_text(&e.viewable_rows())
+                        .iter()
+                        .any(|r| r.contains("primary")),
+                    "{name}: ?1049l restores the primary screen"
+                );
+                assert!(
+                    !e.mode(TerminalMode::AlternateScreen),
+                    "{name}: and alternate_screen says so"
+                );
+            }
         }
 
         /// Erase resets cells to fully default, not merely to a space.

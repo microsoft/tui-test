@@ -80,6 +80,8 @@ export interface TextStyleExpectation {
   hidden?: boolean;
   strikethrough?: boolean;
   blink?: boolean;
+  /** Required OSC 8 link target. Pass `""` to require no link. */
+  link?: string;
 }
 
 export interface LocatorWaitOptions {
@@ -321,6 +323,7 @@ function textStyleValue(style: TextStyleExpectation): RuntimeLocatorStyle {
     hidden: style.hidden,
     strikethrough: style.strikethrough,
     blink: style.blink,
+    link: style.link,
   };
 }
 
@@ -1057,12 +1060,12 @@ export class TuiTest {
 
   async expectSnapshot(
     name: string,
-    opts: { update?: boolean; includeColors?: boolean; includeTitle?: boolean } = {},
+    opts: { update?: boolean; includeStyle?: boolean; includeTitle?: boolean } = {},
   ): Promise<string> {
     return this.#guard("expectSnapshot", () =>
       this.#runtime.snapshot(name, {
         update: opts.update ?? false,
-        includeColors: opts.includeColors ?? false,
+        includeStyle: opts.includeStyle ?? false,
         includeTitle: opts.includeTitle ?? false,
         cwd: process.cwd(),
       }),

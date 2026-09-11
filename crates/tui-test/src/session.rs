@@ -30,6 +30,9 @@ pub(crate) struct TextHighlight {
 
 pub struct TermState {
     pub emu: Box<dyn Emulator>,
+    /// The profile this session started with, kept so a palette entry a
+    /// program overrode can be told apart from one it never touched.
+    pub(crate) profile: Profile,
     /// Shell-integration state, derived from the raw PTY stream rather than
     /// the emulator, so it is identical across backends.
     pub tracker: CommandTracker,
@@ -52,7 +55,6 @@ pub struct TermState {
 pub struct Session {
     pub shell: Option<Shell>,
     pub backend: Backend,
-    pub profile: Profile,
     pub child_pid: Option<u32>,
     pub cols: u16,
     pub rows: u16,
@@ -98,6 +100,7 @@ impl Session {
         let emu = backend.build_with_bells(cols, rows, &profile, bells.clone())?;
         let mut initial_state = TermState {
             emu,
+            profile,
             tracker: CommandTracker::new(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
@@ -261,7 +264,6 @@ impl Session {
         Ok(Session {
             shell,
             backend,
-            profile,
             child_pid,
             cols,
             rows,
@@ -766,6 +768,7 @@ mod tests {
         let started_at = Instant::now();
         let state = Arc::new(Mutex::new(TermState {
             emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
+            profile: Profile::default(),
             tracker: CommandTracker::new(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,

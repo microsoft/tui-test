@@ -1,6 +1,8 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostics::{FailureArtifactRef, FailureDetails, FailureObservation};
@@ -385,6 +387,26 @@ pub struct TextStyle {
     pub hidden: Option<bool>,
     pub strikethrough: Option<bool>,
     pub blink: Option<bool>,
+    /// The OSC 8 URI a cell must link to.
+    ///
+    /// A link is not an SGR attribute: `SGR 0` clears every other field here
+    /// and leaves the link running, and only `OSC 8` with an empty URI closes
+    /// it. It is matched alongside them because it is carried on a cell the
+    /// same way — set on the cursor, inherited by everything written while it
+    /// is open — so `{ bold: true, link: "..." }` is one query rather than two
+    /// that have to be intersected by hand.
+    ///
+    /// An empty string means "links nowhere", so a cell can be required to be
+    /// plain as well as required to be a link. That is why this is a
+    /// `String` rather than an `Option` used as the absence marker: the
+    /// `Option` already means "the caller did not ask".
+    ///
+    /// The `id=` parameter is deliberately not matchable. It exists to join
+    /// the runs of one logical link, which is worth asserting on in principle,
+    /// but the ghostty backend cannot report it at all, so a query against it
+    /// would quietly mean different things on different backends. It stays
+    /// readable on a cell, where being backend-dependent is visible.
+    pub link: Option<String>,
 }
 
 impl TextStyle {
@@ -516,6 +538,8 @@ pub enum Operation {
     GetExitCode,
     GetCwd,
     GetCursor,
+    GetModes,
+    GetColors,
     GetSize,
     GetTitle,
     GetClipboard,
@@ -600,6 +624,29 @@ pub enum Operation {
         code: i32,
         timeout_ms: Option<u64>,
     },
+    /// Wait for a terminal mode to reach `enabled`.
+    ExpectMode {
+        mode: String,
+        enabled: bool,
+        timeout_ms: Option<u64>,
+    },
+    /// Wait for the terminal's colors to match those named.
+    ExpectColors {
+        foreground: Option<String>,
+        background: Option<String>,
+        cursor: Option<String>,
+        /// `OSC 4` palette entries to match, as `(index, color)`.
+        palette: Vec<(u8, String)>,
+        timeout_ms: Option<u64>,
+    },
+    /// Wait for the cursor to match every property the caller named.
+    ExpectCursor {
+        visible: Option<bool>,
+        shape: Option<String>,
+        x: Option<u16>,
+        y: Option<u16>,
+        timeout_ms: Option<u64>,
+    },
     ExpectOutput {
         text: String,
         regex: bool,
@@ -611,7 +658,7 @@ pub enum Operation {
     Snapshot {
         name: String,
         update: bool,
-        include_colors: bool,
+        include_style: bool,
         include_title: bool,
         cwd: Option<String>,
     },
@@ -648,7 +695,9 @@ impl Operation {
 pub enum OperationResult {
     Unit,
     Open(OpenResult),
-    State(State),
+    /// Boxed because it is much larger than every other variant, and a
+    /// `Result` of this enum is returned from every operation.
+    State(Box<State>),
     Text(String),
     PackedScreen(PackedScreen),
     Cells(Vec<Cell>),
@@ -660,6 +709,8 @@ pub enum OperationResult {
     Title(Option<String>),
     Clipboard(String),
     Cursor(Cursor),
+    Modes(BTreeMap<String, bool>),
+    Colors(TerminalColors),
     Size(Size),
     BellCount(u64),
     BellEvents(Vec<BellEvent>),
@@ -764,10 +815,39 @@ pub struct OpenResult {
     pub recording: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// The colors the terminal paints with.
+///
+/// Grouped because they are one concept — the colors a program chooses
+/// rather than the ones a cell names — set by sibling sequences and reset by
+/// `OSC 104` and `OSC 110/111/112`. A slot nothing has overridden reports the
+/// color the session's profile gives it, so every field always has an
+/// answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TerminalColors {
+    /// The default foreground (`OSC 10`).
+    pub foreground: String,
+    /// The default background (`OSC 11`).
+    pub background: String,
+    /// The cursor color (`OSC 12`).
+    pub cursor: String,
+    /// Palette entries a program moved with `OSC 4`, keyed by index.
+    ///
+    /// Only the entries that differ from the profile are listed: a program
+    /// that recolors slot 1 is interesting, and the 255 it left alone are
+    /// not.
+    pub palette: std::collections::BTreeMap<u8, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cursor {
     pub x: u16,
     pub y: u16,
+    /// Whether the cursor is drawn (`DECTCEM`).
+    pub visible: bool,
+    /// `block`, `underline`, or `bar` (`DECSCUSR`).
+    pub shape: String,
+    /// The cursor color as `#rrggbb`, after any `OSC 12` a program sent.
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -827,6 +907,25 @@ pub struct State {
     pub exited: Option<i32>,
     pub ready: bool,
     pub bell_count: u64,
+    /// Terminal modes the child has turned on, by name.
+    ///
+    /// A map rather than a list, so a reader can tell "off" from "this build
+    /// does not know that mode" and every key is always present.
+    pub modes: BTreeMap<String, bool>,
+    /// Mouse tracking level: `none`, `click`, `drag`, or `motion`.
+    ///
+    /// Separate from `modes` because mouse tracking is not a set of
+    /// independent switches: `CSI ?1002 h` replaces `CSI ?1000 h` rather than
+    /// joining it, so reporting it as booleans would say two are on when the
+    /// terminal only honors the last.
+    ///
+    /// Independent of how the child asked for the reports to be encoded.
+    /// `CSI ?1000 h` on its own is `click`, whether or not `CSI ?1006 h`
+    /// followed it to ask for SGR coordinates.
+    pub mouse_mode: String,
+    /// The terminal's colors, as `#rrggbb`: the three defaults and any
+    /// palette entry a program overrode.
+    pub colors: TerminalColors,
     pub timeouts: EffectiveTimeouts,
     pub text: String,
 }
@@ -868,6 +967,21 @@ pub struct Cell {
     pub underline: bool,
     pub underline_style: String,
     pub underline_color: CellColor,
+    /// The OSC 8 URI this cell links to, empty when it links nowhere.
+    pub link: String,
+    /// The link's `id=` parameter, empty when the sequence carried none.
+    ///
+    /// Separate from `link` because it identifies a link across a wrap rather
+    /// than describing where the link points: a program that wraps its own
+    /// links tags each run with a shared `id=` so a terminal can treat them as
+    /// one.
+    ///
+    /// Backend-dependent, unlike everything else on a cell. Ghostty's FFI
+    /// exposes a link's URI and nothing else, so this is always empty there
+    /// and "no `id=` was sent" cannot be told apart from "this backend cannot
+    /// see it". An assertion built on it will not mean the same thing on every
+    /// backend, which is why no locator matches on it.
+    pub link_id: String,
 }
 
 #[derive(Debug, Clone)]

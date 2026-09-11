@@ -116,7 +116,7 @@ The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, 
 
 `wait_clipboard()` waits for the next change. A string matches text. A compiled `re.Pattern` matches a regular expression.
 
-Snapshot options are `update`, `include_colors`, and `include_title`.
+Snapshot options are `update`, `include_style`, and `include_title`.
 
 #### Capture
 

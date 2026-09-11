@@ -399,6 +399,8 @@ fn map_field(field: GetArg) -> GetField {
         GetArg::ExitCode => GetField::ExitCode,
         GetArg::Cwd => GetField::Cwd,
         GetArg::Cursor => GetField::Cursor,
+        GetArg::Modes => GetField::Modes,
+        GetArg::Colors => GetField::Colors,
         GetArg::Size => GetField::Size,
         GetArg::Title => GetField::Title,
         GetArg::Clipboard => GetField::Clipboard,
@@ -572,6 +574,7 @@ fn map_style(args: TextStyleArgs) -> TextStyle {
         hidden: args.hidden,
         strikethrough: args.strikethrough,
         blink: args.blink,
+        link: args.link,
     }
 }
 
@@ -646,6 +649,45 @@ fn map_expect(what: ExpectCmd) -> Request {
             timeout_ms: timeout,
         },
         ExpectCmd::Output { text, regex } => Request::ExpectOutput { text, regex },
+        ExpectCmd::Mode { name, off, timeout } => Request::ExpectMode {
+            mode: name,
+            enabled: !off,
+            timeout_ms: timeout,
+        },
+        ExpectCmd::Colors {
+            foreground,
+            background,
+            cursor,
+            palette,
+            timeout,
+        } => Request::ExpectColors {
+            foreground,
+            background,
+            cursor,
+            palette,
+            timeout_ms: timeout,
+        },
+        ExpectCmd::Cursor {
+            visible,
+            hidden,
+            shape,
+            x,
+            y,
+            timeout,
+        } => Request::ExpectCursor {
+            // `--visible` and `--hidden` are separate flags rather than one
+            // optional boolean so that naming neither leaves visibility
+            // unchecked, which is what a caller asserting only a shape wants.
+            visible: match (visible, hidden) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            },
+            shape,
+            x,
+            y,
+            timeout_ms: timeout,
+        },
         ExpectCmd::Bell { count, timeout } => Request::ExpectBellCount {
             count,
             timeout_ms: timeout,
@@ -653,12 +695,12 @@ fn map_expect(what: ExpectCmd) -> Request {
         ExpectCmd::Snapshot {
             name,
             update,
-            include_colors,
+            include_style,
             include_title,
         } => Request::Snapshot {
             name,
             update,
-            include_colors,
+            include_style,
             include_title,
             cwd: std::env::current_dir()
                 .ok()
@@ -1340,7 +1382,7 @@ WAIT      wait title \"T\" [--regex --not --timeout MS]\n\
 EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex] | expect bell N\n\
-          expect snapshot NAME [-u] [--include-colors --include-title]\n\
+          expect snapshot NAME [-u] [--include-style --include-title]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\

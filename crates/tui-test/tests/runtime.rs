@@ -1412,3 +1412,80 @@ fn session_records_and_exports_an_apng() {
     session.close().expect("close terminal");
     std::fs::remove_file(path).expect("remove apng");
 }
+
+/// `expect colors` waits for a program to recolor the terminal, and matches
+/// every slot it was given as one state.
+#[cfg(unix)]
+#[test]
+fn expect_colors_waits_for_a_program_to_recolor_the_terminal() {
+    let session = Session::new(format!("expect-colors-{}", std::process::id()));
+    // Recolor after a pause, so the assertion has to poll rather than happen
+    // to read a value that was already there.
+    session
+        .run(run_options(
+            "sh",
+            &[
+                "-c",
+                "sleep 0.2; printf '\\033]11;#123456\\033\\\\\\033]4;3;#abcdef\\033\\\\'; sleep 5",
+            ],
+        ))
+        .expect("run recolor program");
+
+    session
+        .execute(Operation::ExpectColors {
+            foreground: None,
+            background: Some("#123456".to_string()),
+            cursor: None,
+            palette: vec![(3, "#abcdef".to_string())],
+            timeout_ms: Some(5_000),
+        })
+        .expect("background and palette entry are matched together");
+
+    let error = session
+        .execute(Operation::ExpectColors {
+            foreground: None,
+            background: Some("#ffffff".to_string()),
+            cursor: None,
+            palette: Vec::new(),
+            timeout_ms: Some(200),
+        })
+        .expect_err("a color the program never set cannot match");
+    assert_eq!(error.kind, ErrorKind::Assertion);
+    let message = error.to_string();
+    assert!(
+        message.contains("background #123456"),
+        "the failure names what the slot actually holds: {message}"
+    );
+    assert!(
+        !message.contains("foreground"),
+        "and says nothing about slots the caller never asked about: {message}"
+    );
+
+    let error = session
+        .execute(Operation::ExpectColors {
+            foreground: None,
+            background: None,
+            cursor: None,
+            palette: Vec::new(),
+            timeout_ms: Some(200),
+        })
+        .expect_err("naming no slot is a usage error");
+    assert_eq!(error.kind, ErrorKind::Usage);
+
+    let error = session
+        .execute(Operation::ExpectColors {
+            foreground: None,
+            background: Some("blue".to_string()),
+            cursor: None,
+            palette: Vec::new(),
+            timeout_ms: Some(200),
+        })
+        .expect_err("an unparseable color is a usage error, not a wait");
+    assert_eq!(error.kind, ErrorKind::Usage);
+    assert!(
+        !error.to_string().contains("default"),
+        "the advice must not offer a spelling this command rejects: {error}"
+    );
+
+    session.close().expect("close terminal");
+}

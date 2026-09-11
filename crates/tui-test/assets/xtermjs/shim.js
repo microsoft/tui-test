@@ -86,6 +86,10 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     return result;
   };
 
+  // xterm.js resolves a cell's `urlId` through this service; there is no
+  // public getter for a link on `IBufferCell`.
+  var oscLinks = term._core._oscLinkService;
+
   // Replies the terminal wants sent back up the PTY (DA, CPR, and friends).
   var replies = [];
   term.onData(function (d) { replies.push(d); });
@@ -330,14 +334,47 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
       var s = term._core.coreService.decPrivateModes.cursorStyle;
       return s === undefined ? 'block' : String(s);
     },
-    bracketedPaste: function () { return term.modes.bracketedPasteMode; },
+    // Terminal modes, keyed by the neutral names the Rust side uses.
+    //
+    // `term.modes` is a fixed set rather than a "read mode N" call, which is
+    // why the Rust vocabulary is a closed enum: these are the ones every
+    // backend can answer. The alternate screen is the exception, absent from
+    // `modes` but readable from the active buffer, which reports `alternate`
+    // exactly while `?1049` or `?47` is in effect.
+    mode: function (name) {
+      var m = term.modes;
+      switch (name) {
+        case 'application_cursor_keys': return m.applicationCursorKeysMode ? 1 : 0;
+        case 'application_keypad': return m.applicationKeypadMode ? 1 : 0;
+        case 'origin': return m.originMode ? 1 : 0;
+        case 'wraparound': return m.wraparoundMode ? 1 : 0;
+        case 'insert': return m.insertMode ? 1 : 0;
+        case 'focus_events': return m.sendFocusMode ? 1 : 0;
+        case 'bracketed_paste': return m.bracketedPasteMode ? 1 : 0;
+        case 'alternate_screen': return term.buffer.active.type === 'alternate' ? 1 : 0;
+        default: return 0;
+      }
+    },
 
     // A color a program set, or -1 when it has not touched this slot and the
-    // profile still decides. Kept as one call per slot: only a handful are
-    // ever read, and a whole-table crossing would cost more than it saves.
+    // profile still decides. One call per slot, for reading a handful.
     colorOverride: function (slot) {
       var v = overrides[slot];
       return v === undefined ? -1 : v;
+    },
+
+    // Every slot a program has changed, flattened as [slot, value, ...].
+    //
+    // Reading the whole table one slot at a time is 259 crossings; this is
+    // one, and it stays small because it carries only what was actually set.
+    colorOverrides: function () {
+      var out = [];
+      for (var slot in overrides) {
+        if (Object.prototype.hasOwnProperty.call(overrides, slot)) {
+          out.push(Number(slot), overrides[slot]);
+        }
+      }
+      return out;
     },
 
     // Row span of the visible screen; `full` prepends the scrollback.
@@ -356,15 +393,45 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     // color *modes* packed into `flags` alongside the SGR booleans: a raw
     // color of 1 is palette slot 1 or the RGB triple #000001 depending on its
     // mode, so the mode has to travel with it.
+    // DECCKM. xterm.js exposes the mode set on the public `modes` object.
+    cursorKeyApplication: function () {
+      return term.modes.applicationCursorKeysMode ? 1 : 0;
+    },
+
     pack: function (start, end) {
       var buf = term.buffer.active, cols = term.cols;
       var chars = [], meta = [];
+      // OSC 8 links, sent once each per batch instead of once per cell: a
+      // link covers a run, and its URI is far larger than the id that stands
+      // in for it. `links[id]` is `id=` (empty when the sequence carried
+      // none) then NUL then the URI.
+      var links = [];
+      var seen = {};
       for (var y = start; y < end; y++) {
         var line = buf.getLine(y);
         for (var x = 0; x < cols; x++) {
-          if (!line) { chars.push(' '); meta.push(1, -1, -1, -1, 0, 0); continue; }
+          if (!line) { chars.push(' '); meta.push(1, -1, -1, -1, 0, 0, 0); continue; }
           var c = line.getCell(x, CELL);
           chars.push(c.getChars());
+
+          // `urlId` indexes xterm.js's own link table and is meaningless
+          // outside this process, so each one is resolved to the `id=` and
+          // URI the child actually sent before it crosses the boundary.
+          //
+          // `hasExtendedAttrs()` is not redundant. `getCell` reuses a single
+          // `CellData` and only overwrites `extended` for a cell that has
+          // any, so an unlinked cell read after a linked one still carries
+          // the previous cell's `urlId`. Reading it unguarded made a link
+          // run to the end of the row no matter where it was closed.
+          var urlId = (c.hasExtendedAttrs() && c.extended)
+            ? (c.extended.urlId || 0)
+            : 0;
+          if (urlId && seen[urlId] === undefined) {
+            var data = oscLinks.getLinkData(urlId);
+            seen[urlId] = links.length + 1;
+            links.push((data && data.id ? data.id : '') + '\0' + (data ? data.uri : ''));
+          }
+          var link = urlId ? seen[urlId] : 0;
 
           // Reading a cell costs a JS call per getter, and a full-scrollback
           // dump is hundreds of thousands of cells. Most of them are ordinary
@@ -372,7 +439,7 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
           // the "no color" value every getter returns, and no attribute bit is
           // set. Verified to produce byte-identical output to the long form
           // across every SGR in the cell vocabulary.
-          if (c.isAttributeDefault()) { meta.push(c.getWidth(), -1, -1, -1, 0, 0); continue; }
+          if (c.isAttributeDefault()) { meta.push(c.getWidth(), -1, -1, -1, 0, 0, link); continue; }
 
           var fg = c.getFgColor();
           var fgMode = c.isFgPalette() ? 1 : (c.isFgRGB() ? 2 : 0);
@@ -403,10 +470,23 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
             (c.isBgPalette() ? 1024 : (c.isBgRGB() ? 2048 : 0)) |
             (ulMode === 1 ? 4096 : (ulMode === 2 ? 8192 : 0));
 
-          meta.push(c.getWidth(), fg, c.getBgColor(), ulColor, c.getUnderlineStyle(), flags);
+          // A cell that is both underlined and inside an OSC 8 link reports
+          // its underline as DASHED whatever SGR asked for: xterm.js draws
+          // links that way, and its `ExtendedAttrs.underlineStyle` getter
+          // returns 5 whenever a `urlId` is set. That is a rendering choice,
+          // not something the child sent, and the other backends report what
+          // SGR said. The raw bits still hold it, so read those instead.
+          // Only reached for a cell that is underlined *and* linked; a link
+          // on its own never sets the underline flag.
+          var ulStyle = c.getUnderlineStyle();
+          if (urlId && ulStyle === 5) {
+            ulStyle = (469762048 & c.extended._ext) >> 26;
+          }
+
+          meta.push(c.getWidth(), fg, c.getBgColor(), ulColor, ulStyle, flags, link);
         }
       }
-      return [chars.join('\0'), meta];
+      return [chars.join('\0'), meta, links.join('\u0001')];
     },
   };
 };

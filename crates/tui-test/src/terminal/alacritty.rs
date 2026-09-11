@@ -23,9 +23,11 @@ use compact_str::{CompactString, ToCompactString};
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
+use crate::terminal::cell::{
+    Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
+};
 use crate::terminal::emu::{
-    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
+    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode, TerminalMode,
 };
 
 fn clipboard_type(clipboard: AlacClipboardType) -> ClipboardType {
@@ -85,7 +87,25 @@ fn underline_from_alac(c: &alacritty_terminal::term::cell::Cell) -> UnderlineSty
     }
 }
 
-fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
+/// alacritty invents an id for a link that arrived without one, appending
+/// `_alacritty` to a process-wide counter. That is a rendering aid, not
+/// something the child sent, and letting it through would put a value in
+/// snapshots that changes with the order links were parsed in and that no
+/// other backend produces. A link with no `id=` reports `None`.
+///
+/// A child that really sent `id=7_alacritty` is indistinguishable from a
+/// synthesized one and reports `None` too. Telling them apart would mean
+/// parsing OSC 8 ourselves, which is a lot of machinery for a collision
+/// nobody will hit.
+fn hyperlink_from_alac(
+    link: &alacritty_terminal::term::cell::Hyperlink,
+    links: &mut LinkCache,
+) -> Arc<Hyperlink> {
+    let id = link.id();
+    links.get((!id.ends_with("_alacritty")).then_some(id), link.uri())
+}
+
+fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell, links: &mut LinkCache) -> EmuCell {
     let flags = c.flags;
     // Only WIDE_CHAR_SPACER is a continuation: it is the second column of a
     // wide char on this row. LEADING_WIDE_CHAR_SPACER is the opposite, a filler
@@ -126,6 +146,10 @@ fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell) -> EmuCell {
         underline: underline_from_alac(c),
         underline_color: c.underline_color().and_then(color_from_alac),
         attrs,
+        hyperlink: c
+            .hyperlink()
+            .as_ref()
+            .map(|link| hyperlink_from_alac(link, links)),
     }
 }
 
@@ -321,11 +345,12 @@ impl AlacrittyEmu {
     fn rows_in_range(&self, start: i32, end: i32) -> Vec<Vec<EmuCell>> {
         let grid = self.term.grid();
         let mut out = Vec::with_capacity((end - start).max(0) as usize);
+        let mut links = LinkCache::default();
         for line in start..end {
             let mut row = Vec::with_capacity(self.cols as usize);
             for col in 0..self.cols as usize {
                 let cell = &grid[Line(line)][Column(col)];
-                row.push(cell_from_alac(cell));
+                row.push(cell_from_alac(cell, &mut links));
             }
             out.push(row);
         }
@@ -379,6 +404,10 @@ impl Emulator for AlacrittyEmu {
             .collect()
     }
 
+    fn cursor_key_application(&self) -> bool {
+        self.term.mode().contains(TermMode::APP_CURSOR)
+    }
+
     fn clipboard(&self, clipboard: ClipboardType) -> anyhow::Result<String> {
         Ok(self
             .clipboard
@@ -426,8 +455,21 @@ impl Emulator for AlacrittyEmu {
         keyboard_mode
     }
 
-    fn bracketed_paste_mode(&self) -> bool {
-        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    fn mode(&self, mode: TerminalMode) -> bool {
+        let flag = match mode {
+            TerminalMode::ApplicationCursorKeys => TermMode::APP_CURSOR,
+            TerminalMode::ApplicationKeypad => TermMode::APP_KEYPAD,
+            TerminalMode::Origin => TermMode::ORIGIN,
+            TerminalMode::Wraparound => TermMode::LINE_WRAP,
+            TerminalMode::Insert => TermMode::INSERT,
+            TerminalMode::FocusEvents => TermMode::FOCUS_IN_OUT,
+            TerminalMode::BracketedPaste => TermMode::BRACKETED_PASTE,
+            TerminalMode::AlternateScreen => TermMode::ALT_SCREEN,
+            // `Hidden` is a shape alacritty uses for a cursor it will not
+            // draw, so this flag means the same thing as `DECTCEM`.
+            TerminalMode::CursorVisible => TermMode::SHOW_CURSOR,
+        };
+        self.term.mode().contains(flag)
     }
 
     fn title(&self) -> Option<String> {
@@ -514,7 +556,10 @@ impl Emulator for AlacrittyEmu {
 mod tests {
     use super::*;
 
-    crate::emulator_conformance_tests!(|c, r, p| Box::new(AlacrittyEmu::new(c, r, p)));
+    crate::emulator_conformance_tests!(
+        |c, r, p| Box::new(AlacrittyEmu::new(c, r, p)),
+        &[crate::terminal::conformance::Divergence::NoLegacyAlternateScreen]
+    );
 
     #[test]
     fn multiple_bells_in_one_chunk_are_counted_individually() {
@@ -634,15 +679,6 @@ mod tests {
 
         emu.process(b"\x1b[=8u");
         assert_eq!(emu.keyboard_mode(), KeyboardMode::REPORT_ALL_KEYS_AS_ESC);
-    }
-
-    #[test]
-    fn tracks_bracketed_paste_mode() {
-        let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
-        emu.process(b"\x1b[?2004h");
-        assert!(emu.bracketed_paste_mode());
-        emu.process(b"\x1b[?2004l");
-        assert!(!emu.bracketed_paste_mode());
     }
 
     #[test]

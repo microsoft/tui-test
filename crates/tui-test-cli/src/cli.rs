@@ -499,9 +499,76 @@ impl SignalArg {
     }
 }
 
+/// Parse an `INDEX=COLOR` palette expectation.
+///
+/// The color is left as written so it is resolved against the session's own
+/// palette later, the same way `--foreground` is.
+fn parse_palette_entry(value: &str) -> Result<(u8, String), String> {
+    let (index, color) = value
+        .split_once('=')
+        .ok_or_else(|| format!("expected INDEX=COLOR, got `{value}`"))?;
+    let index: u8 = index
+        .trim()
+        .parse()
+        .map_err(|_| format!("`{index}` is not a palette index in 0-255"))?;
+    if color.is_empty() {
+        return Err(format!("palette entry {index} names no color"));
+    }
+    Ok((index, color.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expect_colors_accepts_defaults_and_palette_entries() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "expect",
+            "colors",
+            "--foreground",
+            "#ff0000",
+            "--background",
+            "0",
+            "--palette",
+            "1=#00ff00",
+            "--palette",
+            "200=blue",
+        ])
+        .expect("parse color expectation");
+        let Some(Command::Expect {
+            what:
+                ExpectCmd::Colors {
+                    foreground,
+                    background,
+                    cursor,
+                    palette,
+                    ..
+                },
+        }) = cli.command
+        else {
+            panic!("expected `expect colors`");
+        };
+        assert_eq!(foreground.as_deref(), Some("#ff0000"));
+        assert_eq!(background.as_deref(), Some("0"));
+        assert_eq!(cursor, None);
+        assert_eq!(
+            palette,
+            [(1, "#00ff00".to_string()), (200, "blue".to_string())],
+            "--palette is repeatable and keeps the color as written"
+        );
+    }
+
+    /// An index outside a `u8` cannot name a palette slot, so it is rejected
+    /// where it is written rather than becoming a wait that never succeeds.
+    #[test]
+    fn a_palette_expectation_needs_an_index_and_a_color() {
+        assert!(parse_palette_entry("1=#00ff00").is_ok());
+        assert!(parse_palette_entry("#00ff00").is_err(), "no index");
+        assert!(parse_palette_entry("256=#00ff00").is_err(), "out of range");
+        assert!(parse_palette_entry("1=").is_err(), "no color");
+    }
 
     #[test]
     fn key_action_commands_parse() {
@@ -912,6 +979,25 @@ mod tests {
         assert_eq!(query.style.underline_style.as_deref(), Some("curly"));
     }
 
+    /// `--link ""` has to survive parsing as an empty string rather than as
+    /// an absent option, because that is how a caller asks for a cell that
+    /// links nowhere.
+    #[test]
+    fn expect_text_accepts_a_link_target() {
+        for (argument, expected) in [("https://example.com", "https://example.com"), ("", "")] {
+            let cli =
+                Cli::try_parse_from(["tui-test", "expect", "text", "Docs", "--link", argument])
+                    .expect("parse link expectation");
+            let Some(Command::Expect {
+                what: ExpectCmd::Text { query, .. },
+            }) = cli.command
+            else {
+                panic!("expected Expect text");
+            };
+            assert_eq!(query.style.link.as_deref(), Some(expected));
+        }
+    }
+
     #[test]
     fn expect_exit_code_accepts_a_timeout() {
         let cli =
@@ -1005,6 +1091,11 @@ pub enum GetArg {
     Title,
     /// Current clipboard.
     Clipboard,
+    /// Every terminal mode and whether it is set.
+    Modes,
+    /// The terminal's colors: the three defaults (OSC 10/11/12) and any
+    /// palette entry a program overrode (OSC 4).
+    Colors,
     /// Cumulative terminal bell count.
     Bells,
     /// Recorded terminal bell events (sequence + elapsed time).
@@ -1268,6 +1359,9 @@ pub struct TextStyleArgs {
     pub strikethrough: Option<bool>,
     #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
     pub blink: Option<bool>,
+    /// Required OSC 8 link target. Pass an empty string to require no link.
+    #[arg(long)]
+    pub link: Option<String>,
 }
 
 #[derive(Args)]
@@ -1434,6 +1528,58 @@ pub enum ExpectCmd {
         regex: bool,
     },
     /// Wait until the cumulative terminal bell count reaches this value.
+    /// Assert a terminal mode is set.
+    Mode {
+        /// Mode name, as reported by `get modes`.
+        name: String,
+        /// Require the mode to be off instead of on.
+        #[arg(long)]
+        off: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
+    /// Assert the terminal's colors (OSC 4 and OSC 10/11/12).
+    ///
+    /// Every color takes the same spellings `--fg` does, minus `default`.
+    Colors {
+        /// Required default foreground.
+        #[arg(long)]
+        foreground: Option<String>,
+        /// Required default background.
+        #[arg(long)]
+        background: Option<String>,
+        /// Required cursor color.
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Required palette entry, as `INDEX=COLOR`. Repeatable.
+        #[arg(long, value_name = "INDEX=COLOR", value_parser = parse_palette_entry)]
+        palette: Vec<(u8, String)>,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
+    /// Assert the cursor's position, visibility, or shape.
+    Cursor {
+        /// Require the cursor to be drawn.
+        #[arg(long, conflicts_with = "hidden")]
+        visible: bool,
+        /// Require the cursor to be hidden.
+        #[arg(long)]
+        hidden: bool,
+        /// Required shape: block, underline, or bar.
+        #[arg(long)]
+        shape: Option<String>,
+        /// Required column.
+        #[arg(long)]
+        x: Option<u16>,
+        /// Required row.
+        #[arg(long)]
+        y: Option<u16>,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     Bell {
         /// Minimum cumulative bell count.
         count: u64,
@@ -1448,9 +1594,9 @@ pub enum ExpectCmd {
         /// Write the current screen as the new snapshot.
         #[arg(short = 'u', long)]
         update: bool,
-        /// Include cell colors in the snapshot.
+        /// Include each cell's colors, attributes and link in the snapshot.
         #[arg(long)]
-        include_colors: bool,
+        include_style: bool,
         /// Include the window title in the snapshot's frame. Off by default:
         /// a shell prompt often sets the title to a hostname and path, which
         /// would tie the snapshot to one machine.

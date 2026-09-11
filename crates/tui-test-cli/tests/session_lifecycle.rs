@@ -2101,7 +2101,7 @@ fn terminal_backends_match_end_to_end_for_cells_state_and_snapshots() {
                 "snapshot",
                 "backend-parity",
                 "-u",
-                "--include-colors",
+                "--include-style",
                 "--include-title",
             ],
         );
@@ -2134,7 +2134,7 @@ fn terminal_backends_match_end_to_end_for_cells_state_and_snapshots() {
                 "snapshot",
                 "backend-parity-resized",
                 "-u",
-                "--include-colors",
+                "--include-style",
                 "--include-title",
             ],
         );
@@ -2144,7 +2144,7 @@ fn terminal_backends_match_end_to_end_for_cells_state_and_snapshots() {
                 "expect",
                 "snapshot",
                 "backend-parity-resized",
-                "--include-colors",
+                "--include-style",
                 "--include-title",
             ],
         );

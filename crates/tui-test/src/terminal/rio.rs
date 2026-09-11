@@ -9,7 +9,7 @@ use rio_vt::config::colors::term::COUNT as COLOR_COUNT;
 use rio_vt::config::colors::{AnsiColor, ColorRgb, NamedColor as RioNamedColor};
 use rio_vt::crosswords::grid::ExtrasTable;
 use rio_vt::crosswords::pos::Line;
-use rio_vt::crosswords::square::{ContentTag, Square, Wide};
+use rio_vt::crosswords::square::{ContentTag, Hyperlink as RioHyperlink, Square, Wide};
 use rio_vt::crosswords::style::{Style, StyleFlags, StyleSet};
 use rio_vt::crosswords::{Crosswords, CrosswordsSize, Mode};
 use rio_vt::event::{EventListener, RioEvent, WindowId};
@@ -17,9 +17,11 @@ use rio_vt::performer::handler::Processor;
 
 use crate::event::BellTracker;
 use crate::profile::{xterm_color, ColorSlot, Profile, Rgb};
-use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
+use crate::terminal::cell::{
+    Attrs, Color, EmuCell, Hyperlink, LinkCache, UnderlineStyle, CONTINUATION,
+};
 use crate::terminal::emu::{
-    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode,
+    Clipboard, ClipboardType, ClipboardValidator, CursorShape, Emulator, KeyboardMode, TerminalMode,
 };
 
 fn clipboard_type(clipboard: RioClipboardType) -> ClipboardType {
@@ -55,7 +57,21 @@ fn underline_from_rio(flags: StyleFlags) -> UnderlineStyle {
     }
 }
 
-fn styled_cell(square: Square, style: Style, extras: &ExtrasTable) -> EmuCell {
+/// rio invents an id for a link that arrived without one, appending `_rio` to
+/// a process-wide counter, exactly as alacritty does with `_alacritty`. It is
+/// dropped for the same reason: it is not what the child sent, it varies with
+/// parse order, and no other backend produces it.
+fn hyperlink_from_rio(link: &RioHyperlink, links: &mut LinkCache) -> Arc<Hyperlink> {
+    let id = link.id();
+    links.get((!id.ends_with("_rio")).then_some(id), link.uri())
+}
+
+fn styled_cell(
+    square: Square,
+    style: Style,
+    extras: &ExtrasTable,
+    links: &mut LinkCache,
+) -> EmuCell {
     let ch = match square.wide() {
         Wide::Spacer => CompactString::const_new(CONTINUATION),
         Wide::LeadingSpacer => CompactString::const_new(" "),
@@ -94,12 +110,22 @@ fn styled_cell(square: Square, style: Style, extras: &ExtrasTable) -> EmuCell {
         underline: underline_from_rio(style.flags),
         underline_color: style.underline_color.and_then(color_from_rio),
         attrs,
+        hyperlink: square
+            .extras_id()
+            .and_then(|id| extras.get(id))
+            .and_then(|extra| extra.hyperlink.as_ref())
+            .map(|link| hyperlink_from_rio(link, links)),
     }
 }
 
-fn cell_from_rio(square: Square, styles: &StyleSet, extras: &ExtrasTable) -> EmuCell {
+fn cell_from_rio(
+    square: Square,
+    styles: &StyleSet,
+    extras: &ExtrasTable,
+    links: &mut LinkCache,
+) -> EmuCell {
     match square.content_tag() {
-        ContentTag::Codepoint => styled_cell(square, styles.get(square.style_id()), extras),
+        ContentTag::Codepoint => styled_cell(square, styles.get(square.style_id()), extras, links),
         ContentTag::BgPalette => EmuCell {
             bg: Some(Color::from_index(square.bg_palette_index())),
             ..EmuCell::blank()
@@ -277,12 +303,13 @@ impl RioEmu {
         let styles = &self.term.grid.style_set;
         let extras = &self.term.grid.extras_table;
         let mut output = Vec::with_capacity((end - start).max(0) as usize);
+        let mut links = LinkCache::default();
         for line in start..end {
             let source = &self.term.grid[Line(line)];
             let mut row = Vec::with_capacity(self.cols as usize);
             for col in 0..self.cols as usize {
                 let square = source.inner.get(col).copied().unwrap_or_default();
-                row.push(cell_from_rio(square, styles, extras));
+                row.push(cell_from_rio(square, styles, extras, &mut links));
             }
             output.push(row);
         }
@@ -302,6 +329,10 @@ impl Emulator for RioEmu {
 
     fn take_pending_writes(&mut self) -> Vec<u8> {
         std::mem::take(&mut *self.pending.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    fn cursor_key_application(&self) -> bool {
+        self.term.mode().contains(Mode::APP_CURSOR)
     }
 
     fn clipboard(&self, clipboard: ClipboardType) -> anyhow::Result<String> {
@@ -348,8 +379,24 @@ impl Emulator for RioEmu {
         keyboard_mode
     }
 
-    fn bracketed_paste_mode(&self) -> bool {
-        self.term.mode().contains(Mode::BRACKETED_PASTE)
+    fn mode(&self, mode: TerminalMode) -> bool {
+        // rio reports a hidden cursor as a cursor *shape* rather than through
+        // `SHOW_CURSOR`, so this one does not come from the mode bitflags.
+        if mode == TerminalMode::CursorVisible {
+            return !matches!(self.term.cursor().content, RioCursorShape::Hidden);
+        }
+        let flag = match mode {
+            TerminalMode::ApplicationCursorKeys => Mode::APP_CURSOR,
+            TerminalMode::ApplicationKeypad => Mode::APP_KEYPAD,
+            TerminalMode::Origin => Mode::ORIGIN,
+            TerminalMode::Wraparound => Mode::LINE_WRAP,
+            TerminalMode::Insert => Mode::INSERT,
+            TerminalMode::FocusEvents => Mode::FOCUS_IN_OUT,
+            TerminalMode::BracketedPaste => Mode::BRACKETED_PASTE,
+            TerminalMode::AlternateScreen => Mode::ALT_SCREEN,
+            TerminalMode::CursorVisible => unreachable!("handled above"),
+        };
+        self.term.mode().contains(flag)
     }
 
     fn resize(&mut self, cols: u16, rows: u16) {
@@ -374,12 +421,13 @@ impl Emulator for RioEmu {
         (!self.term.title.is_empty()).then(|| self.term.title.clone())
     }
 
-    fn cursor_visible(&self) -> bool {
-        !matches!(self.term.cursor().content, RioCursorShape::Hidden)
-    }
-
     fn cursor_shape(&self) -> CursorShape {
-        match self.term.cursor().content {
+        // `Term::cursor()` masks the shape to `Hidden` whenever the cursor is
+        // not drawn — hidden by `DECTCEM`, or scrolled out of view — which
+        // loses the shape the child actually asked for. `cursor_shape` is the
+        // unmasked field it derives that from, and whether the cursor is drawn
+        // is already reported by `TerminalMode::CursorVisible`.
+        match self.term.cursor_shape {
             RioCursorShape::Underline => CursorShape::Underline,
             RioCursorShape::Beam => CursorShape::Bar,
             RioCursorShape::Block | RioCursorShape::Hidden => CursorShape::Block,
@@ -403,9 +451,10 @@ impl Emulator for RioEmu {
 mod tests {
     use super::*;
 
-    crate::emulator_conformance_tests!(|cols, rows, profile| {
-        Box::new(RioEmu::new(cols, rows, profile))
-    });
+    crate::emulator_conformance_tests!(
+        |cols, rows, profile| { Box::new(RioEmu::new(cols, rows, profile)) },
+        &[crate::terminal::conformance::Divergence::NoLegacyAlternateScreen]
+    );
 
     #[test]
     fn multiple_bells_in_one_chunk_are_counted_individually() {
@@ -416,14 +465,5 @@ mod tests {
 
         assert_eq!(bells.count(), 2);
         assert_eq!(bells.sequence(), 2);
-    }
-
-    #[test]
-    fn tracks_bracketed_paste_mode() {
-        let mut emulator = RioEmu::new(10, 2, &Profile::default());
-        emulator.process(b"\x1b[?2004h");
-        assert!(emulator.bracketed_paste_mode());
-        emulator.process(b"\x1b[?2004l");
-        assert!(!emulator.bracketed_paste_mode());
     }
 }
