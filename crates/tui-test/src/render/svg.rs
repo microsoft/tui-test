@@ -447,8 +447,8 @@ pub(crate) fn render_svg(
     let header_h = style.header_height();
     let divider_h = style.divider_height();
     let radius = style.border.radius;
-    let canvas_padding = style.padding;
-    let canvas_background = style.background;
+    let canvas_padding = style.canvas_padding;
+    let canvas_background = style.canvas_background;
     let shadow_color = style.shadow.color;
     let title_bg = style.window.background;
     let title_divider = style.window.divider;
@@ -1239,7 +1239,7 @@ mod tests {
         );
 
         let recolored = draw(&Style {
-            background: Rgb::new(1, 2, 3),
+            canvas_background: Rgb::new(1, 2, 3),
             ..Style::default()
         });
         assert!(
@@ -1249,7 +1249,7 @@ mod tests {
         assert!(!plain.contains("#010203"));
 
         let padded = draw(&Style {
-            padding: 40,
+            canvas_padding: 40,
             ..Style::default()
         });
         assert!(
@@ -1377,8 +1377,8 @@ mod tests {
     #[test]
     fn a_style_from_a_config_file_reaches_the_output() {
         let config = crate::profile::ConfigFile::parse(
-            "[profiles.docs.recording.style]\nfont_size = 24\npadding = 40\n\
-             background = \"#101112\"\n\
+            "[profiles.docs.recording.style]\nfont_size = 24\ncanvas_padding = 40\n\
+             canvas_background = \"#101112\"\n\
              \n[profiles.docs.recording.style.window]\ntitle_bar = false\n",
         )
         .expect("the config parses");

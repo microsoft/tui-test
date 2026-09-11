@@ -769,7 +769,7 @@ mod tests {
     #[test]
     fn a_profile_style_overrides_the_file_style_key_by_key() {
         let config = ConfigFile::parse(
-            "[recording.style]\nfont_size = 20\nbackground = \"#ff0000\"\npadding = 12\n\
+            "[recording.style]\nfont_size = 20\ncanvas_background = \"#ff0000\"\ncanvas_padding = 12\n\
              \n[recording.style.window]\ntitle_bar = false\nforeground = \"#00ff00\"\n\
              \n[profiles.docs.recording.style]\nfont_size = 24\n\
              \n[profiles.docs.recording.style.window]\nforeground = \"#0000ff\"\n\
@@ -780,11 +780,11 @@ mod tests {
         let docs = config.settings(Some("docs")).unwrap().style;
         assert_eq!(docs.font_size, 24.0, "the key the profile names wins");
         assert_eq!(
-            docs.background,
+            docs.canvas_background,
             Rgb::new(255, 0, 0),
             "a key the profile does not name keeps the file's value"
         );
-        assert_eq!(docs.padding, 12);
+        assert_eq!(docs.canvas_padding, 12);
         assert_eq!(
             docs.window.foreground,
             Rgb::new(0, 0, 255),
@@ -797,7 +797,7 @@ mod tests {
 
         let plain = config.settings(Some("plain")).unwrap().style;
         assert_eq!(plain.font_size, 20.0, "naming no style inherits the file's");
-        assert_eq!(plain.background, Rgb::new(255, 0, 0));
+        assert_eq!(plain.canvas_background, Rgb::new(255, 0, 0));
     }
 
     #[test]

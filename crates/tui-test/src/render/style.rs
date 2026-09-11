@@ -253,9 +253,12 @@ pub struct Style {
     /// Title bar font size, smaller than the grid so the chrome does not
     /// compete with the terminal content.
     pub title_font_size: f32,
-    /// The area around the panel.
-    pub background: Rgb,
-    pub padding: u32,
+    /// The area around the panel. Named for the canvas because a recording
+    /// has three backgrounds: this one, the title bar's, and the terminal's
+    /// own under `[colors]`.
+    pub canvas_background: Rgb,
+    /// The width of that area on every side of the panel.
+    pub canvas_padding: u32,
     pub window: WindowStyle,
     pub border: BorderStyle,
     pub shadow: ShadowStyle,
@@ -267,8 +270,8 @@ impl Default for Style {
             font: FontFamilies::default(),
             font_size: DEFAULT_FONT_SIZE,
             title_font_size: 13.0,
-            background: Rgb::new(104, 103, 170),
-            padding: 24,
+            canvas_background: Rgb::new(104, 103, 170),
+            canvas_padding: 24,
             window: WindowStyle::default(),
             border: BorderStyle::default(),
             shadow: ShadowStyle::default(),
@@ -310,8 +313,8 @@ impl Style {
                 return Err(format!("{name} must not exceed {MAX_LENGTH}"));
             }
         }
-        if self.padding > MAX_PADDING {
-            return Err(format!("padding must not exceed {MAX_PADDING}"));
+        if self.canvas_padding > MAX_PADDING {
+            return Err(format!("canvas_padding must not exceed {MAX_PADDING}"));
         }
         // A positive font size can still be too small to draw with: a
         // subnormal one leaves cells that round to nothing.
@@ -389,7 +392,7 @@ mod tests {
         assert_eq!(style.baseline(), (21.0 - 17.0) / 2.0 + 17.0 * 0.78);
         assert_eq!(style.header_height(), 34.0);
         assert_eq!(style.divider_height(), 1.0);
-        assert_eq!(style.padding, 24);
+        assert_eq!(style.canvas_padding, 24);
         assert_eq!(style.border.radius, 8.0);
         assert_eq!(style.border.width, 0.0, "no border was drawn before");
         assert_eq!(style.shadow_layers().len(), 4);
@@ -494,7 +497,7 @@ mod tests {
         // Colors spells bright_black, so Style spells font_size. One config
         // file should not carry two naming conventions.
         let style: Style = toml::from_str(
-            "font_size = 20\npadding = 8\n\
+            "font_size = 20\ncanvas_padding = 8\n\
              [font]\nfamily = \"Berkeley Mono\"\nbold_italic = \"Berkeley Mono Oblique\"\n\
              [window]\ntitle_bar = false\n\
              [border]\nwidth = 2\ncolor = \"#ff0000\"\n\
@@ -508,8 +511,8 @@ mod tests {
         assert!(!style.shadow.enabled);
         assert_eq!(style.shadow.offset, 2.0);
         assert_eq!(
-            style.background,
-            Style::default().background,
+            style.canvas_background,
+            Style::default().canvas_background,
             "anything unnamed keeps its default"
         );
     }
@@ -572,7 +575,7 @@ mod tests {
             ("font_size = 1e10", "font_size"),
             ("font_size = 1e-40", "too small"),
             ("title_font_size = 0", "title_font_size"),
-            ("padding = 4294967295", "padding"),
+            ("canvas_padding = 4294967295", "canvas_padding"),
             ("[border]\nwidth = -1", "border.width"),
             ("[border]\nradius = nan", "border.radius"),
             ("[shadow]\noffset = inf", "shadow.offset"),

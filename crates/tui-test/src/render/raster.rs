@@ -88,7 +88,7 @@ impl GridRenderer {
         style.validate().map_err(|error| anyhow::anyhow!(error))?;
         let (base_width, base_height) = svg::pixel_size(cols, rows, &style);
         let padding = style
-            .padding
+            .canvas_padding
             .checked_mul(2)
             .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
         let width = base_width
@@ -148,9 +148,9 @@ impl FrameRenderer for GridRenderer {
         let origin_x = (self.width - panel_width) as f32 / 2.0;
         let origin_y = (self.height - panel_height) as f32 / 2.0;
         self.pixmap.fill(tiny_skia::Color::from_rgba8(
-            style.background.r,
-            style.background.g,
-            style.background.b,
+            style.canvas_background.r,
+            style.canvas_background.g,
+            style.canvas_background.b,
             255,
         ));
         draw_shadow(
