@@ -654,27 +654,27 @@ fn map_expect(what: ExpectCmd) -> Request {
             enabled: !off,
             timeout_ms: timeout,
         },
-        ExpectCmd::Colors {
+        ExpectCmd::Colors(cli::ExpectColorsArgs {
             foreground,
             background,
             cursor,
             palette,
             timeout,
-        } => Request::ExpectColors {
+        }) => Request::ExpectColors {
             foreground,
             background,
             cursor,
             palette,
             timeout_ms: timeout,
         },
-        ExpectCmd::Cursor {
+        ExpectCmd::Cursor(cli::ExpectCursorArgs {
             visible,
             hidden,
             shape,
             x,
             y,
             timeout,
-        } => Request::ExpectCursor {
+        }) => Request::ExpectCursor {
             // `--visible` and `--hidden` are separate flags rather than one
             // optional boolean so that naming neither leaves visibility
             // unchecked, which is what a caller asserting only a shape wants.

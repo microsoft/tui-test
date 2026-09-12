@@ -332,6 +332,14 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
         .find(|op| op.name == "locator.wait" && op.result == "ok")
         .unwrap();
     assert!(checkpoint.is_assertion);
+    let Some(tui_test::OperationExpectation::Locator { query, outcome }) = &checkpoint.expectation
+    else {
+        panic!("passing assertion must retain its own expectation");
+    };
+    assert_eq!(query.selector.description(), "ready");
+    assert_eq!(*outcome, tui_test::LocatorExpectation::Visible);
+    assert!(report.contains("## Retained expectations"));
+    assert_eq!(manifest["sensitivity"]["contains_assertion_operands"], true);
     assert!(frames
         .iter()
         .any(|frame| frame["sequence"] == checkpoint.screen_at_return));

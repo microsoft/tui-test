@@ -83,14 +83,15 @@ test("explains expected and observed style values next to the pinned failure", a
 });
 
 test("session, emulator, timeout defaults and elapsed time have labelled metadata", async () => {
-  assert.match(await page.locator("#session-summary").textContent(), /Session:deployment-wizard/);
-  assert.match(await page.locator("#session-summary").textContent(), /Emulator:alacritty/);
-  assert.match(await page.locator("#session-summary").textContent(), /Assertion timeout:20 ms/);
+  assert.match(await page.locator("#session-summary").textContent(), /Session: deployment-wizard/);
+  assert.match(await page.locator("#session-summary").textContent(), /Emulator: alacritty/);
+  assert.doesNotMatch(await page.locator(".topbar").textContent(), /timeout/i);
   await page.locator("#metadata-tab").click();
   assert.match(await page.locator("#session-properties").textContent(), /pwsh/);
   assert.match(await page.locator("#session-properties").textContent(), /Process ID123/);
   assert.match(await page.locator("#timeout-properties").textContent(), /text5000 ms/);
   assert.match(await page.locator("#timeout-properties").textContent(), /command30000 ms/);
+  assert.match(await page.locator("#session-properties").textContent(), /Assertion timeout20 ms/);
   await page.locator("#metadata-tab").focus();
   await page.keyboard.press("ArrowLeft");
   assert.equal(await page.locator("#actions-tab").getAttribute("aria-selected"), "true");
@@ -138,10 +139,103 @@ test("passing assertions sharing a failure frame do not inherit failure annotati
   await point(3).click();
   assert.equal((await frame()).operation.result, "ok");
   assert.equal(await page.locator("#overlay .mismatch-cell").count(), 0);
-  assert.equal(await page.locator("#failure-banner").isVisible(), false);
+  assert.equal(await page.locator("#expectation-banner").getAttribute("data-outcome"), "passed");
+  assert.match(await page.locator("#summary").textContent(), /Passed: Expect text "READY" to be visible/);
+  assert.doesNotMatch(await page.locator("#summary").textContent(), /foreground|ANSI/);
   assert.match(await page.locator("#frame-meta").textContent(), /also used by failure/);
   await page.locator("#failure").click();
   assert.equal(await page.locator("#overlay .mismatch-cell").count(), 1);
+});
+
+test("passing locator expectations are visible, searchable, and included in Call details", async () => {
+  await point(2).click();
+  assert.match(await page.locator("#summary").textContent(), /Expect text "READY" to be visible/);
+  await page.locator("#call-tab").click();
+  assert.match(await page.locator("#call-properties").textContent(), /ExpectedExpect text "READY" to be visible/);
+  await page.locator("#action-filter").fill('"READY"');
+  assert.equal(await page.locator("#points button").count(), 2);
+});
+
+test("style, relative scope, occurrence and negation remain explicit for passing locators", async () => {
+  await variant("style-expectation.html", (payload) => {
+    const original = payload.details.recent_operations[1].expectation.query;
+    payload.details.recent_operations[1].expectation = {
+      kind: "locator", outcome: "hidden",
+      query: {
+        selector: { kind: "style", selector: { style: { foreground: "2", bold: true, link: "https://example.test/" }, full: true } },
+        style: { italic: false }, direction: "after", occurrence: { nth: 1 }, within: original,
+      },
+    };
+  });
+  await point(2).click();
+  const expected = await page.locator("#summary").textContent();
+  for (const fragment of ["cells matching", "ANSI 2 (green slot)", "bold=true", 'link="https://example.test/"', "full scrollback", "italic=false", "nth(1)", 'after [text "READY"]', "to be absent"]) {
+    assert.ok(expected.includes(fragment), `${fragment} is part of the recorded assertion`);
+  }
+});
+
+test("older and oversized expectations are explicitly unavailable rather than inferred", async () => {
+  await variant("old-expectation.html", (payload) => {
+    delete payload.details.recent_operations[1].expectation;
+    payload.details.recent_operations[2].expectation = { kind: "unavailable", reason: "Expectation exceeded the 8192-byte retention limit" };
+  });
+  await point(2).click();
+  assert.match(await page.locator("#summary").textContent(), /Expectation not captured/);
+  assert.doesNotMatch(await page.locator("#summary").textContent(), /foreground|ANSI/);
+  await point(3).click();
+  assert.match(await page.locator("#summary").textContent(), /8192-byte retention limit/);
+});
+
+test("header labels have explicit spacing without overlap at narrower widths", async () => {
+  for (const width of [1440, 850, 560]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const fits = await page.locator(".metadata-item").evaluateAll((items) => items.every((item) => {
+      const label = item.querySelector(".metadata-label").getBoundingClientRect();
+      const value = item.querySelector(".metadata-value").getBoundingClientRect();
+      return value.left >= label.right + 5 && value.right <= innerWidth;
+    }));
+    assert.equal(fits, true);
+    assert.doesNotMatch(await page.locator(".topbar").textContent(), /timeout/i);
+  }
+});
+
+test("header text shares a vertical center across font sizes and zoom levels", async () => {
+  for (const zoom of [1, 1.25, 1.5]) {
+    const measurements = await page.evaluate((zoom) => {
+      document.body.style.zoom = String(zoom);
+      const header = document.querySelector(".topbar");
+      const bounds = header.getBoundingClientRect();
+      const style = getComputedStyle(header);
+      const center = bounds.y + (bounds.height - parseFloat(style.borderBottomWidth) * zoom) / 2;
+      const walker = document.createTreeWalker(header, NodeFilter.SHOW_TEXT);
+      const offsets = [];
+      while (walker.nextNode()) {
+        if (!walker.currentNode.textContent.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(walker.currentNode);
+        const rect = range.getBoundingClientRect();
+        if (rect.height) offsets.push({
+          text: walker.currentNode.textContent.trim(),
+          offset: Math.abs(rect.y + rect.height / 2 - center) / zoom,
+        });
+      }
+      return { lineHeight: style.lineHeight, offsets };
+    }, zoom);
+    assert.equal(measurements.lineHeight, "20px");
+    assert.ok(measurements.offsets.length >= 8);
+    for (const { text, offset } of measurements.offsets) {
+      assert.ok(offset <= 1, `${text} is ${offset}px off center at ${zoom}x zoom`);
+    }
+  }
+});
+
+test("the standalone report executes the committed minified assets", async () => {
+  const javascript = await readFile(path.join(repo, "crates", "tui-test", "src", "diagnostics", "report.min.js"), "utf8");
+  const stylesheet = await readFile(path.join(repo, "crates", "tui-test", "src", "diagnostics", "report.min.css"), "utf8");
+  assert.ok(source.includes(javascript));
+  assert.ok(source.includes(stylesheet));
+  assert.ok(javascript.split("\n").length < 5);
+  assert.ok(stylesheet.split("\n").length < 5);
 });
 
 test("cropped terminal hit testing handles zoom, responsive scaling and Unicode widths", async () => {

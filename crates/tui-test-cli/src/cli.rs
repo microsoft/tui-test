@@ -539,13 +539,13 @@ mod tests {
         .expect("parse color expectation");
         let Some(Command::Expect {
             what:
-                ExpectCmd::Colors {
+                ExpectCmd::Colors(ExpectColorsArgs {
                     foreground,
                     background,
                     cursor,
                     palette,
                     ..
-                },
+                }),
         }) = cli.command
         else {
             panic!("expected `expect colors`");
@@ -1542,44 +1542,9 @@ pub enum ExpectCmd {
     /// Assert the terminal's colors (OSC 4 and OSC 10/11/12).
     ///
     /// Every color takes the same spellings `--fg` does, minus `default`.
-    Colors {
-        /// Required default foreground.
-        #[arg(long)]
-        foreground: Option<String>,
-        /// Required default background.
-        #[arg(long)]
-        background: Option<String>,
-        /// Required cursor color.
-        #[arg(long)]
-        cursor: Option<String>,
-        /// Required palette entry, as `INDEX=COLOR`. Repeatable.
-        #[arg(long, value_name = "INDEX=COLOR", value_parser = parse_palette_entry)]
-        palette: Vec<(u8, String)>,
-        /// Timeout in milliseconds.
-        #[arg(long, value_name = "MS")]
-        timeout: Option<u64>,
-    },
+    Colors(ExpectColorsArgs),
     /// Assert the cursor's position, visibility, or shape.
-    Cursor {
-        /// Require the cursor to be drawn.
-        #[arg(long, conflicts_with = "hidden")]
-        visible: bool,
-        /// Require the cursor to be hidden.
-        #[arg(long)]
-        hidden: bool,
-        /// Required shape: block, underline, or bar.
-        #[arg(long)]
-        shape: Option<String>,
-        /// Required column.
-        #[arg(long)]
-        x: Option<u16>,
-        /// Required row.
-        #[arg(long)]
-        y: Option<u16>,
-        /// Timeout in milliseconds.
-        #[arg(long, value_name = "MS")]
-        timeout: Option<u64>,
-    },
+    Cursor(ExpectCursorArgs),
     Bell {
         /// Minimum cumulative bell count.
         count: u64,
@@ -1603,4 +1568,46 @@ pub enum ExpectCmd {
         #[arg(long)]
         include_title: bool,
     },
+}
+
+// Keep these builders out of the parent Subcommand stack frame on Windows.
+#[derive(clap::Args)]
+pub struct ExpectColorsArgs {
+    /// Required default foreground.
+    #[arg(long)]
+    pub foreground: Option<String>,
+    /// Required default background.
+    #[arg(long)]
+    pub background: Option<String>,
+    /// Required cursor color.
+    #[arg(long)]
+    pub cursor: Option<String>,
+    /// Required palette entry, as `INDEX=COLOR`. Repeatable.
+    #[arg(long, value_name = "INDEX=COLOR", value_parser = parse_palette_entry)]
+    pub palette: Vec<(u8, String)>,
+    /// Timeout in milliseconds.
+    #[arg(long, value_name = "MS")]
+    pub timeout: Option<u64>,
+}
+
+#[derive(clap::Args)]
+pub struct ExpectCursorArgs {
+    /// Require the cursor to be drawn.
+    #[arg(long, conflicts_with = "hidden")]
+    pub visible: bool,
+    /// Require the cursor to be hidden.
+    #[arg(long)]
+    pub hidden: bool,
+    /// Required shape: block, underline, or bar.
+    #[arg(long)]
+    pub shape: Option<String>,
+    /// Required column.
+    #[arg(long)]
+    pub x: Option<u16>,
+    /// Required row.
+    #[arg(long)]
+    pub y: Option<u16>,
+    /// Timeout in milliseconds.
+    #[arg(long, value_name = "MS")]
+    pub timeout: Option<u64>,
 }

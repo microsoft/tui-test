@@ -62,6 +62,10 @@ struct FrameCell {
     resolved_fg: String,
     resolved_bg: String,
     resolved_underline_color: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link_id: Option<String>,
 }
 
 impl FrameCell {
@@ -69,6 +73,12 @@ impl FrameCell {
         let style = svg::style_of(cell, colors);
         Self {
             char: cell.ch.to_string(),
+            link: cell.uri().map(str::to_string),
+            link_id: cell
+                .hyperlink
+                .as_ref()
+                .and_then(|link| link.id.as_ref())
+                .map(ToString::to_string),
             width,
             fg: crate::engine::cell_color(cell.fg),
             bg: crate::engine::cell_color(cell.bg),
@@ -392,8 +402,8 @@ pub(super) fn html(
     .replace('\u{2029}', "\\u2029");
     // Substitute data last: captured output must never be interpreted as a template.
     Ok(include_str!("report.html")
-        .replace("/* REPORT_CSS */", include_str!("report.css"))
-        .replace("/* REPORT_JS */", include_str!("report.js"))
+        .replace("/* REPORT_CSS */", include_str!("report.min.css"))
+        .replace("/* REPORT_JS */", include_str!("report.min.js"))
         .replace("null /* REPORT_DATA */", &data))
 }
 
@@ -584,6 +594,24 @@ pub(super) fn markdown(details: &FailureDetails, files: &[ArtifactFile]) -> Stri
             screen_link(details, op.screen_before),
             screen_link(details, op.screen_at_return)
         );
+    }
+    if details
+        .recent_operations
+        .iter()
+        .any(|operation| operation.expectation.is_some())
+    {
+        out.push_str("\n## Retained expectations\n\nThese include passing assertion operands and may contain sensitive data. Raw input writes and environment values are not retained here.\n");
+        for operation in &details.recent_operations {
+            if let Some(expectation) = &operation.expectation {
+                let _ = writeln!(
+                    out,
+                    "\n### Action {}: {}\n\n{}",
+                    operation.sequence,
+                    code(&operation.name),
+                    block(&serde_json::json!(expectation).to_string(), "json")
+                );
+            }
+        }
     }
     if !details.evaluation_transitions.is_empty() {
         out.push_str("\n## What changed while waiting\n\n| Elapsed (ms) | Screen | Outcome | Stage counts |\n| ---: | --- | --- | --- |\n");
@@ -776,6 +804,21 @@ mod tests {
                 screen_at_return: screen,
                 safe_summary: name.into(),
                 is_assertion: assertion,
+                expectation: match id {
+                    2 | 3 => Some(OperationExpectation::Locator {
+                        query: Box::new(crate::api::LocatorQuery::text("READY")),
+                        outcome: LocatorExpectation::Visible,
+                    }),
+                    5 => {
+                        let mut query = crate::api::LocatorQuery::text("A");
+                        query.style.foreground = Some("2".into());
+                        Some(OperationExpectation::Locator {
+                            query: Box::new(query),
+                            outcome: LocatorExpectation::Visible,
+                        })
+                    }
+                    _ => None,
+                },
             });
         }
         details.locator = Some(LocatorDiagnostics {

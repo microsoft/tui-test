@@ -15,12 +15,13 @@ h2 { font-size: 12px; margin: 12px 0 7px; }
 p { margin: 8px 0; }
 pre { font: 12px/1.5 Consolas, "Liberation Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; margin: 6px 0; }
 .muted { color: var(--muted); font-size: 12px; }
-.topbar { min-height: 44px; display: flex; gap: 18px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.brand { white-space: nowrap; font-size: 15px; color: var(--green); }
-.brand span { color: var(--muted); font-size: 12px; font-weight: 400; margin-left: 6px; }
-.session-summary { display: flex; flex: 1; gap: 18px; overflow: hidden; font-size: 12px; }
-.session-summary span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.session-summary b { font-weight: 500; color: var(--muted); margin-right: 5px; }
+.topbar { min-height: 52px; display: flex; gap: 24px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; line-height: 20px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; font-size: 15px; color: var(--green); }
+.brand span { color: var(--muted); font-size: 12px; font-weight: 400; }
+.session-summary { display: flex; flex: 1; flex-wrap: wrap; gap: 8px 24px; min-width: 0; font-size: 12px; }
+.metadata-item { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.metadata-label { flex-shrink: 0; color: var(--muted); }
+.metadata-value { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .failure-button { color: var(--red); border-color: var(--red); white-space: nowrap; }
 .timeline { height: 132px; padding: 0 12px 6px; flex-shrink: 0; border-bottom: 1px solid var(--border); background: var(--panel); overflow: hidden; }
 .time-scale { height: 21px; display: flex; justify-content: space-between; color: var(--muted); font: 10px/21px Consolas, monospace; }
@@ -48,7 +49,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: 285px minma
 .point.failed .status { background: var(--red); }
 .point .name, .point .description { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .point .description { font-size: 10px; color: var(--muted); margin-top: 2px; }
-.point .result { font-size: 10px; color: var(--muted); text-align: right; }
+.point .result { font-size: 10px; color: var(--muted); text-align: right; white-space: pre-line; }
 .point.failed .name, .point.failed .result { color: var(--red); }
 .point[aria-current="true"] { background: var(--selected); }
 .viewer { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); }
@@ -56,8 +57,12 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: 285px minma
 .viewer-toolbar { justify-content: space-between; padding: 6px 10px; border-bottom: 1px solid var(--border); }
 .viewer-toolbar strong { overflow-wrap: anywhere; min-width: 0; }
 .zoom-label { font-size: 11px; color: var(--muted); }
-.failure-banner { display: grid; gap: 2px; background: var(--error-bg); border-left: 3px solid var(--red); padding: 7px 10px; font-size: 12px; overflow: auto; max-height: 110px; flex-shrink: 0; }
-.failure-banner strong { color: var(--red); font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.expectation-banner { display: grid; gap: 4px; background: var(--panel); border-left: 3px solid var(--muted); padding: 8px 12px; font-size: 12px; overflow: auto; max-height: 110px; flex-shrink: 0; }
+.expectation-banner strong { font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.expectation-banner[data-outcome="failed"] { background: var(--error-bg); border-color: var(--red); }
+.expectation-banner[data-outcome="failed"] strong { color: var(--red); }
+.expectation-banner[data-outcome="passed"] { border-color: var(--green); }
+.expectation-banner[data-outcome="passed"] strong { color: var(--green); }
 .frame-meta { color: var(--muted); font-size: 11px; margin: 0; padding: 4px 10px; }
 .viewport { display: flex; align-items: flex-start; flex: 1; min-height: 0; overflow: auto; padding: 12px; background: var(--panel); }
 #terminal { position: relative; flex-shrink: 0; margin: 0 auto; line-height: 0; cursor: crosshair; box-shadow: 0 1px 5px #0003; }

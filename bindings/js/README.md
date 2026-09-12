@@ -49,6 +49,8 @@ new TuiTest(session?: string, options?: ClientOptions)
 
 The shared HTML viewer has a standalone browser suite: from `bindings/js`, run `npx playwright install chromium` then `npm run test:report`. It generates an artifact with the Rust core and opens it offline in Chromium; no native Node addon build is needed. `TUI_TEST_BROWSER_CHANNEL=msedge` can select an installed Edge browser instead. Playwright is a development-only dependency and is not bundled into reports.
 
+The viewer's typed components live in `crates/tui-test/src/diagnostics/viewer`. Run `npm run build:report` to regenerate its minified JavaScript/CSS, and `npm run check:report` to type-check and verify generated assets. These are development tools only; Cargo embeds committed minified files without invoking Node. `recent_operations[].expectation` retains the selected assertion's operands, including successful locators, up to 8 KiB per operation. Treat these operands as potentially sensitive.
+
 `failure.html` can be distributed alone: its Attachments pane embeds the images, Markdown, structured evidence and included recording for offline preview/download. The trace layout shows expected/observed values alongside the terminal and labels the session, emulator, effective timeout defaults and failing assertion timeout. The embedded manifest snapshot excludes the HTML's own hash; the disk manifest includes it.
 
 #### Properties

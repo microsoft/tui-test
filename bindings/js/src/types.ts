@@ -180,17 +180,18 @@ export interface FailureTextMatch {
 }
 
 export interface FailureTextStyle {
-  readonly foreground?: string;
-  readonly background?: string;
-  readonly bold?: boolean;
-  readonly dim?: boolean;
-  readonly italic?: boolean;
-  readonly underline_style?: string;
-  readonly underline_color?: string;
-  readonly inverse?: boolean;
-  readonly hidden?: boolean;
-  readonly strikethrough?: boolean;
-  readonly blink?: boolean;
+  readonly foreground?: string | null;
+  readonly background?: string | null;
+  readonly bold?: boolean | null;
+  readonly dim?: boolean | null;
+  readonly italic?: boolean | null;
+  readonly underline_style?: string | null;
+  readonly underline_color?: string | null;
+  readonly inverse?: boolean | null;
+  readonly hidden?: boolean | null;
+  readonly strikethrough?: boolean | null;
+  readonly blink?: boolean | null;
+  readonly link?: string | null;
 }
 
 export interface FailureTextAnchor {
@@ -218,6 +219,19 @@ export interface FailureStyleSelector {
 export type FailureLocatorSelector =
   | { readonly kind: "text"; readonly selector: FailureTextSelector }
   | { readonly kind: "style"; readonly selector: FailureStyleSelector };
+
+export interface FailureLocatorQuery {
+  readonly selector: FailureLocatorSelector;
+  readonly occurrence: FailureMatchOccurrence;
+  readonly within?: FailureLocatorQuery | null;
+  readonly direction: "within" | "after" | "before";
+  readonly style: FailureTextStyle;
+}
+
+export type OperationExpectation =
+  | { readonly kind: "locator"; readonly query: FailureLocatorQuery; readonly outcome: "visible" | "hidden" | "unique" | "actionable" }
+  | { readonly kind: "value"; readonly subject: string; readonly expected: string }
+  | { readonly kind: "unavailable"; readonly reason: string };
 
 export interface FailureOperationDetails {
   readonly name: string;
@@ -284,6 +298,7 @@ export interface FailureOperationEvent {
   readonly screen_at_return: number;
   readonly safe_summary: string;
   readonly is_assertion?: boolean;
+  readonly expectation?: OperationExpectation;
 }
 
 export interface FailureCursorDetails {

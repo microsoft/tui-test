@@ -16,7 +16,9 @@ use crate::render::svg::RenderState;
 use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::CursorShape;
 
+mod expectation;
 mod report;
+pub use expectation::{LocatorExpectation, OperationExpectation};
 
 pub const FAILURE_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_SCREEN_HISTORY_LIMIT: u16 = 10;
@@ -195,6 +197,8 @@ pub struct OperationEvent {
     pub safe_summary: String,
     #[serde(default)]
     pub is_assertion: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expectation: Option<OperationExpectation>,
 }
 
 #[derive(Debug)]
@@ -212,6 +216,7 @@ pub(crate) struct PendingOperation {
     screen_before: u64,
     safe_summary: String,
     is_assertion: bool,
+    expectation: Option<OperationExpectation>,
     generation: u64,
 }
 
@@ -231,6 +236,7 @@ impl OperationHistory {
         screen_before: u64,
         safe_summary: String,
         is_assertion: bool,
+        expectation: Option<OperationExpectation>,
     ) -> PendingOperation {
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.wrapping_add(1).max(1);
@@ -241,6 +247,7 @@ impl OperationHistory {
             screen_before,
             safe_summary,
             is_assertion,
+            expectation,
             generation: self.generation,
         }
     }
@@ -275,6 +282,7 @@ impl OperationHistory {
             screen_at_return,
             safe_summary: pending.safe_summary,
             is_assertion: pending.is_assertion,
+            expectation: pending.expectation,
         });
         while self.entries.len() > MAX_OPERATION_HISTORY {
             self.entries.pop_front();
@@ -962,7 +970,13 @@ fn estimate_screen_bytes(details: &ScreenSnapshotDetails, rows: &[Vec<EmuCell>])
         + rows
             .iter()
             .flatten()
-            .map(|cell| cell.ch.len() + std::mem::size_of::<EmuCell>())
+            .map(|cell| {
+                cell.ch.len()
+                    + std::mem::size_of::<EmuCell>()
+                    + cell.hyperlink.as_ref().map_or(0, |link| {
+                        link.uri.len() + link.id.as_ref().map_or(0, |id| id.len())
+                    })
+            })
             .sum::<usize>()
 }
 
@@ -1451,6 +1465,10 @@ fn sensitivity(details: &FailureDetails, files: &[ArtifactFile]) -> SensitivityD
     let has_locator = details.locator.is_some();
     let has_terminal = details.terminal.is_some();
     let has_context = !details.context.is_empty();
+    let has_expectation = details
+        .recent_operations
+        .iter()
+        .any(|event| event.expectation.is_some());
     SensitivityDetails {
         contains_locator_operands: has_locator,
         contains_terminal_output: has_terminal,
@@ -1470,10 +1488,11 @@ fn sensitivity(details: &FailureDetails, files: &[ArtifactFile]) -> SensitivityD
             ) && file.status == ArtifactFileStatus::Written
         }),
         contains_recording_output: has_recording,
-        contains_assertion_operands: has_locator || details.comparison.is_some(),
+        contains_assertion_operands: has_locator || details.comparison.is_some() || has_expectation,
         contains_snapshot_evidence: details.reason == FailureReason::SnapshotMismatch,
         contains_diagnostic_context: has_context,
         contains_user_supplied_values: has_locator
+            || has_expectation
             || has_terminal
             || has_recording
             || has_context
@@ -1710,9 +1729,9 @@ mod tests {
     #[test]
     fn operation_history_does_not_link_frames_across_session_restarts() {
         let mut history = OperationHistory::new();
-        let old = history.begin("old".into(), 100, 50, "old".into(), true);
+        let old = history.begin("old".into(), 100, 50, "old".into(), true, None);
         history.finish(old, 120, 51, "ok");
-        let restart = history.begin("run".into(), 130, 51, "restart".into(), false);
+        let restart = history.begin("run".into(), 130, 51, "restart".into(), false, None);
         history.reset_session();
         history.finish(restart, 10, 1, "ok");
         let events = history.snapshot();
@@ -1721,6 +1740,33 @@ mod tests {
         assert_eq!(events[0].screen_before, 0);
         assert_eq!(events[0].screen_at_return, 1);
         assert_eq!(events[0].sequence, 2);
+    }
+
+    #[test]
+    fn passing_expectations_are_reported_as_sensitive_even_without_a_terminal() {
+        let mut history = OperationHistory::new();
+        let pending = history.begin(
+            "expect.output".into(),
+            1,
+            1,
+            "output".into(),
+            true,
+            Some(OperationExpectation::Value {
+                subject: "Command output".into(),
+                expected: "private operand".into(),
+            }),
+        );
+        history.finish(pending, 2, 1, "ok");
+        let mut details = FailureDetails::new(
+            "later failure",
+            None,
+            FailureReason::InternalFailure,
+            "failed",
+        );
+        details.recent_operations = history.snapshot();
+        let sensitivity = sensitivity(&details, &[]);
+        assert!(sensitivity.contains_assertion_operands);
+        assert!(sensitivity.contains_user_supplied_values);
     }
 
     #[test]

@@ -45,6 +45,8 @@ export type {
   FailureArtifactRef,
   FailureArtifactStatus,
   FailureDetails,
+  FailureLocatorQuery,
+  OperationExpectation,
   FailureReason,
   LocatorFailureReason,
   OpenResult,

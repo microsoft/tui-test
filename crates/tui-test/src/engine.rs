@@ -17,8 +17,8 @@ use crate::diagnostics::{
     allocate_artifact_directory, elapsed_ms, profile_fingerprint, recording_temp_path,
     write_failure_artifact, ArtifactInputs, CellMismatch, CellStyleEvaluation, DiagnosticHint,
     ExecutionContext, FailureArtifactRef, FailureArtifactStatus, FailureDetails,
-    FailureObservation, FailureReason, LocatorFailureReason, OperationEvent, OperationHistory,
-    PreparedRecording, ProcessDiagnostics, RecordingDiagnostics, RecordingStatus,
+    FailureObservation, FailureReason, LocatorFailureReason, OperationEvent, OperationExpectation,
+    OperationHistory, PreparedRecording, ProcessDiagnostics, RecordingDiagnostics, RecordingStatus,
     RuntimeDiagnostics, RECORDING_COPY_LIMIT,
 };
 use crate::input::{keys, mouse};
@@ -73,6 +73,7 @@ struct OperationMetadata {
     screen_before: u64,
     safe_summary: String,
     is_assertion: bool,
+    expectation: Option<OperationExpectation>,
 }
 
 pub struct LiveFrame {
@@ -178,6 +179,7 @@ impl Engine {
             screen_before,
             safe_summary: safe_operation_summary(&operation),
             is_assertion,
+            expectation: OperationExpectation::capture(&operation),
         };
         let pending = self
             .operation_history
@@ -189,6 +191,7 @@ impl Engine {
                 screen_before,
                 metadata.safe_summary.clone(),
                 is_assertion,
+                metadata.expectation.clone(),
             );
         let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.execute_inner(operation, &context, &metadata)
@@ -622,12 +625,19 @@ impl Engine {
                     .map_or(metadata.screen_before, |value| value.screen_sequence),
                 safe_summary: metadata.safe_summary.clone(),
                 is_assertion: metadata.is_assertion,
+                expectation: metadata.expectation.clone(),
             });
         }
 
         if let Some(existing) = error.details.take() {
             merge_failure_details(&mut details, *existing);
         }
+        details.truncated |= details.recent_operations.iter().any(|event| {
+            matches!(
+                event.expectation,
+                Some(OperationExpectation::Unavailable { .. })
+            )
+        });
         if let Some(observation) = &observation {
             details.terminal = Some(observation.terminal());
             details.process = Some(observation.process.clone());
