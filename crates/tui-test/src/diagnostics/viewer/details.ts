@@ -22,9 +22,9 @@ export class DetailsPanel {
     banner.hidden = !expectation && !selection.isFailure && !operation?.is_assertion;
     banner.dataset.outcome = captured ? (operation.result === "ok" ? "passed" : "failed") : selection.isFailure ? "failed" : "unknown";
     if (expectation) {
-      text("summary", `${captured ? (operation?.result === "ok" ? "Passed: " : "Failed: ") : ""}${expectation}`);
+      text("summary", `${captured ? (operation?.result === "ok" ? (operation.is_assertion ? "Passed: " : "Completed: ") : "Failed: ") : ""}${expectation}`);
       text("summary-observed", selection.isFailure ? this.data.explanation.actual :
-        operation?.result === "ok" ? "The selected assertion completed successfully." : "The selected operation did not complete successfully.");
+        operation?.result === "ok" ? `The selected ${operation.is_assertion ? "assertion" : "operation"} completed successfully.` : "The selected operation did not complete successfully.");
     } else if (selection.isFailure) {
       text("summary", `Expected ${this.data.explanation.expected}`);
       text("summary-observed", this.data.explanation.actual);

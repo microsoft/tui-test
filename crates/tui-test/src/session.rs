@@ -28,6 +28,16 @@ pub(crate) struct TextHighlight {
     pub viewport_offset: usize,
 }
 
+pub(crate) struct ManualRecordingOptions {
+    pub path: String,
+    pub format: Option<crate::api::RecordingFormat>,
+    pub fps: Option<u8>,
+    pub speed: Option<f64>,
+    pub idle_time_limit: Option<f64>,
+    pub zoom: Option<f64>,
+    pub background: Option<crate::api::CaptureBackground>,
+}
+
 pub struct TermState {
     pub emu: Box<dyn Emulator>,
     /// The profile this session started with, kept so a palette entry a
@@ -86,7 +96,7 @@ impl Session {
         profile: Profile,
         cols: u16,
         rows: u16,
-        cwd: Option<String>,
+        cwd: Option<PathBuf>,
         env: Vec<(String, String)>,
         timeouts: crate::api::Timeouts,
         diagnostics: DiagnosticRetentionOptions,
@@ -141,15 +151,15 @@ impl Session {
                 let opts = SpawnOptions {
                     cols,
                     rows,
-                    cwd,
+                    cwd: None,
                     env,
                 };
-                Pty::spawn(target, args, &opts)
+                Pty::spawn_with_cwd(target, args, &opts, cwd.as_deref())
             } else {
                 let sh = shell.unwrap_or_else(shell::default_shell);
                 let mut launch = shell::shell_launch(sh)?;
                 launch.env.extend(env);
-                Pty::spawn_launch(&launch, cols, rows, cwd)
+                Pty::spawn_launch_with_cwd(&launch, cols, rows, cwd)
             }
         })();
         let (pty, reader) = match spawned {
@@ -319,13 +329,17 @@ impl Session {
 
     pub fn start_recording(
         &self,
-        path: String,
-        format: Option<crate::api::RecordingFormat>,
-        fps: Option<u8>,
-        speed: Option<f64>,
-        idle_time_limit: Option<f64>,
-        zoom: Option<f64>,
+        options: ManualRecordingOptions,
     ) -> Result<(), crate::api::TuiTestError> {
+        let ManualRecordingOptions {
+            path,
+            format,
+            fps,
+            speed,
+            idle_time_limit,
+            zoom,
+            background,
+        } = options;
         if path.trim().is_empty() {
             return Err(crate::api::TuiTestError::usage(
                 "recording path must not be empty",
@@ -342,6 +356,18 @@ impl Session {
         if format == crate::api::RecordingFormat::Cast && zoom != 1.0 {
             return Err(crate::api::TuiTestError::usage(
                 "zoom is only supported for image and video recordings",
+            ));
+        }
+        if format == crate::api::RecordingFormat::Cast && background.is_some() {
+            return Err(crate::api::TuiTestError::usage(
+                "background customization is only supported for image and video recordings",
+            ));
+        }
+        if format == crate::api::RecordingFormat::Mp4
+            && background == Some(crate::api::CaptureBackground::Transparent)
+        {
+            return Err(crate::api::TuiTestError::usage(
+                "transparent backgrounds are not supported for MP4 recordings",
             ));
         }
         #[cfg(not(feature = "recording-raster"))]
@@ -402,6 +428,8 @@ impl Session {
             #[cfg(feature = "recording-raster")]
             zoom,
             #[cfg(feature = "recording-raster")]
+            background,
+            #[cfg(feature = "recording-raster")]
             timeline: record::frames::TimelineOptions {
                 fps,
                 speed,
@@ -438,7 +466,12 @@ impl Session {
                 let cast = record::cast::read(&stopped.capture_path)?;
                 let frames = record::frames::from_cast(cast, &stopped.timeline)?;
                 let (max_cols, max_rows) = record::frames::max_dimensions(&frames)?;
-                let mut renderer = GridRenderer::with_zoom(max_cols, max_rows, 2.0 * stopped.zoom)?;
+                let mut renderer = GridRenderer::with_zoom_and_background(
+                    max_cols,
+                    max_rows,
+                    2.0 * stopped.zoom,
+                    stopped.background,
+                )?;
                 crate::render::encode::encode(
                     &temporary_path,
                     stopped.format,

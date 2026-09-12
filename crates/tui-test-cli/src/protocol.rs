@@ -10,7 +10,7 @@ use tui_test::{
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -45,6 +45,9 @@ pub enum Request {
         recording: Box<AutomaticRecording>,
         #[serde(default)]
         diagnostics: DiagnosticRetentionOptions,
+    },
+    Restart {
+        graceful_timeout_ms: u64,
     },
     Close,
     Status,
@@ -196,6 +199,8 @@ pub enum Request {
         path: Option<String>,
         #[serde(default)]
         zoom: Option<f64>,
+        #[serde(default)]
+        background: Option<tui_test::CaptureBackground>,
     },
     StartRecording {
         path: String,
@@ -205,6 +210,8 @@ pub enum Request {
         idle_time_limit: Option<f64>,
         #[serde(default)]
         zoom: Option<f64>,
+        #[serde(default)]
+        background: Option<tui_test::CaptureBackground>,
     },
     StopRecording,
     FlushRecording,
@@ -336,6 +343,7 @@ impl Request {
             Self::Monitor { .. } => "monitor",
             Self::MonitorInputStream { .. } => "monitor.input",
             Self::Shutdown => "shutdown",
+            Self::Restart { .. } => "restart",
         }
     }
 
@@ -343,6 +351,14 @@ impl Request {
         match self {
             Self::WithContext { request, .. } => request.is_open(),
             Self::Open { .. } => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_restart(&self) -> bool {
+        match self {
+            Self::WithContext { request, .. } => request.is_restart(),
+            Self::Restart { .. } => true,
             _ => false,
         }
     }
@@ -426,6 +442,11 @@ impl Request {
                     }))
                 }
             }
+            Request::Restart {
+                graceful_timeout_ms,
+            } => Ok(Operation::Restart {
+                graceful_timeout_ms,
+            }),
             Request::Close => Ok(Operation::Close),
             Request::State => Ok(Operation::State),
             Request::Text { full } => Ok(Operation::Text { full }),
@@ -583,9 +604,17 @@ impl Request {
                 include_title,
                 cwd,
             }),
-            Request::Screenshot { full, path, zoom } => {
-                Ok(Operation::Screenshot { full, path, zoom })
-            }
+            Request::Screenshot {
+                full,
+                path,
+                zoom,
+                background,
+            } => Ok(Operation::Screenshot {
+                full,
+                path,
+                zoom,
+                background,
+            }),
             Request::StartRecording {
                 path,
                 format,
@@ -593,6 +622,7 @@ impl Request {
                 speed,
                 idle_time_limit,
                 zoom,
+                background,
             } => Ok(Operation::StartRecording {
                 path,
                 format,
@@ -600,6 +630,7 @@ impl Request {
                 speed,
                 idle_time_limit,
                 zoom,
+                background,
             }),
             Request::StopRecording => Ok(Operation::StopRecording),
             Request::Ping
@@ -742,6 +773,23 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
 mod tests {
     use super::*;
     use tui_test::FailureReason;
+
+    #[test]
+    fn locator_expression_requests_round_trip() {
+        let query = LocatorQuery::text("Docs")
+            .and(LocatorQuery::link("test:link"))
+            .or(LocatorQuery::text("Help"))
+            .filter(None, Some(LocatorQuery::text("old")));
+        let request = Request::FindLocator {
+            query: query.clone(),
+        };
+        let encoded = serde_json::to_string(&request).unwrap();
+        let decoded: Request = serde_json::from_str(&encoded).unwrap();
+        match decoded.into_operation().unwrap() {
+            Operation::FindLocator { query: actual } => assert_eq!(actual, query),
+            other => panic!("expected locator expression, got {other:?}"),
+        }
+    }
 
     fn make_open_req(wait_ready: Option<bool>, timeouts: Timeouts) -> Request {
         Request::Open {
@@ -1001,7 +1049,14 @@ mod tests {
         let screenshot: Request =
             serde_json::from_str(r#"{"kind":"screenshot","full":false,"path":"screen.svg"}"#)
                 .expect("deserialize legacy screenshot");
-        assert!(matches!(screenshot, Request::Screenshot { zoom: None, .. }));
+        assert!(matches!(
+            screenshot,
+            Request::Screenshot {
+                zoom: None,
+                background: None,
+                ..
+            }
+        ));
 
         let recording: Request = serde_json::from_str(
             r#"{"kind":"start_recording","path":"demo.png","format":null,
@@ -1010,7 +1065,11 @@ mod tests {
         .expect("deserialize legacy recording");
         assert!(matches!(
             recording,
-            Request::StartRecording { zoom: None, .. }
+            Request::StartRecording {
+                zoom: None,
+                background: None,
+                ..
+            }
         ));
     }
 

@@ -10,12 +10,16 @@ Use the CLI for terminal work split across separate commands.
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run an app. |
+| `[global options] -- PROGRAM [ARGS...]` | Alias for `run`. |
+| `restart [--graceful-timeout MS]` | Restart the session. |
 | `sessions` | List sessions. |
 | `close [--all]` | Close sessions. |
 
 Use `--session NAME` to select a session. `open` and `run` reuse it unless `--restart` is set.
 
 `open` and `run` accept `--screen-history-limit COUNT` to control how many distinct recent screens are retained for failures.
+
+`restart` replays the last successful spawn, preserving its original working directory, options, and latest terminal size. It sends Ctrl-C and waits up to 5000 ms before forcing replacement; `--graceful-timeout 0` skips the wait. It works after child exit, but not after `close` or daemon shutdown. The terminal and automatic recording start fresh.
 
 ## Locate text
 
@@ -38,9 +42,16 @@ Common options:
 | `--match any\|unique\|first\|last` | Select matches. |
 | `--nth N` | Select a zero-based match. |
 
-Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, `--blink`, and `--link`.
+Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, and `--blink`.
 
-`--link` matches a cell's OSC 8 target: `--link https://example.com` requires that link, and `--link ""` requires a cell that links nowhere. It applies to every cell of the match, blanks included, because a space inside a link is part of the link. The appearance options skip blanks, which cannot show them, so `A B` linked throughout with only the letters bold matches `--bold --link ...` just as it matches either alone.
+`--link URL` matches that hyperlink on every cell, including spaces.
+Use `--link ""` for unlinked cells. Other style filters ignore spaces.
+
+`--link` is a separate whole-match constraint, not a style field. Native
+Rust/JavaScript/Python locators also support cell-set AND/OR and locator-based
+containment filters; the CLI does not expose a shell expression syntax for
+those operations. Locator protocol requests carry expression queries rather
+than native binding stage arrays.
 
 `click text` also accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks`, and `--timeout`.
 
@@ -58,7 +69,6 @@ Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style
 | `mouse down\|up X Y [options]` | Press or release a button. |
 | `mouse drag X1 Y1 X2 Y2 [options]` | Drag. |
 | `mouse scroll up\|down [--amount N]` | Scroll. |
-
 | `resize COLS ROWS` | Resize. |
 | `signal NAME` | Send a signal. |
 
@@ -82,13 +92,14 @@ Most waits accept `--timeout MS`. `expect`, `click`, and `highlight` retry. `fin
 
 | Command | Use |
 | --- | --- |
-| `state` | Read session state, terminal modes, and text. |
+| `state` | Read session state, modes, colors, and text. |
 | `text [--full]` | Read terminal text. |
 | `cells X Y [W H]` | Read cells and styles. |
 | `get FIELD` | Read one field. |
-| `screenshot [PATH]` | Read text or save SVG. |
+| `screenshot [PATH] [--background COLOR \| --transparent]` | Read text or save SVG or PNG. |
 
-Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `clipboard`, `bells`, and `bell-events`.
+Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
+`size`, `title`, `clipboard`, `bells`, and `bell-events`.
 
 ## Assert
 
@@ -105,16 +116,13 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `size`, `title`, `cli
 
 | Command | Use |
 | --- | --- |
-| `record start PATH` | Start a recording. |
+| `record start PATH [--background COLOR \| --transparent]` | Start a recording. |
 | `record stop` | Finish it. |
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
 | `monitor` | Watch a session live. |
 | `monitor --interactive` | Forward keyboard, paste, and supported SGR mouse input; Ctrl+] detaches. |
 
-Interactive monitors apply the target's keyboard and paste modes before reading
-input. SGR mouse clicks, drags, and motion are enabled when requested by the
-target, with coordinates translated past the monitor's border. Viewer modes are
-restored on detach; read-only monitoring does not change input modes.
+Interactive monitors mirror the session's keyboard, paste, and mouse modes.
 
 ## Failure diagnostics
 
@@ -142,6 +150,14 @@ Bundle mode writes:
 Artifact references use `report` for `failure.md`, `report_html` for `failure.html`, and `timeline` for `timeline.json`. Structured terminal history keeps recent samples in `screen_history.screens` and pinned assertion screens in `screen_history.checkpoints`; reports merge these by screen sequence. `runtime.session_name`, `runtime.shell`, and `runtime.timeouts` capture session identity and all effective timeout defaults; `operation.timeout_ms` is the failing operation's timeout, including a per-call override.
 
 Each retained action can carry `expectation`: a typed locator query plus its required outcome, a scalar subject/value, or an explicit unavailable reason. Passing assertions show their own selector, style, scope, occurrence and negation in the action list, banner and Call pane; they never borrow the failing assertion's expectation. Timeout values remain in Metadata, not the top header.
+
+The action list displays API-style query descriptions beside the operation, such as `getByText("Save")`, `getByStyle({ bold: true }).and(getByLink("test:docs"))`, and `.filter({ has: ..., hasNot: ... })`. These are reconstructed descriptions, not captured source code. Long expressions are ellipsized in the row but remain available in its tooltip, search, and Call evidence.
+
+Locator diagnostics follow the expression tree. Each `stages[]` entry has an `expression_path` (`root`, `.within`, `.left`, `.right`, `.input`, `.has`, `.has_not`), `mode`, counts, and `evaluations`. Containment predicates are evaluated inside each candidate; repeated evaluations are aggregated by path. Counts on such entries are totals, not distinct whole-terminal candidates. Compound entries do not repeat their operand trees in `selector`; leaf selectors are retained when within the evidence budget.
+
+Only the decisive failing stage supplies cell mismatch highlights. An empty union operand or an empty `has_not` search is not itself a failure. Explicit uniqueness errors propagate from the offending operand and cannot be hidden by OR or negation. `link_filter_removed_all`, `intersection_empty`, `union_empty`, and `filter_removed_all` distinguish whole-match link refinement, cell-set composition, and containment rejection. At most 128 stage entries with an 8 KiB evidence budget each are retained, with sample/trace truncation flags when limited.
+
+The CLI daemon protocol is version 4. JS and Python native queries use one validated typed node-table/root expression input; the old linear-stage query format and style-link aliases are not accepted. `location()` requests final single-match resolution in the core, preserving explicit occurrence ordering on operands. The trace formatter handles text, style, exact-URI links, relative chains, AND/OR, filters, and occurrence placement without flattening the expression.
 
 The HTML embeds its scripts, styles, original frame images, cell metadata, Markdown and all available attachments as data. Attachments can be previewed and downloaded after the original directory is deleted; there are no sibling-file or network dependencies. File contents are checked against their recorded hashes before embedding. The embedded `failure.json` is a manifest snapshot taken before the HTML write, so it cannot include the HTML's own hash; the disk manifest adds that final entry. The viewer crops screenshot chrome for clarity, while SVG downloads preserve the original image. There are no before/after operation tabs: actions select their completion checkpoint, with individual retained frames available separately.
 
@@ -177,39 +193,9 @@ Recording modes: `disabled`, `on-failure`, and `always`.
 
 ## Terminal modes
 
-`state` reports the modes the child has turned on, under `modes`:
-
-| Key | Sequence | Meaning |
-| --- | --- | --- |
-| `application_cursor_keys` | `CSI ?1 h` | cursor keys send `SS3` |
-| `cursor_visible` | `CSI ?25 h` | the cursor is drawn (on by default) |
-| `application_keypad` | `ESC =` | keypad sends application sequences |
-| `origin` | `CSI ?6 h` | cursor confined to the scroll region |
-| `wraparound` | `CSI ?7 h` | text wraps at the right margin (on by default) |
-| `insert` | `CSI 4 h` | printed text shifts the line right |
-| `focus_events` | `CSI ?1004 h` | focus changes are reported to the child |
-| `bracketed_paste` | `CSI ?2004 h` | pastes are bracketed |
-| `alternate_screen` | `CSI ?1049 h` | the alternate screen is showing |
-
-The `Sequence` column names one way to reach each mode, not every one.
-`alternate_screen` reports whether the alternate screen is showing, however it
-was reached: `CSI ?1049 h` is what a full-screen program sends and every
-backend honors it, while the older `CSI ?47 h` and `CSI ?1047 h` are honored
-by the ghostty and xterm.js backends and ignored by alacritty and rio. Prefer
-`?1049` in a test that has to behave the same everywhere. `CSI ?1049 l` leaves
-the alternate screen whichever sequence entered it.
-
-Mouse tracking is reported separately, as `mouse_mode`: `none`, `click`,
-`drag`, or `motion`. It is not in the table because it is not a set of
-independent switches — `CSI ?1002 h` replaces `CSI ?1000 h` rather than
-joining it, so booleans would claim two are on when only the last is honored.
-It reports the tracking level regardless of how the child asked for the
-reports to be encoded, so `CSI ?1000 h` alone is `click` whether or not
-`CSI ?1006 h` followed it.
-
-Read them with `get modes`, and assert one with `expect mode <NAME> [--off]`.
-The cursor has its own command, since position and shape have nowhere else to
-live:
+`get modes` and `state.modes` report boolean modes; all keys are present.
+`state.mouse_mode` is `none`, `click`, `drag`, or `motion`.
+Use `expect mode NAME [--off]` to check a mode.
 
 ```sh
 tui-test get cursor --json          # x, y, visible, shape, color
@@ -220,30 +206,15 @@ tui-test expect mode alternate_screen
 tui-test expect mode bracketed_paste --off
 ```
 
-`expect cursor` checks only the properties you name, so asserting a shape
-leaves visibility and position alone.
-
-Every key is always present, so `false` means off rather than unknown. The set
-is deliberately closed: a mode is listed only when all four backends report it
-identically, which the conformance suite checks.
+`expect cursor` checks only the properties you name. Cursor visibility and
+wrapping are on by default. For portable alternate-screen tests, use
+`CSI ?1049 h` to enter and `CSI ?1049 l` to exit.
 
 ## Terminal colors
 
-`state` reports the colors the terminal is painting with, under `colors`:
-
-| Key | Sequence | Meaning |
-| --- | --- | --- |
-| `foreground` | `OSC 10` | the default foreground |
-| `background` | `OSC 11` | the default background |
-| `cursor` | `OSC 12` | the cursor color |
-| `palette` | `OSC 4` | palette entries a program overrode, keyed by index |
-
-The three defaults are always reported, resolved through the profile so a slot
-nothing has touched still has an answer. `palette` lists only the entries that
-differ from the profile, so it names what a program changed rather than all
-256 slots, and `OSC 104` empties it again.
-
-Read them with `get colors`, and assert them with `expect colors`:
+`get colors` and `state.colors` report `foreground`, `background`, `cursor`,
+and `palette` entries that differ from the profile. Unchanged defaults use
+the session profile.
 
 ```sh
 tui-test get colors --json                       # foreground, background, cursor, palette
@@ -252,15 +223,9 @@ tui-test expect colors --foreground 7 --cursor '#ff0000'
 tui-test expect colors --palette '1=#00ff00' --palette '200=#123456'
 ```
 
-Every color takes the same spellings `--fg` does — a hex value (`#rrggbb`),
-an RGB triple (`r,g,b`), or an ANSI index — except `default`, which has
-nothing to refer to here since these slots *are* the defaults. An index is
-resolved against the session's own palette, so `--background 0` means the
-black this profile paints.
-
-`expect colors` checks only the slots you name, and `--palette` is repeatable.
-All of them are matched together, so a program that recolors several at once
-is asserted as one state rather than a race between polls.
+Colors accept hex RGB, `r,g,b`, or an ANSI index from the session's palette.
+`default` is not accepted. `expect colors` checks the named slots together;
+repeat `--palette` to check multiple entries.
 
 ## Agent commands
 

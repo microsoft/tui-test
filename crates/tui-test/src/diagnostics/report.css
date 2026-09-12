@@ -34,7 +34,7 @@ pre { font: 12px/1.5 Consolas, "Liberation Mono", monospace; white-space: pre-wr
 .thumbnail img { width: 100%; height: 46px; object-fit: contain; background: #111; display: block; }
 .thumbnail span { display: block; padding: 1px 4px; font-size: 10px; color: var(--muted); }
 .thumbnail[aria-current="true"] { border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
-main { flex: 1; min-height: 0; display: grid; grid-template-columns: 285px minmax(0, 1fr); grid-template-rows: minmax(180px, 1fr) 285px; }
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(300px, 34vw, 620px) minmax(0, 1fr); grid-template-rows: minmax(180px, 1fr) 285px; }
 .sidebar { min-height: 0; min-width: 0; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
 .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--panel); flex-shrink: 0; }
 .tabs button { border: 0; border-radius: 0; padding: 7px 12px; background: transparent; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; }
@@ -48,6 +48,11 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: 285px minma
 .point .status { width: 6px; height: 6px; border-radius: 50%; background: var(--green); margin-top: 6px; }
 .point.failed .status { background: var(--red); }
 .point .name, .point .description { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action-label { min-width: 0; }
+.action-line { display: flex; gap: 9px; align-items: baseline; min-width: 0; }
+.action-line .name { flex: 0 1 auto; max-width: 48%; }
+.query-code { color: #887120; font: 12px/1.5 Consolas, monospace; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+@media (prefers-color-scheme: dark) { .query-code { color: #d5bf75; } }
 .point .description { font-size: 10px; color: var(--muted); margin-top: 2px; }
 .point .result { font-size: 10px; color: var(--muted); text-align: right; white-space: pre-line; }
 .point.failed .name, .point.failed .result { color: var(--red); }

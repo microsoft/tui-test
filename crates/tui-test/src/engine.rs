@@ -37,12 +37,49 @@ pub struct Engine {
     name: String,
     operations: Mutex<()>,
     session: Mutex<Option<TerminalSession>>,
+    spawn_spec: Mutex<Option<SpawnSpec>>,
     live: Arc<Mutex<Option<LiveTarget>>>,
     interrupt: Mutex<Option<InterruptTarget>>,
     logger: Arc<Logger>,
     default_recording_path: PathBuf,
     recording: Mutex<RecordingState>,
     operation_history: Mutex<OperationHistory>,
+}
+
+#[derive(Clone)]
+struct SpawnSpec {
+    command: SpawnCommand,
+    resolved_cwd: Option<PathBuf>,
+    retention: crate::diagnostics::DiagnosticRetentionOptions,
+}
+
+#[derive(Clone)]
+enum SpawnCommand {
+    Open(OpenOptions),
+    Run(RunOptions),
+}
+
+impl SpawnSpec {
+    fn restart(mut self) -> Self {
+        match &mut self.command {
+            SpawnCommand::Open(options) => options.restart = true,
+            SpawnCommand::Run(options) => options.restart = true,
+        }
+        self
+    }
+
+    fn resize(&mut self, cols: u16, rows: u16) {
+        match &mut self.command {
+            SpawnCommand::Open(options) => {
+                options.cols = cols;
+                options.rows = rows;
+            }
+            SpawnCommand::Run(options) => {
+                options.cols = cols;
+                options.rows = rows;
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -81,6 +118,7 @@ pub struct LiveFrame {
     pub cursor: (u16, u16),
     pub size: (u16, u16),
     pub keyboard_mode: KeyboardMode,
+    pub cursor_key_application: bool,
     pub bracketed_paste: bool,
     pub mouse_mode: MouseMode,
     pub exited: Option<i32>,
@@ -128,6 +166,7 @@ impl Engine {
             name,
             operations: Mutex::new(()),
             session: Mutex::new(None),
+            spawn_spec: Mutex::new(None),
             live: Arc::new(Mutex::new(None)),
             interrupt: Mutex::new(None),
             logger,
@@ -263,6 +302,11 @@ impl Engine {
             Operation::Run(options) => self
                 .run(options, context, metadata)
                 .map(OperationResult::Open),
+            Operation::Restart {
+                graceful_timeout_ms,
+            } => self
+                .restart(graceful_timeout_ms, context, metadata)
+                .map(OperationResult::Open),
             Operation::Close => {
                 *self
                     .live
@@ -276,8 +320,27 @@ impl Engine {
                     session.kill();
                     drop(session);
                 }
+                *self
+                    .spawn_spec
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 self.cleanup_recording();
                 Ok(OperationResult::Unit)
+            }
+            Operation::Resize { cols, rows } => {
+                let result = self
+                    .with_session(|session| dispatch(session, Operation::Resize { cols, rows }));
+                if result.is_ok() {
+                    if let Some(spec) = self
+                        .spawn_spec
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .as_mut()
+                    {
+                        spec.resize(cols, rows);
+                    }
+                }
+                result
             }
             other => self.with_session(|session| dispatch(session, other)),
         }
@@ -290,19 +353,11 @@ impl Engine {
         metadata: &OperationMetadata,
     ) -> Result<OpenResult, TuiTestError> {
         self.spawn(
-            options.shell,
-            None,
-            options.backend,
-            options.profile,
-            options.cols,
-            options.rows,
-            options.cwd,
-            options.env,
-            options.wait_ready,
-            options.restart,
-            options.timeouts,
-            options.recording,
-            context.retention,
+            SpawnSpec {
+                command: SpawnCommand::Open(options),
+                resolved_cwd: None,
+                retention: context.retention,
+            },
             context,
             metadata,
         )
@@ -314,47 +369,107 @@ impl Engine {
         context: &ExecutionContext,
         metadata: &OperationMetadata,
     ) -> Result<OpenResult, TuiTestError> {
-        let mut program = Vec::with_capacity(options.args.len() + 1);
-        program.push(options.program);
-        program.extend(options.args);
         self.spawn(
-            None,
-            Some(program),
-            options.backend,
-            options.profile,
-            options.cols,
-            options.rows,
-            options.cwd,
-            options.env,
-            options.wait_ready,
-            options.restart,
-            options.timeouts,
-            options.recording,
-            context.retention,
+            SpawnSpec {
+                command: SpawnCommand::Run(options),
+                resolved_cwd: None,
+                retention: context.retention,
+            },
             context,
             metadata,
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn spawn(
+    fn restart(
         &self,
-        shell: Option<crate::shell::Shell>,
-        program: Option<Vec<String>>,
-        backend: crate::terminal::backend::Backend,
-        profile: crate::profile::Profile,
-        cols: u16,
-        rows: u16,
-        cwd: Option<String>,
-        env: Vec<(String, String)>,
-        wait_ready: Option<bool>,
-        restart: bool,
-        timeouts: crate::api::Timeouts,
-        recording: AutomaticRecording,
-        diagnostics: crate::diagnostics::DiagnosticRetentionOptions,
+        graceful_timeout_ms: u64,
         context: &ExecutionContext,
         metadata: &OperationMetadata,
     ) -> Result<OpenResult, TuiTestError> {
+        let spec = self
+            .spawn_spec
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .ok_or_else(TuiTestError::no_restart_metadata)?;
+
+        if let Some(session) = self.lock_session().as_ref() {
+            if session.is_alive()? {
+                if let Err(error) = session
+                    .pty
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .signal("INT")
+                {
+                    self.logger
+                        .event(&format!("restart interrupt failed error={error}"));
+                }
+                let start = Instant::now();
+                let timeout = Duration::from_millis(graceful_timeout_ms);
+                while session.is_alive()? && start.elapsed() < timeout {
+                    std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
+                }
+            }
+        }
+
+        self.spawn(spec.restart(), context, metadata)
+    }
+
+    fn spawn(
+        &self,
+        mut spec: SpawnSpec,
+        context: &ExecutionContext,
+        metadata: &OperationMetadata,
+    ) -> Result<OpenResult, TuiTestError> {
+        let diagnostics = spec.retention;
+        let (
+            shell,
+            program,
+            backend,
+            profile,
+            cols,
+            rows,
+            cwd,
+            env,
+            wait_ready,
+            restart,
+            timeouts,
+            recording,
+        ) = match &spec.command {
+            SpawnCommand::Open(options) => (
+                options.shell,
+                None,
+                options.backend,
+                options.profile,
+                options.cols,
+                options.rows,
+                options.cwd.clone(),
+                options.env.clone(),
+                options.wait_ready,
+                options.restart,
+                options.timeouts,
+                options.recording.clone(),
+            ),
+            SpawnCommand::Run(options) => {
+                let mut program = Vec::with_capacity(options.args.len() + 1);
+                program.push(options.program.clone());
+                program.extend(options.args.clone());
+                (
+                    None,
+                    Some(program),
+                    options.backend,
+                    options.profile,
+                    options.cols,
+                    options.rows,
+                    options.cwd.clone(),
+                    options.env.clone(),
+                    options.wait_ready,
+                    options.restart,
+                    options.timeouts,
+                    options.recording.clone(),
+                )
+            }
+        };
         recording.validate()?;
         diagnostics.validate().map_err(TuiTestError::usage)?;
         let mut current = self.lock_session();
@@ -368,6 +483,13 @@ impl Engine {
                 });
             }
         }
+        let cwd = match &spec.resolved_cwd {
+            Some(cwd) => cwd.clone(),
+            None => std::path::absolute(cwd.as_deref().unwrap_or(".")).map_err(|error| {
+                TuiTestError::internal(format!("failed to resolve session cwd: {error}"))
+            })?,
+        };
+        spec.resolved_cwd = Some(cwd.clone());
         let recording_required = recording.directory.is_some();
         let recording_path = self.resolve_recording_path(&recording)?;
 
@@ -404,7 +526,7 @@ impl Engine {
             profile,
             cols,
             rows,
-            cwd,
+            Some(cwd),
             env,
             timeouts,
             diagnostics,
@@ -473,6 +595,10 @@ impl Engine {
             .live
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(live);
+        *self
+            .spawn_spec
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(spec);
         Ok(OpenResult {
             shell_pid,
             session: self.name.clone(),
@@ -632,6 +758,10 @@ impl Engine {
         if let Some(existing) = error.details.take() {
             merge_failure_details(&mut details, *existing);
         }
+        details.truncated |= details
+            .locator
+            .as_ref()
+            .is_some_and(|locator| locator.stages_truncated);
         details.truncated |= details.recent_operations.iter().any(|event| {
             matches!(
                 event.expectation,
@@ -851,6 +981,7 @@ impl Engine {
                 cursor: state.emu.cursor(),
                 size: state.emu.size(),
                 keyboard_mode: state.emu.keyboard_mode(),
+                cursor_key_application: state.emu.cursor_key_application(),
                 bracketed_paste: state.emu.mode(TerminalMode::BracketedPaste),
                 mouse_mode: state.mouse_mode.relayable(),
                 exited: state.exited,
@@ -1280,6 +1411,7 @@ fn diagnostic_operation_name(operation: &Operation) -> &'static str {
     match operation {
         Operation::Open(_) => "open",
         Operation::Run(_) => "run",
+        Operation::Restart { .. } => "restart",
         Operation::Close => "close",
         Operation::State => "state",
         Operation::Text { .. } => "text",
@@ -1422,6 +1554,12 @@ fn safe_operation_summary(operation: &Operation) -> String {
 
 fn locator_stage_count(query: &LocatorQuery) -> usize {
     1 + query.within.as_deref().map_or(0, locator_stage_count)
+        + query
+            .selector
+            .children()
+            .into_iter()
+            .map(locator_stage_count)
+            .sum::<usize>()
 }
 
 fn open_ready_timeout(session: &TerminalSession) -> u64 {
@@ -1832,8 +1970,13 @@ fn dispatch(
             include_title,
             cwd,
         )?)),
-        Operation::Screenshot { full, path, zoom } => Ok(OperationResult::Screenshot(screenshot(
-            session, full, path, zoom,
+        Operation::Screenshot {
+            full,
+            path,
+            zoom,
+            background,
+        } => Ok(OperationResult::Screenshot(screenshot(
+            session, full, path, zoom, background,
         )?)),
         Operation::StartRecording {
             path,
@@ -1842,12 +1985,21 @@ fn dispatch(
             speed,
             idle_time_limit,
             zoom,
+            background,
         } => {
-            session.start_recording(path, format, fps, speed, idle_time_limit, zoom)?;
+            session.start_recording(crate::session::ManualRecordingOptions {
+                path,
+                format,
+                fps,
+                speed,
+                idle_time_limit,
+                zoom,
+                background,
+            })?;
             Ok(OperationResult::Unit)
         }
         Operation::StopRecording => Ok(OperationResult::Recording(session.stop_recording()?)),
-        Operation::Open(_) | Operation::Run(_) | Operation::Close => {
+        Operation::Open(_) | Operation::Run(_) | Operation::Restart { .. } | Operation::Close => {
             Err(TuiTestError::internal("unsupported nested operation"))
         }
     }
@@ -2761,6 +2913,20 @@ fn wait_bell(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestEr
 }
 
 fn validate_locator_query(query: &LocatorQuery) -> Result<(), TuiTestError> {
+    validate_locator_node(query, 0, &mut 0)
+}
+
+fn validate_locator_node(
+    query: &LocatorQuery,
+    depth: usize,
+    count: &mut usize,
+) -> Result<(), TuiTestError> {
+    *count += 1;
+    if depth >= 64 || *count > 4096 {
+        return Err(TuiTestError::usage(
+            "locator expression exceeds the size or depth limit",
+        ));
+    }
     if query.within.is_none() && query.direction != crate::api::LocatorDirection::Within {
         return Err(TuiTestError::usage(
             "locator direction requires a preceding locator",
@@ -2776,9 +2942,30 @@ fn validate_locator_query(query: &LocatorQuery) -> Result<(), TuiTestError> {
             }
             validate_style(&selector.style)?;
         }
+        LocatorSelector::Link(_) => {}
+        LocatorSelector::And { .. }
+        | LocatorSelector::Or { .. }
+        | LocatorSelector::Filter { .. } => {
+            if query.within.is_some() || !query.style.is_empty() {
+                return Err(TuiTestError::usage(
+                    "composition nodes do not accept scope or style fields",
+                ));
+            }
+            if let LocatorSelector::Filter {
+                has: None,
+                has_not: None,
+                ..
+            } = &query.selector
+            {
+                return Err(TuiTestError::usage("filter requires has or hasNot"));
+            }
+            for child in query.selector.children() {
+                validate_locator_node(child, depth + 1, count)?;
+            }
+        }
     }
     if let Some(parent) = query.within.as_deref() {
-        validate_locator_query(parent)?;
+        validate_locator_node(parent, depth + 1, count)?;
     }
     validate_style(&query.style)?;
     Ok(())
@@ -3032,6 +3219,9 @@ fn locator_failure_message(
     require_one: bool,
     _timeout_ms: Option<u64>,
 ) -> String {
+    if let Some(error) = &diagnostics.evaluation_error {
+        return error.clone();
+    }
     let description = query.selector.description();
     match diagnostics.failure_reason {
         Some(LocatorFailureReason::Ambiguous) => {
@@ -3557,20 +3747,6 @@ fn evaluate_cell_style(
             ));
         }
     }
-    if let Some(expected) = style.link.as_deref() {
-        let actual = cell.uri().unwrap_or_default();
-        if expected != actual {
-            mismatches.push(style_mismatch(
-                cell,
-                x,
-                y,
-                "link",
-                expected.into(),
-                actual.into(),
-                None,
-            ));
-        }
-    }
     for (property, spec, actual, foreground) in [
         ("foreground", &style.foreground, cell.fg, true),
         ("background", &style.background, cell.bg, false),
@@ -3846,30 +4022,91 @@ fn svg_snapshot(session: &TerminalSession, full: bool) -> SvgSnapshot {
     snapshot
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScreenshotFormat {
+    Svg,
+    Png,
+}
+
+impl ScreenshotFormat {
+    fn infer(path: &str) -> Result<Self, TuiTestError> {
+        let extension = std::path::Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase);
+        match extension.as_deref() {
+            None | Some("svg") => Ok(Self::Svg),
+            Some("png") => Ok(Self::Png),
+            Some(extension) => Err(TuiTestError::usage(format!(
+                "unsupported screenshot extension '.{extension}'; use .svg or .png"
+            ))),
+        }
+    }
+}
+
 fn screenshot(
     session: &TerminalSession,
     full: bool,
     path: Option<String>,
     zoom: Option<f64>,
+    background: Option<crate::api::CaptureBackground>,
 ) -> Result<ScreenshotResult, TuiTestError> {
     match path {
         Some(path) => {
             let zoom = crate::api::resolve_zoom(zoom)?;
+            let format = ScreenshotFormat::infer(&path)?;
             let snapshot = svg_snapshot(session, full);
-            let svg = crate::render::svg::render_svg_with_zoom(
-                &snapshot.rows,
-                snapshot.cols,
-                &snapshot.render_state,
-                snapshot.cursor,
-                snapshot.title.as_deref(),
-                zoom,
-            );
-            std::fs::write(&path, svg)
-                .map_err(|error| TuiTestError::internal(error.to_string()))?;
+            match format {
+                ScreenshotFormat::Svg => {
+                    let svg = crate::render::svg::render_svg_with_zoom(
+                        &snapshot.rows,
+                        snapshot.cols,
+                        &snapshot.render_state,
+                        snapshot.cursor,
+                        snapshot.title.as_deref(),
+                        zoom,
+                        background,
+                    );
+                    std::fs::write(&path, svg)
+                        .map_err(|error| TuiTestError::internal(error.to_string()))?;
+                }
+                ScreenshotFormat::Png => {
+                    #[cfg(feature = "recording-raster")]
+                    {
+                        let rows = snapshot.rows.len();
+                        let frame = crate::record::frames::Frame {
+                            grid: snapshot.rows,
+                            title: snapshot.title,
+                            duration: Duration::ZERO,
+                            render_state: snapshot.render_state,
+                            cursor: snapshot.cursor,
+                        };
+                        let mut renderer = crate::render::raster::GridRenderer::for_screenshot(
+                            snapshot.cols,
+                            rows,
+                            zoom,
+                            background,
+                        )
+                        .map_err(|error| TuiTestError::internal(error.to_string()))?;
+                        crate::render::encode::encode_png(
+                            std::path::Path::new(&path),
+                            &frame,
+                            &mut renderer,
+                        )
+                        .map_err(|error| TuiTestError::internal(error.to_string()))?;
+                    }
+                    #[cfg(not(feature = "recording-raster"))]
+                    {
+                        return Err(TuiTestError::usage(
+                            "PNG screenshots require the tui-test 'recording-raster' feature",
+                        ));
+                    }
+                }
+            }
             Ok(ScreenshotResult::Path(path))
         }
-        None if zoom.is_some() => Err(TuiTestError::usage(
-            "screenshot zoom requires an output path",
+        None if zoom.is_some() || background.is_some() => Err(TuiTestError::usage(
+            "screenshot zoom and background options require an output path",
         )),
         None => Ok(ScreenshotResult::Text(text_of(&grid(session, full)))),
     }
@@ -3904,11 +4141,87 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{TextPosition, TextSpan};
+    use crate::api::{
+        AutomaticRecording, AutomaticRecordingMode, TextPosition, TextSpan, Timeouts,
+    };
     use crate::profile::Profile;
     use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::cell::{NamedColor, UnderlineStyle};
     use crate::terminal::emu::Emulator;
+
+    #[test]
+    fn successful_open_stores_the_complete_spawn_spec_and_tracks_resize() {
+        let recording_path = std::env::current_dir()
+            .unwrap()
+            .join(format!("restart-spec-{}.cast", std::process::id()));
+        let engine = Engine::new(
+            "restart-spec".to_string(),
+            Arc::new(Logger::disabled()),
+            recording_path,
+        );
+        let cwd = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let profile = Profile {
+            scrollback: 321,
+            colors: crate::profile::Colors {
+                foreground: crate::profile::Rgb::new(1, 2, 3),
+                ..crate::profile::Colors::default()
+            },
+        };
+        let options = OpenOptions {
+            backend: crate::Backend::Alacritty,
+            shell: None,
+            profile,
+            cols: 87,
+            rows: 29,
+            cwd: Some(cwd.clone()),
+            env: vec![("RESTART_SPEC".to_string(), "preserved".to_string())],
+            wait_ready: Some(false),
+            restart: false,
+            timeouts: Timeouts {
+                text: Some(11),
+                idle: Some(12),
+                command: Some(13),
+                exit: Some(14),
+                ready: Some(15),
+            },
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Disabled,
+                directory: None,
+            },
+        };
+
+        engine
+            .execute(Operation::Open(options.clone()))
+            .expect("open session");
+        engine
+            .execute(Operation::Resize { cols: 99, rows: 31 })
+            .expect("resize session");
+
+        let stored = engine
+            .spawn_spec
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .expect("stored spawn spec");
+        assert_eq!(stored.resolved_cwd, Some(PathBuf::from(&cwd)));
+        let SpawnCommand::Open(stored) = stored.command else {
+            panic!("expected stored open options");
+        };
+        assert_eq!(stored.backend, options.backend);
+        assert_eq!(stored.shell, options.shell);
+        assert_eq!(stored.profile, options.profile);
+        assert_eq!((stored.cols, stored.rows), (99, 31));
+        assert_eq!(stored.cwd, Some(cwd));
+        assert_eq!(stored.env, options.env);
+        assert_eq!(stored.wait_ready, options.wait_ready);
+        assert_eq!(stored.timeouts, options.timeouts);
+        assert_eq!(stored.recording, options.recording);
+
+        engine.execute(Operation::Close).expect("close session");
+    }
 
     #[test]
     fn an_svg_snapshot_freezes_grid_palette_and_cursor_together() {
@@ -4016,6 +4329,27 @@ mod tests {
     }
 
     #[test]
+    fn screenshot_format_defaults_to_svg_and_rejects_unknown_extensions() {
+        assert_eq!(
+            ScreenshotFormat::infer("screen").unwrap(),
+            ScreenshotFormat::Svg
+        );
+        assert_eq!(
+            ScreenshotFormat::infer("screen.SVG").unwrap(),
+            ScreenshotFormat::Svg
+        );
+        assert_eq!(
+            ScreenshotFormat::infer("screen.PNG").unwrap(),
+            ScreenshotFormat::Png
+        );
+        let error = ScreenshotFormat::infer("screen.gif").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Usage);
+        assert!(error.message.contains(".gif"));
+        assert!(error.message.contains(".svg"));
+        assert!(error.message.contains(".png"));
+    }
+
+    #[test]
     fn cell_model_reports_the_whole_vocabulary() {
         let cell = EmuCell {
             ch: "x".into(),
@@ -4116,7 +4450,7 @@ mod tests {
     /// A link is matched by where it points, so a locator can find the cells
     /// of one link and ignore an identical-looking one pointing elsewhere.
     #[test]
-    fn style_locators_match_a_cell_by_its_link() {
+    fn link_locators_match_a_cell_by_its_link() {
         let emu = AlacrittyEmu::new(10, 2, &Profile::default());
         let linked = EmuCell {
             ch: "x".into(),
@@ -4127,20 +4461,15 @@ mod tests {
             ..EmuCell::blank()
         };
 
-        let with_link = |uri: &str| TextStyle {
-            link: Some(uri.into()),
-            ..TextStyle::default()
-        };
-        assert!(cell_matches_style(
-            &linked,
-            &with_link("https://example.com"),
-            &emu
-        ));
-        assert!(!cell_matches_style(
-            &linked,
-            &with_link("https://other.example"),
-            &emu
-        ));
+        let rows = vec![vec![linked]];
+        for (uri, count) in [("https://example.com", 1), ("https://other.example", 0)] {
+            let found =
+                locator::locate_query(&rows, &LocatorQuery::link(uri), &mut |cell, style| {
+                    cell_matches_style(cell, style, &emu)
+                })
+                .unwrap();
+            assert_eq!(found.len(), count);
+        }
     }
 
     /// An empty link is a real requirement, not an absent one: it asks for a
@@ -4160,19 +4489,18 @@ mod tests {
             })),
             ..plain.clone()
         };
-        let unlinked = TextStyle {
-            link: Some(String::new()),
-            ..TextStyle::default()
-        };
-
-        assert!(cell_matches_style(&plain, &unlinked, &emu));
-        assert!(!cell_matches_style(&linked, &unlinked, &emu));
+        let found = locator::locate_query(
+            &[vec![plain, linked]],
+            &LocatorQuery::link(""),
+            &mut |cell, style| cell_matches_style(cell, style, &emu),
+        )
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].value.spans[0].end, 1);
     }
 
-    /// A style that says nothing about links keeps matching either kind, so
-    /// adding the field does not narrow every existing query.
     #[test]
-    fn a_style_without_a_link_still_matches_a_linked_cell() {
+    fn appearance_matches_independently_of_links() {
         let emu = AlacrittyEmu::new(10, 2, &Profile::default());
         let linked = EmuCell {
             ch: "x".into(),

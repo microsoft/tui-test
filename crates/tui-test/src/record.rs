@@ -39,6 +39,8 @@ pub(crate) struct StartRecording {
     #[cfg(feature = "recording-raster")]
     pub zoom: f64,
     #[cfg(feature = "recording-raster")]
+    pub background: Option<crate::api::CaptureBackground>,
+    #[cfg(feature = "recording-raster")]
     pub timeline: frames::TimelineOptions,
     #[cfg(feature = "recording-raster")]
     pub ffmpeg_path: Option<PathBuf>,
@@ -52,6 +54,8 @@ pub(crate) struct StoppedRecording {
     pub format: RecordingFormat,
     #[cfg(feature = "recording-raster")]
     pub zoom: f64,
+    #[cfg(feature = "recording-raster")]
+    pub background: Option<crate::api::CaptureBackground>,
     #[cfg(feature = "recording-raster")]
     pub timeline: frames::TimelineOptions,
     #[cfg(feature = "recording-raster")]
@@ -442,6 +446,8 @@ mod tests {
                 #[cfg(feature = "recording-raster")]
                 zoom: 1.0,
                 #[cfg(feature = "recording-raster")]
+                background: None,
+                #[cfg(feature = "recording-raster")]
                 timeline: frames::TimelineOptions::default(),
                 #[cfg(feature = "recording-raster")]
                 ffmpeg_path: None,
@@ -478,6 +484,8 @@ mod tests {
             initial_output: String::new(),
             #[cfg(feature = "recording-raster")]
             zoom: 1.0,
+            #[cfg(feature = "recording-raster")]
+            background: None,
             #[cfg(feature = "recording-raster")]
             timeline: frames::TimelineOptions::default(),
             #[cfg(feature = "recording-raster")]
@@ -521,6 +529,8 @@ mod tests {
                 initial_output: String::new(),
                 #[cfg(feature = "recording-raster")]
                 zoom: 1.0,
+                #[cfg(feature = "recording-raster")]
+                background: None,
                 #[cfg(feature = "recording-raster")]
                 timeline: frames::TimelineOptions::default(),
                 #[cfg(feature = "recording-raster")]

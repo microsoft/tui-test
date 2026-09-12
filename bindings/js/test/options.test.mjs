@@ -37,6 +37,24 @@ const ALL_TIMEOUT_ENV_VARS = [
 
 const CLASSES = ["text", "idle", "command", "exit", "ready"];
 
+test("invalid capture backgrounds reject with UsageError before session lookup", async () => {
+  const terminal = new TuiTest(uniqueSession("invalid-capture-background"));
+  for (const background of [
+    "", "#12", "#ff00zz", "#12345678", "#12é34", "256,0,0", "rgb(-1,0,0)",
+  ]) {
+    for (const capture of [
+      () => terminal.screenshot("screen.svg", { background }),
+      () => terminal.startRecording("recording.gif", { background }),
+    ]) {
+      await assert.rejects(
+        capture,
+        (error) => error instanceof UsageError && error.message.includes("color"),
+        JSON.stringify(background),
+      );
+    }
+  }
+});
+
 function withEnv(vars, fn) {
   const saved = {};
   for (const key of Object.keys(vars)) {
@@ -192,11 +210,11 @@ test("mouse helpers encode named buttons and modifiers", async () => {
     });
     const locatorCall = calls.at(-1);
     assert.equal(locatorCall[0], "locator");
-    assert.equal(locatorCall[1].at(-1).occurrence, "unique");
+    assert.equal(locatorCall[1].nodes[locatorCall[1].root].occurrence, "unique");
     assert.deepEqual(locatorCall.slice(2), [29, 2, 50]);
 
     await su.getByText("Open").click();
-    assert.equal(calls.at(-1)[1].at(-1).occurrence, "any");
+    assert.equal(calls.at(-1)[1].nodes.at(-1).occurrence, "any");
 
     await assert.rejects(
       su.mouse.click(0, 0, { button: "primary" }),
@@ -300,7 +318,7 @@ test("locator.location transports require-one to native", async () => {
     assert.equal(match.text, "target");
     assert.equal(calls.length, 1);
     assert.equal(calls[0][1], true);
-    assert.equal(calls[0][0].at(-1).occurrence, "any");
+    assert.equal(calls[0][0].nodes.at(-1).occurrence, "any");
   } finally {
     NativeRuntime.prototype.findLocator = original;
   }
@@ -361,7 +379,7 @@ test("legacy screenshot failures attach a bounded artifact error", async () => {
     text: NativeRuntime.prototype.text,
     screenshot: NativeRuntime.prototype.screenshot,
   };
-  NativeRuntime.prototype.findLocator = async () => [];
+  NativeRuntime.prototype.findLocator = async () => { throw new ExpectationError("no match found\n\nTerminal content:\nlegacy screen"); };
   NativeRuntime.prototype.text = async () => "legacy screen";
   NativeRuntime.prototype.screenshot = async () => {
     throw new Error("capture broke");
@@ -382,6 +400,37 @@ test("legacy screenshot failures attach a bounded artifact error", async () => {
     );
   } finally {
     Object.assign(NativeRuntime.prototype, originals);
+  }
+});
+
+test("restart forwards timeout and preserves result and errors", async () => {
+  const original = NativeRuntime.prototype.restart;
+  const calls = [];
+  const result = {
+    shell_pid: 42,
+    session: "restart-options",
+    ready: true,
+    recording: "",
+  };
+  NativeRuntime.prototype.restart = async (gracefulTimeoutMs) => {
+    calls.push(gracefulTimeoutMs);
+    if (gracefulTimeoutMs === 456) {
+      throw new UsageError("restart failed");
+    }
+    return result;
+  };
+
+  try {
+    const su = new TuiTest("restart-options");
+    assert.equal(await su.restart(), result);
+    assert.equal(await su.restart({ gracefulTimeout: 123 }), result);
+    await assert.rejects(
+      () => su.restart({ gracefulTimeout: 456 }),
+      (error) => error instanceof UsageError && error.message === "restart failed",
+    );
+    assert.deepEqual(calls, [5000, 123, 456]);
+  } finally {
+    NativeRuntime.prototype.restart = original;
   }
 });
 

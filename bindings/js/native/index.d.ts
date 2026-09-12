@@ -5,14 +5,15 @@ export declare class NativeSession {
   name(): string
   open(options?: OpenOptions | undefined | null): Promise<OpenResult>
   run(options: RunOptions): Promise<OpenResult>
+  restart(gracefulTimeoutMs: number): Promise<OpenResult>
   close(): Promise<void>
   state(): Promise<State>
   text(full?: boolean | undefined | null): Promise<string>
-  findLocator(stages: Array<LocatorStage>, requireOne?: boolean | undefined | null): Promise<Array<TextMatch>>
-  waitLocator(stages: Array<LocatorStage>, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
-  clickLocator(stages: Array<LocatorStage>, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
-  highlightLocator(stages: Array<LocatorStage>, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
-  expectLocator(stages: Array<LocatorStage>, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  findLocator(expression: LocatorExpression, requireOne?: boolean | undefined | null): Promise<Array<TextMatch>>
+  waitLocator(expression: LocatorExpression, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  clickLocator(expression: LocatorExpression, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  highlightLocator(expression: LocatorExpression, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
+  expectLocator(expression: LocatorExpression, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
   packedScreen(full?: boolean | undefined | null): Promise<PackedScreen>
   cells(x: number, y: number, w?: number | undefined | null, h?: number | undefined | null): Promise<Array<Cell>>
   getCommand(): Promise<string | null>
@@ -139,8 +140,13 @@ export interface FailureArtifactOptions {
   includeRecording?: boolean
 }
 
-export interface LocatorStage {
-  kind: LocatorStageKind
+export interface LocatorExpression {
+  nodes: Array<LocatorNode>
+  root: number
+}
+
+export interface LocatorNode {
+  kind: LocatorNodeKind
   direction?: LocatorStageDirection
   text?: string
   regex?: boolean
@@ -149,17 +155,28 @@ export interface LocatorStage {
   occurrence?: string
   nth?: number
   style?: LocatorStyle
+  link?: string
+  within?: number
+  left?: number
+  right?: number
+  input?: number
+  has?: number
+  hasNot?: number
+}
+
+export declare const enum LocatorNodeKind {
+  Text = 'text',
+  Style = 'style',
+  Link = 'link',
+  And = 'and',
+  Or = 'or',
+  Filter = 'filter'
 }
 
 export declare const enum LocatorStageDirection {
   Within = 'within',
   After = 'after',
   Before = 'before'
-}
-
-export declare const enum LocatorStageKind {
-  Text = 'text',
-  Style = 'style'
 }
 
 export interface LocatorStyle {
@@ -174,7 +191,6 @@ export interface LocatorStyle {
   hidden?: boolean
   strikethrough?: boolean
   blink?: boolean
-  link?: string
 }
 
 export interface MouseClickOptions {
@@ -239,6 +255,8 @@ export interface RecordingOptions {
   speed?: number
   idleTimeLimit?: number
   zoom?: number
+  background?: string
+  transparent?: boolean
 }
 
 export interface RunOptions {
@@ -261,6 +279,8 @@ export interface ScreenshotOptions {
   full?: boolean
   path?: string
   zoom?: number
+  background?: string
+  transparent?: boolean
 }
 
 export declare function sessions(): Promise<Array<string>>

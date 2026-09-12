@@ -147,6 +147,10 @@ export type LocatorFailureReason =
   | "anchor_ambiguous"
   | "relative_region_no_match"
   | "style_filter_removed_all"
+  | "link_filter_removed_all"
+  | "intersection_empty"
+  | "union_empty"
+  | "filter_removed_all"
   | "nth_out_of_range"
   | "outside_viewport"
   | "matched_no_cells"
@@ -191,7 +195,6 @@ export interface FailureTextStyle {
   readonly hidden?: boolean | null;
   readonly strikethrough?: boolean | null;
   readonly blink?: boolean | null;
-  readonly link?: string | null;
 }
 
 export interface FailureTextAnchor {
@@ -218,7 +221,10 @@ export interface FailureStyleSelector {
 
 export type FailureLocatorSelector =
   | { readonly kind: "text"; readonly selector: FailureTextSelector }
-  | { readonly kind: "style"; readonly selector: FailureStyleSelector };
+  | { readonly kind: "style"; readonly selector: FailureStyleSelector }
+  | { readonly kind: "link"; readonly selector: { readonly uri: string; readonly full: boolean } }
+  | { readonly kind: "and" | "or"; readonly selector: { readonly left: FailureLocatorQuery; readonly right: FailureLocatorQuery } }
+  | { readonly kind: "filter"; readonly selector: { readonly input: FailureLocatorQuery; readonly has?: FailureLocatorQuery | null; readonly has_not?: FailureLocatorQuery | null } };
 
 export interface FailureLocatorQuery {
   readonly selector: FailureLocatorSelector;
@@ -229,7 +235,7 @@ export interface FailureLocatorQuery {
 }
 
 export type OperationExpectation =
-  | { readonly kind: "locator"; readonly query: FailureLocatorQuery; readonly outcome: "visible" | "hidden" | "unique" | "actionable" }
+  | { readonly kind: "locator"; readonly query: FailureLocatorQuery; readonly outcome: "matches" | "visible" | "hidden" | "unique" | "actionable" }
   | { readonly kind: "value"; readonly subject: string; readonly expected: string }
   | { readonly kind: "unavailable"; readonly reason: string };
 
@@ -254,8 +260,11 @@ export interface FailureCellMismatch {
 
 export interface FailureLocatorStageDetails {
   readonly stage_index: number;
-  readonly mode: "text" | "contiguous_style_runs" | "parent_style_filter";
-  readonly selector: FailureLocatorSelector;
+  readonly expression_path: string;
+  readonly evaluations: number;
+  readonly failure_reason?: LocatorFailureReason;
+  readonly mode: "text" | "contiguous_style_runs" | "parent_style_filter" | "contiguous_link_runs" | "parent_link_filter" | "intersection" | "union" | "containment_filter";
+  readonly selector?: FailureLocatorSelector;
   readonly direction: "within" | "after" | "before";
   readonly requested_occurrence: FailureMatchOccurrence;
   readonly effective_occurrence: FailureMatchOccurrence;
@@ -275,6 +284,8 @@ export interface FailureLocatorDetails {
   readonly viewport_origin_y: number;
   readonly stages: readonly FailureLocatorStageDetails[];
   readonly final_candidate_count: number;
+  readonly stages_truncated?: boolean;
+  readonly evaluation_error?: string;
   readonly selected?: readonly FailureTextMatch[];
   readonly failure_stage?: number;
   readonly failure_reason?: LocatorFailureReason;

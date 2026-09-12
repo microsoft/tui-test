@@ -1,5 +1,5 @@
 import { button, element, get, input, time } from "./dom.js";
-import { describeExpectation } from "./expectation.js";
+import { describeExpectation, locatorCode } from "./expectation.js";
 import type { TraceModel } from "./model.js";
 import type { Frame, ImageResult, Operation } from "./types.js";
 
@@ -21,7 +21,7 @@ export class ActionsPanel {
     const filter = input("action-filter").value.toLowerCase();
     return this.model.operations.filter((op) =>
       (!input("assertions-only").checked || op.is_assertion || op.result !== "ok") &&
-      `${op.name} ${op.safe_summary} ${describeExpectation(op.expectation) || ""}`.toLowerCase().includes(filter));
+      `${op.name} ${op.safe_summary} ${describeExpectation(op.expectation) || ""} ${op.expectation?.kind === "locator" ? locatorCode(op.expectation.query) : ""}`.toLowerCase().includes(filter));
   }
   private render() {
     const container = get("points");
@@ -30,11 +30,17 @@ export class ActionsPanel {
       const item = element("button", "", `point${op.result !== "ok" ? " failed" : ""}`);
       item.dataset.operation = String(op.sequence);
       const expectation = describeExpectation(op.expectation) || op.safe_summary;
-      item.title = `${expectation} / screen ${op.screen_at_return}`;
-      const label = element("span");
-      label.append(element("span", `${op.sequence}. ${op.name}`, "name"), element("span", expectation, "description"));
+      const query = op.expectation?.kind === "locator" ? locatorCode(op.expectation.query) : undefined;
+      item.title = `${query ? `${query}\n` : ""}${expectation} / screen ${op.screen_at_return}`;
+      item.setAttribute("aria-label", `${op.name} ${query || expectation} ${op.result === "ok" ? "passed" : "failed"}`);
+      const label = element("span", "", "action-label");
+      const line = element("span", "", "action-line");
+      line.append(element("span", op.name, "name"));
+      if (query) line.append(element("code", query, "query-code"));
+      label.append(line);
+      if (!query) label.append(element("span", expectation, "description"));
       item.append(element("span", "", "status"), label, element("span",
-        `${op.result === "ok" ? "PASS" : "FAIL"}\n${time(op.ended_ms - op.started_ms)}` +
+        `${time(op.ended_ms - op.started_ms)}` +
         (this.model.frameIndex.has(op.screen_at_return) ? "" : "\nnot retained"), "result"));
       item.addEventListener("click", () => this.select(op));
       container.append(item);

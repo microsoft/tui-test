@@ -5,6 +5,9 @@ export type {
   LocatorDirection,
   LocatorExpectOptions,
   LocatorHighlightOptions,
+  LocatorFilterOptions,
+  LinkSelectorOptions,
+  RelativeLinkSelectorOptions,
   LocatorWaitOptions,
   Locator,
   RelativeStyleSelectorOptions,
@@ -18,6 +21,7 @@ export type {
   TitleOptions,
   RecordingFormat,
   RecordingOptions,
+  RestartOptions,
   ScreenshotOptions,
 } from "./client.js";
 export { uniqueSession } from "./ephemeral.js";

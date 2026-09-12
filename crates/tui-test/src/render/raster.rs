@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use tiny_skia::Pixmap;
 
+use crate::api::CaptureBackground;
 use crate::profile::ColorSlot;
 use crate::record::frames::Frame;
 use crate::terminal::cell::{EmuCell, CONTINUATION};
@@ -51,11 +52,13 @@ pub trait FrameRenderer {
 pub struct GridRenderer {
     max_cols: u16,
     max_rows: usize,
+    exact_size: bool,
     scale: f32,
     width: u32,
     height: u32,
     pixmap: Pixmap,
     fonts: FontSystem,
+    background: Option<CaptureBackground>,
 }
 
 impl GridRenderer {
@@ -69,10 +72,42 @@ impl GridRenderer {
     }
 
     pub fn with_zoom(cols: u16, rows: usize, zoom: f64) -> anyhow::Result<Self> {
+        Self::with_zoom_background_and_size(cols, rows, zoom, None, false)
+    }
+
+    pub fn with_zoom_and_background(
+        cols: u16,
+        rows: usize,
+        zoom: f64,
+        background: Option<CaptureBackground>,
+    ) -> anyhow::Result<Self> {
+        Self::with_zoom_background_and_size(cols, rows, zoom, background, false)
+    }
+
+    pub(crate) fn for_screenshot(
+        cols: u16,
+        rows: usize,
+        zoom: f64,
+        background: Option<CaptureBackground>,
+    ) -> anyhow::Result<Self> {
+        Self::with_zoom_background_and_size(cols, rows, zoom, background, true)
+    }
+
+    fn with_zoom_background_and_size(
+        cols: u16,
+        rows: usize,
+        zoom: f64,
+        background: Option<CaptureBackground>,
+        exact_size: bool,
+    ) -> anyhow::Result<Self> {
         if !zoom.is_finite() || zoom <= 0.0 || zoom > f64::from(f32::MAX) {
             anyhow::bail!("recording zoom must be finite and greater than zero");
         }
-        let (base_width, base_height) = svg::pixel_size(cols, rows);
+        let (base_width, base_height) = if exact_size {
+            svg::exact_pixel_size(cols, rows)
+        } else {
+            svg::pixel_size(cols, rows)
+        };
         let padding = CANVAS_PADDING
             .checked_mul(2)
             .expect("recording canvas padding must fit in u32");
@@ -87,6 +122,7 @@ impl GridRenderer {
         Ok(Self {
             max_cols: cols,
             max_rows: rows,
+            exact_size,
             scale: zoom as f32,
             width,
             height,
@@ -94,6 +130,7 @@ impl GridRenderer {
                 anyhow::anyhow!("terminal recording dimensions must fit a pixmap")
             })?,
             fonts: FontSystem::new(),
+            background,
         })
     }
 }
@@ -115,17 +152,32 @@ impl FrameRenderer for GridRenderer {
 
         let scale = self.scale;
         let colors = &frame.render_state;
-        let (base_width, base_height) = svg::pixel_size(cols, rows);
+        let (base_width, base_height) = if self.exact_size {
+            svg::exact_pixel_size(cols, rows)
+        } else {
+            svg::pixel_size(cols, rows)
+        };
         let panel_width = scaled_dimension(base_width, f64::from(self.scale), "frame width")?;
         let panel_height = scaled_dimension(base_height, f64::from(self.scale), "frame height")?;
         let origin_x = (self.width - panel_width) as f32 / 2.0;
         let origin_y = (self.height - panel_height) as f32 / 2.0;
-        self.pixmap.fill(tiny_skia::Color::from_rgba8(
-            CANVAS_BACKGROUND.r,
-            CANVAS_BACKGROUND.g,
-            CANVAS_BACKGROUND.b,
-            255,
-        ));
+        match self.background {
+            Some(CaptureBackground::Transparent) => {
+                self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
+            }
+            Some(CaptureBackground::Color(color)) => {
+                self.pixmap
+                    .fill(tiny_skia::Color::from_rgba8(color.r, color.g, color.b, 255));
+            }
+            None => {
+                self.pixmap.fill(tiny_skia::Color::from_rgba8(
+                    CANVAS_BACKGROUND.r,
+                    CANVAS_BACKGROUND.g,
+                    CANVAS_BACKGROUND.b,
+                    255,
+                ));
+            }
+        }
         draw_shadow(
             &mut self.pixmap,
             origin_x,

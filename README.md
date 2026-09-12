@@ -157,6 +157,8 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | --- | --- |
 | `open [options]` | Open a shell. |
 | `run [options] PROGRAM [ARGS...]` | Run a program. |
+| `[global options] -- PROGRAM [ARGS...]` | Alias for `run`. |
+| `restart [--graceful-timeout MS]` | Restart the session. |
 | `sessions` | List sessions. |
 | `close [--all]` | Close one or all sessions. |
 | `daemon start` | Start the session daemon. |
@@ -197,6 +199,16 @@ Locator options:
 | `--nth N` | Select a zero-based match. |
 
 Style options are `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, and `--blink`. Boolean styles accept `=false`.
+
+`--link URI` separately requires every matched cell, including spaces, to
+have that OSC 8 target. `--link ""` requires no link.
+
+Programmatic locators add `getByLink()` / `get_by_link()`, cell-set
+intersection and union (`and`/`or` in Rust and JavaScript, `and_`/`or_` in
+Python), and locator-only `filter` containment. AND/OR form new contiguous
+per-row runs; filters preserve whole matches. See the
+[JavaScript](bindings/js/README.md#compose-locators) and
+[Python](bindings/python/README.md#compose-locators) composition examples.
 
 `expect text` also accepts `--not` and `--timeout MS`. `click text` accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks N`, and `--timeout MS`. `highlight text` accepts `--timeout MS`.
 
@@ -276,13 +288,13 @@ Timeout defaults:
 
 | Command | Description |
 | --- | --- |
-| `screenshot [PATH] [-o PATH] [--full] [--zoom N]` | Print text or save SVG. |
-| `record start PATH [options]` | Start APNG, GIF, MP4, or asciinema recording. |
+| `screenshot [PATH] [-o PATH] [--full] [--zoom N] [--background COLOR \| --transparent]` | Print text or save SVG or PNG. |
+| `record start PATH [options] [--background COLOR \| --transparent]` | Start APNG, GIF, MP4, or asciinema recording. |
 | `record stop` | Finish the recording. |
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
 | `monitor [--interactive]` | Watch a CLI session or send input with `--interactive`. |
 
-`record start` accepts `--format`, `--fps`, `--speed`, `--idle-time-limit`, and `--zoom`. MP4 output requires `ffmpeg`.
+`record start` options: `--format`, `--fps`, `--speed`, `--idle-time-limit`, `--zoom`, `--background`, and `--transparent`. MP4 requires `ffmpeg` and does not support transparency. Cast recordings do not support canvas options.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `--format` overrides it.
 

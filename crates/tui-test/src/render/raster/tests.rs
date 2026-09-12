@@ -1,6 +1,7 @@
 #[cfg(feature = "recording-font-jetbrains-mono-styles")]
 use super::font::{FontSystem, GlyphKey};
 use super::{FrameRenderer, GridRenderer, RgbaFrame, CANVAS_BACKGROUND, CANVAS_PADDING};
+use crate::api::CaptureBackground;
 use crate::profile::Profile;
 use crate::record::frames::Frame;
 use crate::render::svg::{RenderColors, RenderState};
@@ -58,6 +59,19 @@ fn scaled_renderers_multiply_output_dimensions() {
 }
 
 #[test]
+fn static_screenshots_keep_odd_svg_dimensions_at_zoom() {
+    for (zoom, recording_size, screenshot_size) in
+        [(1.0, (88, 122), (88, 121)), (2.0, (176, 244), (176, 242))]
+    {
+        let recording = GridRenderer::with_zoom(1, 1, zoom).unwrap();
+        let screenshot = GridRenderer::for_screenshot(1, 1, zoom, None).unwrap();
+
+        assert_eq!(recording.pixel_size(), recording_size);
+        assert_eq!(screenshot.pixel_size(), screenshot_size);
+    }
+}
+
+#[test]
 fn fractional_zoom_shrinks_output_without_changing_grid_dimensions() {
     let standard = GridRenderer::new(80, 30);
     let half = GridRenderer::with_zoom(80, 30, 0.5).unwrap();
@@ -72,6 +86,26 @@ fn fractional_zoom_shrinks_output_without_changing_grid_dimensions() {
     let mut half = half;
     half.render(&frame(vec![vec![EmuCell::blank(); 80]; 30]))
         .unwrap();
+}
+
+#[test]
+fn canvas_background_can_be_custom_or_transparent() {
+    let frame = frame(vec![vec![cell("x", Attrs::empty())]]);
+    let mut custom = GridRenderer::with_zoom_and_background(
+        1,
+        1,
+        1.0,
+        Some(CaptureBackground::Color(crate::profile::Rgb::new(1, 2, 3))),
+    )
+    .unwrap();
+    let custom = custom.render(&frame).unwrap();
+    assert_eq!(&custom.as_raw()[..4], &[1, 2, 3, 255]);
+
+    let mut transparent =
+        GridRenderer::with_zoom_and_background(1, 1, 1.0, Some(CaptureBackground::Transparent))
+            .unwrap();
+    let transparent = transparent.render(&frame).unwrap();
+    assert_eq!(&transparent.as_raw()[..4], &[0, 0, 0, 0]);
 }
 
 #[test]

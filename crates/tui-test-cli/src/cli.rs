@@ -200,6 +200,27 @@ impl From<FailureArtifactModeArg> for tui_test::FailureArtifactMode {
     }
 }
 
+#[derive(Args)]
+pub struct ScreenshotArgs {
+    /// Write an SVG or PNG image to this path (alias for --out).
+    pub path: Option<String>,
+    /// Write an SVG or PNG image to this path.
+    #[arg(short, long)]
+    pub out: Option<String>,
+    /// Include scrollback, not just the visible viewport.
+    #[arg(long)]
+    pub full: bool,
+    /// Scale image dimensions while keeping the same terminal cells.
+    #[arg(long)]
+    pub zoom: Option<f64>,
+    /// Canvas background color (#rgb or #rrggbb).
+    #[arg(long, conflicts_with = "transparent")]
+    pub background: Option<String>,
+    /// Leave the image canvas transparent.
+    #[arg(long)]
+    pub transparent: bool,
+}
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Spawn a shell session (auto-starts the daemon).
@@ -278,6 +299,12 @@ pub enum Command {
         #[command(flatten)]
         diagnostics: DiagnosticRetentionArgs,
     },
+    /// Gracefully stop and recreate the session from its last successful open or run.
+    Restart {
+        /// Time to wait after Ctrl-C/SIGINT before forcibly killing the child.
+        #[arg(long, value_name = "MS", default_value_t = 5_000)]
+        graceful_timeout: u64,
+    },
     /// Close the current session (or all sessions).
     Close {
         /// Close every session, not just the current one.
@@ -299,21 +326,9 @@ pub enum Command {
         #[arg(long)]
         full: bool,
     },
-    /// Capture a screenshot: terminal text to stdout, or a full-color SVG image
-    /// when an output path is given (crisp at any zoom).
-    Screenshot {
-        /// Write an SVG image to this path (alias for --out).
-        path: Option<String>,
-        /// Write an SVG image to this path.
-        #[arg(short, long)]
-        out: Option<String>,
-        /// Include scrollback, not just the visible viewport.
-        #[arg(long)]
-        full: bool,
-        /// Scale the SVG dimensions while keeping the same terminal cells.
-        #[arg(long)]
-        zoom: Option<f64>,
-    },
+    /// Capture a screenshot: terminal text to stdout, or a full-color SVG/PNG
+    /// image selected by the output extension (SVG is the default).
+    Screenshot(ScreenshotArgs),
     /// Start or stop an animated terminal recording.
     Record {
         #[command(subcommand)]
@@ -469,6 +484,12 @@ pub enum RecordCmd {
         /// Scale image/video dimensions while keeping the same terminal cells.
         #[arg(long)]
         zoom: Option<f64>,
+        /// Canvas background color (#rgb or #rrggbb).
+        #[arg(long, conflicts_with = "transparent")]
+        background: Option<String>,
+        /// Leave the APNG or GIF canvas transparent.
+        #[arg(long)]
+        transparent: bool,
     },
     /// Stop the active recording and finish its output file.
     Stop,
@@ -715,6 +736,26 @@ mod tests {
     }
 
     #[test]
+    fn restart_accepts_a_named_session_and_graceful_timeout() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "restart",
+            "--session",
+            "work",
+            "--graceful-timeout",
+            "1234",
+        ])
+        .expect("parse named restart");
+        assert_eq!(cli.session.as_deref(), Some("work"));
+        assert!(matches!(
+            cli.command,
+            Some(Command::Restart {
+                graceful_timeout: 1234
+            })
+        ));
+    }
+
+    #[test]
     fn open_shell_values_map_to_library_shells() {
         let cases = [
             ("bash", Shell::Bash),
@@ -861,10 +902,10 @@ mod tests {
         .expect("parse screenshot zoom");
         assert!(matches!(
             cli.command,
-            Some(Command::Screenshot {
+            Some(Command::Screenshot(ScreenshotArgs {
                 zoom: Some(0.5),
                 ..
-            })
+            }))
         ));
     }
 
@@ -994,7 +1035,7 @@ mod tests {
             else {
                 panic!("expected Expect text");
             };
-            assert_eq!(query.style.link.as_deref(), Some(expected));
+            assert_eq!(query.link.as_deref(), Some(expected));
         }
     }
 
@@ -1359,9 +1400,6 @@ pub struct TextStyleArgs {
     pub strikethrough: Option<bool>,
     #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
     pub blink: Option<bool>,
-    /// Required OSC 8 link target. Pass an empty string to require no link.
-    #[arg(long)]
-    pub link: Option<String>,
 }
 
 #[derive(Args)]
@@ -1372,6 +1410,9 @@ pub struct TextQueryArgs {
     pub selector: TextSelectorArgs,
     #[command(flatten)]
     pub style: Box<TextStyleArgs>,
+    /// Required OSC 8 link target on every matched cell. Empty means unlinked.
+    #[arg(long)]
+    pub link: Option<String>,
 }
 
 #[derive(Subcommand)]

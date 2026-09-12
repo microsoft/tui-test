@@ -51,6 +51,8 @@ The shared HTML viewer has a standalone browser suite: from `bindings/js`, run `
 
 The viewer's typed components live in `crates/tui-test/src/diagnostics/viewer`. Run `npm run build:report` to regenerate its minified JavaScript/CSS, and `npm run check:report` to type-check and verify generated assets. These are development tools only; Cargo embeds committed minified files without invoking Node. `recent_operations[].expectation` retains the selected assertion's operands, including successful locators, up to 8 KiB per operation. Treat these operands as potentially sensitive.
 
+Composed locators retain their full query tree in operation expectations. The sidebar renders query descriptions such as `getByText("Docs").getByLink("test:docs")`, `.and(...)`, `.or(...)`, and `.filter({ has: ..., hasNot: ... })` beside actions. Diagnostic stages identify operand paths and aggregate candidate-bounded filter evaluations; only the decisive stage contributes mismatch overlays. `location()` uses the native expression input with final single-match resolution in the core.
+
 `failure.html` can be distributed alone: its Attachments pane embeds the images, Markdown, structured evidence and included recording for offline preview/download. The trace layout shows expected/observed values alongside the terminal and labels the session, emulator, effective timeout defaults and failing assertion timeout. The embedded manifest snapshot excludes the HTML's own hash; the disk manifest includes it.
 
 #### Properties
@@ -68,6 +70,7 @@ The viewer's typed components live in `crates/tui-test/src/diagnostics/viewer`. 
 | `TuiTest.ephemeral(prefix?, options?)` | Create a unique session. |
 | `open(options?)` | Open a shell. |
 | `run(program, args?, options?)` | Run a program. |
+| `restart(options?)` | Restart the session. |
 | `close()` | Close the session. |
 | `closeQuiet()` | Close without throwing. |
 | `[Symbol.asyncDispose]()` | Close from `await using`. |
@@ -131,11 +134,11 @@ Snapshot options are `update`, `includeStyle`, and `includeTitle`.
 
 | Method | Description |
 | --- | --- |
-| `screenshot(path?, { full?, zoom? })` | Return text or save SVG. |
+| `screenshot(path?, { full?, zoom?, background?, transparent? })` | Return text or save SVG or PNG. |
 | `startRecording(path, options?)` | Start APNG, GIF, MP4, or asciinema recording. |
 | `stopRecording()` | Finish the recording and return its path. |
 
-Recording options are `format`, `fps`, `speed`, `idleTimeLimit`, and `zoom`. MP4 requires `ffmpeg`.
+Recording options: `format`, `fps`, `speed`, `idleTimeLimit`, `zoom`, `background`, and `transparent`. MP4 requires `ffmpeg` and does not support transparency.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
 
@@ -159,12 +162,48 @@ await save.click();
 | --- | --- |
 | `terminal.getByText(text, options?)` | `regex`, `full`, `whitespace` |
 | `terminal.getByStyle(style, options?)` | `full` |
+| `terminal.getByLink(uri, options?)` | `full` |
 | `locator.getByText(text, options?)` | `regex`, `full`, `whitespace`, `direction` |
 | `locator.getByStyle(style, options?)` | `full`, `direction` |
+| `locator.getByLink(uri, options?)` | `full`, `direction` |
 
 `whitespace` is `"exact"` or `"normalize"`. `direction` is `"within"`, `"after"`, or `"before"`.
 
 Style fields are `foreground`, `background`, `bold`, `dim`, `italic`, `underlineStyle`, `underlineColor`, `inverse`, `hidden`, `strikethrough`, and `blink`.
+
+`getByLink(uri)` matches an exact OSC 8 target, not visible URL text;
+`getByLink("")` requires no link. Root style/link selectors find runs within
+each row. Chained calls with the default `within` direction check whole
+matches. Styles skip blanks if visible text exists; links check every cell.
+
+#### Compose locators
+
+```js
+const link = terminal.getByLink("https://example.com");
+const bold = terminal.getByStyle({ bold: true });
+const boldLinkCells = bold.and(link);
+const either = link.or(terminal.getByText("Help"));
+const sections = terminal.getByText("Docs and Help");
+const containsLink = sections.filter({ has: link });
+const withoutOldText = sections.filter({ hasNot: terminal.getByText("old") });
+const entirelyLinked = sections.getByLink("https://example.com");
+```
+
+`.and()` keeps shared cells; `.or()` combines cells without duplicates.
+Adjacent cells merge within each physical row, even across original matches.
+Gaps and row breaks split runs. Counts and clicks use these runs, not
+Playwright element identities. Text keeps exact whitespace.
+
+`filter` accepts only locators. `has` requires a match inside each candidate;
+`hasNot` requires none. Both conditions apply when supplied, and the inner
+match may cover the whole candidate. For partially linked `"Docs"`,
+`filter({ has: link })` keeps the whole word, `getByLink(uri)` rejects it,
+and `.and(link)` returns its linked cells.
+
+Use locators from one `TuiTest`. Composition leaves them unchanged and reads
+one fresh snapshot when used. Selection order matters: `a.first().and(b)`
+differs from `a.and(b).first()`. Any `full` branch includes scrollback for the
+whole query. Errors, including `unique()` failures, propagate.
 
 #### Select matches
 

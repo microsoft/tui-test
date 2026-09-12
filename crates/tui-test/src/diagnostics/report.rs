@@ -165,6 +165,7 @@ fn timeline_with_limit(
                         .then_some((cursor.column, usize::from(cursor.row))),
                     frame.screen.title.as_deref(),
                     1.0,
+                    None,
                 ));
                 if serde_json::to_vec(&frame)?.len() > remaining {
                     frame.svg = None;
@@ -253,10 +254,23 @@ fn explanation(details: &FailureDetails) -> Explanation {
             .stages
             .iter()
             .find(|stage| Some(stage.stage_index) == locator.failure_stage)
-            .or_else(|| locator.stages.last());
+            .or_else(|| {
+                (!locator.stages_truncated)
+                    .then(|| locator.stages.last())
+                    .flatten()
+            });
         if let Some(stage) = stage {
-            let selector = format!("{:?}", stage.selector.description());
-            if locator.failure_reason == Some(LocatorFailureReason::StyleFilterRemovedAll) {
+            let selector = stage.selector.as_ref().map_or_else(
+                || stage.expression_path.clone(),
+                |selector| format!("{:?}", selector.description()),
+            );
+            if matches!(
+                locator.failure_reason,
+                Some(
+                    LocatorFailureReason::StyleFilterRemovedAll
+                        | LocatorFailureReason::LinkFilterRemovedAll
+                )
+            ) {
                 if let Some(mismatch) = stage.mismatches.first() {
                     let property = mismatch.property.replace('_', " ");
                     let mut actual = style_value(&mismatch.property, &mismatch.actual);
@@ -267,17 +281,31 @@ fn explanation(details: &FailureDetails) -> Explanation {
                         title: match mismatch.property.as_str() {
                             "foreground" => "Foreground mismatch",
                             "background" => "Background mismatch",
+                            "link" => "Hyperlink mismatch",
                             _ => "Cell style mismatch",
                         }.into(),
                         expected: format!("{selector}: {property} {} {}", mismatch.operator,
                             style_value(&mismatch.property, &mismatch.expected)),
-                        actual: format!("Text matched, but {property} was {actual}."),
-                        note: format!("{} captured style mismatches at locator stage {}. Select a highlighted cell for its exact comparison.",
-                            stage.mismatches.len(), stage.stage_index),
+                        actual: format!("{} matched, but {property} was {actual}.",
+                            if matches!(stage.selector, Some(crate::api::LocatorSelector::Text(_))) { "Text" } else { "Candidate" }),
+                        note: format!("{} captured mismatches at {} (stage {}). Select a highlighted cell for its exact comparison.",
+                            stage.mismatches.len(), stage.expression_path, stage.stage_index),
                     };
                 }
             }
             let (title, expected) = match locator.failure_reason {
+                Some(LocatorFailureReason::IntersectionEmpty) => (
+                    "Empty intersection",
+                    "Cells selected by both operands to overlap".into(),
+                ),
+                Some(LocatorFailureReason::UnionEmpty) => (
+                    "Empty union",
+                    "At least one operand to select terminal cells".into(),
+                ),
+                Some(LocatorFailureReason::FilterRemovedAll) => (
+                    "Containment filter rejected every candidate",
+                    "A candidate to contain has matches and no has_not matches".into(),
+                ),
                 Some(LocatorFailureReason::AnchorNotFound) => {
                     ("Anchor not found", format!("An anchor matching {selector}"))
                 }
@@ -310,7 +338,7 @@ fn explanation(details: &FailureDetails) -> Explanation {
                     stage.raw_candidate_count,
                     stage.style_candidate_count
                 ),
-                note: details.summary.clone(),
+                note: format!("Expression: {}. {}", stage.expression_path, details.summary),
             };
         }
     }
@@ -540,18 +568,29 @@ pub(super) fn markdown(details: &FailureDetails, files: &[ArtifactFile]) -> Stri
             locator.failure_stage,
             locator.failure_reason
         );
-        out.push_str("| Stage | Selector | Direction | Occurrence | Raw | Style | Selected |\n| --- | --- | --- | --- | ---: | ---: | ---: |\n");
+        out.push_str("| Stage | Expression path | Mode / selector | Direction | Occurrence | Raw | Style | Selected | Evaluations |\n| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |\n");
         for stage in &locator.stages {
             let _ = writeln!(
                 out,
-                "| {} | {} | {:?} | {:?} | {} | {} | {} |",
+                "| {} | {} | {} | {:?} | {:?} | {} | {} | {} | {} |",
                 stage.stage_index,
-                code(&stage.selector.description()),
+                code(&stage.expression_path),
+                code(&stage.selector.as_ref().map_or_else(
+                    || format!("{:?}", stage.mode),
+                    |selector| selector.description()
+                )),
                 stage.direction,
                 stage.effective_occurrence,
                 stage.raw_candidate_count,
                 stage.style_candidate_count,
-                stage.selected_count
+                stage.selected_count,
+                stage.evaluations
+            );
+        }
+        out.push_str("\nPaths identify expression operands (within, left, right, input, has, has_not). Repeated containment evaluations are aggregated by path; their counts are totals, not distinct whole-terminal candidates. Missing matches inside has_not are expected and do not imply failure of the complete expression.\n");
+        if locator.stages_truncated {
+            out.push_str(
+                "\nExpression evidence was truncated at the diagnostic retention limit.\n",
             );
         }
         out.push_str("\n### Style mismatches\n\nCoordinates are zero-based in the locator search scope, not necessarily the viewport.\n\n");
@@ -822,6 +861,8 @@ mod tests {
             });
         }
         details.locator = Some(LocatorDiagnostics {
+            stages_truncated: false,
+            evaluation_error: None,
             search_scope: "full".into(),
             viewport_origin_y: 7,
             final_candidate_count: 0,
@@ -829,9 +870,12 @@ mod tests {
             failure_stage: Some(0),
             failure_reason: Some(LocatorFailureReason::StyleFilterRemovedAll),
             stages: vec![LocatorStageDiagnostics {
+                expression_path: "root".into(),
+                evaluations: 1,
+                failure_reason: Some(LocatorFailureReason::StyleFilterRemovedAll),
                 stage_index: 0,
                 mode: LocatorStageMode::Text,
-                selector: crate::api::LocatorQuery::text("A").selector,
+                selector: Some(crate::api::LocatorQuery::text("A").selector),
                 direction: crate::api::LocatorDirection::Within,
                 requested_occurrence: crate::api::MatchOccurrence::Any,
                 effective_occurrence: crate::api::MatchOccurrence::Any,

@@ -374,7 +374,7 @@ impl From<String> for TextSelector {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TextStyle {
     pub foreground: Option<String>,
     pub background: Option<String>,
@@ -387,26 +387,6 @@ pub struct TextStyle {
     pub hidden: Option<bool>,
     pub strikethrough: Option<bool>,
     pub blink: Option<bool>,
-    /// The OSC 8 URI a cell must link to.
-    ///
-    /// A link is not an SGR attribute: `SGR 0` clears every other field here
-    /// and leaves the link running, and only `OSC 8` with an empty URI closes
-    /// it. It is matched alongside them because it is carried on a cell the
-    /// same way — set on the cursor, inherited by everything written while it
-    /// is open — so `{ bold: true, link: "..." }` is one query rather than two
-    /// that have to be intersected by hand.
-    ///
-    /// An empty string means "links nowhere", so a cell can be required to be
-    /// plain as well as required to be a link. That is why this is a
-    /// `String` rather than an `Option` used as the absence marker: the
-    /// `Option` already means "the caller did not ask".
-    ///
-    /// The `id=` parameter is deliberately not matchable. It exists to join
-    /// the runs of one logical link, which is worth asserting on in principle,
-    /// but the ghostty backend cannot report it at all, so a query against it
-    /// would quietly mean different things on different backends. It stays
-    /// readable on a cell, where being backend-dependent is visible.
-    pub link: Option<String>,
 }
 
 impl TextStyle {
@@ -416,7 +396,7 @@ impl TextStyle {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 /// Select contiguous per-row runs whose cells match every requested style.
 pub struct StyleSelector {
     pub style: TextStyle,
@@ -433,10 +413,50 @@ impl From<TextStyle> for StyleSelector {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "selector", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    content = "selector",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum LocatorSelector {
     Text(TextSelector),
     Style(StyleSelector),
+    Link(LinkSelector),
+    And {
+        left: Box<LocatorQuery>,
+        right: Box<LocatorQuery>,
+    },
+    Or {
+        left: Box<LocatorQuery>,
+        right: Box<LocatorQuery>,
+    },
+    Filter {
+        input: Box<LocatorQuery>,
+        has: Option<Box<LocatorQuery>>,
+        has_not: Option<Box<LocatorQuery>>,
+    },
+}
+
+/// Select cells by their exact OSC 8 URI. An empty URI requires no link.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkSelector {
+    pub uri: String,
+    #[serde(default)]
+    pub full: bool,
+}
+
+impl From<&str> for LinkSelector {
+    fn from(uri: &str) -> Self {
+        Self::from(uri.to_owned())
+    }
+}
+
+impl From<String> for LinkSelector {
+    fn from(uri: String) -> Self {
+        Self { uri, full: false }
+    }
 }
 
 impl LocatorSelector {
@@ -444,6 +464,8 @@ impl LocatorSelector {
         match self {
             Self::Text(selector) => selector.full,
             Self::Style(selector) => selector.full,
+            Self::Link(selector) => selector.full,
+            _ => self.children().iter().any(|query| query.uses_full_grid()),
         }
     }
 
@@ -451,6 +473,48 @@ impl LocatorSelector {
         match self {
             Self::Text(selector) => selector.text.clone(),
             Self::Style(_) => "style".to_string(),
+            Self::Link(selector) => format!("link {:?}", selector.uri),
+            Self::And { left, right } => format!(
+                "({}) and ({})",
+                left.selector.description(),
+                right.selector.description()
+            ),
+            Self::Or { left, right } => format!(
+                "({}) or ({})",
+                left.selector.description(),
+                right.selector.description()
+            ),
+            Self::Filter {
+                input,
+                has,
+                has_not,
+            } => {
+                let mut description = input.selector.description();
+                if let Some(has) = has {
+                    description.push_str(&format!(" has ({})", has.selector.description()));
+                }
+                if let Some(has_not) = has_not {
+                    description.push_str(&format!(" has not ({})", has_not.selector.description()));
+                }
+                description
+            }
+        }
+    }
+
+    pub fn children(&self) -> Vec<&LocatorQuery> {
+        match self {
+            Self::And { left, right } | Self::Or { left, right } => vec![left, right],
+            Self::Filter {
+                input,
+                has,
+                has_not,
+            } => {
+                let mut children = vec![input.as_ref()];
+                children.extend(has.as_deref());
+                children.extend(has_not.as_deref());
+                children
+            }
+            _ => Vec::new(),
         }
     }
 }
@@ -472,7 +536,8 @@ fn default_locator_occurrence() -> MatchOccurrence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-/// A lazy locator stage and the parent query that defines its search region.
+#[serde(deny_unknown_fields)]
+/// A lazy locator expression with occurrence selection and optional parent scope.
 pub struct LocatorQuery {
     pub selector: LocatorSelector,
     #[serde(default = "default_locator_occurrence")]
@@ -486,6 +551,42 @@ pub struct LocatorQuery {
 }
 
 impl LocatorQuery {
+    pub fn new(selector: LocatorSelector) -> Self {
+        Self {
+            selector,
+            occurrence: MatchOccurrence::Any,
+            within: None,
+            direction: LocatorDirection::Within,
+            style: TextStyle::default(),
+        }
+    }
+
+    pub fn link(selector: impl Into<LinkSelector>) -> Self {
+        Self::new(LocatorSelector::Link(selector.into()))
+    }
+
+    pub fn and(self, other: Self) -> Self {
+        Self::new(LocatorSelector::And {
+            left: Box::new(self),
+            right: Box::new(other),
+        })
+    }
+
+    pub fn or(self, other: Self) -> Self {
+        Self::new(LocatorSelector::Or {
+            left: Box::new(self),
+            right: Box::new(other),
+        })
+    }
+
+    pub fn filter(self, has: Option<Self>, has_not: Option<Self>) -> Self {
+        Self::new(LocatorSelector::Filter {
+            input: Box::new(self),
+            has: has.map(Box::new),
+            has_not: has_not.map(Box::new),
+        })
+    }
+
     pub fn text(selector: impl Into<TextSelector>) -> Self {
         Self {
             selector: LocatorSelector::Text(selector.into()),
@@ -519,6 +620,9 @@ impl LocatorQuery {
 pub enum Operation {
     Open(OpenOptions),
     Run(RunOptions),
+    Restart {
+        graceful_timeout_ms: u64,
+    },
     Close,
     State,
     Text {
@@ -666,6 +770,7 @@ pub enum Operation {
         full: bool,
         path: Option<String>,
         zoom: Option<f64>,
+        background: Option<CaptureBackground>,
     },
     StartRecording {
         path: String,
@@ -674,6 +779,7 @@ pub enum Operation {
         speed: Option<f64>,
         idle_time_limit: Option<f64>,
         zoom: Option<f64>,
+        background: Option<CaptureBackground>,
     },
     StopRecording,
 }
@@ -781,6 +887,14 @@ impl TuiTestError {
         Self::new(
             ErrorKind::NoSession,
             "no active session; run `tui-test open` (or `tui-test run <program>`) first",
+        )
+    }
+
+    pub fn no_restart_metadata() -> Self {
+        Self::new(
+            ErrorKind::NoSession,
+            "session has no restart metadata; run `tui-test open` or \
+             `tui-test run <program>` before `tui-test restart`",
         )
     }
 
@@ -1017,6 +1131,24 @@ pub enum RecordingFormat {
     Cast,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "color")]
+pub enum CaptureBackground {
+    Color(crate::profile::Rgb),
+    Transparent,
+}
+
+impl CaptureBackground {
+    pub fn parse(value: &str) -> Result<Self, TuiTestError> {
+        if value.eq_ignore_ascii_case("transparent") {
+            return Ok(Self::Transparent);
+        }
+        crate::profile::Rgb::parse(value)
+            .map(Self::Color)
+            .map_err(TuiTestError::usage)
+    }
+}
+
 impl RecordingFormat {
     pub fn infer(path: &str) -> Option<Self> {
         let extension = std::path::Path::new(path)
@@ -1106,6 +1238,65 @@ pub enum MouseAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_background_accepts_hex_rgb_and_transparency() {
+        for (value, expected) in [
+            ("#1aF", "#11aaff"),
+            ("123456", "#123456"),
+            (" #AbCdEf ", "#abcdef"),
+            ("#000000", "#000000"),
+            ("#ffffff", "#ffffff"),
+        ] {
+            let background = CaptureBackground::parse(value).unwrap();
+            assert_eq!(
+                background,
+                CaptureBackground::Color(crate::profile::Rgb::parse(expected).unwrap()),
+                "{value:?}"
+            );
+            let json = serde_json::to_string(&background).unwrap();
+            assert_eq!(
+                serde_json::from_str::<CaptureBackground>(&json).unwrap(),
+                background
+            );
+        }
+        for value in ["transparent", "TRANSPARENT"] {
+            assert_eq!(
+                CaptureBackground::parse(value).unwrap(),
+                CaptureBackground::Transparent
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_capture_background_colors_are_usage_errors() {
+        for value in [
+            "",
+            " ",
+            "#",
+            "#12",
+            "#1234",
+            "#12345",
+            "#1234567",
+            "#12345678",
+            "#ggg",
+            "#ff00zz",
+            "##fff",
+            "#-12345",
+            "#12é34",
+            "１２３",
+            "256,0,0",
+            "-1,0,0",
+            "1,2",
+            "1,2,3,4",
+            "1.5,0,0",
+            "rgb(256,0,0)",
+        ] {
+            let error = CaptureBackground::parse(value).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Usage, "{value:?}");
+            assert!(error.message.contains("color"), "{value:?}: {error}");
+        }
+    }
 
     #[test]
     fn clipboard_patterns_infer_matching_from_the_rust_type() {

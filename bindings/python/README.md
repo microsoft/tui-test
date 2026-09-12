@@ -46,6 +46,8 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_histo
 
 Retained operation mappings can include `expectation`, containing the locator query and required outcome or a scalar subject/value. This includes passing assertions, is capped at 8 KiB per operation, and is marked unavailable if oversized. These operands can contain sensitive data. The selected assertion's expectation is shown even when it passes; timeout values are kept in Metadata rather than the top header.
 
+Expectations preserve composed query trees, including exact links, `and_`, `or_`, and `filter(has=..., has_not=...)`. Diagnostic stage mappings carry expression paths, per-path evaluation counts, and explicit truncation markers. The shared viewer shows an API-style query description beside each action; the spelling is a reconstructed description, not the original Python source. `location()` delegates final single-match resolution to the core using the validated expression transport.
+
 #### Properties
 
 | Property | Type |
@@ -61,6 +63,7 @@ Retained operation mappings can include `expectation`, containing the locator qu
 | `TuiTest.ephemeral(prefix=None, **options)` | Create a unique session. |
 | `await open(**options)` | Open a shell. |
 | `await run(program, *args, **options)` | Run a program. |
+| `await restart(graceful_timeout=5000)` | Restart the session. |
 | `await close()` | Close the session. |
 | `await close_quiet()` | Close without raising. |
 | `async with TuiTest()` | Close on exit. |
@@ -124,11 +127,11 @@ Snapshot options are `update`, `include_style`, and `include_title`.
 
 | Method | Description |
 | --- | --- |
-| `await screenshot(path=None, full=False, zoom=None)` | Return text or save SVG. |
+| `await screenshot(path=None, full=False, zoom=None, background=None, transparent=False)` | Return text or save SVG or PNG. |
 | `await start_recording(path, **options)` | Start APNG, GIF, MP4, or asciinema recording. |
 | `await stop_recording()` | Finish the recording and return its path. |
 
-Recording options are `format`, `fps`, `speed`, `idle_time_limit`, and `zoom`. MP4 requires `ffmpeg`.
+Recording options: `format`, `fps`, `speed`, `idle_time_limit`, `zoom`, `background`, and `transparent`. MP4 requires `ffmpeg` and does not support transparency.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
 
@@ -156,12 +159,48 @@ await save.click()
 | --- | --- |
 | `terminal.get_by_text(text, **options)` | `regex`, `full`, `whitespace` |
 | `terminal.get_by_style(style, **options)` | `full` |
+| `terminal.get_by_link(uri, **options)` | `full` |
 | `locator.get_by_text(text, **options)` | `regex`, `full`, `whitespace`, `direction` |
 | `locator.get_by_style(style, **options)` | `full`, `direction` |
+| `locator.get_by_link(uri, **options)` | `full`, `direction` |
 
 `whitespace` is `"exact"` or `"normalize"`. `direction` is `"within"`, `"after"`, or `"before"`.
 
 `TextStyle` fields are `foreground`, `background`, `bold`, `dim`, `italic`, `underline_style`, `underline_color`, `inverse`, `hidden`, `strikethrough`, and `blink`.
+
+`get_by_link(uri)` matches an exact OSC 8 target, not visible URL text;
+`get_by_link("")` requires no link. Root style/link selectors find runs within
+each row. Chained calls with the default `within` direction check whole
+matches. Styles skip blanks if visible text exists; links check every cell.
+
+#### Compose locators
+
+```python
+link = terminal.get_by_link("https://example.com")
+bold = terminal.get_by_style(TextStyle(bold=True))
+bold_link_cells = bold.and_(link)
+either = link.or_(terminal.get_by_text("Help"))
+sections = terminal.get_by_text("Docs and Help")
+contains_link = sections.filter(has=link)
+without_old_text = sections.filter(has_not=terminal.get_by_text("old"))
+entirely_linked = sections.get_by_link("https://example.com")
+```
+
+`and_()` keeps shared cells; `or_()` combines cells without duplicates. Adjacent
+cells merge within each physical row, even across original matches. Gaps and
+row breaks split runs. Counts and clicks use these runs; text keeps exact
+whitespace.
+
+`filter` accepts only locators. `has` requires a match inside each candidate;
+`has_not` requires none. Both conditions apply when supplied, and the inner
+match may cover the whole candidate. For partially linked `"Docs"`,
+`filter(has=link)` keeps the whole word, `get_by_link(uri)` rejects it, and
+`and_(link)` returns its linked cells.
+
+Use locators from one `TuiTest`. Composition leaves them unchanged and reads
+one fresh snapshot when used. Selection order matters: `a.first().and_(b)`
+differs from `a.and_(b).first()`. Any `full` branch includes scrollback for the
+whole query. Errors propagate.
 
 #### Select matches
 

@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 use tui_test::{
     global_registry, AutomaticRecording, AutomaticRecordingMode, ErrorKind, ExecutionContext,
     FailureArtifactMode, FailureArtifactOptions, FailureReason, LocatorDirection,
-    LocatorExpectOptions, LocatorQuery, MatchOccurrence, OccurrenceSource, OpenOptions, Operation,
-    OperationResult, RunOptions, Session, SessionRegistry, TextSelector, TextStyle, Timeouts,
+    LocatorExpectOptions, LocatorFilterOptions, LocatorQuery, MatchOccurrence, OccurrenceSource,
+    OpenOptions, Operation, OperationResult, RunOptions, Session, SessionRegistry, TextSelector,
+    TextStyle, Timeouts,
 };
 
 fn run_options(program: &str, args: &[&str]) -> RunOptions {
@@ -26,6 +27,79 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
         timeouts: defaults.timeouts,
         recording: defaults.recording,
     }
+}
+
+#[test]
+fn locator_composition_is_owner_checked_and_immutable() {
+    let session = Session::new("same-name");
+    let other = Session::new("same-name");
+    let text = session.get_by_text("Docs");
+    let link = session.clone().get_by_link("test:link");
+    assert!(text.and(&link).is_ok());
+    assert!(text.or(&other.get_by_text("Docs")).is_err());
+    assert!(text
+        .filter(LocatorFilterOptions {
+            has: Some(other.get_by_link("test:link")),
+            has_not: None
+        })
+        .is_err());
+    assert!(text.filter(LocatorFilterOptions::default()).is_err());
+    let selected = text.and(&link).unwrap().first();
+    assert_eq!(selected.query().occurrence, MatchOccurrence::First);
+    assert_eq!(text.query().occurrence, MatchOccurrence::Any);
+    let registry = SessionRegistry::default();
+    let a = registry.session("a");
+    assert!(a.get_by_text("x").and(&a.clone().get_by_link("")).is_ok());
+    assert!(a
+        .get_by_text("x")
+        .and(&registry.session("b").get_by_link(""))
+        .is_err());
+}
+
+#[test]
+fn link_locator_expressions_drive_live_actions() {
+    let session = Session::new(format!("native-link-locator-{}", std::process::id()));
+    let options = if cfg!(windows) {
+        run_options("powershell.exe", &["-NoProfile", "-Command",
+            "[Console]::Write(([string][char]27+'[1mA'+[char]27+']8;;test:link'+[char]7+'B'+[char]27+'[22mC'+[char]27+']8;;'+[char]7)); Start-Sleep -Seconds 30"])
+    } else {
+        run_options(
+            "sh",
+            &[
+                "-c",
+                "printf '\\033[1mA\\033]8;;test:link\\007B\\033[22mC\\033]8;;\\007'; sleep 30",
+            ],
+        )
+    };
+    session.run(options).unwrap();
+    let result = (|| -> Result<(), tui_test::TuiTestError> {
+        let bold = session.get_by_style(TextStyle {
+            bold: Some(true),
+            ..Default::default()
+        });
+        let link = session.get_by_link("test:link");
+        let intersection = bold.and(&link)?;
+        intersection.wait_with_timeout(Some(5_000))?;
+        assert_eq!(intersection.location()?.text, "B");
+        assert_eq!(bold.or(&link)?.location()?.text, "ABC");
+        let parent = session.get_by_text("ABC");
+        assert_eq!(
+            parent
+                .filter(LocatorFilterOptions {
+                    has: Some(link),
+                    has_not: None
+                })?
+                .location()?
+                .text,
+            "ABC"
+        );
+        assert_eq!(parent.get_by_link("test:link").count()?, 0);
+        intersection.click()?;
+        intersection.highlight()?;
+        Ok(())
+    })();
+    session.close().unwrap();
+    result.unwrap();
 }
 
 fn wait_for_exit(session: &Session) {
@@ -410,6 +484,77 @@ fn locator_location_reports_action_default_occurrence() {
 }
 
 #[test]
+fn composed_locator_failures_pin_the_operand_and_preserve_query_expectations() {
+    let session = Session::new(format!("composition-diagnostics-{}", std::process::id()));
+    let (program, args) = if cfg!(windows) {
+        ("powershell", vec!["-NoLogo", "-NoProfile", "-Command",
+            "$e=[char]27; [Console]::Write(\"$e[1mA$e]8;;test:docs$([char]7)B$e[22mC$e]8;;$([char]7)\"); Start-Sleep -Seconds 30"])
+    } else {
+        (
+            "sh",
+            vec![
+                "-c",
+                "printf '\\033[1mA\\033]8;;test:docs\\007B\\033[22mC\\033]8;;\\007'; sleep 30",
+            ],
+        )
+    };
+    session.run(run_options(program, &args)).unwrap();
+    session
+        .get_by_text("ABC")
+        .wait_with_timeout(Some(5000))
+        .unwrap();
+    let text = session.get_by_text("ABC");
+    let linked = session.get_by_link("test:docs");
+    assert_eq!(text.and(&linked).unwrap().location().unwrap().text, "BC");
+    let mut ambiguous = LocatorQuery::text(" ");
+    ambiguous.occurrence = MatchOccurrence::Unique;
+    let query = ambiguous.or(LocatorQuery::text("ABC"));
+    let error = session
+        .execute(Operation::WaitLocator {
+            query: query.clone(),
+            not: true,
+            timeout_ms: Some(1),
+        })
+        .unwrap_err();
+    let details = error.details.unwrap();
+    let locator = details.locator.unwrap();
+    assert_eq!(
+        locator.failure_reason,
+        Some(tui_test::LocatorFailureReason::Ambiguous)
+    );
+    let stage = &locator.stages[locator.failure_stage.unwrap()];
+    assert_eq!(stage.expression_path, "root.left");
+    assert!(locator.evaluation_error.unwrap().contains("root.left"));
+    let event = details.recent_operations.last().unwrap();
+    let Some(tui_test::OperationExpectation::Locator {
+        query: retained,
+        outcome,
+    }) = &event.expectation
+    else {
+        panic!("retained expression expected")
+    };
+    assert_eq!(retained.as_ref(), &query);
+    assert_eq!(*outcome, tui_test::LocatorExpectation::Hidden);
+    let error = text
+        .get_by_link("test:docs")
+        .expect_with(LocatorExpectOptions {
+            timeout_ms: Some(1),
+            not: false,
+        })
+        .unwrap_err();
+    let locator = error.details.unwrap().locator.unwrap();
+    assert_eq!(
+        locator.failure_reason,
+        Some(tui_test::LocatorFailureReason::LinkFilterRemovedAll)
+    );
+    assert_eq!(
+        locator.stages[locator.failure_stage.unwrap()].mismatches[0].grapheme,
+        "A"
+    );
+    session.close().unwrap();
+}
+
+#[test]
 fn locator_style_failure_reports_expected_and_actual_cells() {
     let session = Session::new(format!("style-diagnostics-{}", std::process::id()));
     let (program, args) = if cfg!(windows) {
@@ -774,6 +919,164 @@ fn opening_a_live_named_session_reuses_it_unless_restart_is_requested() {
         .expect("restart live terminal");
     assert_ne!(restarted.shell_pid, first.shell_pid);
     session.close().expect("close restarted terminal");
+}
+
+#[test]
+fn restart_without_spawn_metadata_is_a_specific_no_session_error() {
+    let session = Session::new("native-restart-without-metadata");
+    let error = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 10,
+        })
+        .expect_err("restart must require metadata");
+    assert_eq!(error.kind, ErrorKind::NoSession);
+    assert!(error.message.contains("no restart metadata"));
+}
+
+#[test]
+fn named_restart_without_spawn_metadata_reports_the_specific_error() {
+    let registry = SessionRegistry::default();
+    let never_opened = registry.session("native-never-opened-restart");
+
+    let error = never_opened
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 10,
+        })
+        .expect_err("restart must require metadata");
+    assert_eq!(error.kind, ErrorKind::NoSession);
+    assert!(error.message.contains("no restart metadata"));
+
+    let removed = registry.session("native-removed-restart");
+    removed
+        .open(OpenOptions {
+            wait_ready: Some(false),
+            ..OpenOptions::default()
+        })
+        .expect("open terminal before removal");
+    removed.close().expect("remove named terminal");
+
+    let error = removed
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 10,
+        })
+        .expect_err("restart after removal must require metadata");
+    assert_eq!(error.kind, ErrorKind::NoSession);
+    assert!(error.message.contains("no restart metadata"));
+}
+
+#[test]
+fn restarting_a_shell_changes_pid_and_restores_prompt_integration() {
+    let session = Session::new("native-shell-restart");
+    let first = session
+        .open(OpenOptions {
+            cols: 91,
+            rows: 27,
+            ..OpenOptions::default()
+        })
+        .expect("open shell");
+    assert!(first.ready);
+
+    let OperationResult::Open(restarted) = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 0,
+        })
+        .expect("restart shell")
+    else {
+        panic!("unexpected restart result");
+    };
+    assert_ne!(restarted.shell_pid, first.shell_pid);
+    assert!(restarted.ready);
+
+    session
+        .execute(Operation::Submit {
+            data: Some("echo shell-restart-ready".to_string()),
+        })
+        .expect("submit after restart");
+    session
+        .execute(Operation::WaitCommand {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for command after restart");
+    assert!(matches!(
+        session.execute(Operation::State).expect("state after restart"),
+        OperationResult::State(state)
+            if state.cols == 91
+                && state.rows == 27
+                && state.ready
+                && state.text.contains("shell-restart-ready")
+    ));
+
+    session.close().expect("close restarted shell");
+}
+
+#[test]
+fn restart_replays_the_last_successful_spawn_after_reuse_and_failure() {
+    let session = Session::new("native-restart-spawn-history");
+    let first = session
+        .open(OpenOptions {
+            cols: 91,
+            rows: 27,
+            ..OpenOptions::default()
+        })
+        .expect("open original shell");
+    let reused = session
+        .run(run_options("tui-test-program-that-does-not-exist", &[]))
+        .expect("reuse the live shell");
+    assert_eq!(reused.shell_pid, first.shell_pid);
+    session
+        .execute(Operation::Resize { cols: 99, rows: 31 })
+        .expect("resize original shell");
+
+    let mut invalid = run_options("tui-test-program-that-does-not-exist", &[]);
+    invalid.restart = true;
+    assert_eq!(session.run(invalid).unwrap_err().kind, ErrorKind::Internal);
+
+    let OperationResult::Open(restarted) = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 0,
+        })
+        .expect("restart the last successful spawn")
+    else {
+        panic!("unexpected restart result");
+    };
+    assert_ne!(restarted.shell_pid, first.shell_pid);
+    assert!(
+        restarted.ready,
+        "restart should restore the shell, not the failed program"
+    );
+    assert!(matches!(
+        session.execute(Operation::State).expect("restarted state"),
+        OperationResult::State(state) if state.cols == 99 && state.rows == 31
+    ));
+    session.close().expect("close restarted shell");
+}
+
+#[test]
+fn restarting_an_exited_program_skips_the_grace_period() {
+    let session = Session::new("native-restart-exited");
+    let options = if cfg!(windows) {
+        run_options("cmd", &["/d", "/c", "exit 7"])
+    } else {
+        run_options("sh", &["-c", "exit 7"])
+    };
+    let first = session.run(options).expect("run short-lived program");
+    wait_for_exit(&session);
+    assert_eq!(process_exit_code(&session), Some(7));
+
+    let start = Instant::now();
+    let OperationResult::Open(restarted) = session
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 60_000,
+        })
+        .expect("restart exited program")
+    else {
+        panic!("unexpected restart result");
+    };
+    assert!(start.elapsed() < Duration::from_secs(10));
+    assert_ne!(restarted.shell_pid, first.shell_pid);
+    wait_for_exit(&session);
+    assert_eq!(process_exit_code(&session), Some(7));
+    session.close().expect("close exited program");
 }
 
 #[test]
@@ -1392,6 +1695,7 @@ fn session_records_and_exports_an_apng() {
             speed: Some(1.0),
             idle_time_limit: Some(5.0),
             zoom: Some(0.5),
+            background: None,
         })
         .expect("start recording");
     session

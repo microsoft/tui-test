@@ -118,13 +118,13 @@ fn spawn_operation_worker(
     std::thread::spawn(move || {
         for (req, mut conn) in requests {
             let enrich = match &req {
-                request if request.is_open() => Some(false),
+                request if request.is_open() || request.is_restart() => Some(false),
                 Request::Status => Some(true),
                 _ => None,
             };
             let shutdown = req.is_close() || req.is_shutdown();
-            let recording_lifecycle = req.is_open() || shutdown;
-            if req.is_open() {
+            let recording_lifecycle = req.is_open() || req.is_restart() || shutdown;
+            if req.is_open() || req.is_restart() {
                 let _ = std::fs::write(config::recording_pointer_file(&session), "");
             }
             let mut response = match req {

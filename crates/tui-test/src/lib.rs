@@ -4,6 +4,7 @@ pub mod config;
 pub mod diagnostics;
 pub mod engine;
 pub mod input;
+pub mod locator_query;
 pub mod logger;
 pub mod profile;
 pub mod record;
@@ -20,7 +21,7 @@ pub use api::*;
 pub use diagnostics::*;
 pub use engine::Engine;
 pub use runtime::{
-    global_registry, Locator, LocatorClickOptions, LocatorExpectOptions, Session, SessionHandle,
-    SessionRegistry,
+    global_registry, Locator, LocatorClickOptions, LocatorExpectOptions, LocatorFilterOptions,
+    Session, SessionHandle, SessionRegistry,
 };
 pub use terminal::backend::Backend;

@@ -64,6 +64,10 @@ pub enum LocatorFailureReason {
     AnchorAmbiguous,
     RelativeRegionNoMatch,
     StyleFilterRemovedAll,
+    LinkFilterRemovedAll,
+    IntersectionEmpty,
+    UnionEmpty,
+    FilterRemovedAll,
     NthOutOfRange,
     OutsideViewport,
     MatchedNoCells,
@@ -84,6 +88,11 @@ pub enum LocatorStageMode {
     Text,
     ContiguousStyleRuns,
     ParentStyleFilter,
+    ContiguousLinkRuns,
+    ParentLinkFilter,
+    Intersection,
+    Union,
+    ContainmentFilter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,8 +120,15 @@ impl OperationDiagnostics {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocatorStageDiagnostics {
     pub stage_index: usize,
+    #[serde(default)]
+    pub expression_path: String,
+    #[serde(default)]
+    pub evaluations: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<LocatorFailureReason>,
     pub mode: LocatorStageMode,
-    pub selector: LocatorSelector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selector: Option<LocatorSelector>,
     pub direction: LocatorDirection,
     pub requested_occurrence: MatchOccurrence,
     pub effective_occurrence: MatchOccurrence,
@@ -167,6 +183,10 @@ pub struct LocatorDiagnostics {
     pub viewport_origin_y: u32,
     pub stages: Vec<LocatorStageDiagnostics>,
     pub final_candidate_count: usize,
+    #[serde(default)]
+    pub stages_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evaluation_error: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selected: Vec<TextMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -728,6 +748,7 @@ impl FailureObservation {
             self.cursor,
             self.title.as_deref(),
             1.0,
+            None,
         )
     }
 

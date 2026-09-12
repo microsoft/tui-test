@@ -19,7 +19,8 @@ export class TraceModel {
     this.frameIndex = new Map(this.frames.map((frame, index) => [frame.sequence, index]));
     this.failureIndex = this.frameIndex.get(data.timeline.failure_screen_sequence);
     this.failureOperation = this.operations.findLast((op) => op.result !== "ok" && op.screen_at_return === data.timeline.failure_screen_sequence);
-    this.failureMismatches = (data.details.locator?.stages || []).flatMap((stage) =>
+    this.failureMismatches = (data.details.locator?.stages || [])
+      .filter((stage) => stage.stage_index === data.details.locator?.failure_stage).flatMap((stage) =>
       (stage.mismatches || []).map((mismatch) => ({
         ...mismatch, stage: stage.stage_index, x: mismatch.location.column,
         y: mismatch.location.row - (data.details.locator?.viewport_origin_y || 0),

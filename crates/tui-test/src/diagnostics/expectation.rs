@@ -7,6 +7,7 @@ const MAX_EXPECTATION_BYTES: usize = 8 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LocatorExpectation {
+    Matches,
     Visible,
     Hidden,
     Unique,
@@ -42,6 +43,10 @@ impl OperationExpectation {
             )
         };
         let expectation = match operation {
+            Operation::FindLocator { query } => Self::Locator {
+                query: Box::new(query.clone()),
+                outcome: LocatorExpectation::Matches,
+            },
             Operation::WaitLocator { query, not, .. } => Self::Locator {
                 query: Box::new(query.clone()),
                 outcome: if *not {

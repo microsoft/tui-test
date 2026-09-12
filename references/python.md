@@ -33,7 +33,10 @@ locator = (
 | Method | Use |
 | --- | --- |
 | `get_by_text(text, **options)` | Match text or regex. |
-| `get_by_style(style, **options)` | Match colors, attributes, or an OSC 8 `link`. |
+| `get_by_style(style, **options)` | Match appearance; when chained, require it on the whole match. |
+| `get_by_link(uri, **options)` | Match an OSC 8 target; when chained, require it on every cell. `""` means unlinked. |
+| `and_(other)`, `or_(other)` | Intersect/union cells, then form contiguous per-row runs. |
+| `filter(has=..., has_not=...)` | Keep whole matches containing an inner match or containing none. |
 | `any()` | Keep all matches. |
 | `unique()` | Require one match. |
 | `first()`, `last()`, `nth(index)` | Select a match. |
@@ -45,6 +48,18 @@ locator = (
 
 Text options: `regex`, `full`, `whitespace`, and chained `direction`.
 
+Style/link options are `full` and chained `direction`. Filter accepts locators
+only; use `get_by_text()` for text containment. A partially linked text match
+passes `filter(has=terminal.get_by_link(uri))` but fails chained
+`get_by_link(uri)`. `and_(terminal.get_by_link(uri))` returns its linked cells.
+Appearance refinement skips blanks when visible characters are present;
+link refinement checks blanks too.
+
+Composition requires operands from the same terminal instance. It is lazy,
+uses one snapshot, and merges adjacent selected cells even from different
+matches. Separate rows remain separate runs; composed text uses exact-grid
+whitespace. Any `full` branch makes the whole query use the full grid.
+
 Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 
 ## Session
@@ -53,6 +68,7 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | --- | --- |
 | `open(**options)` | Open a shell. |
 | `run(program, *args, **options)` | Run an app. |
+| `restart(graceful_timeout=5000)` | Restart the session. |
 | `submit(text=None)` | Type and press Enter. |
 | `type(text)`, `write(data)` | Send text or bytes. |
 | `resize(cols, rows)` | Resize. |
@@ -66,9 +82,13 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `wait_title()`, `wait_clipboard()`, `wait_bell()` | Wait for events. |
 | `expect_title()`, `expect_output()`, `expect_exit_code()` | Assert state. |
 | `expect_bell_count()`, `expect_snapshot()` | Assert bells or snapshots. |
-| `screenshot()` | Read text or save SVG. |
+| `screenshot()` | Read text or save SVG or PNG. |
 | `start_recording()`, `stop_recording()` | Record. |
 | `close()`, `close_quiet()` | Close. |
+
+Capture options: `background` and `transparent` (SVG, APNG, and GIF).
+
+`restart(graceful_timeout=5000)` returns an `OpenResult` typed dictionary, preserving the last successful spawn's original working directory, options, and latest terminal size. The timeout is milliseconds after Ctrl-C before forced replacement; `0` skips the wait. Child exit preserves restart metadata; `close()` clears it. The terminal and automatic recording start fresh.
 
 Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`, and `screen_history_limit`.
 

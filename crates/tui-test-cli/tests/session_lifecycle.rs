@@ -13,9 +13,55 @@ use tui_test::Backend;
 
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
+#[test]
+fn invalid_capture_backgrounds_fail_before_starting_a_session() {
+    let sandbox = Sandbox::new("invalid-capture-background");
+    let screenshot = sandbox.home.join("screen.svg");
+    let recording = sandbox.home.join("recording.gif");
+    for value in [
+        "",
+        "#12",
+        "#ff00zz",
+        "#12345678",
+        "#12é34",
+        "256,0,0",
+        "rgb(-1,0,0)",
+    ] {
+        let background = format!("--background={value}");
+        for args in [
+            vec!["screenshot", screenshot.to_str().unwrap(), &background],
+            vec!["record", "start", recording.to_str().unwrap(), &background],
+        ] {
+            let output = sandbox.run(&args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}");
+            let message = String::from_utf8_lossy(&output.stderr);
+            assert!(message.contains("color"), "{args:?}: {message}");
+        }
+    }
+    assert!(!screenshot.exists());
+    assert!(!recording.exists());
+    assert_eq!(sandbox.ok(&["sessions"]).trim(), "no active sessions");
+}
+
+#[test]
+fn cli_startup_fits_the_default_process_stack() {
+    for argument in ["--help", "--version"] {
+        let output = Command::new(BIN).arg(argument).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{argument} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 static SANDBOX_SEQ: AtomicU32 = AtomicU32::new(0);
+
+fn contains_rgba(pixels: &[u8], expected: [u8; 4]) -> bool {
+    pixels.chunks(4).any(|pixel| pixel == expected)
+}
 
 struct Sandbox {
     label: &'static str,
@@ -279,6 +325,63 @@ fn monitor_windows_console_forwards_ctrl_z_and_unicode_without_detaching() {
 }
 
 #[test]
+fn screenshots_dispatch_by_extension_without_changing_svg_output() {
+    let sandbox = Sandbox::new("screenshot-formats");
+    let program = r#"printf "\033[41m \033[0m\033[38;2;0;255;0mX\033[0m\033]12;#ff00ff\007\033[1;4H"; sleep 30"#;
+    sandbox.ok(&[
+        "run", "--cols", "4", "--rows", "3", "--", "bash", "--norc", "-c", program,
+    ]);
+    sandbox.wait_for_text("X", "5000");
+
+    let svg = sandbox.home.join("screen.svg");
+    let extensionless = sandbox.home.join("screen");
+    sandbox.ok(&["screenshot", svg.to_str().unwrap()]);
+    sandbox.ok(&["screenshot", extensionless.to_str().unwrap()]);
+    let svg_bytes = std::fs::read(&svg).unwrap();
+    assert!(svg_bytes.starts_with(b"<svg "));
+    assert_eq!(svg_bytes, std::fs::read(&extensionless).unwrap());
+
+    let zoomed_svg = sandbox.home.join("screen-zoomed.svg");
+    sandbox.ok(&["screenshot", zoomed_svg.to_str().unwrap(), "--zoom", "2"]);
+    let zoomed_svg = std::fs::read_to_string(zoomed_svg).unwrap();
+    assert!(
+        zoomed_svg.contains(r#"width="236" height="326" viewBox="0 0 118 163""#),
+        "unexpected zoomed SVG dimensions: {zoomed_svg}"
+    );
+
+    let png = sandbox.home.join("screen.PNG");
+    sandbox.ok(&["screenshot", png.to_str().unwrap(), "--zoom", "2"]);
+    let png_bytes = std::fs::read(&png).unwrap();
+    assert_eq!(&png_bytes[..8], b"\x89PNG\r\n\x1a\n");
+    let decoder = png::Decoder::new(std::io::Cursor::new(&png_bytes));
+    let mut reader = decoder.read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut pixels).unwrap();
+    assert_eq!((info.width, info.height), (236, 326));
+    let pixels = &pixels[..info.buffer_size()];
+    assert!(
+        contains_rgba(pixels, [128, 0, 0, 255]),
+        "styled red background cell was not rendered"
+    );
+    assert!(
+        contains_rgba(pixels, [0, 255, 0, 255]),
+        "non-empty green glyph was not rendered"
+    );
+    assert!(
+        contains_rgba(pixels, [255, 0, 255, 255]),
+        "magenta cursor was not rendered"
+    );
+
+    let unsupported = sandbox.home.join("screen.gif");
+    let output = sandbox.run(&["screenshot", unsupported.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unsupported screenshot extension '.gif'")
+    );
+    assert!(!unsupported.exists());
+}
+
+#[test]
 fn sandbox_paths_fit_in_a_unix_socket_address() {
     const SUN_PATH_MAX: usize = 103;
     const MACOS_TMPDIR: usize = 49;
@@ -512,6 +615,187 @@ fn open_reuses_a_live_child_unless_restart_is_requested() {
         Some(first_pid),
         "--restart should replace the live child"
     );
+}
+
+#[test]
+fn run_restart_still_replaces_the_live_child_with_the_requested_program() {
+    let sandbox = Sandbox::new("run-restart");
+    let mut first_args = vec!["--json", "run"];
+    first_args.extend(sleeper());
+    let first: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&first_args)).expect("first run json");
+    let first_pid = first["data"]["shell_pid"]
+        .as_u64()
+        .expect("first child pid");
+
+    let mut restart_args = vec!["--json", "run", "--restart"];
+    restart_args.extend(sleeper());
+    let restarted: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&restart_args)).expect("restarted run json");
+    assert_ne!(restarted["data"]["shell_pid"].as_u64(), Some(first_pid));
+}
+
+#[test]
+fn restart_without_spawn_metadata_reports_a_specific_error() {
+    let sandbox = Sandbox::new("restart-no-metadata");
+    let out = sandbox.run(&["restart", "--graceful-timeout", "1"]);
+    assert_eq!(out.status.code(), Some(3));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no restart metadata"),
+        "unexpected restart error: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn restart_gracefully_recreates_a_run_with_its_metadata() {
+    let sandbox = Sandbox::new("restart-run");
+    let cwd = sandbox.home.join("restart-cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let marker = sandbox.home.join("graceful.txt");
+    let starts = sandbox.home.join("starts.txt");
+    let (program, script_args) = restart_helper(&sandbox.home);
+    let config = sandbox.home.join("restart.toml");
+    std::fs::write(
+        &config,
+        "[profiles.restart]\nscrollback = 432\n\
+         [profiles.restart.timeouts]\ntext = 1234\n\
+         [profiles.restart.colors]\nforeground = \"#123456\"\n",
+    )
+    .unwrap();
+
+    let mut owned = vec![
+        "--json".to_string(),
+        "run".to_string(),
+        "--backend".to_string(),
+        "rio".to_string(),
+        "--cols".to_string(),
+        "93".to_string(),
+        "--rows".to_string(),
+        "26".to_string(),
+        "--cwd".to_string(),
+        cwd.to_string_lossy().into_owned(),
+        "--env".to_string(),
+        format!("TUI_RESTART_TOKEN={}", "metadata-preserved"),
+        "--env".to_string(),
+        format!("TUI_RESTART_MARKER={}", marker.to_string_lossy()),
+        "--env".to_string(),
+        format!("TUI_RESTART_STARTS={}", starts.to_string_lossy()),
+        "--config".to_string(),
+        config.to_string_lossy().into_owned(),
+        "--profile".to_string(),
+        "restart".to_string(),
+        program,
+    ];
+    owned.extend(script_args);
+    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+    let first: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&refs)).expect("first run json");
+    let first_pid = first["data"]["shell_pid"]
+        .as_u64()
+        .expect("first child pid");
+    let recording = first["data"]["recording"]
+        .as_str()
+        .expect("first automatic recording")
+        .to_string();
+    assert!(!recording.is_empty());
+    sandbox.wait_for_text("restart-ready", "30000");
+    sandbox.ok(&[
+        "expect",
+        "text",
+        "restart-ready",
+        "--fg",
+        "#123456",
+        "--match",
+        "first",
+    ]);
+
+    let restarted: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "restart", "--graceful-timeout", "5000"]))
+            .expect("restart json");
+    assert_ne!(
+        restarted["data"]["shell_pid"].as_u64(),
+        Some(first_pid),
+        "restart should replace the child"
+    );
+    assert_eq!(restarted["data"]["recording"], recording);
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap().trim(),
+        "graceful",
+        "the old process should handle Ctrl-C before respawn"
+    );
+
+    sandbox.wait_for_text("restart-ready", "30000");
+    sandbox.ok(&[
+        "expect",
+        "text",
+        "restart-ready",
+        "--fg",
+        "#123456",
+        "--match",
+        "first",
+    ]);
+    let state: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "state"])).expect("state json");
+    assert_eq!(state["data"]["cols"], 93);
+    assert_eq!(state["data"]["rows"], 26);
+    assert_eq!(state["data"]["timeouts"]["text"], 1234);
+
+    let starts = std::fs::read_to_string(&starts).unwrap();
+    let lines: Vec<&str> = starts.lines().collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "expected one metadata line per spawn: {starts}"
+    );
+    assert_eq!(lines[0], lines[1], "spawn metadata changed across restart");
+    assert!(lines[0].contains("arg=restart-argument"));
+    assert!(lines[0].contains("token=metadata-preserved"));
+    let recorded_cwd = lines[0]
+        .split(';')
+        .find_map(|field| field.strip_prefix("cwd="))
+        .expect("recorded working directory");
+    assert_eq!(
+        std::fs::canonicalize(recorded_cwd).unwrap(),
+        std::fs::canonicalize(&cwd).unwrap()
+    );
+}
+
+#[test]
+fn restart_forcibly_replaces_a_child_that_ignores_interrupts() {
+    let sandbox = Sandbox::new("restart-force");
+    let marker = sandbox.home.join("interrupt.txt");
+    let starts = sandbox.home.join("starts.txt");
+    let (program, args) = restart_helper(&sandbox.home);
+    let mut owned = vec![
+        "--json".to_string(),
+        "run".to_string(),
+        "--env".to_string(),
+        "TUI_RESTART_TOKEN=force".to_string(),
+        "--env".to_string(),
+        "TUI_RESTART_IGNORE_INT=1".to_string(),
+        "--env".to_string(),
+        format!("TUI_RESTART_MARKER={}", marker.display()),
+        "--env".to_string(),
+        format!("TUI_RESTART_STARTS={}", starts.display()),
+        program,
+    ];
+    owned.extend(args);
+    let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+    let first: serde_json::Value = serde_json::from_str(&sandbox.ok(&refs)).unwrap();
+    sandbox.wait_for_text("restart-ready", "30000");
+
+    let start = Instant::now();
+    let restarted: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--json", "restart", "--graceful-timeout", "1000"]))
+            .unwrap();
+    let elapsed = start.elapsed();
+    assert!(elapsed >= Duration::from_millis(1000), "{elapsed:?}");
+    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    assert_ne!(restarted["data"]["shell_pid"], first["data"]["shell_pid"]);
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "graceful");
+    sandbox.wait_for_text("restart-ready", "30000");
+    assert_eq!(std::fs::read_to_string(starts).unwrap().lines().count(), 2);
 }
 
 #[test]
@@ -1345,6 +1629,70 @@ fn sleeper() -> Vec<&'static str> {
     } else {
         vec!["sleep", "30"]
     }
+}
+
+#[cfg(windows)]
+fn restart_helper(root: &std::path::Path) -> (String, Vec<String>) {
+    let script = root.join("restart-helper.ps1");
+    std::fs::write(
+        &script,
+        r#"param([string]$RestartArgument)
+$line = "arg=$RestartArgument;token=$env:TUI_RESTART_TOKEN;cwd=$((Get-Location).Path);size=$([Console]::WindowWidth)x$([Console]::WindowHeight)"
+[IO.File]::AppendAllText($env:TUI_RESTART_STARTS, $line + [Environment]::NewLine)
+[Console]::TreatControlCAsInput = $true
+[Console]::WriteLine("restart-ready")
+while ($true) {
+    $key = [Console]::ReadKey($true)
+    if ($key.Key -eq [ConsoleKey]::C -and
+        ($key.Modifiers -band [ConsoleModifiers]::Control)) {
+        [IO.File]::WriteAllText($env:TUI_RESTART_MARKER, "graceful")
+        if ($env:TUI_RESTART_IGNORE_INT -ne "1") { exit 0 }
+    }
+}
+"#,
+    )
+    .unwrap();
+    (
+        "powershell".to_string(),
+        vec![
+            "-NoLogo".to_string(),
+            "-NoProfile".to_string(),
+            "-File".to_string(),
+            script.to_string_lossy().into_owned(),
+            "restart-argument".to_string(),
+        ],
+    )
+}
+
+#[cfg(unix)]
+fn restart_helper(root: &std::path::Path) -> (String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = root.join("restart-helper.sh");
+    std::fs::write(
+        &script,
+        r#"#!/usr/bin/env bash
+set -eu
+size="$(stty size)"
+printf 'arg=%s;token=%s;cwd=%s;size=%s\n' "$1" "$TUI_RESTART_TOKEN" "$PWD" "$size" >> "$TUI_RESTART_STARTS"
+trap 'printf "graceful" > "$TUI_RESTART_MARKER"; if [ "${TUI_RESTART_IGNORE_INT:-0}" != 1 ]; then exit 0; fi' INT
+printf 'restart-ready\n'
+while :; do
+    IFS= read -r _ || :
+done
+"#,
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    (
+        "bash".to_string(),
+        vec![
+            script.to_string_lossy().into_owned(),
+            "restart-argument".to_string(),
+        ],
+    )
 }
 
 fn two_bells_command() -> String {

@@ -277,6 +277,27 @@ class TypedCallTests(unittest.TestCase):
         self.assertEqual(args[0], "vim")
         self.assertEqual(args[1], ["file.txt"])
 
+    def test_restart_forwards_timeout_and_preserves_result(self):
+        terminal = _CapturingClient("s")
+        terminal.fake.reply = {
+            "shell_pid": 42,
+            "session": "s",
+            "ready": True,
+            "recording": "",
+        }
+        result = run(terminal.restart(graceful_timeout=123))
+        self.assertEqual(terminal.fake.calls, [("restart", (123,))])
+        self.assertIs(result, terminal.fake.reply)
+
+    def test_restart_preserves_native_errors(self):
+        terminal = _CapturingClient("s")
+        error = RuntimeError("restart failed")
+        terminal.fake.error = error
+        with self.assertRaises(RuntimeError) as raised:
+            run(terminal.restart())
+        self.assertIs(raised.exception, error)
+        self.assertEqual(terminal.fake.calls, [("restart", (5000,))])
+
     def test_constructor_profile_is_forwarded_to_run(self):
         terminal = _CapturingClient(
             "s", profile=Profile(colors=Colors(background="#112233"))
@@ -435,7 +456,7 @@ class TypedCallTests(unittest.TestCase):
             [
                 (
                     "start_recording",
-                    ("demo.png", "apng", 24, 2.0, 3.0, 0.5),
+                    ("demo.png", "apng", 24, 2.0, 3.0, 0.5, None, False),
                 ),
                 ("stop_recording", ()),
             ],
@@ -446,13 +467,28 @@ class TypedCallTests(unittest.TestCase):
         run(terminal.screenshot("screen.svg", full=True, zoom=0.5))
         self.assertEqual(
             terminal.fake.calls,
-            [("screenshot", ("screen.svg", True, 0.5))],
+            [("screenshot", ("screen.svg", True, 0.5, None, False))],
         )
 
     def test_screenshot_rejects_zoom_without_path(self):
         terminal = _CapturingClient("s")
         with self.assertRaisesRegex(ValueError, "requires a path"):
             run(terminal.screenshot(zoom=0.5))
+
+    def test_capture_background_options_are_forwarded(self):
+        terminal = _CapturingClient("s")
+        run(terminal.screenshot("screen.svg", background="#123456"))
+        run(terminal.start_recording("demo.gif", transparent=True))
+        self.assertEqual(
+            terminal.fake.calls,
+            [
+                ("screenshot", ("screen.svg", False, None, "#123456", False)),
+                (
+                    "start_recording",
+                    ("demo.gif", None, None, None, None, None, None, True),
+                ),
+            ],
+        )
 
 
 class ClientTimeoutTests(unittest.TestCase):
@@ -595,7 +631,7 @@ class LocatorTests(unittest.TestCase):
         )
         name, args = terminal.fake.calls[0]
         self.assertEqual(name, "find_locator")
-        stages = args[0]
+        stages = args[0]["nodes"]
         self.assertEqual(stages[0]["text"], "Settings")
         selector = stages[-1]
         self.assertEqual(selector["direction"], "after")
@@ -613,6 +649,7 @@ class LocatorTests(unittest.TestCase):
         name, args = terminal.fake.calls[1]
         self.assertEqual(name, "expect_locator")
         query, not_ = args[:2]
+        query = query["nodes"]
         style = query[-1]["style"]
         self.assertEqual(query[-1]["direction"], "within")
         self.assertEqual(query[-1]["occurrence"], "first")
@@ -635,16 +672,16 @@ class LocatorTests(unittest.TestCase):
         self.assertEqual(match.start.row, 1)
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "find_locator")
-        query = args[0]
+        query = args[0]["nodes"]
         self.assertTrue(args[1])
         self.assertEqual(query[-1]["occurrence"], "nth")
         self.assertEqual(query[-1]["nth"], 1)
 
         run(locator.first().locations())
-        selected = terminal.fake.calls[-1][1][0]
+        selected = terminal.fake.calls[-1][1][0]["nodes"]
         self.assertEqual(selected[-1]["occurrence"], "first")
         run(locator.locations())
-        original = terminal.fake.calls[-1][1][0]
+        original = terminal.fake.calls[-1][1][0]["nodes"]
         self.assertEqual(original[-1]["occurrence"], "any")
 
         run(
@@ -653,7 +690,7 @@ class LocatorTests(unittest.TestCase):
             .get_by_text("av")
             .locations()
         )
-        nested = terminal.fake.calls[-1][1][0]
+        nested = terminal.fake.calls[-1][1][0]["nodes"]
         self.assertEqual([stage["text"] for stage in nested], [
             "Save Save",
             "Save",
@@ -665,7 +702,7 @@ class LocatorTests(unittest.TestCase):
             .get_by_text("Save")
             .locations()
         )
-        styled = terminal.fake.calls[-1][1][0]
+        styled = terminal.fake.calls[-1][1][0]["nodes"]
         self.assertEqual(styled[-1]["kind"], "text")
         self.assertEqual(styled[-2]["kind"], "style")
         self.assertTrue(styled[-2]["style"]["bold"])
@@ -694,23 +731,25 @@ class LocatorTests(unittest.TestCase):
         )
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "click_locator")
-        self.assertEqual(args[0][-1]["occurrence"], "any")
+        self.assertEqual(args[0]["nodes"][args[0]["root"]]["occurrence"], "any")
         self.assertEqual(args[1:], (29, 2, 50))
 
         run(locator.highlight())
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "highlight_locator")
-        self.assertEqual(args[0][-1]["occurrence"], "any")
+        self.assertEqual(args[0]["nodes"][args[0]["root"]]["occurrence"], "any")
 
         run(locator.expect())
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "expect_locator")
         query, not_ = args[:2]
+        query = query["nodes"]
         self.assertEqual(query[-1]["occurrence"], "any")
         self.assertFalse(not_)
 
         run(locator.unique().expect())
         query, not_ = terminal.fake.calls[-1][1][:2]
+        query = query["nodes"]
         self.assertEqual(query[-1]["occurrence"], "unique")
         self.assertFalse(not_)
 
@@ -727,7 +766,7 @@ class LocatorTests(unittest.TestCase):
         self.assertIs(run(locator.wait()), locator)
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "wait_locator")
-        query = args[0]
+        query = args[0]["nodes"]
         self.assertEqual(query[-1]["direction"], "after")
 
     def test_locator_rejects_invalid_selection_and_state(self):
@@ -746,37 +785,44 @@ class LocatorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least one style"):
             terminal.get_by_style(TextStyle())
 
-    def test_location_diagnostic_failure_does_not_mask_no_match_error(self):
+    def test_composition_is_lazy_immutable_and_owner_checked(self):
         terminal = _CapturingClient("s")
+        terminal.fake.reply = []
+        bold = terminal.get_by_style(TextStyle(bold=True))
+        link = terminal.get_by_link("test:link")
+        composed = bold.and_(link).or_(terminal.get_by_text("fallback"))
+        filtered = composed.filter(has=link, has_not=terminal.get_by_text("old"))
+        self.assertEqual(terminal.fake.calls, [])
+        run(filtered.nth(1).locations())
+        expression = terminal.fake.calls[-1][1][0]
+        root = expression["nodes"][expression["root"]]
+        self.assertEqual(root["kind"], "filter")
+        self.assertEqual(root["nth"], 1)
+        self.assertEqual(expression["nodes"][root["input"]]["kind"], "or")
+        self.assertEqual(expression["nodes"][root["has"]]["link"], "test:link")
+        run(bold.locations())
+        self.assertEqual(len(terminal.fake.calls[-1][1][0]["nodes"]), 1)
+        other = _CapturingClient("s").get_by_link("test:link")
+        for operation in (lambda: bold.and_(other), lambda: bold.or_(other), lambda: bold.filter(has=other)):
+            with self.assertRaisesRegex(ValueError, "same terminal owner"):
+                operation()
+        with self.assertRaises(ValueError):
+            bold.filter()
+        with self.assertRaises(TypeError):
+            bold.filter(has=link, link="test:link")
+        with self.assertRaises(TypeError):
+            TextStyle(link="test:link")
 
-        def legacy_find(stages, *extra):
-            if extra:
-                raise TypeError("legacy native signature")
-            terminal.fake.calls.append(("find_locator", (stages,)))
-
-            async def complete():
-                return []
-
-            return complete()
-
-        terminal.fake.find_locator = legacy_find
-
-        def fail_text(*args):
-            terminal.fake.calls.append(("text", args))
-
-            async def complete():
-                raise InternalError("screen read failed")
-
-            return complete()
-
-        terminal.fake.text = fail_text
-        with self.assertRaises(ExpectationError) as raised:
+    def test_location_rejects_an_invalid_native_match_count(self):
+        terminal = _CapturingClient("s")
+        terminal.fake.reply = []
+        with self.assertRaises(InternalError) as raised:
             run(terminal.get_by_text("missing").location())
-        self.assertIn("no match found", str(raised.exception))
-        self.assertIn(
-            "Terminal content unavailable: screen read failed",
-            str(raised.exception),
-        )
+        self.assertIn("invalid match count", str(raised.exception))
+        name, args = terminal.fake.calls[-1]
+        self.assertEqual(name, "find_locator")
+        self.assertIn("nodes", args[0])
+        self.assertTrue(args[1])
 
 
 class ArtifactCaptureTests(unittest.TestCase):

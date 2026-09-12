@@ -28,6 +28,7 @@ from . import _ephemeral as ephemeral
 from . import _native as native
 from .errors import (
     ExpectationError,
+    InternalError,
     NoSessionError,
     TerminalArtifact,
     TuiTestError,
@@ -40,6 +41,7 @@ from .types import (
     Cell,
     LocatorDirection,
     MouseButton,
+    OpenResult,
     Profile,
     RecordingFormat,
     State,
@@ -260,19 +262,19 @@ def _text_query_value(
     full: bool,
     whitespace: str,
     direction: LocatorDirection,
-    within: Optional[List[Dict[str, object]]],
-) -> List[Dict[str, object]]:
-    stages = copy.deepcopy(within) if within is not None else []
-    stages.append(
+    within: Optional["_LocatorQuery"],
+) -> "_LocatorQuery":
+    return _append_node(
+        within,
         _text_stage_value(
             text,
             regex=regex,
             full=full,
             whitespace=whitespace,
             direction=direction,
-        )
+        ),
+        relative=True,
     )
-    return stages
 
 
 def _style_query_value(
@@ -280,24 +282,98 @@ def _style_query_value(
     *,
     full: bool,
     direction: LocatorDirection,
-    within: Optional[List[Dict[str, object]]],
-) -> List[Dict[str, object]]:
+    within: Optional["_LocatorQuery"],
+) -> "_LocatorQuery":
+    if not isinstance(style, TextStyle):
+        raise TypeError("style must be a TextStyle")
     style_value = asdict(style)
+    if set(vars(style)) - set(TextStyle.__dataclass_fields__):
+        raise ValueError("unknown style property")
     if not any(value is not None for value in style_value.values()):
         raise ValueError("get_by_style requires at least one style property")
     if direction not in ("within", "after", "before"):
         raise ValueError("locator direction must be within, after, or before")
-    stages = copy.deepcopy(within) if within is not None else []
-    stages.append(
+    return _append_node(
+        within,
         {
             "kind": "style",
             "direction": direction,
             "style": style_value,
             "full": full,
             **_occurrence_fields("any"),
-        }
+        },
+        relative=True,
     )
-    return stages
+
+
+def _link_query_value(
+    uri: str,
+    *,
+    full: bool,
+    direction: LocatorDirection,
+    within: Optional["_LocatorQuery"],
+) -> "_LocatorQuery":
+    if not isinstance(uri, str):
+        raise TypeError("get_by_link requires a URI string")
+    if direction not in ("within", "after", "before"):
+        raise ValueError("locator direction must be within, after, or before")
+    return _append_node(
+        within,
+        {
+            "kind": "link",
+            "link": uri,
+            "full": full,
+            "direction": direction,
+            **_occurrence_fields("any"),
+        },
+        relative=True,
+    )
+
+
+class _LocatorQuery:
+    def __init__(self, nodes: List[Dict[str, object]], root: int) -> None:
+        self.nodes = nodes
+        self.root = root
+
+    def payload(self) -> Dict[str, object]:
+        return {"nodes": self.nodes, "root": self.root}
+
+    def current(self) -> Dict[str, object]:
+        return self.nodes[self.root]
+
+
+def _append_node(
+    query: Optional[_LocatorQuery],
+    node: Dict[str, object],
+    *,
+    relative: bool = False,
+) -> _LocatorQuery:
+    result = copy.deepcopy(query) if query is not None else _LocatorQuery([], 0)
+    if len(result.nodes) >= 256:
+        raise ValueError("locator expression exceeds 256 nodes")
+    if relative:
+        if query is None and node.get("direction", "within") != "within":
+            raise ValueError("locator direction requires a parent locator")
+        if query is not None:
+            node["within"] = result.root
+    result.root = len(result.nodes)
+    result.nodes.append(node)
+    return result
+
+
+def _append_operand(query: _LocatorQuery, other: _LocatorQuery) -> int:
+    offset = len(query.nodes)
+    if offset + len(other.nodes) >= 256:
+        raise ValueError("locator expression exceeds 256 nodes")
+    for node in copy.deepcopy(other.nodes):
+        for field in ("within", "left", "right", "input", "has", "has_not"):
+            reference = node.get(field)
+            if reference is not None:
+                if not isinstance(reference, int):
+                    raise TypeError("locator operand reference must be an integer")
+                node[field] = reference + offset
+        query.nodes.append(node)
+    return offset + other.root
 
 
 def _extract_terminal_text(message: Optional[str]) -> Optional[str]:
@@ -490,24 +566,18 @@ class _Mouse:
 
 
 class Locator:
-    """A lazy text/style query resolved against the current terminal grid."""
+    """A lazy cell query resolved against the current terminal grid."""
 
     def __init__(
-        self, client: "TuiTest", query: List[Dict[str, object]]
+        self, client: "TuiTest", query: _LocatorQuery
     ) -> None:
         self._client = client
         self._query = copy.deepcopy(query)
 
     def _with_occurrence(self, occurrence: _Occurrence) -> "Locator":
         query = copy.deepcopy(self._query)
-        query[-1].update(_occurrence_fields(occurrence))
+        query.current().update(_occurrence_fields(occurrence))
         return Locator(self._client, query)
-
-    def _strict_query(self) -> List[Dict[str, object]]:
-        query = copy.deepcopy(self._query)
-        if query[-1]["occurrence"] == "any":
-            query[-1]["occurrence"] = "unique"
-        return query
 
     def any(self) -> "Locator":
         return self._with_occurrence("any")
@@ -558,53 +628,90 @@ class Locator:
             within=self._query,
         )
 
-    async def locations(self) -> List[TextMatch]:
-        try:
-            awaitable = self._client._native.find_locator(
-                self._query, False
+    def get_by_link(
+        self,
+        uri: str,
+        *,
+        full: bool = False,
+        direction: LocatorDirection = "within",
+    ) -> "Locator":
+        return Locator(
+            self._client,
+            _link_query_value(
+                uri, full=full, direction=direction, within=self._query,
+            ),
+        )
+
+    def _operand(self, other: "Locator") -> _LocatorQuery:
+        if not isinstance(other, Locator) or other._client is not self._client:
+            raise ValueError(
+                "locator operands must belong to the same terminal owner"
             )
-        except TypeError:
-            awaitable = self._client._native.find_locator(self._query)
+        return other._query
+
+    def _combine(self, kind: str, other: "Locator") -> "Locator":
+        query = copy.deepcopy(self._query)
+        right = _append_operand(query, self._operand(other))
+        return Locator(
+            self._client,
+            _append_node(query, {
+                "kind": kind,
+                "left": query.root,
+                "right": right,
+                **_occurrence_fields("any"),
+            }),
+        )
+
+    def and_(self, other: "Locator") -> "Locator":
+        """Intersect selected cells and form contiguous per-row runs."""
+        return self._combine("and", other)
+
+    def or_(self, other: "Locator") -> "Locator":
+        """Union selected cells and form contiguous per-row runs."""
+        return self._combine("or", other)
+
+    def filter(
+        self,
+        *,
+        has: Optional["Locator"] = None,
+        has_not: Optional["Locator"] = None,
+    ) -> "Locator":
+        """Keep whole matches containing has and containing no has_not matches."""
+        if has is None and has_not is None:
+            raise ValueError("filter requires has or has_not")
+        query = copy.deepcopy(self._query)
+        positive = (
+            None if has is None else _append_operand(query, self._operand(has))
+        )
+        negative = (
+            None if has_not is None
+            else _append_operand(query, self._operand(has_not))
+        )
+        return Locator(
+            self._client,
+            _append_node(query, {
+                "kind": "filter",
+                "input": query.root,
+                "has": positive,
+                "has_not": negative,
+                **_occurrence_fields("any"),
+            }),
+        )
+
+    async def locations(self) -> List[TextMatch]:
         values = await self._client._guarded(
             "locator.locations",
-            awaitable,
+            self._client._native.find_locator(self._query.payload(), False),
         )
         return [TextMatch.from_dict(value) for value in values]
 
     async def location(self) -> TextMatch:
-        legacy = False
-        try:
-            awaitable = self._client._native.find_locator(self._query, True)
-        except TypeError:
-            legacy = True
-            awaitable = self._client._native.find_locator(
-                self._strict_query()
-            )
         values = await self._client._guarded(
             "locator.location",
-            awaitable,
+            self._client._native.find_locator(self._query.payload(), True),
         )
-        if legacy and len(values) != 1:
-            current = self._query[-1]
-            description = (
-                repr(current["text"])
-                if current["kind"] == "text"
-                else "style"
-            )
-            message = "locator.location: no match found for {}".format(
-                description
-            )
-            try:
-                message += "\n\nTerminal content:\n{}".format(
-                    await self._client.text()
-                )
-            except TuiTestError as diagnostic_error:
-                message += "\n\nTerminal content unavailable: {}".format(
-                    diagnostic_error
-                )
-            error = ExpectationError(message)
-            await self._client._capture_artifacts(error)
-            raise error
+        if len(values) != 1:
+            raise InternalError("locator.location: native returned an invalid match count")
         return TextMatch.from_dict(values[0])
 
     async def count(self) -> int:
@@ -612,7 +719,7 @@ class Locator:
 
     async def all(self) -> List["Locator"]:
         matches = await self.locations()
-        if self._query[-1]["occurrence"] == "any":
+        if self._query.current()["occurrence"] == "any":
             return [self.nth(index) for index in range(len(matches))]
         return [Locator(self._client, self._query) for _ in matches]
 
@@ -627,7 +734,7 @@ class Locator:
         await self._client._guarded(
             "locator.wait",
             self._client._native.wait_locator(
-                self._query,
+                self._query.payload(),
                 state == "hidden",
                 self._client._timeout("text", timeout),
             ),
@@ -653,7 +760,7 @@ class Locator:
         await self._client._guarded(
             "locator.click",
             self._client._native.click_locator(
-                self._query,
+                self._query.payload(),
                 code,
                 clicks,
                 self._client._timeout("text", timeout),
@@ -664,7 +771,7 @@ class Locator:
         await self._client._guarded(
             "locator.highlight",
             self._client._native.highlight_locator(
-                self._query,
+                self._query.payload(),
                 self._client._timeout("text", timeout),
             ),
         )
@@ -678,7 +785,7 @@ class Locator:
         await self._client._guarded(
             "locator.expect",
             self._client._native.expect_locator(
-                self._query,
+                self._query.payload(),
                 not_,
                 self._client._timeout("text", timeout),
             ),
@@ -867,9 +974,9 @@ class TuiTest:
 
     async def _spawn(
         self,
-        start: Callable[[], Awaitable[Dict[str, Any]]],
+        start: Callable[[], Awaitable[OpenResult]],
         retries: int,
-    ) -> Dict[str, Any]:
+    ) -> OpenResult:
         attempts = retries + 1 if retries > 0 else 1
         for attempt in range(attempts):
             try:
@@ -895,7 +1002,7 @@ class TuiTest:
         profile: Optional[Profile] = None,
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> OpenResult:
         env_values = _env_pairs(env)
         profile_values = _profile_values(
             profile if profile is not None else self._profile
@@ -936,7 +1043,7 @@ class TuiTest:
         profile: Optional[Profile] = None,
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> OpenResult:
         env_values = _env_pairs(env)
         profile_values = _profile_values(
             profile if profile is not None else self._profile
@@ -963,6 +1070,9 @@ class TuiTest:
             lambda: self._native.run(*native_args),
             retries,
         )
+
+    async def restart(self, *, graceful_timeout: int = 5_000) -> OpenResult:
+        return await self._await(self._native.restart(graceful_timeout))
 
     async def close(self) -> None:
         await self._await(self._native.close())
@@ -1025,7 +1135,7 @@ class TuiTest:
         full: bool,
         whitespace: str,
         direction: LocatorDirection,
-        within: Optional[List[Dict[str, object]]],
+        within: Optional[_LocatorQuery],
     ) -> Locator:
         return Locator(
             self,
@@ -1052,13 +1162,19 @@ class TuiTest:
             within=None,
         )
 
+    def get_by_link(self, uri: str, *, full: bool = False) -> Locator:
+        return Locator(
+            self,
+            _link_query_value(uri, full=full, direction="within", within=None),
+        )
+
     def _make_style_locator(
         self,
         style: TextStyle,
         *,
         full: bool,
         direction: LocatorDirection,
-        within: Optional[List[Dict[str, object]]],
+        within: Optional[_LocatorQuery],
     ) -> Locator:
         return Locator(
             self,
@@ -1123,10 +1239,16 @@ class TuiTest:
         *,
         full: bool = False,
         zoom: Optional[float] = None,
+        background: Optional[str] = None,
+        transparent: bool = False,
     ) -> str:
-        if zoom is not None and path is None:
-            raise ValueError("screenshot zoom requires a path")
-        return await self._await(self._native.screenshot(path, full, zoom))
+        if (zoom is not None or background is not None or transparent) and path is None:
+            raise ValueError("screenshot customization requires a path")
+        if background is not None and transparent:
+            raise ValueError("screenshot background and transparent options conflict")
+        return await self._await(
+            self._native.screenshot(path, full, zoom, background, transparent)
+        )
 
     async def start_recording(
         self,
@@ -1137,10 +1259,21 @@ class TuiTest:
         speed: Optional[float] = None,
         idle_time_limit: Optional[float] = None,
         zoom: Optional[float] = None,
+        background: Optional[str] = None,
+        transparent: bool = False,
     ) -> None:
+        if background is not None and transparent:
+            raise ValueError("recording background and transparent options conflict")
         await self._await(
             self._native.start_recording(
-                path, format, fps, speed, idle_time_limit, zoom
+                path,
+                format,
+                fps,
+                speed,
+                idle_time_limit,
+                zoom,
+                background,
+                transparent,
             )
         )
 

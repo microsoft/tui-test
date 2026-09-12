@@ -4,7 +4,46 @@ import json
 import unittest
 from pathlib import Path
 
-from tui_test import Locator, TuiTest, _native, unique_session
+from tui_test import Locator, TuiTest, UsageError, _native, unique_session
+
+
+INVALID_CAPTURE_BACKGROUNDS = (
+    "", "#12", "#ff00zz", "#12345678", "#12é34", "256,0,0", "rgb(-1,0,0)",
+)
+
+
+class CaptureBackgroundTests(unittest.TestCase):
+    def test_invalid_background_errors_come_from_native_awaitables(self):
+        async def scenario():
+            session = _native.NativeSession(unique_session("invalid-native-background"))
+            for background in INVALID_CAPTURE_BACKGROUNDS:
+                for capture in (
+                    lambda: session.screenshot("screen.svg", False, background=background),
+                    lambda: session.start_recording(
+                        "recording.gif", None, None, None, None, background=background
+                    ),
+                ):
+                    with self.subTest(background=background):
+                        awaitable = capture()
+                        self.assertTrue(inspect.isawaitable(awaitable))
+                        with self.assertRaisesRegex(_native.NativeUsageError, "color"):
+                            await awaitable
+
+        asyncio.run(scenario())
+
+    def test_invalid_backgrounds_raise_public_usage_errors(self):
+        async def scenario():
+            terminal = TuiTest(unique_session("invalid-background"))
+            for background in INVALID_CAPTURE_BACKGROUNDS:
+                for capture in (
+                    lambda: terminal.screenshot("screen.svg", background=background),
+                    lambda: terminal.start_recording("recording.gif", background=background),
+                ):
+                    with self.subTest(background=background):
+                        with self.assertRaisesRegex(UsageError, "color"):
+                            await capture()
+
+        asyncio.run(scenario())
 
 
 class _IndexValue:
@@ -36,6 +75,7 @@ class NativeSurfaceTests(unittest.TestCase):
         for name in (
             "open",
             "run",
+            "restart",
             "close",
             "state",
             "text",
@@ -120,15 +160,19 @@ class NativeSurfaceTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_locator_stages_reject_cross_kind_fields(self):
+    def test_locator_nodes_reject_invalid_fields_and_references(self):
         async def scenario():
             session = _native.NativeSession(unique_session("native-locator"))
             for stage in (
                 {"kind": "text", "text": "x", "style": {"bold": True}},
                 {"kind": "style", "style": {"bold": True}, "text": "x"},
+                {"kind": "style", "style": {"bold": True, "link": "test:link"}},
+                {"kind": "link"},
+                {"kind": "and", "left": 0, "right": 0},
+                {"kind": "filter", "has_text": "x"},
             ):
                 with self.assertRaises(_native.NativeUsageError):
-                    await session.find_locator([stage], False)
+                    await session.find_locator({"nodes": [stage], "root": 0}, False)
 
         asyncio.run(scenario())
 
@@ -171,6 +215,21 @@ class NativeSurfaceTests(unittest.TestCase):
                     51,
                 )
             self.assertIn("at most 50", str(raised.exception))
+        asyncio.run(scenario())
+
+    def test_restart_validates_timeout_before_session_lookup(self):
+        async def scenario():
+            session = _native.NativeSession(unique_session("native-restart-number"))
+            with self.assertRaises(_native.NativeUsageError):
+                await session.restart(-1)
+
+        asyncio.run(scenario())
+
+    def test_restart_without_spawn_metadata_is_no_session(self):
+        async def scenario():
+            session = _native.NativeSession(unique_session("native-restart-missing"))
+            with self.assertRaises(_native.NativeNoSessionError):
+                await session.restart(0)
 
         asyncio.run(scenario())
 
@@ -187,11 +246,27 @@ class NativeStubTests(unittest.TestCase):
         self.assertNotIn("query_json", stub)
         self.assertNotIn("request_json", stub)
         self.assertIn("def open(", stub)
+        self.assertIn("def restart(self, graceful_timeout_ms: int)", stub)
         self.assertIn(
-            "def find_locator(self, stages: typing.List[typing.Dict[str, typing.Any]], require_one: bool)",
+            "def find_locator(self, expression: typing.Dict[str, typing.Any], require_one: bool)",
             stub,
         )
         self.assertIn("typing.Awaitable[", stub)
+
+    def test_spawn_results_use_the_public_open_result_type(self):
+        stub = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "tui_test"
+            / "_native.pyi"
+        ).read_text(encoding="utf-8")
+        self.assertIn("import tui_test\n", stub)
+        for method in ("open", "run", "restart"):
+            declaration = next(
+                line for line in stub.splitlines()
+                if line.strip().startswith(f"def {method}(")
+            )
+            self.assertIn("typing.Awaitable[tui_test.OpenResult]", declaration)
 
 
 if __name__ == "__main__":

@@ -149,11 +149,32 @@ test("passing assertions sharing a failure frame do not inherit failure annotati
 
 test("passing locator expectations are visible, searchable, and included in Call details", async () => {
   await point(2).click();
+  assert.equal(await point(2).locator(".query-code").textContent(), 'getByText("READY")');
+  const inline = await point(2).evaluate((row) => {
+    const name = row.querySelector(".name").getBoundingClientRect();
+    const query = row.querySelector(".query-code").getBoundingClientRect();
+    return query.x > name.right && Math.abs(query.y - name.y) < 4;
+  });
+
+  assert.equal(inline, true);
   assert.match(await page.locator("#summary").textContent(), /Expect text "READY" to be visible/);
   await page.locator("#call-tab").click();
   assert.match(await page.locator("#call-properties").textContent(), /ExpectedExpect text "READY" to be visible/);
   await page.locator("#action-filter").fill('"READY"');
   assert.equal(await page.locator("#points button").count(), 2);
+});
+
+test("read-only locator actions show their query without claiming a visibility assertion", async () => {
+  await variant("locator-read.html", (payload) => {
+    const read = payload.details.recent_operations[1];
+    read.name = "locator.locations";
+    read.is_assertion = false;
+    read.expectation.outcome = "matches";
+  });
+  await point(2).click();
+  assert.equal(await point(2).locator(".query-code").textContent(), 'getByText("READY")');
+  assert.match(await page.locator("#summary").textContent(), /Completed: Resolve text "READY" \(zero or more matches\)/);
+  assert.doesNotMatch(await page.locator("#summary").textContent(), /visible/);
 });
 
 test("style, relative scope, occurrence and negation remain explicit for passing locators", async () => {
@@ -162,16 +183,52 @@ test("style, relative scope, occurrence and negation remain explicit for passing
     payload.details.recent_operations[1].expectation = {
       kind: "locator", outcome: "hidden",
       query: {
-        selector: { kind: "style", selector: { style: { foreground: "2", bold: true, link: "https://example.test/" }, full: true } },
-        style: { italic: false }, direction: "after", occurrence: { nth: 1 }, within: original,
+        selector: { kind: "link", selector: { uri: "https://example.test/", full: false } },
+        style: {}, direction: "within", occurrence: "any",
+        within: {
+          selector: { kind: "style", selector: { style: { foreground: "2", bold: true }, full: true } },
+          style: { italic: false }, direction: "after", occurrence: { nth: 1 }, within: original,
+        },
       },
     };
   });
   await point(2).click();
   const expected = await page.locator("#summary").textContent();
-  for (const fragment of ["cells matching", "ANSI 2 (green slot)", "bold=true", 'link="https://example.test/"', "full scrollback", "italic=false", "nth(1)", 'after [text "READY"]', "to be absent"]) {
+  for (const fragment of ["cells matching", "ANSI 2 (green slot)", "bold=true", 'linking exactly to "https://example.test/"', "whole match satisfies", "full scrollback", "italic=false", "nth(1)", 'after [text "READY"]', "to be absent"]) {
     assert.ok(expected.includes(fragment), `${fragment} is part of the recorded assertion`);
   }
+});
+
+test("composed and containment expectations retain grouping, occurrences and exact link selection", async () => {
+  await variant("composition.html", (payload) => {
+    const ready = payload.details.recent_operations[1].expectation.query;
+    const node = (kind, selector, occurrence = "any") => ({ selector: { kind, selector }, style: {}, direction: "within", occurrence });
+    const link = node("link", { uri: "", full: true });
+    const intersection = node("and", { left: { ...ready, occurrence: "first" }, right: link });
+    const union = node("or", { left: intersection, right: ready }, "last");
+    const filtered = node("filter", { input: union, has: ready, has_not: node("link", { uri: "test:deprecated", full: false }) });
+    payload.details.recent_operations[1].expectation = { kind: "locator", query: filtered, outcome: "visible" };
+  });
+  await point(2).click();
+  assert.equal(await point(2).locator(".query-code").textContent(),
+    'getByText("READY").first().and(getByLink("", { full: true })).or(getByText("READY")).last().filter({ has: getByText("READY"), hasNot: getByLink("test:deprecated") })');
+  assert.match(await point(2).getAttribute("title"), /getByText\("READY"\)\.first\(\)\.and/);
+  const value = await page.locator("#summary").textContent();
+  for (const fragment of ["cell union", "cell intersection", 'text "READY" (first)', "cells with no hyperlink in full scrollback", "(last) filtered by has", 'has not [cells linking exactly to "test:deprecated"]']) {
+    assert.ok(value.includes(fragment), fragment);
+  }
+  await page.locator("#action-filter").fill("test:deprecated");
+  assert.equal(await page.locator("#points button").count(), 1);
+});
+
+test("non-decisive branches never paint misleading failure cell highlights", async () => {
+  await variant("irrelevant-mismatch.html", (payload) => {
+    payload.details.locator.stages.push({
+      ...payload.details.locator.stages[0],
+      stage_index: 1, expression_path: "root.has_not", mismatches: [{ ...payload.details.locator.stages[0].mismatches[0], location: { column: 3, row: 7 } }],
+    });
+  });
+  assert.equal(await page.locator("#overlay .mismatch-cell").count(), 1);
 });
 
 test("older and oversized expectations are explicitly unavailable rather than inferred", async () => {
