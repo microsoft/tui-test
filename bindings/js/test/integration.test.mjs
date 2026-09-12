@@ -281,7 +281,8 @@ test("recording API exports styled Unicode to APNG and GIF", async () => {
           await su.screenshot(screenshotPath, { zoom: 0.5 });
           assert.match(
             await readFile(screenshotPath, "utf8"),
-            /width="139" height="92" viewBox="0 0 278 184"/,
+            // Follows the default style; update deliberately if a gap moves.
+            /width="139" height="94" viewBox="0 0 278 188"/,
           );
         }
         await su.startRecording(path, { format, fps: 30, zoom: 0.5 });
@@ -294,11 +295,11 @@ test("recording API exports styled Unicode to APNG and GIF", async () => {
         assert.deepEqual(bytes.subarray(0, 8), Buffer.from("\x89PNG\r\n\x1a\n", "latin1"));
         assert.ok(bytes.includes(Buffer.from("acTL")));
         assert.equal(bytes.readUInt32BE(16), 278);
-        assert.equal(bytes.readUInt32BE(20), 184);
+        assert.equal(bytes.readUInt32BE(20), 188);
       } else {
         assert.equal(bytes.subarray(0, 6).toString("ascii"), "GIF89a");
         assert.equal(bytes.readUInt16LE(6), 278);
-        assert.equal(bytes.readUInt16LE(8), 184);
+        assert.equal(bytes.readUInt16LE(8), 188);
       }
     }
   } finally {
