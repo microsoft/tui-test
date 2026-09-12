@@ -23,6 +23,7 @@ tui-test = { workspace = true, features = [
 ] }
 pyo3 = { version = "0.28" }
 pyo3-async-runtimes = { version = "0.28", features = ["tokio-runtime"] }
+serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [features]

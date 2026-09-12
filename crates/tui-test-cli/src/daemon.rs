@@ -97,7 +97,7 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
             }
             continue;
         }
-        let shutdown = matches!(&req, Request::Close | Request::Shutdown);
+        let shutdown = req.is_close() || req.is_shutdown();
         if operations.send((req, reader.into_inner())).is_err() || shutdown {
             break;
         }
@@ -118,16 +118,13 @@ fn spawn_operation_worker(
     std::thread::spawn(move || {
         for (req, mut conn) in requests {
             let enrich = match &req {
-                Request::Open { .. } | Request::Restart { .. } => Some(false),
+                request if request.is_open() || request.is_restart() => Some(false),
                 Request::Status => Some(true),
                 _ => None,
             };
-            let shutdown = matches!(&req, Request::Close | Request::Shutdown);
-            let recording_lifecycle = matches!(
-                &req,
-                Request::Open { .. } | Request::Restart { .. } | Request::Close | Request::Shutdown
-            );
-            if matches!(&req, Request::Open { .. } | Request::Restart { .. }) {
+            let shutdown = req.is_close() || req.is_shutdown();
+            let recording_lifecycle = req.is_open() || req.is_restart() || shutdown;
+            if req.is_open() || req.is_restart() {
                 let _ = std::fs::write(config::recording_pointer_file(&session), "");
             }
             let mut response = match req {
@@ -188,6 +185,7 @@ fn status_response(engine: &Engine) -> Response {
     let mut data = serde_json::json!({
         "session": status.session,
         "shell_pid": status.shell_pid,
+        "protocol_version": crate::protocol::PROTOCOL_VERSION,
     });
     if status.cols.is_some() {
         let object = data

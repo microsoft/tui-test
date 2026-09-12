@@ -129,6 +129,13 @@ impl From<TimeoutArgs> for Timeouts {
     }
 }
 
+#[derive(Args, Clone, Copy)]
+pub struct DiagnosticRetentionArgs {
+    /// Number of distinct recent screens retained for failure diagnostics.
+    #[arg(long, value_name = "COUNT")]
+    pub screen_history_limit: Option<u16>,
+}
+
 #[derive(Parser)]
 #[command(name = "tui-test", version, about = "Headless terminal cli + daemon")]
 pub struct Cli {
@@ -145,8 +152,52 @@ pub struct Cli {
     #[arg(long, short = 'v', global = true)]
     pub verbose: bool,
 
+    /// Write a structured failure artifact under this directory.
+    #[arg(long, global = true, value_name = "DIR")]
+    pub failure_artifacts: Option<std::path::PathBuf>,
+
+    /// Failure artifact contents.
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value_t = FailureArtifactModeArg::Bundle
+    )]
+    pub failure_artifact_mode: FailureArtifactModeArg,
+
+    /// Copy the automatic asciicast into failure artifacts.
+    #[arg(long, global = true, requires = "failure_artifacts")]
+    pub failure_artifact_recording: bool,
+
+    /// Add a safe KEY=VALUE field to structured failure diagnostics.
+    #[arg(long, global = true, value_name = "KEY=VALUE")]
+    pub diagnostic_context: Vec<String>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum FailureArtifactModeArg {
+    #[default]
+    Bundle,
+    Json,
+    Svg,
+    Text,
+    None,
+}
+
+impl From<FailureArtifactModeArg> for tui_test::FailureArtifactMode {
+    fn from(value: FailureArtifactModeArg) -> Self {
+        match value {
+            FailureArtifactModeArg::Bundle => Self::Bundle,
+            FailureArtifactModeArg::Json => Self::Json,
+            FailureArtifactModeArg::Svg => Self::Svg,
+            FailureArtifactModeArg::Text => Self::Text,
+            FailureArtifactModeArg::None => Self::None,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -206,6 +257,8 @@ pub enum Command {
         profile: ProfileArgs,
         #[command(flatten)]
         timeouts: TimeoutArgs,
+        #[command(flatten)]
+        diagnostics: DiagnosticRetentionArgs,
     },
     /// Spawn a session running a program directly.
     Run {
@@ -243,6 +296,8 @@ pub enum Command {
         profile: ProfileArgs,
         #[command(flatten)]
         timeouts: TimeoutArgs,
+        #[command(flatten)]
+        diagnostics: DiagnosticRetentionArgs,
     },
     /// Gracefully stop and recreate the session from its last successful open or run.
     Restart {
@@ -505,13 +560,13 @@ mod tests {
         .expect("parse color expectation");
         let Some(Command::Expect {
             what:
-                ExpectCmd::Colors {
+                ExpectCmd::Colors(ExpectColorsArgs {
                     foreground,
                     background,
                     cursor,
                     palette,
                     ..
-                },
+                }),
         }) = cli.command
         else {
             panic!("expected `expect colors`");
@@ -1528,44 +1583,9 @@ pub enum ExpectCmd {
     /// Assert the terminal's colors (OSC 4 and OSC 10/11/12).
     ///
     /// Every color takes the same spellings `--fg` does, minus `default`.
-    Colors {
-        /// Required default foreground.
-        #[arg(long)]
-        foreground: Option<String>,
-        /// Required default background.
-        #[arg(long)]
-        background: Option<String>,
-        /// Required cursor color.
-        #[arg(long)]
-        cursor: Option<String>,
-        /// Required palette entry, as `INDEX=COLOR`. Repeatable.
-        #[arg(long, value_name = "INDEX=COLOR", value_parser = parse_palette_entry)]
-        palette: Vec<(u8, String)>,
-        /// Timeout in milliseconds.
-        #[arg(long, value_name = "MS")]
-        timeout: Option<u64>,
-    },
+    Colors(ExpectColorsArgs),
     /// Assert the cursor's position, visibility, or shape.
-    Cursor {
-        /// Require the cursor to be drawn.
-        #[arg(long, conflicts_with = "hidden")]
-        visible: bool,
-        /// Require the cursor to be hidden.
-        #[arg(long)]
-        hidden: bool,
-        /// Required shape: block, underline, or bar.
-        #[arg(long)]
-        shape: Option<String>,
-        /// Required column.
-        #[arg(long)]
-        x: Option<u16>,
-        /// Required row.
-        #[arg(long)]
-        y: Option<u16>,
-        /// Timeout in milliseconds.
-        #[arg(long, value_name = "MS")]
-        timeout: Option<u64>,
-    },
+    Cursor(ExpectCursorArgs),
     Bell {
         /// Minimum cumulative bell count.
         count: u64,
@@ -1589,4 +1609,46 @@ pub enum ExpectCmd {
         #[arg(long)]
         include_title: bool,
     },
+}
+
+// Keep these builders out of the parent Subcommand stack frame on Windows.
+#[derive(clap::Args)]
+pub struct ExpectColorsArgs {
+    /// Required default foreground.
+    #[arg(long)]
+    pub foreground: Option<String>,
+    /// Required default background.
+    #[arg(long)]
+    pub background: Option<String>,
+    /// Required cursor color.
+    #[arg(long)]
+    pub cursor: Option<String>,
+    /// Required palette entry, as `INDEX=COLOR`. Repeatable.
+    #[arg(long, value_name = "INDEX=COLOR", value_parser = parse_palette_entry)]
+    pub palette: Vec<(u8, String)>,
+    /// Timeout in milliseconds.
+    #[arg(long, value_name = "MS")]
+    pub timeout: Option<u64>,
+}
+
+#[derive(clap::Args)]
+pub struct ExpectCursorArgs {
+    /// Require the cursor to be drawn.
+    #[arg(long, conflicts_with = "hidden")]
+    pub visible: bool,
+    /// Require the cursor to be hidden.
+    #[arg(long)]
+    pub hidden: bool,
+    /// Required shape: block, underline, or bar.
+    #[arg(long)]
+    pub shape: Option<String>,
+    /// Required column.
+    #[arg(long)]
+    pub x: Option<u16>,
+    /// Required row.
+    #[arg(long)]
+    pub y: Option<u16>,
+    /// Timeout in milliseconds.
+    #[arg(long, value_name = "MS")]
+    pub timeout: Option<u64>,
 }

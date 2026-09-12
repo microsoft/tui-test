@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>tui-test trace viewer</title>
+<style>/* REPORT_CSS */</style>
+</head>
+<body>
+<header class="topbar">
+  <strong class="brand">tui-test <span>Trace viewer</span></strong>
+  <div id="session-summary" class="session-summary"></div>
+  <button id="failure" class="failure-button">Jump to failure</button>
+</header>
+<div id="report-error" class="notice error" role="alert" hidden></div>
+<noscript><p class="notice">Enable JavaScript to inspect this report. All terminal snapshots, cell metadata and evidence files are embedded; no server or network connection is required.</p></noscript>
+<section class="timeline" aria-label="Trace timeline">
+  <div id="time-scale" class="time-scale" aria-hidden="true"></div>
+  <div id="action-timeline" class="action-timeline" aria-label="Operation durations"></div>
+  <nav id="filmstrip" class="filmstrip" aria-label="Retained terminal frames"></nav>
+</section>
+<main>
+  <aside class="sidebar">
+    <div class="tabs" role="tablist" aria-label="Trace navigation">
+      <button role="tab" id="actions-tab" data-group="sidebar" aria-controls="actions-panel" aria-selected="true">Actions</button>
+      <button role="tab" id="metadata-tab" data-group="sidebar" aria-controls="metadata-panel" aria-selected="false" tabindex="-1">Metadata</button>
+    </div>
+    <section id="actions-panel" role="tabpanel" aria-labelledby="actions-tab">
+      <div class="action-filter">
+        <input id="action-filter" type="search" aria-label="Filter actions" placeholder="Filter actions">
+        <label><input id="assertions-only" type="checkbox"> Assertions and waits only</label>
+      </div>
+      <nav id="points" aria-label="Recorded actions"></nav>
+    </section>
+    <section id="metadata-panel" role="tabpanel" aria-labelledby="metadata-tab" hidden>
+      <h2>Session</h2>
+      <dl id="session-properties"></dl>
+      <h2>Effective timeout defaults</h2>
+      <dl id="timeout-properties"></dl>
+      <h2>Capture</h2>
+      <p id="retention" class="muted"></p>
+      <details><summary>Raw metadata</summary><pre id="runtime"></pre></details>
+    </section>
+  </aside>
+  <section class="viewer" aria-label="Terminal snapshot">
+    <div class="viewer-toolbar">
+      <strong id="frame-heading">Terminal</strong>
+      <div class="toolbar">
+        <button id="previous-point" aria-label="Previous action">Prev action</button>
+        <button id="next-point" aria-label="Next action">Next action</button>
+        <label class="zoom-label">Zoom <select id="zoom" aria-label="Terminal zoom"><option value="fit">Fit</option><option value="1">100%</option><option value="1.5">150%</option></select></label>
+      </div>
+    </div>
+    <div id="expectation-banner" class="expectation-banner">
+      <strong id="summary"></strong>
+      <span id="summary-observed"></span>
+    </div>
+    <p id="frame-meta" class="frame-meta" aria-live="polite"></p>
+    <div id="frame-notice" class="notice" hidden></div>
+    <div class="viewport" id="viewport">
+      <div id="terminal" tabindex="0" role="group" aria-label="Terminal cell inspector. Click a cell or use arrow keys." hidden>
+        <img id="screen-image" alt="Captured terminal screen" draggable="false">
+        <svg id="overlay" aria-hidden="true"></svg>
+      </div>
+      <pre id="screen-text" hidden></pre>
+    </div>
+    <div class="frame-controls">
+      <button id="previous-frame" aria-label="Previous retained frame">Prev frame</button>
+      <button id="play">Play to next point</button>
+      <input id="frame-slider" type="range" min="0" value="0" aria-label="Retained frame">
+      <button id="next-frame" aria-label="Next retained frame">Next frame</button>
+      <span id="frame-count" class="muted"></span>
+    </div>
+  </section>
+  <section class="details-panel">
+    <div class="tabs" role="tablist" aria-label="Action details">
+      <button role="tab" id="errors-tab" data-group="details" aria-controls="errors-panel" aria-selected="true">Error</button>
+      <button role="tab" id="cell-tab" data-group="details" aria-controls="cell-panel" aria-selected="false" tabindex="-1">Cell</button>
+      <button role="tab" id="call-tab" data-group="details" aria-controls="call-panel" aria-selected="false" tabindex="-1">Call</button>
+      <button role="tab" id="attachments-tab" data-group="details" aria-controls="attachments-panel" aria-selected="false" tabindex="-1">Attachments</button>
+    </div>
+    <section id="errors-panel" role="tabpanel" aria-labelledby="errors-tab">
+      <div class="error-heading"><h1 id="operation">Assertion failed</h1><span id="failure-timing" class="muted"></span></div>
+      <div class="comparison">
+        <div class="expected"><h2>Expected</h2><pre id="expected"></pre></div>
+        <div class="actual"><h2>Observed</h2><pre id="actual"></pre></div>
+      </div>
+      <p id="explanation-note" class="muted"></p>
+      <ul id="hints"></ul>
+      <details><summary>Original error and locator evidence</summary><pre id="raw-error"></pre><pre id="diagnosis"></pre></details>
+    </section>
+    <section id="cell-panel" role="tabpanel" aria-labelledby="cell-tab" hidden>
+      <div class="cell-layout">
+        <div>
+          <div class="coordinates toolbar">
+            <label>Column <input id="column" type="number" min="0" value="0"></label>
+            <label>Row <input id="row" type="number" min="0" value="0"></label>
+            <button id="inspect">Inspect</button>
+            <span id="cell-heading" aria-live="polite">Select a cell.</span>
+          </div>
+          <p class="muted">Zero-based viewport coordinates. Empty graphemes mark wide-character continuation cells.</p>
+          <dl id="cell-properties"></dl>
+        </div>
+        <div>
+          <div id="cell-mismatches" class="cell-mismatches" hidden></div>
+          <details><summary>Raw cell metadata</summary><pre id="cell-json"></pre></details>
+        </div>
+      </div>
+    </section>
+    <section id="call-panel" role="tabpanel" aria-labelledby="call-tab" hidden>
+      <dl id="call-properties"></dl>
+      <details><summary>Operation and frame metadata</summary><pre id="frame-details"></pre></details>
+    </section>
+    <section id="attachments-panel" role="tabpanel" aria-labelledby="attachments-tab" hidden>
+      <p class="muted">Every available file below is embedded in this HTML. Preview or download it without the original directory. Captured output is untrusted test data; review it before sharing. The embedded failure.json is a manifest snapshot taken before the HTML's own hash was added to the disk manifest.</p>
+      <div class="attachment-layout">
+        <div id="evidence-links"></div>
+        <div id="attachment-preview"><p class="muted">Select an attachment to preview it.</p></div>
+      </div>
+      <p id="recording-note" class="muted"></p>
+    </section>
+  </section>
+</main>
+<script id="report-data" type="application/json">null /* REPORT_DATA */</script>
+<script>/* REPORT_JS */</script>
+</body>
+</html>

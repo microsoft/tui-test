@@ -50,7 +50,10 @@
     "test:node": "npm run build && node --test ./test/conformance.test.mjs ./test/integration.test.mjs ./test/options.test.mjs ./test/native.test.mjs ./test/helpers.test.mjs",
     "test:bun": "npm run build && bun test ./test/conformance.test.mjs && bun test ./test/integration.test.mjs && bun test ./test/options.test.mjs && bun test ./test/native.test.mjs && bun test ./test/helpers.test.mjs",
     "test:deno": "npm run build && deno test -A ./test",
-    "test:all": "npm run test:node && npm run test:bun && npm run test:deno"
+    "test:all": "npm run test:node && npm run test:bun && npm run test:deno",
+    "test:report": "node --test ./scripts/failure-report.test.mjs",
+    "build:report": "node ./scripts/build-report.mjs",
+    "check:report": "tsc -p ./scripts/report.tsconfig.json && node ./scripts/build-report.mjs --check"
   },
   "keywords": [
     "terminal",
@@ -70,10 +73,11 @@
     "access": "public",
     "tag": "beta"
   },
-  "dependencies": {},
   "devDependencies": {
     "@napi-rs/cli": "^3.7.4",
     "@types/node": "^20.14.0",
+    "esbuild": "0.28.2",
+    "playwright": "1.63.0",
     "typescript": "^5.5.0"
   }
 }

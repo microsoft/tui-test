@@ -71,6 +71,18 @@ jobs:
       - name: Install Node dependencies
         run: npm ci --prefix bindings/js
 
+      - name: Verify embedded report assets and viewer types
+        run: npm run check:report --prefix bindings/js
+
+      - name: Install failure report browser
+        if: runner.os == 'Linux'
+        working-directory: bindings/js
+        run: npx playwright install --with-deps chromium
+
+      - name: Test offline failure report viewer
+        if: runner.os == 'Linux'
+        run: npm run test:report --prefix bindings/js
+
       - name: Test Node binding
         run: npm run test:node --prefix bindings/js
 

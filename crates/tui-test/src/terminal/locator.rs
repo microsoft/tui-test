@@ -10,6 +10,112 @@ use crate::api::{
 };
 
 use super::cell::EmuCell;
+use crate::diagnostics::{
+    CellMismatch, CellStyleEvaluation, LocatorDiagnostics, LocatorFailureReason,
+};
+
+mod trace;
+use trace::{NodeStats, Trace};
+
+pub(crate) struct LocatorEvaluation {
+    pub matches: Vec<LocatedMatch>,
+    pub diagnostics: LocatorDiagnostics,
+}
+
+#[derive(Debug)]
+struct SelectionFailure {
+    reason: LocatorFailureReason,
+    count: usize,
+    message: String,
+}
+impl std::fmt::Display for SelectionFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for SelectionFailure {}
+
+#[derive(Debug)]
+struct EvaluationFailure {
+    stage: Option<usize>,
+    reason: LocatorFailureReason,
+    message: String,
+}
+impl std::fmt::Display for EvaluationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for EvaluationFailure {}
+
+struct NodeOutcome {
+    matches: Vec<LocatedMatch>,
+    failure: Option<(Option<usize>, LocatorFailureReason)>,
+    candidate_count: usize,
+}
+
+pub(crate) fn evaluate_query<F>(
+    rows: &[Vec<EmuCell>],
+    query: &LocatorQuery,
+    require_one: bool,
+    style: &mut F,
+) -> anyhow::Result<LocatorEvaluation>
+where
+    F: FnMut(&EmuCell, &TextStyle, usize, usize) -> CellStyleEvaluation,
+{
+    let mut trace = Trace {
+        enabled: true,
+        ..Trace::default()
+    };
+    let outcome = evaluate_node(
+        &QueryGrid::new(rows),
+        query,
+        None,
+        style,
+        &mut trace,
+        "root",
+        require_one,
+    );
+    let (matches, failure, final_candidate_count, error) = match outcome {
+        Ok(value) => (value.matches, value.failure, value.candidate_count, None),
+        Err(error) => {
+            let Some(failure) = error.downcast_ref::<EvaluationFailure>() else {
+                return Err(error);
+            };
+            let count = failure
+                .stage
+                .and_then(|i| trace.stages.get(i))
+                .map_or(0, |stage| stage.style_candidate_count);
+            let mut message = error.to_string();
+            trace.truncated |= trace::truncate(&mut message);
+            (
+                Vec::new(),
+                Some((failure.stage, failure.reason)),
+                count,
+                Some(message),
+            )
+        }
+    };
+    Ok(LocatorEvaluation {
+        diagnostics: LocatorDiagnostics {
+            search_scope: if query.uses_full_grid() {
+                "full_grid"
+            } else {
+                "viewport"
+            }
+            .into(),
+            viewport_origin_y: 0,
+            final_candidate_count,
+            selected: trace::sample(&matches),
+            stages: trace.stages,
+            stages_truncated: trace.truncated,
+            failure_stage: failure.and_then(|(stage, _)| stage),
+            failure_reason: failure.map(|(_, reason)| reason),
+            evaluation_error: error,
+        },
+        matches,
+    })
+}
 
 pub enum Pattern {
     Text(String),
@@ -151,151 +257,363 @@ fn locate_query_within<F>(
 where
     F: FnMut(&EmuCell, &TextStyle) -> bool,
 {
-    let mut parents = match query.within.as_deref() {
-        Some(parent) => {
-            let mut parents = locate_query_within(grid, parent, enclosing, style_matches)?;
-            if parents.is_empty() {
-                return Ok(Vec::new());
-            }
-            parents.sort_by_key(|matched| matched.source_start);
-            Some(parents)
-        }
-        None => None,
-    };
-    let relative = parents.as_ref().map(|parents| {
-        relative_regions(
-            parents,
-            query.direction,
-            grid.width.saturating_mul(grid.rows.len()),
-        )
-    });
-    let allowed = match (relative, enclosing) {
-        (Some(relative), Some(enclosing)) => Some(
-            relative
-                .iter()
-                .flat_map(|region| intersect_ranges(std::slice::from_ref(region), enclosing))
-                .collect(),
-        ),
-        (Some(relative), None) => Some(relative),
-        (None, Some(enclosing)) => Some(enclosing.to_vec()),
-        (None, None) => None,
-    };
-    let occurrence = query.occurrence.clone();
-    let select_early = query.style.is_empty();
-    let mut selected_early = false;
-    let mut matches = match &query.selector {
-        LocatorSelector::Text(selector) => {
-            selected_early = select_early;
-            locate_text_within(
-                grid,
-                selector,
-                allowed.as_deref(),
-                select_early.then_some(&occurrence),
-                enclosing,
-            )?
-        }
-        LocatorSelector::Style(selector)
-            if query.direction == LocatorDirection::Within && parents.is_some() =>
-        {
-            let mut matches = parents.take().expect("parent matches are present");
-            matches
-                .retain(|matched| located_match_has_style(matched, &selector.style, style_matches));
-            matches
-        }
-        LocatorSelector::Style(selector) => {
-            selected_early = select_early;
-            locate_style_within(
-                grid,
-                selector,
-                allowed.as_deref(),
-                select_early.then_some(&occurrence),
-                style_matches,
-            )?
-        }
-        LocatorSelector::Link(selector)
-            if query.direction == LocatorDirection::Within && parents.is_some() =>
-        {
-            let mut matches = parents.take().expect("parent matches are present");
-            matches.retain(|matched| {
-                matched
-                    .cells
-                    .iter()
-                    .all(|cell| cell_has_link(&cell.cell, &selector.uri))
-            });
-            matches
-        }
-        LocatorSelector::Link(selector) => {
-            locate_cells_within(grid, allowed.as_deref(), &mut |cell| {
-                cell_has_link(cell, &selector.uri)
-            })?
-        }
-        LocatorSelector::And { left, right } | LocatorSelector::Or { left, right } => {
-            let left = locate_query_within(grid, left, allowed.as_deref(), style_matches)?;
-            let right = locate_query_within(grid, right, allowed.as_deref(), style_matches)?;
-            let left = coverage(&left, grid.width);
-            let right = coverage(&right, grid.width);
-            let ranges = if matches!(&query.selector, LocatorSelector::And { .. }) {
-                intersect_ranges(&left, &right)
-            } else {
-                normalize_ranges(left.into_iter().chain(right).collect())
-            };
-            materialize_runs(grid, &ranges)
-        }
-        LocatorSelector::Filter {
-            input,
-            has,
-            has_not,
-        } => {
-            let candidates = locate_query_within(grid, input, allowed.as_deref(), style_matches)?;
-            let mut retained = Vec::new();
-            for candidate in candidates {
-                let scope = coverage(std::slice::from_ref(&candidate), grid.width);
-                let positive = match has {
-                    Some(inner) => {
-                        !locate_query_within(grid, inner, Some(&scope), style_matches)?.is_empty()
-                    }
-                    None => true,
-                };
-                let negative = match has_not {
-                    Some(inner) => {
-                        locate_query_within(grid, inner, Some(&scope), style_matches)?.is_empty()
-                    }
-                    None => true,
-                };
-                if positive && negative {
-                    retained.push(candidate);
+    evaluate_node(
+        grid,
+        query,
+        enclosing,
+        &mut |cell, style, _, _| CellStyleEvaluation {
+            matched: style_matches(cell, style),
+            mismatches: Vec::new(),
+        },
+        &mut Trace::default(),
+        "root",
+        false,
+    )
+    .map(|outcome| outcome.matches)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_node<F>(
+    grid: &QueryGrid<'_>,
+    query: &LocatorQuery,
+    enclosing: Option<&[(usize, usize)]>,
+    style_evaluate: &mut F,
+    trace: &mut Trace,
+    path: &str,
+    require_one: bool,
+) -> anyhow::Result<NodeOutcome>
+where
+    F: FnMut(&EmuCell, &TextStyle, usize, usize) -> CellStyleEvaluation,
+{
+    let mut stats = NodeStats::default();
+    let mut inherited_failure = None;
+    let outcome = (|| -> anyhow::Result<Vec<LocatedMatch>> {
+        let mut parents = match query.within.as_deref() {
+            Some(parent) => {
+                let parent = evaluate_node(
+                    grid,
+                    parent,
+                    enclosing,
+                    style_evaluate,
+                    trace,
+                    &format!("{path}.within"),
+                    false,
+                )?;
+                inherited_failure = parent.failure;
+                let mut parents = parent.matches;
+                if parents.is_empty() {
+                    stats.reason = Some(LocatorFailureReason::RelativeRegionNoMatch);
+                    return Ok(Vec::new());
                 }
+                parents.sort_by_key(|matched| matched.source_start);
+                Some(parents)
             }
-            retained
+            None => None,
+        };
+        stats.input = parents.as_ref().map_or(1, Vec::len);
+        let relative = parents.as_ref().map(|parents| {
+            relative_regions(
+                parents,
+                query.direction,
+                grid.width.saturating_mul(grid.rows.len()),
+            )
+        });
+        let allowed = match (relative, enclosing) {
+            (Some(relative), Some(enclosing)) => Some(
+                relative
+                    .iter()
+                    .flat_map(|region| intersect_ranges(std::slice::from_ref(region), enclosing))
+                    .collect(),
+            ),
+            (Some(relative), None) => Some(relative),
+            (None, Some(enclosing)) => Some(enclosing.to_vec()),
+            (None, None) => None,
+        };
+        let occurrence = if require_one && query.occurrence == MatchOccurrence::Any {
+            MatchOccurrence::Unique
+        } else {
+            query.occurrence.clone()
+        };
+        let select_early = query.style.is_empty();
+        let mut selected_early = false;
+        let mut matches = match &query.selector {
+            LocatorSelector::Text(selector) => {
+                selected_early = select_early;
+                locate_text_observed(
+                    grid,
+                    selector,
+                    allowed.as_deref(),
+                    select_early.then_some(&occurrence),
+                    enclosing,
+                    &mut stats,
+                )?
+            }
+            LocatorSelector::Style(selector)
+                if query.direction == LocatorDirection::Within && parents.is_some() =>
+            {
+                let mut matches = parents.take().expect("parent matches are present");
+                stats.raw = matches.len();
+                matches.retain(|matched| {
+                    evaluate_match_style(matched, &selector.style, style_evaluate, &mut stats)
+                });
+                if matches.is_empty() && stats.raw > 0 {
+                    stats.reason = Some(LocatorFailureReason::StyleFilterRemovedAll);
+                }
+                matches
+            }
+            LocatorSelector::Style(selector) => {
+                selected_early = select_early;
+                locate_style_observed(
+                    grid,
+                    selector,
+                    allowed.as_deref(),
+                    select_early.then_some(&occurrence),
+                    &mut |cell, style| style_evaluate(cell, style, 0, 0).matched,
+                    &mut stats,
+                )?
+            }
+            LocatorSelector::Link(selector)
+                if query.direction == LocatorDirection::Within && parents.is_some() =>
+            {
+                let mut matches = parents.take().expect("parent matches are present");
+                stats.raw = matches.len();
+                matches.retain(|matched| {
+                    let mut matched_all = true;
+                    for cell in &matched.cells {
+                        if !cell_has_link(&cell.cell, &selector.uri) {
+                            matched_all = false;
+                            stats.mismatch(CellMismatch {
+                                location: TextPosition {
+                                    column: cell.x.min(u16::MAX as usize) as u16,
+                                    row: cell.y.min(u32::MAX as usize) as u32,
+                                },
+                                grapheme: cell.cell.ch.to_string(),
+                                property: "link".into(),
+                                operator: "equals".into(),
+                                expected: selector.uri.clone(),
+                                actual: cell.cell.uri().unwrap_or_default().into(),
+                                resolved: None,
+                                reason: "value_mismatch".into(),
+                            });
+                        }
+                    }
+                    matched_all
+                });
+                if matches.is_empty() && stats.raw > 0 {
+                    stats.reason = Some(LocatorFailureReason::LinkFilterRemovedAll);
+                }
+                matches
+            }
+            LocatorSelector::Link(selector) => {
+                let matches = locate_cells_within(grid, allowed.as_deref(), &mut |cell| {
+                    cell_has_link(cell, &selector.uri)
+                })?;
+                stats.raw = matches.len();
+                matches
+            }
+            LocatorSelector::And { left, right } | LocatorSelector::Or { left, right } => {
+                let left = evaluate_node(
+                    grid,
+                    left,
+                    allowed.as_deref(),
+                    style_evaluate,
+                    trace,
+                    &format!("{path}.left"),
+                    false,
+                )?
+                .matches;
+                let right = evaluate_node(
+                    grid,
+                    right,
+                    allowed.as_deref(),
+                    style_evaluate,
+                    trace,
+                    &format!("{path}.right"),
+                    false,
+                )?
+                .matches;
+                stats.input = left.len().saturating_add(right.len());
+                let left = coverage(&left, grid.width);
+                let right = coverage(&right, grid.width);
+                let ranges = if matches!(&query.selector, LocatorSelector::And { .. }) {
+                    intersect_ranges(&left, &right)
+                } else {
+                    normalize_ranges(left.into_iter().chain(right).collect())
+                };
+                let matches = materialize_runs(grid, &ranges);
+                stats.raw = matches.len();
+                if matches.is_empty() {
+                    stats.reason =
+                        Some(if matches!(&query.selector, LocatorSelector::And { .. }) {
+                            LocatorFailureReason::IntersectionEmpty
+                        } else {
+                            LocatorFailureReason::UnionEmpty
+                        });
+                }
+                matches
+            }
+            LocatorSelector::Filter {
+                input,
+                has,
+                has_not,
+            } => {
+                let candidates = evaluate_node(
+                    grid,
+                    input,
+                    allowed.as_deref(),
+                    style_evaluate,
+                    trace,
+                    &format!("{path}.input"),
+                    false,
+                )?
+                .matches;
+                stats.input = candidates.len();
+                stats.raw = candidates.len();
+                let mut retained = Vec::new();
+                for candidate in candidates {
+                    let scope = coverage(std::slice::from_ref(&candidate), grid.width);
+                    let positive = match has {
+                        Some(inner) => !evaluate_node(
+                            grid,
+                            inner,
+                            Some(&scope),
+                            style_evaluate,
+                            trace,
+                            &format!("{path}.has"),
+                            false,
+                        )?
+                        .matches
+                        .is_empty(),
+                        None => true,
+                    };
+                    let negative = match has_not {
+                        Some(inner) => evaluate_node(
+                            grid,
+                            inner,
+                            Some(&scope),
+                            style_evaluate,
+                            trace,
+                            &format!("{path}.has_not"),
+                            false,
+                        )?
+                        .matches
+                        .is_empty(),
+                        None => true,
+                    };
+                    if positive && negative {
+                        retained.push(candidate);
+                    }
+                }
+                if retained.is_empty() {
+                    stats.reason = Some(LocatorFailureReason::FilterRemovedAll);
+                }
+                retained
+            }
+        };
+        if !query.style.is_empty() {
+            let count = matches.len();
+            matches.retain(|matched| {
+                evaluate_match_style(matched, &query.style, style_evaluate, &mut stats)
+            });
+            if count > 0 && matches.is_empty() {
+                stats.reason = Some(LocatorFailureReason::StyleFilterRemovedAll);
+            }
         }
-    };
-    if !query.style.is_empty() {
-        matches.retain(|matched| located_match_has_style(matched, &query.style, style_matches));
+        stats.styled = if selected_early {
+            stats.raw
+        } else {
+            matches.len()
+        };
+        if selected_early {
+            Ok(matches)
+        } else {
+            select_items(matches, &occurrence, &query.selector.description())
+        }
+    })();
+    let mut child_error = None;
+    match &outcome {
+        Ok(matches) => {
+            stats.selected_count = matches.len();
+            if trace.enabled {
+                stats.selected = trace::sample(matches);
+            }
+            if matches.is_empty() && stats.reason.is_none() {
+                stats.reason = Some(
+                    if matches!(query.occurrence, MatchOccurrence::Nth(_)) && stats.styled > 0 {
+                        LocatorFailureReason::NthOutOfRange
+                    } else {
+                        LocatorFailureReason::NoMatch
+                    },
+                );
+            }
+        }
+        Err(error) => {
+            if let Some(failure) = error.downcast_ref::<SelectionFailure>() {
+                stats.reason = Some(failure.reason);
+                stats.styled = failure.count;
+            } else if let Some(failure) = error.downcast_ref::<EvaluationFailure>() {
+                child_error = Some((failure.stage, failure.reason));
+                stats.reason = Some(failure.reason);
+            }
+        }
     }
-    if selected_early {
-        Ok(matches)
-    } else {
-        select_items(matches, &occurrence, &query.selector.description())
+    let reason = stats.reason;
+    let count = stats.styled;
+    let stage = trace.record(query, path, require_one, stats);
+    match outcome {
+        Ok(matches) => Ok(NodeOutcome {
+            failure: if matches.is_empty() {
+                inherited_failure.or_else(|| reason.map(|reason| (stage, reason)))
+            } else {
+                None
+            },
+            matches,
+            candidate_count: count,
+        }),
+        Err(error) => {
+            let (stage, reason) =
+                child_error.unwrap_or((stage, reason.unwrap_or(LocatorFailureReason::NoMatch)));
+            let message = if child_error.is_some() {
+                error.to_string()
+            } else {
+                format!("{error} at {path}")
+            };
+            Err(EvaluationFailure {
+                stage,
+                reason,
+                message,
+            }
+            .into())
+        }
     }
 }
 
-fn located_match_has_style<F>(
+fn evaluate_match_style<F>(
     matched: &LocatedMatch,
     style: &TextStyle,
     style_matches: &mut F,
+    stats: &mut NodeStats,
 ) -> bool
 where
-    F: FnMut(&EmuCell, &TextStyle) -> bool,
+    F: FnMut(&EmuCell, &TextStyle, usize, usize) -> CellStyleEvaluation,
 {
     let visible = |cell: &MatchedCell| {
         !cell.cell.ch.is_empty() && !cell.cell.ch.chars().all(char::is_whitespace)
     };
     let has_visible = matched.cells.iter().any(&visible);
-    matched
+    let mut all_matched = true;
+    for cell in matched
         .cells
         .iter()
         .filter(|cell| !has_visible || visible(cell))
-        .all(|cell| style_matches(&cell.cell, style))
+    {
+        let result = style_matches(&cell.cell, style, cell.x, cell.y);
+        all_matched &= result.matched;
+        for mismatch in result.mismatches {
+            stats.mismatch(mismatch);
+        }
+    }
+    all_matched
 }
 
 fn cell_has_link(cell: &EmuCell, uri: &str) -> bool {
@@ -421,11 +739,40 @@ fn locate_text_within(
     occurrence: Option<&MatchOccurrence>,
     anchor_regions: Option<&[(usize, usize)]>,
 ) -> anyhow::Result<Vec<LocatedMatch>> {
+    locate_text_observed(
+        grid,
+        selector,
+        allowed,
+        occurrence,
+        anchor_regions,
+        &mut NodeStats::default(),
+    )
+}
+
+fn locate_text_observed(
+    grid: &QueryGrid<'_>,
+    selector: &TextSelector,
+    allowed: Option<&[(usize, usize)]>,
+    occurrence: Option<&MatchOccurrence>,
+    anchor_regions: Option<&[(usize, usize)]>,
+    stats: &mut NodeStats,
+) -> anyhow::Result<Vec<LocatedMatch>> {
     if grid.rows.is_empty() {
         return Ok(Vec::new());
     }
     let flat = grid.flat(selector.whitespace);
-    let Some((start, end)) = scope(flat, selector, anchor_regions)? else {
+    let scoped = scope(flat, selector, anchor_regions, &mut stats.reason).map_err(|error| {
+        if let Some(failure) = error.downcast_ref::<SelectionFailure>() {
+            anyhow::Error::new(SelectionFailure {
+                reason: LocatorFailureReason::AnchorAmbiguous,
+                count: failure.count,
+                message: error.to_string(),
+            })
+        } else {
+            error
+        }
+    })?;
+    let Some((start, end)) = scoped else {
         return Ok(Vec::new());
     };
     let pattern = selector_pattern(&selector.text, selector.regex, selector.whitespace)?;
@@ -454,6 +801,7 @@ fn locate_text_within(
     }
     ranges.sort_unstable();
     ranges.dedup();
+    stats.raw = ranges.len();
     let ranges = if let Some(occurrence) = occurrence {
         select(ranges, occurrence, &pattern.describe())?
     } else {
@@ -471,6 +819,27 @@ fn locate_style_within<F>(
     allowed: Option<&[(usize, usize)]>,
     occurrence: Option<&MatchOccurrence>,
     style_matches: &mut F,
+) -> anyhow::Result<Vec<LocatedMatch>>
+where
+    F: FnMut(&EmuCell, &TextStyle) -> bool,
+{
+    locate_style_observed(
+        grid,
+        selector,
+        allowed,
+        occurrence,
+        style_matches,
+        &mut NodeStats::default(),
+    )
+}
+
+fn locate_style_observed<F>(
+    grid: &QueryGrid<'_>,
+    selector: &StyleSelector,
+    allowed: Option<&[(usize, usize)]>,
+    occurrence: Option<&MatchOccurrence>,
+    style_matches: &mut F,
+    stats: &mut NodeStats,
 ) -> anyhow::Result<Vec<LocatedMatch>>
 where
     F: FnMut(&EmuCell, &TextStyle) -> bool,
@@ -534,6 +903,7 @@ where
             position = row_end;
         }
     }
+    stats.raw = ranges.len();
     let ranges = if let Some(occurrence) = occurrence {
         select(ranges, occurrence, "style")?
     } else {
@@ -639,21 +1009,31 @@ fn scope(
     flat: &FlatGrid,
     selector: &TextSelector,
     allowed: Option<&[(usize, usize)]>,
+    reason: &mut Option<LocatorFailureReason>,
 ) -> anyhow::Result<Option<(usize, usize)>> {
     let start = match &selector.scope.after {
         Some(anchor) => match anchor_range(flat, anchor, selector.whitespace, "after", allowed)? {
             Some((_, end)) => end,
-            None => return Ok(None),
+            None => {
+                *reason = Some(LocatorFailureReason::AnchorNotFound);
+                return Ok(None);
+            }
         },
         None => 0,
     };
     let end = match &selector.scope.before {
         Some(anchor) => match anchor_range(flat, anchor, selector.whitespace, "before", allowed)? {
             Some((start, _)) => start,
-            None => return Ok(None),
+            None => {
+                *reason = Some(LocatorFailureReason::AnchorNotFound);
+                return Ok(None);
+            }
         },
         None => flat.chars.len(),
     };
+    if start > end {
+        *reason = Some(LocatorFailureReason::RelativeRegionNoMatch);
+    }
     Ok((start <= end).then_some((start, end)))
 }
 
@@ -687,7 +1067,12 @@ fn anchor_range(
         &format!("{name} anchor '{}'", pattern.describe()),
     )?;
     if ranges.len() > 1 {
-        anyhow::bail!("{name} anchor must select one match");
+        return Err(SelectionFailure {
+            reason: LocatorFailureReason::AnchorAmbiguous,
+            count: ranges.len(),
+            message: format!("{name} anchor must select one match"),
+        }
+        .into());
     }
     Ok(ranges.into_iter().next())
 }
@@ -708,9 +1093,12 @@ fn select_items<T>(
     let count = items.len();
     match occurrence {
         MatchOccurrence::Any => Ok(items),
-        MatchOccurrence::Unique if count > 1 => {
-            anyhow::bail!("expected '{description}' to match once, but found {count} matches")
+        MatchOccurrence::Unique if count > 1 => Err(SelectionFailure {
+            reason: LocatorFailureReason::Ambiguous,
+            count,
+            message: format!("expected '{description}' to match once, but found {count} matches"),
         }
+        .into()),
         MatchOccurrence::Unique | MatchOccurrence::First => {
             Ok(items.into_iter().next().into_iter().collect())
         }

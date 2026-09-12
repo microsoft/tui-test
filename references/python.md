@@ -90,9 +90,11 @@ Capture options: `background` and `transparent` (SVG, APNG, and GIF).
 
 `restart(graceful_timeout=5000)` returns an `OpenResult` typed dictionary, preserving the last successful spawn's original working directory, options, and latest terminal size. The timeout is milliseconds after Ctrl-C before forced replacement; `0` skips the wait. Child exit preserves restart metadata; `close()` clears it. The terminal and automatic recording start fresh.
 
-Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
+Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`, and `screen_history_limit`.
 
 Recording modes: `disabled`, `on-failure`, and `always`.
+
+Failure artifact modes are `bundle`, `json`, `svg`, `text`, and `none`. Bundle mode writes a deterministic report, structured JSON, and the pinned screen; `include_recording=True` also copies the automatic cast through the failure boundary.
 
 ## Input helpers
 
@@ -121,5 +123,7 @@ Helpers: `create_terminal`, `terminal`, `close_all_tracked`, `set_terminal_defau
 ## Errors
 
 `ExpectationError`, `UsageError`, `NoSessionError`, and `InternalError` extend `TuiTestError`.
+
+`TuiTestError.details` contains the structured operation, locator evaluation, style mismatches, process/runtime state, recent operations, and recent screens. `TuiTestError.artifact` identifies the committed bundle files. Terminal evidence and locator operands may be sensitive.
 
 Full API: [bindings/python/README.md](https://github.com/microsoft/tui-test/blob/main/bindings/python/README.md)

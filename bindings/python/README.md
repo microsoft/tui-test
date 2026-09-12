@@ -27,7 +27,7 @@ async with TuiTest.ephemeral() as terminal:
 ### `TuiTest`
 
 ```python
-TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=None, recording=None)
+TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_history_limit=None, artifacts=None, recording=None)
 ```
 
 | Option | Type | Default |
@@ -36,10 +36,17 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=No
 | `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs"` | `"alacritty"` |
 | `timeouts` | `Timeouts \| dict` | built-in defaults |
 | `profile` | `Profile \| dict` | built-in profile |
+| `screen_history_limit` | `int \| None` | core default |
 | `artifacts` | `dict` | off |
 | `recording` | `AutomaticRecording \| dict` | `{"mode": "always"}` |
 
-`artifacts["on_failure"]` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+`artifacts["on_failure"]` is `"bundle"`, `"json"`, `"svg"`, `"text"`, or `"none"`. Bundle mode writes `failure.md` for agents, an offline `failure.html` assertion/frame viewer with clickable cell metadata, `failure.json`, `timeline.json`, `current.txt`, and `current.svg`. Error artifact references expose `report`, `report_html`, and `timeline` paths. Checkpoints and sampled frames are bounded; missing frames are shown explicitly. `include_recording=True` also copies an immutable prefix of the automatic cast for continuous replay. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+
+`failure.html` can be distributed alone: its Attachments pane embeds the images, Markdown, structured evidence and included recording for offline preview/download. The trace layout shows expected/observed values alongside the terminal and labels the session, emulator, effective timeout defaults and failing assertion timeout. The embedded manifest snapshot excludes the HTML's own hash; the disk manifest includes it.
+
+Retained operation mappings can include `expectation`, containing the locator query and required outcome or a scalar subject/value. This includes passing assertions, is capped at 8 KiB per operation, and is marked unavailable if oversized. These operands can contain sensitive data. The selected assertion's expectation is shown even when it passes; timeout values are kept in Metadata rather than the top header.
+
+Expectations preserve composed query trees, including exact links, `and_`, `or_`, and `filter(has=..., has_not=...)`. Diagnostic stage mappings carry expression paths, per-path evaluation counts, and explicit truncation markers. The shared viewer shows an API-style query description beside each action; the spelling is a reconstructed description, not the original Python source. `location()` delegates final single-match resolution to the core using the validated expression transport.
 
 #### Properties
 
@@ -323,6 +330,8 @@ terminal = TuiTest(
 | `Colors` | Terminal palette. |
 | `MouseButton` | `"left"`, `"middle"`, or `"right"`. |
 | `TextPosition`, `TextSpan` | Match coordinates. |
+| `FailureDetails` | Structured operation, locator, process, runtime, and screen evidence. |
+| `FailureArtifactRef` | Paths and write status for a failure artifact. |
 
 `__version__` contains the package version.
 
@@ -335,6 +344,6 @@ terminal = TuiTest(
 | `NoSessionError` | `3` |
 | `InternalError` | `5` |
 
-All errors extend `TuiTestError`. Expectation errors can include `terminal.text` and `terminal.screenshot`.
+All errors extend `TuiTestError`. Structured native failures expose `details` and `artifact`; expectation errors continue to populate compatibility `terminal.text` and `terminal.screenshot` fields. Failure artifacts can contain terminal output, titles, locator operands, and recordings, so review them before uploading.
 
 Sessions are local to the current process and cannot be controlled by the CLI. Cancelling a task does not stop an active terminal operation.

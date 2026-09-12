@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::diagnostics::{FailureArtifactRef, FailureDetails, FailureObservation};
 use crate::shell::Shell;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -699,6 +700,9 @@ pub enum Operation {
     FindLocator {
         query: LocatorQuery,
     },
+    ResolveLocator {
+        query: LocatorQuery,
+    },
     WaitLocator {
         query: LocatorQuery,
         not: bool,
@@ -851,9 +855,13 @@ impl ErrorKind {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TuiTestError {
     pub kind: ErrorKind,
     pub message: String,
+    pub details: Option<Box<FailureDetails>>,
+    pub artifact: Option<Box<FailureArtifactRef>>,
+    pub(crate) observation: Option<Box<FailureObservation>>,
 }
 
 impl TuiTestError {
@@ -861,6 +869,9 @@ impl TuiTestError {
         Self {
             kind,
             message: message.into(),
+            details: None,
+            artifact: None,
+            observation: None,
         }
     }
 
@@ -889,6 +900,16 @@ impl TuiTestError {
 
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Internal, message)
+    }
+
+    pub fn with_details(mut self, details: FailureDetails) -> Self {
+        self.details = Some(Box::new(details));
+        self
+    }
+
+    pub fn with_artifact(mut self, artifact: FailureArtifactRef) -> Self {
+        self.artifact = Some(Box::new(artifact));
+        self
     }
 }
 
@@ -931,7 +952,7 @@ pub struct TerminalColors {
     pub palette: std::collections::BTreeMap<u8, String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cursor {
     pub x: u16,
     pub y: u16,
@@ -943,7 +964,7 @@ pub struct Cursor {
     pub color: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Size {
     pub cols: u16,
     pub rows: u16,
@@ -955,20 +976,20 @@ pub struct BellEvent {
     pub elapsed_ms: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextPosition {
     pub row: u32,
     pub column: u16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextSpan {
     pub row: u32,
     pub start: u16,
     pub end: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextMatch {
     pub text: String,
     pub start: TextPosition,
@@ -978,7 +999,7 @@ pub struct TextMatch {
     pub spans: Vec<TextSpan>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EffectiveTimeouts {
     pub text: u64,
     pub idle: u64,

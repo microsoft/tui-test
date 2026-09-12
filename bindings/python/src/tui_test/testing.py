@@ -53,6 +53,7 @@ class TerminalOptions:
     wait_ready: Optional[bool] = None
     timeouts: Optional[Timeouts] = None
     profile: Optional[Profile] = None
+    screen_history_limit: Optional[int] = None
     artifacts: Optional[Dict[str, Any]] = None
     recording: Optional[AutomaticRecording] = None
 
@@ -150,6 +151,8 @@ def _client_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
         kwargs["timeouts"] = opts.timeouts
     if opts.profile is not None:
         kwargs["profile"] = opts.profile
+    if opts.screen_history_limit is not None:
+        kwargs["screen_history_limit"] = opts.screen_history_limit
     if opts.artifacts is not None:
         kwargs["artifacts"] = opts.artifacts
     if opts.recording is not None:

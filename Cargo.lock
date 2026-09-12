@@ -2049,6 +2049,8 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "serde",
+ "serde_json",
  "tui-test-rs",
 ]
 
@@ -2059,6 +2061,7 @@ dependencies = [
  "anyhow",
  "pyo3",
  "pyo3-async-runtimes",
+ "serde_json",
  "tokio",
  "tui-test-rs",
 ]

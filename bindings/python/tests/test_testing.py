@@ -144,6 +144,7 @@ class OptionPlumbingTests(unittest.TestCase):
         testing.set_terminal_defaults(
             cols=100,
             profile=profile,
+            screen_history_limit=17,
             artifacts={"dir": "from-defaults"},
         )
         with mock.patch.object(testing, "TuiTest", FakeTuiTest), \
@@ -151,6 +152,7 @@ class OptionPlumbingTests(unittest.TestCase):
             run(testing.create_terminal(cols=42))
         self.assertEqual(created[0].open_kwargs["cols"], 42)
         self.assertEqual(created[0].kwargs["profile"], profile)
+        self.assertEqual(created[0].kwargs["screen_history_limit"], 17)
         self.assertEqual(created[0].kwargs["artifacts"], {"dir": "from-defaults"})
 
     def test_unknown_create_option_is_rejected(self):

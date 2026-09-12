@@ -1,8 +1,8 @@
 use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
-use std::path::Path;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::profile::ColorSlot;
 use crate::terminal::cell::{Attrs, Color, EmuCell, UnderlineStyle, CONTINUATION};
@@ -17,7 +17,9 @@ pub(crate) use reader::{read, CastEventKind, CastReader};
 
 pub(crate) struct CastWriter {
     start: Instant,
+    path: PathBuf,
     sink: BufWriter<File>,
+    last_committed: Option<Duration>,
 }
 
 impl CastWriter {
@@ -41,7 +43,9 @@ impl CastWriter {
             .open(path)?;
         let mut writer = Self {
             start,
+            path: path.to_path_buf(),
             sink: BufWriter::new(sink),
+            last_committed: None,
         };
         writer.write_header(cols, rows, env)?;
         Ok(writer)
@@ -57,6 +61,14 @@ impl CastWriter {
 
     pub fn flush(&mut self) -> io::Result<()> {
         self.sink.flush()
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn last_committed(&self) -> Option<Duration> {
+        self.last_committed
     }
 
     fn write_header(&mut self, cols: u16, rows: u16, env: &[(String, String)]) -> io::Result<()> {
@@ -84,10 +96,13 @@ impl CastWriter {
     }
 
     fn write_event(&mut self, at: Instant, code: &str, data: &str) -> io::Result<()> {
-        let elapsed = at.saturating_duration_since(self.start).as_secs_f64();
-        serde_json::to_writer(&mut self.sink, &(elapsed, code, data)).map_err(json_error)?;
+        let elapsed = at.saturating_duration_since(self.start);
+        serde_json::to_writer(&mut self.sink, &(elapsed.as_secs_f64(), code, data))
+            .map_err(json_error)?;
         self.sink.write_all(b"\n")?;
-        self.sink.flush()
+        self.sink.flush()?;
+        self.last_committed = Some(elapsed);
+        Ok(())
     }
 }
 

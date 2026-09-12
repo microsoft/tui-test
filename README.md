@@ -144,6 +144,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `--session NAME` | Select a session. Default: `default` or `TUI_TEST_SESSION`. |
 | `--json` | Print JSON. |
 | `--verbose`, `-v` | Write a session log. |
+| `--failure-artifacts DIR` | Write structured assertion artifacts. |
+| `--failure-artifact-mode MODE` | Select `bundle`, `json`, `svg`, `text`, or `none`. |
+| `--failure-artifact-recording` | Copy the automatic cast through the failure boundary. |
+| `--diagnostic-context KEY=VALUE` | Add safe caller context to failure details. |
 
 CLI sessions persist between commands. `open` and `run` reuse a live session unless `--restart` is set.
 
@@ -161,7 +165,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | `daemon status` | Show daemon status. |
 | `daemon stop [--all]` | Stop one or all daemons. |
 
-`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, and `--timeout-<class> MS`. `open` also accepts `--shell`.
+`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, `--timeout-<class> MS`, and `--screen-history-limit COUNT`. `open` also accepts `--shell`.
 
 ### Text locators
 
@@ -320,9 +324,16 @@ red = "#800000"
 [recording]
 mode = "on-failure"
 directory = "./artifacts"
+
+[diagnostics]
+screen-history-limit = 10
 ```
 
 Recording modes are `disabled`, `on-failure`, and `always`. Default: `always`.
+
+`--json` assertion failures include structured details. With `--failure-artifacts`, bundle mode writes `failure.md` for agents, a standalone `failure.html` trace viewer, `failure.json`, `timeline.json`, `current.txt`, and `current.svg`. The viewer opens at the failure with explicit expected/observed values, an action timeline and filmstrip, cell inspection, and labelled session/emulator/timeout metadata. Its Attachments pane embeds every available evidence file, including an opted-in recording, for offline preview and download. The HTML can be renamed or distributed alone; no server, CDN, sibling files, or network connection is needed.
+
+Frames come from the original emulator, not an asciicast re-emulation. Recent sampled screens and passing assertion checkpoints are retained separately; omissions are explicit rather than replaced with a nearby frame. The optional `session.cast` supports continuous replay in an asciicast player. See [failure diagnostics](references/cli.md#failure-diagnostics) for retention, formats, and limits. These files can contain terminal output, titles, locator operands, and other user-supplied values; review them before uploading.
 
 The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
 

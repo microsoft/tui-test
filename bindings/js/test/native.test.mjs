@@ -3,6 +3,97 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import { TuiTest } from "../dist/index.js";
+import {
+  ExpectationError,
+  InternalError,
+} from "../dist/index.js";
+import { mapNativeError } from "../dist/native.js";
+
+const ERROR_PREFIX = "__tui_test_native_error__:";
+
+test("native JSON error envelopes expose structured diagnostics", () => {
+  const details = {
+    schema_version: 1,
+    signature: "sha256:test",
+    operation: {
+      name: "locator.location",
+      elapsed_ms: 12,
+      started_screen_sequence: 1,
+      failed_screen_sequence: 2,
+    },
+    reason: "locator_no_match",
+    summary: "missing",
+    terminal: {
+      size: { cols: 80, rows: 24 },
+      cursor: { column: 0, row: 0, visible: true, shape: "block" },
+      last_visual_change_ms: 1,
+      unchanged_for_ms: 2,
+      screen_history: {
+        limit: 10,
+        dropped_screen_count: 0,
+        dropped_row_count: 0,
+        screens: [
+          {
+            sequence: 2,
+            first_seen_ms: 1,
+            last_seen_ms: 2,
+            repeat_count: 1,
+            changes: [],
+            size: { cols: 80, rows: 24 },
+            cursor: { column: 0, row: 0, visible: true, shape: "block" },
+            text: "current screen",
+          },
+        ],
+      },
+    },
+    truncated: false,
+  };
+  const artifact = {
+    status: "written",
+    directory: "C:\\artifacts\\failure",
+    report: "C:\\artifacts\\failure\\failure.md",
+    report_html: "C:\\artifacts\\failure\\failure.html",
+    timeline: "C:\\artifacts\\failure\\timeline.json",
+    screen_text: "C:\\artifacts\\failure\\screen.txt",
+    screen_svg: "C:\\artifacts\\failure\\screen.svg",
+  };
+  const error = mapNativeError(
+    new Error(
+      `${ERROR_PREFIX}${JSON.stringify({
+        kind: "assertion",
+        message: "missing",
+        details,
+        artifact,
+      })}`,
+    ),
+  );
+
+  assert.ok(error instanceof ExpectationError);
+  assert.equal(error.message, "missing");
+  assert.deepEqual(error.details, details);
+  assert.deepEqual(error.artifact, artifact);
+  assert.deepEqual(error.terminal, {
+    text: "current screen",
+    screenshot: artifact.screen_svg,
+  });
+});
+
+test("native error parsing retains the legacy newline fallback", () => {
+  const error = mapNativeError(
+    new Error(`${ERROR_PREFIX}assertion\nlegacy failure`),
+  );
+  assert.ok(error instanceof ExpectationError);
+  assert.equal(error.message, "legacy failure");
+  assert.equal(error.details, undefined);
+  assert.equal(error.artifact, undefined);
+});
+
+test("malformed JSON error envelopes become internal transport errors", () => {
+  const error = mapNativeError(new Error(`${ERROR_PREFIX}{not-json`));
+  assert.ok(error instanceof InternalError);
+  assert.match(error.message, /malformed native error envelope/);
+});
+
 import { NativeSession } from "../native/index.js";
 
 test("locator expressions reject invalid fields and references", async () => {
@@ -95,7 +186,17 @@ test("generated native declarations expose typed operations", async () => {
   assert.doesNotMatch(declarations, /Promise<unknown>/);
   assert.match(
     declarations,
-    /findLocator\(expression: LocatorExpression\)/,
+    /findLocator\(expression: LocatorExpression, requireOne\?: boolean/,
+  );
+  assert.match(declarations, /constructor\(name: string, recording\?.*artifacts\?/);
+  assert.match(declarations, /export interface FailureArtifactOptions\b/);
+  assert.match(
+    declarations,
+    /interface OpenOptions \{[\s\S]*screenHistoryLimit\?: number/,
+  );
+  assert.match(
+    declarations,
+    /interface RunOptions \{[\s\S]*screenHistoryLimit\?: number/,
   );
   assert.doesNotMatch(declarations, /(?:queryJson|requestJson): string/);
   assert.match(
@@ -155,6 +256,17 @@ test("public declarations expose reusable get-by locators", async () => {
   assert.doesNotMatch(filterOptions ?? "", /(?:style|link|hasText|hasNotText)\??:/);
   const styleFields = declarations.match(/export interface TextStyleExpectation \{([^}]*)\}/s)?.[1];
   assert.doesNotMatch(styleFields ?? "", /\blink\??:/);
+});
+
+test("public client options expose screenHistoryLimit", async () => {
+  const declarations = await readFile(
+    new URL("../dist/types.d.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    declarations,
+    /interface ClientOptions \{[\s\S]*screenHistoryLimit\?: number/,
+  );
 });
 
 test("public facade omits generic request dispatchers", async () => {

@@ -41,10 +41,19 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs"` | `"alacritty"` |
 | `timeouts` | `Timeouts` | built-in defaults |
 | `profile` | `Profile` | built-in profile |
-| `artifacts` | `{ dir, onFailure? }` | off |
+| `screenHistoryLimit` | `number` | `10` |
+| `artifacts` | `{ dir, onFailure?, includeRecording? }` | off |
 | `recording` | `{ mode?, directory? }` | `{ mode: "always" }` |
 
-`artifacts.onFailure` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+`artifacts.onFailure` is `"bundle"`, `"json"`, `"svg"`, `"text"`, or `"none"`. Bundle mode writes `failure.md` for agents, an offline `failure.html` assertion/frame viewer with clickable cell metadata, `failure.json`, `timeline.json`, `current.txt`, and `current.svg`. Error artifact references expose `report`, `report_html`, and `timeline` paths. Checkpoints and sampled frames are bounded; missing frames are shown explicitly. `includeRecording: true` also copies an immutable prefix of the automatic cast for continuous replay. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+
+The shared HTML viewer has a standalone browser suite: from `bindings/js`, run `npx playwright install chromium` then `npm run test:report`. It generates an artifact with the Rust core and opens it offline in Chromium; no native Node addon build is needed. `TUI_TEST_BROWSER_CHANNEL=msedge` can select an installed Edge browser instead. Playwright is a development-only dependency and is not bundled into reports.
+
+The viewer's typed components live in `crates/tui-test/src/diagnostics/viewer`. Run `npm run build:report` to regenerate its minified JavaScript/CSS, and `npm run check:report` to type-check and verify generated assets. These are development tools only; Cargo embeds committed minified files without invoking Node. `recent_operations[].expectation` retains the selected assertion's operands, including successful locators, up to 8 KiB per operation. Treat these operands as potentially sensitive.
+
+Composed locators retain their full query tree in operation expectations. The sidebar renders query descriptions such as `getByText("Docs").getByLink("test:docs")`, `.and(...)`, `.or(...)`, and `.filter({ has: ..., hasNot: ... })` beside actions. Diagnostic stages identify operand paths and aggregate candidate-bounded filter evaluations; only the decisive stage contributes mismatch overlays. `location()` uses the native expression input with final single-match resolution in the core.
+
+`failure.html` can be distributed alone: its Attachments pane embeds the images, Markdown, structured evidence and included recording for offline preview/download. The trace layout shows expected/observed values alongside the terminal and labels the session, emulator, effective timeout defaults and failing assertion timeout. The embedded manifest snapshot excludes the HTML's own hash; the disk manifest includes it.
 
 #### Properties
 
@@ -66,7 +75,7 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `closeQuiet()` | Close without throwing. |
 | `[Symbol.asyncDispose]()` | Close from `await using`. |
 
-`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
+`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, `timeouts`, and `screenHistoryLimit`. `run()` accepts the same options except `shell`.
 
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
 
@@ -304,7 +313,12 @@ const terminal = new TuiTest("test", {
     colors: { foreground: "#ffffff", background: "#000000" },
   },
   timeouts: { text: 10_000, command: 60_000 },
-  artifacts: { dir: "artifacts", onFailure: "svg" },
+  screenHistoryLimit: 10,
+  artifacts: {
+    dir: "artifacts/failures",
+    onFailure: "bundle",
+    includeRecording: true,
+  },
   recording: { mode: "on-failure", directory: "artifacts" },
 });
 ```
@@ -320,6 +334,8 @@ const terminal = new TuiTest("test", {
 | `Profile`, `Colors` | Scrollback and colors. |
 | `Timeouts` | Text, idle, command, exit, and ready timeouts. |
 | `AutomaticRecording` | Automatic recording mode and directory. |
+| `FailureDetails` | Structured operation, locator, process, runtime, and screen evidence. |
+| `FailureArtifactRef` | Paths and write status for a failure artifact. |
 | `MouseButton` | `"left"`, `"middle"`, or `"right"`. |
 | `MouseClickOptions` | Button, modifiers, target text, and click count. |
 | `MouseButtonOptions` | Button and modifiers. |
@@ -337,6 +353,6 @@ const terminal = new TuiTest("test", {
 | `NoSessionError` | `3` |
 | `InternalError` | `5` |
 
-All errors extend `TuiTestError` and include `kind` and `exitCode`. Expectation errors can include `terminal.text` and `terminal.screenshot`.
+All errors extend `TuiTestError` and include `kind` and `exitCode`. Structured native failures expose `details` and `artifact`; expectation errors continue to populate compatibility `terminal.text` and `terminal.screenshot` fields. Failure artifacts can contain terminal output, titles, locator operands, and recordings, so review them before uploading.
 
 Sessions are local to the current process and cannot be controlled by the CLI. Cancelling a promise does not stop an active terminal operation.
