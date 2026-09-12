@@ -2043,6 +2043,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tui-test-go"
+version = "0.1.0-beta.3"
+dependencies = [
+ "tui-test-rs",
+]
+
+[[package]]
 name = "tui-test-node"
 version = "0.1.0-beta.3"
 dependencies = [
