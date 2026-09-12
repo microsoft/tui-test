@@ -980,7 +980,7 @@ mod tests {
             else {
                 panic!("expected Expect text");
             };
-            assert_eq!(query.style.link.as_deref(), Some(expected));
+            assert_eq!(query.link.as_deref(), Some(expected));
         }
     }
 
@@ -1345,9 +1345,6 @@ pub struct TextStyleArgs {
     pub strikethrough: Option<bool>,
     #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
     pub blink: Option<bool>,
-    /// Required OSC 8 link target. Pass an empty string to require no link.
-    #[arg(long)]
-    pub link: Option<String>,
 }
 
 #[derive(Args)]
@@ -1358,6 +1355,9 @@ pub struct TextQueryArgs {
     pub selector: TextSelectorArgs,
     #[command(flatten)]
     pub style: Box<TextStyleArgs>,
+    /// Required OSC 8 link target on every matched cell. Empty means unlinked.
+    #[arg(long)]
+    pub link: Option<String>,
 }
 
 #[derive(Subcommand)]

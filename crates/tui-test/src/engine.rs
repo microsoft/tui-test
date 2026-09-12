@@ -2092,6 +2092,20 @@ fn wait_bell(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestEr
 }
 
 fn validate_locator_query(query: &LocatorQuery) -> Result<(), TuiTestError> {
+    validate_locator_node(query, 0, &mut 0)
+}
+
+fn validate_locator_node(
+    query: &LocatorQuery,
+    depth: usize,
+    count: &mut usize,
+) -> Result<(), TuiTestError> {
+    *count += 1;
+    if depth >= 64 || *count > 4096 {
+        return Err(TuiTestError::usage(
+            "locator expression exceeds the size or depth limit",
+        ));
+    }
     if query.within.is_none() && query.direction != crate::api::LocatorDirection::Within {
         return Err(TuiTestError::usage(
             "locator direction requires a preceding locator",
@@ -2107,9 +2121,30 @@ fn validate_locator_query(query: &LocatorQuery) -> Result<(), TuiTestError> {
             }
             validate_style(&selector.style)?;
         }
+        LocatorSelector::Link(_) => {}
+        LocatorSelector::And { .. }
+        | LocatorSelector::Or { .. }
+        | LocatorSelector::Filter { .. } => {
+            if query.within.is_some() || !query.style.is_empty() {
+                return Err(TuiTestError::usage(
+                    "composition nodes do not accept scope or style fields",
+                ));
+            }
+            if let LocatorSelector::Filter {
+                has: None,
+                has_not: None,
+                ..
+            } = &query.selector
+            {
+                return Err(TuiTestError::usage("filter requires has or hasNot"));
+            }
+            for child in query.selector.children() {
+                validate_locator_node(child, depth + 1, count)?;
+            }
+        }
     }
     if let Some(parent) = query.within.as_deref() {
-        validate_locator_query(parent)?;
+        validate_locator_node(parent, depth + 1, count)?;
     }
     validate_style(&query.style)?;
     Ok(())
@@ -2467,11 +2502,6 @@ fn cell_matches_style(cell: &EmuCell, style: &TextStyle, colors: &dyn Emulator) 
         .is_some_and(|expected| expected != cell.underline.name())
     {
         return false;
-    }
-    if let Some(expected) = style.link.as_deref() {
-        if expected != cell.uri().unwrap_or_default() {
-            return false;
-        }
     }
     for (spec, actual, foreground) in [
         (&style.foreground, cell.fg, true),
@@ -3069,7 +3099,7 @@ mod tests {
     /// A link is matched by where it points, so a locator can find the cells
     /// of one link and ignore an identical-looking one pointing elsewhere.
     #[test]
-    fn style_locators_match_a_cell_by_its_link() {
+    fn link_locators_match_a_cell_by_its_link() {
         let emu = AlacrittyEmu::new(10, 2, &Profile::default());
         let linked = EmuCell {
             ch: "x".into(),
@@ -3080,20 +3110,15 @@ mod tests {
             ..EmuCell::blank()
         };
 
-        let with_link = |uri: &str| TextStyle {
-            link: Some(uri.into()),
-            ..TextStyle::default()
-        };
-        assert!(cell_matches_style(
-            &linked,
-            &with_link("https://example.com"),
-            &emu
-        ));
-        assert!(!cell_matches_style(
-            &linked,
-            &with_link("https://other.example"),
-            &emu
-        ));
+        let rows = vec![vec![linked]];
+        for (uri, count) in [("https://example.com", 1), ("https://other.example", 0)] {
+            let found =
+                locator::locate_query(&rows, &LocatorQuery::link(uri), &mut |cell, style| {
+                    cell_matches_style(cell, style, &emu)
+                })
+                .unwrap();
+            assert_eq!(found.len(), count);
+        }
     }
 
     /// An empty link is a real requirement, not an absent one: it asks for a
@@ -3113,19 +3138,18 @@ mod tests {
             })),
             ..plain.clone()
         };
-        let unlinked = TextStyle {
-            link: Some(String::new()),
-            ..TextStyle::default()
-        };
-
-        assert!(cell_matches_style(&plain, &unlinked, &emu));
-        assert!(!cell_matches_style(&linked, &unlinked, &emu));
+        let found = locator::locate_query(
+            &[vec![plain, linked]],
+            &LocatorQuery::link(""),
+            &mut |cell, style| cell_matches_style(cell, style, &emu),
+        )
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].value.spans[0].end, 1);
     }
 
-    /// A style that says nothing about links keeps matching either kind, so
-    /// adding the field does not narrow every existing query.
     #[test]
-    fn a_style_without_a_link_still_matches_a_linked_cell() {
+    fn appearance_matches_independently_of_links() {
         let emu = AlacrittyEmu::new(10, 2, &Profile::default());
         let linked = EmuCell {
             ch: "x".into(),

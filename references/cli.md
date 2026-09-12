@@ -40,7 +40,7 @@ Common options:
 | `--match any\|unique\|first\|last` | Select matches. |
 | `--nth N` | Select a zero-based match. |
 
-Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, `--blink`, and `--link`.
+Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, and `--blink`.
 
 `--link URL` matches that hyperlink on every cell, including spaces.
 Use `--link ""` for unlinked cells. Other style filters ignore spaces.

@@ -169,7 +169,6 @@ export interface LocatorStyle {
   hidden?: boolean
   strikethrough?: boolean
   blink?: boolean
-  link?: string
 }
 
 export interface MouseClickOptions {

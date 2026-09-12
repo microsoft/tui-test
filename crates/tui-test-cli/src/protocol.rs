@@ -599,6 +599,23 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
 mod tests {
     use super::*;
 
+    #[test]
+    fn locator_expression_requests_round_trip() {
+        let query = LocatorQuery::text("Docs")
+            .and(LocatorQuery::link("test:link"))
+            .or(LocatorQuery::text("Help"))
+            .filter(None, Some(LocatorQuery::text("old")));
+        let request = Request::FindLocator {
+            query: query.clone(),
+        };
+        let encoded = serde_json::to_string(&request).unwrap();
+        let decoded: Request = serde_json::from_str(&encoded).unwrap();
+        match decoded.into_operation().unwrap() {
+            Operation::FindLocator { query: actual } => assert_eq!(actual, query),
+            other => panic!("expected locator expression, got {other:?}"),
+        }
+    }
+
     fn make_open_req(wait_ready: Option<bool>, timeouts: Timeouts) -> Request {
         Request::Open {
             shell: None,
