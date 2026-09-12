@@ -314,6 +314,170 @@ directory = "./artifacts"
 
 Recording modes are `disabled`, `on-failure`, and `always`. Default: `always`.
 
+How screenshots and recordings are drawn is configurable too, from the font
+down to the window chrome:
+
+```toml
+[recording.style]
+font_size = 20
+canvas_background = "#101014"
+canvas_padding = 32
+
+[recording.style.font]
+family = "Berkeley Mono"
+files = ["fonts/BerkeleyMono.ttf"]
+
+[recording.style.window]
+traffic_lights = false
+
+[recording.style.border]
+width = 1
+color = "#454550"
+```
+
+A profile can carry its own `[recording]`, inheriting every key it does not
+name. See [the CLI reference](references/cli.md#styling-screenshots-and-recordings)
+for the full set.
+
+Each profile overrides only what it names, so one file can hold a look for
+docs, a smaller one for CI artifacts, and a light one for slides:
+
+<img alt="three profiles overriding the same file-level recording settings" src="static/style-profiles.png" width="860">
+
+Every screenshot below is the same session, drawn from a different style.
+
+<table>
+<tr>
+<td width="50%">
+
+**Default** — no `[recording.style]` at all.
+
+<img alt="the default tui-test style" src="static/style-default.svg" width="400">
+
+</td>
+<td width="50%">
+
+**No chrome** — just the grid.
+
+```toml
+[recording.style]
+canvas_background = "#ffffff"
+canvas_padding = 12
+
+[recording.style.window]
+title_bar = false
+
+[recording.style.shadow]
+enabled = false
+
+[recording.style.border]
+radius = 0
+```
+
+<img alt="tui-test drawn with no window chrome" src="static/style-minimal.svg" width="400">
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Bordered** — a stroke instead of a shadow.
+
+```toml
+[recording.style]
+canvas_background = "#f6f6f8"
+canvas_padding = 28
+
+[recording.style.window]
+traffic_lights = false
+background = "#e8e8ef"
+divider = "#d0d0dc"
+
+[recording.style.border]
+width = 2
+color = "#8a8aa0"
+radius = 10
+
+[recording.style.shadow]
+enabled = false
+```
+
+<img alt="tui-test drawn with a border and no shadow" src="static/style-bordered.svg" width="400">
+
+</td>
+<td width="50%">
+
+**Midnight** — chrome and terminal palette together.
+
+```toml
+[recording.style]
+font_size = 18
+canvas_background = "#05050a"
+canvas_padding = 30
+
+[recording.style.window]
+background = "#15151f"
+foreground = "#c8c8e0"
+divider = "#2a2a3a"
+
+[recording.style.border]
+width = 1
+color = "#3a3a52"
+radius = 12
+
+[profiles.default.colors]
+background = "#0b0b12"
+foreground = "#d8d8e8"
+```
+
+<img alt="tui-test drawn with a dark canvas, chrome and palette" src="static/style-midnight.svg" width="400">
+
+</td>
+</tr>
+</table>
+
+**Poster** — large type and a deep shadow, for a README or a slide.
+
+```toml
+[recording.style]
+font_size = 24
+title_font_size = 16
+canvas_padding = 48
+
+[recording.style.border]
+radius = 16
+
+[recording.style.shadow]
+enabled = true
+color = "#1a1a2e"
+offset = 14
+spread = 22
+```
+
+<img alt="tui-test drawn at poster size with a deep shadow" src="static/style-poster.svg" width="460">
+
+Each option on its own, one change from the default. The gap around the window is one number for every side, or a table naming the sides that differ:
+
+<img alt="every tui-test style option shown one change at a time" src="static/style-options.png" width="860">
+
+`font_size` drives the cell size, so the whole image grows with it. These are
+at one scale, not fitted to a column:
+
+<img alt="the same session at four font sizes" src="static/style-font-sizes.png" width="860">
+
+Two gaps, each defaulting differently: `canvas_padding` is 24 on every side,
+and `content_padding` is 8 top, 15 at the sides and 14 at the bottom. Set
+either to `0` to trim the frame, and set `content_padding` to one number to
+inset the grid evenly once the title bar is gone:
+
+<img alt="the same session with the padding removed and with even padding" src="static/style-padding.png" width="700">
+
+Recordings are drawn from the same style, so a `.gif` matches its screenshot:
+
+| Default | Midnight | Bordered |
+| --- | --- | --- |
+| <img alt="a tui-test recording in the default style" src="static/style-anim-default.gif" width="280"> | <img alt="a tui-test recording in the midnight style" src="static/style-anim-midnight.gif" width="280"> | <img alt="a tui-test recording in the bordered style" src="static/style-anim-bordered.gif" width="280"> |
+
 The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
 
 ### Shells and backends

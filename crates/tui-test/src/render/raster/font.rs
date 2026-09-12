@@ -23,14 +23,16 @@ pub(super) struct GlyphOutline {
 }
 
 pub(super) struct FontSystem {
-    catalog: &'static catalog::Catalog,
+    catalog: std::sync::Arc<catalog::Catalog>,
     glyphs: HashMap<GlyphKey, Option<GlyphOutline>>,
 }
 
 impl FontSystem {
-    pub fn new() -> Self {
+    /// Built from the style's fonts, so a recording draws with the family the
+    /// config named rather than whatever the catalog ranked first.
+    pub fn new(font: &crate::render::style::FontFamilies) -> Self {
         Self {
-            catalog: catalog::catalog(),
+            catalog: catalog::catalog_for(font),
             glyphs: HashMap::new(),
         }
     }

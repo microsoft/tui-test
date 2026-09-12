@@ -13,47 +13,21 @@ use std::fmt::Write;
 use super::nerd_font::NerdFont;
 use crate::api::CaptureBackground;
 use crate::profile::{ColorSlot, Profile, Rgb};
+use crate::render::style::Style;
 use crate::terminal::cell::{truncate_to_columns, Attrs, Color, EmuCell, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator};
 
-pub(crate) const CELL_W: f32 = 10.0;
-pub(crate) const CELL_H: f32 = 21.0;
-pub(crate) const FONT_SIZE: f32 = 17.0;
-pub(crate) const FONT_BASELINE: f32 = (CELL_H - FONT_SIZE) / 2.0 + FONT_SIZE * 0.78;
-pub(crate) const MARGIN_X: f32 = 15.0;
-pub(crate) const HEADER_H: f32 = 34.0;
-pub(crate) const CONTENT_PADDING_TOP: f32 = 4.0;
-const MARGIN_BOTTOM: f32 = 14.0;
 pub(crate) const DOT_R: f32 = 7.0;
 pub(crate) const RED_DOT_R: f32 = 2.5;
 pub(crate) const RED_DOT_COLOR: Rgb = Rgb::new(105, 17, 10);
-pub(crate) const WINDOW_RADIUS: f32 = 8.0;
-pub(crate) const TITLE_DIVIDER_H: f32 = 1.0;
-pub(crate) const TITLE_BG: Rgb = Rgb::new(217, 217, 232);
-pub(crate) const TITLE_DIVIDER: Rgb = Rgb::new(0, 0, 0);
-pub(crate) const CANVAS_PADDING: u32 = 24;
-pub(crate) const CANVAS_BACKGROUND: Rgb = Rgb::new(104, 103, 170);
-pub(crate) const SHADOW_COLOR: Rgb = Rgb::new(8, 8, 18);
-pub(crate) const SHADOW_LAYERS: [(f32, f32, u8); 4] = [
-    (7.0, 5.0, 18),
-    (5.0, 4.0, 20),
-    (3.0, 3.0, 22),
-    (1.0, 2.0, 24),
-];
-pub(crate) const TRAFFIC_LIGHTS: [Rgb; 3] = [
-    Rgb::new(236, 106, 94),
-    Rgb::new(244, 191, 79),
-    Rgb::new(97, 197, 84),
-];
 /// Title bar text, smaller than the grid font so the chrome does not compete
 /// with the terminal content itself.
-pub(crate) const TITLE_FONT_SIZE: f32 = 13.0;
-pub(crate) const TITLE_FG: Rgb = Rgb::new(65, 65, 69);
 /// Where the rightmost traffic light ends. A centred title is kept clear of
 /// this on both sides, so it can never be drawn over the controls.
-const DOTS_RIGHT: f32 = MARGIN_X + 5.0 + 2.0 * 20.0 + DOT_R;
-const FONT_STACK: &str =
-    "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,'DejaVu Sans Mono',monospace";
+/// How far the traffic lights reach from the panel edge.
+fn dots_right(style: &Style) -> f32 {
+    style.content_left() + 5.0 + 2.0 * 20.0 + DOT_R
+}
 
 fn hex(c: Rgb) -> String {
     c.to_hex()
@@ -172,8 +146,11 @@ pub(crate) fn bg_of(cell: &EmuCell, colors: &dyn RenderColors) -> Rgb {
     }
 }
 
+/// What to paint one cell's text with, after inverse and dim have been
+/// resolved. Distinct from [`crate::render::style::Style`], which describes
+/// the whole image rather than a cell in it.
 #[derive(Clone, Copy, PartialEq)]
-pub(crate) struct Style {
+pub(crate) struct CellPaint {
     pub fg: Rgb,
     pub bold: bool,
     pub italic: bool,
@@ -182,7 +159,7 @@ pub(crate) struct Style {
     pub invisible: bool,
 }
 
-pub(crate) fn style_of(cell: &EmuCell, colors: &dyn RenderColors) -> Style {
+pub(crate) fn cell_paint(cell: &EmuCell, colors: &dyn RenderColors) -> CellPaint {
     let mut fg = colors.resolve(cell.fg, true);
     let bg = colors.resolve(cell.bg, false);
     if cell.has(Attrs::INVERSE) {
@@ -191,7 +168,7 @@ pub(crate) fn style_of(cell: &EmuCell, colors: &dyn RenderColors) -> Style {
     if cell.has(Attrs::DIM) {
         fg = dim(fg);
     }
-    Style {
+    CellPaint {
         fg,
         bold: cell.has(Attrs::BOLD),
         italic: cell.has(Attrs::ITALIC),
@@ -199,6 +176,25 @@ pub(crate) fn style_of(cell: &EmuCell, colors: &dyn RenderColors) -> Style {
         strike: cell.has(Attrs::STRIKE),
         invisible: cell.has(Attrs::INVISIBLE),
     }
+}
+
+/// Escape a value going into a double-quoted XML attribute.
+///
+/// [`escape`] is for text content, where a quote is harmless. Inside an
+/// attribute a quote closes it, so a font family named `Foo" onload="x` would
+/// otherwise write arbitrary markup into the document.
+fn escape_attribute(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn escape(s: &str) -> String {
@@ -225,43 +221,57 @@ fn run_text(row: &[EmuCell], start: usize, end: usize) -> String {
 fn write_text_run(
     out: &mut String,
     row: &[EmuCell],
-    start: usize,
-    end: usize,
+    run: std::ops::Range<usize>,
     y: usize,
-    style: Style,
+    paint: CellPaint,
     nerd_font: &NerdFont,
+    style: &Style,
 ) {
-    if style.invisible {
+    if paint.invisible {
         return;
     }
-    let fg = hex(style.fg);
-    let tx = MARGIN_X + start as f32 * CELL_W;
-    let baseline = HEADER_H + CONTENT_PADDING_TOP + y as f32 * CELL_H + FONT_BASELINE;
-    let width = (end - start) as f32 * CELL_W;
+    let (start, end) = (run.start, run.end);
+    let cell_w = style.cell_width();
+    let cell_h = style.cell_height();
+    let header_h = style.header_height();
+    let font_baseline = style.baseline();
+    let fg = hex(paint.fg);
+    let tx = style.content_left() + start as f32 * cell_w;
+    let baseline = header_h + style.content_top() + y as f32 * cell_h + font_baseline;
+    let width = (end - start) as f32 * cell_w;
     let original_text = run_text(row, start, end);
-    let (text, run_x_adjust) = nerd_font.prepare_run(&original_text, width, CELL_W);
+    let (text, run_x_adjust) = nerd_font.prepare_run(&original_text, width, cell_w);
 
     // Preserve decoration for runs containing only vector glyphs.
     if !original_text.trim().is_empty() {
-        let weight = if style.bold {
+        let weight = if paint.bold {
             r#" font-weight="bold""#
         } else {
             ""
         };
-        let italic = if style.italic {
+        let italic = if paint.italic {
             r#" font-style="italic""#
         } else {
             ""
         };
-        let deco = match (style.underline, style.strike) {
+        let deco = match (paint.underline, paint.strike) {
             (true, true) => r#" text-decoration="underline line-through""#,
             (true, false) => r#" text-decoration="underline""#,
             (false, true) => r#" text-decoration="line-through""#,
             (false, false) => "",
         };
+        // Only when the variant names a family of its own; otherwise the root
+        // font-family already says it, and repeating it on every run would
+        // bloat the document for no change in what is drawn.
+        let resolved = style.font.resolve(paint.bold, paint.italic);
+        let family = if resolved == style.font.family {
+            String::new()
+        } else {
+            format!(r#" font-family="{}""#, escape_attribute(resolved))
+        };
         let _ = write!(
             out,
-            r#"<text x="{tx:.2}" y="{baseline:.2}" fill="{fg}"{weight}{italic}{deco} textLength="{width:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{esc}</text>"#,
+            r#"<text x="{tx:.2}" y="{baseline:.2}" fill="{fg}"{family}{weight}{italic}{deco} textLength="{width:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{esc}</text>"#,
             esc = escape(&text)
         );
     }
@@ -271,10 +281,10 @@ fn write_text_run(
                 out,
                 c,
                 (
-                    MARGIN_X + i as f32 * CELL_W,
-                    HEADER_H + CONTENT_PADDING_TOP + y as f32 * CELL_H,
+                    style.content_left() + i as f32 * cell_w,
+                    header_h + style.content_top() + y as f32 * cell_h,
                 ),
-                (CELL_W, CELL_H),
+                (cell_w, cell_h),
                 run_x_adjust,
                 &fg,
             );
@@ -289,8 +299,8 @@ fn write_text_run(
 /// computed width would distort it. It is instead truncated to what fits, and
 /// kept clear of the traffic lights by reserving the same margin on both
 /// sides, which also keeps it centred on the space that remains.
-pub(crate) fn title_advance() -> f32 {
-    TITLE_FONT_SIZE * (CELL_W / FONT_SIZE)
+pub(crate) fn title_advance(style: &Style) -> f32 {
+    style.title_font_size * (style.cell_width() / style.font_size)
 }
 
 pub(crate) fn media_title(title: Option<&str>, cols: u16, rows: usize, fits: usize) -> String {
@@ -316,26 +326,37 @@ pub(crate) fn visible_title(
     cols: u16,
     rows: usize,
     width: f32,
+    style: &Style,
 ) -> Option<String> {
     const GAP: f32 = 8.0;
-    let available = width - 2.0 * (DOTS_RIGHT + GAP);
-    let fits = (available / title_advance()).floor().max(0.0) as usize;
+    let available = width - 2.0 * (dots_right(style) + GAP);
+    let fits = (available / title_advance(style)).floor().max(0.0) as usize;
     if fits == 0 {
         return None;
     }
     Some(media_title(title, cols, rows, fits))
 }
 
-fn write_title(out: &mut String, title: Option<&str>, cols: u16, rows: usize, width: f32) {
-    let Some(shown) = visible_title(title, cols, rows, width) else {
+fn write_title(
+    out: &mut String,
+    title: Option<&str>,
+    cols: u16,
+    rows: usize,
+    width: f32,
+    style: &Style,
+) {
+    let Some(shown) = visible_title(title, cols, rows, width, style) else {
         return;
     };
+    let header_h = style.header_height();
+    let title_font_size = style.title_font_size;
+    let title_fg = style.window.foreground;
     let _ = write!(
         out,
-        r#"<text x="{cx:.2}" y="{baseline:.2}" fill="{fill}" font-size="{TITLE_FONT_SIZE}px" font-weight="bold" text-anchor="middle" xml:space="preserve">{esc}</text>"#,
+        r#"<text x="{cx:.2}" y="{baseline:.2}" fill="{fill}" font-size="{title_font_size}px" font-weight="bold" text-anchor="middle" xml:space="preserve">{esc}</text>"#,
         cx = width / 2.0,
-        baseline = HEADER_H / 2.0 + TITLE_FONT_SIZE * 0.35,
-        fill = hex(TITLE_FG),
+        baseline = header_h / 2.0 + title_font_size * 0.35,
+        fill = hex(title_fg),
         esc = escape(&shown),
     );
 }
@@ -355,10 +376,14 @@ fn write_cursor(
     (cx, cy): (u16, usize),
     colors: &dyn RenderColors,
     nerd_font: &NerdFont,
+    style: &Style,
 ) {
     let Some(row) = rows.get(cy) else {
         return;
     };
+    let cell_w = style.cell_width();
+    let cell_h = style.cell_height();
+    let header_h = style.header_height();
     let cell = cell_at(row, cx as usize);
     // A double-width character stores its second half as a continuation cell,
     // so the cursor has to cover both or it clips the glyph down the middle.
@@ -370,15 +395,15 @@ fn write_cursor(
     } else {
         1.0
     };
-    let w = span * CELL_W;
-    let x = MARGIN_X + cx as f32 * CELL_W;
-    let y = HEADER_H + CONTENT_PADDING_TOP + cy as f32 * CELL_H;
+    let w = span * cell_w;
+    let x = style.content_left() + cx as f32 * cell_w;
+    let y = header_h + style.content_top() + cy as f32 * cell_h;
     let fill = hex(colors.color(ColorSlot::Cursor));
 
     let (rx, ry, rw, rh) = match colors.cursor_shape() {
-        CursorShape::Block => (x, y, w, CELL_H),
-        CursorShape::Underline => (x, y + CELL_H - CURSOR_THICKNESS, w, CURSOR_THICKNESS),
-        CursorShape::Bar => (x, y, CURSOR_THICKNESS, CELL_H),
+        CursorShape::Block => (x, y, w, cell_h),
+        CursorShape::Underline => (x, y + cell_h - CURSOR_THICKNESS, w, CURSOR_THICKNESS),
+        CursorShape::Bar => (x, y, CURSOR_THICKNESS, cell_h),
     };
     let _ = write!(
         out,
@@ -388,16 +413,16 @@ fn write_cursor(
     if colors.cursor_shape() != CursorShape::Block {
         return;
     }
-    let mut style = style_of(cell, colors);
-    style.fg = bg_of(cell, colors);
+    let mut paint = cell_paint(cell, colors);
+    paint.fg = bg_of(cell, colors);
     write_text_run(
         out,
         row,
-        cx as usize,
-        cx as usize + span as usize,
+        cx as usize..cx as usize + span as usize,
         cy,
-        style,
+        paint,
         nerd_font,
+        style,
     );
 }
 
@@ -408,45 +433,49 @@ fn write_cursor(
 ///
 /// Its row is a `usize` because it indexes `rows`, which for a full-history
 /// render is as long as the scrollback and so is not bounded by the screen.
-#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_svg(
     rows: &[Vec<EmuCell>],
     cols: u16,
     colors: &dyn RenderColors,
     cursor: Option<(u16, usize)>,
     title: Option<&str>,
-) -> String {
-    render_svg_with_zoom(rows, cols, colors, cursor, title, 1.0, None)
-}
-
-pub(crate) fn render_svg_with_zoom(
-    rows: &[Vec<EmuCell>],
-    cols: u16,
-    colors: &dyn RenderColors,
-    cursor: Option<(u16, usize)>,
-    title: Option<&str>,
+    style: &Style,
     zoom: f64,
     background: Option<CaptureBackground>,
 ) -> String {
-    let nerd_font = NerdFont::new(rows, FONT_SIZE);
+    let cell_w = style.cell_width();
+    let cell_h = style.cell_height();
+    let font_size = style.font_size;
+    let header_h = style.header_height();
+    let divider_h = style.divider_height();
+    let radius = style.border.radius;
+    let shadow_color = style.shadow.color;
+    let title_bg = style.window.background;
+    let title_divider = style.window.divider;
+    let font_family = escape_attribute(&style.font.family);
+    let nerd_font = NerdFont::new(rows, font_size);
     let cols = cols as usize;
-    let x0 = MARGIN_X;
-    let y0 = HEADER_H + CONTENT_PADDING_TOP;
-    let panel_width = MARGIN_X * 2.0 + cols as f32 * CELL_W;
+    let x0 = style.content_left();
+    let y0 = header_h + style.content_top();
+    let panel_width = style.content_left() + style.content_right() + cols as f32 * cell_w;
     let panel_height =
-        HEADER_H + CONTENT_PADDING_TOP + MARGIN_BOTTOM + rows.len().max(1) as f32 * CELL_H;
-    let padding = CANVAS_PADDING as f32;
-    let width = panel_width + padding * 2.0;
-    let height = panel_height + padding * 2.0;
+        header_h + style.content_top() + style.content_bottom() + rows.len().max(1) as f32 * cell_h;
+    let pad_left = style.canvas_left() as f32;
+    let pad_top = style.canvas_top() as f32;
+    let width = panel_width + pad_left + style.canvas_right() as f32;
+    let height = panel_height + pad_top + style.canvas_bottom() as f32;
     let output_width = svg_dimension(f64::from(width) * zoom);
     let output_height = svg_dimension(f64::from(height) * zoom);
 
     let mut out = String::new();
     let _ = write!(
         out,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{FONT_STACK}" font-size="{FONT_SIZE}px">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{font_size}px">"#
     );
     nerd_font.write_defs(&mut out);
+    // A capture may override the configured canvas, including with nothing at
+    // all; naming none leaves the style in charge.
     match background {
         Some(CaptureBackground::Transparent) => {}
         Some(CaptureBackground::Color(color)) => {
@@ -460,57 +489,75 @@ pub(crate) fn render_svg_with_zoom(
             let _ = write!(
                 out,
                 r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
-                hex(CANVAS_BACKGROUND)
+                hex(style.canvas_background)
             );
         }
     }
-    for (spread, offset_y, alpha) in SHADOW_LAYERS {
-        let shadow_x = padding - spread;
-        let shadow_y = padding - spread + offset_y;
+    for (spread, offset_y, alpha) in style.shadow_layers() {
+        let shadow_x = pad_left - spread;
+        let shadow_y = pad_top - spread + offset_y;
         let shadow_width = panel_width + spread * 2.0;
         let shadow_height = panel_height + spread * 2.0;
-        let shadow_radius = WINDOW_RADIUS + spread;
+        let shadow_radius = radius + spread;
         let opacity = f32::from(alpha) / 255.0;
         let _ = write!(
             out,
             r#"<rect x="{shadow_x:.1}" y="{shadow_y:.1}" width="{shadow_width:.1}" height="{shadow_height:.1}" rx="{shadow_radius:.1}" fill="{}" fill-opacity="{opacity:.6}"/>"#,
-            hex(SHADOW_COLOR)
+            hex(shadow_color)
         );
     }
     let _ = write!(
         out,
-        r#"<g transform="translate({padding:.0} {padding:.0})"><rect width="{panel_width:.0}" height="{panel_height:.0}" rx="{WINDOW_RADIUS:.0}" fill="{}"/>"#,
+        r#"<g transform="translate({pad_left:.0} {pad_top:.0})"><rect width="{panel_width:.0}" height="{panel_height:.0}" rx="{radius:.0}" fill="{}"/>"#,
         hex(colors.resolve(None, false))
     );
-    let title_bottom = HEADER_H - TITLE_DIVIDER_H;
-    let right_curve = panel_width - WINDOW_RADIUS;
-    let _ = write!(
-        out,
-        r#"<path d="M0 {WINDOW_RADIUS:.1} Q0 0 {WINDOW_RADIUS:.1} 0 H{right_curve:.1} Q{panel_width:.1} 0 {panel_width:.1} {WINDOW_RADIUS:.1} V{title_bottom:.1} H0 Z" fill="{}"/>"#,
-        hex(TITLE_BG)
-    );
-    let _ = write!(
-        out,
-        r#"<rect y="{title_bottom:.1}" width="{panel_width:.0}" height="{TITLE_DIVIDER_H:.1}" fill="{}"/>"#,
-        hex(TITLE_DIVIDER)
-    );
-    for (i, dot) in TRAFFIC_LIGHTS.iter().copied().enumerate() {
-        let cx = MARGIN_X + 5.0 + i as f32 * 20.0;
+    // The whole title bar is one decision. Each piece used to be drawn
+    // unconditionally, so turning the bar off left a strip of title color
+    // across the grid's top corners, the close button's dot at 0,0, and the
+    // title written over the first row of content.
+    if style.window.title_bar {
+        let title_bottom = header_h - divider_h;
+        let right_curve = panel_width - radius;
         let _ = write!(
             out,
-            r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{DOT_R:.1}" fill="{}"/>"#,
-            hex(dot),
-            cy = HEADER_H / 2.0,
+            r#"<path d="M0 {radius:.1} Q0 0 {radius:.1} 0 H{right_curve:.1} Q{panel_width:.1} 0 {panel_width:.1} {radius:.1} V{title_bottom:.1} H0 Z" fill="{}"/>"#,
+            hex(title_bg)
+        );
+        let _ = write!(
+            out,
+            r#"<rect y="{title_bottom:.1}" width="{panel_width:.0}" height="{divider_h:.1}" fill="{}"/>"#,
+            hex(title_divider)
+        );
+        let lights = style.window.traffic_lights();
+        for (i, dot) in lights.iter().copied().enumerate() {
+            let cx = style.content_left() + 5.0 + i as f32 * 20.0;
+            let _ = write!(
+                out,
+                r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{DOT_R:.1}" fill="{}"/>"#,
+                hex(dot),
+                cy = header_h / 2.0,
+            );
+        }
+        // The darker centre of the close button belongs with the lights, not
+        // beside them, or it survives them being turned off.
+        if !lights.is_empty() {
+            let _ = write!(
+                out,
+                r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{RED_DOT_R:.1}" fill="{}"/>"#,
+                hex(RED_DOT_COLOR),
+                cx = style.content_left() + 5.0,
+                cy = header_h / 2.0,
+            );
+        }
+        write_title(
+            &mut out,
+            title,
+            cols as u16,
+            rows.len().max(1),
+            panel_width,
+            style,
         );
     }
-    let _ = write!(
-        out,
-        r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{RED_DOT_R:.1}" fill="{}"/>"#,
-        hex(RED_DOT_COLOR),
-        cx = MARGIN_X + 5.0,
-        cy = HEADER_H / 2.0,
-    );
-    write_title(&mut out, title, cols as u16, rows.len().max(1), panel_width);
 
     for (y, row) in rows.iter().enumerate() {
         let mut x = 0;
@@ -521,12 +568,12 @@ pub(crate) fn render_svg_with_zoom(
                 run += 1;
             }
             if bg != colors.resolve(None, false) {
-                let rx = x0 + x as f32 * CELL_W;
-                let ry = y0 + y as f32 * CELL_H;
-                let rw = run as f32 * CELL_W;
+                let rx = x0 + x as f32 * cell_w;
+                let ry = y0 + y as f32 * cell_h;
+                let rw = run as f32 * cell_w;
                 let _ = write!(
                     out,
-                    r#"<rect x="{rx:.2}" y="{ry:.2}" width="{rw:.2}" height="{CELL_H:.2}" fill="{}"/>"#,
+                    r#"<rect x="{rx:.2}" y="{ry:.2}" width="{rw:.2}" height="{cell_h:.2}" fill="{}"/>"#,
                     hex(bg)
                 );
             }
@@ -537,18 +584,34 @@ pub(crate) fn render_svg_with_zoom(
     for (y, row) in rows.iter().enumerate() {
         let mut x = 0;
         while x < cols {
-            let style = style_of(cell_at(row, x), colors);
+            let paint = cell_paint(cell_at(row, x), colors);
             let mut run = 1;
-            while x + run < cols && style_of(cell_at(row, x + run), colors) == style {
+            while x + run < cols && cell_paint(cell_at(row, x + run), colors) == paint {
                 run += 1;
             }
-            write_text_run(&mut out, row, x, x + run, y, style, &nerd_font);
+            write_text_run(&mut out, row, x..x + run, y, paint, &nerd_font, style);
             x += run;
         }
     }
 
     if let Some(at) = cursor {
-        write_cursor(&mut out, rows, at, colors, &nerd_font);
+        write_cursor(&mut out, rows, at, colors, &nerd_font, style);
+    }
+
+    // Last, so the content it frames cannot paint over it. The rect is inset
+    // by half the stroke because SVG centers a stroke on its path, and a
+    // border that straddled the panel edge would bleed into the padding.
+    if style.border.width > 0.0 {
+        let inset = style.border.width / 2.0;
+        let _ = write!(
+            out,
+            r#"<rect x="{inset:.2}" y="{inset:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="none" stroke="{}" stroke-width="{:.2}"/>"#,
+            (panel_width - style.border.width).max(0.0),
+            (panel_height - style.border.width).max(0.0),
+            (radius - inset).max(0.0),
+            hex(style.border.color),
+            style.border.width,
+        );
     }
 
     out.push_str("</g></svg>");
@@ -556,22 +619,44 @@ pub(crate) fn render_svg_with_zoom(
 }
 
 #[cfg(feature = "recording-raster")]
-pub(crate) fn pixel_size(cols: u16, rows: usize) -> (u32, u32) {
-    let (width, height) = exact_pixel_size(cols, rows);
+pub(crate) fn pixel_size(cols: u16, rows: usize, style: &Style) -> (u32, u32) {
+    let (width, height) = exact_pixel_size(cols, rows, style);
     (width + width % 2, height + height % 2)
 }
 
 #[cfg(feature = "recording-raster")]
-pub(crate) fn exact_pixel_size(cols: u16, rows: usize) -> (u32, u32) {
-    let width = (MARGIN_X * 2.0 + f32::from(cols) * CELL_W).ceil() as u32;
-    let height = (HEADER_H + CONTENT_PADDING_TOP + MARGIN_BOTTOM + rows.max(1) as f32 * CELL_H)
-        .ceil() as u32;
+pub(crate) fn exact_pixel_size(cols: u16, rows: usize, style: &Style) -> (u32, u32) {
+    let cell_w = style.cell_width();
+    let cell_h = style.cell_height();
+    let header_h = style.header_height();
+    let width =
+        (style.content_left() + style.content_right() + f32::from(cols) * cell_w).ceil() as u32;
+    let height =
+        (header_h + style.content_top() + style.content_bottom() + rows.max(1) as f32 * cell_h)
+            .ceil() as u32;
     (width, height)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The geometry the assertions below are written against.
+    fn geometry() -> Style {
+        Style::default()
+    }
+    fn cell_w() -> f32 {
+        geometry().cell_width()
+    }
+    fn cell_h() -> f32 {
+        geometry().cell_height()
+    }
+    fn header_h() -> f32 {
+        geometry().header_height()
+    }
+    fn font_baseline() -> f32 {
+        geometry().baseline()
+    }
     use crate::profile::{ColorSlot, Profile};
     use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::cell::{Color, UnderlineStyle};
@@ -603,7 +688,16 @@ mod tests {
         let cursor_fill = hex(Profile::default().colors.cursor);
 
         let mut emu = colors();
-        let block = render_svg(&rows, 1, &emu, Some((0, 0)), None);
+        let block = render_svg(
+            &rows,
+            1,
+            &emu,
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(
             block.contains(&format!(
                 r#"width="10.00" height="21.00" fill="{cursor_fill}""#
@@ -612,7 +706,16 @@ mod tests {
         );
 
         emu.process(b"\x1b[4 q");
-        let underline = render_svg(&rows, 1, &emu, Some((0, 0)), None);
+        let underline = render_svg(
+            &rows,
+            1,
+            &emu,
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(
             underline.contains(&format!(
                 r#"width="10.00" height="2.00" fill="{cursor_fill}""#
@@ -621,7 +724,16 @@ mod tests {
         );
 
         emu.process(b"\x1b[6 q");
-        let bar = render_svg(&rows, 1, &emu, Some((0, 0)), None);
+        let bar = render_svg(
+            &rows,
+            1,
+            &emu,
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(
             bar.contains(&format!(
                 r#"width="2.00" height="21.00" fill="{cursor_fill}""#
@@ -636,7 +748,16 @@ mod tests {
     #[test]
     fn a_block_cursor_keeps_its_character_readable() {
         let rows = vec![vec![cell("Z", None, None)]];
-        let svg = render_svg(&rows, 1, &colors(), Some((0, 0)), None);
+        let svg = render_svg(
+            &rows,
+            1,
+            &colors(),
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         let background = hex(Profile::default().colors.background);
         assert!(
             svg.contains(&format!(r#"fill="{background}""#)) && svg.matches(">Z<").count() == 2,
@@ -648,7 +769,16 @@ mod tests {
     fn a_block_cursor_does_not_reveal_invisible_text() {
         let mut hidden = cell("X", None, None);
         hidden.attrs = Attrs::INVISIBLE;
-        let svg = render_svg(&[vec![hidden]], 1, &colors(), Some((0, 0)), None);
+        let svg = render_svg(
+            &[vec![hidden]],
+            1,
+            &colors(),
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(
             !svg.contains('X'),
             "the cursor must not redraw text hidden with SGR 8: {svg}"
@@ -660,7 +790,16 @@ mod tests {
         let mut styled = cell("S", None, None);
         styled.attrs = Attrs::BOLD | Attrs::ITALIC | Attrs::STRIKE;
         styled.underline = UnderlineStyle::Single;
-        let svg = render_svg(&[vec![styled]], 1, &colors(), Some((0, 0)), None);
+        let svg = render_svg(
+            &[vec![styled]],
+            1,
+            &colors(),
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
 
         for attribute in [
             r#"font-weight="bold""#,
@@ -686,7 +825,16 @@ mod tests {
             cell(CONTINUATION, None, None),
             cell("a", None, None),
         ]];
-        let svg = render_svg(&rows, 3, &colors(), Some((0, 0)), None);
+        let svg = render_svg(
+            &rows,
+            3,
+            &colors(),
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         let cursor_fill = hex(Profile::default().colors.cursor);
         assert!(
             svg.contains(&format!(
@@ -711,7 +859,16 @@ mod tests {
     fn a_block_cursor_redraws_a_vector_glyph() {
         let rows = vec![vec![cell("\u{f115}", None, None)]];
         let background = hex(Profile::default().colors.background);
-        let svg = render_svg(&rows, 1, &colors(), Some((0, 0)), None);
+        let svg = render_svg(
+            &rows,
+            1,
+            &colors(),
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert_eq!(
             svg.matches("<use href=\"#nf-f115\"").count(),
             2,
@@ -742,8 +899,17 @@ mod tests {
     fn a_cursor_below_the_u16_mark_keeps_its_row() {
         let row = 70_000usize;
         let rows = vec![vec![cell("x", None, None)]; row + 1];
-        let svg = render_svg(&rows, 1, &colors(), Some((0, row)), None);
-        let expected = HEADER_H + CONTENT_PADDING_TOP + row as f32 * CELL_H;
+        let svg = render_svg(
+            &rows,
+            1,
+            &colors(),
+            Some((0, row)),
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
+        let expected = header_h() + Style::default().content_top() + row as f32 * cell_h();
         assert!(
             svg.contains(&format!(r#"<rect x="15.00" y="{expected:.2}""#)),
             "the cursor sits on row {row}, not on a wrapped one"
@@ -763,17 +929,38 @@ mod tests {
         emu.process(b"\x1b]12;#ff00ff\x07");
 
         assert!(
-            render_svg(&rows, 1, &emu, Some((0, 0)), None).contains("#ff00ff"),
+            render_svg(
+                &rows,
+                1,
+                &emu,
+                Some((0, 0)),
+                None,
+                &Style::default(),
+                1.0,
+                None
+            )
+            .contains("#ff00ff"),
             "the cursor is drawn when there is one to draw"
         );
         assert!(
-            !render_svg(&rows, 1, &emu, None, None).contains("#ff00ff"),
+            !render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0, None)
+                .contains("#ff00ff"),
             "a terminal not showing a cursor gets none"
         );
         // A row past the end of the grid: reachable if a caller miscounts the
         // scrollback offset, and not worth a panic.
         assert!(
-            !render_svg(&rows, 1, &emu, Some((0, 9)), None).contains("#ff00ff"),
+            !render_svg(
+                &rows,
+                1,
+                &emu,
+                Some((0, 9)),
+                None,
+                &Style::default(),
+                1.0,
+                None
+            )
+            .contains("#ff00ff"),
             "an out-of-range position is ignored"
         );
     }
@@ -786,7 +973,17 @@ mod tests {
         let rows = vec![vec![cell("x", None, None)]];
         let mut emu = colors();
         emu.process(b"\x1b]12;#ff00ff\x07");
-        assert!(render_svg(&rows, 1, &emu, Some((0, 0)), None).contains("#ff00ff"));
+        assert!(render_svg(
+            &rows,
+            1,
+            &emu,
+            Some((0, 0)),
+            None,
+            &Style::default(),
+            1.0,
+            None
+        )
+        .contains("#ff00ff"));
     }
 
     /// A program that repaints the terminal repaints the screenshot.
@@ -801,14 +998,14 @@ mod tests {
         let mut emu = colors();
         let rows = vec![vec![cell("x", Some(Color::from_index(1)), None)]];
 
-        let before = render_svg(&rows, 1, &emu, None, None);
+        let before = render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0, None);
         assert!(before.contains(&hex(Profile::default().colors.red)));
         assert!(before.contains(&hex(Profile::default().colors.background)));
 
         // The program picks its own background and recolors palette slot 1.
         emu.process(b"\x1b]11;#3b0764\x07\x1b]4;1;#22c55e\x07");
 
-        let after = render_svg(&rows, 1, &emu, None, None);
+        let after = render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0, None);
         assert!(
             after.contains("#3b0764"),
             "the window is painted with the background the program set"
@@ -833,7 +1030,7 @@ mod tests {
         emu.process(b"\x1b]11;#3b0764\x07\x1b]4;1;#22c55e\x07");
         emu.process(b"\x1b]111\x07\x1b]104;1\x07");
 
-        let after = render_svg(&rows, 1, &emu, None, None);
+        let after = render_svg(&rows, 1, &emu, None, None, &Style::default(), 1.0, None);
         assert!(after.contains(&hex(Profile::default().colors.background)));
         assert!(after.contains(&hex(Profile::default().colors.red)));
     }
@@ -844,7 +1041,16 @@ mod tests {
             cell("h", Some(Color::from_index(1)), None),
             cell("i", Some(Color::from_index(1)), None),
         ]];
-        let svg = render_svg(&rows, 2, &colors(), None, None);
+        let svg = render_svg(
+            &rows,
+            2,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(svg.starts_with("<svg"));
         assert!(svg.ends_with("</svg>"));
         assert!(svg.contains("textLength"));
@@ -860,41 +1066,114 @@ mod tests {
     #[test]
     fn zoom_changes_output_size_without_changing_the_view_box() {
         let rows = vec![vec![cell("x", None, None)]];
-        let svg = render_svg_with_zoom(&rows, 1, &colors(), None, None, 0.5, None);
-        assert!(svg.contains(r#"width="44" height="60.5" viewBox="0 0 88 121""#));
+        let svg = render_svg(
+            &rows,
+            1,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            0.5,
+            None,
+        );
+        let full = render_svg(
+            &rows,
+            1,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
+        let view_box = {
+            let start = full.find("viewBox=\"").expect("a viewBox");
+            let rest = &full[start..];
+            rest[..rest[9..].find('"').expect("a close") + 10].to_string()
+        };
+        let (w, h) = {
+            let inner = view_box
+                .trim_start_matches("viewBox=\"0 0 ")
+                .trim_end_matches('"');
+            let mut parts = inner.split(' ');
+            (
+                parts.next().unwrap().parse::<f32>().unwrap(),
+                parts.next().unwrap().parse::<f32>().unwrap(),
+            )
+        };
+        assert!(
+            svg.contains(&format!(
+                r#"width="{}" height="{}" {view_box}"#,
+                w / 2.0,
+                h / 2.0
+            )),
+            "halving the zoom halves the drawn size and leaves the view box: {svg}"
+        );
     }
 
     #[test]
     fn canvas_background_can_be_custom_or_transparent() {
         let rows = vec![vec![cell("x", None, None)]];
-        let custom = render_svg_with_zoom(
-            &rows,
-            1,
-            &colors(),
-            None,
-            None,
-            1.0,
-            Some(CaptureBackground::Color(Rgb::new(1, 2, 3))),
-        );
-        assert!(custom.contains(r##"<rect width="88" height="121" fill="#010203"/>"##));
+        let draw = |background| {
+            render_svg(
+                &rows,
+                1,
+                &colors(),
+                None,
+                None,
+                &Style::default(),
+                1.0,
+                background,
+            )
+        };
 
-        let transparent = render_svg_with_zoom(
-            &rows,
-            1,
-            &colors(),
-            None,
-            None,
-            1.0,
-            Some(CaptureBackground::Transparent),
+        let custom = draw(Some(CaptureBackground::Color(Rgb::new(1, 2, 3))));
+        assert!(
+            custom.contains(r##"fill="#010203"/>"##),
+            "a capture may name its own canvas: {custom}"
         );
-        assert!(!transparent.contains(r##"<rect width="88" height="121" fill="#6867aa"/>"##));
+
+        let transparent = draw(Some(CaptureBackground::Transparent));
+        assert!(
+            !transparent.contains(&hex(Style::default().canvas_background)),
+            "or none at all: {transparent}"
+        );
+
+        assert!(
+            draw(None).contains(&hex(Style::default().canvas_background)),
+            "and naming none leaves the style in charge"
+        );
     }
 
     #[test]
     fn emits_window_chrome() {
-        let svg = render_svg(&[vec![cell(" ", None, None)]], 1, &colors(), None, None);
+        let svg = render_svg(
+            &[vec![cell(" ", None, None)]],
+            1,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(svg.contains("<circle"));
-        assert!(svg.contains(r##"<rect width="88" height="121" fill="#6867aa"/>"##));
+        // Derived, so a deliberate change to a default gap does not read as a
+        // broken chrome test.
+        let style = Style::default();
+        let canvas_width = style.content_left() + style.content_right() + style.cell_width();
+        let canvas_height = style.header_height()
+            + style.content_top()
+            + style.content_bottom()
+            + style.cell_height();
+        let width = canvas_width + (style.canvas_left() + style.canvas_right()) as f32;
+        let height = canvas_height + (style.canvas_top() + style.canvas_bottom()) as f32;
+        assert!(
+            svg.contains(&format!(
+                r##"<rect width="{width:.0}" height="{height:.0}" fill="#6867aa"/>"##
+            )),
+            "the canvas is the panel plus its gaps: {svg}"
+        );
         assert!(svg.contains(r#"<g transform="translate(24 24)">"#));
         assert!(svg.contains(r##"fill="#080812" fill-opacity="0.070588""##));
         assert!(svg.contains(&hex(Profile::default().colors.background)));
@@ -909,15 +1188,33 @@ mod tests {
 
     #[test]
     fn centers_the_text_font_box_in_each_cell() {
-        let svg = render_svg(&[vec![cell("x", None, None)]], 1, &colors(), None, None);
-        let expected_baseline = HEADER_H + CONTENT_PADDING_TOP + FONT_BASELINE;
+        let svg = render_svg(
+            &[vec![cell("x", None, None)]],
+            1,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
+        let expected_baseline = header_h() + Style::default().content_top() + font_baseline();
         assert!(svg.contains(&format!(r#"y="{expected_baseline:.2}""#)));
     }
 
     #[test]
     fn escapes_markup_characters() {
         let rows = vec![vec![cell("<", None, None)]];
-        let svg = render_svg(&rows, 1, &colors(), None, None);
+        let svg = render_svg(
+            &rows,
+            1,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(svg.contains("&lt;"));
         assert!(!svg.contains("><</text>"));
     }
@@ -925,7 +1222,16 @@ mod tests {
     #[test]
     fn background_run_emitted_for_non_default_bg() {
         let rows = vec![vec![cell(" ", None, Some(Color::from_index(4)))]];
-        let svg = render_svg(&rows, 1, &colors(), None, None);
+        let svg = render_svg(
+            &rows,
+            1,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
         assert!(
             svg.contains(&hex(Emulator::color(&colors(), ColorSlot::Indexed(4)))),
             "slot 4 is painted with the profile color"
@@ -940,13 +1246,23 @@ mod tests {
             cell(glyph, None, None),
             cell("b", None, None),
         ]];
-        let svg = render_svg(&rows, 3, &colors(), None, None);
+        let svg = render_svg(
+            &rows,
+            3,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
 
         assert!(svg.contains(r#"<path id="nf-f115" d=""#));
         assert!(svg.contains(r##"<use href="#nf-f115""##));
         assert!(svg.contains(">a b</text>"));
         assert!(!svg.contains(glyph));
-        assert!(svg.contains(&format!(r#"font-family="{FONT_STACK}" font-size="#)));
+        let family = &Style::default().font.family;
+        assert!(svg.contains(&format!(r#"font-family="{family}" font-size="#)));
     }
 
     #[test]
@@ -958,6 +1274,9 @@ mod tests {
             &colors(),
             None,
             None,
+            &Style::default(),
+            1.0,
+            None,
         );
 
         assert_eq!(svg.matches(r#"<path id="nf-f115""#).count(), 1);
@@ -967,7 +1286,16 @@ mod tests {
     #[test]
     fn leaves_unknown_private_use_glyphs_as_text() {
         let glyph = "\u{10fffd}";
-        let svg = render_svg(&[vec![cell(glyph, None, None)]], 1, &colors(), None, None);
+        let svg = render_svg(
+            &[vec![cell(glyph, None, None)]],
+            1,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
 
         assert!(svg.contains(glyph));
         assert!(!svg.contains("<defs>"));
@@ -979,8 +1307,26 @@ mod tests {
     #[test]
     fn draws_the_window_title_centred_in_the_bar() {
         let rows = vec![vec![cell("x", None, None); 40]];
-        let bare = render_svg(&rows, 40, &colors(), None, None);
-        let titled = render_svg(&rows, 40, &colors(), None, Some("vim: notes.md"));
+        let bare = render_svg(
+            &rows,
+            40,
+            &colors(),
+            None,
+            None,
+            &Style::default(),
+            1.0,
+            None,
+        );
+        let titled = render_svg(
+            &rows,
+            40,
+            &colors(),
+            None,
+            Some("vim: notes.md"),
+            &Style::default(),
+            1.0,
+            None,
+        );
 
         assert!(
             bare.contains(">tui-test capture - 40x1</text>"),
@@ -1008,7 +1354,16 @@ mod tests {
     fn truncates_a_title_that_does_not_fit() {
         let rows = vec![vec![cell("x", None, None); 20]];
         let long = "a-very-long-window-title-that-cannot-possibly-fit";
-        let svg = render_svg(&rows, 20, &colors(), None, Some(long));
+        let svg = render_svg(
+            &rows,
+            20,
+            &colors(),
+            None,
+            Some(long),
+            &Style::default(),
+            1.0,
+            None,
+        );
 
         assert!(!svg.contains(long), "the full title cannot have been drawn");
         let drawn = svg
@@ -1033,7 +1388,16 @@ mod tests {
     #[test]
     fn budgets_a_wide_glyph_title_by_column() {
         let rows = vec![vec![cell("x", None, None); 24]];
-        let svg = render_svg(&rows, 24, &colors(), None, Some(&"你".repeat(40)));
+        let svg = render_svg(
+            &rows,
+            24,
+            &colors(),
+            None,
+            Some(&"你".repeat(40)),
+            &Style::default(),
+            1.0,
+            None,
+        );
         let drawn = svg
             .split("text-anchor=\"middle\" xml:space=\"preserve\">")
             .nth(1)
@@ -1045,12 +1409,14 @@ mod tests {
     /// The drawn title must sit inside the space between the traffic lights
     /// and the mirrored margin on the right.
     fn assert_fits_clear_of_the_controls(drawn: &str, cols: f32) {
-        let panel = MARGIN_X * 2.0 + cols * CELL_W;
-        let drawn_width = crate::terminal::cell::display_width(drawn) as f32 * title_advance();
+        let panel =
+            Style::default().content_left() + Style::default().content_right() + cols * cell_w();
+        let drawn_width =
+            crate::terminal::cell::display_width(drawn) as f32 * title_advance(&geometry());
         assert!(
-            drawn_width <= panel - 2.0 * DOTS_RIGHT,
+            drawn_width <= panel - 2.0 * dots_right(&Style::default()),
             "title {drawn:?} is {drawn_width} wide, past the {} available",
-            panel - 2.0 * DOTS_RIGHT
+            panel - 2.0 * dots_right(&Style::default())
         );
     }
 
@@ -1066,6 +1432,9 @@ mod tests {
             &colors(),
             None,
             Some("</text><script>x</script>"),
+            &Style::default(),
+            1.0,
+            None,
         );
 
         assert!(!svg.contains("<script>"), "no injected element: {svg}");
@@ -1073,5 +1442,467 @@ mod tests {
             svg.contains("&lt;script&gt;"),
             "it is escaped instead: {svg}"
         );
+    }
+
+    /// Each knob has to reach the output. The golden pins the default, which
+    /// would keep passing if the renderer ignored every configured value, so
+    /// this renders non-default styles and looks for the difference.
+    #[test]
+    fn a_configured_style_changes_what_is_drawn() {
+        use crate::render::style::{BorderStyle, FontFamilies, ShadowStyle, WindowStyle};
+        // Wide enough that the title fits, or its color is never painted.
+        let rows = vec![vec![cell("x", None, None); 40]];
+        let draw =
+            |style: &Style| render_svg(&rows, 40, &colors(), None, Some("title"), style, 1.0, None);
+        let plain = draw(&Style::default());
+
+        let bigger = draw(&Style {
+            font_size: 34.0,
+            ..Style::default()
+        });
+        assert!(
+            bigger.contains(r#"font-size="34px""#),
+            "the font size reaches the root: {bigger}"
+        );
+
+        let recolored = draw(&Style {
+            canvas_background: Rgb::new(1, 2, 3),
+            ..Style::default()
+        });
+        assert!(
+            recolored.contains("#010203"),
+            "the canvas background is painted"
+        );
+        assert!(!plain.contains("#010203"));
+
+        let padded = draw(&Style {
+            canvas_padding: crate::render::style::Padding::Uniform(40),
+            ..Style::default()
+        });
+        assert!(
+            padded.contains("translate(40 40)"),
+            "padding offsets the panel: {padded}"
+        );
+
+        let bare = draw(&Style {
+            window: WindowStyle {
+                title_bar: false,
+                ..WindowStyle::default()
+            },
+            ..Style::default()
+        });
+        assert!(!bare.contains("#69110a"), "no close button without a bar");
+        assert!(!bare.contains(">title"), "and no title drawn over the grid");
+
+        let no_lights = draw(&Style {
+            window: WindowStyle {
+                traffic_lights: false,
+                ..WindowStyle::default()
+            },
+            ..Style::default()
+        });
+        assert!(
+            !no_lights.contains("#ec6a5e"),
+            "the lights can be turned off"
+        );
+        assert!(
+            no_lights.contains("#d9d9e8"),
+            "while the bar they sit on stays"
+        );
+
+        let themed = draw(&Style {
+            window: WindowStyle {
+                background: Rgb::new(9, 9, 9),
+                foreground: Rgb::new(8, 8, 8),
+                divider: Rgb::new(7, 7, 7),
+                ..WindowStyle::default()
+            },
+            ..Style::default()
+        });
+        for expected in ["#090909", "#080808", "#070707"] {
+            assert!(themed.contains(expected), "{expected} is painted: {themed}");
+        }
+
+        let unshadowed = draw(&Style {
+            shadow: ShadowStyle {
+                enabled: false,
+                ..ShadowStyle::default()
+            },
+            ..Style::default()
+        });
+        assert!(
+            !unshadowed.contains("#080812"),
+            "the shadow can be turned off"
+        );
+        assert!(plain.contains("#080812"));
+
+        let recast = draw(&Style {
+            shadow: ShadowStyle {
+                color: Rgb::new(4, 5, 6),
+                ..ShadowStyle::default()
+            },
+            ..Style::default()
+        });
+        assert!(
+            recast.contains("#040506"),
+            "the shadow color reaches the output"
+        );
+
+        let rounded = draw(&Style {
+            border: BorderStyle {
+                radius: 2.0,
+                ..BorderStyle::default()
+            },
+            ..Style::default()
+        });
+        assert!(rounded.contains(r#"rx="2""#), "the corner radius applies");
+
+        let lettered = draw(&Style {
+            font: FontFamilies {
+                family: "Berkeley Mono".into(),
+                ..FontFamilies::default()
+            },
+            ..Style::default()
+        });
+        assert!(lettered.contains(r#"font-family="Berkeley Mono""#));
+    }
+
+    /// A font family is a configured string that lands inside a quoted XML
+    /// attribute, so a quote in it would close the attribute and let the rest
+    /// become markup. Text escaping is not enough there: a quote is harmless
+    /// in content and fatal in an attribute.
+    #[test]
+    fn a_font_family_cannot_break_out_of_its_attribute() {
+        use crate::render::style::FontFamilies;
+        let rows = vec![vec![cell("x", None, None); 2]];
+        let svg = render_svg(
+            &rows,
+            2,
+            &colors(),
+            None,
+            None,
+            &Style {
+                font: FontFamilies {
+                    family: r#"Evil" onload="alert(1)"#.into(),
+                    ..FontFamilies::default()
+                },
+                ..Style::default()
+            },
+            1.0,
+            None,
+        );
+        assert!(
+            !svg.contains(r#"onload="alert(1)""#),
+            "the quote must not close the attribute: {svg}"
+        );
+        assert!(svg.contains("&quot;"), "it is escaped instead: {svg}");
+    }
+
+    /// A config file has to reach the picture. Every other test here starts
+    /// from a `Style` built in Rust, so the whole chain from TOML to output
+    /// could be broken — a hop substituting `Style::default()` — and they
+    /// would all still pass.
+    #[test]
+    fn a_style_from_a_config_file_reaches_the_output() {
+        let config = crate::profile::ConfigFile::parse(
+            "[profiles.docs.recording.style]\nfont_size = 24\ncanvas_padding = 40\n\
+             canvas_background = \"#101112\"\n\
+             \n[profiles.docs.recording.style.window]\ntitle_bar = false\n",
+        )
+        .expect("the config parses");
+        let style = config
+            .settings(Some("docs"))
+            .expect("the profile resolves")
+            .style;
+
+        let rows = vec![vec![cell("x", None, None); 4]];
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0, None);
+
+        assert!(svg.contains(r#"font-size="24px""#), "font_size: {svg}");
+        assert!(svg.contains("translate(40 40)"), "padding: {svg}");
+        assert!(svg.contains("#101112"), "background: {svg}");
+        assert!(!svg.contains("#d9d9e8"), "title_bar = false: {svg}");
+    }
+
+    /// Knobs the broader test does not reach, each of which would otherwise
+    /// only be pinned for its default by the golden.
+    #[test]
+    fn the_remaining_knobs_reach_the_output() {
+        use crate::render::style::ShadowStyle;
+        let rows = vec![vec![cell("x", None, None); 40]];
+        let draw =
+            |style: &Style| render_svg(&rows, 40, &colors(), None, Some("title"), style, 1.0, None);
+
+        let titled = draw(&Style {
+            title_font_size: 21.0,
+            ..Style::default()
+        });
+        assert!(
+            titled.contains(r#"font-size="21px""#),
+            "the title font size is its own knob: {titled}"
+        );
+
+        // The shadow's geometry is derived, so this proves the derivation is
+        // wired into the renderer rather than only unit-tested.
+        let default_shadow = draw(&Style::default());
+        let cast = draw(&Style {
+            shadow: ShadowStyle {
+                offset: 20.0,
+                spread: 28.0,
+                ..ShadowStyle::default()
+            },
+            ..Style::default()
+        });
+        assert_ne!(
+            default_shadow, cast,
+            "changing the shadow's offset and spread moves the rectangles"
+        );
+        assert!(
+            cast.contains(r#"rx="36.0""#),
+            "the outermost layer is spread past the corner radius: {cast}"
+        );
+    }
+
+    /// `border.width` and `border.color` were accepted, validated and then
+    /// ignored by both renderers.
+    #[test]
+    fn a_border_is_stroked_when_one_is_asked_for() {
+        use crate::render::style::BorderStyle;
+        let rows = vec![vec![cell("x", None, None); 4]];
+        let draw = |border: BorderStyle| {
+            render_svg(
+                &rows,
+                4,
+                &colors(),
+                None,
+                Some("t"),
+                &Style {
+                    border,
+                    ..Style::default()
+                },
+                1.0,
+                None,
+            )
+        };
+
+        assert!(
+            !draw(BorderStyle::default()).contains("stroke"),
+            "the default asks for no border and gets none"
+        );
+
+        let bordered = draw(BorderStyle {
+            width: 4.0,
+            color: crate::profile::Rgb::new(255, 0, 0),
+            radius: 8.0,
+        });
+        assert!(
+            bordered.contains(r##"stroke="#ff0000""##),
+            "the configured color is used: {bordered}"
+        );
+        assert!(
+            bordered.contains(r#"stroke-width="4.00""#),
+            "the configured width is used: {bordered}"
+        );
+        assert!(
+            bordered.contains(r#"x="2.00" y="2.00""#),
+            "and the stroke is inset by half its width so it stays on the panel: {bordered}"
+        );
+    }
+
+    /// `font.bold` and friends were accepted and never drawn.
+    #[test]
+    fn a_variant_font_is_asked_for_only_where_it_differs() {
+        use crate::render::style::FontFamilies;
+        let rows = vec![vec![
+            cell("a", None, None),
+            EmuCell {
+                attrs: Attrs::BOLD,
+                ..cell("b", None, None)
+            },
+        ]];
+        let style = Style {
+            font: FontFamilies {
+                family: "Base Mono".into(),
+                bold: Some("Heavy Mono".into()),
+                ..FontFamilies::default()
+            },
+            ..Style::default()
+        };
+        let svg = render_svg(&rows, 2, &colors(), None, Some("t"), &style, 1.0, None);
+
+        assert!(
+            svg.contains(r#"font-family="Base Mono""#),
+            "the root carries the base family: {svg}"
+        );
+        assert!(
+            svg.contains(r#"font-family="Heavy Mono" font-weight="bold""#),
+            "and a bold run asks for the bold family: {svg}"
+        );
+        assert_eq!(
+            svg.matches("font-family=").count(),
+            2,
+            "the plain run inherits the root rather than repeating it: {svg}"
+        );
+    }
+
+    /// One number used to set every gap, so a wider bottom meant a wider
+    /// everything.
+    #[test]
+    fn each_gap_around_the_window_can_differ() {
+        use crate::render::style::{Padding, PaddingSides};
+        let rows = vec![vec![cell("x", None, None); 4]];
+        let style = Style {
+            canvas_padding: Padding::Sides(PaddingSides {
+                top: Some(10),
+                right: Some(20),
+                bottom: Some(60),
+                left: Some(30),
+            }),
+            ..Style::default()
+        };
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0, None);
+
+        assert!(
+            svg.contains("translate(30 10)"),
+            "the window sits at the left and top gaps: {svg}"
+        );
+
+        // Measured against the default rather than recomputed: the default is
+        // 24 on every side, so each axis differs by the gaps it actually got.
+        let box_of = |svg: &str| -> (f32, f32) {
+            let start = svg.find("viewBox=\"0 0 ").expect("a viewBox") + 13;
+            let rest = &svg[start..];
+            let end = rest.find('"').expect("a closing quote");
+            let mut parts = rest[..end].split(' ');
+            (
+                parts.next().unwrap().parse().unwrap(),
+                parts.next().unwrap().parse().unwrap(),
+            )
+        };
+        let plain = render_svg(
+            &rows,
+            4,
+            &colors(),
+            None,
+            Some("t"),
+            &Style::default(),
+            1.0,
+            None,
+        );
+        let (plain_w, plain_h) = box_of(&plain);
+        let (wide_w, wide_h) = box_of(&svg);
+        assert_eq!(
+            (wide_w - plain_w, wide_h - plain_h),
+            ((30.0 + 20.0) - 48.0, (10.0 + 60.0) - 48.0),
+            "each axis grows by its own two gaps, not by one of them doubled"
+        );
+
+        // A table naming one side leaves the rest at the default rather than
+        // collapsing them to zero.
+        let one = Style {
+            canvas_padding: Padding::Sides(PaddingSides {
+                bottom: Some(60),
+                ..crate::render::style::PaddingSides::default()
+            }),
+            ..Style::default()
+        };
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &one, 1.0, None);
+        assert!(
+            svg.contains("translate(24 24)"),
+            "the sides it did not name keep the default: {svg}"
+        );
+    }
+
+    /// The gap inside the window was three constants, and the one above the
+    /// grid was the smallest of them, so text sat against the title bar and
+    /// against the top edge when there was no title bar at all.
+    #[test]
+    fn the_gap_inside_the_window_is_configurable_on_every_side() {
+        use crate::render::style::{Padding, PaddingSides};
+        let rows = vec![vec![cell("x", None, None); 4]];
+        let default = Style::default();
+        assert_eq!(
+            (
+                default.content_top(),
+                default.content_right(),
+                default.content_bottom(),
+                default.content_left()
+            ),
+            (8.0, 15.0, 14.0, 15.0),
+            "the default top gap is no longer a quarter of the side gaps"
+        );
+
+        let style = Style {
+            content_padding: Padding::Sides(PaddingSides {
+                top: Some(40),
+                left: Some(30),
+                ..PaddingSides::default()
+            }),
+            ..Style::default()
+        };
+        let svg = render_svg(&rows, 4, &colors(), None, Some("t"), &style, 1.0, None);
+
+        // The first run starts at the left gap, and its baseline sits below the
+        // title bar by the top gap.
+        assert!(
+            svg.contains(r#"<text x="30.00""#),
+            "the grid starts at the left gap: {svg}"
+        );
+        let baseline = style.header_height() + 40.0 + style.baseline();
+        assert!(
+            svg.contains(&format!(r#"y="{baseline:.2}""#)),
+            "and below the title bar by the top gap: {svg}"
+        );
+
+        // A side the table does not name keeps its own default rather than the
+        // one the named sides happen to use.
+        assert_eq!(style.content_bottom(), 14.0);
+        assert_eq!(style.content_right(), 15.0);
+    }
+}
+
+#[cfg(test)]
+mod golden {
+    use super::*;
+    use crate::profile::Profile;
+    use crate::terminal::alacritty::AlacrittyEmu;
+    use crate::terminal::emu::Emulator;
+
+    /// The default style must render exactly what the renderer did when every
+    /// value here was a constant.
+    ///
+    /// The appearance was moved out of the source and into [`Style`], which is
+    /// only safe if the defaults reproduce it: a refactor that shifted a
+    /// margin by a pixel would silently restyle every existing recording, and
+    /// nothing else in the suite compares whole output.
+    ///
+    /// Set `TUI_TEST_UPDATE_GOLDEN=1` to rewrite the file when the default look
+    /// is meant to change, so the new bytes land in a diff a reviewer can read
+    /// rather than being pasted out of an assertion message.
+    #[test]
+    fn the_default_style_renders_the_original_bytes() {
+        let mut emu = AlacrittyEmu::new(20, 3, &Profile::default());
+        emu.process(b"\x1b]0;golden\x07");
+        emu.process("\x1b[1mbold\x1b[0m \x1b[3mit\x1b[0m \x1b[4mul\x1b[0m \u{4f60}".as_bytes());
+        emu.process(b"\r\n\x1b[31;44mcolor\x1b[0m");
+        let rendered = render_svg(
+            &emu.viewable_rows(),
+            20,
+            &emu as &dyn RenderColors,
+            Some((0, 1)),
+            Some("golden"),
+            &Style::default(),
+            1.0,
+            None,
+        );
+        let golden = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/render/testdata/default-style.svg"
+        );
+        if std::env::var_os("TUI_TEST_UPDATE_GOLDEN").is_some() {
+            std::fs::write(golden, &rendered).expect("rewrite the golden");
+            return;
+        }
+        assert_eq!(rendered, include_str!("testdata/default-style.svg"));
     }
 }

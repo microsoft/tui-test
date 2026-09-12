@@ -1,9 +1,10 @@
 #[cfg(feature = "recording-font-jetbrains-mono-styles")]
 use super::font::{FontSystem, GlyphKey};
-use super::{FrameRenderer, GridRenderer, RgbaFrame, CANVAS_BACKGROUND, CANVAS_PADDING};
+use super::{FrameRenderer, GridRenderer, RgbaFrame};
 use crate::api::CaptureBackground;
 use crate::profile::Profile;
 use crate::record::frames::Frame;
+use crate::render::style::{Padding, Style};
 use crate::render::svg::{RenderColors, RenderState};
 use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::cell::{Attrs, Color, EmuCell, CONTINUATION};
@@ -60,11 +61,14 @@ fn scaled_renderers_multiply_output_dimensions() {
 
 #[test]
 fn static_screenshots_keep_odd_svg_dimensions_at_zoom() {
+    // Sizes follow the default style; update them deliberately if a default
+    // gap moves. The point is the difference: a recording is rounded up to
+    // even dimensions for the video encoders, a screenshot is not.
     for (zoom, recording_size, screenshot_size) in
-        [(1.0, (88, 122), (88, 121)), (2.0, (176, 244), (176, 242))]
+        [(1.0, (88, 126), (88, 125)), (2.0, (176, 252), (176, 250))]
     {
-        let recording = GridRenderer::with_zoom(1, 1, zoom).unwrap();
-        let screenshot = GridRenderer::for_screenshot(1, 1, zoom, None).unwrap();
+        let recording = GridRenderer::with_zoom(1, 1, zoom, Style::default()).unwrap();
+        let screenshot = GridRenderer::for_screenshot(1, 1, zoom, Style::default(), None).unwrap();
 
         assert_eq!(recording.pixel_size(), recording_size);
         assert_eq!(screenshot.pixel_size(), screenshot_size);
@@ -74,7 +78,7 @@ fn static_screenshots_keep_odd_svg_dimensions_at_zoom() {
 #[test]
 fn fractional_zoom_shrinks_output_without_changing_grid_dimensions() {
     let standard = GridRenderer::new(80, 30);
-    let half = GridRenderer::with_zoom(80, 30, 0.5).unwrap();
+    let half = GridRenderer::with_zoom(80, 30, 0.5, Style::default()).unwrap();
     assert_eq!(
         half.pixel_size(),
         (
@@ -95,15 +99,21 @@ fn canvas_background_can_be_custom_or_transparent() {
         1,
         1,
         1.0,
+        Style::default(),
         Some(CaptureBackground::Color(crate::profile::Rgb::new(1, 2, 3))),
     )
     .unwrap();
     let custom = custom.render(&frame).unwrap();
     assert_eq!(&custom.as_raw()[..4], &[1, 2, 3, 255]);
 
-    let mut transparent =
-        GridRenderer::with_zoom_and_background(1, 1, 1.0, Some(CaptureBackground::Transparent))
-            .unwrap();
+    let mut transparent = GridRenderer::with_zoom_and_background(
+        1,
+        1,
+        1.0,
+        Style::default(),
+        Some(CaptureBackground::Transparent),
+    )
+    .unwrap();
     let transparent = transparent.render(&frame).unwrap();
     assert_eq!(&transparent.as_raw()[..4], &[0, 0, 0, 0]);
 }
@@ -138,10 +148,12 @@ fn adjacent_background_cells_are_seamless_at_fractional_zoom() {
     ];
 
     for zoom in [1.02, 1.25] {
-        let mut renderer = GridRenderer::with_zoom(backgrounds.len() as u16, rows, zoom).unwrap();
+        let mut renderer =
+            GridRenderer::with_zoom(backgrounds.len() as u16, rows, zoom, Style::default())
+                .unwrap();
         let image = renderer.render(&frame(grid.clone())).unwrap();
         let (panel_width, panel_height) =
-            crate::render::svg::pixel_size(backgrounds.len() as u16, rows);
+            crate::render::svg::pixel_size(backgrounds.len() as u16, rows, &Style::default());
         let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
         let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
         let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
@@ -186,9 +198,9 @@ fn block_cursor_is_aligned_with_background_cells_at_fractional_zoom() {
         let cursor = content
             .render_state
             .color(crate::profile::ColorSlot::Cursor);
-        let mut renderer = GridRenderer::with_zoom(4, 1, zoom).unwrap();
+        let mut renderer = GridRenderer::with_zoom(4, 1, zoom, Style::default()).unwrap();
         let image = renderer.render(&content).unwrap();
-        let (panel_width, panel_height) = crate::render::svg::pixel_size(4, 1);
+        let (panel_width, panel_height) = crate::render::svg::pixel_size(4, 1, &Style::default());
         let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
         let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
         let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
@@ -222,7 +234,7 @@ fn block_cursor_is_aligned_with_background_cells_at_fractional_zoom() {
 #[test]
 fn invalid_zoom_is_rejected() {
     for zoom in [0.0, -1.0, f64::INFINITY, f64::NAN] {
-        assert!(GridRenderer::with_zoom(1, 1, zoom).is_err());
+        assert!(GridRenderer::with_zoom(1, 1, zoom, Style::default()).is_err());
     }
 }
 
@@ -235,17 +247,20 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
     let expected_background = content.render_state.resolve(None, false);
     let image = renderer.render(&content).unwrap();
     let (width, height) = image.dimensions();
-    let (panel_width, panel_height) = crate::render::svg::pixel_size(2, 1);
+    let (panel_width, panel_height) = crate::render::svg::pixel_size(2, 1, &Style::default());
     let origin_x = (width - panel_width) / 2;
     let origin_y = (height - panel_height) / 2;
 
-    assert_eq!(CANVAS_BACKGROUND, crate::profile::Rgb::new(104, 103, 170));
+    assert_eq!(
+        Style::default().canvas_background,
+        crate::profile::Rgb::new(104, 103, 170)
+    );
     assert_eq!(
         pixel_at(&image, 0, 0),
         [
-            CANVAS_BACKGROUND.r,
-            CANVAS_BACKGROUND.g,
-            CANVAS_BACKGROUND.b,
+            Style::default().canvas_background.r,
+            Style::default().canvas_background.g,
+            Style::default().canvas_background.b,
             255
         ]
     );
@@ -257,15 +272,15 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
         pixel_at(
             &image,
             origin_x + panel_width / 2,
-            origin_y + crate::render::svg::HEADER_H as u32 - 1
+            origin_y + Style::default().header_height() as u32 - 1
         ),
         [0, 0, 0, 255]
     );
     assert_eq!(
         pixel_at(
             &image,
-            origin_x + (crate::render::svg::MARGIN_X + 5.0) as u32,
-            origin_y + (crate::render::svg::HEADER_H / 2.0) as u32
+            origin_x + (Style::default().content_left() + 5.0) as u32,
+            origin_y + (Style::default().header_height() / 2.0) as u32
         ),
         [105, 17, 10, 255]
     );
@@ -273,7 +288,7 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
         pixel_at(
             &image,
             origin_x + panel_width / 2,
-            origin_y + crate::render::svg::HEADER_H as u32 + 1
+            origin_y + Style::default().header_height() as u32 + 1
         ),
         [
             expected_background.r,
@@ -287,7 +302,7 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
             &image,
             origin_x + panel_width / 2,
             origin_y
-                + (crate::render::svg::HEADER_H + crate::render::svg::CONTENT_PADDING_TOP) as u32
+                + (Style::default().header_height() + Style::default().content_top()) as u32
                 + 1
         ),
         [1, 2, 3, 255]
@@ -326,7 +341,7 @@ fn bold_and_italic_change_the_rasterized_glyph() {
 #[cfg(feature = "recording-font-jetbrains-mono-styles")]
 #[test]
 fn bundled_styles_do_not_need_synthetic_bold_or_italic() {
-    let mut fonts = FontSystem::new();
+    let mut fonts = FontSystem::new(&Style::default().font);
     for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
         let glyph = fonts
             .resolve(GlyphKey {
@@ -406,10 +421,10 @@ fn frame_palette_and_cursor_state_change_the_pixels() {
     assert_ne!(first_pixels, second_pixels);
 
     let width = renderer.pixel_size().0 as usize;
-    let x = (CANVAS_PADDING + super::super::svg::MARGIN_X as u32) as usize;
-    let y = (CANVAS_PADDING
-        + super::super::svg::HEADER_H as u32
-        + super::super::svg::CONTENT_PADDING_TOP as u32) as usize;
+    let x = (Style::default().canvas_left() + Style::default().content_left() as u32) as usize;
+    let y = (Style::default().canvas_top()
+        + Style::default().header_height() as u32
+        + Style::default().content_top() as u32) as usize;
     let cursor = (y * width + x) * 4;
     assert_eq!(&first_pixels[cursor..cursor + 3], &[255, 0, 255]);
 }
@@ -453,15 +468,259 @@ fn color_to_pixel(color: Color) -> [u8; 4] {
 }
 
 fn grid_x(origin_x: f32, column: usize, scale: f32) -> u32 {
-    (origin_x + (super::super::svg::MARGIN_X + column as f32 * super::super::svg::CELL_W) * scale)
+    (origin_x
+        + (Style::default().content_left() + column as f32 * Style::default().cell_width()) * scale)
         .round() as u32
 }
 
 fn grid_y(origin_y: f32, row: usize, scale: f32) -> u32 {
     (origin_y
-        + (super::super::svg::HEADER_H
-            + super::super::svg::CONTENT_PADDING_TOP
-            + row as f32 * super::super::svg::CELL_H)
+        + (Style::default().header_height()
+            + Style::default().content_top()
+            + row as f32 * Style::default().cell_height())
             * scale)
         .round() as u32
+}
+
+/// Each axis can pass its own bound while the area is enormous. A grid this
+/// size at the largest allowed font and padding is under u32::MAX on both
+/// axes and still tens of gigabytes of pixmap, which the process would
+/// otherwise only discover by touching the pages.
+#[test]
+fn an_enormous_canvas_is_refused_before_it_is_allocated() {
+    let huge = Style {
+        font_size: 999.0,
+        canvas_padding: Padding::Uniform(10_000),
+        ..Style::default()
+    };
+    let Err(error) = GridRenderer::with_zoom(500, 200, 1.0, huge) else {
+        panic!("a canvas that large must not be allocated");
+    };
+    assert!(
+        error.to_string().contains("pixels"),
+        "the error says how big it was: {error}"
+    );
+
+    GridRenderer::with_zoom(
+        120,
+        40,
+        2.0,
+        Style {
+            font_size: 40.0,
+            ..Style::default()
+        },
+    )
+    .map(|_| ())
+    .expect("a genuinely large recording still renders");
+}
+
+/// A screenshot and a recording of the same terminal under the same config
+/// have to describe the same canvas. They are not byte-identical in size:
+/// `pixel_size` rounds each axis up to an even number because video encoders
+/// demand it, and an SVG has no such constraint. That rounding is the only
+/// licensed difference, so this pins it — the two renderers compute their
+/// geometry separately, and nothing else would catch them drifting apart.
+#[test]
+fn both_renderers_agree_on_size_for_the_same_style() {
+    use crate::render::style::WindowStyle;
+
+    let cases = [
+        ("default", Style::default()),
+        (
+            "no chrome",
+            Style {
+                window: WindowStyle {
+                    title_bar: false,
+                    ..WindowStyle::default()
+                },
+                ..Style::default()
+            },
+        ),
+        (
+            "padded",
+            Style {
+                canvas_padding: Padding::Uniform(40),
+                ..Style::default()
+            },
+        ),
+        (
+            "large font",
+            Style {
+                font_size: 30.0,
+                ..Style::default()
+            },
+        ),
+    ];
+
+    for (name, style) in cases {
+        let rows = vec![vec![EmuCell::blank(); 8]; 3];
+        let svg = crate::render::svg::render_svg(
+            &rows,
+            8,
+            &Profile::default(),
+            None,
+            Some("t"),
+            &style,
+            1.0,
+            None,
+        );
+        // The root dimensions can be fractional; the raster canvas is whole
+        // pixels, so it takes the ceiling before rounding up to even.
+        let attr = |key: &str| -> f64 {
+            let at = svg.find(&format!("{key}=\"")).expect("dimension attribute");
+            let rest = &svg[at + key.len() + 2..];
+            rest[..rest.find('"').unwrap()].parse().expect("a number")
+        };
+
+        let renderer =
+            GridRenderer::with_zoom(8, 3, 1.0, style).expect("the raster canvas is buildable");
+        let even = |value: f64| {
+            let whole = value.ceil() as u32;
+            whole + whole % 2
+        };
+        assert_eq!(
+            (even(attr("width")), even(attr("height"))),
+            renderer.dimensions(),
+            "{name}: the recording is the screenshot's canvas rounded up to even"
+        );
+    }
+}
+
+/// Every other raster test builds its renderer with `Style::default()`, so a
+/// `GridRenderer` that ignored its style entirely would keep them all green.
+#[test]
+fn the_raster_canvas_is_drawn_from_its_style() {
+    let style = Style {
+        font_size: 34.0,
+        canvas_padding: Padding::Uniform(40),
+        canvas_background: crate::profile::Rgb::new(1, 2, 3),
+        ..Style::default()
+    };
+    let mut renderer = GridRenderer::with_zoom(4, 2, 1.0, style.clone()).unwrap();
+    let plain = GridRenderer::new(4, 2);
+
+    let (panel_width, panel_height) = crate::render::svg::pixel_size(4, 2, &style);
+    assert_eq!(
+        renderer.dimensions(),
+        (
+            panel_width + style.canvas_horizontal().unwrap(),
+            panel_height + style.canvas_vertical().unwrap()
+        ),
+        "the canvas is the styled panel plus the styled padding on every side"
+    );
+    assert_ne!(
+        renderer.dimensions(),
+        plain.dimensions(),
+        "a larger font and padding grow the canvas"
+    );
+
+    let image = renderer
+        .render(&frame(vec![vec![EmuCell::blank(); 4]; 2]))
+        .unwrap();
+    assert_eq!(
+        pixel_at(&image, 1, 1),
+        color_to_pixel(Color::Rgb(1, 2, 3)),
+        "the configured background is painted into the padding"
+    );
+}
+
+/// The border has to reach real pixels, not just the SVG text.
+#[test]
+fn a_border_is_stroked_onto_the_raster_canvas() {
+    use crate::render::style::BorderStyle;
+
+    let border = BorderStyle {
+        width: 4.0,
+        color: crate::profile::Rgb::new(255, 0, 0),
+        radius: 0.0,
+    };
+    let style = Style {
+        border,
+        canvas_padding: Padding::Uniform(10),
+        ..Style::default()
+    };
+    let mut renderer = GridRenderer::with_zoom(6, 2, 1.0, style.clone()).unwrap();
+    let image = renderer
+        .render(&frame(vec![vec![EmuCell::blank(); 6]; 2]))
+        .unwrap();
+
+    let (panel_width, _) = crate::render::svg::pixel_size(6, 2, &style);
+    // The panel is centered, so its left edge sits one padding in. Two pixels
+    // further is the middle of a four-wide stroke.
+    let middle_of_stroke = (image.dimensions().0 - panel_width) / 2 + 2;
+    assert_eq!(
+        pixel_at(&image, middle_of_stroke, image.dimensions().1 / 2),
+        color_to_pixel(Color::Rgb(255, 0, 0)),
+        "the configured border color is painted along the panel edge"
+    );
+
+    let mut plain = GridRenderer::with_zoom(
+        6,
+        2,
+        1.0,
+        Style {
+            canvas_padding: Padding::Uniform(10),
+            ..Style::default()
+        },
+    )
+    .unwrap();
+    let unbordered = plain
+        .render(&frame(vec![vec![EmuCell::blank(); 6]; 2]))
+        .unwrap();
+    assert_ne!(
+        pixel_at(&unbordered, middle_of_stroke, unbordered.dimensions().1 / 2),
+        color_to_pixel(Color::Rgb(255, 0, 0)),
+        "and asking for no border leaves that edge alone"
+    );
+}
+
+/// The raster path centres the window on its canvas, which is the same thing
+/// as "at the gap" only while every gap is equal.
+#[test]
+fn the_raster_window_sits_at_its_own_gaps() {
+    use crate::render::style::PaddingSides;
+
+    let style = Style {
+        canvas_padding: Padding::Sides(PaddingSides {
+            top: Some(10),
+            right: Some(20),
+            bottom: Some(60),
+            left: Some(30),
+        }),
+        canvas_background: crate::profile::Rgb::new(1, 2, 3),
+        // Off, so a tinted pixel means the panel rather than its shadow.
+        shadow: crate::render::style::ShadowStyle {
+            enabled: false,
+            ..crate::render::style::ShadowStyle::default()
+        },
+        ..Style::default()
+    };
+    let mut renderer = GridRenderer::with_zoom(6, 2, 1.0, style.clone()).unwrap();
+    let (panel_width, panel_height) = crate::render::svg::pixel_size(6, 2, &style);
+
+    assert_eq!(
+        renderer.dimensions(),
+        (panel_width + 30 + 20, panel_height + 10 + 60),
+        "each axis grows by its own two gaps"
+    );
+
+    let image = renderer
+        .render(&frame(vec![vec![EmuCell::blank(); 6]; 2]))
+        .unwrap();
+    let canvas = color_to_pixel(Color::Rgb(1, 2, 3));
+
+    // One pixel inside the left gap is canvas; one pixel past it is the panel.
+    assert_eq!(pixel_at(&image, 29, panel_height / 2 + 10), canvas);
+    assert_ne!(
+        pixel_at(&image, 31, panel_height / 2 + 10),
+        canvas,
+        "the window starts at the left gap, not at the midpoint of the canvas"
+    );
+    // The bottom gap is wider than the top, so the row below the panel is
+    // still canvas while the matching row above it is too.
+    assert_eq!(pixel_at(&image, panel_width / 2 + 30, 9), canvas);
+    assert_eq!(
+        pixel_at(&image, panel_width / 2 + 30, image.dimensions().1 - 2),
+        canvas
+    );
 }

@@ -329,44 +329,105 @@ impl Default for Profile {
     }
 }
 
-/// A profile as represented in `tui-test.toml`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Recording settings as written in the config file.
+///
+/// `mode` and `directory` are independent policies, so each is optional and a
+/// profile inherits the ones it does not name. Whole-table replacement would
+/// mean that naming a directory also reset the mode the file established.
+///
+/// `style` inherits the same way, key by key and at every depth: a profile
+/// naming `font_size` keeps the file's background and padding. It once
+/// replaced the file's style whole, on the theory that a look is a coherent
+/// thing, but a partial TOML table conventionally reads as an override, the
+/// two policies beside it merge, and the value a profile silently fell back
+/// to was the built-in default rather than the file's -- so the rule produced
+/// a look nobody chose precisely when it claimed to prevent one.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct ConfigProfile {
-    pub scrollback: usize,
-    pub colors: Colors,
-    pub timeouts: crate::api::Timeouts,
+pub struct RecordingConfig {
+    pub mode: Option<crate::api::AutomaticRecordingMode>,
+    pub directory: Option<PathBuf>,
+    /// How screenshots and recordings taken under this profile are drawn.
+    pub style: Option<crate::render::style::Style>,
 }
 
-impl Default for ConfigProfile {
-    fn default() -> Self {
-        Self {
-            scrollback: DEFAULT_SCROLLBACK,
-            colors: Colors::default(),
-            timeouts: crate::api::Timeouts::default(),
+/// Fill every key `overlay` does not name from `base`, recursing into
+/// sub-tables so depth does not change the rule.
+fn fill_missing(overlay: &mut toml::Value, base: &toml::Value) {
+    let (toml::Value::Table(overlay), toml::Value::Table(base)) = (overlay, base) else {
+        return;
+    };
+    for (key, value) in base {
+        match overlay.get_mut(key) {
+            Some(existing) => fill_missing(existing, value),
+            None => {
+                overlay.insert(key.clone(), value.clone());
+            }
         }
     }
 }
 
+impl RecordingConfig {
+    fn validate(&self) -> anyhow::Result<()> {
+        if self
+            .directory
+            .as_ref()
+            .is_some_and(|d| d.as_os_str().is_empty())
+        {
+            anyhow::bail!("recording directory must not be empty");
+        }
+        if let Some(style) = &self.style {
+            style.validate().map_err(|error| anyhow::anyhow!(error))?;
+        }
+        Ok(())
+    }
+
+    /// A relative directory means "beside this config", wherever the process
+    /// happens to be running from.
+    fn anchor(&mut self, parent: &Path) {
+        if let Some(directory) = self.directory.as_mut() {
+            if directory.is_relative() {
+                *directory = parent.join(&*directory);
+            }
+        }
+        // Font files for the same reason: a repository carrying its own font
+        // renders the same wherever the checkout sits.
+        if let Some(style) = self.style.as_mut() {
+            style.font.resolve_paths(parent);
+        }
+    }
+
+    /// This table's values, falling back to `base`: the policies field by
+    /// field, the style whole.
+    fn over(&self, base: &RecordingConfig) -> Self {
+        Self {
+            mode: self.mode.or(base.mode),
+            directory: self.directory.clone().or_else(|| base.directory.clone()),
+            style: self.style.clone().or_else(|| base.style.clone()),
+        }
+    }
+}
+
+/// A profile as represented in `tui-test.toml`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ConfigProfile {
+    pub scrollback: Option<usize>,
+    pub colors: Colors,
+    pub timeouts: crate::api::Timeouts,
+    /// Recording settings for this profile, each field falling back to the
+    /// file's own `[recording]` when it names none.
+    pub recording: RecordingConfig,
+}
+
 /// Concrete session settings resolved from a config profile.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Settings {
     pub profile: Profile,
     pub timeouts: crate::api::Timeouts,
     pub recording: crate::api::AutomaticRecording,
-}
-
-impl From<ConfigProfile> for Settings {
-    fn from(value: ConfigProfile) -> Self {
-        Self {
-            profile: Profile {
-                scrollback: value.scrollback,
-                colors: value.colors,
-            },
-            timeouts: value.timeouts,
-            recording: crate::api::AutomaticRecording::default(),
-        }
-    }
+    /// How this session's screenshots and recordings are drawn.
+    pub style: crate::render::style::Style,
 }
 
 /// A parsed config file.
@@ -374,13 +435,60 @@ impl From<ConfigProfile> for Settings {
 #[serde(default, deny_unknown_fields)]
 pub struct ConfigFile {
     pub profiles: BTreeMap<String, ConfigProfile>,
-    pub recording: crate::api::AutomaticRecording,
+    pub recording: RecordingConfig,
 }
 
 impl ConfigFile {
+    /// A profile naming one style key means "the file's look, with that key
+    /// changed" -- not "the built-in defaults, with that key changed". By the
+    /// time the typed config exists serde has already filled in every key the
+    /// profile left out, so which keys it actually named is recovered from the
+    /// raw document. Parsing twice keeps the typed parse as the one that
+    /// reports errors, with its spans intact.
+    fn inherit_profile_styles(&mut self, toml_text: &str) -> anyhow::Result<()> {
+        let document: toml::Value = match toml::from_str(toml_text) {
+            Ok(document) => document,
+            Err(_) => return Ok(()),
+        };
+        let Some(base) = document
+            .get("recording")
+            .and_then(|recording| recording.get("style"))
+        else {
+            return Ok(());
+        };
+        let raw_profiles = document.get("profiles").and_then(toml::Value::as_table);
+        for (name, profile) in self.profiles.iter_mut() {
+            let Some(named) = raw_profiles
+                .and_then(|profiles| profiles.get(name))
+                .and_then(|profile| profile.get("recording"))
+                .and_then(|recording| recording.get("style"))
+            else {
+                continue;
+            };
+            let mut merged = named.clone();
+            fill_missing(&mut merged, base);
+            profile.recording.style = Some(
+                merged
+                    .try_into()
+                    .map_err(|error| anyhow::anyhow!("profile {name:?}: {error}"))?,
+            );
+        }
+        Ok(())
+    }
+
     pub fn parse(toml_text: &str) -> anyhow::Result<Self> {
-        let config: Self = toml::from_str(toml_text)?;
+        let mut config: Self = toml::from_str(toml_text)?;
+        config.inherit_profile_styles(toml_text)?;
         config.recording.validate()?;
+        // Every profile's own table too. Validating only the file's left an
+        // invalid per-profile value to surface when a session opened, far
+        // from the config that caused it.
+        for (name, profile) in &config.profiles {
+            profile
+                .recording
+                .validate()
+                .map_err(|error| anyhow::anyhow!("profile {name:?}: {error}"))?;
+        }
         Ok(config)
     }
 
@@ -394,13 +502,17 @@ impl ConfigFile {
             .map_err(|e| anyhow::anyhow!("could not read {}: {e}", path.display()))?;
         let mut config =
             Self::parse(&text).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
-        if let Some(directory) = config.recording.directory.as_mut() {
-            if directory.is_relative() {
-                *directory = path
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .join(&*directory);
-            }
+        let parent = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        // A relative directory means "beside this config", wherever the
+        // process happens to be running from. That has to hold for a
+        // profile's table as much as the file's, or the same suite writes
+        // recordings somewhere else when run from another directory.
+        config.recording.anchor(&parent);
+        for profile in config.profiles.values_mut() {
+            profile.recording.anchor(&parent);
         }
         Ok(config)
     }
@@ -414,7 +526,13 @@ impl ConfigFile {
     /// The named profile and its session timeout defaults.
     pub fn settings(&self, name: Option<&str>) -> anyhow::Result<Settings> {
         let profile = match name {
-            Some(name) => self.profiles.get(name).copied().ok_or_else(|| {
+            // Naming the default explicitly is the same as not naming one.
+            // Otherwise `--profile default` failed on every config that did
+            // not declare the profile the flag already defaults to.
+            Some(name) if name == DEFAULT_PROFILE && !self.profiles.contains_key(name) => {
+                Ok(ConfigProfile::default())
+            }
+            Some(name) => self.profiles.get(name).cloned().ok_or_else(|| {
                 let known: Vec<&str> = self.profiles.keys().map(String::as_str).collect();
                 if known.is_empty() {
                     anyhow::anyhow!("no profile {name:?}; the config file defines none")
@@ -425,12 +543,22 @@ impl ConfigFile {
             None => Ok(self
                 .profiles
                 .get(DEFAULT_PROFILE)
-                .copied()
+                .cloned()
                 .unwrap_or_default()),
         }?;
-        let mut settings: Settings = profile.into();
-        settings.recording = self.recording.clone();
-        Ok(settings)
+        let recording = profile.recording.over(&self.recording);
+        Ok(Settings {
+            profile: Profile {
+                scrollback: profile.scrollback.unwrap_or(DEFAULT_SCROLLBACK),
+                colors: profile.colors,
+            },
+            timeouts: profile.timeouts,
+            recording: crate::api::AutomaticRecording {
+                mode: recording.mode.unwrap_or_default(),
+                directory: recording.directory,
+            },
+            style: recording.style.unwrap_or_default(),
+        })
     }
 }
 
@@ -509,19 +637,26 @@ pub fn resolve_settings(
     }
 }
 
+/// The recording policy in force when no session recorded where its output
+/// went, used to explain why there is nothing to show.
+///
+/// Resolved through `settings` rather than off the file's own `[recording]`,
+/// so a `[profiles.default.recording]` is honored here exactly as it is when a
+/// session opens. A session opened under a *named* profile is not knowable
+/// from here, which is why this is only ever a fallback explanation.
 pub fn resolve_recording(
     explicit_config: Option<&Path>,
     cwd: &Path,
 ) -> anyhow::Result<crate::api::AutomaticRecording> {
     if let Some(path) = explicit_config {
-        return Ok(ConfigFile::load(path)?.recording);
+        return Ok(ConfigFile::load(path)?.settings(None)?.recording);
     }
     if let Some(path) = std::env::var_os("TUI_TEST_CONFIG").map(PathBuf::from) {
-        return Ok(ConfigFile::load(&path)?.recording);
+        return Ok(ConfigFile::load(&path)?.settings(None)?.recording);
     }
     for path in default_search_paths(cwd) {
         if path.is_file() {
-            return Ok(ConfigFile::load(&path)?.recording);
+            return Ok(ConfigFile::load(&path)?.settings(None)?.recording);
         }
     }
     Ok(crate::api::AutomaticRecording::default())
@@ -632,6 +767,273 @@ mod tests {
     #[test]
     fn empty_recording_directory_is_rejected() {
         assert!(ConfigFile::parse("[recording]\ndirectory = \"\"\n").is_err());
+    }
+
+    /// A style is inherited or replaced whole, never half-merged. Naming one
+    /// key does not leave the rest of the file's theme showing through, which
+    /// would be a look neither config asked for.
+    #[test]
+    fn a_profile_style_overrides_the_file_style_key_by_key() {
+        let config = ConfigFile::parse(
+            "[recording.style]\nfont_size = 20\ncanvas_background = \"#ff0000\"\ncanvas_padding = 12\n\
+             \n[recording.style.window]\ntitle_bar = false\nforeground = \"#00ff00\"\n\
+             \n[profiles.docs.recording.style]\nfont_size = 24\n\
+             \n[profiles.docs.recording.style.window]\nforeground = \"#0000ff\"\n\
+             \n[profiles.plain]\n",
+        )
+        .unwrap();
+
+        let docs = config.settings(Some("docs")).unwrap().style;
+        assert_eq!(docs.font_size, 24.0, "the key the profile names wins");
+        assert_eq!(
+            docs.canvas_background,
+            Rgb::new(255, 0, 0),
+            "a key the profile does not name keeps the file's value"
+        );
+        assert_eq!(docs.canvas_top(), 12);
+        assert_eq!(
+            docs.window.foreground,
+            Rgb::new(0, 0, 255),
+            "the rule reaches into sub-tables"
+        );
+        assert!(
+            !docs.window.title_bar,
+            "and a sibling inside that sub-table still comes from the file"
+        );
+
+        let plain = config.settings(Some("plain")).unwrap().style;
+        assert_eq!(plain.font_size, 20.0, "naming no style inherits the file's");
+        assert_eq!(plain.canvas_background, Rgb::new(255, 0, 0));
+    }
+
+    #[test]
+    fn a_profile_recording_is_validated_and_anchored() {
+        let error = ConfigFile::parse("[profiles.docs.recording]\ndirectory = \"\"\n")
+            .expect_err("an empty directory is rejected wherever it is written");
+        assert!(
+            error.to_string().contains("docs"),
+            "the error names the profile: {error}"
+        );
+
+        let error = ConfigFile::parse("[profiles.docs.recording.style]\nfont_size = 0\n")
+            .expect_err("a style that cannot be drawn is rejected at parse");
+        assert!(
+            error.to_string().contains("font_size"),
+            "the error names the value: {error}"
+        );
+
+        let dir = std::env::temp_dir().join(format!("tui-test-anchor-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILE);
+        std::fs::write(
+            &path,
+            "[profiles.docs.recording]\ndirectory = \"artifacts\"\n\
+             \n[profiles.docs.recording.style.font]\nfiles = [\"fonts/Berkeley.ttf\"]\n",
+        )
+        .unwrap();
+        let config = ConfigFile::load(&path).unwrap();
+        assert_eq!(
+            config.profiles["docs"].recording.directory,
+            Some(dir.join("artifacts")),
+            "a relative directory anchors to the config, not the working directory"
+        );
+        assert_eq!(
+            config.profiles["docs"]
+                .recording
+                .style
+                .as_ref()
+                .unwrap()
+                .font
+                .files,
+            vec![dir.join("fonts").join("Berkeley.ttf")],
+            "and so does a font the repository carries"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The defaults written down in `references/cli.md`. Documentation that
+    /// drifts from the code is worse than none, so the numbers in it are
+    /// pinned here rather than trusted.
+    #[test]
+    fn the_documented_defaults_are_the_real_ones() {
+        let style = crate::render::style::Style::default();
+        assert_eq!(style.font_size, 17.0);
+        assert_eq!(style.title_font_size, 13.0);
+        assert_eq!(style.canvas_background, Rgb::new(0x68, 0x67, 0xaa));
+        assert_eq!(style.canvas_top(), 24);
+        assert_eq!(
+            (
+                style.content_top(),
+                style.content_right(),
+                style.content_bottom(),
+                style.content_left()
+            ),
+            (8.0, 15.0, 14.0, 15.0)
+        );
+        assert_eq!(
+            style.font.family,
+            "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,'DejaVu Sans Mono',monospace"
+        );
+        assert!(style.window.title_bar);
+        assert!(style.window.traffic_lights);
+        assert_eq!(style.window.background, Rgb::new(0xd9, 0xd9, 0xe8));
+        assert_eq!(style.window.foreground, Rgb::new(0x41, 0x41, 0x45));
+        assert_eq!(style.window.divider, Rgb::new(0, 0, 0));
+        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.border.color, Rgb::new(0, 0, 0));
+        assert_eq!(style.border.radius, 8.0);
+        assert!(style.shadow.enabled);
+        assert_eq!(style.shadow.color, Rgb::new(0x08, 0x08, 0x12));
+        assert_eq!(style.shadow.offset, 5.0);
+        assert_eq!(style.shadow.spread, 7.0);
+    }
+
+    /// The per-profile example in `references/cli.md`, and the claim the prose
+    /// around it makes about what the profile ends up with.
+    #[test]
+    fn the_documented_per_profile_example_does_what_it_says() {
+        let config = ConfigFile::parse(
+            "[recording]\nmode = \"on-failure\"\ndirectory = \"./artifacts\"\n\
+             \n[recording.style]\ncanvas_background = \"#101014\"\ncanvas_padding = 32\n\
+             \n[profiles.docs.recording]\nmode = \"always\"\n\
+             \n[profiles.docs.recording.style]\nfont_size = 24\n",
+        )
+        .expect("the documented example parses");
+
+        let docs = config.settings(Some("docs")).unwrap();
+        assert_eq!(
+            docs.recording.mode,
+            crate::api::AutomaticRecordingMode::Always
+        );
+        assert_eq!(docs.recording.directory, Some(PathBuf::from("./artifacts")));
+        assert_eq!(docs.style.font_size, 24.0);
+        assert_eq!(docs.style.canvas_background, Rgb::new(0x10, 0x10, 0x14));
+        assert_eq!(docs.style.canvas_top(), 32);
+    }
+
+    /// The per-profile examples in `references/cli.md`. Each profile names a
+    /// different mix of keys, so between them they cover overriding a policy,
+    /// overriding a style key, and naming neither.
+    #[test]
+    fn the_documented_profile_overrides_resolve_as_written() {
+        let config = ConfigFile::parse(include_str!("testdata/profiles.toml"))
+            .expect("the documented example parses");
+        let mode = |name| config.settings(Some(name)).unwrap().recording.mode;
+        let style = |name| config.settings(Some(name)).unwrap().style;
+        let directory = |name| config.settings(Some(name)).unwrap().recording.directory;
+
+        // docs: overrides both policies and one style key.
+        assert_eq!(mode("docs"), crate::api::AutomaticRecordingMode::Always);
+        assert_eq!(directory("docs"), Some(PathBuf::from("./docs/media")));
+        assert_eq!(style("docs").font_size, 24.0);
+        assert_eq!(
+            style("docs").canvas_background,
+            Rgb::new(0x10, 0x10, 0x14),
+            "and keeps the canvas the file set"
+        );
+        assert_eq!(style("docs").canvas_top(), 30);
+
+        // ci: names no policy at all, so both come from the file.
+        assert_eq!(mode("ci"), crate::api::AutomaticRecordingMode::OnFailure);
+        assert_eq!(directory("ci"), Some(PathBuf::from("./artifacts")));
+        assert_eq!(style("ci").canvas_top(), 8, "its own gap");
+        assert!(!style("ci").window.title_bar);
+        assert!(!style("ci").shadow.enabled);
+        assert_eq!(
+            style("ci").window.background,
+            Rgb::new(0x1a, 0x1a, 0x22),
+            "a sibling inside the same sub-table still comes from the file"
+        );
+        assert_eq!(style("ci").font_size, 17.0);
+
+        // demo: a look of its own, still inheriting the file's directory.
+        assert_eq!(mode("demo"), crate::api::AutomaticRecordingMode::Always);
+        assert_eq!(directory("demo"), Some(PathBuf::from("./artifacts")));
+        assert_eq!(style("demo").canvas_background, Rgb::new(0xf6, 0xf6, 0xf8));
+        assert_eq!(style("demo").border.width, 2.0);
+        assert_eq!(
+            style("demo").window.divider,
+            Rgb::new(0x2a, 0x2a, 0x36),
+            "the divider it did not name comes from the file"
+        );
+        assert_eq!(style("demo").canvas_top(), 30);
+    }
+
+    #[test]
+    fn naming_the_default_profile_matches_omitting_it() {
+        let config = ConfigFile::parse(
+            "[recording]\nmode = \"always\"\n\n[profiles.docs.recording]\nmode = \"disabled\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config
+                .settings(Some(DEFAULT_PROFILE))
+                .unwrap()
+                .recording
+                .mode,
+            config.settings(None).unwrap().recording.mode,
+            "the flag's own default must not be an error on a config without it"
+        );
+        assert!(
+            config.settings(Some("nope")).is_err(),
+            "any other unknown profile is still an error"
+        );
+    }
+
+    #[test]
+    fn a_profile_that_names_no_style_keeps_the_file_style() {
+        let config = ConfigFile::parse(
+            "[recording]\nmode = \"on-failure\"\n\
+             \n[recording.style]\nfont_size = 30\n\
+             \n[profiles.ops.recording]\ndirectory = \"shots\"\n",
+        )
+        .unwrap();
+
+        let ops = config.settings(Some("ops")).unwrap();
+        assert_eq!(
+            ops.style.font_size, 30.0,
+            "a profile adjusting only where recordings land keeps the file's look"
+        );
+        assert_eq!(ops.recording.directory, Some(PathBuf::from("shots")));
+    }
+
+    /// A profile changes the recording settings it names and inherits the
+    /// rest. Replacing the table whole would mean that setting a font size
+    /// silently reset the mode the file had established.
+    #[test]
+    fn a_profile_recording_inherits_field_by_field() {
+        let config = ConfigFile::parse(
+            "[recording]\nmode = \"on-failure\"\ndirectory = \"artifacts\"\n\
+             \n[profiles.docs.recording.style]\nfont_size = 24\n\
+             \n[profiles.ci.recording]\nmode = \"always\"\n",
+        )
+        .unwrap();
+
+        let docs = config.settings(Some("docs")).unwrap();
+        assert_eq!(docs.style.font_size, 24.0, "the profile's style applies");
+        assert_eq!(
+            docs.recording.mode,
+            crate::api::AutomaticRecordingMode::OnFailure,
+            "and naming only a style leaves the file's mode alone"
+        );
+        assert_eq!(docs.recording.directory, Some(PathBuf::from("artifacts")));
+
+        let ci = config.settings(Some("ci")).unwrap();
+        assert_eq!(
+            ci.recording.mode,
+            crate::api::AutomaticRecordingMode::Always
+        );
+        assert_eq!(
+            ci.recording.directory,
+            Some(PathBuf::from("artifacts")),
+            "changing the mode leaves the directory alone"
+        );
+        assert_eq!(
+            ci.style,
+            crate::render::style::Style::default(),
+            "and a profile naming no style gets the default"
+        );
     }
 
     #[test]

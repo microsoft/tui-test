@@ -16,6 +16,7 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
         program: program.to_string(),
         args: args.iter().map(|arg| (*arg).to_string()).collect(),
         profile: defaults.profile,
+        style: defaults.style,
         cols: defaults.cols,
         rows: defaults.rows,
         cwd: defaults.cwd,
@@ -1138,8 +1139,10 @@ fn session_records_and_exports_an_apng() {
     let bytes = std::fs::read(&path).expect("read apng");
     assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
     assert!(bytes.windows(4).any(|window| window == b"acTL"));
+    // The default style at zoom 0.5. Pinned rather than derived because
+    // pixel_size is crate-private; update deliberately if a default gap moves.
     assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 878);
-    assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 730);
+    assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 734);
 
     session.close().expect("close terminal");
     std::fs::remove_file(path).expect("remove apng");
