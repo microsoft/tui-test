@@ -18,7 +18,8 @@ import { uniqueSession } from "./ephemeral.js";
 import { ExpectationError, TuiTestError, UsageError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
 import type {
-  RuntimeLocatorStage,
+  RuntimeLocatorNode,
+  RuntimeLocatorExpression,
   RuntimeLocatorStyle,
 } from "./native.js";
 import type {
@@ -122,9 +123,26 @@ export interface RelativeStyleSelectorOptions extends StyleSelectorOptions {
   direction?: LocatorDirection;
 }
 
+export interface LinkSelectorOptions {
+  full?: boolean;
+}
+
+export interface RelativeLinkSelectorOptions extends LinkSelectorOptions {
+  direction?: LocatorDirection;
+}
+
+export interface LocatorFilterOptions {
+  has?: Locator;
+  hasNot?: Locator;
+}
+
 export interface Locator {
   getByText(text: string, opts?: RelativeTextSelectorOptions): Locator;
   getByStyle(style: TextStyleExpectation, opts?: RelativeStyleSelectorOptions): Locator;
+  getByLink(uri: string, opts?: RelativeLinkSelectorOptions): Locator;
+  and(other: Locator): Locator;
+  or(other: Locator): Locator;
+  filter(options: LocatorFilterOptions): Locator;
   any(): Locator;
   unique(): Locator;
   first(): Locator;
@@ -268,7 +286,7 @@ function occurrenceOptions(occurrence?: TextOccurrence): {
   return { occurrence: "nth", nth: occurrence.nth };
 }
 
-type LocatorQueryValue = RuntimeLocatorStage[];
+type LocatorQueryValue = RuntimeLocatorExpression;
 
 function directionValue(direction?: LocatorDirection): LocatorDirection {
   if (
@@ -286,7 +304,7 @@ function textStageValue(
   text: string,
   opts: RelativeTextSelectorOptions,
   occurrence: TextOccurrence = "any",
-): RuntimeLocatorStage {
+): RuntimeLocatorNode {
   return {
     kind: "text",
     direction: opts.direction ?? "within",
@@ -302,7 +320,7 @@ function styleStageValue(
   style: TextStyleExpectation,
   opts: RelativeStyleSelectorOptions,
   occurrence: TextOccurrence = "any",
-): RuntimeLocatorStage {
+): RuntimeLocatorNode {
   if (!Object.values(style).some((value) => value !== undefined)) {
     throw new TypeError("getByStyle requires at least one style property");
   }
@@ -316,7 +334,7 @@ function styleStageValue(
 }
 
 function textStyleValue(style: TextStyleExpectation): RuntimeLocatorStyle {
-  return {
+  const value = {
     foreground: style.foreground,
     background: style.background,
     bold: style.bold,
@@ -329,32 +347,99 @@ function textStyleValue(style: TextStyleExpectation): RuntimeLocatorStyle {
     strikethrough: style.strikethrough,
     blink: style.blink,
   };
+  for (const key of Object.keys(style)) {
+    if (!Object.hasOwn(value, key)) {
+      throw new TypeError(`unknown style property ${JSON.stringify(key)}`);
+    }
+  }
+  return value;
 }
 
 function textQuery(
   text: string,
   opts: RelativeTextSelectorOptions,
-  within: LocatorQueryValue = [],
+  within?: LocatorQueryValue,
 ): LocatorQueryValue {
   rejectOccurrenceOption(opts);
   const direction = directionValue(opts.direction);
-  if (within.length === 0 && direction !== "within") {
+  if (!within && direction !== "within") {
     throw new TypeError("locator direction requires a parent locator");
   }
-  return [...within, textStageValue(text, { ...opts, direction })];
+  return appendNode(within, {
+    ...textStageValue(text, { ...opts, direction }),
+    within: within?.root,
+  });
 }
 
 function styleQuery(
   style: TextStyleExpectation,
   opts: RelativeStyleSelectorOptions,
-  within: LocatorQueryValue = [],
+  within?: LocatorQueryValue,
 ): LocatorQueryValue {
   rejectOccurrenceOption(opts);
   const direction = directionValue(opts.direction);
-  if (within.length === 0 && direction !== "within") {
+  if (!within && direction !== "within") {
     throw new TypeError("locator direction requires a parent locator");
   }
-  return [...within, styleStageValue(style, { ...opts, direction })];
+  return appendNode(within, {
+    ...styleStageValue(style, { ...opts, direction }),
+    within: within?.root,
+  });
+}
+
+function linkQuery(
+  uri: string,
+  opts: RelativeLinkSelectorOptions,
+  within?: LocatorQueryValue,
+): LocatorQueryValue {
+  if (typeof uri !== "string") {
+    throw new TypeError("getByLink requires a URI string");
+  }
+  rejectOccurrenceOption(opts);
+  const direction = directionValue(opts.direction);
+  if (!within && direction !== "within") {
+    throw new TypeError("locator direction requires a parent locator");
+  }
+  return appendNode(within, {
+    kind: "link",
+    link: uri,
+    full: opts.full ?? false,
+    direction,
+    within: within?.root,
+    occurrence: "any",
+  });
+}
+
+function appendNode(
+  query: LocatorQueryValue | undefined,
+  node: RuntimeLocatorNode,
+): LocatorQueryValue {
+  const result = query ? cloneQuery(query) : { nodes: [], root: 0 };
+  if (result.nodes.length >= 256) {
+    throw new TypeError("locator expression exceeds 256 nodes");
+  }
+  result.root = result.nodes.length;
+  result.nodes.push(node);
+  return result;
+}
+
+function appendOperand(
+  query: LocatorQueryValue,
+  other: LocatorQueryValue,
+): number {
+  const offset = query.nodes.length;
+  if (offset + other.nodes.length >= 256) {
+    throw new TypeError("locator expression exceeds 256 nodes");
+  }
+  for (const source of cloneQuery(other).nodes) {
+    for (const field of ["within", "left", "right", "input", "has", "hasNot"] as const) {
+      if (source[field] !== undefined) {
+        source[field] += offset;
+      }
+    }
+    query.nodes.push(source);
+  }
+  return offset + other.root;
 }
 
 function rejectOccurrenceOption(opts: object): void {
@@ -366,21 +451,25 @@ function rejectOccurrenceOption(opts: object): void {
 }
 
 function cloneQuery(query: LocatorQueryValue): LocatorQueryValue {
-  return query.map((stage) => ({
-    ...stage,
-    style: stage.style ? { ...stage.style } : undefined,
-  }));
+  return {
+    root: query.root,
+    nodes: query.nodes.map((node) => ({
+      ...node,
+      style: node.style ? { ...node.style } : undefined,
+    })),
+  };
 }
 
-function currentStage(query: LocatorQueryValue): RuntimeLocatorStage {
-  const stage = query.at(-1);
+function currentStage(query: LocatorQueryValue): RuntimeLocatorNode {
+  const stage = query.nodes[query.root];
   if (!stage) {
-    throw new TypeError("locator requires at least one stage");
+    throw new TypeError("locator expression requires a root node");
   }
   return stage;
 }
 
 interface LocatorActions {
+  owner: object;
   locations(query: LocatorQueryValue, operation: string): Promise<TextMatch[]>;
   wait(
     query: LocatorQueryValue,
@@ -471,6 +560,61 @@ class LocatorImpl implements Locator {
     );
   }
 
+  getByLink(uri: string, opts: RelativeLinkSelectorOptions = {}): Locator {
+    return new LocatorImpl(linkQuery(uri, opts, this.#query), this.#actions);
+  }
+
+  #operand(other: Locator): LocatorQueryValue {
+    if (!(other instanceof LocatorImpl) || other.#actions.owner !== this.#actions.owner) {
+      throw new TypeError("locator operands must belong to the same terminal owner");
+    }
+    return other.#query;
+  }
+
+  #combine(kind: "and" | "or", other: Locator): Locator {
+    const query = cloneQuery(this.#query);
+    const right = appendOperand(query, this.#operand(other));
+    return new LocatorImpl(
+      appendNode(query, { kind, left: query.root, right, occurrence: "any" }),
+      this.#actions,
+    );
+  }
+
+  and(other: Locator): Locator {
+    return this.#combine("and", other);
+  }
+
+  or(other: Locator): Locator {
+    return this.#combine("or", other);
+  }
+
+  filter(options: LocatorFilterOptions): Locator {
+    if (!options || typeof options !== "object") {
+      throw new TypeError("filter requires has or hasNot");
+    }
+    for (const key of Object.keys(options)) {
+      if (key !== "has" && key !== "hasNot") {
+        throw new TypeError(`unknown filter property ${JSON.stringify(key)}`);
+      }
+    }
+    if (options.has === undefined && options.hasNot === undefined) {
+      throw new TypeError("filter requires has or hasNot");
+    }
+    const query = cloneQuery(this.#query);
+    const has = options.has === undefined
+      ? undefined
+      : appendOperand(query, this.#operand(options.has));
+    const hasNot = options.hasNot === undefined
+      ? undefined
+      : appendOperand(query, this.#operand(options.hasNot));
+    return new LocatorImpl(
+      appendNode(query, {
+        kind: "filter", input: query.root, has, hasNot, occurrence: "any",
+      }),
+      this.#actions,
+    );
+  }
+
   locations(): Promise<TextMatch[]> {
     return this.#actions.locations(this.#query, "locator.locations");
   }
@@ -485,7 +629,9 @@ class LocatorImpl implements Locator {
       const description =
         current.kind === "text"
           ? JSON.stringify(current.text)
-          : "style";
+          : current.kind === "link"
+            ? `link ${JSON.stringify(current.link)}`
+            : current.kind;
       return this.#actions.fail(
         "locator.location",
         `no match found for ${description}`,
@@ -617,6 +763,7 @@ export class TuiTest {
 
   #makeLocator(query: LocatorQueryValue): LocatorImpl {
     const actions: LocatorActions = {
+      owner: this,
       locations: (value, operation) =>
         this.#guard(operation, () =>
           this.#runtime.findLocator(value),
@@ -935,6 +1082,10 @@ export class TuiTest {
 
   getByText(text: string, opts: TextSelectorOptions = {}): Locator {
     return this.#makeLocator(textQuery(text, opts));
+  }
+
+  getByLink(uri: string, opts: LinkSelectorOptions = {}): Locator {
+    return this.#makeLocator(linkQuery(uri, opts));
   }
 
   getByStyle(

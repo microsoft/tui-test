@@ -153,12 +153,48 @@ await save.click();
 | --- | --- |
 | `terminal.getByText(text, options?)` | `regex`, `full`, `whitespace` |
 | `terminal.getByStyle(style, options?)` | `full` |
+| `terminal.getByLink(uri, options?)` | `full` |
 | `locator.getByText(text, options?)` | `regex`, `full`, `whitespace`, `direction` |
 | `locator.getByStyle(style, options?)` | `full`, `direction` |
+| `locator.getByLink(uri, options?)` | `full`, `direction` |
 
 `whitespace` is `"exact"` or `"normalize"`. `direction` is `"within"`, `"after"`, or `"before"`.
 
 Style fields are `foreground`, `background`, `bold`, `dim`, `italic`, `underlineStyle`, `underlineColor`, `inverse`, `hidden`, `strikethrough`, and `blink`.
+
+`getByLink(uri)` matches an exact OSC 8 target, not visible URL text;
+`getByLink("")` requires no link. Root style/link selectors find runs within
+each row. Chained calls with the default `within` direction check whole
+matches. Styles skip blanks if visible text exists; links check every cell.
+
+#### Compose locators
+
+```js
+const link = terminal.getByLink("https://example.com");
+const bold = terminal.getByStyle({ bold: true });
+const boldLinkCells = bold.and(link);
+const either = link.or(terminal.getByText("Help"));
+const sections = terminal.getByText("Docs and Help");
+const containsLink = sections.filter({ has: link });
+const withoutOldText = sections.filter({ hasNot: terminal.getByText("old") });
+const entirelyLinked = sections.getByLink("https://example.com");
+```
+
+`.and()` keeps shared cells; `.or()` combines cells without duplicates.
+Adjacent cells merge within each physical row, even across original matches.
+Gaps and row breaks split runs. Counts and clicks use these runs, not
+Playwright element identities. Text keeps exact whitespace.
+
+`filter` accepts only locators. `has` requires a match inside each candidate;
+`hasNot` requires none. Both conditions apply when supplied, and the inner
+match may cover the whole candidate. For partially linked `"Docs"`,
+`filter({ has: link })` keeps the whole word, `getByLink(uri)` rejects it,
+and `.and(link)` returns its linked cells.
+
+Use locators from one `TuiTest`. Composition leaves them unchanged and reads
+one fresh snapshot when used. Selection order matters: `a.first().and(b)`
+differs from `a.and(b).first()`. Any `full` branch includes scrollback for the
+whole query. Errors, including `unique()` failures, propagate.
 
 #### Select matches
 
