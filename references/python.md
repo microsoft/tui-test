@@ -33,7 +33,7 @@ locator = (
 | Method | Use |
 | --- | --- |
 | `get_by_text(text, **options)` | Match text or regex. |
-| `get_by_style(style, **options)` | Match colors, attributes, or an OSC 8 `link`. |
+| `get_by_style(style, **options)` | Match colors, attributes, or `link` targets. |
 | `any()` | Keep all matches. |
 | `unique()` | Require one match. |
 | `first()`, `last()`, `nth(index)` | Select a match. |
@@ -67,7 +67,7 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `wait_title()`, `wait_clipboard()`, `wait_bell()` | Wait for events. |
 | `expect_title()`, `expect_output()`, `expect_exit_code()` | Assert state. |
 | `expect_bell_count()`, `expect_snapshot()` | Assert bells or snapshots. |
-| `screenshot()` | Read text or save SVG. |
+| `screenshot()` | Read text or save SVG or PNG. |
 | `start_recording()`, `stop_recording()` | Record. |
 | `close()`, `close_quiet()` | Close. |
 

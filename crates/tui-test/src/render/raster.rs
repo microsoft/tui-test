@@ -58,6 +58,7 @@ pub trait FrameRenderer {
 pub struct GridRenderer {
     max_cols: u16,
     max_rows: usize,
+    exact_size: bool,
     scale: f32,
     width: u32,
     height: u32,
@@ -84,7 +85,7 @@ impl GridRenderer {
     }
 
     pub fn with_zoom(cols: u16, rows: usize, zoom: f64, style: Style) -> anyhow::Result<Self> {
-        Self::with_zoom_and_background(cols, rows, zoom, style, None)
+        Self::with_zoom_background_and_size(cols, rows, zoom, style, None, false)
     }
 
     pub fn with_zoom_and_background(
@@ -94,12 +95,38 @@ impl GridRenderer {
         style: Style,
         background: Option<CaptureBackground>,
     ) -> anyhow::Result<Self> {
+        Self::with_zoom_background_and_size(cols, rows, zoom, style, background, false)
+    }
+
+    pub(crate) fn for_screenshot(
+        cols: u16,
+        rows: usize,
+        zoom: f64,
+        style: Style,
+        background: Option<CaptureBackground>,
+    ) -> anyhow::Result<Self> {
+        Self::with_zoom_background_and_size(cols, rows, zoom, style, background, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn with_zoom_background_and_size(
+        cols: u16,
+        rows: usize,
+        zoom: f64,
+        style: Style,
+        background: Option<CaptureBackground>,
+        exact_size: bool,
+    ) -> anyhow::Result<Self> {
         if !zoom.is_finite() || zoom <= 0.0 || zoom > f64::from(f32::MAX) {
             anyhow::bail!("recording zoom must be finite and greater than zero");
         }
         // Before pixel_size, which is where an unbounded font size overflows.
         style.validate().map_err(|error| anyhow::anyhow!(error))?;
-        let (base_width, base_height) = svg::pixel_size(cols, rows, &style);
+        let (base_width, base_height) = if exact_size {
+            svg::exact_pixel_size(cols, rows, &style)
+        } else {
+            svg::pixel_size(cols, rows, &style)
+        };
         let horizontal = style
             .canvas_horizontal()
             .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
@@ -127,6 +154,7 @@ impl GridRenderer {
         Ok(Self {
             max_cols: cols,
             max_rows: rows,
+            exact_size,
             scale: zoom as f32,
             width,
             height,
@@ -158,7 +186,11 @@ impl FrameRenderer for GridRenderer {
         let scale = self.scale;
         let colors = &frame.render_state;
         let style = &self.style;
-        let (base_width, base_height) = svg::pixel_size(cols, rows, style);
+        let (base_width, base_height) = if self.exact_size {
+            svg::exact_pixel_size(cols, rows, style)
+        } else {
+            svg::pixel_size(cols, rows, style)
+        };
         let panel_width = scaled_dimension(base_width, f64::from(self.scale), "frame width")?;
         let panel_height = scaled_dimension(base_height, f64::from(self.scale), "frame height")?;
         // The window sits at its own left and top gap. A frame smaller than the

@@ -60,6 +60,22 @@ fn scaled_renderers_multiply_output_dimensions() {
 }
 
 #[test]
+fn static_screenshots_keep_odd_svg_dimensions_at_zoom() {
+    // Sizes follow the default style; update them deliberately if a default
+    // gap moves. The point is the difference: a recording is rounded up to
+    // even dimensions for the video encoders, a screenshot is not.
+    for (zoom, recording_size, screenshot_size) in
+        [(1.0, (88, 126), (88, 125)), (2.0, (176, 252), (176, 250))]
+    {
+        let recording = GridRenderer::with_zoom(1, 1, zoom, Style::default()).unwrap();
+        let screenshot = GridRenderer::for_screenshot(1, 1, zoom, Style::default(), None).unwrap();
+
+        assert_eq!(recording.pixel_size(), recording_size);
+        assert_eq!(screenshot.pixel_size(), screenshot_size);
+    }
+}
+
+#[test]
 fn fractional_zoom_shrinks_output_without_changing_grid_dimensions() {
     let standard = GridRenderer::new(80, 30);
     let half = GridRenderer::with_zoom(80, 30, 0.5, Style::default()).unwrap();

@@ -620,6 +620,12 @@ pub(crate) fn render_svg(
 
 #[cfg(feature = "recording-raster")]
 pub(crate) fn pixel_size(cols: u16, rows: usize, style: &Style) -> (u32, u32) {
+    let (width, height) = exact_pixel_size(cols, rows, style);
+    (width + width % 2, height + height % 2)
+}
+
+#[cfg(feature = "recording-raster")]
+pub(crate) fn exact_pixel_size(cols: u16, rows: usize, style: &Style) -> (u32, u32) {
     let cell_w = style.cell_width();
     let cell_h = style.cell_height();
     let header_h = style.header_height();
@@ -628,7 +634,7 @@ pub(crate) fn pixel_size(cols: u16, rows: usize, style: &Style) -> (u32, u32) {
     let height =
         (header_h + style.content_top() + style.content_bottom() + rows.max(1) as f32 * cell_h)
             .ceil() as u32;
-    (width + width % 2, height + height % 2)
+    (width, height)
 }
 
 #[cfg(test)]
