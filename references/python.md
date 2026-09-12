@@ -34,6 +34,9 @@ locator = (
 | --- | --- |
 | `get_by_text(text, **options)` | Match text or regex. |
 | `get_by_style(style, **options)` | Match appearance; when chained, require it on the whole match. |
+| `get_by_link(uri, **options)` | Match an OSC 8 target; when chained, require it on every cell. `""` means unlinked. |
+| `and_(other)`, `or_(other)` | Intersect/union cells, then form contiguous per-row runs. |
+| `filter(has=..., has_not=...)` | Keep whole matches containing an inner match or containing none. |
 | `any()` | Keep all matches. |
 | `unique()` | Require one match. |
 | `first()`, `last()`, `nth(index)` | Select a match. |
@@ -44,6 +47,18 @@ locator = (
 | `highlight(timeout=None)` | Highlight. |
 
 Text options: `regex`, `full`, `whitespace`, and chained `direction`.
+
+Style/link options are `full` and chained `direction`. Filter accepts locators
+only; use `get_by_text()` for text containment. A partially linked text match
+passes `filter(has=terminal.get_by_link(uri))` but fails chained
+`get_by_link(uri)`. `and_(terminal.get_by_link(uri))` returns its linked cells.
+Appearance refinement skips blanks when visible characters are present;
+link refinement checks blanks too.
+
+Composition requires operands from the same terminal instance. It is lazy,
+uses one snapshot, and merges adjacent selected cells even from different
+matches. Separate rows remain separate runs; composed text uses exact-grid
+whitespace. Any `full` branch makes the whole query use the full grid.
 
 Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 

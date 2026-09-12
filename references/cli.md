@@ -45,6 +45,12 @@ Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style
 `--link URL` matches that hyperlink on every cell, including spaces.
 Use `--link ""` for unlinked cells. Other style filters ignore spaces.
 
+`--link` is a separate whole-match constraint, not a style field. Native
+Rust/JavaScript/Python locators also support cell-set AND/OR and locator-based
+containment filters; the CLI does not expose a shell expression syntax for
+those operations. Locator protocol requests carry expression queries rather
+than native binding stage arrays.
+
 `click text` also accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks`, and `--timeout`.
 
 ## Send input

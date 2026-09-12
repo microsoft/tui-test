@@ -148,15 +148,19 @@ class NativeSurfaceTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_locator_stages_reject_cross_kind_fields(self):
+    def test_locator_nodes_reject_invalid_fields_and_references(self):
         async def scenario():
             session = _native.NativeSession(unique_session("native-locator"))
             for stage in (
                 {"kind": "text", "text": "x", "style": {"bold": True}},
                 {"kind": "style", "style": {"bold": True}, "text": "x"},
+                {"kind": "style", "style": {"bold": True, "link": "test:link"}},
+                {"kind": "link"},
+                {"kind": "and", "left": 0, "right": 0},
+                {"kind": "filter", "has_text": "x"},
             ):
                 with self.assertRaises(_native.NativeUsageError):
-                    await session.find_locator([stage])
+                    await session.find_locator({"nodes": [stage], "root": 0})
 
         asyncio.run(scenario())
 
@@ -207,7 +211,7 @@ class NativeStubTests(unittest.TestCase):
         self.assertIn("def open(", stub)
         self.assertIn("def restart(self, graceful_timeout_ms: int)", stub)
         self.assertIn(
-            "def find_locator(self, stages: typing.List[typing.Dict[str, typing.Any]])",
+            "def find_locator(self, expression: typing.Dict[str, typing.Any])",
             stub,
         )
         self.assertIn("typing.Awaitable[", stub)

@@ -152,12 +152,48 @@ await save.click()
 | --- | --- |
 | `terminal.get_by_text(text, **options)` | `regex`, `full`, `whitespace` |
 | `terminal.get_by_style(style, **options)` | `full` |
+| `terminal.get_by_link(uri, **options)` | `full` |
 | `locator.get_by_text(text, **options)` | `regex`, `full`, `whitespace`, `direction` |
 | `locator.get_by_style(style, **options)` | `full`, `direction` |
+| `locator.get_by_link(uri, **options)` | `full`, `direction` |
 
 `whitespace` is `"exact"` or `"normalize"`. `direction` is `"within"`, `"after"`, or `"before"`.
 
 `TextStyle` fields are `foreground`, `background`, `bold`, `dim`, `italic`, `underline_style`, `underline_color`, `inverse`, `hidden`, `strikethrough`, and `blink`.
+
+`get_by_link(uri)` matches an exact OSC 8 target, not visible URL text;
+`get_by_link("")` requires no link. Root style/link selectors find runs within
+each row. Chained calls with the default `within` direction check whole
+matches. Styles skip blanks if visible text exists; links check every cell.
+
+#### Compose locators
+
+```python
+link = terminal.get_by_link("https://example.com")
+bold = terminal.get_by_style(TextStyle(bold=True))
+bold_link_cells = bold.and_(link)
+either = link.or_(terminal.get_by_text("Help"))
+sections = terminal.get_by_text("Docs and Help")
+contains_link = sections.filter(has=link)
+without_old_text = sections.filter(has_not=terminal.get_by_text("old"))
+entirely_linked = sections.get_by_link("https://example.com")
+```
+
+`and_()` keeps shared cells; `or_()` combines cells without duplicates. Adjacent
+cells merge within each physical row, even across original matches. Gaps and
+row breaks split runs. Counts and clicks use these runs; text keeps exact
+whitespace.
+
+`filter` accepts only locators. `has` requires a match inside each candidate;
+`has_not` requires none. Both conditions apply when supplied, and the inner
+match may cover the whole candidate. For partially linked `"Docs"`,
+`filter(has=link)` keeps the whole word, `get_by_link(uri)` rejects it, and
+`and_(link)` returns its linked cells.
+
+Use locators from one `TuiTest`. Composition leaves them unchanged and reads
+one fresh snapshot when used. Selection order matters: `a.first().and_(b)`
+differs from `a.and_(b).first()`. Any `full` branch includes scrollback for the
+whole query. Errors propagate.
 
 #### Select matches
 

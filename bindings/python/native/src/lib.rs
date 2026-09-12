@@ -11,10 +11,10 @@ use tui_test::{
     AutomaticRecording as CoreAutomaticRecording,
     AutomaticRecordingMode as CoreAutomaticRecordingMode, Backend, BellEvent, CaptureBackground,
     Cell, CellColor, ClipboardPattern, Cursor, ErrorKind, KeyAction, LocatorDirection,
-    LocatorQuery, LocatorSelector, MatchOccurrence, MouseAction, MouseOptions, OpenOptions,
-    OpenResult, Operation, OperationResult, PackedScreen, RecordingFormat, RunOptions,
-    ScreenshotResult, Size, SnapshotResult, State, StyleSelector, TerminalColors, TextMatch,
-    TextSelector, TextStyle, Timeouts, TuiTestError, WhitespaceMode,
+    LocatorQuery, MatchOccurrence, MouseAction, MouseOptions, OpenOptions, OpenResult, Operation,
+    OperationResult, PackedScreen, RecordingFormat, RunOptions, ScreenshotResult, Size,
+    SnapshotResult, State, TerminalColors, TextMatch, TextStyle, Timeouts, TuiTestError,
+    WhitespaceMode,
 };
 
 pyo3::create_exception!(
@@ -288,9 +288,9 @@ impl NativeSession {
     fn find_locator<'py>(
         &self,
         py: Python<'py>,
-        stages: Vec<Bound<'py, PyAny>>,
+        expression: Bound<'py, PyDict>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let query = capture_locator_query(&stages);
+        let query = capture_locator_query(&expression);
         let name = self.name.clone();
         future_blocking(
             py,
@@ -299,15 +299,15 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (stages, not_, timeout_ms))]
+    #[pyo3(signature = (expression, not_, timeout_ms))]
     fn wait_locator<'py>(
         &self,
         py: Python<'py>,
-        stages: Vec<Bound<'py, PyAny>>,
+        expression: Bound<'py, PyDict>,
         not_: bool,
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let query = capture_locator_query(&stages);
+        let query = capture_locator_query(&expression);
         let timeout_ms = capture_optional_integer(timeout_ms);
         let name = self.name.clone();
         future_blocking(
@@ -326,16 +326,16 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (stages, button, clicks, timeout_ms))]
+    #[pyo3(signature = (expression, button, clicks, timeout_ms))]
     fn click_locator<'py>(
         &self,
         py: Python<'py>,
-        stages: Vec<Bound<'py, PyAny>>,
+        expression: Bound<'py, PyDict>,
         button: Bound<'py, PyAny>,
         clicks: Bound<'py, PyAny>,
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let query = capture_locator_query(&stages);
+        let query = capture_locator_query(&expression);
         let button = capture_integer(&button);
         let clicks = capture_integer(&clicks);
         let timeout_ms = capture_optional_integer(timeout_ms);
@@ -357,14 +357,14 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (stages, timeout_ms))]
+    #[pyo3(signature = (expression, timeout_ms))]
     fn highlight_locator<'py>(
         &self,
         py: Python<'py>,
-        stages: Vec<Bound<'py, PyAny>>,
+        expression: Bound<'py, PyDict>,
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let query = capture_locator_query(&stages);
+        let query = capture_locator_query(&expression);
         let timeout_ms = capture_optional_integer(timeout_ms);
         let name = self.name.clone();
         future_blocking(
@@ -382,15 +382,15 @@ impl NativeSession {
         )
     }
 
-    #[pyo3(signature = (stages, not_, timeout_ms))]
+    #[pyo3(signature = (expression, not_, timeout_ms))]
     fn expect_locator<'py>(
         &self,
         py: Python<'py>,
-        stages: Vec<Bound<'py, PyAny>>,
+        expression: Bound<'py, PyDict>,
         not_: bool,
         timeout_ms: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let query = capture_locator_query(&stages);
+        let query = capture_locator_query(&expression);
         let timeout_ms = capture_optional_integer(timeout_ms);
         let name = self.name.clone();
         future_blocking(
@@ -1484,6 +1484,22 @@ fn core_occurrence(
 }
 
 fn core_style(dict: &Bound<'_, PyDict>) -> Result<TextStyle, TuiTestError> {
+    require_keys(
+        dict,
+        &[
+            "foreground",
+            "background",
+            "bold",
+            "dim",
+            "italic",
+            "underline_style",
+            "underline_color",
+            "inverse",
+            "hidden",
+            "strikethrough",
+            "blink",
+        ],
+    )?;
     Ok(TextStyle {
         foreground: py_string(dict, "foreground")?,
         background: py_string(dict, "background")?,
@@ -1499,87 +1515,118 @@ fn core_style(dict: &Bound<'_, PyDict>) -> Result<TextStyle, TuiTestError> {
     })
 }
 
-fn capture_locator_query(stages: &[Bound<'_, PyAny>]) -> Result<LocatorQuery, TuiTestError> {
-    let mut parent = None;
-    for (index, stage) in stages.iter().enumerate() {
-        let dict = stage
+fn require_keys(dict: &Bound<'_, PyDict>, allowed: &[&str]) -> Result<(), TuiTestError> {
+    for (key, _) in dict.iter() {
+        let key = key
+            .extract::<String>()
+            .map_err(|error| TuiTestError::usage(error.to_string()))?;
+        if !allowed.contains(&key.as_str()) {
+            return Err(TuiTestError::usage(format!(
+                "unknown locator field {key:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn capture_locator_query(expression: &Bound<'_, PyDict>) -> Result<LocatorQuery, TuiTestError> {
+    use tui_test::locator_query::{LocatorExpression, LocatorNode, LocatorNodeKind as Kind};
+    require_keys(expression, &["nodes", "root"])?;
+    let root = py_usize(expression, "root")?
+        .ok_or_else(|| TuiTestError::usage("locator expression requires root"))?;
+    let values = py_item(expression, "nodes")?
+        .ok_or_else(|| TuiTestError::usage("locator expression requires nodes"))?;
+    let values = values
+        .extract::<Vec<Bound<'_, PyAny>>>()
+        .map_err(|error| TuiTestError::usage(error.to_string()))?;
+    let mut nodes = Vec::new();
+    for (index, node) in values.iter().enumerate() {
+        let dict = node
             .cast::<PyDict>()
-            .map_err(|error| TuiTestError::usage(format!("stages[{index}]: {error}")))?;
+            .map_err(|error| TuiTestError::usage(format!("nodes[{index}]: {error}")))?;
+        require_keys(
+            dict,
+            &[
+                "kind",
+                "text",
+                "regex",
+                "full",
+                "whitespace",
+                "direction",
+                "occurrence",
+                "nth",
+                "style",
+                "link",
+                "within",
+                "left",
+                "right",
+                "input",
+                "has",
+                "has_not",
+            ],
+        )?;
         let occurrence = core_occurrence(
             py_string(dict, "occurrence")?,
             py_usize(dict, "nth")?,
-            &format!("stages[{index}].nth"),
+            &format!("nodes[{index}].nth"),
         )?;
         let direction = match py_string(dict, "direction")?.as_deref() {
-            None | Some("within") => LocatorDirection::Within,
-            Some("after") => LocatorDirection::After,
-            Some("before") => LocatorDirection::Before,
+            None => None,
+            Some("within") => Some(LocatorDirection::Within),
+            Some("after") => Some(LocatorDirection::After),
+            Some("before") => Some(LocatorDirection::Before),
             Some(value) => {
                 return Err(TuiTestError::usage(format!(
                     "locator direction must be within, after, or before (got '{value}')"
                 )))
             }
         };
-        let selector = match py_string(dict, "kind")?.as_deref() {
-            Some("text") => {
-                if py_item(dict, "style")?.is_some() {
-                    return Err(TuiTestError::usage(
-                        "text locator stages do not accept style parameters",
-                    ));
-                }
-                let whitespace = match py_string(dict, "whitespace")?.as_deref() {
-                    None | Some("exact") => WhitespaceMode::Exact,
-                    Some("normalize") => WhitespaceMode::Normalize,
-                    Some(value) => {
-                        return Err(TuiTestError::usage(format!(
-                            "whitespace must be exact or normalize (got '{value}')"
-                        )))
-                    }
-                };
-                LocatorSelector::Text(TextSelector {
-                    text: py_string(dict, "text")?
-                        .ok_or_else(|| TuiTestError::usage("text locator stage requires text"))?,
-                    regex: py_bool(dict, "regex")?.unwrap_or(false),
-                    full: py_bool(dict, "full")?.unwrap_or(false),
-                    whitespace,
-                    scope: Default::default(),
-                })
-            }
-            Some("style") => {
-                if py_item(dict, "text")?.is_some()
-                    || py_bool(dict, "regex")?.unwrap_or(false)
-                    || py_item(dict, "whitespace")?.is_some()
-                {
-                    return Err(TuiTestError::usage(
-                        "style locator stages do not accept text parameters",
-                    ));
-                }
-                let style = py_item(dict, "style")?
-                    .ok_or_else(|| TuiTestError::usage("style locator stage requires style"))?;
-                let style = style
-                    .cast::<PyDict>()
-                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
-                LocatorSelector::Style(StyleSelector {
-                    style: core_style(style)?,
-                    full: py_bool(dict, "full")?.unwrap_or(false),
-                })
-            }
-            Some(value) => {
+        let kind = match py_string(dict, "kind")?.as_deref() {
+            Some("text") => Kind::Text,
+            Some("style") => Kind::Style,
+            Some("link") => Kind::Link,
+            Some("and") => Kind::And,
+            Some("or") => Kind::Or,
+            Some("filter") => Kind::Filter,
+            value => {
                 return Err(TuiTestError::usage(format!(
-                    "unknown locator stage kind '{value}'"
+                    "unknown locator node kind {value:?}"
                 )))
             }
-            None => return Err(TuiTestError::usage("locator stage requires kind")),
         };
-        parent = Some(LocatorQuery {
-            selector,
+        let whitespace = match py_string(dict, "whitespace")?.as_deref() {
+            None => None,
+            Some("exact") => Some(WhitespaceMode::Exact),
+            Some("normalize") => Some(WhitespaceMode::Normalize),
+            value => return Err(TuiTestError::usage(format!("invalid whitespace {value:?}"))),
+        };
+        let style = py_item(dict, "style")?
+            .map(|style| {
+                let dict = style
+                    .cast::<PyDict>()
+                    .map_err(|error| TuiTestError::usage(error.to_string()))?;
+                core_style(dict)
+            })
+            .transpose()?;
+        nodes.push(LocatorNode {
+            kind,
             occurrence,
-            within: parent.map(Box::new),
             direction,
-            style: TextStyle::default(),
+            whitespace,
+            style,
+            text: py_string(dict, "text")?,
+            regex: py_bool(dict, "regex")?,
+            full: py_bool(dict, "full")?,
+            link: py_string(dict, "link")?,
+            within: py_usize(dict, "within")?,
+            left: py_usize(dict, "left")?,
+            right: py_usize(dict, "right")?,
+            input: py_usize(dict, "input")?,
+            has: py_usize(dict, "has")?,
+            has_not: py_usize(dict, "has_not")?,
         });
     }
-    parent.ok_or_else(|| TuiTestError::usage("locator requires at least one stage"))
+    LocatorExpression { nodes, root }.into_query()
 }
 
 fn profile_from_parts(
