@@ -114,8 +114,7 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 | `monitor` | Watch a session live. |
 | `monitor --interactive` | Forward keyboard, paste, and supported SGR mouse input; Ctrl+] detaches. |
 
-Interactive input follows the app's keyboard, paste, and mouse modes.
-Detaching restores the viewer's modes; read-only monitoring leaves them unchanged.
+Interactive monitors mirror the session's keyboard, paste, and mouse modes.
 
 ## Configure
 
