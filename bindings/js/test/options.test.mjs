@@ -8,14 +8,17 @@ import {
   uniqueSession,
 } from "../dist/index.js";
 import {
+  artifactPayload,
   backendPayload,
   envPairs,
   profilePayload,
   recordingPayload,
+  tracePayload,
   resolveTimeout,
   timeoutsPayload,
 } from "../dist/config.js";
 import { NativeRuntime } from "../dist/native.js";
+import { resolve } from "node:path";
 
 const shell = process.platform === "win32" ? "pwsh" : undefined;
 const evalArgs =
@@ -211,6 +214,9 @@ test("mouse helpers encode named buttons and modifiers", async () => {
     assert.equal(locatorCall[1].nodes[locatorCall[1].root].occurrence, "unique");
     assert.deepEqual(locatorCall.slice(2), [29, 2, 50]);
 
+    await su.getByText("Open").click();
+    assert.equal(calls.at(-1)[1].nodes.at(-1).occurrence, "any");
+
     await assert.rejects(
       su.mouse.click(0, 0, { button: "primary" }),
       /unknown mouse button "primary"/,
@@ -228,14 +234,189 @@ test("mouse helpers encode named buttons and modifiers", async () => {
   }
 });
 
-test("recordingPayload accepts only mode and directory", () => {
-  assert.deepEqual(recordingPayload({ mode: "on-failure", directory: "casts" }), {
-    mode: "on-failure",
+test("recordingPayload accepts only a directory", () => {
+  assert.deepEqual(recordingPayload({ directory: "casts" }), {
     directory: "casts",
   });
-  assert.throws(() => recordingPayload({ mode: "sometimes" }), /recording mode/);
+  assert.throws(() => recordingPayload({ mode: "always" }), /recording field mode/);
   assert.throws(() => recordingPayload({ directory: "" }), /non-empty/);
   assert.throws(() => recordingPayload({ other: 1 }), /other/);
+});
+
+test("tracePayload accepts only on, off, and on-failure", () => {
+  assert.equal(tracePayload(), undefined);
+  for (const mode of ["on", "off", "on-failure"]) {
+    assert.deepEqual(tracePayload({ mode, directory: "traces" }), { mode, directory: "traces" });
+  }
+  assert.throws(() => tracePayload({ mode: "always" }), /trace mode/);
+  assert.throws(() => tracePayload({ directory: "" }), /non-empty/);
+  assert.throws(() => tracePayload({ other: true }), /trace field/);
+});
+
+test("artifactPayload maps modes and resolves directories before native dispatch", () => {
+  assert.equal(artifactPayload(), undefined);
+  assert.deepEqual(
+    artifactPayload({
+      dir: "failure-output",
+      onFailure: "all",
+      includeRecording: true,
+    }),
+    {
+      directory: resolve("failure-output"),
+      mode: "all",
+      includeRecording: true,
+    },
+  );
+  assert.deepEqual(artifactPayload({ dir: "." }), {
+    directory: resolve("."),
+    mode: "all",
+    includeRecording: false,
+  });
+  for (const mode of ["none", "text", "all"]) {
+    assert.equal(artifactPayload({ dir: ".", onFailure: mode }).mode, mode);
+  }
+  for (const mode of ["bundle", "json", "svg"]) {
+    assert.throws(() => artifactPayload({ dir: ".", onFailure: mode }), /expected all, text, or none/);
+  }
+
+  assert.throws(
+    () => artifactPayload({ dir: ".", onFailure: "archive" }),
+    /artifacts\.onFailure/,
+  );
+  assert.throws(
+    () => artifactPayload({ dir: ".", includeRecording: "yes" }),
+    /includeRecording must be a boolean/,
+  );
+});
+
+test("constructor screenHistoryLimit reaches open and run options", async () => {
+  const originals = {
+    open: NativeRuntime.prototype.open,
+    run: NativeRuntime.prototype.run,
+  };
+  const calls = [];
+  NativeRuntime.prototype.open = async (options) => {
+    calls.push(["open", options]);
+    return { shell_pid: null, session: "history", ready: true, recording: "" };
+  };
+  NativeRuntime.prototype.run = async (options) => {
+    calls.push(["run", options]);
+    return { shell_pid: null, session: "history", ready: true, recording: "" };
+  };
+  try {
+    const su = new TuiTest("history", { screenHistoryLimit: 17 });
+    await su.open();
+    await su.run("program");
+    assert.equal(calls[0][1].screenHistoryLimit, 17);
+    assert.equal(calls[1][1].screenHistoryLimit, 17);
+  } finally {
+    Object.assign(NativeRuntime.prototype, originals);
+  }
+});
+
+test("locator.location transports require-one to native", async () => {
+  const original = NativeRuntime.prototype.findLocator;
+  const calls = [];
+  NativeRuntime.prototype.findLocator = async (stages, requireOne) => {
+    calls.push([stages, requireOne]);
+    return [
+      {
+        text: "target",
+        start: { row: 0, column: 0 },
+        end: { row: 0, column: 6 },
+        spans: [{ row: 0, start: 0, end: 6 }],
+      },
+    ];
+  };
+  try {
+    const su = new TuiTest("require-one-transport");
+    const match = await su.getByText("target").location();
+    assert.equal(match.text, "target");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][1], true);
+    assert.equal(calls[0][0].nodes.at(-1).occurrence, "any");
+  } finally {
+    NativeRuntime.prototype.findLocator = original;
+  }
+});
+
+test("core artifacts suppress legacy screenshot capture", async () => {
+  const originals = {
+    expectLocator: NativeRuntime.prototype.expectLocator,
+    screenshot: NativeRuntime.prototype.screenshot,
+  };
+  let screenshots = 0;
+  const structured = new ExpectationError("structured failure");
+  Object.defineProperties(structured, {
+    details: {
+      value: {
+        schema_version: 1,
+        signature: "sha256:test",
+        operation: {
+          name: "locator.expect",
+          elapsed_ms: 1,
+          started_screen_sequence: 1,
+          failed_screen_sequence: 1,
+        },
+        reason: "locator_no_match",
+        summary: "structured failure",
+        truncated: false,
+      },
+    },
+    artifact: {
+      value: {
+        status: "written",
+        directory: resolve("failure-output"),
+        screen_svg: resolve("failure-output", "screen.svg"),
+      },
+    },
+  });
+  NativeRuntime.prototype.expectLocator = async () => {
+    throw structured;
+  };
+  NativeRuntime.prototype.screenshot = async () => {
+    screenshots++;
+    return "unexpected.svg";
+  };
+  try {
+    const su = new TuiTest("structured-artifact", {
+      artifacts: { dir: "failure-output", onFailure: "all" },
+    });
+    await assert.rejects(su.getByText("missing").expect(), structured);
+    assert.equal(screenshots, 0);
+  } finally {
+    Object.assign(NativeRuntime.prototype, originals);
+  }
+});
+
+test("legacy errors do not substitute a live screenshot for requested exports", async () => {
+  const originals = {
+    findLocator: NativeRuntime.prototype.findLocator,
+    text: NativeRuntime.prototype.text,
+    screenshot: NativeRuntime.prototype.screenshot,
+  };
+  NativeRuntime.prototype.findLocator = async () => { throw new ExpectationError("no match found\n\nTerminal content:\nlegacy screen"); };
+  NativeRuntime.prototype.text = async () => "legacy screen";
+  NativeRuntime.prototype.screenshot = async () => {
+    throw new Error("unexpected live capture");
+  };
+  try {
+    const su = new TuiTest("legacy-artifact", {
+      artifacts: { dir: ".", onFailure: "all" },
+    });
+    await assert.rejects(
+      su.getByText("missing").location(),
+      (error) =>
+        error instanceof ExpectationError &&
+        error.message.includes("no match found") &&
+        error.terminal?.text === "legacy screen" &&
+        error.artifact?.status === "failed" &&
+        error.artifact.errors[0].includes("require native structured diagnostics") &&
+        error.artifact.errors[0].length <= 1050,
+    );
+  } finally {
+    Object.assign(NativeRuntime.prototype, originals);
+  }
 });
 
 test("restart forwards timeout and preserves result and errors", async () => {
