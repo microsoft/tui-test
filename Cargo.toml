@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "bindings/go/native",
     "bindings/js",
     "bindings/python/native",
     "crates/tui-test",
