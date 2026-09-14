@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::diagnostics::{FailureArtifactRef, FailureDetails, FailureObservation};
+use crate::diagnostics::{FailureArtifactRef, FailureDetails, FailureObservation, FailureReport};
 use crate::shell::Shell;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -858,6 +858,7 @@ pub struct TuiTestError {
     pub message: String,
     pub details: Option<Box<FailureDetails>>,
     pub artifact: Option<Box<FailureArtifactRef>>,
+    pub(crate) report: Option<Box<FailureReport>>,
     pub(crate) observation: Option<Box<FailureObservation>>,
 }
 
@@ -868,6 +869,7 @@ impl TuiTestError {
             message: message.into(),
             details: None,
             artifact: None,
+            report: None,
             observation: None,
         }
     }
@@ -906,6 +908,11 @@ impl TuiTestError {
 
     pub fn with_artifact(mut self, artifact: FailureArtifactRef) -> Self {
         self.artifact = Some(Box::new(artifact));
+        self
+    }
+
+    pub(crate) fn with_report(mut self, report: FailureReport) -> Self {
+        self.report = Some(Box::new(report));
         self
     }
 }

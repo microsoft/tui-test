@@ -9,10 +9,15 @@ use crate::api::{
 use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
 use crate::config::{self, POLL_DELAY_MS};
+use crate::diagnostics::merge_failure_details;
+use crate::diagnostics::strings::{
+    base_error_message, diagnostic_hints, diagnostic_operation_name, format_timeout,
+    operation_timeout, timeout_message, title_timeout_message_from_actual,
+    truncate_diagnostic_value,
+};
 use crate::diagnostics::{
-    elapsed_ms, profile_fingerprint, CellMismatch, CellStyleEvaluation, DiagnosticHint,
-    FailureDetails, FailureObservation, FailureReason, LocatorFailureReason, ProcessDiagnostics,
-    RuntimeDiagnostics,
+    elapsed_ms, failure_reason, CellMismatch, CellStyleEvaluation, FailureObservation,
+    FailureReason, FailureReport, ProcessDiagnostics, RuntimeDiagnostics,
 };
 use crate::input::{keys, mouse};
 use crate::logger::Logger;
@@ -212,6 +217,7 @@ impl Engine {
                 self.finalize_failure(error, &metadata);
             }));
             error.observation = None;
+            error.report = None;
         } else {
             self.capture_current_screen_sequence(true, is_assertion);
         }
@@ -523,7 +529,7 @@ impl Engine {
         // of it is a guess, and a wrong answer is worse than a failure.
         if let Some(fault) = session.fault() {
             return Err(
-                TuiTestError::internal(fault.clone()).with_details(FailureDetails::new(
+                TuiTestError::internal(fault.clone()).with_report(FailureReport::new(
                     "terminal.operation",
                     None,
                     FailureReason::EmulatorFault,
@@ -566,11 +572,7 @@ impl Engine {
         if !matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal) {
             return;
         }
-        if error
-            .details
-            .as_ref()
-            .is_some_and(|details| details.terminal.is_some())
-        {
+        if error.details.is_some() {
             return;
         }
         let guard = self.lock_session();
@@ -586,11 +588,7 @@ impl Engine {
         if !matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal) {
             return;
         }
-        if error
-            .details
-            .as_ref()
-            .is_some_and(|details| details.terminal.is_some())
-        {
+        if error.details.is_some() {
             return;
         }
         let captured = if error.observation.is_none() {
@@ -601,7 +599,7 @@ impl Engine {
         let observation = error.observation.as_deref().or(captured.as_ref());
         let (summary, summary_truncated) =
             truncate_diagnostic_value(base_error_message(&error.message), 64 * 1024);
-        let mut details = FailureDetails::new(
+        let mut details = FailureReport::new(
             metadata.name.clone(),
             metadata.timeout_ms,
             failure_reason(error, observation),
@@ -614,7 +612,7 @@ impl Engine {
             .as_ref()
             .map_or(0, |value| value.screen_sequence);
 
-        if let Some(existing) = error.details.take() {
+        if let Some(existing) = error.report.take() {
             merge_failure_details(&mut details, *existing);
         }
         details.truncated |= details
@@ -637,20 +635,11 @@ impl Engine {
         }
         details.hints = diagnostic_hints(&details);
 
-        if let Some(observation) = &observation {
-            if !error.message.contains("Terminal content:\n") {
-                let (screen, truncated) = truncate_diagnostic_value(observation.text(), 512 * 1024);
-                details.truncated |= truncated;
-                error.message = format!("{}\n\nTerminal content:\n{}", error.message, screen);
-            }
-        }
-        let (message, message_truncated) =
-            truncate_diagnostic_value(std::mem::take(&mut error.message), 1024 * 1024);
-        error.message = message;
-        details.truncated |= message_truncated;
         details.finish_signature();
 
-        error.details = Some(Box::new(details));
+        let failure = details.failure_details();
+        error.message = failure.summary.clone();
+        error.details = Some(Box::new(failure));
     }
 
     pub fn status(&self) -> RuntimeStatus {
@@ -985,7 +974,6 @@ fn capture_failure_observation_locked(
         backend: session.backend.as_str().to_string(),
         target_os: std::env::consts::OS.to_string(),
         target_arch: std::env::consts::ARCH.to_string(),
-        terminal_profile_fingerprint: profile_fingerprint(&state.profile),
     };
     FailureObservation {
         rows: snapshot.rows,
@@ -1000,189 +988,6 @@ fn capture_failure_observation_locked(
         history: state.screen_history.clone(),
         process,
         runtime,
-    }
-}
-
-fn failure_reason(error: &TuiTestError, observation: Option<&FailureObservation>) -> FailureReason {
-    if let Some(observation) = observation {
-        if observation.process.cancelled {
-            return FailureReason::Cancelled;
-        }
-        if observation.process.exit_code.is_some() {
-            return FailureReason::SessionExited;
-        }
-    }
-    if let Some(locator) = error
-        .details
-        .as_ref()
-        .and_then(|details| details.locator.as_ref())
-    {
-        return match locator.failure_reason {
-            Some(LocatorFailureReason::Ambiguous) => FailureReason::LocatorAmbiguous,
-            Some(LocatorFailureReason::OutsideViewport)
-            | Some(LocatorFailureReason::MatchedNoCells) => FailureReason::MatchNotActionable,
-            _ => FailureReason::LocatorNoMatch,
-        };
-    }
-    match error.kind {
-        ErrorKind::Internal => FailureReason::InternalFailure,
-        ErrorKind::Assertion
-            if error.message.contains("timed out") || error.message.contains("timeout") =>
-        {
-            FailureReason::TimedOut
-        }
-        ErrorKind::Assertion if error.message.contains("snapshot mismatch") => {
-            FailureReason::SnapshotMismatch
-        }
-        ErrorKind::Assertion => FailureReason::ScalarMismatch,
-        ErrorKind::Usage | ErrorKind::NoSession => FailureReason::InternalFailure,
-    }
-}
-
-fn merge_failure_details(target: &mut FailureDetails, source: FailureDetails) {
-    target.reason = source.reason;
-    let (summary, truncated) = truncate_diagnostic_value(source.summary, 64 * 1024);
-    target.summary = summary;
-    target.locator = source.locator;
-    target.comparison = source.comparison;
-    target.evaluation_transitions = source.evaluation_transitions;
-    target.hints = source.hints;
-    target.truncated |= source.truncated || truncated;
-    if source.operation.timeout_ms.is_some() {
-        target.operation.timeout_ms = source.operation.timeout_ms;
-    }
-}
-
-fn diagnostic_hints(details: &FailureDetails) -> Vec<DiagnosticHint> {
-    let mut hints = Vec::new();
-    match details.reason {
-        FailureReason::LocatorAmbiguous => hints.push(DiagnosticHint {
-            code: "choose_occurrence".to_string(),
-            message:
-                "Narrow the locator or choose first(), last(), or nth() when multiple matches are expected."
-                    .to_string(),
-        }),
-        FailureReason::LocatorNoMatch => {
-            if let Some(locator) = &details.locator {
-                if locator.failure_reason == Some(LocatorFailureReason::StyleFilterRemovedAll) {
-                    hints.push(DiagnosticHint {
-                        code: "inspect_style_mismatch".to_string(),
-                        message:
-                            "The selector found candidate text, but its requested style did not match."
-                                .to_string(),
-                    });
-                } else if let Some(stage) = locator.failure_stage {
-                    hints.push(DiagnosticHint {
-                        code: "inspect_locator_stage".to_string(),
-                        message: format!(
-                            "Inspect locator stage {stage}; it produced no selected candidates."
-                        ),
-                    });
-                }
-            }
-        }
-        FailureReason::MatchNotActionable => hints.push(DiagnosticHint {
-            code: "make_match_visible".to_string(),
-            message:
-                "The locator matched, but the result was not actionable in the visible viewport."
-                    .to_string(),
-        }),
-        FailureReason::SessionExited => hints.push(DiagnosticHint {
-            code: "inspect_process_exit".to_string(),
-            message: "Inspect the process exit code and the final recording output.".to_string(),
-        }),
-        FailureReason::TimedOut => hints.push(DiagnosticHint {
-            code: "inspect_last_change".to_string(),
-            message:
-                "Inspect the retained screen transitions and the last successful operation before the timeout."
-                    .to_string(),
-        }),
-        _ => {}
-    }
-    hints
-}
-
-fn base_error_message(message: &str) -> String {
-    message
-        .split_once("\n\nTerminal content:\n")
-        .map_or(message, |(base, _)| base)
-        .to_string()
-}
-
-fn diagnostic_operation_name(operation: &Operation) -> &'static str {
-    match operation {
-        Operation::Open(_) => "open",
-        Operation::Run(_) => "run",
-        Operation::Restart { .. } => "restart",
-        Operation::Close => "close",
-        Operation::State => "state",
-        Operation::Text { .. } => "text",
-        Operation::PackedScreen { .. } => "packed_screen",
-        Operation::Cells { .. } => "cells",
-        Operation::GetCommand => "get.command",
-        Operation::GetOutput => "get.output",
-        Operation::GetExitCode => "get.exit_code",
-        Operation::GetCwd => "get.cwd",
-        Operation::GetCursor => "get.cursor",
-        Operation::GetModes => "get.modes",
-        Operation::GetColors => "get.colors",
-        Operation::GetSize => "get.size",
-        Operation::GetTitle => "get.title",
-        Operation::GetClipboard => "get.clipboard",
-        Operation::GetBellCount => "get.bell_count",
-        Operation::GetBellEvents => "get.bell_events",
-        Operation::Write { .. } => "write",
-        Operation::Submit { .. } => "submit",
-        Operation::Key { .. } => "key",
-        Operation::Mouse { .. } => "mouse",
-        Operation::Resize { .. } => "resize",
-        Operation::Signal { .. } => "signal",
-        Operation::WaitTitle { .. } => "wait.title",
-        Operation::WaitClipboard { .. } => "wait.clipboard",
-        Operation::WaitClipboardMatch { .. } => "wait.clipboard_match",
-        Operation::WaitIdle { .. } => "wait.idle",
-        Operation::WaitCommand { .. } => "wait.command",
-        Operation::WaitExit { .. } => "wait.exit",
-        Operation::WaitReady { .. } => "wait.ready",
-        Operation::WaitBell { .. } => "wait.bell",
-        Operation::FindLocator { .. } => "locator.find",
-        Operation::WaitLocator { .. } => "locator.wait",
-        Operation::ClickLocator { .. } => "locator.click",
-        Operation::HighlightLocator { .. } => "locator.highlight",
-        Operation::ExpectTitle { .. } => "expect.title",
-        Operation::ExpectExitCode { .. } => "expect.exit_code",
-        Operation::ExpectMode { .. } => "expect.mode",
-        Operation::ExpectColors { .. } => "expect.colors",
-        Operation::ExpectCursor { .. } => "expect.cursor",
-        Operation::ExpectOutput { .. } => "expect.output",
-        Operation::ExpectBellCount { .. } => "expect.bell_count",
-        Operation::Snapshot { .. } => "expect.snapshot",
-        Operation::Screenshot { .. } => "screenshot",
-        Operation::StartRecording { .. } => "record.start",
-        Operation::StopRecording => "record.stop",
-    }
-}
-
-fn operation_timeout(operation: &Operation) -> Option<u64> {
-    match operation {
-        Operation::WaitTitle { timeout_ms, .. }
-        | Operation::WaitClipboard { timeout_ms }
-        | Operation::WaitClipboardMatch { timeout_ms, .. }
-        | Operation::WaitIdle { timeout_ms }
-        | Operation::WaitCommand { timeout_ms }
-        | Operation::WaitExit { timeout_ms }
-        | Operation::WaitReady { timeout_ms }
-        | Operation::WaitBell { timeout_ms }
-        | Operation::WaitLocator { timeout_ms, .. }
-        | Operation::ClickLocator { timeout_ms, .. }
-        | Operation::HighlightLocator { timeout_ms, .. }
-        | Operation::ExpectTitle { timeout_ms, .. }
-        | Operation::ExpectExitCode { timeout_ms, .. }
-        | Operation::ExpectMode { timeout_ms, .. }
-        | Operation::ExpectColors { timeout_ms, .. }
-        | Operation::ExpectCursor { timeout_ms, .. }
-        | Operation::ExpectBellCount { timeout_ms, .. } => *timeout_ms,
-        _ => None,
     }
 }
 
@@ -2377,25 +2182,6 @@ fn expect_title(
     }
 }
 
-/// Naming the title actually seen turns "expected X" into a diff a caller can
-/// act on, which matters more here than for text because the title is a single
-/// short string that the terminal screen does not show.
-fn title_timeout_message_from_actual(
-    actual: Option<&str>,
-    pattern: &str,
-    timeout_ms: u64,
-    not: bool,
-) -> String {
-    let actual = actual
-        .map(|title| format!("'{title}'"))
-        .unwrap_or_else(|| "no title set".to_string());
-    format!(
-        "timed out after {} waiting for the title '{pattern}' to be {}; the title is {actual}",
-        format_timeout(timeout_ms),
-        if not { "hidden" } else { "visible" },
-    )
-}
-
 fn wait_idle(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
     let quiet = Duration::from_millis(250);
     if poll_until(
@@ -2658,7 +2444,7 @@ fn comparison_failure(
     expected: Option<String>,
     actual: Option<String>,
 ) -> TuiTestError {
-    let mut details = FailureDetails::new(operation, timeout_ms, reason, message.clone());
+    let mut details = FailureReport::new(operation, timeout_ms, reason, message.clone());
     let (expected, expected_truncated) = expected.map_or((None, false), |value| {
         let (value, truncated) = truncate_diagnostic_value(value, 256 * 1024);
         (Some(value), truncated)
@@ -2673,7 +2459,7 @@ fn comparison_failure(
         expected,
         actual,
     });
-    TuiTestError::assertion(message).with_details(details)
+    TuiTestError::assertion(message).with_report(details)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2692,19 +2478,6 @@ fn observed_comparison_failure(
     );
     error.observation = Some(Box::new(capture_failure_observation(session)));
     error
-}
-
-fn truncate_diagnostic_value(mut value: String, limit: usize) -> (String, bool) {
-    if value.len() <= limit {
-        return (value, false);
-    }
-    let mut end = limit;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value.truncate(end);
-    value.push_str("\n... diagnostic value truncated ...");
-    (value, true)
 }
 
 fn resolve_locator_click_point(
@@ -3392,22 +3165,6 @@ fn screenshot(
     }
 }
 
-fn timeout_message(pattern: &str, timeout_ms: u64, not: bool) -> String {
-    format!(
-        "timed out after {} waiting for '{pattern}' to be {}",
-        format_timeout(timeout_ms),
-        if not { "hidden" } else { "visible" }
-    )
-}
-
-fn format_timeout(timeout_ms: u64) -> String {
-    if timeout_ms.is_multiple_of(1_000) {
-        format!("{}s", timeout_ms / 1_000)
-    } else {
-        format!("{timeout_ms}ms")
-    }
-}
-
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
     if let Some(message) = payload.downcast_ref::<&'static str>() {
         message
@@ -4010,7 +3767,9 @@ mod tests {
                 state.emu.process(b"\x1b[HLATER OUTPUT");
                 capture_visual_state(&mut state, true);
             }
-            assert!(!captured.text().contains("LATER OUTPUT"));
+            assert!(!rows_to_strings(&captured.rows)
+                .join("\n")
+                .contains("LATER OUTPUT"));
             assert!(!captured
                 .terminal()
                 .screen_history
@@ -4088,7 +3847,8 @@ mod tests {
                     })
                     .unwrap_err();
                 assert!(error.observation.is_none());
-                assert!(error.details.as_ref().unwrap().terminal.is_some());
+                assert!(error.details.is_some());
+                assert!(error.report.is_none());
                 assert!(error.artifact.is_none());
                 error
             })
@@ -4104,7 +3864,8 @@ mod tests {
             .execute(Operation::Run(sleeping_program(true)))
             .unwrap_err();
         assert!(failed_open.observation.is_none());
-        assert!(failed_open.details.as_ref().unwrap().terminal.is_some());
+        assert!(failed_open.details.is_some());
+        assert!(failed_open.report.is_none());
         assert!(failed_open.artifact.is_none());
         engine.execute(Operation::Close).unwrap();
     }

@@ -14,8 +14,12 @@ use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::CursorShape;
 
 mod expectation;
+mod failure;
 mod input;
+pub(crate) mod strings;
 pub use expectation::{LocatorExpectation, OperationExpectation};
+pub(crate) use failure::{failure_reason, merge_failure_details};
+pub use failure::{FailureDetails, LocatorFailure};
 pub use input::{InputArguments, InputDetails, MouseTarget};
 
 pub const FAILURE_SCHEMA_VERSION: u32 = 1;
@@ -122,10 +126,12 @@ pub struct LocatorStageDiagnostics {
     pub selector: Option<LocatorSelector>,
     pub direction: LocatorDirection,
     pub requested_occurrence: MatchOccurrence,
+    /// Action operations may require a unique match.
     pub effective_occurrence: MatchOccurrence,
     pub occurrence_source: OccurrenceSource,
     pub input_candidate_count: usize,
     pub raw_candidate_count: usize,
+    /// Candidates remaining after applying the requested styles.
     pub style_candidate_count: usize,
     pub selected_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -173,6 +179,7 @@ pub struct LocatorDiagnostics {
     pub search_scope: String,
     pub viewport_origin_y: u32,
     pub stages: Vec<LocatorStageDiagnostics>,
+    /// Candidates before the final occurrence is selected.
     pub final_candidate_count: usize,
     #[serde(default)]
     pub stages_truncated: bool,
@@ -287,7 +294,6 @@ pub struct RuntimeDiagnostics {
     pub backend: String,
     pub target_os: String,
     pub target_arch: String,
-    pub terminal_profile_fingerprint: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -333,7 +339,7 @@ pub struct ComparisonDiagnostics {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FailureDetails {
+pub struct FailureReport {
     pub schema_version: u32,
     pub signature: String,
     pub operation: OperationDiagnostics,
@@ -364,7 +370,7 @@ pub struct FailureDetails {
     pub truncated: bool,
 }
 
-impl FailureDetails {
+impl FailureReport {
     pub fn new(
         operation: impl Into<String>,
         timeout_ms: Option<u64>,
@@ -408,7 +414,6 @@ impl FailureDetails {
         }
         if let Some(runtime) = &self.runtime {
             hasher.update(runtime.backend.as_bytes());
-            hasher.update(runtime.terminal_profile_fingerprint.as_bytes());
         }
         self.signature = format!("sha256:{:x}", hasher.finalize());
     }
@@ -631,7 +636,7 @@ pub struct SensitivityDetails {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailureArtifactManifest {
     #[serde(flatten)]
-    pub details: FailureDetails,
+    pub details: FailureReport,
     pub sensitivity: SensitivityDetails,
     pub files: Vec<ArtifactFile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -655,10 +660,6 @@ pub(crate) struct FailureObservation {
 }
 
 impl FailureObservation {
-    pub(crate) fn text(&self) -> String {
-        crate::assert::snapshot::serialize(&self.rows, self.cols, false, self.title.as_deref())
-    }
-
     pub(crate) fn terminal(&self) -> TerminalDiagnostics {
         TerminalDiagnostics {
             size: Size {
@@ -972,11 +973,6 @@ pub(crate) fn elapsed_ms(started_at: Instant) -> u64 {
     started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
-pub(crate) fn profile_fingerprint(profile: &crate::profile::Profile) -> String {
-    let bytes = serde_json::to_vec(profile).unwrap_or_default();
-    format!("sha256:{:x}", Sha256::digest(bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1118,7 +1114,7 @@ mod tests {
 
     #[test]
     fn failure_details_round_trip() {
-        let mut details = FailureDetails::new(
+        let mut details = FailureReport::new(
             "locator.expect",
             Some(25),
             FailureReason::LocatorNoMatch,
@@ -1126,7 +1122,7 @@ mod tests {
         );
         details.finish_signature();
         let encoded = serde_json::to_string(&details).unwrap();
-        let decoded: FailureDetails = serde_json::from_str(&encoded).unwrap();
+        let decoded: FailureReport = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, details);
     }
 

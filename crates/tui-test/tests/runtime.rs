@@ -650,7 +650,7 @@ fn text_locators_are_lazy_reusable_queries() {
 
     let locator = session.get_by_text(TextSelector::new("locator-target"));
     assert_eq!(locator.count().expect("count initial matches"), 0);
-    assert!(locator
+    assert!(!locator
         .location()
         .unwrap_err()
         .message
