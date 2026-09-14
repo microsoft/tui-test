@@ -252,6 +252,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
                 recording: Box::new(settings.recording),
+                style: settings.style.clone(),
             }
         }
         Command::Run {
@@ -284,6 +285,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
                 recording: Box::new(settings.recording),
+                style: settings.style.clone(),
             }
         }
         Command::Restart { graceful_timeout } => Request::Restart {

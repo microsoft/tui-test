@@ -89,6 +89,9 @@ pub struct OpenOptions {
     pub restart: bool,
     pub timeouts: Timeouts,
     pub recording: AutomaticRecording,
+    /// How this session's screenshots and recordings are drawn, resolved
+    /// from the config file by the client alongside `profile`.
+    pub style: crate::render::style::Style,
 }
 
 impl Default for OpenOptions {
@@ -105,6 +108,7 @@ impl Default for OpenOptions {
             restart: false,
             timeouts: Timeouts::default(),
             recording: AutomaticRecording::default(),
+            style: crate::render::style::Style::default(),
         }
     }
 }
@@ -127,6 +131,9 @@ pub struct RunOptions {
     pub restart: bool,
     pub timeouts: Timeouts,
     pub recording: AutomaticRecording,
+    /// How this session's screenshots and recordings are drawn, resolved
+    /// from the config file by the client alongside `profile`.
+    pub style: crate::render::style::Style,
 }
 
 /// Clipboard text or regex.

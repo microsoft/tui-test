@@ -345,7 +345,8 @@ fn screenshots_dispatch_by_extension_without_changing_svg_output() {
     sandbox.ok(&["screenshot", zoomed_svg.to_str().unwrap(), "--zoom", "2"]);
     let zoomed_svg = std::fs::read_to_string(zoomed_svg).unwrap();
     assert!(
-        zoomed_svg.contains(r#"width="236" height="326" viewBox="0 0 118 163""#),
+        // Follows the default style; update deliberately if a gap moves.
+        zoomed_svg.contains(r#"width="236" height="334" viewBox="0 0 118 167""#),
         "unexpected zoomed SVG dimensions: {zoomed_svg}"
     );
 
@@ -357,7 +358,7 @@ fn screenshots_dispatch_by_extension_without_changing_svg_output() {
     let mut reader = decoder.read_info().unwrap();
     let mut pixels = vec![0; reader.output_buffer_size()];
     let info = reader.next_frame(&mut pixels).unwrap();
-    assert_eq!((info.width, info.height), (236, 326));
+    assert_eq!((info.width, info.height), (236, 334));
     let pixels = &pixels[..info.buffer_size()];
     assert!(
         contains_rgba(pixels, [128, 0, 0, 255]),
@@ -2173,7 +2174,9 @@ fn a_window_title_is_tracked_asserted_and_drawn() {
             backend.as_str()
         );
         assert!(
-            image.contains(r#"width="239" height="365" viewBox="0 0 478 730""#),
+            // The default style at zoom 0.5; update deliberately if a
+            // default gap moves.
+            image.contains(r#"width="239" height="367" viewBox="0 0 478 734""#),
             "{} changed the SVG dimensions at zoom 0.5: {image}",
             backend.as_str()
         );

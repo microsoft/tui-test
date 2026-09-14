@@ -150,8 +150,10 @@ class IntegrationTests(unittest.TestCase):
                                     str(screenshot), zoom=0.5
                                 )
                                 self.assertIn(
-                                    'width="139" height="92" '
-                                    'viewBox="0 0 278 184"',
+                                    # Follows the default style; update
+                                    # deliberately if a default gap moves.
+                                    'width="139" height="94" '
+                                    'viewBox="0 0 278 188"',
                                     screenshot.read_text(encoding="utf-8"),
                                 )
                             await su.start_recording(
@@ -170,7 +172,7 @@ class IntegrationTests(unittest.TestCase):
                                 int.from_bytes(data[16:20], "big"), 278
                             )
                             self.assertEqual(
-                                int.from_bytes(data[20:24], "big"), 184
+                                int.from_bytes(data[20:24], "big"), 188
                             )
                         else:
                             self.assertEqual(data[:6], b"GIF89a")
@@ -178,7 +180,7 @@ class IntegrationTests(unittest.TestCase):
                                 int.from_bytes(data[6:8], "little"), 278
                             )
                             self.assertEqual(
-                                int.from_bytes(data[8:10], "little"), 184
+                                int.from_bytes(data[8:10], "little"), 188
                             )
 
         run(scenario())

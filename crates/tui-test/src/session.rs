@@ -42,6 +42,8 @@ pub struct TermState {
     /// The profile this session started with, kept so a palette entry a
     /// program overrode can be told apart from one it never touched.
     pub(crate) profile: Profile,
+    /// How this session's screenshots and recordings are drawn.
+    pub(crate) style: crate::render::style::Style,
     /// Shell-integration state, derived from the raw PTY stream rather than
     /// the emulator, so it is identical across backends.
     pub tracker: CommandTracker,
@@ -84,6 +86,7 @@ impl Session {
         program: Option<Vec<String>>,
         backend: Backend,
         profile: Profile,
+        style: crate::render::style::Style,
         cols: u16,
         rows: u16,
         cwd: Option<PathBuf>,
@@ -98,6 +101,7 @@ impl Session {
         let state = Arc::new(Mutex::new(TermState {
             emu: backend.build_with_bells(cols, rows, &profile, bells.clone())?,
             profile,
+            style,
             tracker: CommandTracker::new(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
@@ -399,6 +403,8 @@ impl Session {
             #[cfg(feature = "recording-raster")]
             zoom,
             #[cfg(feature = "recording-raster")]
+            style: state.style.clone(),
+            #[cfg(feature = "recording-raster")]
             background,
             #[cfg(feature = "recording-raster")]
             timeline: record::frames::TimelineOptions {
@@ -441,6 +447,7 @@ impl Session {
                     max_cols,
                     max_rows,
                     2.0 * stopped.zoom,
+                    stopped.style.clone(),
                     stopped.background,
                 )?;
                 crate::render::encode::encode(
@@ -701,6 +708,7 @@ mod tests {
         let state = Arc::new(Mutex::new(TermState {
             emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
             profile: Profile::default(),
+            style: crate::render::style::Style::default(),
             tracker: CommandTracker::new(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
