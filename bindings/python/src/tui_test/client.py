@@ -185,12 +185,18 @@ def _decode_native_error(error: Exception, fallback_kind: str) -> TuiTestError:
     message = envelope.get("message")
     details = envelope.get("details")
     artifact = envelope.get("artifact")
-    return make_error(
-        kind,
-        message if isinstance(message, str) else str(error),
-        details=details if isinstance(details, Mapping) else None,
-        artifact=artifact if isinstance(artifact, Mapping) else None,
-    )
+    try:
+        return make_error(
+            kind,
+            message if isinstance(message, str) else str(error),
+            details=details if isinstance(details, Mapping) else None,
+            artifact=artifact if isinstance(artifact, Mapping) else None,
+        )
+    except (KeyError, TypeError, ValueError) as decode_error:
+        return make_error(
+            "internal",
+            "malformed native error details: {}".format(decode_error),
+        )
 
 
 def _atexit_close_all() -> None:
@@ -890,18 +896,6 @@ class TuiTest:
                             artifact_error
                         )
                     )
-            if text is None and error.details is not None:
-                terminal = error.details.terminal
-                if isinstance(terminal, Mapping):
-                    history = terminal.get("screen_history")
-                    if isinstance(history, Mapping):
-                        screens = history.get("screens")
-                        if isinstance(screens, (list, tuple)) and screens:
-                            latest = screens[-1]
-                            if isinstance(latest, Mapping):
-                                value = latest.get("text")
-                                if isinstance(value, str):
-                                    text = value
             if (
                 text is not None
                 or (

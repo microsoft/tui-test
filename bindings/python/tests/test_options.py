@@ -176,10 +176,10 @@ class FailureDiagnosticsTests(unittest.TestCase):
                 "message": "structured message",
                 "details": {
                     "schema_version": 1,
-                    "signature": "sha256:test",
-                    "operation": {"name": "locator.location"},
+                    "operation": "locator.location",
                     "reason": "locator_no_match",
                     "summary": "missing",
+                    "truncated": False,
                     "unknown_additive_field": True,
                 },
                 "artifact": {
@@ -205,6 +205,9 @@ class FailureDiagnosticsTests(unittest.TestCase):
         self.assertIs(error.__cause__, native_error)
         self.assertIsInstance(error.details, FailureDetails)
         self.assertEqual(error.details.reason, FailureReason.LOCATOR_NO_MATCH)
+        self.assertEqual(error.details.operation, "locator.location")
+        self.assertFalse(hasattr(error.details, "terminal"))
+        self.assertFalse(hasattr(error.details, "recent_operations"))
         self.assertIsInstance(error.artifact, FailureArtifactRef)
         self.assertEqual(
             error.artifact.status, FailureArtifactStatus.PARTIAL

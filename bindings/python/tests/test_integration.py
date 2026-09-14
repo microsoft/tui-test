@@ -432,16 +432,13 @@ class IntegrationTests(unittest.TestCase):
                 with self.assertRaises(ExpectationError):
                     await locator.unique().locations()
 
-                with tempfile.TemporaryDirectory() as root:
-                    su._artifacts = {
-                        "dir": root,
-                        "on_failure": "text",
-                    }
-                    with self.assertRaises(ExpectationError) as raised:
-                        await su.get_by_text("missing-item").location()
-                    self.assertIn("Terminal content:", str(raised.exception))
-                    self.assertIsNotNone(raised.exception.terminal)
-                    self.assertIn("item item", raised.exception.terminal.text)
+                with self.assertRaises(ExpectationError) as raised:
+                    await su.get_by_text("missing-item").location()
+                self.assertNotIn("Terminal content:", str(raised.exception))
+                self.assertIsNone(raised.exception.terminal)
+                self.assertEqual(
+                    raised.exception.details.locator.selectors, ("missing-item",)
+                )
 
                 await nested.highlight()
                 await nested.first().click(timeout=2000)
@@ -596,10 +593,15 @@ class IntegrationTests(unittest.TestCase):
                 )
                 self.assertNotIn("Terminal content:", message)
                 self.assertNotIn("ready", message)
+                self.assertIsNone(raised.exception.terminal)
                 self.assertIsNotNone(raised.exception.details)
                 self.assertEqual(
-                    raised.exception.details.operation["name"],
+                    raised.exception.details.operation,
                     "locator.expect",
+                )
+                self.assertEqual(
+                    raised.exception.details.locator.selectors,
+                    ("text-that-is-not-on-screen",),
                 )
 
         run(scenario())
