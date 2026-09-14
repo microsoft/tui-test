@@ -561,13 +561,6 @@ impl Session {
     pub fn automatic_recording_enabled(&self) -> bool {
         self.recorder.automatic_enabled()
     }
-
-    pub fn submit(&self, data: &str) -> anyhow::Result<()> {
-        let mut bytes = data.as_bytes().to_vec();
-        let ret = self.shell.map(|s| s.return_char()).unwrap_or("\r");
-        bytes.extend_from_slice(ret.as_bytes());
-        self.write(&bytes)
-    }
 }
 
 fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, cols: u16, rows: u16) {
