@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, VecDeque};
-use std::path::PathBuf;
-use std::time::Instant;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -26,6 +29,11 @@ pub const FAILURE_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_SCREEN_HISTORY_LIMIT: u16 = 10;
 pub const MAX_SCREEN_HISTORY_LIMIT: u16 = 50;
 
+const FAILURE_JSON_LIMIT: usize = 2 * 1024 * 1024;
+const SCREEN_TEXT_LIMIT: usize = 1024 * 1024;
+const SCREEN_SVG_LIMIT: usize = 8 * 1024 * 1024;
+pub(crate) const RECORDING_COPY_LIMIT: u64 = 64 * 1024 * 1024;
+const ARTIFACT_TOTAL_LIMIT: u64 = 256 * 1024 * 1024;
 const MAX_HISTORY_BYTES: usize = 512 * 1024;
 const MAX_CHECKPOINT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CONTEXT_ENTRIES: usize = 16;
@@ -483,6 +491,18 @@ pub struct FailureReport {
 }
 
 impl FailureReport {
+    pub(crate) fn artifact_name(&self, extension: &str) -> String {
+        format!(
+            "{}.{}",
+            if self.outcome.is_some() {
+                "trace"
+            } else {
+                "failure"
+            },
+            extension
+        )
+    }
+
     pub fn new(
         operation: impl Into<String>,
         timeout_ms: Option<u64>,
@@ -565,6 +585,17 @@ impl FailureArtifactOptions {
         }
         Ok(())
     }
+
+    pub(crate) fn wants_text(&self) -> bool {
+        matches!(
+            self.mode,
+            FailureArtifactMode::All | FailureArtifactMode::Text
+        )
+    }
+
+    pub(crate) fn wants_svg(&self) -> bool {
+        matches!(self.mode, FailureArtifactMode::All)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -615,6 +646,14 @@ impl TraceOptions {
             return Err("trace directory must not be empty".into());
         }
         Ok(())
+    }
+
+    pub(crate) fn artifact_options(&self) -> FailureArtifactOptions {
+        FailureArtifactOptions {
+            directory: self.directory.clone(),
+            mode: FailureArtifactMode::All,
+            include_recording: true,
+        }
     }
 }
 
@@ -760,10 +799,13 @@ pub(crate) struct FailureObservation {
     pub rows: Vec<Vec<EmuCell>>,
     pub cols: u16,
     pub title: Option<String>,
+    pub cursor: Option<(u16, usize)>,
     pub cursor_position: (u16, u16),
     pub cursor_visible: bool,
     pub cursor_shape: CursorShape,
+    pub render_state: RenderState,
     pub screen_sequence: u64,
+    pub output_revision: u64,
     pub captured_ms: u64,
     pub last_visual_change_ms: u64,
     pub history: ScreenHistory,
@@ -772,6 +814,22 @@ pub(crate) struct FailureObservation {
 }
 
 impl FailureObservation {
+    pub(crate) fn text(&self) -> String {
+        crate::assert::snapshot::serialize(&self.rows, self.cols, false, self.title.as_deref())
+    }
+
+    pub(crate) fn svg(&self) -> String {
+        crate::render::svg::render_svg_with_zoom(
+            &self.rows,
+            self.cols,
+            &self.render_state,
+            self.cursor,
+            self.title.as_deref(),
+            1.0,
+            None,
+        )
+    }
+
     pub(crate) fn terminal(&self) -> TerminalDiagnostics {
         TerminalDiagnostics {
             size: Size {
@@ -1088,6 +1146,393 @@ fn screen_changes(
     changes
 }
 
+pub(crate) struct ArtifactInputs<'a> {
+    pub details: &'a mut FailureReport,
+    pub observation: &'a FailureObservation,
+    pub recording: Option<PreparedRecording>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedRecording {
+    pub temporary_path: PathBuf,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+pub(crate) fn allocate_artifact_directory(base: &Path) -> io::Result<PathBuf> {
+    allocate_directory(base, "failure")
+}
+
+pub(crate) fn allocate_trace_directory(base: &Path) -> io::Result<PathBuf> {
+    allocate_directory(base, "trace")
+}
+
+fn allocate_directory(base: &Path, prefix: &str) -> io::Result<PathBuf> {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    fs::create_dir_all(base)?;
+    let epoch_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis();
+    for _ in 0..100 {
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = base.join(format!(
+            "{prefix}-{epoch_ms}-p{}-{sequence}",
+            std::process::id()
+        ));
+        match fs::create_dir(&path) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+                }
+                return Ok(path);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "failed to allocate a unique diagnostic directory",
+    ))
+}
+
+pub(crate) fn recording_temp_path(directory: &Path) -> PathBuf {
+    directory.join("session.cast.tmp")
+}
+
+pub(crate) fn write_failure_artifact(
+    options: &FailureArtifactOptions,
+    inputs: ArtifactInputs<'_>,
+    directory: PathBuf,
+) -> FailureArtifactRef {
+    let mut reference = FailureArtifactRef {
+        status: FailureArtifactStatus::Failed,
+        directory: directory.to_string_lossy().into_owned(),
+        manifest: None,
+        report: None,
+        report_html: None,
+        timeline: None,
+        screen_text: None,
+        screen_svg: None,
+        recording: None,
+        errors: Vec::new(),
+    };
+    if options.mode == FailureArtifactMode::None {
+        return reference;
+    }
+
+    let manifest_name = inputs.details.artifact_name("json");
+    let mut files = Vec::new();
+    let mut total = 0u64;
+    if options.wants_text() {
+        let screen_text = inputs.observation.text();
+        write_optional_file(
+            &directory,
+            "screen_text",
+            "current.txt",
+            screen_text.as_bytes(),
+            SCREEN_TEXT_LIMIT as u64,
+            &mut total,
+            &mut files,
+            &mut reference.errors,
+        );
+        if files
+            .last()
+            .is_some_and(|file| file.status == ArtifactFileStatus::Written)
+        {
+            reference.screen_text =
+                Some(directory.join("current.txt").to_string_lossy().into_owned());
+        }
+    }
+
+    if options.wants_svg() {
+        let cell_count = inputs.observation.rows.iter().map(Vec::len).sum::<usize>();
+        if cell_count > 100_000 {
+            files.push(ArtifactFile {
+                kind: "screen_svg".to_string(),
+                path: "current.svg".to_string(),
+                status: ArtifactFileStatus::Omitted,
+                bytes: None,
+                sha256: None,
+                reason: Some("size_limit".to_string()),
+            });
+        } else {
+            let svg = inputs.observation.svg();
+            write_optional_file(
+                &directory,
+                "screen_svg",
+                "current.svg",
+                svg.as_bytes(),
+                SCREEN_SVG_LIMIT as u64,
+                &mut total,
+                &mut files,
+                &mut reference.errors,
+            );
+        }
+        if files
+            .last()
+            .is_some_and(|file| file.status == ArtifactFileStatus::Written)
+        {
+            reference.screen_svg =
+                Some(directory.join("current.svg").to_string_lossy().into_owned());
+        }
+    }
+
+    if let Some(recording) = inputs.recording {
+        let final_path = directory.join("session.cast");
+        let status = if recording.bytes > RECORDING_COPY_LIMIT
+            || total.saturating_add(recording.bytes) > ARTIFACT_TOTAL_LIMIT
+        {
+            let _ = fs::remove_file(&recording.temporary_path);
+            if let Some(details) = inputs.details.recording.as_mut() {
+                details.status = RecordingStatus::Omitted;
+                details.path = None;
+                details.reason = Some("size_limit".to_string());
+            }
+            ArtifactFile {
+                kind: "recording".to_string(),
+                path: "session.cast".to_string(),
+                status: ArtifactFileStatus::Omitted,
+                bytes: Some(recording.bytes),
+                sha256: Some(recording.sha256),
+                reason: Some("size_limit".to_string()),
+            }
+        } else {
+            match fs::rename(&recording.temporary_path, &final_path) {
+                Ok(()) => {
+                    total = total.saturating_add(recording.bytes);
+                    reference.recording = Some(final_path.to_string_lossy().into_owned());
+                    if let Some(details) = inputs.details.recording.as_mut() {
+                        details.status = RecordingStatus::Copied;
+                        details.path = Some("session.cast".to_string());
+                        details.reason = None;
+                    }
+                    ArtifactFile {
+                        kind: "recording".to_string(),
+                        path: "session.cast".to_string(),
+                        status: ArtifactFileStatus::Written,
+                        bytes: Some(recording.bytes),
+                        sha256: Some(recording.sha256),
+                        reason: None,
+                    }
+                }
+                Err(error) => {
+                    let _ = fs::remove_file(&recording.temporary_path);
+                    reference
+                        .errors
+                        .push(format!("failed to commit session.cast: {error}"));
+                    if let Some(details) = inputs.details.recording.as_mut() {
+                        details.status = RecordingStatus::Failed;
+                        details.path = None;
+                        details.reason = Some(error.to_string());
+                    }
+                    ArtifactFile {
+                        kind: "recording".to_string(),
+                        path: "session.cast".to_string(),
+                        status: ArtifactFileStatus::Failed,
+                        bytes: Some(recording.bytes),
+                        sha256: Some(recording.sha256),
+                        reason: Some(error.to_string()),
+                    }
+                }
+            }
+        };
+        files.push(status);
+    } else if options.include_recording {
+        let recording = inputs.details.recording.as_ref();
+        let failed = recording.is_some_and(|recording| recording.status == RecordingStatus::Failed);
+        files.push(ArtifactFile {
+            kind: "recording".to_string(),
+            path: "session.cast".to_string(),
+            status: if failed {
+                ArtifactFileStatus::Failed
+            } else {
+                ArtifactFileStatus::Omitted
+            },
+            bytes: recording.and_then(|recording| recording.bytes),
+            sha256: None,
+            reason: Some(
+                recording
+                    .and_then(|recording| recording.reason.clone())
+                    .unwrap_or_else(|| "recording unavailable".to_string()),
+            ),
+        });
+    }
+
+    let sensitivity = sensitivity(inputs.details, &files);
+    let manifest = FailureArtifactManifest {
+        details: inputs.details.clone(),
+        sensitivity,
+        files,
+        errors: reference.errors.clone(),
+    };
+    let json = match serde_json::to_vec_pretty(&manifest) {
+        Ok(json) if json.len() <= FAILURE_JSON_LIMIT => json,
+        Ok(_) => {
+            reference
+                .errors
+                .push(format!("{manifest_name} exceeded the 2 MiB limit"));
+            return reference;
+        }
+        Err(error) => {
+            reference
+                .errors
+                .push(format!("failed to serialize {manifest_name}: {error}"));
+            return reference;
+        }
+    };
+    if total.saturating_add(json.len() as u64) > ARTIFACT_TOTAL_LIMIT {
+        reference.errors.push(format!(
+            "{manifest_name} would exceed the total artifact limit"
+        ));
+        return reference;
+    }
+    let manifest_path = directory.join(&manifest_name);
+    match write_atomic(&manifest_path, &json) {
+        Ok(()) => {
+            reference.manifest = Some(manifest_path.to_string_lossy().into_owned());
+            reference.status = if reference.errors.is_empty()
+                && manifest
+                    .files
+                    .iter()
+                    .all(|file| file.status == ArtifactFileStatus::Written)
+            {
+                FailureArtifactStatus::Written
+            } else {
+                FailureArtifactStatus::Partial
+            };
+        }
+        Err(error) => reference
+            .errors
+            .push(format!("failed to commit {manifest_name}: {error}")),
+    }
+    reference
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_optional_file(
+    directory: &Path,
+    kind: &str,
+    name: &str,
+    bytes: &[u8],
+    limit: u64,
+    total: &mut u64,
+    files: &mut Vec<ArtifactFile>,
+    errors: &mut Vec<String>,
+) {
+    let length = bytes.len() as u64;
+    if length > limit || total.saturating_add(length) > ARTIFACT_TOTAL_LIMIT {
+        files.push(ArtifactFile {
+            kind: kind.to_string(),
+            path: name.to_string(),
+            status: ArtifactFileStatus::Omitted,
+            bytes: Some(length),
+            sha256: Some(format!("sha256:{:x}", Sha256::digest(bytes))),
+            reason: Some("size_limit".to_string()),
+        });
+        return;
+    }
+    let path = directory.join(name);
+    match write_atomic(&path, bytes) {
+        Ok(()) => {
+            *total = total.saturating_add(length);
+            files.push(ArtifactFile {
+                kind: kind.to_string(),
+                path: name.to_string(),
+                status: ArtifactFileStatus::Written,
+                bytes: Some(length),
+                sha256: Some(format!("sha256:{:x}", Sha256::digest(bytes))),
+                reason: None,
+            });
+        }
+        Err(error) => {
+            errors.push(format!("failed to write {name}: {error}"));
+            files.push(ArtifactFile {
+                kind: kind.to_string(),
+                path: name.to_string(),
+                status: ArtifactFileStatus::Failed,
+                bytes: Some(length),
+                sha256: Some(format!("sha256:{:x}", Sha256::digest(bytes))),
+                reason: Some(error.to_string()),
+            });
+        }
+    }
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let temporary = path.with_extension(format!(
+        "{}.tmp",
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+    ));
+    fs::write(&temporary, bytes)?;
+    match fs::rename(&temporary, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            Err(error)
+        }
+    }
+}
+
+fn sensitivity(details: &FailureReport, files: &[ArtifactFile]) -> SensitivityDetails {
+    let has_recording = files
+        .iter()
+        .any(|file| file.kind == "recording" && file.status == ArtifactFileStatus::Written);
+    let has_locator = details.locator.is_some();
+    let has_terminal = details.terminal.is_some();
+    let has_context = !details.context.is_empty();
+    let has_expectation = details
+        .recent_operations
+        .iter()
+        .any(|event| event.expectation.is_some());
+    let has_input = details
+        .recent_operations
+        .iter()
+        .any(|event| event.input.is_some());
+    SensitivityDetails {
+        contains_input: has_input,
+        contains_locator_operands: has_locator,
+        contains_terminal_output: has_terminal,
+        contains_terminal_title: details.terminal.as_ref().is_some_and(|terminal| {
+            terminal.title.is_some()
+                || terminal
+                    .screen_history
+                    .screens
+                    .iter()
+                    .chain(&terminal.screen_history.checkpoints)
+                    .any(|screen| screen.title.is_some())
+        }),
+        contains_visual_output: files.iter().any(|file| {
+            matches!(
+                file.kind.as_str(),
+                "screen_svg" | "timeline" | "report_html"
+            ) && file.status == ArtifactFileStatus::Written
+        }),
+        contains_recording_output: has_recording,
+        contains_assertion_operands: has_locator || details.comparison.is_some() || has_expectation,
+        contains_snapshot_evidence: details.reason == FailureReason::SnapshotMismatch,
+        contains_diagnostic_context: has_context,
+        contains_user_supplied_values: has_locator
+            || has_input
+            || has_expectation
+            || has_terminal
+            || has_recording
+            || has_context
+            || details.comparison.is_some(),
+        permissions: if cfg!(unix) {
+            "user_only"
+        } else {
+            "platform_default"
+        }
+        .to_string(),
+    }
+}
+
 pub(crate) fn elapsed_ms(started_at: Instant) -> u64 {
     started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
@@ -1095,13 +1540,9 @@ pub(crate) fn elapsed_ms(started_at: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::profile::Profile;
-
     use crate::terminal::alacritty::AlacrittyEmu;
-
     use crate::terminal::cell::{Attrs, EmuCell};
-
     use crate::terminal::emu::Emulator;
 
     #[test]
@@ -1113,6 +1554,16 @@ mod tests {
         let values = context.sanitized_context();
         assert!(values["test"].ends_with("..."));
         assert!(values["test"].len() <= MAX_CONTEXT_VALUE_BYTES + 3);
+    }
+
+    #[test]
+    fn artifact_directories_do_not_overwrite() {
+        let root =
+            std::env::temp_dir().join(format!("tui-test-failure-artifact-{}", std::process::id()));
+        let first = allocate_artifact_directory(&root).unwrap();
+        let second = allocate_artifact_directory(&root).unwrap();
+        assert_ne!(first, second);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1365,5 +1816,136 @@ mod tests {
         assert_eq!(events[0].screen_before, 0);
         assert_eq!(events[0].screen_at_return, 1);
         assert_eq!(events[0].sequence, 2);
+    }
+
+    #[test]
+    fn passing_expectations_are_reported_as_sensitive_even_without_a_terminal() {
+        let mut history = OperationHistory::new();
+        let pending = history.begin(
+            "expect.output".into(),
+            1,
+            1,
+            "output".into(),
+            true,
+            Some(OperationExpectation::Value {
+                subject: "Command output".into(),
+                expected: "private operand".into(),
+            }),
+        );
+        history.finish(pending, 2, 1, "ok", None);
+        let mut details = FailureReport::new(
+            "later failure",
+            None,
+            FailureReason::InternalFailure,
+            "failed",
+        );
+        details.recent_operations = history.snapshot();
+        let sensitivity = sensitivity(&details, &[]);
+        assert!(sensitivity.contains_assertion_operands);
+        assert!(sensitivity.contains_user_supplied_values);
+    }
+
+    #[test]
+    fn retained_inputs_are_sensitive_without_terminal_output() {
+        let mut history = OperationHistory::new();
+        let pending = history.begin("write".into(), 1, 0, "wrote 6 bytes".into(), false, None);
+        let input = InputDetails::capture(&crate::api::Operation::Write {
+            data: "secret".into(),
+        });
+        history.finish(pending, 2, 0, "ok", input);
+        let mut details = FailureReport::new(
+            "later failure",
+            None,
+            FailureReason::InternalFailure,
+            "failed",
+        );
+        details.recent_operations = history.snapshot();
+        let sensitivity = sensitivity(&details, &[]);
+        assert!(sensitivity.contains_input);
+        assert!(sensitivity.contains_user_supplied_values);
+        assert!(!sensitivity.contains_terminal_output);
+    }
+
+    #[test]
+    fn recording_status_reflects_commit_failure() {
+        let root =
+            std::env::temp_dir().join(format!("tui-test-recording-commit-{}", std::process::id()));
+        let directory = allocate_artifact_directory(&root).unwrap();
+        fs::create_dir(directory.join("session.cast")).unwrap();
+        let temporary_path = recording_temp_path(&directory);
+        fs::write(&temporary_path, b"cast").unwrap();
+
+        let emu = AlacrittyEmu::new(1, 1, &Profile::default());
+        let rows = emu.viewable_rows();
+        let observation = FailureObservation {
+            rows: rows.clone(),
+            cols: 1,
+            title: None,
+            cursor: None,
+            cursor_position: (0, 0),
+            cursor_visible: false,
+            cursor_shape: CursorShape::Block,
+            render_state: RenderState::capture(&emu),
+            screen_sequence: 1,
+            output_revision: 1,
+            captured_ms: 1,
+            last_visual_change_ms: 1,
+            history: ScreenHistory::new(1),
+            process: ProcessDiagnostics {
+                pid: None,
+                state: "running".to_string(),
+                exit_code: None,
+                status_error: None,
+                cancelled: false,
+                ready: false,
+                command_running: false,
+                last_command_exit: None,
+            },
+            runtime: RuntimeDiagnostics {
+                session_name: Some("recording-test".into()),
+                shell: None,
+                timeouts: None,
+                tui_test_version: "test".to_string(),
+                backend: "alacritty".to_string(),
+                target_os: std::env::consts::OS.to_string(),
+                target_arch: std::env::consts::ARCH.to_string(),
+            },
+        };
+        let mut details = FailureReport::new(
+            "locator.expect",
+            Some(1),
+            FailureReason::LocatorNoMatch,
+            "missing",
+        );
+        details.recording = Some(RecordingDiagnostics {
+            mode: AutomaticRecordingMode::OnFailure,
+            status: RecordingStatus::Live,
+            failure_offset_ms: 1,
+            last_committed_ms: Some(1),
+            path: None,
+            bytes: Some(4),
+            reason: None,
+            ephemeral: false,
+        });
+        let reference = write_failure_artifact(
+            &FailureArtifactOptions {
+                directory: root.clone(),
+                mode: FailureArtifactMode::Text,
+                include_recording: true,
+            },
+            ArtifactInputs {
+                details: &mut details,
+                observation: &observation,
+                recording: Some(PreparedRecording {
+                    temporary_path,
+                    bytes: 4,
+                    sha256: format!("sha256:{:x}", Sha256::digest(b"cast")),
+                }),
+            },
+            directory,
+        );
+        assert_eq!(details.recording.unwrap().status, RecordingStatus::Failed);
+        assert!(reference.recording.is_none());
+        let _ = fs::remove_dir_all(root);
     }
 }

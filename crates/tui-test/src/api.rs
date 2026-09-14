@@ -624,6 +624,9 @@ pub enum Operation {
         graceful_timeout_ms: u64,
     },
     Close,
+    FinishTrace {
+        failed: bool,
+    },
     State,
     Text {
         full: bool,

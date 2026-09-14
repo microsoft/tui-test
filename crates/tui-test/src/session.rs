@@ -49,6 +49,7 @@ pub struct TermState {
     pub(crate) mouse_mode: MouseModeTracker,
     pub observed_clipboard_revision: u64,
     pub started_at: Instant,
+    pub visual_revision: u64,
     pub screen_history: ScreenHistory,
     pub screen_dirty: bool,
     pub last_screen_sample: Instant,
@@ -114,6 +115,7 @@ impl Session {
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
             started_at,
+            visual_revision: 0,
             screen_history: ScreenHistory::new(diagnostics.screen_history_limit),
             screen_dirty: true,
             last_screen_sample: started_at,
@@ -204,6 +206,7 @@ impl Session {
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
                             st.emu.process(&buf[..n]);
                             st.tracker.feed(&buf[..n]);
+                            st.visual_revision = st.visual_revision.wrapping_add(1);
                             st.screen_dirty = true;
                             st.mouse_mode.process(&buf[..n]);
                             st.last_change = Instant::now();
@@ -558,6 +561,14 @@ impl Session {
         self.recorder.flush().map_err(capture_error)
     }
 
+    pub(crate) fn snapshot_automatic_recording(
+        &self,
+        target_path: PathBuf,
+        max_bytes: u64,
+    ) -> Result<record::AutomaticRecordingSnapshot, CaptureError> {
+        self.recorder.snapshot_automatic(target_path, max_bytes)
+    }
+
     pub fn automatic_recording_enabled(&self) -> bool {
         self.recorder.automatic_enabled()
     }
@@ -569,6 +580,7 @@ fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, col
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     recorder.on_resize(cols, rows);
     state.emu.resize(cols, rows);
+    state.visual_revision = state.visual_revision.wrapping_add(1);
     state.screen_dirty = true;
     state.last_change = Instant::now();
     state.highlight = None;
@@ -789,6 +801,7 @@ mod tests {
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
             started_at,
+            visual_revision: 0,
             screen_history: ScreenHistory::new(crate::diagnostics::DEFAULT_SCREEN_HISTORY_LIMIT),
             screen_dirty: true,
             last_screen_sample: started_at,
