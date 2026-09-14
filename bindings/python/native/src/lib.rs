@@ -142,8 +142,8 @@ impl NativeSession {
             name,
             trace,
             recording: CoreAutomaticRecording {
+                mode: tui_test::AutomaticRecordingMode::Disabled,
                 directory: recording_directory.map(Into::into),
-                ..CoreAutomaticRecording::default()
             },
             artifact: artifact_mode
                 .map(|mode| {
@@ -151,9 +151,12 @@ impl NativeSession {
                         "all" => FailureArtifactMode::All,
                         "text" => FailureArtifactMode::Text,
                         "none" => FailureArtifactMode::None,
-                        other => return Err(TuiTestError::usage(format!(
-                            "unknown failure artifact mode {other:?}; expected all, text, or none"
-                        ))),
+                        other => {
+                            let message = format!(
+                                "unknown failure artifact mode {other:?}; expected all, text, or none"
+                            );
+                            return Err(TuiTestError::usage(message));
+                        }
                     };
                     Ok(FailureArtifactOptions {
                         directory: artifact_directory.unwrap_or_default().into(),
