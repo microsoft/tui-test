@@ -11,9 +11,9 @@ use crate::shell::Shell;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AutomaticRecordingMode {
+    #[default]
     Disabled,
     OnFailure,
-    #[default]
     Always,
 }
 
