@@ -1617,11 +1617,11 @@ fn clipboard_command(base64: &str) -> String {
 fn blinking_program() -> Vec<&'static str> {
     if cfg!(windows) {
         vec![
-            "pwsh",
+            "powershell.exe",
             "-NoLogo",
             "-NoProfile",
             "-Command",
-            "while ($true) { [Console]::Write(\"`e[H`e[5mX`e[0m\"); Start-Sleep -Milliseconds 100 }",
+            "while ($true) { [Console]::Write(([char]27).ToString() + '[H' + ([char]27).ToString() + '[5mX' + ([char]27).ToString() + '[0m'); Start-Sleep -Milliseconds 100 }",
         ]
     } else {
         vec!["sh", "-c", "printf '\\033[5mX\\033[0m'; sleep 30"]
