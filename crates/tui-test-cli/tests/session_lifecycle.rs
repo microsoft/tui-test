@@ -1063,6 +1063,7 @@ fn a_screenshot_and_an_assertion_agree_on_a_color() {
     let mut command = vec!["run", "--cols", "44", "--"];
     command.extend(colored_text_program());
     sandbox.ok(&command);
+    sandbox.wait_for_text("qrsx", FIXTURE_START_TIMEOUT);
 
     // The default profile is the VGA palette, so slot 1 is #800000.
     sandbox.ok(&["expect", "text", "qrsx", "--fg", "#800000"]);
@@ -1098,6 +1099,7 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
     ];
     command.extend(colored_text_program());
     sandbox.ok(&command);
+    sandbox.wait_for_text("qrsx", FIXTURE_START_TIMEOUT);
 
     sandbox.ok(&["expect", "text", "qrsx", "--fg", "#ff00ff"]);
     let out = sandbox.run(&["expect", "text", "qrsx", "--fg", "#800000"]);
@@ -1115,6 +1117,8 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
         "the screenshot follows the profile too"
     );
 }
+
+const FIXTURE_START_TIMEOUT: &str = "15000";
 
 fn colored_text_program() -> Vec<&'static str> {
     // Repaint on Windows so startup console redraws cannot erase the fixture.
@@ -1661,7 +1665,7 @@ fn ghostty_backend_is_used_end_to_end() {
     ];
     args.extend(blinking_program());
     sandbox.ok(&args);
-    sandbox.wait_for_text("X", "5000");
+    sandbox.wait_for_text("X", FIXTURE_START_TIMEOUT);
 
     let raw = sandbox.ok(&["--json", "cells", "0", "0"]);
     let payload: serde_json::Value = serde_json::from_str(&raw).expect("cells json");
