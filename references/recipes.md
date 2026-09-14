@@ -79,16 +79,32 @@ await terminal.waitClipboard(/copied/i);
 
 ## Keep failure artifacts
 
+```sh
+tui-test --failure-artifacts artifacts/failures \
+  --failure-artifact-recording \
+  expect text "Ready" --timeout 5000
+```
+
 ```python
 terminal = TuiTest(
-    artifacts={"dir": "artifacts"},
-    recording={"mode": "on-failure", "directory": "artifacts"},
+    artifacts={
+        "dir": "artifacts/failures",
+        "on_failure": "all",
+        "include_recording": True,
+    },
+    trace={"mode": "on-failure", "directory": "artifacts/traces"},
 )
 ```
 
 ```js
 const terminal = new TuiTest("test", {
-  artifacts: { dir: "artifacts" },
-  recording: { mode: "on-failure", directory: "artifacts" },
+  artifacts: {
+    dir: "artifacts/failures",
+    onFailure: "all",
+    includeRecording: true,
+  },
+  trace: { mode: "on-failure", directory: "artifacts/traces" },
 });
 ```
+
+Agents should read `failure.md` first and use `failure.json` / `timeline.json` for exact structured evidence. Users can open `failure.html` directly from disk, select actions or filmstrip frames, read explicit expected/observed values, and click cells for style and mismatch metadata. The HTML embeds the available evidence for offline preview/download, including the pinned terminal text/SVG and an explicitly requested cast; it can be distributed alone. Review terminal evidence before uploading it.

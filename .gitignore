@@ -1,4 +1,5 @@
 /target
+/generated-traces
 *.pyc
 *.trace
 __pycache__/
@@ -9,3 +10,7 @@ bindings/js/native/target
 bindings/python/target
 bindings/python/native/target
 bindings/python/stub-gen/target
+trace-viewer/node_modules/
+trace-viewer/.preview/
+trace-viewer/test-results/
+trace-viewer/playwright-report/

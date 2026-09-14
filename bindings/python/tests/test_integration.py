@@ -691,6 +691,7 @@ class IntegrationTests(unittest.TestCase):
                     self.assertEqual(len(bundles), 1)
                     manifest = json.loads((bundles[0] / "trace.json").read_text(encoding="utf-8"))
                     self.assertEqual(manifest["outcome"], "failed" if failed else "passed")
+                    self.assertTrue((bundles[0] / "trace.html").is_file())
                     self.assertTrue((bundles[0] / "trace.md").is_file())
                     self.assertIn('"version":2', (bundles[0] / "session.cast").read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as root:
