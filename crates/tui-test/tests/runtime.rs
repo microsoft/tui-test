@@ -491,6 +491,12 @@ fn restarting_a_shell_changes_pid_and_restores_prompt_integration() {
             timeout_ms: Some(30_000),
         })
         .expect("wait for command after restart");
+    // The command-complete marker arrives before the next prompt-ready marker.
+    session
+        .execute(Operation::WaitReady {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for prompt after restart");
     assert!(matches!(
         session.execute(Operation::State).expect("state after restart"),
         OperationResult::State(state)

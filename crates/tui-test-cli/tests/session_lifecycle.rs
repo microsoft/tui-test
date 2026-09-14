@@ -1060,11 +1060,9 @@ fn config_timeouts_apply_below_command_line_overrides() {
 #[test]
 fn a_screenshot_and_an_assertion_agree_on_a_color() {
     let sandbox = Sandbox::new("palette-agree");
-    // Printed lowercase so the match is the output, not the echoed command.
-    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)"; sleep 30"#;
-    sandbox.ok(&[
-        "run", "--cols", "44", "--", "bash", "--norc", "-c", print_red,
-    ]);
+    let mut command = vec!["run", "--cols", "44", "--"];
+    command.extend(colored_text_program());
+    sandbox.ok(&command);
 
     // The default profile is the VGA palette, so slot 1 is #800000.
     sandbox.ok(&["expect", "text", "qrsx", "--fg", "#800000"]);
@@ -1088,8 +1086,7 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
     std::fs::write(&config, "[profiles.neon.colors]\nred = \"#ff00ff\"\n").expect("write config");
     let config_path = config.to_str().expect("utf-8 path");
 
-    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)"; sleep 30"#;
-    sandbox.ok(&[
+    let mut command = vec![
         "run",
         "--config",
         config_path,
@@ -1098,11 +1095,9 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
         "--cols",
         "44",
         "--",
-        "bash",
-        "--norc",
-        "-c",
-        print_red,
-    ]);
+    ];
+    command.extend(colored_text_program());
+    sandbox.ok(&command);
 
     sandbox.ok(&["expect", "text", "qrsx", "--fg", "#ff00ff"]);
     let out = sandbox.run(&["expect", "text", "qrsx", "--fg", "#800000"]);
@@ -1119,6 +1114,26 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
         drawing.contains("fill=\"#ff00ff\""),
         "the screenshot follows the profile too"
     );
+}
+
+fn colored_text_program() -> Vec<&'static str> {
+    // Repaint on Windows so startup console redraws cannot erase the fixture.
+    // Construct lowercase text so the assertion cannot match an echoed command.
+    if cfg!(windows) {
+        vec![
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "while ($true) { [Console]::Write(([char]27).ToString() + '[H' + ([char]27).ToString() + '[31m' + 'QRSX'.ToLowerInvariant() + ([char]27).ToString() + '[0m'); Start-Sleep -Milliseconds 100 }",
+        ]
+    } else {
+        vec![
+            "bash",
+            "--norc",
+            "-c",
+            r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)"; sleep 30"#,
+        ]
+    }
 }
 
 /// A profile that does not exist is an error naming the ones that do, rather
@@ -1606,7 +1621,7 @@ fn blinking_program() -> Vec<&'static str> {
             "-NoLogo",
             "-NoProfile",
             "-Command",
-            "[Console]::Write(\"`e[5mX`e[0m\"); Start-Sleep -Seconds 30",
+            "while ($true) { [Console]::Write(\"`e[H`e[5mX`e[0m\"); Start-Sleep -Milliseconds 100 }",
         ]
     } else {
         vec!["sh", "-c", "printf '\\033[5mX\\033[0m'; sleep 30"]
