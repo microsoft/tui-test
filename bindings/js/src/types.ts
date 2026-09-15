@@ -119,7 +119,7 @@ export interface TerminalArtifact {
 
 export interface ArtifactOptions {
   dir: string;
-  onFailure?: "all" | "text" | "none";
+  onFailure?: "all" | "html" | "text" | "none";
   includeRecording?: boolean;
 }
 

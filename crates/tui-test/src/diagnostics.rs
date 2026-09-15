@@ -18,6 +18,7 @@ use crate::terminal::emu::CursorShape;
 
 mod expectation;
 mod failure;
+mod html;
 mod input;
 mod markdown;
 pub(crate) mod strings;
@@ -34,6 +35,8 @@ pub const MAX_SCREEN_HISTORY_LIMIT: u16 = 50;
 
 const FAILURE_JSON_LIMIT: usize = 2 * 1024 * 1024;
 const REPORT_LIMIT: usize = 1024 * 1024;
+const TIMELINE_LIMIT: usize = 8 * 1024 * 1024;
+const HTML_LIMIT: usize = 128 * 1024 * 1024;
 const SCREEN_TEXT_LIMIT: usize = 1024 * 1024;
 const SCREEN_SVG_LIMIT: usize = 8 * 1024 * 1024;
 pub(crate) const RECORDING_COPY_LIMIT: u64 = 64 * 1024 * 1024;
@@ -560,6 +563,7 @@ impl FailureReport {
 pub enum FailureArtifactMode {
     #[default]
     All,
+    Html,
     Text,
     None,
 }
@@ -601,10 +605,24 @@ impl FailureArtifactOptions {
         matches!(self.mode, FailureArtifactMode::All)
     }
 
+    pub(crate) fn wants_json(&self) -> bool {
+        matches!(
+            self.mode,
+            FailureArtifactMode::All | FailureArtifactMode::Text
+        )
+    }
+
     pub(crate) fn wants_markdown(&self) -> bool {
         matches!(
             self.mode,
             FailureArtifactMode::All | FailureArtifactMode::Text
+        )
+    }
+
+    pub(crate) fn wants_html(&self) -> bool {
+        matches!(
+            self.mode,
+            FailureArtifactMode::All | FailureArtifactMode::Html
         )
     }
 }
@@ -1065,7 +1083,6 @@ impl ScreenHistory {
         }
     }
 
-    #[cfg(test)]
     fn retained(&self) -> BTreeMap<u64, &std::sync::Arc<ScreenFrame>> {
         self.checkpoints
             .iter()
@@ -1236,6 +1253,7 @@ pub(crate) fn write_failure_artifact(
     }
 
     let markdown_name = inputs.details.artifact_name("md");
+    let html_name = inputs.details.artifact_name("html");
     let manifest_name = inputs.details.artifact_name("json");
     let mut files = Vec::new();
     let mut total = 0u64;
@@ -1374,29 +1392,131 @@ pub(crate) fn write_failure_artifact(
         });
     }
 
-    if options.wants_markdown() {
-        let markdown = markdown::render(inputs.details, &files);
-        write_optional_file(
-            &directory,
-            "report",
-            &markdown_name,
-            markdown.as_bytes(),
-            REPORT_LIMIT as u64,
-            &mut total,
-            &mut files,
-            &mut reference.errors,
-        );
-        if files
-            .last()
-            .is_some_and(|file| file.status == ArtifactFileStatus::Written)
-        {
-            reference.report = Some(
-                directory
-                    .join(&markdown_name)
-                    .to_string_lossy()
-                    .into_owned(),
-            );
+    if options.wants_markdown() || options.wants_html() {
+        let generated = (|| -> io::Result<()> {
+            let timeline = if options.wants_html() {
+                let timeline = html::timeline(inputs.observation)?;
+                inputs.details.truncated |= timeline.is_truncated();
+                if options.mode == FailureArtifactMode::All {
+                    let json = serde_json::to_vec(&timeline)?;
+                    write_optional_file(
+                        &directory,
+                        "timeline",
+                        "timeline.json",
+                        &json,
+                        TIMELINE_LIMIT as u64,
+                        &mut total,
+                        &mut files,
+                        &mut reference.errors,
+                    );
+                    if files
+                        .last()
+                        .is_some_and(|file| file.status == ArtifactFileStatus::Written)
+                    {
+                        reference.timeline = Some(
+                            directory
+                                .join("timeline.json")
+                                .to_string_lossy()
+                                .into_owned(),
+                        );
+                    }
+                }
+                Some(timeline)
+            } else {
+                None
+            };
+            if options.wants_markdown() {
+                let markdown = markdown::render(inputs.details, &files);
+                write_optional_file(
+                    &directory,
+                    "report",
+                    &markdown_name,
+                    markdown.as_bytes(),
+                    REPORT_LIMIT as u64,
+                    &mut total,
+                    &mut files,
+                    &mut reference.errors,
+                );
+                if files
+                    .last()
+                    .is_some_and(|file| file.status == ArtifactFileStatus::Written)
+                {
+                    reference.report = Some(
+                        directory
+                            .join(&markdown_name)
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                }
+            }
+            if let Some(timeline) = timeline {
+                let html = html::render(
+                    inputs.details,
+                    &timeline,
+                    &files,
+                    &reference.errors,
+                    &directory,
+                )?;
+                write_optional_file(
+                    &directory,
+                    "report_html",
+                    &html_name,
+                    html.as_bytes(),
+                    HTML_LIMIT as u64,
+                    &mut total,
+                    &mut files,
+                    &mut reference.errors,
+                );
+                if files
+                    .last()
+                    .is_some_and(|file| file.status == ArtifactFileStatus::Written)
+                {
+                    reference.report_html =
+                        Some(directory.join(&html_name).to_string_lossy().into_owned());
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = generated {
+            reference.errors.push(format!(
+                "failed to generate failure timeline/viewer: {error}"
+            ));
+            for (kind, path, requested) in [
+                (
+                    "timeline",
+                    "timeline.json",
+                    options.mode == FailureArtifactMode::All,
+                ),
+                ("report", markdown_name.as_str(), options.wants_markdown()),
+                ("report_html", html_name.as_str(), options.wants_html()),
+            ] {
+                if requested && !files.iter().any(|file| file.path == path) {
+                    files.push(ArtifactFile {
+                        kind: kind.into(),
+                        path: path.into(),
+                        status: ArtifactFileStatus::Failed,
+                        bytes: None,
+                        sha256: None,
+                        reason: Some(error.to_string()),
+                    });
+                }
+            }
         }
+    }
+
+    if !options.wants_json() {
+        reference.status = if reference.report_html.is_none() {
+            FailureArtifactStatus::Failed
+        } else if reference.errors.is_empty()
+            && files
+                .iter()
+                .all(|file| file.status == ArtifactFileStatus::Written)
+        {
+            FailureArtifactStatus::Written
+        } else {
+            FailureArtifactStatus::Partial
+        };
+        return reference;
     }
 
     let sensitivity = sensitivity(inputs.details, &files);

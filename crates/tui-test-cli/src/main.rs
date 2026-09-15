@@ -1475,7 +1475,7 @@ RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [-
 WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
 GLOBAL    --session NAME | --json | --verbose | --failure-artifacts DIR\n\
-          [--failure-artifact-mode none|text|all]\n\
+          [--failure-artifact-mode none|text|html|all]\n\
           [--failure-artifact-recording] [--diagnostic-context KEY=VALUE]\n\
 EXIT      0 ok | 1 assertion/wait failed | 2 usage | 3 no session | 4 daemon/IPC | 5 internal\n\
 "

@@ -865,7 +865,7 @@ class ArtifactCaptureTests(unittest.TestCase):
         self.assertEqual(constructor.call_args.args[3], "none")
 
     def test_all_failure_artifact_modes_are_mapped(self):
-        for mode in ("all", "text"):
+        for mode in ("all", "html", "text"):
             with self.subTest(mode=mode), mock.patch.object(
                 client.native, "NativeSession"
             ) as constructor:
@@ -880,7 +880,7 @@ class ArtifactCaptureTests(unittest.TestCase):
             client.TuiTest("s", artifacts={"dir": "artifacts"})
         self.assertEqual(constructor.call_args.args[3], "all")
         for mode in ("bundle", "svg", "json"):
-            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "all, text, or none"):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "all, html, text, or none"):
                 client.TuiTest("s", artifacts={"dir": "artifacts", "on_failure": mode})
 
     def test_text_mode_captures_terminal_text_only(self):

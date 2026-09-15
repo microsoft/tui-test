@@ -1,0 +1,24 @@
+:root { color-scheme: light dark; --bg: #fff; --panel: #f8f9fa; --border: #d9dde3; --text: #24292f; --muted: #57616e; --blue: #0969da; --selected: #e9f2ff; --red: #b42332; --error-bg: #fff3f3; --green: #18713c; font: 13px/1.45 system-ui, sans-serif; color: var(--text); background: var(--bg); }
+@media (prefers-color-scheme: dark) { :root { --bg: #202124; --panel: #292a2d; --border: #43464d; --text: #e5e7eb; --muted: #adb4c0; --blue: #8ab4f8; --selected: #293e5d; --red: #ff9b9b; --error-bg: #3a2529; --green: #8bd3a4; } }
+* { box-sizing: border-box; }
+body { margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+#workbench { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+button, input, select { font: inherit; color: inherit; }
+button, select { background: var(--bg); border: 1px solid var(--border); padding: 4px 8px; border-radius: 3px; }
+button { cursor: pointer; }
+button:hover:not(:disabled) { background: var(--selected); }
+button:disabled { opacity: .45; cursor: default; }
+input { min-width: 0; background: var(--bg); border: 1px solid var(--border); padding: 4px 6px; border-radius: 3px; }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+[hidden] { display: none !important; }
+h1 { font-size: 17px; margin: 0; }
+h2 { font-size: 12px; margin: 12px 0 7px; }
+p { margin: 8px 0; }
+pre { font: 12px/1.5 Consolas, "Liberation Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; margin: 6px 0; }
+details { margin-top: 10px; }
+summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+details pre { padding: 8px; border: 1px solid var(--border); background: var(--panel); }
+.muted { color: var(--muted); font-size: 12px; }
+.toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.notice { border-left: 3px solid #ba8a2c; padding: 7px 10px; font-size: 12px; margin: 0; background: var(--panel); overflow-wrap: anywhere; flex-shrink: 0; }
+.notice.error { border-color: var(--red); color: var(--red); }

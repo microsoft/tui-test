@@ -41,7 +41,13 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_histo
 | `recording` | `AutomaticRecording \| dict` (directory only) | default recording directory |
 | `trace` | `TraceOptions \| dict` | `{"mode": "off", "directory": ".tui-test/traces"}` |
 
-
+`trace.mode` is `"on"` (all tests/sessions), `"off"` (default), or `"on-failure"`.
+Retained traces contain `trace.md`, `trace.json`, `session.cast`, and a standalone
+`trace.html`, plus screen/timeline evidence. There is no always-on cast by
+default; `recording` only chooses its directory. The async context managers
+supply the final test outcome. Direct callers can use `close(failed=True)` for
+an external failure or `close(failed=False)` when a test intentionally catches
+an assertion. Plain `close()` uses the session's recorded outcome.
 
 `artifacts["on_failure"]` selects `"none"`, `"text"`, `"html"`, or `"all"` (the
 configured default). `text` exports JSON, terminal text, and Markdown; `html`
@@ -50,7 +56,7 @@ JSON. `include_recording` separately includes an available recording. Without
 `artifacts`, per-failure exports are disabled. Frames and checkpoints are bounded;
 missing evidence is reported explicitly.
 
-
+`failure.html` can be distributed alone: its Attachments pane embeds the images, Markdown, structured evidence and included recording for offline preview/download. The trace layout shows expected/observed values alongside the terminal and labels the session, emulator, effective timeout defaults and failing assertion timeout. The embedded manifest snapshot excludes the HTML's own hash; the disk manifest includes it.
 
 Retained operation mappings can include `expectation`, containing the locator query and required outcome or a scalar subject/value. This includes passing assertions, is capped at 8 KiB per operation, and is marked unavailable if oversized. These operands can contain sensitive data. The selected assertion's expectation is shown even when it passes; timeout values are kept in Metadata rather than the top header.
 
@@ -356,13 +362,3 @@ terminal = TuiTest(
 All errors extend `TuiTestError`. Structured native failures expose `details` and `artifact`; expectation errors continue to populate compatibility `terminal.text` and `terminal.screenshot` fields. Failure artifacts can contain terminal output, titles, locator operands, and recordings, so review them before uploading.
 
 Sessions are local to the current process and cannot be controlled by the CLI. Cancelling a task does not stop an active terminal operation.
-
-### Diagnostic exports
-
-Errors expose structured diagnostic details, including locator stages and bounded
-screen history. Artifact export is opt-in. Configured exports default to `all`;
-`none` writes no files, `text` writes JSON and terminal text, and `all` adds SVG.
-Trace retention independently selects `off`, `on`, or `on-failure`. Final test
-outcomes control retained traces, including tests that catch multiple assertions.
-
-The `text` and `all` modes also include a Markdown diagnostic report.

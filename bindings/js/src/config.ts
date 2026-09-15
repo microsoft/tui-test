@@ -33,6 +33,7 @@ const PROFILE_FIELDS = new Set(["scrollback", "colors"]);
 const TRACE_MODES = new Set(["off", "on-failure", "on"]);
 const FAILURE_ARTIFACT_MODES = new Set([
   "all",
+  "html",
   "text",
   "none",
 ]);
@@ -170,7 +171,7 @@ export function tracePayload(trace?: TraceOptions): TraceOptions | undefined {
 
 export interface FailureArtifactPayload {
   directory: string;
-  mode: "all" | "text" | "none";
+  mode: "all" | "html" | "text" | "none";
   includeRecording: boolean;
 }
 
@@ -193,7 +194,7 @@ export function artifactPayload(
   const mode = raw.onFailure ?? "all";
   if (!FAILURE_ARTIFACT_MODES.has(String(mode))) {
     throw new TypeError(
-      `unknown artifacts.onFailure "${String(mode)}"; expected all, text, or none`,
+      `unknown artifacts.onFailure "${String(mode)}"; expected all, html, text, or none`,
     );
   }
   if (

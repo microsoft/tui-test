@@ -54,7 +54,7 @@ from .types import (
 _TERMINAL_MARKER = "Terminal content:\n"
 _ERROR_JSON_ATTRIBUTE = "_tui_test_error_json"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
-_ARTIFACT_MODES = ("all", "text", "none")
+_ARTIFACT_MODES = ("all", "html", "text", "none")
 
 _T = TypeVar("_T")
 
@@ -408,7 +408,7 @@ def _artifact_values(
     mode = artifacts.get("on_failure", "all")
     if mode not in _ARTIFACT_MODES:
         raise ValueError(
-            "artifacts.on_failure must be all, text, or none"
+            "artifacts.on_failure must be all, html, text, or none"
         )
     include_recording = artifacts.get("include_recording", False)
     if not isinstance(include_recording, bool):
