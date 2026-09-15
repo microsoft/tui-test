@@ -9,12 +9,12 @@ use crate::api::{
 use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
 use crate::config::{self, POLL_DELAY_MS};
-use crate::diagnostics::merge_failure_details;
 use crate::diagnostics::strings::{
     base_error_message, diagnostic_hints, diagnostic_operation_name, format_timeout,
     operation_timeout, timeout_message, title_timeout_message_from_actual,
     truncate_diagnostic_value,
 };
+use crate::diagnostics::{comparison_failure, merge_failure_details};
 use crate::diagnostics::{
     elapsed_ms, failure_reason, CellMismatch, CellStyleEvaluation, FailureObservation,
     FailureReason, FailureReport, ProcessDiagnostics, RuntimeDiagnostics,
@@ -2433,33 +2433,6 @@ fn wait_locator(
             not,
         )))
     }
-}
-
-fn comparison_failure(
-    operation: &str,
-    timeout_ms: Option<u64>,
-    reason: FailureReason,
-    message: String,
-    kind: &str,
-    expected: Option<String>,
-    actual: Option<String>,
-) -> TuiTestError {
-    let mut details = FailureReport::new(operation, timeout_ms, reason, message.clone());
-    let (expected, expected_truncated) = expected.map_or((None, false), |value| {
-        let (value, truncated) = truncate_diagnostic_value(value, 256 * 1024);
-        (Some(value), truncated)
-    });
-    let (actual, actual_truncated) = actual.map_or((None, false), |value| {
-        let (value, truncated) = truncate_diagnostic_value(value, 256 * 1024);
-        (Some(value), truncated)
-    });
-    details.truncated = expected_truncated || actual_truncated;
-    details.comparison = Some(crate::diagnostics::ComparisonDiagnostics {
-        kind: kind.to_string(),
-        expected,
-        actual,
-    });
-    TuiTestError::assertion(message).with_report(details)
 }
 
 #[allow(clippy::too_many_arguments)]

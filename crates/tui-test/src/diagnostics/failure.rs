@@ -36,16 +36,16 @@ pub struct LocatorFailure {
 
 impl FailureDetails {
     pub fn new(
-        operation: impl Into<String>,
+        operation: impl AsRef<str>,
         reason: FailureReason,
-        summary: impl Into<String>,
+        summary: impl AsRef<str>,
     ) -> Self {
         let mut truncated = false;
         Self {
             schema_version: FAILURE_SCHEMA_VERSION,
-            operation: bounded(&operation.into(), 256, &mut truncated),
+            operation: bounded(operation.as_ref(), 256, &mut truncated),
             reason,
-            summary: bounded(&summary.into(), 4096, &mut truncated),
+            summary: bounded(summary.as_ref(), 4096, &mut truncated),
             locator: None,
             comparison: None,
             truncated,
@@ -196,6 +196,33 @@ pub(crate) fn merge_failure_details(target: &mut FailureReport, source: FailureR
     if source.operation.timeout_ms.is_some() {
         target.operation.timeout_ms = source.operation.timeout_ms;
     }
+}
+
+pub(crate) fn comparison_failure(
+    operation: &str,
+    timeout_ms: Option<u64>,
+    reason: FailureReason,
+    message: String,
+    kind: &str,
+    expected: Option<String>,
+    actual: Option<String>,
+) -> TuiTestError {
+    let mut details = FailureReport::new(operation, timeout_ms, reason, message.clone());
+    let (expected, expected_truncated) = expected.map_or((None, false), |value| {
+        let (value, truncated) = truncate_diagnostic_value(value, 256 * 1024);
+        (Some(value), truncated)
+    });
+    let (actual, actual_truncated) = actual.map_or((None, false), |value| {
+        let (value, truncated) = truncate_diagnostic_value(value, 256 * 1024);
+        (Some(value), truncated)
+    });
+    details.truncated = expected_truncated || actual_truncated;
+    details.comparison = Some(crate::diagnostics::ComparisonDiagnostics {
+        kind: kind.to_string(),
+        expected,
+        actual,
+    });
+    TuiTestError::assertion(message).with_report(details)
 }
 
 #[cfg(test)]

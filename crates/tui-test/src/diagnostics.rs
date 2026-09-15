@@ -18,7 +18,7 @@ mod failure;
 mod input;
 pub(crate) mod strings;
 pub use expectation::{LocatorExpectation, OperationExpectation};
-pub(crate) use failure::{failure_reason, merge_failure_details};
+pub(crate) use failure::{comparison_failure, failure_reason, merge_failure_details};
 pub use failure::{FailureDetails, LocatorFailure};
 pub use input::{InputArguments, InputDetails, MouseTarget};
 
@@ -176,7 +176,9 @@ impl CellStyleEvaluation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocatorDiagnostics {
+    /// Whether matching searched viewport or retained scrollback.
     pub search_scope: String,
+    /// Absolute grid row where the viewport begins.
     pub viewport_origin_y: u32,
     pub stages: Vec<LocatorStageDiagnostics>,
     /// Candidates before the final occurrence is selected.
@@ -341,6 +343,7 @@ pub struct ComparisonDiagnostics {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailureReport {
     pub schema_version: u32,
+    /// Groups failures by operation and locator shape.
     pub signature: String,
     pub operation: OperationDiagnostics,
     pub reason: FailureReason,
