@@ -71,6 +71,7 @@ pub(crate) fn diagnostic_operation_name(operation: &Operation) -> &'static str {
         Operation::Run(_) => "run",
         Operation::Restart { .. } => "restart",
         Operation::Close => "close",
+        Operation::FinishTrace { .. } => "trace.finish",
         Operation::State => "state",
         Operation::Text { .. } => "text",
         Operation::PackedScreen { .. } => "packed_screen",
@@ -285,5 +286,16 @@ pub(crate) fn locator_failure_message(
             format!("locator anchor for '{description}' was not found")
         }
         _ => format!("no match found for '{description}'"),
+    }
+}
+
+pub(crate) fn capture_error_message(error: &crate::record::CaptureError) -> String {
+    match error {
+        crate::record::CaptureError::AlreadyActive => {
+            "a selected recording is already active".to_string()
+        }
+        crate::record::CaptureError::NotActive => "no selected recording is active".to_string(),
+        crate::record::CaptureError::WorkerStopped => "recording worker stopped".to_string(),
+        crate::record::CaptureError::Io(message) => message.clone(),
     }
 }
