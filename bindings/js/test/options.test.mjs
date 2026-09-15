@@ -351,13 +351,7 @@ test("core artifacts suppress legacy screenshot capture", async () => {
     details: {
       value: {
         schema_version: 1,
-        signature: "sha256:test",
-        operation: {
-          name: "locator.expect",
-          elapsed_ms: 1,
-          started_screen_sequence: 1,
-          failed_screen_sequence: 1,
-        },
+        operation: "locator.expect",
         reason: "locator_no_match",
         summary: "structured failure",
         truncated: false,

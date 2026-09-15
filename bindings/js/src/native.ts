@@ -127,19 +127,11 @@ function isNativeErrorEnvelope(value: unknown): value is NativeErrorEnvelope {
   );
 }
 
-function latestScreenText(details?: FailureDetails): string | undefined {
-  return details?.terminal?.screen_history.screens.at(-1)?.text;
-}
-
 function attachStructuredFailure(
   mapped: ReturnType<typeof makeError>,
   envelope: NativeErrorEnvelope,
 ): void {
-  const terminal: { text?: string; screenshot?: string } = {};
-  const text = latestScreenText(envelope.details);
-  if (text !== undefined) {
-    terminal.text = text;
-  }
+  const terminal: { screenshot?: string } = {};
   if (envelope.artifact?.screen_svg !== undefined) {
     terminal.screenshot = envelope.artifact.screen_svg;
   }
@@ -155,7 +147,7 @@ function attachStructuredFailure(
       value: envelope.artifact,
     },
   });
-  if (terminal.text !== undefined || terminal.screenshot !== undefined) {
+  if (terminal.screenshot !== undefined) {
     mapped.terminal = terminal;
   }
 }

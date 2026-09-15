@@ -14,38 +14,9 @@ const ERROR_PREFIX = "__tui_test_native_error__:";
 test("native JSON error envelopes expose structured diagnostics", () => {
   const details = {
     schema_version: 1,
-    signature: "sha256:test",
-    operation: {
-      name: "locator.location",
-      elapsed_ms: 12,
-      started_screen_sequence: 1,
-      failed_screen_sequence: 2,
-    },
+    operation: "locator.location",
     reason: "locator_no_match",
     summary: "missing",
-    terminal: {
-      size: { cols: 80, rows: 24 },
-      cursor: { column: 0, row: 0, visible: true, shape: "block" },
-      last_visual_change_ms: 1,
-      unchanged_for_ms: 2,
-      screen_history: {
-        limit: 10,
-        dropped_screen_count: 0,
-        dropped_row_count: 0,
-        screens: [
-          {
-            sequence: 2,
-            first_seen_ms: 1,
-            last_seen_ms: 2,
-            repeat_count: 1,
-            changes: [],
-            size: { cols: 80, rows: 24 },
-            cursor: { column: 0, row: 0, visible: true, shape: "block" },
-            text: "current screen",
-          },
-        ],
-      },
-    },
     truncated: false,
   };
   const artifact = {
@@ -73,7 +44,6 @@ test("native JSON error envelopes expose structured diagnostics", () => {
   assert.deepEqual(error.details, details);
   assert.deepEqual(error.artifact, artifact);
   assert.deepEqual(error.terminal, {
-    text: "current screen",
     screenshot: artifact.screen_svg,
   });
 });

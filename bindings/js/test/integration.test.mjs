@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -345,7 +345,10 @@ test(
           error.message.includes(
             "locator.expect: timed out after 50ms waiting for 'text-that-is-not-on-screen' to be visible",
           ) &&
-          !error.message.includes("Terminal content:"),
+          !error.message.includes("Terminal content:") &&
+          error.details.operation === "locator.expect" &&
+          error.details.terminal === undefined &&
+          error.details.recent_operations === undefined,
       );
       await assert.rejects(
         su.getByText("ready").wait({ state: "hidden", timeout: 50 }),
@@ -610,9 +613,11 @@ test("locators support scoped text matches and style assertions", async () => {
 
 test("nested text and style clicks retain their full query and resolved input", async () => {
   const program = "process.stdout.write('Review deployment\\r\\n\\x1b[36mView connection\\x1b[0m\\r\\nHelp: View connection\\r\\n'); setInterval(() => {}, 1000)";
+  const directory = mkdtempSync(join(tmpdir(), "tui-test-input-evidence-"));
   await withTerminal({
     program: [process.execPath, evalArgs[0], program],
     waitReady: false,
+    artifacts: { dir: directory, onFailure: "text" },
   }, async (terminal) => {
     await terminal.getByText("Review deployment").wait({ timeout: 3000 });
     await terminal
@@ -625,7 +630,9 @@ test("nested text and style clicks retain their full query and resolved input", 
       terminal.getByText("missing diagnostic marker").expect({ timeout: 0 }),
       (error) => {
         assert(error instanceof ExpectationError);
-        const click = error.details.recent_operations.find((operation) => operation.name === "locator.click");
+        assert.equal(error.details.recent_operations, undefined);
+        const report = JSON.parse(readFileSync(error.artifact.manifest, "utf8"));
+        const click = report.recent_operations.find((operation) => operation.name === "locator.click");
         assert(click);
         const query = click.expectation.query;
         assert.equal(query.selector.kind, "style");
@@ -639,7 +646,7 @@ test("nested text and style clicks retain their full query and resolved input", 
         return true;
       },
     );
-  });
+  }).finally(() => rmSync(directory, { recursive: true, force: true }));
 });
 
 test("get-by locators are lazy, chainable, and actionable", async () => {
@@ -714,8 +721,8 @@ test("get-by locators are lazy, chainable, and actionable", async () => {
       su.getByText("missing-item").location(),
       (error) =>
         error instanceof ExpectationError &&
-        error.message.includes("Terminal content:") &&
-        error.message.includes("item item"),
+        !error.message.includes("Terminal content:") &&
+        error.details.locator.selectors.includes("missing-item"),
     );
 
     await nested.highlight();
