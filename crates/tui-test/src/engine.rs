@@ -18,7 +18,6 @@ use crate::diagnostics::strings::{
     format_timeout, locator_failure_message, operation_timeout, safe_operation_summary,
     timeout_message, title_timeout_message_from_actual, truncate_diagnostic_value,
 };
-use crate::diagnostics::{comparison_failure, merge_failure_details};
 use crate::diagnostics::{
     allocate_artifact_directory, allocate_trace_directory, elapsed_ms, failure_reason,
     recording_temp_path, write_failure_artifact, ArtifactInputs, CellMismatch, CellStyleEvaluation,
@@ -27,6 +26,7 @@ use crate::diagnostics::{
     OperationHistory, PreparedRecording, ProcessDiagnostics, RecordingDiagnostics, RecordingStatus,
     RuntimeDiagnostics, TraceMode, TraceOptions, TraceOutcome, RECORDING_COPY_LIMIT,
 };
+use crate::diagnostics::{comparison_failure, merge_failure_details};
 use crate::input::{keys, mouse};
 use crate::logger::Logger;
 use crate::session::{
