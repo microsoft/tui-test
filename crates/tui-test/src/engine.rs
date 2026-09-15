@@ -2625,8 +2625,7 @@ fn find_locator(
     {
         let observation = capture_failure_observation_locked(session, &mut state);
         drop(state);
-        let message =
-            locator_failure_message(query, &evaluated.evaluation.diagnostics, require_one, None);
+        let message = locator_failure_message(query, &evaluated.evaluation.diagnostics);
         return Err(locator_failure_error(
             if require_one {
                 "locator.location"
@@ -2723,12 +2722,7 @@ fn wait_locator(
                         | LocatorFailureReason::AnchorNotFound
                 )
             ) {
-                locator_failure_message(
-                    query,
-                    &final_evaluated.evaluation.diagnostics,
-                    false,
-                    Some(timeout_ms),
-                )
+                locator_failure_message(query, &final_evaluated.evaluation.diagnostics)
             } else {
                 timeout_message(&description, timeout_ms, not)
             };
@@ -2917,12 +2911,7 @@ fn resolve_locator_click_point(
                             | LocatorFailureReason::AnchorNotFound
                     )
                 ) {
-                    locator_failure_message(
-                        query,
-                        &final_evaluated.evaluation.diagnostics,
-                        true,
-                        Some(timeout_ms),
-                    )
+                    locator_failure_message(query, &final_evaluated.evaluation.diagnostics)
                 } else {
                     format!(
                         "timed out after {} waiting for exactly one '{description}' match",
@@ -3125,12 +3114,7 @@ fn highlight_locator(
                     | LocatorFailureReason::AnchorNotFound
             )
         ) {
-            locator_failure_message(
-                query,
-                &evaluated.evaluation.diagnostics,
-                false,
-                Some(timeout_ms),
-            )
+            locator_failure_message(query, &evaluated.evaluation.diagnostics)
         } else {
             format!(
                 "timed out after {} waiting for a '{description}' match to highlight",

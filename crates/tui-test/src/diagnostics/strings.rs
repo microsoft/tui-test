@@ -247,7 +247,7 @@ pub(crate) fn safe_operation_summary(operation: &Operation) -> String {
     }
 }
 
-pub(crate) fn locator_stage_count(query: &LocatorQuery) -> usize {
+fn locator_stage_count(query: &LocatorQuery) -> usize {
     1 + query.within.as_deref().map_or(0, locator_stage_count)
         + query
             .selector
@@ -260,8 +260,6 @@ pub(crate) fn locator_stage_count(query: &LocatorQuery) -> usize {
 pub(crate) fn locator_failure_message(
     query: &LocatorQuery,
     diagnostics: &crate::diagnostics::LocatorDiagnostics,
-    require_one: bool,
-    _timeout_ms: Option<u64>,
 ) -> String {
     if let Some(error) = &diagnostics.evaluation_error {
         return error.clone();
@@ -286,7 +284,6 @@ pub(crate) fn locator_failure_message(
         Some(LocatorFailureReason::AnchorNotFound) => {
             format!("locator anchor for '{description}' was not found")
         }
-        _ if require_one => format!("no match found for '{description}'"),
         _ => format!("no match found for '{description}'"),
     }
 }
