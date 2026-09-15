@@ -1,11 +1,14 @@
 import { InternalError, UsageError, makeError } from "./errors.js";
+import type { FailureArtifactRef, FailureDetails } from "./types.js";
 import type {
   AutomaticRecordingOptions,
+  TraceOptions,
   BellEvent,
   Cell,
   ClipboardWaitOptions,
   Cursor,
   EffectiveTimeouts,
+  FailureArtifactOptions,
   LocatorExpression,
   LocatorNode,
   LocatorStyle,
@@ -106,11 +109,78 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function mapNativeError(error: unknown): Error {
+interface NativeErrorEnvelope {
+  kind: string;
+  message: string;
+  details?: FailureDetails;
+  artifact?: FailureArtifactRef;
+}
+
+function isNativeErrorEnvelope(value: unknown): value is NativeErrorEnvelope {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    typeof value.kind === "string" &&
+    "message" in value &&
+    typeof value.message === "string"
+  );
+}
+
+function attachStructuredFailure(
+  mapped: ReturnType<typeof makeError>,
+  envelope: NativeErrorEnvelope,
+): void {
+  const terminal: { screenshot?: string } = {};
+  if (envelope.artifact?.screen_svg !== undefined) {
+    terminal.screenshot = envelope.artifact.screen_svg;
+  }
+  Object.defineProperties(mapped, {
+    details: {
+      configurable: true,
+      enumerable: true,
+      value: envelope.details,
+    },
+    artifact: {
+      configurable: true,
+      enumerable: true,
+      value: envelope.artifact,
+    },
+  });
+  if (terminal.screenshot !== undefined) {
+    mapped.terminal = terminal;
+  }
+}
+
+export function mapNativeError(error: unknown): Error {
   const message = errorMessage(error);
   const encodedAt = message.indexOf(ERROR_PREFIX);
   if (encodedAt >= 0) {
     const encoded = message.slice(encodedAt + ERROR_PREFIX.length);
+    if (encoded.startsWith("{")) {
+      try {
+        const envelope: unknown = JSON.parse(encoded);
+        if (!isNativeErrorEnvelope(envelope)) {
+          throw new TypeError("native error envelope has an invalid shape");
+        }
+        const mapped = makeError(envelope.kind, envelope.message);
+        attachStructuredFailure(mapped, envelope);
+        Object.defineProperty(mapped, "cause", {
+          configurable: true,
+          value: error,
+        });
+        return mapped;
+      } catch (parseError) {
+        const detail =
+          parseError instanceof Error ? parseError.message : String(parseError);
+        const mapped = new InternalError(`malformed native error envelope: ${detail}`);
+        Object.defineProperty(mapped, "cause", {
+          configurable: true,
+          value: error,
+        });
+        return mapped;
+      }
+    }
     const newline = encoded.indexOf("\n");
     if (newline >= 0) {
       const mapped = makeError(encoded.slice(0, newline), encoded.slice(newline + 1));
@@ -147,16 +217,23 @@ async function invoke<T>(action: () => Promise<T>): Promise<T> {
 async function createSession(
   name: string,
   recording?: AutomaticRecordingOptions,
+  artifacts?: FailureArtifactOptions,
+  trace?: TraceOptions,
 ): Promise<NativeSessionHandle> {
   const binding = await loadBinding();
-  return new binding.NativeSession(name, recording);
+  return new binding.NativeSession(name, recording, artifacts, trace);
 }
 
 export class NativeRuntime {
   #session: Promise<NativeSessionHandle>;
 
-  constructor(name: string, recording?: AutomaticRecordingOptions) {
-    this.#session = createSession(name, recording);
+  constructor(
+    name: string,
+    recording?: AutomaticRecordingOptions,
+    artifacts?: FailureArtifactOptions,
+    trace?: TraceOptions,
+  ) {
+    this.#session = createSession(name, recording, artifacts, trace);
   }
 
   async #call<T>(action: (session: NativeSessionHandle) => Promise<T>): Promise<T> {
@@ -176,8 +253,8 @@ export class NativeRuntime {
     return this.#call((session) => session.restart(gracefulTimeoutMs));
   }
 
-  close(): Promise<void> {
-    return this.#call((session) => session.close());
+  close(failed?: boolean): Promise<void> {
+    return this.#call((session) => session.close(failed));
   }
 
   state(): Promise<State> {
@@ -188,9 +265,12 @@ export class NativeRuntime {
     return this.#call((session) => session.text(full));
   }
 
-  findLocator(expression: RuntimeLocatorExpression): Promise<TextMatch[]> {
+  findLocator(
+    expression: RuntimeLocatorExpression,
+    requireOne = false,
+  ): Promise<TextMatch[]> {
     return this.#call((session) =>
-      session.findLocator(expression as LocatorExpression),
+      session.findLocator(expression as LocatorExpression, requireOne),
     );
   }
 

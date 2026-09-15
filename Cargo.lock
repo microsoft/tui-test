@@ -2049,6 +2049,8 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "serde",
+ "serde_json",
  "tui-test-rs",
 ]
 

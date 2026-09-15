@@ -1,21 +1,20 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-
 import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
+  artifactPayload,
   assertTimeoutClasses,
   backendPayload,
   envPairs,
   profilePayload,
   recordingPayload,
+  tracePayload,
   resolveSession,
   resolveTimeout,
   timeoutsPayload,
 } from "./config.js";
 import type { TimeoutClass } from "./config.js";
 import { uniqueSession } from "./ephemeral.js";
-import { ExpectationError, TuiTestError, UsageError } from "./errors.js";
+import { ExpectationError, InternalError, TuiTestError, UsageError } from "./errors.js";
 import { NativeRuntime } from "./native.js";
 import type {
   RuntimeLocatorNode,
@@ -470,7 +469,11 @@ function currentStage(query: LocatorQueryValue): RuntimeLocatorNode {
 
 interface LocatorActions {
   owner: object;
-  locations(query: LocatorQueryValue, operation: string): Promise<TextMatch[]>;
+  locations(
+    query: LocatorQueryValue,
+    operation: string,
+    requireOne?: boolean,
+  ): Promise<TextMatch[]>;
   wait(
     query: LocatorQueryValue,
     hidden: boolean,
@@ -487,7 +490,6 @@ interface LocatorActions {
     expectation: LocatorExpectOptions,
     operation: string,
   ): Promise<void>;
-  fail(operation: string, message: string): Promise<never>;
 }
 
 class LocatorImpl implements Locator {
@@ -509,15 +511,6 @@ class LocatorImpl implements Locator {
         : "nth";
     stage.nth = selected.nth;
     return new LocatorImpl(query, this.#actions);
-  }
-
-  #strictQuery(): LocatorQueryValue {
-    const query = cloneQuery(this.#query);
-    const stage = currentStage(query);
-    if (stage.occurrence === "any") {
-      stage.occurrence = "unique";
-    }
-    return query;
   }
 
   any(): Locator {
@@ -621,21 +614,12 @@ class LocatorImpl implements Locator {
 
   async location(): Promise<TextMatch> {
     const matches = await this.#actions.locations(
-      this.#strictQuery(),
+      this.#query,
       "locator.location",
+      true,
     );
     if (matches.length !== 1) {
-      const current = currentStage(this.#query);
-      const description =
-        current.kind === "text"
-          ? JSON.stringify(current.text)
-          : current.kind === "link"
-            ? `link ${JSON.stringify(current.link)}`
-            : current.kind;
-      return this.#actions.fail(
-        "locator.location",
-        `no match found for ${description}`,
-      );
+      throw new InternalError("locator.location: native returned an invalid match count");
     }
     return matches[0];
   }
@@ -667,7 +651,7 @@ class LocatorImpl implements Locator {
   }
 
   click(opts: LocatorClickOptions = {}): Promise<void> {
-    return this.#actions.click(this.#strictQuery(), opts);
+    return this.#actions.click(this.#query, opts);
   }
 
   highlight(opts: LocatorHighlightOptions = {}): Promise<void> {
@@ -738,7 +722,6 @@ export class TuiTest {
   readonly mouse: Mouse;
   #runtime: NativeRuntime;
   #options: ClientOptions;
-  #artifactCounter = 0;
 
   constructor(session?: string, opts: ClientOptions = {}) {
     this.session = resolveSession(session);
@@ -747,8 +730,23 @@ export class TuiTest {
     }
     backendPayload(opts.backend);
     profilePayload(opts.profile);
-    this.#options = opts;
-    this.#runtime = new NativeRuntime(this.session, recordingPayload(opts.recording));
+    const artifacts = artifactPayload(opts.artifacts);
+    this.#options = {
+      ...opts,
+      artifacts:
+        artifacts === undefined
+          ? undefined
+          : {
+              ...opts.artifacts!,
+              dir: artifacts.directory,
+            },
+    };
+    this.#runtime = new NativeRuntime(
+      this.session,
+      recordingPayload(opts.recording),
+      artifacts,
+      tracePayload(opts.trace),
+    );
     this.keyboard = new Keyboard(this.#runtime);
     this.mouse = new Mouse(this.#runtime);
   }
@@ -764,9 +762,9 @@ export class TuiTest {
   #makeLocator(query: LocatorQueryValue): LocatorImpl {
     const actions: LocatorActions = {
       owner: this,
-      locations: (value, operation) =>
+      locations: (value, operation, requireOne = false) =>
         this.#guard(operation, () =>
-          this.#runtime.findLocator(value),
+          this.#runtime.findLocator(value, requireOne),
         ),
       wait: (value, hidden, timeout, operation) =>
         this.#guard(operation, () =>
@@ -800,20 +798,6 @@ export class TuiTest {
             this.#timeout("text", expectation.timeout),
           ),
         );
-      },
-      fail: async (operation, message) => {
-        let diagnostic = message;
-        try {
-          diagnostic += `\n\nTerminal content:\n${await this.text()}`;
-        } catch (error) {
-          if (!(error instanceof TuiTestError)) {
-            throw error;
-          }
-          diagnostic += `\n\nTerminal content unavailable: ${error.message}`;
-        }
-        return this.#guard(operation, async () => {
-          throw new ExpectationError(diagnostic);
-        });
       },
     };
     return new LocatorImpl(query, actions);
@@ -865,28 +849,33 @@ export class TuiTest {
     if (!artifacts || !(error instanceof ExpectationError)) {
       return;
     }
-    const mode = artifacts.onFailure ?? "svg";
+    if (error.details !== undefined || error.artifact !== undefined) {
+      return;
+    }
+    const mode = artifacts.onFailure ?? "all";
     if (mode === "none") {
       return;
     }
+    const terminal = error.terminal ?? {};
+    const errors = [
+      "artifact exports require native structured diagnostics; legacy errors cannot provide the requested files",
+    ];
     try {
-      const terminal = error.terminal ?? {};
       const text = extractTerminalContent(error.message);
       if (text !== undefined) {
         terminal.text = text;
-      }
-      if (mode === "svg") {
-        await mkdir(artifacts.dir, { recursive: true });
-        const file = path.join(
-          artifacts.dir,
-          `${this.session}-${Date.now()}-${this.#artifactCounter++}.svg`,
-        );
-        terminal.screenshot = await this.screenshot(file);
-      }
-      if (terminal.text !== undefined || terminal.screenshot !== undefined) {
         error.terminal = terminal;
       }
-    } catch {}
+    } catch (captureError) {
+      const message =
+        captureError instanceof Error ? captureError.message : String(captureError);
+      errors.push(`failed to parse legacy terminal text: ${message.slice(0, 1024)}`);
+    }
+    Object.defineProperty(error, "artifact", {
+      configurable: true,
+      enumerable: true,
+      value: { status: "failed", directory: artifacts.dir, errors },
+    });
   }
 
   async #spawn(action: () => Promise<OpenResult>, retries: number): Promise<OpenResult> {
@@ -921,6 +910,7 @@ export class TuiTest {
       profileScrollback: profile?.scrollback,
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
+      screenHistoryLimit: this.#options.screenHistoryLimit,
     };
     return this.#spawn(() => this.#runtime.open(options), opts.retries ?? 0);
   }
@@ -943,12 +933,13 @@ export class TuiTest {
       profileScrollback: profile?.scrollback,
       profileColors: profile?.colors,
       timeouts: timeoutsPayload(opts.timeouts),
+      screenHistoryLimit: this.#options.screenHistoryLimit,
     };
     return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0);
   }
 
-  async close(): Promise<void> {
-    await this.#runtime.close();
+  async close(options: { failed?: boolean } = {}): Promise<void> {
+    await this.#runtime.close(options.failed);
   }
 
   async restart(opts: RestartOptions = {}): Promise<OpenResult> {

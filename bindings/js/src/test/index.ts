@@ -4,6 +4,7 @@ import { uniqueSession } from "../ephemeral.js";
 import type {
   ArtifactOptions,
   AutomaticRecording,
+  TraceOptions,
   Backend,
   ClientOptions,
   Profile,
@@ -31,6 +32,7 @@ export interface CreateTerminalOptions {
   profile?: Profile;
   artifacts?: ArtifactOptions;
   recording?: AutomaticRecording;
+  trace?: TraceOptions;
 }
 
 let defaults: Partial<CreateTerminalOptions> = {};
@@ -85,6 +87,7 @@ function clientOptions(opts: CreateTerminalOptions): ClientOptions {
     "profile",
     "artifacts",
     "recording",
+    "trace",
   ] as const) {
     const value = opts[key];
     if (value !== undefined) {
@@ -134,9 +137,17 @@ export async function withTerminal<T>(
 ): Promise<T> {
   const terminal = await createTerminal(options);
   try {
-    return await fn(terminal);
+    const value = await fn(terminal);
+    await terminal.close({ failed: false });
+    return value;
+  } catch (error) {
+    try {
+      await terminal.close({ failed: true });
+    } catch (closeError) {
+      throw new AggregateError([error, closeError], "Test and terminal cleanup failed");
+    }
+    throw error;
   } finally {
-    await terminal.closeQuiet();
     untrackTerminal(terminal);
   }
 }
