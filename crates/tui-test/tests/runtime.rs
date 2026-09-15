@@ -101,7 +101,7 @@ fn trace_retention_writes_complete_bundles_only_for_selected_outcomes() {
                     .collect();
                 assert_eq!(bundles.len(), 1);
                 let bundle = &bundles[0];
-                for name in ["trace.json", "session.cast"] {
+                for name in ["trace.json", "trace.md", "session.cast"] {
                     assert!(bundle.join(name).is_file(), "missing {name}: {bundle:?}");
                 }
                 let manifest: serde_json::Value =
@@ -115,6 +115,9 @@ fn trace_retention_writes_complete_bundles_only_for_selected_outcomes() {
                 assert!(std::fs::read_to_string(bundle.join("session.cast"))
                     .unwrap()
                     .contains("TRACE_READY"));
+                assert!(std::fs::read_to_string(bundle.join("trace.md"))
+                    .unwrap()
+                    .contains("session.cast"));
             } else {
                 assert!(!directory.exists());
             }
@@ -789,6 +792,10 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
         .expect("failure manifest");
     assert!(manifest.is_file());
     assert!(artifact
+        .report
+        .as_ref()
+        .is_some_and(|path| std::path::Path::new(path).is_file()));
+    assert!(artifact
         .screen_text
         .as_ref()
         .is_some_and(|path| std::path::Path::new(path).is_file()));
@@ -805,6 +812,12 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
     assert!(manifest["terminal"]["screen_history"]["screens"]
         .as_array()
         .is_some_and(|screens| !screens.is_empty()));
+    let report = std::fs::read_to_string(artifact.report.as_ref().unwrap()).unwrap();
+    assert!(artifact.report.as_ref().unwrap().ends_with("failure.md"));
+    assert!(report.contains("## Assertion checkpoints"));
+    assert!(report.contains("## Locator evaluation"));
+    assert!(report.contains("## Terminal state"));
+    assert!(report.contains("inspect_locator_stage"));
     let checkpoint = details
         .recent_operations
         .iter()
@@ -817,6 +830,7 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
     };
     assert_eq!(query.selector.description(), "ready");
     assert_eq!(*outcome, tui_test::LocatorExpectation::Visible);
+    assert!(report.contains("## Retained expectations"));
     assert_eq!(manifest["sensitivity"]["contains_assertion_operands"], true);
     for file in manifest["files"].as_array().unwrap() {
         use sha2::Digest;

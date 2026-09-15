@@ -19,7 +19,10 @@ use crate::terminal::emu::CursorShape;
 mod expectation;
 mod failure;
 mod input;
+mod markdown;
 pub(crate) mod strings;
+#[cfg(test)]
+mod test_fixture;
 pub use expectation::{LocatorExpectation, OperationExpectation};
 pub(crate) use failure::{comparison_failure, failure_reason, merge_failure_details};
 pub use failure::{FailureDetails, LocatorFailure};
@@ -30,6 +33,7 @@ pub const DEFAULT_SCREEN_HISTORY_LIMIT: u16 = 10;
 pub const MAX_SCREEN_HISTORY_LIMIT: u16 = 50;
 
 const FAILURE_JSON_LIMIT: usize = 2 * 1024 * 1024;
+const REPORT_LIMIT: usize = 1024 * 1024;
 const SCREEN_TEXT_LIMIT: usize = 1024 * 1024;
 const SCREEN_SVG_LIMIT: usize = 8 * 1024 * 1024;
 pub(crate) const RECORDING_COPY_LIMIT: u64 = 64 * 1024 * 1024;
@@ -595,6 +599,13 @@ impl FailureArtifactOptions {
 
     pub(crate) fn wants_svg(&self) -> bool {
         matches!(self.mode, FailureArtifactMode::All)
+    }
+
+    pub(crate) fn wants_markdown(&self) -> bool {
+        matches!(
+            self.mode,
+            FailureArtifactMode::All | FailureArtifactMode::Text
+        )
     }
 }
 
@@ -1224,6 +1235,7 @@ pub(crate) fn write_failure_artifact(
         return reference;
     }
 
+    let markdown_name = inputs.details.artifact_name("md");
     let manifest_name = inputs.details.artifact_name("json");
     let mut files = Vec::new();
     let mut total = 0u64;
@@ -1360,6 +1372,31 @@ pub(crate) fn write_failure_artifact(
                     .unwrap_or_else(|| "recording unavailable".to_string()),
             ),
         });
+    }
+
+    if options.wants_markdown() {
+        let markdown = markdown::render(inputs.details, &files);
+        write_optional_file(
+            &directory,
+            "report",
+            &markdown_name,
+            markdown.as_bytes(),
+            REPORT_LIMIT as u64,
+            &mut total,
+            &mut files,
+            &mut reference.errors,
+        );
+        if files
+            .last()
+            .is_some_and(|file| file.status == ArtifactFileStatus::Written)
+        {
+            reference.report = Some(
+                directory
+                    .join(&markdown_name)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
     }
 
     let sensitivity = sensitivity(inputs.details, &files);
@@ -1530,6 +1567,24 @@ fn sensitivity(details: &FailureReport, files: &[ArtifactFile]) -> SensitivityDe
             "platform_default"
         }
         .to_string(),
+    }
+}
+
+fn failure_reason_code(reason: FailureReason) -> &'static str {
+    match reason {
+        FailureReason::TimedOut => "timed_out",
+        FailureReason::SessionExited => "session_exited",
+        FailureReason::Cancelled => "cancelled",
+        FailureReason::LocatorNoMatch => "locator_no_match",
+        FailureReason::LocatorAmbiguous => "locator_ambiguous",
+        FailureReason::UnexpectedMatch => "unexpected_match",
+        FailureReason::MatchNotActionable => "match_not_actionable",
+        FailureReason::ScalarMismatch => "scalar_mismatch",
+        FailureReason::SnapshotMismatch => "snapshot_mismatch",
+        FailureReason::EmulatorFault => "emulator_fault",
+        FailureReason::InternalFailure => "internal_failure",
+        FailureReason::Completed => "completed",
+        FailureReason::TestFailed => "test_failed",
     }
 }
 
@@ -1864,6 +1919,9 @@ mod tests {
         assert!(sensitivity.contains_input);
         assert!(sensitivity.contains_user_supplied_values);
         assert!(!sensitivity.contains_terminal_output);
+        let markdown = markdown::render(&details, &[]);
+        assert!(markdown.contains("secret"));
+        assert!(markdown.contains("Input for operation 1"));
     }
 
     #[test]
