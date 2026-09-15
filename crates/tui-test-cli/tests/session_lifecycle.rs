@@ -1496,7 +1496,9 @@ fn json_failure_writes_and_reports_a_diagnostic_bundle() {
     assert_eq!(plain.status.code(), Some(1));
     let plain: serde_json::Value =
         serde_json::from_slice(&plain.stdout).expect("plain failure json response");
-    assert_eq!(plain["details"]["operation"]["name"], "locator.expect");
+    assert_eq!(plain["details"]["operation"], "locator.expect");
+    assert!(plain["details"].get("terminal").is_none());
+    assert!(plain["details"].get("recent_operations").is_none());
 
     let artifacts = sandbox.home.join("failure-artifacts");
     let artifacts = artifacts.to_str().unwrap();
@@ -1517,12 +1519,16 @@ fn json_failure_writes_and_reports_a_diagnostic_bundle() {
     let payload: serde_json::Value =
         serde_json::from_slice(&out.stdout).expect("failure json response");
     assert_eq!(payload["details"]["schema_version"], 1);
-    assert_eq!(payload["details"]["operation"]["name"], "locator.expect");
-    assert_eq!(payload["details"]["context"]["test"], "cli-bundle");
+    assert_eq!(payload["details"]["operation"], "locator.expect");
+    assert!(payload["details"].get("context").is_none());
     let manifest = payload["artifact"]["manifest"]
         .as_str()
         .expect("failure manifest path");
     assert!(std::path::Path::new(manifest).is_file());
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest).unwrap()).unwrap();
+    assert_eq!(report["context"]["test"], "cli-bundle");
+    assert!(report["terminal"]["screen_history"]["screens"].is_array());
     let human = sandbox.run(&[
         "--failure-artifacts",
         artifacts,
