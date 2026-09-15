@@ -71,6 +71,7 @@ pub(crate) enum CaptureError {
 }
 
 impl Recorder {
+    #[cfg(test)]
     pub fn create(
         path: Option<PathBuf>,
         cols: u16,
@@ -79,7 +80,18 @@ impl Recorder {
         required: bool,
         logger: Arc<crate::logger::Logger>,
     ) -> std::io::Result<Self> {
-        let started = Instant::now();
+        Self::create_at(path, cols, rows, env, required, logger, Instant::now())
+    }
+
+    pub fn create_at(
+        path: Option<PathBuf>,
+        cols: u16,
+        rows: u16,
+        env: &[(String, String)],
+        required: bool,
+        logger: Arc<crate::logger::Logger>,
+        started: Instant,
+    ) -> std::io::Result<Self> {
         let writer = match path {
             Some(path) => match cast::CastWriter::create(&path, cols, rows, env, started) {
                 Ok(writer) => Some(writer),

@@ -110,6 +110,10 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 | `expect bell COUNT` | Wait until the cumulative bell count reaches `COUNT`. |
 | `expect snapshot NAME [-u] [--include-style] [--include-title]` | Assert a snapshot. |
 
+Snapshot mismatch messages show bounded expected and actual excerpts around the
+first difference. `...` marks omitted content; the stored `.snap` baseline is
+unchanged unless you pass `-u`.
+
 ## Capture
 
 | Command | Use |
