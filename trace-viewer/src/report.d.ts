@@ -139,10 +139,12 @@ export interface FailureLocatorStageDetails {
   readonly selector?: FailureLocatorSelector;
   readonly direction: "within" | "after" | "before";
   readonly requested_occurrence: FailureMatchOccurrence;
+  /** Action operations may require a unique match. */
   readonly effective_occurrence: FailureMatchOccurrence;
   readonly occurrence_source: "explicit" | "action_default";
   readonly input_candidate_count: number;
   readonly raw_candidate_count: number;
+  /** Candidates remaining after applying the requested styles. */
   readonly style_candidate_count: number;
   readonly selected_count: number;
   readonly candidates?: readonly FailureTextMatch[];
@@ -155,6 +157,7 @@ export interface FailureLocatorDetails {
   readonly search_scope: string;
   readonly viewport_origin_y: number;
   readonly stages: readonly FailureLocatorStageDetails[];
+  /** Candidates before the final occurrence is selected. */
   readonly final_candidate_count: number;
   readonly stages_truncated?: boolean;
   readonly evaluation_error?: string;
@@ -307,4 +310,3 @@ export interface FailureReport {
   readonly context?: Readonly<Record<string, string>>;
   readonly truncated: boolean;
 }
-

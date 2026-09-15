@@ -61,7 +61,7 @@ export function fixture() {
       },
       runtime: {
         session_name: "deployment-wizard", shell: "pwsh", backend: "alacritty", target_os: "test", target_arch: "test",
-        tui_test_version: "fixture", terminal_profile_fingerprint: "sha256:test",
+        tui_test_version: "fixture",
         timeouts: { text: 5000, idle: 5000, command: 30000, exit: 30000, ready: 30000 },
       },
       process: { pid: 123, state: "running", cancelled: false, ready: true, command_running: false },
