@@ -2152,19 +2152,30 @@ fn status_reports_the_daemon_pid_not_the_child() {
 fn a_window_title_is_tracked_asserted_and_drawn() {
     for backend in Backend::ALL {
         let sandbox = Sandbox::new("title");
-        sandbox.ok(&[
-            "run",
-            "--backend",
-            backend.as_str(),
-            "--cols",
-            "40",
-            "--",
-            "bash",
-            "--norc",
-        ]);
+        let mut args = vec!["run", "--backend", backend.as_str(), "--cols", "40", "--"];
+        if cfg!(windows) {
+            args.extend([
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "$e=[char]27; [Console]::Write('TITLE_READY'); while (($value=[Console]::ReadLine()) -ne $null) { [Console]::Write($e.ToString() + ']2;' + $value + [char]7) }",
+            ]);
+        } else {
+            args.extend(["bash", "--norc"]);
+        }
+        sandbox.ok(&args);
+        if cfg!(windows) {
+            sandbox.wait_for_text("TITLE_READY", "10000");
+        }
         let before = sandbox.ok(&["get", "title"]);
 
-        sandbox.ok(&["submit", r#"printf '\033]2;vim: notes.md\007'"#]);
+        let set_title = if cfg!(windows) {
+            "vim: notes.md"
+        } else {
+            r#"printf '\033]2;vim: notes.md\007'"#
+        };
+        sandbox.ok(&["submit", set_title]);
         sandbox.ok(&["expect", "title", "vim", "--timeout", "5000"]);
         sandbox.ok(&["expect", "title", "notes\\.\\w+", "--regex"]);
         sandbox.ok(&["expect", "title", "emacs", "--not"]);
@@ -2198,7 +2209,12 @@ fn a_window_title_is_tracked_asserted_and_drawn() {
         );
 
         // An empty title clears it, which is how programs tidy up on exit.
-        sandbox.ok(&["submit", r#"printf '\033]2;\007'"#]);
+        let clear_title = if cfg!(windows) {
+            ""
+        } else {
+            r#"printf '\033]2;\007'"#
+        };
+        sandbox.ok(&["submit", clear_title]);
         sandbox.ok(&["wait", "title", "vim", "--not", "--timeout", "5000"]);
     }
 }
@@ -2214,19 +2230,24 @@ fn a_snapshot_records_the_title_only_when_asked() {
         let sandbox = Sandbox::new("snap-title");
         // Wide enough that the title is not truncated, so the assertion is
         // about whether it was recorded at all rather than how it was shortened.
-        let set_title = r#"clear; printf '\033]2;tui-test-user@host: /some/path\007'; sleep 30"#;
-        sandbox.ok(&[
-            "run",
-            "--backend",
-            backend.as_str(),
-            "--cols",
-            "40",
-            "--",
-            "bash",
-            "--norc",
-            "-c",
-            set_title,
-        ]);
+        let mut args = vec!["run", "--backend", backend.as_str(), "--cols", "40", "--"];
+        if cfg!(windows) {
+            args.extend([
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                r#"$e=[char]27; [Console]::Write("$e[2J$e[H$e]2;tui-test-user@host: /some/path$([char]7)"); Start-Sleep -Seconds 30"#,
+            ]);
+        } else {
+            args.extend([
+                "bash",
+                "--norc",
+                "-c",
+                r#"clear; printf '\033]2;tui-test-user@host: /some/path\007'; sleep 30"#,
+            ]);
+        }
+        sandbox.ok(&args);
         sandbox.ok(&["expect", "title", "tui-test-user@host", "--timeout", "5000"]);
 
         let plain = sandbox.ok_in(Some(&sandbox.home), &["expect", "snapshot", "plain", "-u"]);
