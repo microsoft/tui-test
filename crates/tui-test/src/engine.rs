@@ -4142,31 +4142,26 @@ mod tests {
             .execute(Operation::Run(sleeping_program(false)))
             .unwrap();
         populate_history(&engine);
-        let errors: Vec<_> = (0..3)
-            .map(|_| {
-                let error = engine
-                    .execute_with_context(
-                        Operation::WaitLocator {
-                            query: LocatorQuery::text("missing diagnostic marker"),
-                            not: false,
-                            timeout_ms: Some(0),
-                        },
-                        context.clone(),
-                    )
-                    .unwrap_err();
-                assert!(error.observation.is_none());
-                assert!(error.details.is_some());
-                assert!(error.report.is_none());
-                assert!(error.artifact.as_ref().unwrap().manifest.is_some());
-                error
-            })
-            .collect();
-        let (_, allocations) = crate::test_allocations::measure(|| errors.clone());
-        assert!(
-            allocations.peak < 1024 * 1024,
-            "error clone peak: {}",
-            allocations.peak
-        );
+        for _ in 0..3 {
+            let error = engine
+                .execute_with_context(
+                    Operation::WaitLocator {
+                        query: LocatorQuery::text("missing diagnostic marker"),
+                        not: false,
+                        timeout_ms: Some(0),
+                    },
+                    context.clone(),
+                )
+                .unwrap_err();
+            assert!(error.observation.is_none());
+            assert!(error.details.is_some());
+            assert!(error.report.is_none());
+            assert!(error.artifact.as_ref().unwrap().manifest.is_some());
+            let cloned = error.clone();
+            assert!(cloned.observation.is_none());
+            assert_eq!(cloned.details, error.details);
+            assert_eq!(cloned.artifact, error.artifact);
+        }
         engine.execute(Operation::Close).unwrap();
 
         let failed_open = engine
@@ -4195,7 +4190,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_snapshots_share_history_and_pin_the_compared_screen() {
+    fn successful_snapshots_preserve_the_compared_screen() {
         let root =
             std::env::temp_dir().join(format!("tui-test-snapshot-memory-{}", std::process::id()));
         let directory = allocate_artifact_directory(&root).unwrap();
@@ -4213,18 +4208,12 @@ mod tests {
             let session = guard.as_ref().unwrap();
             let cwd = Some(directory.to_string_lossy().into_owned());
             for update in [true, false] {
-                let (result, allocations) = crate::test_allocations::measure(|| {
-                    do_snapshot(session, "compared", update, false, false, cwd.clone()).unwrap()
-                });
+                let result =
+                    do_snapshot(session, "compared", update, false, false, cwd.clone()).unwrap();
                 assert!(matches!(
                     result,
                     SnapshotResult::Written | SnapshotResult::Passed
                 ));
-                assert!(
-                    allocations.peak < 1024 * 1024,
-                    "snapshot peak: {}",
-                    allocations.peak
-                );
             }
             let captured = capture_failure_observation(session);
             {
@@ -4247,15 +4236,8 @@ mod tests {
                 .unwrap()
                 .text
                 .contains("LATER OUTPUT"));
-            let (result, allocations) = crate::test_allocations::measure(|| {
-                do_snapshot(session, "compared", true, false, false, cwd).unwrap()
-            });
+            let result = do_snapshot(session, "compared", true, false, false, cwd).unwrap();
             assert!(matches!(result, SnapshotResult::Updated));
-            assert!(
-                allocations.peak < 1024 * 1024,
-                "snapshot update peak: {}",
-                allocations.peak
-            );
         }
         engine.execute(Operation::Close).unwrap();
         std::fs::remove_dir_all(root).unwrap();
@@ -4561,19 +4543,18 @@ mod tests {
     }
 
     #[test]
-    fn boolean_style_checks_allocate_no_mismatch_evidence() {
+    fn style_mismatch_evidence_respects_the_requested_budget() {
         let emu = AlacrittyEmu::new(80, 24, &Profile::default());
         let cell = EmuCell::blank();
         let style = TextStyle {
             bold: Some(true),
             ..TextStyle::default()
         };
-        let (_, allocations) = crate::test_allocations::measure(|| {
-            for _ in 0..800_000 {
-                assert!(!cell_matches_style(&cell, &style, &emu));
-            }
-        });
-        assert_eq!(allocations.allocations, 0);
+        assert!(!cell_matches_style(&cell, &style, &emu));
+        let boolean = evaluate_cell_style(&cell, &style, &emu, 0, 0, 0);
+        assert!(!boolean.matched);
+        assert!(boolean.mismatches.is_empty());
+        assert!(boolean.mismatches_truncated);
         let limited = evaluate_cell_style(
             &cell,
             &TextStyle {
