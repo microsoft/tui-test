@@ -61,17 +61,16 @@ impl FailureReport {
         details.comparison = self
             .comparison
             .as_ref()
-            .map(|comparison| ComparisonDiagnostics {
-                kind: bounded(&comparison.kind, 128, truncated),
-                expected: comparison
-                    .expected
-                    .as_ref()
-                    .map(|value| bounded(value, 1024, truncated)),
-                actual: comparison
-                    .actual
-                    .as_ref()
-                    .map(|value| bounded(value, 1024, truncated)),
-            });
+            .map(|comparison| bounded_comparison(comparison, 1024, truncated));
+        if let Some(comparison) = &details.comparison {
+            if comparison.kind == "snapshot" {
+                if let (Some(expected), Some(actual)) = (&comparison.expected, &comparison.actual) {
+                    details.summary = format!(
+                        "snapshot mismatch\n--- expected ---\n{expected}\n--- actual ---\n{actual}"
+                    );
+                }
+            }
+        }
         details.locator = self.locator.as_ref().map(|locator| {
             let stage = locator
                 .failure_stage
@@ -145,47 +144,94 @@ fn bounded(value: &str, limit: usize, truncated: &mut bool) -> String {
     format!("{}...", &value[..end])
 }
 
+fn bounded_comparison(
+    comparison: &ComparisonDiagnostics,
+    limit: usize,
+    truncated: &mut bool,
+) -> ComparisonDiagnostics {
+    let mut start = 0;
+    if comparison.kind == "snapshot" {
+        if let (Some(expected), Some(actual)) = (&comparison.expected, &comparison.actual) {
+            if expected.len() > limit || actual.len() > limit {
+                let common = expected
+                    .chars()
+                    .zip(actual.chars())
+                    .take_while(|(expected, actual)| expected == actual)
+                    .map(|(ch, _)| ch.len_utf8())
+                    .sum::<usize>();
+                // Keep the differing line, or a little context if that line alone is long.
+                start = expected[..common]
+                    .rfind('\n')
+                    .map_or(0, |index| index + 1)
+                    .max(common.saturating_sub(limit / 4));
+                while !expected.is_char_boundary(start) {
+                    start -= 1;
+                }
+            }
+        }
+    }
+    let mut excerpt = |value: &String| {
+        if start != 0 {
+            *truncated = true;
+            format!("...{}", bounded(&value[start..], limit - 3, truncated))
+        } else {
+            bounded(value, limit, truncated)
+        }
+    };
+    let expected = comparison.expected.as_ref().map(&mut excerpt);
+    let actual = comparison.actual.as_ref().map(&mut excerpt);
+    ComparisonDiagnostics {
+        kind: bounded(&comparison.kind, 128, truncated),
+        expected,
+        actual,
+    }
+}
+
 pub(crate) fn failure_reason(
     error: &TuiTestError,
     observation: Option<&FailureObservation>,
 ) -> FailureReason {
-    if let Some(observation) = observation {
-        if observation.process.cancelled {
-            return FailureReason::Cancelled;
-        }
-        if observation.process.exit_code.is_some() {
-            return FailureReason::SessionExited;
+    let reason = error.report.as_ref().map_or_else(
+        || match error.kind {
+            ErrorKind::Internal => FailureReason::InternalFailure,
+            ErrorKind::Assertion if error.message.starts_with("session exited") => {
+                FailureReason::SessionExited
+            }
+            ErrorKind::Assertion
+                if error.message.contains("timed out") || error.message.contains("timeout") =>
+            {
+                FailureReason::TimedOut
+            }
+            ErrorKind::Assertion if error.message.contains("snapshot mismatch") => {
+                FailureReason::SnapshotMismatch
+            }
+            ErrorKind::Assertion => FailureReason::ScalarMismatch,
+            ErrorKind::Usage | ErrorKind::NoSession => FailureReason::InternalFailure,
+        },
+        |report| report.reason,
+    );
+    if matches!(
+        reason,
+        FailureReason::TimedOut
+            | FailureReason::SessionExited
+            | FailureReason::LocatorNoMatch
+            | FailureReason::LocatorAmbiguous
+            | FailureReason::UnexpectedMatch
+            | FailureReason::MatchNotActionable
+    ) {
+        if let Some(observation) = observation {
+            if observation.process.cancelled {
+                return FailureReason::Cancelled;
+            }
+            if observation.process.exit_code.is_some() {
+                return FailureReason::SessionExited;
+            }
         }
     }
-    if let Some(locator) = error
-        .report
-        .as_ref()
-        .and_then(|details| details.locator.as_ref())
-    {
-        return match locator.failure_reason {
-            Some(LocatorFailureReason::Ambiguous) => FailureReason::LocatorAmbiguous,
-            Some(LocatorFailureReason::OutsideViewport)
-            | Some(LocatorFailureReason::MatchedNoCells) => FailureReason::MatchNotActionable,
-            _ => FailureReason::LocatorNoMatch,
-        };
-    }
-    match error.kind {
-        ErrorKind::Internal => FailureReason::InternalFailure,
-        ErrorKind::Assertion
-            if error.message.contains("timed out") || error.message.contains("timeout") =>
-        {
-            FailureReason::TimedOut
-        }
-        ErrorKind::Assertion if error.message.contains("snapshot mismatch") => {
-            FailureReason::SnapshotMismatch
-        }
-        ErrorKind::Assertion => FailureReason::ScalarMismatch,
-        ErrorKind::Usage | ErrorKind::NoSession => FailureReason::InternalFailure,
-    }
+    reason
 }
 
 pub(crate) fn merge_failure_details(target: &mut FailureReport, source: FailureReport) {
-    target.reason = source.reason;
     let (summary, truncated) = truncate_diagnostic_value(source.summary, 64 * 1024);
     target.summary = summary;
     target.locator = source.locator;
@@ -208,26 +254,102 @@ pub(crate) fn comparison_failure(
     actual: Option<String>,
 ) -> TuiTestError {
     let mut details = FailureReport::new(operation, timeout_ms, reason, message.clone());
-    let (expected, expected_truncated) = expected.map_or((None, false), |value| {
-        let (value, truncated) = truncate_diagnostic_value(value, 256 * 1024);
-        (Some(value), truncated)
-    });
-    let (actual, actual_truncated) = actual.map_or((None, false), |value| {
-        let (value, truncated) = truncate_diagnostic_value(value, 256 * 1024);
-        (Some(value), truncated)
-    });
-    details.truncated = expected_truncated || actual_truncated;
-    details.comparison = Some(crate::diagnostics::ComparisonDiagnostics {
-        kind: kind.to_string(),
-        expected,
-        actual,
-    });
+    details.comparison = Some(bounded_comparison(
+        &ComparisonDiagnostics {
+            kind: kind.to_string(),
+            expected,
+            actual,
+        },
+        256 * 1024,
+        &mut details.truncated,
+    ));
     TuiTestError::assertion(message).with_report(details)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_excerpts_preserve_late_differences_through_both_limits() {
+        for prefix in [
+            "same row\n".repeat(40),
+            "same row\n".repeat(40_000),
+            "\u{1f600}".repeat(80_000),
+        ] {
+            let expected = format!("{prefix}EXPECTED_DIFFERENCE{}", " tail".repeat(400));
+            let actual = format!("{prefix}OBSERVED_DIFFERENCE{}", " tail".repeat(400));
+            let error = comparison_failure(
+                "expect.snapshot",
+                None,
+                FailureReason::SnapshotMismatch,
+                format!(
+                    "snapshot mismatch\n--- expected ---\n{expected}\n--- actual ---\n{actual}"
+                ),
+                "snapshot",
+                Some(expected),
+                Some(actual),
+            );
+            let report = error.report.unwrap();
+            let comparison = report.comparison.as_ref().unwrap();
+            assert!(comparison
+                .expected
+                .as_ref()
+                .unwrap()
+                .contains("EXPECTED_DIFFERENCE"));
+            assert!(comparison
+                .actual
+                .as_ref()
+                .unwrap()
+                .contains("OBSERVED_DIFFERENCE"));
+            let details = report.failure_details();
+            let comparison = details.comparison.as_ref().unwrap();
+            assert_ne!(comparison.expected, comparison.actual);
+            assert!(comparison.expected.as_ref().unwrap().len() <= 1027);
+            assert!(comparison.actual.as_ref().unwrap().len() <= 1027);
+            assert!(details.summary.contains("EXPECTED_DIFFERENCE"));
+            assert!(details.summary.contains("OBSERVED_DIFFERENCE"));
+            assert!(details.summary.len() <= 4096);
+            assert!(details.truncated);
+        }
+    }
+
+    #[test]
+    fn comparison_excerpts_handle_end_of_input_and_unicode_boundaries() {
+        let prefix = "\u{1f600}".repeat(2000);
+        for (expected, actual) in [
+            (String::new(), "new".into()),
+            ("short".into(), "other".into()),
+            (prefix.clone(), format!("{prefix}extra")),
+            (format!("{prefix}extra"), prefix.clone()),
+            (format!("{prefix}\u{e9}"), format!("{prefix}\u{ea}")),
+            (format!("{prefix}\n"), format!("{prefix}\nextra")),
+        ] {
+            let comparison = ComparisonDiagnostics {
+                kind: "snapshot".into(),
+                expected: Some(expected.clone()),
+                actual: Some(actual.clone()),
+            };
+            let mut truncated = false;
+            let bounded = bounded_comparison(&comparison, 1024, &mut truncated);
+            assert_ne!(bounded.expected, bounded.actual);
+            if expected.len() <= 1024 && actual.len() <= 1024 {
+                assert_eq!(bounded, comparison);
+                assert!(!truncated);
+            } else {
+                assert!(truncated);
+            }
+        }
+        let comparison = ComparisonDiagnostics {
+            kind: "exit_code".into(),
+            expected: Some("0".into()),
+            actual: None,
+        };
+        assert_eq!(
+            bounded_comparison(&comparison, 1024, &mut false),
+            comparison
+        );
+    }
 
     #[test]
     fn public_failure_contains_only_bounded_actionable_evidence() {

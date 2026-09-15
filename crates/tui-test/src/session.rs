@@ -583,8 +583,10 @@ fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, col
 }
 
 pub(crate) fn capture_visual_state(state: &mut TermState, force: bool) -> u64 {
-    if !state.screen_dirty && !force {
-        return state.screen_history.current_sequence();
+    if !state.screen_dirty {
+        return state
+            .screen_history
+            .observe_current(elapsed_ms(state.started_at));
     }
     if !force
         && state.last_screen_sample.elapsed() < Duration::from_millis(crate::config::POLL_DELAY_MS)

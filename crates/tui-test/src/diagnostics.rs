@@ -750,10 +750,7 @@ impl ScreenHistory {
                 && last.details.cursor.shape == cursor_shape_name(cursor_shape)
                 && last.render_state == render_state
             {
-                let last = std::sync::Arc::make_mut(last);
-                last.details.last_seen_ms = elapsed_ms;
-                last.details.repeat_count = last.details.repeat_count.saturating_add(1);
-                return last.details.sequence;
+                return self.observe_current(elapsed_ms);
             }
         }
 
@@ -831,6 +828,16 @@ impl ScreenHistory {
         self.entries
             .back()
             .map_or(0, |entry| entry.details.sequence)
+    }
+
+    pub(crate) fn observe_current(&mut self, elapsed_ms: u64) -> u64 {
+        let Some(last) = self.entries.back_mut() else {
+            return 0;
+        };
+        let last = std::sync::Arc::make_mut(last);
+        last.details.last_seen_ms = elapsed_ms;
+        last.details.repeat_count = last.details.repeat_count.saturating_add(1);
+        last.details.sequence
     }
 
     pub(crate) fn snapshot(&self) -> ScreenHistoryDetails {

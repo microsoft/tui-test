@@ -627,11 +627,6 @@ impl Engine {
                 session_name: Some(self.name.clone()),
                 ..observation.runtime.clone()
             });
-            if observation.process.cancelled {
-                details.reason = FailureReason::Cancelled;
-            } else if observation.process.exit_code.is_some() {
-                details.reason = FailureReason::SessionExited;
-            }
         }
         details.hints = diagnostic_hints(&details);
 
@@ -3694,9 +3689,64 @@ mod tests {
         let mut state = session.state.lock().unwrap();
         for index in 0..32 {
             state.emu.process(format!("\x1b[H{index:02}").as_bytes());
+            state.screen_dirty = true;
             capture_visual_state(&mut state, true);
             state.screen_history.pin_current();
         }
+    }
+
+    #[test]
+    fn clean_screen_boundaries_reuse_the_grid_but_flush_dirty_output() {
+        let engine = Engine::new(
+            "cached-screen".into(),
+            Arc::new(Logger::disabled()),
+            std::env::temp_dir().join("unused-cached-screen.cast"),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            let sequence = capture_visual_state(&mut state, true);
+            state.screen_history.pin_current();
+            let frozen = state.screen_history.clone();
+            let sample_time = state.last_screen_sample;
+            let repeat_count = frozen.snapshot().screens.last().unwrap().repeat_count;
+            for _ in 0..1000 {
+                assert_eq!(capture_visual_state(&mut state, true), sequence);
+            }
+            assert_eq!(state.last_screen_sample, sample_time);
+            assert_eq!(
+                state
+                    .screen_history
+                    .snapshot()
+                    .screens
+                    .last()
+                    .unwrap()
+                    .repeat_count,
+                repeat_count + 1000,
+            );
+            assert_eq!(
+                frozen.snapshot().screens.last().unwrap().repeat_count,
+                repeat_count
+            );
+            state.emu.process(b"\x1b[HFRESH OUTPUT");
+            state.screen_dirty = true;
+            let changed = capture_visual_state(&mut state, true);
+            assert_ne!(changed, sequence);
+            assert!(!state.screen_dirty);
+            assert!(state
+                .screen_history
+                .snapshot()
+                .screens
+                .last()
+                .unwrap()
+                .text
+                .contains("FRESH OUTPUT"));
+        }
+        engine.execute(Operation::Close).unwrap();
     }
 
     #[test]
@@ -3738,6 +3788,7 @@ mod tests {
             {
                 let mut state = session.state.lock().unwrap();
                 state.emu.process(b"\x1b[HLATER OUTPUT");
+                state.screen_dirty = true;
                 capture_visual_state(&mut state, true);
             }
             assert!(!rows_to_strings(&captured.rows)
