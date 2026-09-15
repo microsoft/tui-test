@@ -1456,8 +1456,8 @@ fn explicit_wait_ready_fails_when_no_prompt_is_reported() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("Terminal content:"),
-        "the failure should show the screen it gave up on: {}",
+        !String::from_utf8_lossy(&out.stderr).contains("Terminal content:"),
+        "ordinary failures must not dump the terminal: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
