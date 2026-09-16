@@ -307,7 +307,7 @@ test("recording API exports styled Unicode to APNG and GIF", async () => {
 });
 
 test(
-  "assertion errors include the current terminal",
+  "assertion errors contain only actionable failure details",
   async () => {
     await withTerminal({ program: [process.execPath, ...evalArgs] }, async (su) => {
       await su.getByText("ready").wait({ timeout: 2000 });
@@ -318,24 +318,21 @@ test(
           error.message.includes(
             "locator.expect: timed out after 50ms waiting for 'text-that-is-not-on-screen' to be visible",
           ) &&
-          error.message.includes("Terminal content:\n╭") &&
-          error.message.includes("ready") &&
-          error.message.includes("\n╰"),
+          !error.message.includes("Terminal content:"),
       );
       await assert.rejects(
         su.getByText("ready").wait({ state: "hidden", timeout: 50 }),
         (error) =>
           error instanceof ExpectationError &&
           error.message.includes("timed out after 50ms waiting for 'ready' to be hidden") &&
-          error.message.includes("Terminal content:\n╭"),
+          !error.message.includes("Terminal content:"),
       );
       await assert.rejects(
         su.expectOutput("missing"),
         (error) =>
           error instanceof ExpectationError &&
           error.message.includes("no command output tracked yet") &&
-          error.message.includes("Terminal content:\n╭") &&
-          error.message.includes("ready"),
+          !error.message.includes("Terminal content:"),
       );
     });
   },

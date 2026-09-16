@@ -261,18 +261,9 @@ impl Locator {
         let description = query.selector.description();
         match self.target.execute(Operation::FindLocator { query })? {
             OperationResult::Matches(mut matches) if matches.len() == 1 => Ok(matches.remove(0)),
-            OperationResult::Matches(_) => {
-                let diagnostic = match self.target.execute(Operation::Text { full: false }) {
-                    Ok(OperationResult::Text(screen)) => {
-                        format!("\n\nTerminal content:\n{screen}")
-                    }
-                    Ok(_) => "\n\nTerminal content unavailable: unexpected result type".to_string(),
-                    Err(error) => format!("\n\nTerminal content unavailable: {error}"),
-                };
-                Err(TuiTestError::assertion(format!(
-                    "no match found for '{description}'{diagnostic}"
-                )))
-            }
+            OperationResult::Matches(_) => Err(TuiTestError::assertion(format!(
+                "no match found for '{description}'"
+            ))),
             _ => Err(TuiTestError::internal(
                 "locator location returned an unexpected result type",
             )),

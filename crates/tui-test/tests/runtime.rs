@@ -491,6 +491,12 @@ fn restarting_a_shell_changes_pid_and_restores_prompt_integration() {
             timeout_ms: Some(30_000),
         })
         .expect("wait for command after restart");
+    // The command-complete marker arrives before the next prompt-ready marker.
+    session
+        .execute(Operation::WaitReady {
+            timeout_ms: Some(30_000),
+        })
+        .expect("wait for prompt after restart");
     assert!(matches!(
         session.execute(Operation::State).expect("state after restart"),
         OperationResult::State(state)
@@ -644,7 +650,7 @@ fn text_locators_are_lazy_reusable_queries() {
 
     let locator = session.get_by_text(TextSelector::new("locator-target"));
     assert_eq!(locator.count().expect("count initial matches"), 0);
-    assert!(locator
+    assert!(!locator
         .location()
         .unwrap_err()
         .message

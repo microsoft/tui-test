@@ -545,7 +545,7 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
-    def test_locator_expect_error_includes_terminal(self):
+    def test_locator_expect_error_contains_only_actionable_details(self):
         async def scenario():
             async with self._client() as su:
                 await su.run(
@@ -565,9 +565,8 @@ class IntegrationTests(unittest.TestCase):
                     "'text-that-is-not-on-screen' to be visible",
                     message,
                 )
-                self.assertIn("Terminal content:\n╭", message)
-                self.assertIn("ready", message)
-                self.assertIn("\n╰", message)
+                self.assertNotIn("Terminal content:", message)
+                self.assertNotIn("ready", message)
 
         run(scenario())
 
