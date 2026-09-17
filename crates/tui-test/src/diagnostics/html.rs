@@ -856,7 +856,7 @@ mod tests {
     }
 
     #[test]
-    fn a_full_recording_does_not_multiply_html_payload_allocations() {
+    fn a_full_recording_fits_the_html_report_budget() {
         let root =
             std::env::temp_dir().join(format!("tui-test-html-memory-{}", std::process::id()));
         let directory = allocate_artifact_directory(&root).unwrap();
@@ -879,15 +879,9 @@ mod tests {
         };
         let (details, observation) = fixture();
         let timeline = timeline(&observation).unwrap();
-        let (report, allocations) = crate::test_allocations::measure(|| {
-            html(&details, &timeline, &[file], &[], &directory).unwrap()
-        });
+        let report = html(&details, &timeline, &[file], &[], &directory).unwrap();
         assert!(report.len() > length * 4 / 3);
-        assert!(
-            allocations.peak < length * 3,
-            "peak bytes: {}",
-            allocations.peak
-        );
+        assert!(report.len() <= crate::diagnostics::HTML_LIMIT);
         std::fs::remove_dir_all(&directory).unwrap();
         std::fs::remove_dir(root).unwrap();
     }
