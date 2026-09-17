@@ -9,7 +9,7 @@ MouseButton = Literal["left", "middle", "right"]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
-AutomaticRecordingMode = Literal["disabled", "on-failure", "always"]
+TraceMode = Literal["off", "on-failure", "on"]
 LocatorDirection = Literal["within", "after", "before"]
 
 
@@ -60,7 +60,11 @@ class Timeouts:
 
 @dataclass
 class AutomaticRecording:
-    mode: Optional[AutomaticRecordingMode] = None
+    directory: Optional[str] = None
+
+@dataclass
+class TraceOptions:
+    mode: Optional[TraceMode] = None
     directory: Optional[str] = None
 
 

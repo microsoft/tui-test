@@ -1,11 +1,26 @@
 import asyncio
+import json
+import os
 import re
 import unittest
+from unittest import mock
 
-from tui_test import _config as cfg
+import tui_test
+from tui_test import (
+    FailureArtifactRef,
+    FailureArtifactStatus,
+    FailureDetails,
+    FailureReason,
+    _config as cfg,
+)
 from tui_test import _ephemeral as ephemeral
 from tui_test import client
-from tui_test.errors import ExpectationError, InternalError, TerminalArtifact
+from tui_test.errors import (
+    ExpectationError,
+    InternalError,
+    NoSessionError,
+    UsageError,
+)
 from tui_test.types import AutomaticRecording, Colors, Profile, TextStyle, Timeouts
 
 
@@ -129,12 +144,12 @@ class ProfileResolutionTests(unittest.TestCase):
 
 
 class RecordingResolutionTests(unittest.TestCase):
-    def test_accepts_only_mode_and_directory(self):
+    def test_accepts_only_directory(self):
         self.assertEqual(
             cfg.normalize_recording(
-                AutomaticRecording(mode="on-failure", directory="casts")
+                AutomaticRecording(directory="casts")
             ),
-            {"mode": "on-failure", "directory": "casts"},
+            {"directory": "casts"},
         )
         with self.assertRaises(ValueError):
             cfg.normalize_recording({"mode": "sometimes"})
@@ -142,6 +157,150 @@ class RecordingResolutionTests(unittest.TestCase):
             cfg.normalize_recording({"directory": ""})
         with self.assertRaises(ValueError):
             cfg.normalize_recording({"other": 1})
+
+    def test_trace_modes_are_separate_from_recording(self):
+        for mode in ("on", "off", "on-failure"):
+            self.assertEqual(cfg.normalize_trace({"mode": mode, "directory": "traces"}), {"mode": mode, "directory": "traces"})
+        with self.assertRaises(ValueError):
+            cfg.normalize_trace({"mode": "always"})
+        with self.assertRaises(TypeError):
+            cfg.normalize_trace({"directory": ""})
+
+
+class FailureDiagnosticsTests(unittest.TestCase):
+    def test_native_envelope_is_decoded_and_preserves_cause(self):
+        native_error = client.native.NativeAssertionError("native message")
+        native_error._tui_test_error_json = json.dumps(
+            {
+                "kind": "assertion",
+                "message": "structured message",
+                "details": {
+                    "schema_version": 1,
+                    "operation": "locator.location",
+                    "reason": "locator_no_match",
+                    "summary": "missing",
+                    "truncated": False,
+                    "unknown_additive_field": True,
+                },
+                "artifact": {
+                    "status": "partial",
+                    "directory": "artifacts/failure",
+                    "report": "artifacts/failure/failure.md",
+                    "report_html": "artifacts/failure/failure.html",
+                    "timeline": "artifacts/failure/timeline.json",
+                    "screen_svg": "artifacts/failure/current.svg",
+                    "errors": ["recording omitted"],
+                    "unknown_additive_field": True,
+                },
+            }
+        )
+
+        async def fail():
+            raise native_error
+
+        with self.assertRaises(ExpectationError) as raised:
+            run(client._await_native(fail()))
+        error = raised.exception
+        self.assertEqual(error.message, "structured message")
+        self.assertIs(error.__cause__, native_error)
+        self.assertIsInstance(error.details, FailureDetails)
+        self.assertEqual(error.details.reason, FailureReason.LOCATOR_NO_MATCH)
+        self.assertEqual(error.details.operation, "locator.location")
+        self.assertFalse(hasattr(error.details, "terminal"))
+        self.assertFalse(hasattr(error.details, "recent_operations"))
+        self.assertIsInstance(error.artifact, FailureArtifactRef)
+        self.assertEqual(
+            error.artifact.status, FailureArtifactStatus.PARTIAL
+        )
+        self.assertEqual(error.artifact.errors, ("recording omitted",))
+        self.assertEqual(error.artifact.report, "artifacts/failure/failure.md")
+        self.assertEqual(error.artifact.report_html, "artifacts/failure/failure.html")
+        self.assertEqual(error.artifact.timeline, "artifacts/failure/timeline.json")
+
+    def test_current_error_envelopes_can_omit_optional_diagnostics(self):
+        for kind, native_type, public_type in (
+            ("assertion", client.native.NativeAssertionError, ExpectationError),
+            ("usage", client.native.NativeUsageError, UsageError),
+            ("no_session", client.native.NativeNoSessionError, NoSessionError),
+            ("internal", client.native.NativeInternalError, InternalError),
+        ):
+            for optional in ({}, {"details": None, "artifact": None}):
+                with self.subTest(kind=kind, optional=optional):
+                    native_error = native_type("native message")
+                    native_error._tui_test_error_json = json.dumps(
+                        {"kind": kind, "message": "current message", **optional}
+                    )
+
+                    async def fail():
+                        raise native_error
+
+                    with self.assertRaises(public_type) as raised:
+                        run(client._await_native(fail()))
+                    self.assertEqual(raised.exception.message, "current message")
+                    self.assertIs(raised.exception.__cause__, native_error)
+                    self.assertIsNone(raised.exception.details)
+                    self.assertIsNone(raised.exception.artifact)
+                    self.assertFalse(hasattr(raised.exception, "terminal"))
+
+    def test_malformed_native_envelope_is_an_internal_transport_error(self):
+        valid_details = {
+            "schema_version": 1,
+            "operation": "locator.expect",
+            "reason": "locator_no_match",
+            "summary": "missing",
+            "truncated": False,
+        }
+        malformed = [None, b'{"kind":"usage","message":"bytes"}', "{not-json", "[]", "{}"]
+        malformed.extend(json.dumps(value) for value in (
+            {"message": "missing kind"},
+            {"kind": "usage"},
+            {"kind": "unknown", "message": "bad kind"},
+            {"kind": "usage", "message": None},
+            {"kind": "assertion", "message": "bad details", "details": []},
+            {"kind": "assertion", "message": "bad artifact", "artifact": []},
+            {
+                "kind": "assertion", "message": "bad reason",
+                "details": {**valid_details, "reason": "unknown"},
+            },
+            {
+                "kind": "assertion", "message": "bad locator",
+                "details": {**valid_details, "locator": {"selectors": []}},
+            },
+        ))
+        for artifact in (
+            {},
+            {"directory": "artifacts"},
+            {"status": "written"},
+            {"status": "unknown", "directory": "artifacts"},
+            {"status": "written", "directory": 123},
+            {"status": "written", "directory": "artifacts", "errors": "error"},
+            {"status": "written", "directory": "artifacts", "errors": [None]},
+            {"status": "written", "directory": "artifacts", "screen_svg": 123},
+        ):
+            malformed.append(json.dumps({
+                "kind": "assertion", "message": "bad artifact", "artifact": artifact,
+            }))
+        for raw in malformed:
+            with self.subTest(raw=raw):
+                native_error = client.native.NativeAssertionError("native message")
+                if raw is not None:
+                    native_error._tui_test_error_json = raw
+
+                async def fail():
+                    raise native_error
+
+                with self.assertRaises(InternalError) as raised:
+                    run(client._await_native(fail()))
+                self.assertIn("malformed native error envelope", raised.exception.message)
+                self.assertIs(raised.exception.__cause__, native_error)
+
+    def test_public_errors_expose_only_current_diagnostic_fields(self):
+        self.assertFalse(hasattr(tui_test, "TerminalArtifact"))
+        self.assertNotIn("TerminalArtifact", tui_test.__all__)
+        error = ExpectationError("missing")
+        self.assertFalse(hasattr(error, "terminal"))
+        self.assertIsNone(error.details)
+        self.assertIsNone(error.artifact)
 
 
 class BackendResolutionTests(unittest.TestCase):
@@ -181,7 +340,7 @@ class TypedCallTests(unittest.TestCase):
         self.assertTrue(args[7])
         self.assertEqual(args[8], 321)
         self.assertEqual(args[9], [("red", "#010203")])
-        self.assertEqual(args[10:], (100, None, None, None, 200))
+        self.assertEqual(args[10:], (100, None, None, None, 200, None))
 
     def test_run_uses_program_and_argv(self):
         terminal = _CapturingClient("s")
@@ -228,6 +387,44 @@ class TypedCallTests(unittest.TestCase):
         run(terminal.run("vim", backend="alacritty"))
         self.assertEqual(terminal.fake.calls[0][1][1], "ghostty")
         self.assertEqual(terminal.fake.calls[1][1][2], "alacritty")
+
+    def test_constructor_screen_history_limit_reaches_open_and_run(self):
+        terminal = _CapturingClient("s", screen_history_limit=17)
+        run(terminal.open())
+        run(terminal.run("vim"))
+        self.assertEqual(terminal.fake.calls[0][1][-1], 17)
+        self.assertEqual(terminal.fake.calls[1][1][-1], 17)
+
+    def test_obsolete_native_constructor_is_not_adapted(self):
+        class ObsoleteNativeSession:
+            def __init__(self, name, recording_mode, recording_directory):
+                raise AssertionError("obsolete constructor must not be called")
+
+        with mock.patch.object(
+            client.native, "NativeSession", ObsoleteNativeSession
+        ):
+            with self.assertRaises(TypeError):
+                client.TuiTest("s", screen_history_limit=17)
+
+    def test_constructor_type_error_is_not_retried(self):
+        error = TypeError("current argument is invalid")
+        with mock.patch.object(
+            client.native, "NativeSession", side_effect=error
+        ) as constructor:
+            with self.assertRaises(TypeError) as raised:
+                client.TuiTest("s")
+        self.assertIs(raised.exception, error)
+        constructor.assert_called_once_with("s", None, None, None, False, None, None)
+
+    def test_close_always_uses_current_outcome_argument(self):
+        terminal = _CapturingClient("s")
+        run(terminal.close())
+        run(terminal.close(failed=False))
+        run(terminal.close(failed=True))
+        self.assertEqual(
+            terminal.fake.calls,
+            [("close", (None,)), ("close", (False,)), ("close", (True,))],
+        )
 
     def test_input_helpers_use_distinct_typed_methods(self):
         terminal = _CapturingClient("s")
@@ -406,10 +603,12 @@ class ClientTimeoutTests(unittest.TestCase):
         run(terminal.open(timeouts=Timeouts(text=1000, ready=2000)))
         run(terminal.run("vim", timeouts=Timeouts(idle=1500)))
         self.assertEqual(
-            terminal.fake.calls[0][1][-5:], (1000, None, None, None, 2000)
+            terminal.fake.calls[0][1][-6:-1],
+            (1000, None, None, None, 2000),
         )
         self.assertEqual(
-            terminal.fake.calls[1][1][-5:], (None, 1500, None, None, None)
+            terminal.fake.calls[1][1][-6:-1],
+            (None, 1500, None, None, None),
         )
 
 
@@ -548,7 +747,10 @@ class LocatorTests(unittest.TestCase):
         terminal.fake.reply = [self._match(row=1)]
         match = run(items[1].location())
         self.assertEqual(match.start.row, 1)
-        query = terminal.fake.calls[-1][1][0]["nodes"]
+        name, args = terminal.fake.calls[-1]
+        self.assertEqual(name, "find_locator")
+        query = args[0]["nodes"]
+        self.assertTrue(args[1])
         self.assertEqual(query[-1]["occurrence"], "nth")
         self.assertEqual(query[-1]["nth"], 1)
 
@@ -606,7 +808,7 @@ class LocatorTests(unittest.TestCase):
         )
         name, args = terminal.fake.calls[-1]
         self.assertEqual(name, "click_locator")
-        self.assertEqual(args[0]["nodes"][args[0]["root"]]["occurrence"], "unique")
+        self.assertEqual(args[0]["nodes"][args[0]["root"]]["occurrence"], "any")
         self.assertEqual(args[1:], (29, 2, 50))
 
         run(locator.highlight())
@@ -688,57 +890,177 @@ class LocatorTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             TextStyle(link="test:link")
 
-    def test_location_diagnostic_failure_does_not_mask_no_match_error(self):
+    def test_location_rejects_an_invalid_native_match_count(self):
         terminal = _CapturingClient("s")
         terminal.fake.reply = []
-
-        def fail_text(*args):
-            terminal.fake.calls.append(("text", args))
-
-            async def complete():
-                raise InternalError("screen read failed")
-
-            return complete()
-
-        terminal.fake.text = fail_text
-        with self.assertRaises(ExpectationError) as raised:
+        with self.assertRaises(InternalError) as raised:
             run(terminal.get_by_text("missing").location())
-        self.assertIn("no match found", str(raised.exception))
-        self.assertIn(
-            "Terminal content unavailable: screen read failed",
-            str(raised.exception),
-        )
+        self.assertIn("invalid match count", str(raised.exception))
+        name, args = terminal.fake.calls[-1]
+        self.assertEqual(name, "find_locator")
+        self.assertIn("nodes", args[0])
+        self.assertTrue(args[1])
+
+
+class ContextManagerTests(unittest.TestCase):
+    def test_close_receives_the_final_outcome(self):
+        for failure in (None, RuntimeError("test failed"), asyncio.CancelledError()):
+            with self.subTest(failure=type(failure).__name__):
+                terminal = _CapturingClient("s")
+
+                async def body():
+                    async with terminal:
+                        if failure is not None:
+                            raise failure
+
+                async def scenario():
+                    if failure is None:
+                        await body()
+                    else:
+                        with self.assertRaises(type(failure)) as raised:
+                            await body()
+                        self.assertIs(raised.exception, failure)
+
+                run(scenario())
+                self.assertEqual(
+                    terminal.fake.calls, [("close", (failure is not None,))]
+                )
+
+    def test_cleanup_error_does_not_mask_body_failure_or_cancellation(self):
+        for failure in (RuntimeError("test failed"), asyncio.CancelledError()):
+            with self.subTest(failure=type(failure).__name__):
+                terminal = _CapturingClient("s")
+                terminal.fake.error = InternalError("trace export failed")
+
+                async def scenario():
+                    with self.assertRaises(type(failure)) as raised:
+                        async with terminal:
+                            raise failure
+                    self.assertIs(raised.exception, failure)
+
+                run(scenario())
+                self.assertEqual(terminal.fake.calls, [("close", (True,))])
+
+    def test_cleanup_error_is_reported_when_body_succeeds(self):
+        terminal = _CapturingClient("s")
+        terminal.fake.error = InternalError("trace export failed")
+
+        async def scenario():
+            async with terminal:
+                pass
+
+        with self.assertRaises(InternalError) as raised:
+            run(scenario())
+        self.assertIs(raised.exception, terminal.fake.error)
+        self.assertEqual(terminal.fake.calls, [("close", (False,))])
 
 
 class ArtifactCaptureTests(unittest.TestCase):
-    def test_text_mode_captures_terminal_text_only(self):
+    def test_bytes_artifact_directory_is_decoded_before_native_constructor(self):
+        class BytesPath:
+            def __fspath__(self):
+                return os.fsencode(os.path.join("relative", "artifacts-é"))
+
+        for directory in (BytesPath(), os.fspath(BytesPath())):
+            with self.subTest(directory=directory), mock.patch.object(
+                client.native, "NativeSession", wraps=client.native.NativeSession
+            ) as constructor:
+                terminal = client.TuiTest(
+                    "s", artifacts={"dir": directory, "on_failure": "text"}
+                )
+                self.assertEqual(
+                    constructor.call_args.args[2],
+                    os.path.abspath(os.path.join("relative", "artifacts-é")),
+                )
+                with self.assertRaisesRegex(UsageError, "cols"):
+                    run(terminal.open(cols=-1))
+
+    def test_artifact_options_are_absolute_and_passed_native(self):
+        native_session = mock.Mock()
+        with mock.patch.object(
+            client.native, "NativeSession", return_value=native_session
+        ) as constructor:
+            client.TuiTest(
+                "s",
+                artifacts={
+                    "dir": os.path.join("relative", "artifacts"),
+                    "on_failure": "all",
+                    "include_recording": True,
+                },
+            )
+        args = constructor.call_args.args
+        self.assertEqual(
+            args[2], os.path.abspath(os.path.join("relative", "artifacts"))
+        )
+        self.assertEqual(args[3], "all")
+        self.assertTrue(args[4])
+
+    def test_none_artifact_mode_does_not_require_directory(self):
+        with mock.patch.object(client.native, "NativeSession") as constructor:
+            client.TuiTest("s", artifacts={"on_failure": "none"})
+        self.assertIsNone(constructor.call_args.args[2])
+        self.assertEqual(constructor.call_args.args[3], "none")
+
+    def test_all_failure_artifact_modes_are_mapped(self):
+        for mode in ("all", "text"):
+            with self.subTest(mode=mode), mock.patch.object(
+                client.native, "NativeSession"
+            ) as constructor:
+                client.TuiTest(
+                    "s",
+                    artifacts={"dir": "artifacts", "on_failure": mode},
+                )
+            self.assertEqual(constructor.call_args.args[3], mode)
+
+    def test_invalid_artifact_modes_are_rejected_and_default_is_all(self):
+        with mock.patch.object(client.native, "NativeSession") as constructor:
+            client.TuiTest("s", artifacts={"dir": "artifacts"})
+        self.assertEqual(constructor.call_args.args[3], "all")
+        for mode in ("bundle", "svg", "json"):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "all, text, or none"):
+                client.TuiTest("s", artifacts={"dir": "artifacts", "on_failure": mode})
+
+    def test_native_artifact_references_are_not_recaptured_or_read(self):
         terminal = _CapturingClient(
-            "s", artifacts={"dir": "unused", "on_failure": "text"}
+            "s", artifacts={"dir": "unused", "on_failure": "all"}
         )
-        terminal.fake.error = ExpectationError(
-            "nope\n\nTerminal content:\n╭──╮\n╰──╯"
-        )
-        with self.assertRaises(ExpectationError) as raised:
-            run(terminal.get_by_text("x").wait())
-        artifact = raised.exception.terminal
-        self.assertIsInstance(artifact, TerminalArtifact)
-        self.assertIn("╭──╮", artifact.text)
-        self.assertIsNone(artifact.screenshot)
-
-    def test_capture_never_masks_original_error(self):
-        terminal = _CapturingClient(
-            "s", artifacts={"dir": "unused", "on_failure": "svg"}
-        )
-        terminal.fake.error = ExpectationError(
-            "nope\n\nTerminal content:\n╭──╮\n╰──╯"
-        )
-
-        async def boom(*args, **kwargs):
-            raise RuntimeError("screenshot exploded")
-
-        terminal.screenshot = boom
-        with self.assertRaises(ExpectationError):
-            run(terminal.get_by_text("x").wait())
+        native_error = client.native.NativeAssertionError("native message")
+        native_error._tui_test_error_json = json.dumps({
+            "kind": "assertion",
+            "message": "structured",
+            "details": {
+                "schema_version": 1,
+                "operation": "locator.wait",
+                "reason": "locator_no_match",
+                "summary": "missing",
+                "truncated": False,
+            },
+            "artifact": {
+                "status": "partial",
+                "directory": "core-artifacts",
+                "screen_text": "core-artifacts/current.txt",
+                "screen_svg": "core-artifacts/current.svg",
+                "errors": ["recording omitted"],
+            },
+        })
+        terminal.fake.error = native_error
+        terminal.screenshot = mock.AsyncMock(side_effect=AssertionError("unexpected capture"))
+        with mock.patch.object(
+            client, "open", create=True, side_effect=AssertionError("unexpected file read")
+        ) as open_file:
+            with self.assertRaises(ExpectationError) as raised:
+                run(terminal.get_by_text("x").wait())
+        error = raised.exception
+        self.assertEqual(error.message, "locator.wait: structured")
+        self.assertIs(error.__cause__, native_error)
+        self.assertEqual(error.details.reason, FailureReason.LOCATOR_NO_MATCH)
+        self.assertEqual(error.artifact.status, FailureArtifactStatus.PARTIAL)
+        self.assertEqual(error.artifact.screen_text, "core-artifacts/current.txt")
+        self.assertEqual(error.artifact.screen_svg, "core-artifacts/current.svg")
+        self.assertEqual(error.artifact.errors, ("recording omitted",))
+        self.assertFalse(hasattr(error, "terminal"))
+        terminal.screenshot.assert_not_awaited()
+        open_file.assert_not_called()
 
 
 class UniqueSessionTests(unittest.TestCase):

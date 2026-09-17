@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest import mock
 
-from tui_test import testing
+from tui_test import InternalError, TuiTest, testing
 from tui_test.types import Colors, Profile
 
 
@@ -87,6 +87,42 @@ class SafetyNetTests(unittest.TestCase):
         self.assertEqual(calls, ["_close_all_tracked_blocking"])
 
 
+class ContextManagerTests(unittest.TestCase):
+    def test_cleanup_preserves_outcome_and_always_untracks(self):
+        for failure in (None, RuntimeError("test failed"), asyncio.CancelledError()):
+            for cleanup_error in (None, InternalError("trace export failed")):
+                with self.subTest(
+                    failure=type(failure).__name__,
+                    cleanup_error=type(cleanup_error).__name__,
+                ):
+                    term = TuiTest.ephemeral()
+                    term.close = mock.AsyncMock(side_effect=cleanup_error)
+                    testing.track_terminal(term)
+
+                    async def body():
+                        async with testing.terminal() as actual:
+                            self.assertIs(actual, term)
+                            if failure is not None:
+                                raise failure
+
+                    expected_error = failure or cleanup_error
+
+                    async def scenario():
+                        if expected_error is None:
+                            await body()
+                        else:
+                            with self.assertRaises(type(expected_error)) as raised:
+                                await body()
+                            self.assertIs(raised.exception, expected_error)
+
+                    with mock.patch.object(
+                        testing, "create_terminal", mock.AsyncMock(return_value=term)
+                    ):
+                        run(scenario())
+                    term.close.assert_awaited_once_with(failed=failure is not None)
+                    self.assertEqual(testing.tracked_count(), 0)
+
+
 class DefaultsTests(unittest.TestCase):
     def tearDown(self):
         testing.reset_terminal_defaults()
@@ -144,6 +180,7 @@ class OptionPlumbingTests(unittest.TestCase):
         testing.set_terminal_defaults(
             cols=100,
             profile=profile,
+            screen_history_limit=17,
             artifacts={"dir": "from-defaults"},
         )
         with mock.patch.object(testing, "TuiTest", FakeTuiTest), \
@@ -151,6 +188,7 @@ class OptionPlumbingTests(unittest.TestCase):
             run(testing.create_terminal(cols=42))
         self.assertEqual(created[0].open_kwargs["cols"], 42)
         self.assertEqual(created[0].kwargs["profile"], profile)
+        self.assertEqual(created[0].kwargs["screen_history_limit"], 17)
         self.assertEqual(created[0].kwargs["artifacts"], {"dir": "from-defaults"})
 
     def test_unknown_create_option_is_rejected(self):

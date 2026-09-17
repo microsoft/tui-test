@@ -21,7 +21,7 @@ def resolve_session(session: Optional[str]) -> str:
 
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
 _BACKENDS = ("alacritty", "ghostty", "rio", "xtermjs")
-_RECORDING_MODES = ("disabled", "on-failure", "always")
+_TRACE_MODES = ("off", "on-failure", "on")
 _PROFILE_FIELDS = frozenset(("scrollback", "colors"))
 _COLOR_FIELDS = frozenset(
     (
@@ -119,18 +119,11 @@ def normalize_recording(recording: object) -> Optional[Dict[str, Any]]:
     if recording is None:
         return None
     raw = _object_mapping(recording, "recording")
-    unknown = sorted(set(raw) - {"mode", "directory"})
+    unknown = sorted(set(raw) - {"directory"})
     if unknown:
         raise ValueError(
             "unknown recording field {}".format(
                 ", ".join(repr(name) for name in unknown)
-            )
-        )
-    mode = raw.get("mode")
-    if mode is not None and mode not in _RECORDING_MODES:
-        raise ValueError(
-            "unknown recording mode {!r}; expected one of {}".format(
-                mode, ", ".join(_RECORDING_MODES)
             )
         )
     directory = raw.get("directory")
@@ -138,6 +131,21 @@ def normalize_recording(recording: object) -> Optional[Dict[str, Any]]:
         not isinstance(directory, str) or not directory
     ):
         raise TypeError("recording.directory must be a non-empty string")
+    return raw
+
+def normalize_trace(trace: object) -> Optional[Dict[str, Any]]:
+    if trace is None:
+        return None
+    raw = _object_mapping(trace, "trace")
+    unknown = sorted(set(raw) - {"mode", "directory"})
+    if unknown:
+        raise ValueError("unknown trace field {}".format(", ".join(unknown)))
+    mode = raw.get("mode")
+    if mode is not None and mode not in _TRACE_MODES:
+        raise ValueError("unknown trace mode {!r}; expected off, on-failure, or on".format(mode))
+    directory = raw.get("directory")
+    if directory is not None and (not isinstance(directory, str) or not directory):
+        raise TypeError("trace.directory must be a non-empty string")
     return raw
 
 
