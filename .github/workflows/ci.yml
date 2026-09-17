@@ -71,6 +71,14 @@ jobs:
       - name: Install Node dependencies
         run: npm ci --prefix bindings/js
 
+      - name: Install trace viewer development tools
+        run: npm ci --prefix trace-viewer
+
+      - name: Verify embedded trace viewer assets and types
+        run: |
+          npm run check --prefix trace-viewer
+          npm run test:unit --prefix trace-viewer
+
       - name: Test Node binding
         run: npm run test:node --prefix bindings/js
 

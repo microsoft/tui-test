@@ -95,7 +95,10 @@ Capture options: `background` and `transparent` (SVG, APNG, and GIF).
 
 Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`, `trace`, and `screenHistoryLimit`.
 
-
+Use `trace: { mode: "on" | "off" | "on-failure", directory: "traces" }`.
+Traces default to `off`; retained traces contain agent-readable Markdown/JSON,
+an asciicast, and standalone HTML. `recording: { directory: "casts" }` chooses
+the raw cast directory without enabling automatic recording.
 
 Failure artifact modes are `none`, `text`, `html`, and `all`. `text` writes JSON, terminal text, and Markdown; `html` writes a standalone viewer with embedded evidence; `all` adds the loose text/JSON/Markdown/SVG files and timeline JSON. Configured exports default to `all`; omitting `artifacts` disables them. `includeRecording: true` separately copies the automatic cast through the failure boundary.
 
@@ -131,13 +134,3 @@ Helpers: `createTerminal`, `withTerminal`, `closeAllTracked`, `setTerminalDefaul
 `TuiTestError.details` contains the structured operation, locator evaluation, style mismatches, process/runtime state, recent operations, and recent screens. `TuiTestError.artifact` identifies the committed bundle files. Terminal evidence and locator operands may be sensitive.
 
 Full API: [bindings/js/README.md](https://github.com/microsoft/tui-test/blob/main/bindings/js/README.md)
-
-### Diagnostic exports
-
-Errors expose structured diagnostic details, including locator stages and bounded
-screen history. Artifact export is opt-in. Configured exports default to `all`;
-`none` writes no files, `text` writes JSON and terminal text, and `all` adds SVG.
-Trace retention independently selects `off`, `on`, or `on-failure`. Final test
-outcomes control retained traces, including tests that catch multiple assertions.
-
-The `text` and `all` modes also include a Markdown diagnostic report.

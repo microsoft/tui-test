@@ -149,11 +149,12 @@ impl NativeSession {
                 .map(|mode| {
                     let mode = match mode.as_str() {
                         "all" => FailureArtifactMode::All,
+                        "html" => FailureArtifactMode::Html,
                         "text" => FailureArtifactMode::Text,
                         "none" => FailureArtifactMode::None,
                         other => {
                             let message = format!(
-                                "unknown failure artifact mode {other:?}; expected all, text, or none"
+                                "unknown failure artifact mode {other:?}; expected all, html, text, or none"
                             );
                             return Err(TuiTestError::usage(message));
                         }
