@@ -8,12 +8,13 @@
     "typecheck": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "dev": "node build.mjs --watch",
     "test:unit": "node --test test/model.test.mjs",
-    "test": "npm run check && npm run test:unit"
+    "test": "npm run check && npm run test:unit && playwright test"
   },
   "dependencies": {
     "svelte": "5.57.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "22.19.15",
     "esbuild": "0.28.2",
     "svelte-check": "4.7.6",
