@@ -1,5 +1,9 @@
 //! Reusable in-process terminal engine.
 
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
 use crate::api::{
     AutomaticRecording, AutomaticRecordingMode, Cell, CellColor, ClipboardPattern, Cursor,
     EffectiveTimeouts, ErrorKind, LocatorQuery, LocatorSelector, OpenOptions, OpenResult,
@@ -10,16 +14,19 @@ use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
 use crate::config::{self, POLL_DELAY_MS};
 use crate::diagnostics::strings::{
-    base_error_message, diagnostic_hints, diagnostic_operation_name, format_timeout,
-    locator_failure_message, operation_timeout, safe_operation_summary, timeout_message,
-    title_timeout_message_from_actual, truncate_diagnostic_value,
+    base_error_message, capture_error_message, diagnostic_hints, diagnostic_operation_name,
+    format_timeout, locator_failure_message, operation_timeout, safe_operation_summary,
+    timeout_message, title_timeout_message_from_actual, truncate_diagnostic_value,
+};
+use crate::diagnostics::{
+    allocate_artifact_directory, allocate_trace_directory, elapsed_ms, failure_reason,
+    recording_temp_path, write_failure_artifact, ArtifactInputs, CellMismatch, CellStyleEvaluation,
+    ExecutionContext, FailureArtifactRef, FailureArtifactStatus, FailureObservation, FailureReason,
+    FailureReport, InputDetails, LocatorFailureReason, OperationEvent, OperationExpectation,
+    OperationHistory, PreparedRecording, ProcessDiagnostics, RecordingDiagnostics, RecordingStatus,
+    RuntimeDiagnostics, TraceMode, TraceOptions, TraceOutcome, RECORDING_COPY_LIMIT,
 };
 use crate::diagnostics::{comparison_failure, merge_failure_details};
-use crate::diagnostics::{
-    elapsed_ms, failure_reason, CellMismatch, CellStyleEvaluation, FailureObservation,
-    FailureReason, FailureReport, InputDetails, LocatorFailureReason, OperationEvent,
-    OperationExpectation, OperationHistory, ProcessDiagnostics, RuntimeDiagnostics,
-};
 use crate::input::{keys, mouse};
 use crate::logger::Logger;
 use crate::session::{
@@ -31,9 +38,6 @@ use crate::terminal::emu::{
     ClipboardType, CursorShape, Emulator, KeyboardMode, MouseMode, TerminalMode,
 };
 use crate::terminal::locator::{self, Pattern};
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
 
 pub struct Engine {
     name: String,
@@ -45,6 +49,7 @@ pub struct Engine {
     logger: Arc<Logger>,
     default_recording_path: PathBuf,
     recording: Mutex<RecordingState>,
+    trace: Mutex<TraceState>,
     operation_history: Mutex<OperationHistory>,
 }
 
@@ -52,6 +57,8 @@ pub struct Engine {
 struct SpawnSpec {
     command: SpawnCommand,
     resolved_cwd: Option<PathBuf>,
+    retention: crate::diagnostics::DiagnosticRetentionOptions,
+    trace: Option<TraceOptions>,
 }
 
 #[derive(Clone)]
@@ -88,6 +95,30 @@ struct RecordingState {
     path: Option<PathBuf>,
     mode: AutomaticRecordingMode,
     failed: bool,
+}
+
+#[derive(Default)]
+struct TraceState {
+    options: TraceOptions,
+    artifact: Option<FailureArtifactRef>,
+    context: std::collections::BTreeMap<String, String>,
+    owned_directories: Vec<PathBuf>,
+    pending_startup_outcome: bool,
+}
+
+impl TraceState {
+    fn diagnostic_context(
+        &self,
+        context: &ExecutionContext,
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut diagnostic_context = self.context.clone();
+        diagnostic_context.extend(context.sanitized_context());
+        ExecutionContext {
+            diagnostic_context,
+            ..Default::default()
+        }
+        .sanitized_context()
+    }
 }
 
 #[derive(Clone)]
@@ -197,11 +228,26 @@ impl Engine {
                 mode: AutomaticRecordingMode::Disabled,
                 failed: false,
             }),
+            trace: Mutex::new(TraceState::default()),
             operation_history: Mutex::new(OperationHistory::new()),
         }
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
+        self.execute_with_context(operation, ExecutionContext::default())
+    }
+
+    pub fn execute_with_context(
+        &self,
+        operation: Operation,
+        context: ExecutionContext,
+    ) -> Result<OperationResult, TuiTestError> {
+        if let Some(artifact) = &context.artifact {
+            artifact.validate().map_err(TuiTestError::usage)?;
+        }
+        if let Some(trace) = &context.trace {
+            trace.validate().map_err(TuiTestError::usage)?;
+        }
         let _operation = self
             .operations
             .lock()
@@ -210,7 +256,10 @@ impl Engine {
             self.logger
                 .event(&format!("operation {}", operation_summary(&operation)));
         }
-        let name = diagnostic_operation_name(&operation).to_string();
+        let name = context
+            .operation_name
+            .clone()
+            .unwrap_or_else(|| diagnostic_operation_name(&operation).to_string());
         let screen_before = self.capture_current_screen_sequence(true, false);
         let canonical_name = diagnostic_operation_name(&operation);
         let is_assertion = canonical_name.starts_with("expect.")
@@ -243,7 +292,7 @@ impl Engine {
             );
         metadata.sequence = pending.sequence();
         let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute_inner(operation, &mut metadata)
+            self.execute_inner(operation, &context, &mut metadata)
         }))
         .unwrap_or_else(|payload| {
             Err(TuiTestError::internal(format!(
@@ -263,7 +312,15 @@ impl Engine {
         if let Err(error) = &mut result {
             self.prepare_failure_observation(error);
         }
-        let pin_checkpoint = is_assertion;
+        let pin_checkpoint = is_assertion
+            || (metadata.input.is_some()
+                && self
+                    .trace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .options
+                    .mode
+                    != TraceMode::Off);
         let screen_at_return = result
             .as_ref()
             .err()
@@ -297,7 +354,7 @@ impl Engine {
             );
         if let Err(error) = &mut result {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.finalize_failure(error, &metadata);
+                self.finalize_failure(error, &context, &metadata);
             }));
             error.observation = None;
             error.report = None;
@@ -308,17 +365,27 @@ impl Engine {
     fn execute_inner(
         &self,
         operation: Operation,
+        context: &ExecutionContext,
         metadata: &mut OperationMetadata,
     ) -> Result<OperationResult, TuiTestError> {
         match operation {
-            Operation::Open(options) => self.open(options, metadata).map(OperationResult::Open),
-            Operation::Run(options) => self.run(options, metadata).map(OperationResult::Open),
+            Operation::FinishTrace { failed } => {
+                self.finish_trace(context, Some(failed))?;
+                Ok(OperationResult::Unit)
+            }
+            Operation::Open(options) => self
+                .open(options, context, metadata)
+                .map(OperationResult::Open),
+            Operation::Run(options) => self
+                .run(options, context, metadata)
+                .map(OperationResult::Open),
             Operation::Restart {
                 graceful_timeout_ms,
             } => self
-                .restart(graceful_timeout_ms, metadata)
+                .restart(graceful_timeout_ms, context, metadata)
                 .map(OperationResult::Open),
             Operation::Close => {
+                let trace_result = self.finish_trace(context, None);
                 *self
                     .live
                     .lock()
@@ -336,6 +403,11 @@ impl Engine {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 self.cleanup_recording();
+                self.trace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .pending_startup_outcome = false;
+                trace_result?;
                 Ok(OperationResult::Unit)
             }
             Operation::Resize { cols, rows } => {
@@ -365,13 +437,17 @@ impl Engine {
     fn open(
         &self,
         options: OpenOptions,
+        context: &ExecutionContext,
         metadata: &OperationMetadata,
     ) -> Result<OpenResult, TuiTestError> {
         self.spawn(
             SpawnSpec {
                 command: SpawnCommand::Open(options),
                 resolved_cwd: None,
+                retention: context.retention,
+                trace: context.trace.clone(),
             },
+            context,
             metadata,
         )
     }
@@ -379,13 +455,17 @@ impl Engine {
     fn run(
         &self,
         options: RunOptions,
+        context: &ExecutionContext,
         metadata: &OperationMetadata,
     ) -> Result<OpenResult, TuiTestError> {
         self.spawn(
             SpawnSpec {
                 command: SpawnCommand::Run(options),
                 resolved_cwd: None,
+                retention: context.retention,
+                trace: context.trace.clone(),
             },
+            context,
             metadata,
         )
     }
@@ -393,6 +473,7 @@ impl Engine {
     fn restart(
         &self,
         graceful_timeout_ms: u64,
+        context: &ExecutionContext,
         metadata: &OperationMetadata,
     ) -> Result<OpenResult, TuiTestError> {
         let spec = self
@@ -421,14 +502,20 @@ impl Engine {
             }
         }
 
-        self.spawn(spec.restart(), metadata)
+        let mut context = context.clone();
+        if context.trace.is_none() {
+            context.trace = spec.trace.clone();
+        }
+        self.spawn(spec.restart(), &context, metadata)
     }
 
     fn spawn(
         &self,
         mut spec: SpawnSpec,
+        context: &ExecutionContext,
         metadata: &OperationMetadata,
     ) -> Result<OpenResult, TuiTestError> {
+        let diagnostics = spec.retention;
         let (
             shell,
             program,
@@ -441,7 +528,7 @@ impl Engine {
             wait_ready,
             restart,
             timeouts,
-            recording,
+            mut recording,
         ) = match &spec.command {
             SpawnCommand::Open(options) => (
                 options.shell,
@@ -478,6 +565,31 @@ impl Engine {
             }
         };
         recording.validate()?;
+        let mut trace_options = context.trace.clone().unwrap_or_default();
+        trace_options.directory =
+            std::path::absolute(&trace_options.directory).map_err(|error| {
+                TuiTestError::internal(format!("failed to resolve trace directory: {error}"))
+            })?;
+        spec.trace = context.trace.as_ref().map(|_| trace_options.clone());
+        if context.trace.is_some() {
+            recording.mode = match trace_options.mode {
+                TraceMode::Off => AutomaticRecordingMode::Disabled,
+                TraceMode::On => AutomaticRecordingMode::Always,
+                TraceMode::OnFailure => AutomaticRecordingMode::OnFailure,
+            };
+        } else if context
+            .artifact
+            .as_ref()
+            .is_some_and(|artifact| artifact.include_recording)
+            && recording.mode == AutomaticRecordingMode::Disabled
+        {
+            recording.mode = AutomaticRecordingMode::OnFailure;
+        }
+        match &mut spec.command {
+            SpawnCommand::Open(options) => options.recording = recording.clone(),
+            SpawnCommand::Run(options) => options.recording = recording.clone(),
+        }
+        diagnostics.validate().map_err(TuiTestError::usage)?;
         let mut current = self.lock_session();
         if let Some(previous) = current.as_ref() {
             if !restart && previous.is_alive()? {
@@ -508,6 +620,7 @@ impl Engine {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         if let Some(previous) = current.take() {
+            self.finish_trace_with_session(&previous, context, None)?;
             previous.kill();
             drop(previous);
         }
@@ -517,6 +630,16 @@ impl Engine {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .reset_session();
         self.discard_recording();
+        *self
+            .trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = TraceState {
+            options: trace_options,
+            artifact: None,
+            context: context.sanitized_context(),
+            owned_directories: Vec::new(),
+            pending_startup_outcome: false,
+        };
         *self
             .recording
             .lock()
@@ -535,7 +658,7 @@ impl Engine {
             Some(cwd),
             env,
             timeouts,
-            crate::diagnostics::DiagnosticRetentionOptions::default(),
+            diagnostics,
             self.logger.clone(),
             recording_path.clone(),
             recording_required,
@@ -569,7 +692,17 @@ impl Engine {
                 screen_before: 0,
                 ..metadata.clone()
             };
-            self.finalize_failure_with_session(&mut error, &metadata, Some(&session), true);
+            self.finalize_failure_with_session(
+                &mut error,
+                context,
+                &metadata,
+                Some(&session),
+                true,
+            );
+            self.trace
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending_startup_outcome = true;
             session.kill();
             return Err(error);
         }
@@ -665,7 +798,12 @@ impl Engine {
         }
     }
 
-    fn finalize_failure(&self, error: &mut TuiTestError, metadata: &OperationMetadata) {
+    fn finalize_failure(
+        &self,
+        error: &mut TuiTestError,
+        context: &ExecutionContext,
+        metadata: &OperationMetadata,
+    ) {
         if !matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal) {
             return;
         }
@@ -673,12 +811,13 @@ impl Engine {
             return;
         }
         let guard = self.lock_session();
-        self.finalize_failure_with_session(error, metadata, guard.as_ref(), false);
+        self.finalize_failure_with_session(error, context, metadata, guard.as_ref(), false);
     }
 
     fn finalize_failure_with_session(
         &self,
         error: &mut TuiTestError,
+        context: &ExecutionContext,
         metadata: &OperationMetadata,
         session: Option<&TerminalSession>,
         include_pending_operation: bool,
@@ -709,6 +848,36 @@ impl Engine {
         details.operation.failed_screen_sequence = observation
             .as_ref()
             .map_or(0, |value| value.screen_sequence);
+        if let Some(existing) = error.report.take() {
+            merge_failure_details(&mut details, *existing);
+        }
+        details.truncated |= details
+            .locator
+            .as_ref()
+            .is_some_and(|locator| locator.stages_truncated);
+        let trace = self
+            .trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .options
+            .clone();
+        let trace_artifact = (trace.mode != TraceMode::Off).then(|| trace.artifact_options());
+        if !context
+            .artifact
+            .iter()
+            .chain(trace_artifact.iter())
+            .any(|options| options.mode != crate::diagnostics::FailureArtifactMode::None)
+        {
+            let failure = details.failure_details();
+            error.message = failure.summary.clone();
+            error.details = Some(Box::new(failure));
+            return;
+        }
+        details.context = self
+            .trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .diagnostic_context(context);
         details.recent_operations = self
             .operation_history
             .lock()
@@ -725,13 +894,6 @@ impl Engine {
             );
         }
 
-        if let Some(existing) = error.report.take() {
-            merge_failure_details(&mut details, *existing);
-        }
-        details.truncated |= details
-            .locator
-            .as_ref()
-            .is_some_and(|locator| locator.stages_truncated);
         details.truncated |= details.recent_operations.iter().any(|event| {
             matches!(
                 event.expectation,
@@ -748,14 +910,397 @@ impl Engine {
                 session_name: Some(self.name.clone()),
                 ..observation.runtime.clone()
             });
+            details.recording = Some(self.recording_diagnostics(observation));
         }
         details.hints = diagnostic_hints(&details);
 
         details.finish_signature();
 
+        let mut exports_truncated = false;
+        for (is_trace, options) in [
+            (false, context.artifact.as_ref()),
+            (true, trace_artifact.as_ref()),
+        ] {
+            let (Some(options), Some(observation)) = (options, observation) else {
+                continue;
+            };
+            if options.mode != crate::diagnostics::FailureArtifactMode::None {
+                let mut export_details = details.clone();
+                export_details.outcome = is_trace.then_some(TraceOutcome::Failed);
+                let allocated = if is_trace {
+                    allocate_trace_directory(&options.directory)
+                } else {
+                    allocate_artifact_directory(&options.directory)
+                };
+                let mut owned_directory = None;
+                let artifact = match allocated {
+                    Ok(directory) => {
+                        if is_trace {
+                            owned_directory = Some(directory.clone());
+                        }
+                        let prepared_recording = if options.include_recording {
+                            session.and_then(|session| {
+                                self.prepare_recording_artifact(
+                                    session,
+                                    observation,
+                                    &directory,
+                                    &mut export_details,
+                                )
+                            })
+                        } else {
+                            None
+                        };
+                        write_failure_artifact(
+                            options,
+                            ArtifactInputs {
+                                details: &mut export_details,
+                                observation,
+                                recording: prepared_recording,
+                            },
+                            directory,
+                        )
+                    }
+                    Err(error) => FailureArtifactRef {
+                        status: FailureArtifactStatus::Failed,
+                        directory: options.directory.to_string_lossy().into_owned(),
+                        manifest: None,
+                        report: None,
+                        report_html: None,
+                        timeline: None,
+                        screen_text: None,
+                        screen_svg: None,
+                        recording: None,
+                        errors: vec![format!(
+                            "failed to allocate failure artifact directory: {error}"
+                        )],
+                    },
+                };
+                if is_trace {
+                    let mut trace = self
+                        .trace
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    trace.artifact = Some(artifact.clone());
+                    trace.owned_directories.extend(owned_directory);
+                }
+                exports_truncated |= export_details.truncated;
+                if is_trace && artifact.status != FailureArtifactStatus::Written {
+                    if let Some(primary) = error.artifact.as_mut() {
+                        if primary.status == FailureArtifactStatus::Written {
+                            primary.status = FailureArtifactStatus::Partial;
+                        }
+                        primary.errors.push(format!(
+                            "trace export was not fully written at {}",
+                            artifact.directory
+                        ));
+                        primary.errors.extend(
+                            artifact
+                                .errors
+                                .iter()
+                                .map(|message| format!("trace: {message}")),
+                        );
+                    }
+                }
+                if !is_trace || error.artifact.is_none() {
+                    error.artifact = Some(Box::new(artifact));
+                }
+            }
+        }
+        details.truncated |= exports_truncated;
         let failure = details.failure_details();
         error.message = failure.summary.clone();
         error.details = Some(Box::new(failure));
+    }
+
+    fn finish_trace(
+        &self,
+        context: &ExecutionContext,
+        failed: Option<bool>,
+    ) -> Result<(), TuiTestError> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let session = self.lock_session();
+            if let Some(session) = session.as_ref() {
+                self.finish_trace_with_session(session, context, failed)?;
+            } else {
+                self.finish_failed_startup_trace(failed)?;
+            }
+            Ok(())
+        }))
+        .unwrap_or_else(|payload| {
+            Err(TuiTestError::internal(format!(
+                "terminal trace finalization panicked: {}",
+                panic_message(payload.as_ref())
+            )))
+        })
+    }
+
+    fn finish_failed_startup_trace(&self, failed: Option<bool>) -> Result<(), TuiTestError> {
+        let Some(failed) = failed else {
+            return Ok(());
+        };
+        let mode = {
+            let trace = self
+                .trace
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !trace.pending_startup_outcome {
+                return Ok(());
+            }
+            trace.options.mode
+        };
+        if !failed && mode == TraceMode::OnFailure {
+            self.discard_trace_artifacts()?;
+        }
+        let mut recording = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !failed && recording.mode == AutomaticRecordingMode::OnFailure {
+            if let Some(path) = &recording.path {
+                match std::fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(TuiTestError::internal(format!(
+                            "failed to discard automatic recording {}: {error}",
+                            path.display()
+                        )));
+                    }
+                }
+            }
+        }
+        recording.failed = failed;
+        Ok(())
+    }
+
+    fn discard_trace_artifacts(&self) -> Result<(), TuiTestError> {
+        let mut trace = self
+            .trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while let Some(directory) = trace.owned_directories.last() {
+            std::fs::remove_dir_all(directory).map_err(|error| {
+                TuiTestError::internal(format!(
+                    "failed to discard superseded trace {}: {error}",
+                    directory.display()
+                ))
+            })?;
+            trace.owned_directories.pop();
+        }
+        trace.artifact = None;
+        Ok(())
+    }
+
+    fn finish_trace_with_session(
+        &self,
+        session: &TerminalSession,
+        context: &ExecutionContext,
+        failed: Option<bool>,
+    ) -> Result<(), TuiTestError> {
+        let previous_failed = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .failed;
+        if failed.is_some_and(|failed| failed != previous_failed) {
+            self.discard_trace_artifacts()?;
+        }
+        let failed = failed.unwrap_or(previous_failed);
+        self.recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .failed = failed;
+        let options = {
+            let trace = self
+                .trace
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if trace.options.mode == TraceMode::Off || trace.artifact.is_some() {
+                return Ok(());
+            }
+            trace.options.clone()
+        };
+        if options.mode == TraceMode::OnFailure && !failed {
+            return Ok(());
+        }
+        let observation = capture_failure_observation(session);
+        let mut details = FailureReport::new(
+            "test",
+            None,
+            if failed {
+                FailureReason::TestFailed
+            } else {
+                FailureReason::Completed
+            },
+            if failed {
+                "Test failed outside a terminal assertion."
+            } else {
+                "Session completed successfully."
+            },
+        );
+        details.outcome = Some(if failed {
+            TraceOutcome::Failed
+        } else {
+            TraceOutcome::Passed
+        });
+        details.operation.failed_screen_sequence = observation.screen_sequence;
+        details.operation.elapsed_ms = observation.captured_ms;
+        details.terminal = Some(observation.terminal());
+        details.runtime = Some(RuntimeDiagnostics {
+            session_name: Some(self.name.clone()),
+            ..observation.runtime.clone()
+        });
+        details.process = Some(observation.process.clone());
+        details.recording = Some(self.recording_diagnostics(&observation));
+        details.context = self
+            .trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .diagnostic_context(context);
+        details.recent_operations = self
+            .operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot();
+        details.truncated = details.recent_operations.iter().any(|event| {
+            matches!(
+                event.expectation,
+                Some(OperationExpectation::Unavailable { .. })
+            ) || event
+                .input
+                .as_ref()
+                .is_some_and(InputDetails::is_unavailable)
+        });
+        details.finish_signature();
+        let directory = allocate_trace_directory(&options.directory).map_err(|error| {
+            TuiTestError::internal(format!("failed to allocate trace directory: {error}"))
+        })?;
+        let recording =
+            self.prepare_recording_artifact(session, &observation, &directory, &mut details);
+        let artifact = write_failure_artifact(
+            &options.artifact_options(),
+            ArtifactInputs {
+                details: &mut details,
+                observation: &observation,
+                recording,
+            },
+            directory.clone(),
+        );
+        {
+            let mut trace = self
+                .trace
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            trace.artifact = Some(artifact.clone());
+            trace.owned_directories.push(directory);
+        }
+        if artifact.status != FailureArtifactStatus::Written {
+            let mut error = TuiTestError::internal(format!(
+                "trace could not be fully written at {}: {}",
+                artifact.directory,
+                if artifact.errors.is_empty() {
+                    "evidence was omitted; see the manifest for details".to_string()
+                } else {
+                    artifact.errors.join("; ")
+                }
+            ));
+            error.artifact = Some(Box::new(artifact));
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn prepare_recording_artifact(
+        &self,
+        session: &TerminalSession,
+        observation: &FailureObservation,
+        directory: &std::path::Path,
+        details: &mut FailureReport,
+    ) -> Option<PreparedRecording> {
+        if details
+            .recording
+            .as_ref()
+            .is_some_and(|recording| recording.status == RecordingStatus::Disabled)
+        {
+            return None;
+        }
+        let state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if details.outcome.is_none()
+            && (state.visual_revision != observation.output_revision
+                || state.screen_dirty
+                || state.screen_history.current_sequence() != observation.screen_sequence)
+        {
+            if let Some(recording) = details.recording.as_mut() {
+                recording.status = RecordingStatus::Omitted;
+                recording.reason = Some(
+                    "terminal output advanced after the pinned failure observation".to_string(),
+                );
+            }
+            return None;
+        }
+        let temporary_path = recording_temp_path(directory);
+        let result =
+            session.snapshot_automatic_recording(temporary_path.clone(), RECORDING_COPY_LIMIT);
+        drop(state);
+        match result {
+            Ok(snapshot) => {
+                if let Some(recording) = details.recording.as_mut() {
+                    recording.status = RecordingStatus::Live;
+                    recording.last_committed_ms = snapshot.last_committed_ms;
+                    recording.path = None;
+                    recording.bytes = Some(snapshot.bytes);
+                    recording.reason = None;
+                    recording.ephemeral = false;
+                }
+                Some(PreparedRecording {
+                    temporary_path,
+                    bytes: snapshot.bytes,
+                    sha256: snapshot.sha256,
+                })
+            }
+            Err(error) => {
+                let message = capture_error_message(&error);
+                if let Some(recording) = details.recording.as_mut() {
+                    recording.status = if message.contains("maximum byte limit") {
+                        RecordingStatus::Omitted
+                    } else {
+                        RecordingStatus::Failed
+                    };
+                    recording.reason = Some(message);
+                }
+                None
+            }
+        }
+    }
+
+    fn recording_diagnostics(&self, observation: &FailureObservation) -> RecordingDiagnostics {
+        let recording = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (status, reason) = match (&recording.mode, &recording.path) {
+            (AutomaticRecordingMode::Disabled, _) => {
+                (RecordingStatus::Disabled, Some("disabled".to_string()))
+            }
+            (_, Some(_)) => (RecordingStatus::Live, None),
+            _ => (
+                RecordingStatus::Unavailable,
+                Some("automatic recording could not be created".to_string()),
+            ),
+        };
+        RecordingDiagnostics {
+            mode: recording.mode,
+            status,
+            failure_offset_ms: observation.captured_ms,
+            last_committed_ms: None,
+            path: None,
+            bytes: None,
+            reason,
+            ephemeral: false,
+        }
     }
 
     pub fn status(&self) -> RuntimeStatus {
@@ -1013,6 +1558,12 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        if let Err(error) = self.finish_trace(
+            &ExecutionContext::default(),
+            std::thread::panicking().then_some(true),
+        ) {
+            eprintln!("failed to finish terminal trace: {error}");
+        }
         if let Ok(session) = self.session.get_mut() {
             if let Some(session) = session.take() {
                 session.kill();
@@ -1095,10 +1646,13 @@ fn capture_failure_observation_locked(
         rows: snapshot.rows,
         cols: snapshot.cols,
         title: snapshot.title,
+        cursor: snapshot.cursor,
         cursor_position: state.emu.cursor(),
         cursor_visible: state.emu.cursor_visible(),
         cursor_shape: state.emu.cursor_shape(),
+        render_state: snapshot.render_state,
         screen_sequence,
+        output_revision: state.visual_revision,
         captured_ms,
         last_visual_change_ms,
         history: state.screen_history.clone(),
@@ -1566,7 +2120,11 @@ fn dispatch(
             Ok(OperationResult::Unit)
         }
         Operation::StopRecording => Ok(OperationResult::Recording(session.stop_recording()?)),
-        Operation::Open(_) | Operation::Run(_) | Operation::Restart { .. } | Operation::Close => {
+        Operation::Open(_)
+        | Operation::Run(_)
+        | Operation::Restart { .. }
+        | Operation::Close
+        | Operation::FinishTrace { .. } => {
             Err(TuiTestError::internal("unsupported nested operation"))
         }
     }
@@ -3639,17 +4197,12 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::api::{
         AutomaticRecording, AutomaticRecordingMode, TextPosition, TextSpan, Timeouts,
     };
-
     use crate::profile::Profile;
-
     use crate::terminal::alacritty::AlacrittyEmu;
-
     use crate::terminal::cell::{NamedColor, UnderlineStyle};
-
     use crate::terminal::emu::Emulator;
 
     fn sleeping_program(wait_ready: bool) -> RunOptions {
@@ -3696,14 +4249,620 @@ mod tests {
         }
     }
 
+    fn trace_engine(name: &str, mode: TraceMode) -> (Engine, ExecutionContext, PathBuf) {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = Engine::new(
+            name.into(),
+            Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        );
+        let context = ExecutionContext {
+            trace: Some(TraceOptions {
+                mode,
+                directory: root.join("traces"),
+            }),
+            ..Default::default()
+        };
+        (engine, context, root)
+    }
+
+    struct PanickingTraceEmulator(AlacrittyEmu);
+
+    impl Emulator for PanickingTraceEmulator {
+        fn process(&mut self, bytes: &[u8]) {
+            self.0.process(bytes);
+        }
+        fn take_pending_writes(&mut self) -> Vec<u8> {
+            self.0.take_pending_writes()
+        }
+        fn mode(&self, mode: TerminalMode) -> bool {
+            self.0.mode(mode)
+        }
+        fn resize(&mut self, cols: u16, rows: u16) {
+            self.0.resize(cols, rows);
+        }
+        fn size(&self) -> (u16, u16) {
+            self.0.size()
+        }
+        fn cursor(&self) -> (u16, u16) {
+            self.0.cursor()
+        }
+        fn title(&self) -> Option<String> {
+            self.0.title()
+        }
+        fn cursor_shape(&self) -> CursorShape {
+            self.0.cursor_shape()
+        }
+        fn viewable_rows(&self) -> Vec<Vec<EmuCell>> {
+            panic!("injected trace capture failure")
+        }
+        fn full_rows(&self) -> Vec<Vec<EmuCell>> {
+            self.viewable_rows()
+        }
+        fn color(&self, slot: crate::profile::ColorSlot) -> crate::profile::Rgb {
+            self.0.color(slot)
+        }
+    }
+
+    #[test]
+    fn trace_capture_panics_do_not_skip_close_or_escape_drop() {
+        for close in [true, false] {
+            let (engine, context, root) = trace_engine("trace-panic", TraceMode::On);
+            engine
+                .execute_with_context(Operation::Run(sleeping_program(false)), context)
+                .unwrap();
+            {
+                let guard = engine.lock_session();
+                let session = guard.as_ref().unwrap();
+                let mut state = session.state.lock().unwrap();
+                state.emu = Box::new(PanickingTraceEmulator(AlacrittyEmu::new(
+                    80,
+                    24,
+                    &Profile::default(),
+                )));
+                state.screen_dirty = true;
+            }
+            let closed = if close {
+                let error = engine.execute(Operation::Close).unwrap_err();
+                assert_eq!(error.kind, ErrorKind::Internal);
+                assert!(error.message.contains("injected trace capture failure"));
+                Some(!engine.is_open())
+            } else {
+                None
+            };
+            let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(engine)));
+            std::fs::remove_dir_all(root).unwrap();
+            assert_ne!(
+                closed,
+                Some(false),
+                "trace capture must not prevent closing"
+            );
+            assert!(dropped.is_ok(), "trace capture must not panic during drop");
+        }
+    }
+
+    #[test]
+    fn trace_failure_preserves_startup_context_and_operation_overrides() {
+        let (engine, mut context, root) = trace_engine("trace-context", TraceMode::OnFailure);
+        context
+            .diagnostic_context
+            .insert("test".into(), "case".into());
+        context
+            .diagnostic_context
+            .insert("phase".into(), "startup".into());
+        engine
+            .execute_with_context(Operation::Run(sleeping_program(false)), context)
+            .unwrap();
+        let error = engine
+            .execute_with_context(
+                Operation::WaitLocator {
+                    query: LocatorQuery::text("missing trace marker"),
+                    not: false,
+                    timeout_ms: Some(0),
+                },
+                ExecutionContext {
+                    diagnostic_context: [("phase".into(), "assertion".into())].into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        let manifest: crate::diagnostics::FailureArtifactManifest = serde_json::from_slice(
+            &std::fs::read(error.artifact.unwrap().manifest.unwrap()).unwrap(),
+        )
+        .unwrap();
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            manifest.details.context.get("test").map(String::as_str),
+            Some("case")
+        );
+        assert_eq!(
+            manifest.details.context.get("phase").map(String::as_str),
+            Some("assertion")
+        );
+    }
+
+    #[test]
+    fn trace_context_merge_preserves_the_context_budget() {
+        let trace = TraceState {
+            context: (0..16)
+                .map(|index| (format!("session-{index}"), "startup".into()))
+                .collect(),
+            ..Default::default()
+        };
+        let context = ExecutionContext {
+            diagnostic_context: (0..16)
+                .map(|index| (format!("operation-{index}"), "x".repeat(512)))
+                .collect(),
+            ..Default::default()
+        };
+        let merged = trace.diagnostic_context(&context);
+        assert_eq!(merged.len(), 16);
+        assert!(merged.values().all(|value| value.len() <= 259));
+    }
+
+    #[test]
+    fn failed_startup_final_outcome_controls_on_failure_evidence() {
+        for failed in [false, true] {
+            let (engine, mut context, root) =
+                trace_engine("startup-retention", TraceMode::OnFailure);
+            context.artifact = Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.join("explicit-failures"),
+                mode: crate::diagnostics::FailureArtifactMode::Text,
+                include_recording: false,
+            });
+            let recording_directory = root.join("recordings");
+            let mut options = sleeping_program(true);
+            options.recording.directory = Some(recording_directory.clone());
+            let error = engine
+                .execute_with_context(Operation::Run(options), context)
+                .unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Assertion);
+            assert!(!engine.is_open());
+            assert!(error.observation.is_none());
+            let failure_manifest = error.artifact.unwrap().manifest.unwrap();
+            let failure_bytes = std::fs::read(&failure_manifest).unwrap();
+            let trace_artifact = engine.trace.lock().unwrap().artifact.clone().unwrap();
+            let trace_manifest = trace_artifact.manifest.unwrap();
+            let trace_bytes = std::fs::read(&trace_manifest).unwrap();
+            let trace_recording = trace_artifact.recording.unwrap();
+            let trace_recording_bytes = std::fs::read(&trace_recording).unwrap();
+            let recording_path = engine.recording_path().unwrap();
+            assert!(recording_path.starts_with(&recording_directory));
+            let recording_bytes = std::fs::read(&recording_path).unwrap();
+            let unrelated = recording_directory.join("keep.txt");
+            std::fs::write(&unrelated, "not owned by the engine").unwrap();
+
+            engine.execute(Operation::FinishTrace { failed }).unwrap();
+            engine.execute(Operation::FinishTrace { failed }).unwrap();
+            assert_eq!(std::path::Path::new(&trace_manifest).is_file(), failed);
+            assert_eq!(recording_path.is_file(), failed);
+            engine.execute(Operation::Close).unwrap();
+            engine.execute(Operation::Close).unwrap();
+            drop(engine);
+
+            assert_eq!(std::fs::read(&failure_manifest).unwrap(), failure_bytes);
+            assert_eq!(
+                std::fs::read_to_string(&unrelated).unwrap(),
+                "not owned by the engine"
+            );
+            if failed {
+                assert_eq!(std::fs::read(&trace_manifest).unwrap(), trace_bytes);
+                assert_eq!(
+                    std::fs::read(&trace_recording).unwrap(),
+                    trace_recording_bytes
+                );
+                assert_eq!(std::fs::read(&recording_path).unwrap(), recording_bytes);
+            } else {
+                assert!(!std::path::Path::new(&trace_manifest).exists());
+                assert!(!std::path::Path::new(&trace_recording).exists());
+                assert!(!recording_path.exists());
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_startup_outcomes_preserve_explicit_recording_policies() {
+        for mode in [
+            AutomaticRecordingMode::Disabled,
+            AutomaticRecordingMode::OnFailure,
+            AutomaticRecordingMode::Always,
+        ] {
+            for failed in [false, true] {
+                let (engine, _, root) = trace_engine("startup-recording", TraceMode::Off);
+                let path = root.join("automatic.cast");
+                let mut options = sleeping_program(true);
+                options.recording.mode = mode;
+                if mode == AutomaticRecordingMode::Disabled {
+                    std::fs::write(&path, "not owned by the engine").unwrap();
+                }
+                engine.execute(Operation::Run(options)).unwrap_err();
+                assert!(!engine.is_open());
+                let bytes = std::fs::read(&path).unwrap();
+                engine.execute(Operation::FinishTrace { failed }).unwrap();
+                engine.execute(Operation::Close).unwrap();
+                drop(engine);
+                if mode == AutomaticRecordingMode::OnFailure && !failed {
+                    assert!(!path.exists());
+                } else {
+                    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                }
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn failed_startup_recording_cleanup_errors_are_reported_and_retryable() {
+        let (engine, _, root) = trace_engine("startup-cleanup-error", TraceMode::Off);
+        let mut options = sleeping_program(true);
+        options.recording.mode = AutomaticRecordingMode::OnFailure;
+        engine.execute(Operation::Run(options)).unwrap_err();
+        let path = engine.recording_path().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+
+        let error = engine
+            .execute(Operation::FinishTrace { failed: false })
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Internal);
+        assert!(error
+            .message
+            .contains("failed to discard automatic recording"));
+        assert!(path.is_dir());
+        assert!(engine.recording.lock().unwrap().failed);
+
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        engine
+            .execute(Operation::FinishTrace { failed: false })
+            .unwrap();
+        assert!(!path.exists());
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_startup_retention_does_not_change_normal_close_contract() {
+        let (engine, context, root) = trace_engine("closed-retention", TraceMode::OnFailure);
+        engine
+            .execute_with_context(Operation::Run(sleeping_program(false)), context)
+            .unwrap();
+        let error = engine
+            .execute(Operation::WaitLocator {
+                query: LocatorQuery::text("missing trace marker"),
+                not: false,
+                timeout_ms: Some(0),
+            })
+            .unwrap_err();
+        engine.execute(Operation::Close).unwrap();
+        let trace_manifest = error.artifact.unwrap().manifest.unwrap();
+        let trace_bytes = std::fs::read(&trace_manifest).unwrap();
+        let recording_path = engine.recording_path().unwrap();
+        let recording_bytes = std::fs::read(&recording_path).unwrap();
+        engine
+            .execute(Operation::FinishTrace { failed: false })
+            .unwrap();
+        drop(engine);
+        assert_eq!(std::fs::read(&trace_manifest).unwrap(), trace_bytes);
+        assert_eq!(std::fs::read(&recording_path).unwrap(), recording_bytes);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn trace_retention_does_not_override_explicit_failure_exports() {
+        for (include_recording, shared_directory) in [(false, false), (true, false), (false, true)]
+        {
+            let (engine, context, root) = trace_engine("trace-exports", TraceMode::OnFailure);
+            let trace_directory = context.trace.as_ref().unwrap().directory.clone();
+            let failure_directory = if shared_directory {
+                trace_directory.clone()
+            } else {
+                root.join("failures")
+            };
+            engine
+                .execute_with_context(Operation::Run(sleeping_program(false)), context)
+                .unwrap();
+            let error = engine
+                .execute_with_context(
+                    Operation::WaitLocator {
+                        query: LocatorQuery::text("missing export marker"),
+                        not: false,
+                        timeout_ms: Some(0),
+                    },
+                    ExecutionContext {
+                        artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                            directory: failure_directory.clone(),
+                            mode: crate::diagnostics::FailureArtifactMode::Text,
+                            include_recording,
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .unwrap_err();
+            let artifact = error.artifact.unwrap();
+            let manifest_path = artifact.manifest.unwrap();
+            let manifest: crate::diagnostics::FailureArtifactManifest =
+                serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+            let trace_manifest = engine
+                .trace
+                .lock()
+                .unwrap()
+                .artifact
+                .as_ref()
+                .unwrap()
+                .manifest
+                .clone()
+                .unwrap();
+            assert_eq!(error.kind, ErrorKind::Assertion);
+            assert!(std::path::Path::new(&manifest_path).starts_with(&failure_directory));
+            assert!(std::path::Path::new(&manifest_path).ends_with("failure.json"));
+            assert!(manifest.details.outcome.is_none());
+            assert!(artifact.screen_text.is_some());
+            assert!(artifact.screen_svg.is_none());
+            assert_eq!(
+                manifest.files.iter().any(|file| file.kind == "recording"),
+                include_recording
+            );
+            assert!(std::path::Path::new(&trace_manifest).starts_with(&trace_directory));
+            assert!(std::path::Path::new(&trace_manifest).ends_with("trace.json"));
+            let trace_report: crate::diagnostics::FailureArtifactManifest =
+                serde_json::from_slice(&std::fs::read(&trace_manifest).unwrap()).unwrap();
+            assert_eq!(trace_report.details.outcome, Some(TraceOutcome::Failed));
+            assert!(trace_report
+                .files
+                .iter()
+                .any(|file| file.kind == "recording"));
+            if !include_recording {
+                assert!(manifest.details.recording.unwrap().path.is_none());
+            }
+            engine
+                .execute(Operation::FinishTrace { failed: false })
+                .unwrap();
+            engine.execute(Operation::Close).unwrap();
+            assert!(std::path::Path::new(&manifest_path).is_file());
+            assert!(!std::path::Path::new(&trace_manifest).exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn trace_and_explicit_failure_export_errors_are_independent() {
+        for fail_trace in [false, true] {
+            let (engine, context, root) = trace_engine("trace-export-errors", TraceMode::OnFailure);
+            let trace_directory = context.trace.as_ref().unwrap().directory.clone();
+            let failure_directory = root.join("failures");
+            std::fs::write(
+                if fail_trace {
+                    &trace_directory
+                } else {
+                    &failure_directory
+                },
+                "not a directory",
+            )
+            .unwrap();
+            engine
+                .execute_with_context(Operation::Run(sleeping_program(false)), context)
+                .unwrap();
+            let error = engine
+                .execute_with_context(
+                    Operation::WaitLocator {
+                        query: LocatorQuery::text("missing export marker"),
+                        not: false,
+                        timeout_ms: Some(0),
+                    },
+                    ExecutionContext {
+                        artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                            directory: failure_directory.clone(),
+                            mode: crate::diagnostics::FailureArtifactMode::Text,
+                            include_recording: false,
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .unwrap_err();
+            let artifact = error.artifact.unwrap();
+            let trace = engine.trace.lock().unwrap().artifact.clone().unwrap();
+            engine.execute(Operation::Close).unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(error.kind, ErrorKind::Assertion);
+            assert!(std::path::Path::new(&artifact.directory).starts_with(&failure_directory));
+            assert_eq!(artifact.manifest.is_some(), fail_trace);
+            assert_eq!(trace.manifest.is_some(), !fail_trace);
+            if fail_trace {
+                assert_eq!(artifact.status, FailureArtifactStatus::Partial);
+                assert!(artifact
+                    .errors
+                    .iter()
+                    .any(|error| error.contains("trace export")));
+            }
+            let failed_export = if fail_trace { trace } else { *artifact };
+            assert_eq!(failed_export.status, FailureArtifactStatus::Failed);
+            assert!(!failed_export.errors.is_empty());
+        }
+    }
+
+    #[test]
+    fn trace_final_outcome_still_controls_retention_after_caught_failures() {
+        for mode in [TraceMode::Off, TraceMode::On, TraceMode::OnFailure] {
+            for failed in [false, true] {
+                let (engine, context, root) = trace_engine("trace-retention", mode);
+                let directory = context.trace.as_ref().unwrap().directory.clone();
+                engine
+                    .execute_with_context(Operation::Run(sleeping_program(false)), context)
+                    .unwrap();
+                for _ in 0..2 {
+                    engine
+                        .execute(Operation::WaitLocator {
+                            query: LocatorQuery::text("missing trace marker"),
+                            not: false,
+                            timeout_ms: Some(0),
+                        })
+                        .unwrap_err();
+                }
+                engine.execute(Operation::FinishTrace { failed }).unwrap();
+                engine.execute(Operation::Close).unwrap();
+                engine.execute(Operation::Close).unwrap();
+                let bundles: Vec<_> = if directory.exists() {
+                    std::fs::read_dir(&directory)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let retained = mode == TraceMode::On || (mode == TraceMode::OnFailure && failed);
+                assert_eq!(
+                    bundles.len(),
+                    if retained {
+                        if failed {
+                            2
+                        } else {
+                            1
+                        }
+                    } else {
+                        0
+                    }
+                );
+                for bundle in bundles {
+                    let manifest: crate::diagnostics::FailureArtifactManifest =
+                        serde_json::from_slice(&std::fs::read(bundle.join("trace.json")).unwrap())
+                            .unwrap();
+                    assert_eq!(
+                        manifest.details.outcome,
+                        Some(if failed {
+                            TraceOutcome::Failed
+                        } else {
+                            TraceOutcome::Passed
+                        })
+                    );
+                }
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn failure_recording_boundary_does_not_limit_session_traces() {
+        let (engine, context, root) = trace_engine("trace-boundary", TraceMode::OnFailure);
+        engine
+            .execute_with_context(Operation::Run(sleeping_program(false)), context)
+            .unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let observation = capture_failure_observation(session);
+            {
+                let mut state = session.state.lock().unwrap();
+                state.emu.process(b"later output");
+                state.visual_revision += 1;
+                state.screen_dirty = true;
+                capture_visual_state(&mut state, true);
+            }
+            let mut details = FailureReport::new(
+                "locator.wait",
+                Some(0),
+                FailureReason::TimedOut,
+                "missing trace marker",
+            );
+            details.recording = Some(engine.recording_diagnostics(&observation));
+            let prepared =
+                engine.prepare_recording_artifact(session, &observation, &root, &mut details);
+            assert!(prepared.is_none());
+            assert_eq!(
+                details.recording.as_ref().unwrap().status,
+                RecordingStatus::Omitted
+            );
+            details.outcome = Some(TraceOutcome::Failed);
+            let prepared =
+                engine.prepare_recording_artifact(session, &observation, &root, &mut details);
+            let prepared = prepared.expect("a session trace can extend beyond its failure offset");
+            std::fs::remove_file(prepared.temporary_path).unwrap();
+        }
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn returned_failures_release_private_observations_including_failed_open() {
+        let root =
+            std::env::temp_dir().join(format!("tui-test-error-memory-{}", std::process::id()));
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Text,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let engine = Engine::new(
+            "error-memory".into(),
+            Arc::new(Logger::disabled()),
+            root.join("unused.cast"),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        populate_history(&engine);
+        let errors: Vec<_> = (0..3)
+            .map(|_| {
+                let error = engine
+                    .execute_with_context(
+                        Operation::WaitLocator {
+                            query: LocatorQuery::text("missing diagnostic marker"),
+                            not: false,
+                            timeout_ms: Some(0),
+                        },
+                        context.clone(),
+                    )
+                    .unwrap_err();
+                assert!(error.observation.is_none());
+                assert!(error.details.is_some());
+                assert!(error.report.is_none());
+                assert!(error.artifact.as_ref().unwrap().manifest.is_some());
+                error
+            })
+            .collect();
+        let (_, allocations) = crate::test_allocations::measure(|| errors.clone());
+        assert!(
+            allocations.peak < 1024 * 1024,
+            "error clone peak: {}",
+            allocations.peak
+        );
+        engine.execute(Operation::Close).unwrap();
+
+        let failed_open = engine
+            .execute_with_context(Operation::Run(sleeping_program(true)), context)
+            .unwrap_err();
+        assert!(failed_open.observation.is_none());
+        assert!(failed_open.artifact.is_some());
+        let details = failed_open.details.unwrap();
+        assert!(!details.summary.is_empty());
+        assert!(failed_open.report.is_none());
+        let report: crate::diagnostics::FailureArtifactManifest = serde_json::from_slice(
+            &std::fs::read(failed_open.artifact.unwrap().manifest.unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            report.details.operation.failed_screen_sequence,
+            report
+                .details
+                .recent_operations
+                .last()
+                .unwrap()
+                .screen_at_return
+        );
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn successful_snapshots_share_history_and_pin_the_compared_screen() {
         let root =
             std::env::temp_dir().join(format!("tui-test-snapshot-memory-{}", std::process::id()));
-        let directory = {
-            std::fs::create_dir_all(&root).unwrap();
-            root.clone()
-        };
+        let directory = allocate_artifact_directory(&root).unwrap();
         let engine = Engine::new(
             "snapshot-memory".into(),
             Arc::new(Logger::disabled()),
@@ -4660,10 +5819,17 @@ mod tests {
                     expectation: None,
                     input: None,
                 };
+                let context = ExecutionContext {
+                    artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                        directory: std::env::temp_dir().join("unused-history-lock"),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
                 barrier.wait();
                 for _ in 0..2000 {
                     let mut error = TuiTestError::internal("synthetic failure");
-                    engine.finalize_failure(&mut error, &metadata);
+                    engine.finalize_failure(&mut error, &context, &metadata);
                 }
             })
         };
@@ -4672,51 +5838,5 @@ mod tests {
             engine.execute(Operation::Close).unwrap();
         }
         reporter.join().unwrap();
-    }
-
-    #[test]
-    fn returned_failures_release_private_observations_including_failed_open() {
-        let root =
-            std::env::temp_dir().join(format!("tui-test-error-memory-{}", std::process::id()));
-        let engine = Engine::new(
-            "error-memory".into(),
-            Arc::new(Logger::disabled()),
-            root.join("unused.cast"),
-        );
-        engine
-            .execute(Operation::Run(sleeping_program(false)))
-            .unwrap();
-        populate_history(&engine);
-        let errors: Vec<_> = (0..3)
-            .map(|_| {
-                let error = engine
-                    .execute(Operation::WaitLocator {
-                        query: LocatorQuery::text("missing diagnostic marker"),
-                        not: false,
-                        timeout_ms: Some(0),
-                    })
-                    .unwrap_err();
-                assert!(error.observation.is_none());
-                assert!(error.details.is_some());
-                assert!(error.report.is_none());
-                assert!(error.artifact.is_none());
-                error
-            })
-            .collect();
-        let (_, allocations) = crate::test_allocations::measure(|| errors.clone());
-        assert!(
-            allocations.peak < 1024 * 1024,
-            "error clone peak: {}",
-            allocations.peak
-        );
-        engine.execute(Operation::Close).unwrap();
-        let failed_open = engine
-            .execute(Operation::Run(sleeping_program(true)))
-            .unwrap_err();
-        assert!(failed_open.observation.is_none());
-        assert!(failed_open.details.is_some());
-        assert!(failed_open.report.is_none());
-        assert!(failed_open.artifact.is_none());
-        engine.execute(Operation::Close).unwrap();
     }
 }
