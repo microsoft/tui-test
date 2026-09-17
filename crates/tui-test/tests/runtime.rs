@@ -101,7 +101,13 @@ fn trace_retention_writes_complete_bundles_only_for_selected_outcomes() {
                     .collect();
                 assert_eq!(bundles.len(), 1);
                 let bundle = &bundles[0];
-                for name in ["trace.json", "trace.md", "session.cast"] {
+                for name in [
+                    "trace.json",
+                    "trace.md",
+                    "trace.html",
+                    "session.cast",
+                    "timeline.json",
+                ] {
                     assert!(bundle.join(name).is_file(), "missing {name}: {bundle:?}");
                 }
                 let manifest: serde_json::Value =
@@ -902,6 +908,29 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
     assert!(report.contains("## Locator evaluation"));
     assert!(report.contains("## Terminal state"));
     assert!(report.contains("<code>inspect&#95;locator&#95;stage</code>"));
+    let html = std::fs::read_to_string(artifact.report_html.as_ref().unwrap()).unwrap();
+    assert!(html.contains("<div id=\"workbench\"></div>"));
+    assert!(!html.contains("/* REPORT_JS */"));
+    assert!(!html.contains("/* REPORT_CSS */"));
+    let embedded: serde_json::Value = serde_json::from_str(
+        html.split_once("<script id=\"report-data\" type=\"application/json\">")
+            .unwrap()
+            .1
+            .split_once("</script>")
+            .unwrap()
+            .0,
+    )
+    .unwrap();
+    assert_eq!(embedded["details"]["operation"]["name"], "locator.wait");
+    let timeline: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(artifact.timeline.as_ref().unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(embedded["timeline"], timeline);
+    assert_eq!(
+        timeline["failure_screen_sequence"],
+        details.operation.failed_screen_sequence
+    );
+    let frames = timeline["frames"].as_array().unwrap();
     let checkpoint = details
         .recent_operations
         .iter()
@@ -916,6 +945,19 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
     assert_eq!(*outcome, tui_test::LocatorExpectation::Visible);
     assert!(report.contains("## Retained expectations"));
     assert_eq!(manifest["sensitivity"]["contains_assertion_operands"], true);
+    assert!(frames
+        .iter()
+        .any(|frame| frame["sequence"] == checkpoint.screen_at_return));
+    let failure = frames
+        .iter()
+        .find(|frame| frame["sequence"] == details.operation.failed_screen_sequence)
+        .unwrap();
+    assert_eq!(
+        failure["svg"],
+        std::fs::read_to_string(artifact.screen_svg.as_ref().unwrap()).unwrap()
+    );
+    assert_eq!(failure["size"]["cols"], 81);
+    assert_eq!(failure["grid"].as_array().unwrap().len(), 31);
     for file in manifest["files"].as_array().unwrap() {
         use sha2::Digest;
         assert_eq!(file["status"], "written");

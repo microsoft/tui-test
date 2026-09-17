@@ -923,6 +923,7 @@ test("withTerminal retains traces according to the final test outcome", async ()
         const manifest = JSON.parse(await readFile(join(bundle, "trace.json"), "utf8"));
         assert.equal(manifest.outcome, failed ? "failed" : "passed");
         assert.match(await readFile(join(bundle, "session.cast"), "utf8"), /"version":2/);
+        assert.ok(existsSync(join(bundle, "trace.html")));
         assert.ok(existsSync(join(bundle, "trace.md")));
       }
     }

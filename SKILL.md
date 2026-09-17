@@ -105,7 +105,9 @@ Do not use a fixed sleep when a wait can describe the state.
 
 ## Capture output
 
-Use `screenshot` for text, SVG, or PNG. SVG, PNG, APNG, and GIF support `--background COLOR` and `--transparent`. MP4 supports `--background` only. Use `record` for APNG, GIF, MP4, or asciinema. Use recording mode `on-failure` for test artifacts.
+Use `screenshot` for text, SVG, or PNG. SVG, PNG, APNG, and GIF support `--background COLOR` and `--transparent`. MP4 supports `--background` only. Use `record` for APNG, GIF, MP4, or asciinema. Configure `[trace]` with `mode = "on-failure"` and a `directory` for test artifacts, including agent-readable Markdown/JSON, an asciicast, and standalone HTML. Trace modes are `off` (default), `on`, and `on-failure`; `[recording]` only accepts `directory`.
+
+For a failed assertion that must be understood offline, add `--failure-artifacts <dir>`. Agents should read `failure.md` first, then `failure.json` for exact locator/process evidence and `timeline.json` for retained per-cell frame metadata. Users can open `failure.html` directly from disk to navigate assertion checkpoints, step frames, and inspect clicked cells. Missing history is explicit; sampled frames are not a complete recording. Add `--failure-artifact-recording` for a continuous cast only when terminal output is safe to retain; diagnostic bundles can contain sensitive terminal text, titles, and locator operands.
 
 ## References
 
