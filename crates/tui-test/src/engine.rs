@@ -2150,6 +2150,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
         cwd: state.tracker.cwd().map(str::to_string),
         last_command: state.tracker.last_command().map(str::to_string),
         last_exit: state.tracker.last_exit(),
+        exit_signal: state.exit_signal.clone(),
         exited: state.exited,
         ready: state.tracker.is_ready(),
         bell_count: bells.count,

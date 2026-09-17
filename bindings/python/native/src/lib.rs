@@ -2177,6 +2177,7 @@ fn state_to_py(py: Python<'_>, value: State) -> PyResult<Py<PyAny>> {
     result.set_item("cwd", value.cwd)?;
     result.set_item("last_command", value.last_command)?;
     result.set_item("last_exit", value.last_exit)?;
+    result.set_item("exit_signal", value.exit_signal)?;
     result.set_item("exited", value.exited)?;
     result.set_item("ready", value.ready)?;
     result.set_item("bell_count", value.bell_count)?;

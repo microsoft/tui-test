@@ -1029,6 +1029,8 @@ pub struct State {
     pub cwd: Option<String>,
     pub last_command: Option<String>,
     pub last_exit: Option<i32>,
+    /// Signal reported when the process was terminated by one.
+    pub exit_signal: Option<String>,
     pub exited: Option<i32>,
     pub ready: bool,
     pub bell_count: u64,

@@ -58,6 +58,7 @@ pub struct TermState {
     pub last_change: Instant,
     pub awaiting_start: Option<u64>,
     pub exited: Option<i32>,
+    pub exit_signal: Option<String>,
     pub exit_error: Option<String>,
     pub highlight: Option<TextHighlight>,
 }
@@ -124,6 +125,7 @@ impl Session {
             last_change: Instant::now(),
             awaiting_start: None,
             exited: None,
+            exit_signal: None,
             exit_error: None,
             highlight: None,
         };
@@ -237,12 +239,16 @@ impl Session {
                 pty.try_wait()
             };
             match status {
-                Ok(Some(code)) => {
-                    watcher_logger.event(&format!("process exited code={code}"));
+                Ok(Some(status)) => {
+                    watcher_logger.event(&format!(
+                        "process exited code={} signal={:?}",
+                        status.code, status.signal
+                    ));
                     let mut st = watcher_state
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    st.exited = Some(code);
+                    st.exited = Some(status.code);
+                    st.exit_signal = status.signal;
                     st.last_change = Instant::now();
                     break;
                 }
@@ -537,7 +543,7 @@ impl Session {
                     "failed to query process status: {error}"
                 ))
             })?;
-        let Some(exit_code) = exit_code else {
+        let Some(status) = exit_code else {
             return Ok(true);
         };
 
@@ -545,7 +551,10 @@ impl Session {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.exited.get_or_insert(exit_code);
+        state.exited.get_or_insert(status.code);
+        if state.exit_signal.is_none() {
+            state.exit_signal = status.signal;
+        }
         Ok(false)
     }
 
@@ -810,6 +819,7 @@ mod tests {
             last_change: Instant::now(),
             awaiting_start: None,
             exited: None,
+            exit_signal: None,
             exit_error: None,
             highlight: None,
         }));
