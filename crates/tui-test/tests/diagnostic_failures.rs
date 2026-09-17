@@ -156,3 +156,41 @@ fn snapshot_errors_show_the_differing_actual_row_without_artifacts() {
     assert!(comparison.expected.unwrap().contains("WANTED_ROW_25"));
     assert!(comparison.actual.unwrap().contains("ACTUAL_ROW_25"));
 }
+
+#[test]
+fn ambiguous_locations_retain_candidate_positions_in_public_errors() {
+    let session = Session::new(format!("ambiguity-diagnostic-{}", std::process::id()));
+    let options = if cfg!(windows) {
+        run_options(
+            "powershell.exe",
+            &[
+                "-NoProfile",
+                "-Command",
+                "$e=[char]27; while ($true) { [Console]::Write($e.ToString()+'[H'+ 'DUPLICATE DUPLICATE'); Start-Sleep -Milliseconds 100 }",
+            ],
+        )
+    } else {
+        run_options("sh", &["-c", "printf 'DUPLICATE DUPLICATE'; sleep 30"])
+    };
+    session.run(options).unwrap();
+    session
+        .get_by_text("DUPLICATE")
+        .wait_with_timeout(Some(15_000))
+        .unwrap();
+    let error = session
+        .execute(Operation::ResolveLocator {
+            query: tui_test::LocatorQuery::text("DUPLICATE"),
+        })
+        .unwrap_err();
+    session.close().unwrap();
+    let details = error.details.unwrap();
+    assert_eq!(details.reason, FailureReason::LocatorAmbiguous);
+    let locator = details.locator.unwrap();
+    assert_eq!(
+        locator.reason,
+        Some(tui_test::LocatorFailureReason::Ambiguous)
+    );
+    assert_eq!(locator.locations.len(), 2);
+    assert_eq!(locator.locations[0].column, 0);
+    assert_eq!(locator.locations[1].column, 10);
+}

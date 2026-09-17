@@ -1,0 +1,642 @@
+use super::*;
+use crate::diagnostics::{
+    CellMismatch, LocatorStageDiagnostics, LocatorStageMode, OccurrenceSource,
+};
+
+const MAX_STAGES: usize = 128;
+const MAX_SAMPLE: usize = 64;
+const MAX_STAGE_BYTES: usize = 8 * 1024;
+
+fn bound_stage(stage: &mut LocatorStageDiagnostics) -> bool {
+    let mut truncated = false;
+    while serde_json::to_vec(stage)
+        .expect("diagnostic stage contains only serializable values")
+        .len()
+        > MAX_STAGE_BYTES
+    {
+        truncated = true;
+        if !stage.candidates.is_empty() {
+            stage.candidates.pop();
+            stage.candidates_truncated = true;
+        } else if !stage.mismatches.is_empty() {
+            stage.mismatches.pop();
+            stage.mismatches_truncated = true;
+        } else {
+            stage.selector = None;
+            break;
+        }
+    }
+    truncated
+}
+
+#[derive(Default)]
+pub(super) struct Trace {
+    pub enabled: bool,
+    pub stages: Vec<LocatorStageDiagnostics>,
+    pub truncated: bool,
+}
+
+#[derive(Default)]
+pub(super) struct NodeStats {
+    pub input: usize,
+    pub raw: usize,
+    pub styled: usize,
+    pub capture_candidates: bool,
+    pub candidate_count: usize,
+    pub candidates: Vec<TextMatch>,
+    pub selected_count: usize,
+    pub mismatches: Vec<CellMismatch>,
+    pub mismatches_truncated: bool,
+    pub mismatch_limit: usize,
+    pub reason: Option<LocatorFailureReason>,
+}
+
+impl NodeStats {
+    pub fn samples_ambiguity(&self, occurrence: &MatchOccurrence, count: usize) -> bool {
+        self.capture_candidates && *occurrence == MatchOccurrence::Unique && count > 1
+    }
+
+    pub fn sample_ambiguous_ranges(
+        &mut self,
+        rows: &[Vec<EmuCell>],
+        flat: &FlatGrid,
+        ranges: &[(usize, usize)],
+        occurrence: &MatchOccurrence,
+    ) {
+        if self.samples_ambiguity(occurrence, ranges.len()) {
+            self.candidate_count = ranges.len();
+            self.candidates = sample_values(
+                ranges
+                    .iter()
+                    .filter_map(|range| materialize(rows, flat, *range))
+                    .map(|matched| matched.value),
+            );
+        }
+    }
+
+    pub fn mismatch_budget(&self) -> usize {
+        self.mismatch_limit.saturating_sub(self.mismatches.len())
+    }
+
+    pub fn mismatch(&mut self, mut mismatch: CellMismatch) {
+        for value in [
+            &mut mismatch.grapheme,
+            &mut mismatch.expected,
+            &mut mismatch.actual,
+        ] {
+            self.mismatches_truncated |= truncate(value);
+        }
+        if self.mismatch_budget() > 0 {
+            self.mismatches.push(mismatch);
+        } else {
+            self.mismatches_truncated = true;
+        }
+    }
+}
+
+impl Trace {
+    pub fn mismatch_budget(&self, path: &str) -> usize {
+        if !self.enabled {
+            return 0;
+        }
+        self.stages
+            .iter()
+            .find(|stage| stage.expression_path == path)
+            .map_or(MAX_SAMPLE, |stage| {
+                if stage.mismatches_truncated {
+                    0
+                } else {
+                    MAX_SAMPLE.saturating_sub(stage.mismatches.len())
+                }
+            })
+    }
+
+    pub fn record(
+        &mut self,
+        query: &LocatorQuery,
+        path: &str,
+        require_one: bool,
+        stats: NodeStats,
+    ) -> Option<usize> {
+        if !self.enabled {
+            return None;
+        }
+        if let Some(stage) = self
+            .stages
+            .iter_mut()
+            .find(|stage| stage.expression_path == path)
+        {
+            stage.evaluations += 1;
+            stage.input_candidate_count = stage.input_candidate_count.saturating_add(stats.input);
+            stage.raw_candidate_count = stage.raw_candidate_count.saturating_add(stats.raw);
+            stage.style_candidate_count = stage.style_candidate_count.saturating_add(stats.styled);
+            stage.selected_count = stage.selected_count.saturating_add(stats.selected_count);
+            stage.failure_reason = stats.reason;
+            stage.candidates.extend(stats.candidates);
+            stage.mismatches.extend(stats.mismatches);
+            stage.mismatches_truncated |= stats.mismatches_truncated;
+            stage.candidates_truncated |= stats.candidate_count > MAX_SAMPLE;
+            stage.truncate();
+            self.truncated |= bound_stage(stage);
+            return Some(stage.stage_index);
+        }
+        if self.stages.len() == MAX_STAGES {
+            self.truncated = true;
+            return None;
+        }
+        let index = self.stages.len();
+        let parent_filter = query.within.is_some() && query.direction == LocatorDirection::Within;
+        let mode = match &query.selector {
+            LocatorSelector::Text(_) => LocatorStageMode::Text,
+            LocatorSelector::Style(_) if parent_filter => LocatorStageMode::ParentStyleFilter,
+            LocatorSelector::Style(_) => LocatorStageMode::ContiguousStyleRuns,
+            LocatorSelector::Link(_) if parent_filter => LocatorStageMode::ParentLinkFilter,
+            LocatorSelector::Link(_) => LocatorStageMode::ContiguousLinkRuns,
+            LocatorSelector::And { .. } => LocatorStageMode::Intersection,
+            LocatorSelector::Or { .. } => LocatorStageMode::Union,
+            LocatorSelector::Filter { .. } => LocatorStageMode::ContainmentFilter,
+        };
+        // Branch structure is identified by paths, not repeated subtrees in every stage.
+        let selector = if query.selector.children().is_empty() {
+            let mut selector = query.selector.clone();
+            match &mut selector {
+                LocatorSelector::Text(text) => {
+                    self.truncated |= truncate(&mut text.text);
+                    for anchor in [&mut text.scope.after, &mut text.scope.before]
+                        .into_iter()
+                        .flatten()
+                    {
+                        self.truncated |= truncate(&mut anchor.text);
+                    }
+                }
+                LocatorSelector::Link(link) => {
+                    self.truncated |= truncate(&mut link.uri);
+                }
+                LocatorSelector::Style(selector) => {
+                    for value in [
+                        &mut selector.style.foreground,
+                        &mut selector.style.background,
+                        &mut selector.style.underline_color,
+                        &mut selector.style.underline_style,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        self.truncated |= truncate(value);
+                    }
+                }
+                _ => {}
+            }
+            Some(selector)
+        } else {
+            None
+        };
+        let default = require_one && query.occurrence == MatchOccurrence::Any;
+        let mut stage = LocatorStageDiagnostics {
+            stage_index: index,
+            expression_path: path.into(),
+            evaluations: 1,
+            failure_reason: stats.reason,
+            mode,
+            selector,
+            direction: query.direction,
+            requested_occurrence: query.occurrence.clone(),
+            effective_occurrence: if default {
+                MatchOccurrence::Unique
+            } else {
+                query.occurrence.clone()
+            },
+            occurrence_source: if default {
+                OccurrenceSource::ActionDefault
+            } else {
+                OccurrenceSource::Explicit
+            },
+            input_candidate_count: stats.input,
+            raw_candidate_count: stats.raw,
+            style_candidate_count: stats.styled,
+            selected_count: stats.selected_count,
+            candidates_truncated: stats.candidate_count > MAX_SAMPLE,
+            candidates: stats.candidates,
+            mismatches: stats.mismatches,
+            mismatches_truncated: stats.mismatches_truncated,
+        };
+        stage.truncate();
+        self.truncated |= bound_stage(&mut stage);
+        self.stages.push(stage);
+        Some(index)
+    }
+}
+
+pub(super) fn sample(matches: &[LocatedMatch]) -> Vec<TextMatch> {
+    sample_values(matches.iter().map(|matched| matched.value.clone()))
+}
+
+fn sample_values(values: impl Iterator<Item = TextMatch>) -> Vec<TextMatch> {
+    values
+        .take(MAX_SAMPLE)
+        .map(|mut value| {
+            truncate(&mut value.text);
+            value.spans.truncate(256);
+            value
+        })
+        .collect()
+}
+
+pub(super) fn truncate(value: &mut String) -> bool {
+    if value.len() <= 4096 {
+        return false;
+    }
+    let mut end = 4096;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    value.push_str("...");
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profile::Profile;
+    use crate::terminal::{alacritty::AlacrittyEmu, cell::Attrs, emu::Emulator};
+
+    fn rows() -> Vec<Vec<EmuCell>> {
+        let mut emu = AlacrittyEmu::new(8, 2, &Profile::default());
+        emu.process(b"\x1b[1mA\x1b]8;;test:docs\x07B\x1b[22mC\x1b]8;;\x07");
+        emu.viewable_rows()
+    }
+
+    fn evaluate(rows: &[Vec<EmuCell>], query: &LocatorQuery) -> LocatorEvaluation {
+        let style = |cell: &EmuCell, style: &TextStyle| {
+            style.bold.is_none_or(|bold| bold == cell.has(Attrs::BOLD))
+        };
+        let traced = evaluate_query(rows, query, false, &mut |cell, expected, _, _, _| {
+            CellStyleEvaluation {
+                matched: style(cell, expected),
+                mismatches: Vec::new(),
+                mismatches_truncated: false,
+            }
+        })
+        .unwrap();
+        let plain = locate_query(rows, query, &mut |cell, expected| style(cell, expected));
+        match plain {
+            Ok(plain) => assert_eq!(
+                plain.iter().map(|m| &m.value).collect::<Vec<_>>(),
+                traced.matches.iter().map(|m| &m.value).collect::<Vec<_>>()
+            ),
+            Err(error) => assert_eq!(
+                traced.diagnostics.evaluation_error.as_deref(),
+                Some(error.to_string().as_str())
+            ),
+        }
+        traced
+    }
+
+    fn stage<'a>(evaluation: &'a LocatorEvaluation, path: &str) -> &'a LocatorStageDiagnostics {
+        evaluation
+            .diagnostics
+            .stages
+            .iter()
+            .find(|stage| stage.expression_path == path)
+            .unwrap()
+    }
+
+    #[test]
+    fn composed_cell_sets_and_whole_match_refinement_have_distinct_evidence() {
+        let rows = rows();
+        let bold = LocatorQuery::style(TextStyle {
+            bold: Some(true),
+            ..TextStyle::default()
+        });
+        let linked = LocatorQuery::link("test:docs");
+        let intersection = evaluate(&rows, &bold.clone().and(linked.clone()));
+        assert_eq!(intersection.matches[0].value.text, "B");
+        assert_eq!(
+            stage(&intersection, "root").mode,
+            LocatorStageMode::Intersection
+        );
+        assert_eq!(stage(&intersection, "root.left").selected_count, 1);
+        let union = evaluate(&rows, &bold.clone().or(linked.clone()));
+        assert_eq!(union.matches[0].value.text, "ABC");
+        let mut whole_link = linked.clone();
+        whole_link.within = Some(Box::new(bold.clone()));
+        let rejected = evaluate(&rows, &whole_link);
+        assert_eq!(
+            rejected.diagnostics.failure_reason,
+            Some(LocatorFailureReason::LinkFilterRemovedAll)
+        );
+        let root = stage(&rejected, "root");
+        assert_eq!(root.mode, LocatorStageMode::ParentLinkFilter);
+        assert_eq!(root.mismatches[0].location.column, 0);
+        assert_eq!(root.mismatches[0].property, "link");
+        assert_eq!(root.mismatches[0].expected, "test:docs");
+        let contained = evaluate(&rows, &bold.filter(Some(linked), None));
+        assert_eq!(contained.matches[0].value.text, "AB");
+        assert_eq!(
+            stage(&contained, "root").mode,
+            LocatorStageMode::ContainmentFilter
+        );
+        assert_eq!(stage(&contained, "root.has").selected_count, 1);
+    }
+
+    #[test]
+    fn successful_union_and_negative_filters_do_not_inherit_soft_branch_failures() {
+        let rows = rows();
+        let query = LocatorQuery::text("missing").or(LocatorQuery::text("ABC"));
+        assert_eq!(evaluate(&rows, &query).diagnostics.failure_reason, None);
+        let query = LocatorQuery::text("ABC").filter(
+            Some(LocatorQuery::link("test:docs")),
+            Some(LocatorQuery::text("absent")),
+        );
+        let result = evaluate(&rows, &query);
+        assert_eq!(result.matches[0].value.text, "ABC");
+        assert_eq!(result.diagnostics.failure_reason, None);
+        assert_eq!(stage(&result, "root.has_not").selected_count, 0);
+    }
+
+    #[test]
+    fn explicit_unique_operand_errors_propagate_with_the_branch_path() {
+        let rows = rows();
+        let mut ambiguous = LocatorQuery::text(" ");
+        ambiguous.occurrence = MatchOccurrence::Unique;
+        for query in [
+            ambiguous.clone().or(LocatorQuery::text("ABC")),
+            LocatorQuery::text("ABC").and(ambiguous.clone()),
+            LocatorQuery::text("ABC ").filter(None, Some(ambiguous)),
+        ] {
+            let result = evaluate(&rows, &query);
+            // The candidate-bounded has_not finds only one blank and is valid.
+            if let Some(error) = &result.diagnostics.evaluation_error {
+                let failed = &result.diagnostics.stages[result.diagnostics.failure_stage.unwrap()];
+                assert_eq!(failed.failure_reason, Some(LocatorFailureReason::Ambiguous));
+                assert!(!failed.candidates.is_empty());
+                assert!(error.contains(&failed.expression_path));
+                assert!(!failed.expression_path.eq("root"));
+            } else {
+                assert_eq!(
+                    result.diagnostics.failure_reason,
+                    Some(LocatorFailureReason::FilterRemovedAll)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn style_evidence_is_budgeted_before_capture_and_boolean_scans_request_none() {
+        let rows = vec![vec![
+            EmuCell {
+                ch: "A".into(),
+                ..EmuCell::blank()
+            };
+            2000
+        ]];
+        let style = TextStyle {
+            bold: Some(true),
+            ..TextStyle::default()
+        };
+        let mut captured = 0;
+        let mut evaluate_style = |cell: &EmuCell, _: &TextStyle, x, y, budget| {
+            let mut result = CellStyleEvaluation {
+                matched: true,
+                mismatches: Vec::new(),
+                mismatches_truncated: false,
+            };
+            result.reject(budget, || {
+                captured += 1;
+                CellMismatch {
+                    location: TextPosition {
+                        column: x as u16,
+                        row: y as u32,
+                    },
+                    grapheme: cell.ch.to_string(),
+                    property: "bold".into(),
+                    operator: "equals".into(),
+                    expected: "true".into(),
+                    actual: "false".into(),
+                    resolved: None,
+                    reason: "value_mismatch".into(),
+                }
+            });
+            result
+        };
+        let contiguous = evaluate_query(
+            &rows,
+            &LocatorQuery::style(style.clone()),
+            false,
+            &mut evaluate_style,
+        )
+        .unwrap();
+        assert!(contiguous.matches.is_empty());
+        let mut query = LocatorQuery::text("A");
+        query.style = style;
+        let filtered = evaluate_query(&rows, &query, false, &mut evaluate_style).unwrap();
+        assert!(filtered.matches.is_empty());
+        assert_eq!(
+            filtered
+                .diagnostics
+                .stages
+                .last()
+                .unwrap()
+                .raw_candidate_count,
+            2000
+        );
+        assert!(
+            filtered
+                .diagnostics
+                .stages
+                .last()
+                .unwrap()
+                .mismatches_truncated
+        );
+        assert_eq!(captured, MAX_SAMPLE);
+    }
+
+    #[test]
+    fn occurrence_stays_on_its_operand_and_counts_survive_early_selection() {
+        let rows = rows();
+        let mut any = LocatorQuery::text(" ");
+        any.occurrence = MatchOccurrence::First;
+        let result = evaluate(&rows, &any);
+        assert_eq!(stage(&result, "root").raw_candidate_count, 13);
+        assert_eq!(stage(&result, "root").selected_count, 1);
+        any.occurrence = MatchOccurrence::Nth(99);
+        assert_eq!(
+            evaluate(&rows, &any).diagnostics.failure_reason,
+            Some(LocatorFailureReason::NthOutOfRange)
+        );
+        let mut left = LocatorQuery::text(crate::api::TextSelector {
+            text: "[AB]".into(),
+            regex: true,
+            ..Default::default()
+        });
+        left.occurrence = MatchOccurrence::First;
+        let result = evaluate(&rows, &left.and(LocatorQuery::text("B")));
+        assert_eq!(
+            result.diagnostics.failure_reason,
+            Some(LocatorFailureReason::IntersectionEmpty)
+        );
+    }
+
+    #[test]
+    fn ambiguous_selectors_retain_the_conflicting_candidate_locations() {
+        let rows: Vec<Vec<EmuCell>> = vec!["A A"
+            .chars()
+            .map(|ch| EmuCell {
+                ch: ch.to_string().into(),
+                ..EmuCell::blank()
+            })
+            .collect()];
+        let mut explicit = LocatorQuery::text("A");
+        explicit.occurrence = MatchOccurrence::Unique;
+        let mut filtered = explicit.clone();
+        filtered.style.bold = Some(false);
+        let mut styled = LocatorQuery::style(TextStyle {
+            bold: Some(true),
+            ..Default::default()
+        });
+        styled.occurrence = MatchOccurrence::Unique;
+        let mut styled_rows = rows.clone();
+        styled_rows[0][0].attrs.insert(Attrs::BOLD);
+        styled_rows[0][2].attrs.insert(Attrs::BOLD);
+        for (rows, query, require_one) in [
+            (&rows, explicit, false),
+            (&rows, filtered, false),
+            (&rows, LocatorQuery::text("A"), true),
+            (&styled_rows, styled, false),
+        ] {
+            let result = evaluate_query(rows, &query, require_one, &mut |cell, style, _, _, _| {
+                CellStyleEvaluation {
+                    matched: style.bold.is_none_or(|bold| bold == cell.has(Attrs::BOLD)),
+                    mismatches: Vec::new(),
+                    mismatches_truncated: false,
+                }
+            })
+            .unwrap();
+            assert_eq!(
+                result.diagnostics.failure_reason,
+                Some(LocatorFailureReason::Ambiguous)
+            );
+            assert!(result.matches.is_empty());
+            let stage = stage(&result, "root");
+            assert_eq!(stage.selected_count, 0);
+            assert_eq!(stage.style_candidate_count, 2);
+            assert_eq!(
+                stage
+                    .candidates
+                    .iter()
+                    .map(|candidate| candidate.start.column)
+                    .collect::<Vec<_>>(),
+                vec![0, 2],
+            );
+        }
+    }
+
+    #[test]
+    fn ambiguity_samples_keep_count_and_byte_limits_without_changing_matching() {
+        let rows = vec!["A "
+            .repeat(200)
+            .chars()
+            .map(|ch| EmuCell {
+                ch: ch.to_string().into(),
+                ..EmuCell::blank()
+            })
+            .collect()];
+        let mut query = LocatorQuery::text("A");
+        assert_eq!(evaluate(&rows, &query).matches.len(), 200);
+        query.occurrence = MatchOccurrence::Unique;
+        let result = evaluate(&rows, &query);
+        let stage = stage(&result, "root");
+        assert_eq!(stage.style_candidate_count, 200);
+        assert_eq!(stage.selected_count, 0);
+        assert!(!stage.candidates.is_empty());
+        assert!(stage.candidates.len() <= MAX_SAMPLE);
+        assert!(stage.candidates_truncated);
+        assert!(serde_json::to_vec(stage).unwrap().len() <= MAX_STAGE_BYTES);
+        assert_eq!(stage.candidates[0].text, "A");
+        assert_eq!(
+            stage.candidates[0].start,
+            TextPosition { row: 0, column: 0 }
+        );
+    }
+
+    #[test]
+    fn ambiguous_anchor_samples_respect_retention_and_occurrence_selection() {
+        let rows = vec!["A "
+            .repeat(200)
+            .chars()
+            .map(|ch| EmuCell {
+                ch: ch.to_string().into(),
+                ..EmuCell::blank()
+            })
+            .collect()];
+        for occurrence in [MatchOccurrence::Any, MatchOccurrence::Unique] {
+            let mut selector = TextSelector::new(" ");
+            selector.scope.after = Some(TextAnchor {
+                text: "A".into(),
+                regex: false,
+                occurrence,
+            });
+            let result = evaluate(&rows, &LocatorQuery::text(selector));
+            assert_eq!(
+                result.diagnostics.failure_reason,
+                Some(LocatorFailureReason::AnchorAmbiguous)
+            );
+            let stage = stage(&result, "root");
+            assert_eq!(stage.style_candidate_count, 200);
+            assert_eq!(stage.selected_count, 0);
+            assert!(!stage.candidates.is_empty());
+            assert!(stage.candidates.len() <= MAX_SAMPLE);
+            assert!(stage.candidates_truncated);
+            assert_eq!(stage.candidates[0].text, "A");
+            assert!(serde_json::to_vec(stage).unwrap().len() <= MAX_STAGE_BYTES);
+        }
+        for occurrence in [
+            MatchOccurrence::First,
+            MatchOccurrence::Last,
+            MatchOccurrence::Nth(10),
+        ] {
+            let mut selector = TextSelector::new(" ");
+            selector.scope.after = Some(TextAnchor {
+                text: "A".into(),
+                regex: false,
+                occurrence,
+            });
+            let result = evaluate(&rows, &LocatorQuery::text(selector));
+            assert_eq!(result.diagnostics.failure_reason, None);
+            assert_eq!(stage(&result, "root").candidates[0].text, " ");
+        }
+    }
+
+    #[test]
+    fn containment_is_bounded_and_repeated_evaluations_are_aggregated() {
+        let row = (0..600)
+            .map(|_| EmuCell {
+                ch: "A".into(),
+                ..EmuCell::blank()
+            })
+            .collect();
+        let rows = vec![row];
+        let query = LocatorQuery::text("A")
+            .filter(Some(LocatorQuery::text("A")), Some(LocatorQuery::text("B")));
+        let result = evaluate(&rows, &query);
+        assert_eq!(result.matches.len(), 600);
+        assert_eq!(result.diagnostics.stages.len(), 4);
+        assert_eq!(stage(&result, "root.has").evaluations, 600);
+        assert_eq!(stage(&result, "root.has").candidates.len(), MAX_SAMPLE);
+        assert!(stage(&result, "root.has").candidates_truncated);
+        let rows = vec!["ABC OUT"
+            .chars()
+            .map(|ch| EmuCell {
+                ch: ch.to_string().into(),
+                ..EmuCell::blank()
+            })
+            .collect()];
+        let escaping = LocatorQuery::text("OUT");
+        let query = LocatorQuery::text("ABC").filter(Some(escaping), None);
+        assert_eq!(
+            evaluate(&rows, &query).diagnostics.failure_reason,
+            Some(LocatorFailureReason::FilterRemovedAll)
+        );
+    }
+}
