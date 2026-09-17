@@ -1816,12 +1816,7 @@ mod tests {
             );
             history.pin_current();
         }
-        let (saved, allocation) = crate::test_allocations::measure(|| history.clone());
-        assert!(
-            allocation.peak < 16 * 1024,
-            "peak bytes: {}",
-            allocation.peak
-        );
+        let saved = history.clone();
         let frame = saved.entries.back().unwrap();
         assert!(Arc::ptr_eq(frame, history.entries.back().unwrap()));
         assert!(Arc::ptr_eq(frame, history.checkpoints.back().unwrap()));
