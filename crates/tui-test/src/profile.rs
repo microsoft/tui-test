@@ -354,6 +354,8 @@ pub struct Settings {
     pub profile: Profile,
     pub timeouts: crate::api::Timeouts,
     pub recording: crate::api::AutomaticRecording,
+    pub diagnostics: crate::diagnostics::DiagnosticRetentionOptions,
+    pub trace: crate::diagnostics::TraceOptions,
 }
 
 impl From<ConfigProfile> for Settings {
@@ -365,6 +367,8 @@ impl From<ConfigProfile> for Settings {
             },
             timeouts: value.timeouts,
             recording: crate::api::AutomaticRecording::default(),
+            diagnostics: crate::diagnostics::DiagnosticRetentionOptions::default(),
+            trace: crate::diagnostics::TraceOptions::default(),
         }
     }
 }
@@ -375,12 +379,16 @@ impl From<ConfigProfile> for Settings {
 pub struct ConfigFile {
     pub profiles: BTreeMap<String, ConfigProfile>,
     pub recording: crate::api::AutomaticRecording,
+    pub diagnostics: crate::diagnostics::DiagnosticRetentionOptions,
+    pub trace: crate::diagnostics::TraceOptions,
 }
 
 impl ConfigFile {
     pub fn parse(toml_text: &str) -> anyhow::Result<Self> {
         let config: Self = toml::from_str(toml_text)?;
         config.recording.validate()?;
+        config.diagnostics.validate().map_err(anyhow::Error::msg)?;
+        config.trace.validate().map_err(anyhow::Error::msg)?;
         Ok(config)
     }
 
@@ -401,6 +409,12 @@ impl ConfigFile {
                     .unwrap_or_else(|| Path::new("."))
                     .join(&*directory);
             }
+        }
+        if config.trace.directory.is_relative() {
+            config.trace.directory = path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(&config.trace.directory);
         }
         Ok(config)
     }
@@ -430,6 +444,8 @@ impl ConfigFile {
         }?;
         let mut settings: Settings = profile.into();
         settings.recording = self.recording.clone();
+        settings.diagnostics = self.diagnostics;
+        settings.trace = self.trace.clone();
         Ok(settings)
     }
 }
@@ -562,6 +578,19 @@ mod tests {
         assert_eq!(Profile::default().scrollback, 10_000);
     }
 
+    #[test]
+    fn diagnostics_history_limit_is_loaded() {
+        let config = ConfigFile::parse("[diagnostics]\nscreen-history-limit = 3\n").unwrap();
+        assert_eq!(
+            config
+                .settings(None)
+                .unwrap()
+                .diagnostics
+                .screen_history_limit,
+            3
+        );
+    }
+
     /// Every field is individually optional, so a profile can set one color
     /// without restating the palette.
     #[test]
@@ -617,21 +646,42 @@ mod tests {
     }
 
     #[test]
-    fn automatic_recording_configuration_is_loaded() {
-        let config =
-            ConfigFile::parse("[recording]\nmode = \"on-failure\"\ndirectory = \"artifacts\"\n")
-                .unwrap();
-        let recording = config.settings(None).unwrap().recording;
+    fn recording_directory_and_trace_retention_are_separate() {
+        let config = ConfigFile::parse("[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"on-failure\"\ndirectory = \"traces\"\n").unwrap();
+        let settings = config.settings(None).unwrap();
+        assert_eq!(settings.recording.directory, Some(PathBuf::from("casts")));
         assert_eq!(
-            recording.mode,
-            crate::api::AutomaticRecordingMode::OnFailure
+            settings.trace.mode,
+            crate::diagnostics::TraceMode::OnFailure
         );
-        assert_eq!(recording.directory, Some(PathBuf::from("artifacts")));
+        assert_eq!(settings.trace.directory, PathBuf::from("traces"));
+        assert_eq!(
+            ConfigFile::default().trace.mode,
+            crate::diagnostics::TraceMode::Off
+        );
+        for mode in ["always", "on-failure", "disabled"] {
+            assert!(ConfigFile::parse(&format!("[recording]\nmode = \"{mode}\"\n")).is_err());
+        }
+        assert!(ConfigFile::parse("[trace]\nmode = \"always\"\n").is_err());
+        assert!(ConfigFile::parse("[trace]\ndirectory = \"\"\n").is_err());
     }
 
     #[test]
     fn empty_recording_directory_is_rejected() {
         assert!(ConfigFile::parse("[recording]\ndirectory = \"\"\n").is_err());
+    }
+
+    #[test]
+    fn trace_directory_is_relative_to_config_without_a_recording_directory() {
+        let root =
+            std::env::temp_dir().join(format!("tui-test-trace-config-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("tui-test.toml");
+        std::fs::write(&path, "[trace]\nmode = \"on\"\ndirectory = \"traces\"\n").unwrap();
+        let settings = ConfigFile::load(&path).unwrap().settings(None).unwrap();
+        assert_eq!(settings.trace.directory, root.join("traces"));
+        assert!(settings.recording.directory.is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
