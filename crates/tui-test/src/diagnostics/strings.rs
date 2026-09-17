@@ -1,5 +1,5 @@
 use super::{DiagnosticHint, FailureReason, FailureReport, LocatorFailureReason};
-use crate::api::Operation;
+use crate::api::{LocatorQuery, Operation};
 
 pub(crate) fn format_timeout(timeout_ms: u64) -> String {
     if timeout_ms.is_multiple_of(1_000) {
@@ -102,6 +102,7 @@ pub(crate) fn diagnostic_operation_name(operation: &Operation) -> &'static str {
         Operation::WaitReady { .. } => "wait.ready",
         Operation::WaitBell { .. } => "wait.bell",
         Operation::FindLocator { .. } => "locator.find",
+        Operation::ResolveLocator { .. } => "locator.resolve",
         Operation::WaitLocator { .. } => "locator.wait",
         Operation::ClickLocator { .. } => "locator.click",
         Operation::HighlightLocator { .. } => "locator.highlight",
@@ -177,4 +178,112 @@ pub(crate) fn title_timeout_message_from_actual(
         format_timeout(timeout_ms),
         if not { "hidden" } else { "visible" },
     )
+}
+
+pub(crate) fn safe_operation_summary(operation: &Operation) -> String {
+    match operation {
+        Operation::Open(options) => format!(
+            "opened a {} terminal at {}x{} with {} environment variables",
+            options.backend.as_str(),
+            options.cols,
+            options.rows,
+            options.env.len()
+        ),
+        Operation::Run(options) => format!(
+            "ran a program in a {} terminal at {}x{} with {} arguments and {} environment variables",
+            options.backend.as_str(),
+            options.cols,
+            options.rows,
+            options.args.len(),
+            options.env.len()
+        ),
+        Operation::Write { data } => format!("wrote {} bytes", data.len()),
+        Operation::Submit { data } => {
+            format!("submitted {} bytes", data.as_ref().map_or(0, String::len))
+        }
+        Operation::Key { keys, .. } => format!("sent {} key tokens", keys.len()),
+        Operation::Mouse { action } => match action {
+            crate::api::MouseAction::Click {
+                on_text,
+                options,
+                clicks,
+                ..
+            } => format!(
+                "clicked {} time(s) with {:?} button{}",
+                clicks.max(&1),
+                options.button,
+                if on_text.is_some() { " on text" } else { "" }
+            ),
+            _ => "sent a mouse action".to_string(),
+        },
+        Operation::Resize { cols, rows } => format!("resized terminal to {cols}x{rows}"),
+        Operation::FindLocator { query } => {
+            format!("resolved a {}-stage locator", locator_stage_count(query))
+        }
+        Operation::ResolveLocator { query } => format!(
+            "resolved a {}-stage locator requiring one match",
+            locator_stage_count(query)
+        ),
+        Operation::WaitLocator { query, not, .. } => format!(
+            "waited for a {}-stage locator to become {}",
+            locator_stage_count(query),
+            if *not { "hidden" } else { "visible" }
+        ),
+        Operation::ClickLocator {
+            query,
+            options,
+            clicks,
+            ..
+        } => format!(
+            "clicked a {}-stage locator {} time(s) with {:?} button",
+            locator_stage_count(query),
+            clicks.max(&1),
+            options.button
+        ),
+        Operation::HighlightLocator { query, .. } => {
+            format!("highlighted a {}-stage locator", locator_stage_count(query))
+        }
+        _ => diagnostic_operation_name(operation).to_string(),
+    }
+}
+
+fn locator_stage_count(query: &LocatorQuery) -> usize {
+    1 + query.within.as_deref().map_or(0, locator_stage_count)
+        + query
+            .selector
+            .children()
+            .into_iter()
+            .map(locator_stage_count)
+            .sum::<usize>()
+}
+
+pub(crate) fn locator_failure_message(
+    query: &LocatorQuery,
+    diagnostics: &crate::diagnostics::LocatorDiagnostics,
+) -> String {
+    if let Some(error) = &diagnostics.evaluation_error {
+        return error.clone();
+    }
+    let description = query.selector.description();
+    match diagnostics.failure_reason {
+        Some(LocatorFailureReason::Ambiguous) => {
+            let count = diagnostics
+                .failure_stage
+                .and_then(|index| diagnostics.stages.get(index))
+                .map_or(diagnostics.final_candidate_count, |stage| {
+                    stage.style_candidate_count
+                });
+            format!("expected '{description}' to match once, but found {count} matches")
+        }
+        Some(LocatorFailureReason::NthOutOfRange) => {
+            format!("no match found for '{description}': selected occurrence is out of range")
+        }
+        Some(LocatorFailureReason::AnchorAmbiguous) => {
+            format!("locator anchor for '{description}' matched more than once")
+        }
+        Some(LocatorFailureReason::AnchorNotFound) => {
+            format!("locator anchor for '{description}' was not found")
+        }
+        _ => format!("no match found for '{description}'"),
+    }
 }

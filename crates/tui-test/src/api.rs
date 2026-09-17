@@ -700,6 +700,9 @@ pub enum Operation {
     FindLocator {
         query: LocatorQuery,
     },
+    ResolveLocator {
+        query: LocatorQuery,
+    },
     WaitLocator {
         query: LocatorQuery,
         not: bool,

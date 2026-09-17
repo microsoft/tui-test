@@ -31,7 +31,8 @@ const MAX_CHECKPOINT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CONTEXT_ENTRIES: usize = 16;
 const MAX_CONTEXT_KEY_BYTES: usize = 64;
 const MAX_CONTEXT_VALUE_BYTES: usize = 256;
-
+const MAX_CANDIDATES: usize = 64;
+const MAX_MISMATCHES: usize = 64;
 const MAX_OPERATION_HISTORY: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +143,19 @@ pub struct LocatorStageDiagnostics {
     pub mismatches_truncated: bool,
 }
 
+impl LocatorStageDiagnostics {
+    pub(crate) fn truncate(&mut self) {
+        if self.candidates.len() > MAX_CANDIDATES {
+            self.candidates.truncate(MAX_CANDIDATES);
+            self.candidates_truncated = true;
+        }
+        if self.mismatches.len() > MAX_MISMATCHES {
+            self.mismatches.truncate(MAX_MISMATCHES);
+            self.mismatches_truncated = true;
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellMismatch {
     pub location: TextPosition,
@@ -221,6 +235,111 @@ pub struct OperationEvent {
     pub expectation: Option<OperationExpectation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<InputDetails>,
+}
+
+#[derive(Debug)]
+pub(crate) struct OperationHistory {
+    next_sequence: u64,
+    generation: u64,
+    entries: VecDeque<OperationEvent>,
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingOperation {
+    sequence: u64,
+    name: String,
+    started_at: Instant,
+    started_ms: u64,
+    screen_before: u64,
+    safe_summary: String,
+    is_assertion: bool,
+    expectation: Option<OperationExpectation>,
+    generation: u64,
+}
+
+impl PendingOperation {
+    pub(crate) fn sequence(&self) -> u64 {
+        self.sequence
+    }
+}
+
+impl OperationHistory {
+    pub(crate) fn new() -> Self {
+        Self {
+            next_sequence: 1,
+            generation: 0,
+            entries: VecDeque::new(),
+        }
+    }
+
+    pub(crate) fn begin(
+        &mut self,
+        name: String,
+        started_ms: u64,
+        screen_before: u64,
+        safe_summary: String,
+        is_assertion: bool,
+        expectation: Option<OperationExpectation>,
+    ) -> PendingOperation {
+        let sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.wrapping_add(1).max(1);
+        PendingOperation {
+            sequence,
+            name,
+            started_at: Instant::now(),
+            started_ms,
+            screen_before,
+            safe_summary,
+            is_assertion,
+            expectation,
+            generation: self.generation,
+        }
+    }
+
+    pub(crate) fn reset_session(&mut self) {
+        self.entries.clear();
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    pub(crate) fn finish(
+        &mut self,
+        pending: PendingOperation,
+        ended_ms: Option<u64>,
+        screen_at_return: u64,
+        result: impl Into<String>,
+        input: Option<InputDetails>,
+    ) {
+        let started_ms = if pending.generation == self.generation {
+            pending.started_ms
+        } else {
+            0
+        };
+        self.entries.push_back(OperationEvent {
+            sequence: pending.sequence,
+            name: pending.name,
+            started_ms,
+            ended_ms: ended_ms
+                .unwrap_or_else(|| started_ms.saturating_add(elapsed_ms(pending.started_at))),
+            result: result.into(),
+            screen_before: if pending.generation == self.generation {
+                pending.screen_before
+            } else {
+                0
+            },
+            screen_at_return,
+            safe_summary: pending.safe_summary,
+            is_assertion: pending.is_assertion,
+            expectation: pending.expectation,
+            input,
+        });
+        while self.entries.len() > MAX_OPERATION_HISTORY {
+            self.entries.pop_front();
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> Vec<OperationEvent> {
+        self.entries.iter().cloned().collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1240,5 +1359,38 @@ mod tests {
             history.frames()[0].render_state,
             history.frames()[1].render_state
         );
+    }
+
+    #[test]
+    fn operation_history_does_not_link_frames_across_session_restarts() {
+        let mut history = OperationHistory::new();
+        let old = history.begin("old".into(), 100, 50, "old".into(), true, None);
+        history.finish(old, Some(120), 51, "ok", None);
+        let restart = history.begin("run".into(), 130, 51, "restart".into(), false, None);
+        history.reset_session();
+        history.finish(restart, Some(10), 1, "ok", None);
+        let events = history.snapshot();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].started_ms, 0);
+        assert_eq!(events[0].screen_before, 0);
+        assert_eq!(events[0].screen_at_return, 1);
+        assert_eq!(events[0].sequence, 2);
+    }
+
+    #[test]
+    fn operation_history_uses_elapsed_time_when_the_session_clock_is_gone() {
+        for reset in [false, true] {
+            let mut history = OperationHistory::new();
+            let mut pending =
+                history.begin("close".into(), 10_000, 50, "close".into(), false, None);
+            pending.started_at = Instant::now() - std::time::Duration::from_secs(2);
+            if reset {
+                history.reset_session();
+            }
+            history.finish(pending, None, 0, "ok", None);
+            let event = history.snapshot().pop().unwrap();
+            assert_eq!(event.started_ms, if reset { 0 } else { 10_000 });
+            assert!(event.ended_ms >= event.started_ms + 2_000);
+        }
     }
 }
