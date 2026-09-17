@@ -547,7 +547,9 @@ fn monitor_input_is_delivered_while_a_long_operation_is_running() {
 #[test]
 fn get_recording_flushes_queued_output_before_reading() {
     let sandbox = Sandbox::new("recording-flush");
-    sandbox.ok(&["open"]);
+    let config = sandbox.home.join("trace.toml");
+    std::fs::write(&config, "[trace]\nmode = \"on\"\ndirectory = \"traces\"\n").unwrap();
+    sandbox.ok(&["open", "--config", config.to_str().unwrap()]);
     sandbox.ok(&["submit", "echo recording-flush-marker"]);
     sandbox.ok(&["wait", "command", "--timeout", "30000"]);
 
@@ -660,7 +662,8 @@ fn restart_gracefully_recreates_a_run_with_its_metadata() {
         &config,
         "[profiles.restart]\nscrollback = 432\n\
          [profiles.restart.timeouts]\ntext = 1234\n\
-         [profiles.restart.colors]\nforeground = \"#123456\"\n",
+         [profiles.restart.colors]\nforeground = \"#123456\"\n\
+         [trace]\nmode = \"on\"\ndirectory = \"traces\"\n",
     )
     .unwrap();
 
@@ -1336,7 +1339,7 @@ fn automatic_recording_mode_and_directory_come_from_config() {
     let config = sandbox.home.join("recording.toml");
     std::fs::write(
         &config,
-        "[recording]\nmode = \"disabled\"\ndirectory = \"casts\"\n",
+        "[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"off\"\n",
     )
     .unwrap();
     let config = config.to_str().unwrap();
@@ -1352,7 +1355,7 @@ fn failed_open_recording_is_readable_before_close() {
     let config = sandbox.home.join("recording.toml");
     std::fs::write(
         &config,
-        "[recording]\nmode = \"on-failure\"\ndirectory = \"casts\"\n",
+        "[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"on-failure\"\ndirectory = \"traces\"\n",
     )
     .unwrap();
     let config = config.to_str().unwrap();
@@ -1376,14 +1379,18 @@ fn failed_open_recording_is_readable_before_close() {
 fn failed_spawn_does_not_expose_a_previous_custom_recording() {
     let sandbox = Sandbox::new("recording-failed-spawn");
     let config = sandbox.home.join("recording.toml");
-    std::fs::write(&config, "[recording]\ndirectory = \"casts\"\n").unwrap();
+    std::fs::write(
+        &config,
+        "[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"on\"\ndirectory = \"traces\"\n",
+    )
+    .unwrap();
     let config = config.to_str().unwrap();
     sandbox.ok(&["open", "--config", config, "--no-wait-ready"]);
     sandbox.ok(&["close"]);
 
     std::fs::write(
         config,
-        "[recording]\nmode = \"on-failure\"\ndirectory = \"casts\"\n",
+        "[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"on-failure\"\ndirectory = \"traces\"\n",
     )
     .unwrap();
     assert!(!sandbox
@@ -1472,6 +1479,120 @@ fn explicit_wait_ready_fails_when_no_prompt_is_reported() {
         "the failed open left a session behind: {}",
         String::from_utf8_lossy(&after.stdout),
     );
+}
+
+#[test]
+fn json_failure_writes_and_reports_a_diagnostic_bundle() {
+    let sandbox = Sandbox::new("failure-artifact");
+    sandbox.ok(&["open", "--no-wait-ready"]);
+    let plain = sandbox.run(&[
+        "--json",
+        "expect",
+        "text",
+        "never-present",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(plain.status.code(), Some(1));
+    let plain: serde_json::Value =
+        serde_json::from_slice(&plain.stdout).expect("plain failure json response");
+    assert_eq!(plain["details"]["operation"], "locator.expect");
+    assert!(plain["details"].get("terminal").is_none());
+    assert!(plain["details"].get("recent_operations").is_none());
+
+    let artifacts = sandbox.home.join("failure-artifacts");
+    let artifacts = artifacts.to_str().unwrap();
+
+    let out = sandbox.run(&[
+        "--json",
+        "--failure-artifacts",
+        artifacts,
+        "--diagnostic-context",
+        "test=cli-bundle",
+        "expect",
+        "text",
+        "never-present",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let payload: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("failure json response");
+    assert_eq!(payload["details"]["schema_version"], 1);
+    assert_eq!(payload["details"]["operation"], "locator.expect");
+    assert!(payload["details"].get("context").is_none());
+    let manifest = payload["artifact"]["manifest"]
+        .as_str()
+        .expect("failure manifest path");
+    assert!(std::path::Path::new(manifest).is_file());
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest).unwrap()).unwrap();
+    assert_eq!(report["context"]["test"], "cli-bundle");
+    assert!(report["terminal"]["screen_history"]["screens"].is_array());
+    let human = sandbox.run(&[
+        "--failure-artifacts",
+        artifacts,
+        "expect",
+        "text",
+        "never-present",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(human.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(stderr.contains("failure.json"));
+
+    sandbox.ok(&["close"]);
+}
+
+#[test]
+fn usage_errors_do_not_capture_terminal_artifacts() {
+    let sandbox = Sandbox::new("usage-no-artifact");
+    sandbox.ok(&["open", "--no-wait-ready"]);
+    let artifacts = sandbox.home.join("failure-artifacts");
+    let artifacts_arg = artifacts.to_str().unwrap();
+    let out = sandbox.run(&[
+        "--failure-artifacts",
+        artifacts_arg,
+        "expect",
+        "text",
+        "hello",
+        "--fg",
+        "not-a-color",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("Terminal content:"));
+    assert!(!artifacts.exists());
+    sandbox.ok(&["close"]);
+}
+
+#[test]
+fn diagnostic_capture_panics_do_not_kill_the_daemon() {
+    let sandbox = Sandbox::new("diagnostic-panic-containment");
+    sandbox.ok(&["open", "--no-wait-ready"]);
+    let resize = sandbox.run(&["resize", "0", "0"]);
+    assert_ne!(
+        resize.status.code(),
+        Some(4),
+        "diagnostic capture escaped the daemon: {}",
+        String::from_utf8_lossy(&resize.stderr)
+    );
+    let state = sandbox.run(&["state"]);
+    assert_eq!(
+        state.status.code(),
+        Some(5),
+        "corrupt diagnostic state should remain a contained internal error: {}",
+        String::from_utf8_lossy(&state.stderr)
+    );
+    let status = sandbox.run(&["daemon", "status"]);
+    assert!(
+        status.status.success(),
+        "daemon did not survive diagnostic capture panic: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    sandbox.ok(&["close"]);
 }
 
 #[test]

@@ -32,6 +32,8 @@ Core types:
 | `Operation` | Run a terminal operation. |
 | `OpenOptions`, `RunOptions` | Start a shell or app. |
 | `Profile`, `Timeouts` | Set colors, scrollback, and timeouts. |
+| `ExecutionContext`, `FailureArtifactOptions` | Attach diagnostic context and write failure artifacts. |
+| `FailureDetails`, `FailureArtifactRef` | Inspect structured failures without parsing messages. |
 
 Locator methods: `get_by_text`, `get_by_style`, `any`, `unique`, `first`, `last`, `nth`, `locations`, `location`, `count`, `all`, `wait`, `wait_hidden`, `expect`, `click`, and `highlight`. Option variants are `wait_with_timeout`, `expect_with`, `click_with`, and `highlight_with_timeout`.
 
@@ -39,4 +41,32 @@ Add `recording-raster` for APNG, GIF, and MP4. Add `ghostty`, `rio`, or `xtermjs
 
 Raster output uses installed fonts. Add a `recording-font-jetbrains-mono*` feature to bundle one.
 
+Configure a contextual session to write actionable failure bundles:
+
+```rust
+use std::path::PathBuf;
+use tui_test::{
+    ExecutionContext, FailureArtifactMode, FailureArtifactOptions, Session,
+};
+
+let terminal = Session::new("example").with_execution_context(ExecutionContext {
+    artifact: Some(FailureArtifactOptions {
+        directory: PathBuf::from("artifacts/failures"),
+        mode: FailureArtifactMode::All,
+        include_recording: false,
+    }),
+    ..ExecutionContext::default()
+});
+```
+
+`TuiTestError.details` includes the resolved locator stages, selection counts, style mismatches, process/runtime state, recent operations, and recent distinct screens. `TuiTestError.artifact` points to the committed `failure.json` when artifact output is configured.
+
 Full API: [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/)
+
+### Diagnostic exports
+
+Errors expose structured diagnostic details, including locator stages and bounded
+screen history. Artifact export is opt-in. Configured exports default to `all`;
+`none` writes no files, `text` writes JSON and terminal text, and `all` adds SVG.
+Trace retention independently selects `off`, `on`, or `on-failure`. Final test
+outcomes control retained traces, including tests that catch multiple assertions.

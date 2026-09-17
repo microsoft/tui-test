@@ -17,6 +17,8 @@ Use the CLI for terminal work split across separate commands.
 
 Use `--session NAME` to select a session. `open` and `run` reuse it unless `--restart` is set.
 
+`open` and `run` accept `--screen-history-limit COUNT` to control how many distinct recent screens are retained for failures.
+
 `restart` replays the last successful spawn, preserving its original working directory, options, and latest terminal size. It sends Ctrl-C and waits up to 5000 ms before forcing replacement; `--graceful-timeout 0` skips the wait. It works after child exit, but not after `close` or daemon shutdown. The terminal and automatic recording start fresh.
 
 ## Locate text
@@ -122,6 +124,74 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 
 Interactive monitors mirror the session's keyboard, paste, and mouse modes.
 
+## Failure diagnostics
+
+Assertion failures always include structured `details` in `--json` output. The details identify the operation, final reason, locator stages and candidate counts, style mismatches, process/runtime state, recent operations, and a bounded history of distinct screens.
+
+
+
+Write the complete set of offline artifacts:
+
+```sh
+tui-test --json \
+  --failure-artifacts ./artifacts/failures \
+  --diagnostic-context test=settings-save \
+  expect text "Save" --fg green --timeout 5000
+```
+
+Bundle mode writes:
+
+
+
+
+
+Each retained action can carry `expectation`: a typed locator query plus its required outcome, a scalar subject/value, or an explicit unavailable reason. Passing assertions show their own selector, style, scope, occurrence and negation in the action list, banner and Call pane; they never borrow the failing assertion's expectation. Timeout values remain in Metadata, not the top header.
+
+The action list displays API-style query descriptions beside the operation, such as `getByText("Save")`, `getByStyle({ bold: true }).and(getByLink("test:docs"))`, and `.filter({ has: ..., hasNot: ... })`. These are reconstructed descriptions, not captured source code. Long expressions are ellipsized in the row but wrap in a selectable Locator block in Error details for the failure and Call details for each selected action. Selecting a successful action switches Error details to Call; Cell and Attachments stay open when selected.
+
+Locator diagnostics follow the expression tree. Each `stages[]` entry has an `expression_path` (`root`, `.within`, `.left`, `.right`, `.input`, `.has`, `.has_not`), `mode`, counts, and `evaluations`. Containment predicates are evaluated inside each candidate; repeated evaluations are aggregated by path. Counts on such entries are totals, not distinct whole-terminal candidates. Compound entries do not repeat their operand trees in `selector`; leaf selectors are retained when within the evidence budget.
+
+Only the decisive failing stage supplies cell mismatch highlights. An empty union operand or an empty `has_not` search is not itself a failure. Explicit uniqueness errors propagate from the offending operand and cannot be hidden by OR or negation. `link_filter_removed_all`, `intersection_empty`, `union_empty`, and `filter_removed_all` distinguish whole-match link refinement, cell-set composition, and containment rejection. At most 128 stage entries with an 8 KiB evidence budget each are retained, with sample/trace truncation flags when limited.
+
+The CLI daemon protocol is version 5. JS and Python native queries use one validated typed node-table/root expression input; the old linear-stage query format and style-link aliases are not accepted. `location()` requests final single-match resolution in the core, preserving explicit occurrence ordering on operands. The trace formatter handles text, style, exact-URI links, relative chains, AND/OR, filters, and occurrence placement without flattening the expression.
+
+
+
+The viewer uses tui-test's original emulator grids and SVG renderer, rather than reconstructing cell state in a second emulator. Asciinema-player supports seeking and markers, but does not expose cell metadata in its public API. Add `--failure-artifact-recording` to copy an immutable `session.cast` prefix through the failure boundary for continuous replay in an asciicast player. Recording is not required for frame inspection.
+
+Retention is bounded: at most 32 recent operations (each expectation and input limited to 8 KiB), 10 recent sampled screens by default (0-50 configurable, also bounded to 512 KiB with the current screen always retained), and 32 distinct action checkpoints bounded to 8 MiB. Enabled traces pin input returns as well as assertions and waits. Oversized expectations are replaced with an explicit unavailable reason, not a partial or inferred assertion. Setting `--screen-history-limit 0` disables historical checkpoint retention too. Passing checkpoints capture the screen at operation return; failure uses the pinned evaluation. Sampled screens do not represent every PTY write. Missing frames, evicted checkpoints, and oversized grids are reported explicitly, never substituted or interpolated. Play advances retained frames every 400 ms, stopping at the next retained checkpoint, not at original recording speed.
+
+
+
+`--failure-artifact-mode` selects exported files, independently of structured error details and trace retention:
+
+
+
+
+
+
+
+An unspecified trace setting is not an explicit `off` override: restart preserves the effective recording policy unless overridden. When a test finishes successfully in `on-failure` mode, all trace bundles created by its caught failures are discarded, not just the most recent one. Explicit per-failure artifacts retain their independent export behavior.
+
+Failure bundles can contain operands from both successful and failed assertions, raw typed/submitted input, key names and event types, mouse targets, terminal output, hyperlink targets, titles, screenshots, snapshot evidence, diagnostic context, and recordings. `recent_operations[].input` retains arguments and exact bytes accepted by the PTY writer up to 8 KiB per operation. An empty `sent_bytes` array means the keyboard protocol emitted no bytes; an absent array means bytes were not sent or not retained. Mouse input records the actual resolved cell, not an inferred cursor position. Environment values are not retained. Review bundles before uploading.
+
+### Viewer development
+
+
+
+| Layer | Responsibility |
+| --- | --- |
+| `schema.js`, `model.js`, `format.js` | Validate embedded JSON once and normalize frames, actions, expectations, inputs, cell evidence, metadata and immutable attachment Blobs with bounded previews. Display fields use a common model; raw evidence stays separate. Missing checkpoints are explicit, never interpolated. |
+| `App.svelte`, `state.js` | Svelte `$state` and `$derived` connect the normalized report to pure selection/playback rules. A lifecycle-scoped `$effect` owns the playback timer. |
+| `components/` | `Header`, `Timeline`, `SideNav`, `BottomNav` and `TerminalViewer` define the workbench layout. Named Svelte snippets compose the six tab components; shared `TabBar`, `TabPanel`, `PropertyList` and `LocatorBlock` components handle repeated UI. Props and callback attributes make interactions explicit. Styles are scoped to their owning components. |
+| `TerminalScreen.svelte`, `CellOverlay.svelte`, `resources.js` | CSS container units fit the terminal without resize handlers; Svelte renders cell highlights. Image/download URLs have explicit disposal. Captured strings use Svelte's escaped interpolation, never `{@html}`; captured SVG only loads through inert image elements. |
+
+
+
+
+
+
+
 ## Configure
 
 ```toml
@@ -129,11 +199,20 @@ Interactive monitors mirror the session's keyboard, paste, and mouse modes.
 scrollback = 10000
 
 [recording]
+directory = "./casts"
+
+[trace]
 mode = "on-failure"
-directory = "./artifacts"
+directory = "./traces"
+
+[diagnostics]
+screen-history-limit = 10
 ```
 
-Recording modes: `disabled`, `on-failure`, and `always`.
+Trace modes: `off`, `on-failure`, and `on`. The default is `off`.
+`recording.directory` is optional and independent of `trace.directory`.
+The old `recording.mode` field is rejected. Relative directories in a config
+file resolve beside that file.
 
 ## Terminal modes
 
@@ -179,3 +258,11 @@ repeat `--palette` to check multiple entries.
 | `agent-context` | Exact command schema as JSON. |
 | `skill` | Complete agent guide. |
 | `skill --add` | Install this skill. |
+
+### Diagnostic exports
+
+Errors expose structured diagnostic details, including locator stages and bounded
+screen history. Artifact export is opt-in. Configured exports default to `all`;
+`none` writes no files, `text` writes JSON and terminal text, and `all` adds SVG.
+Trace retention independently selects `off`, `on`, or `on-failure`. Final test
+outcomes control retained traces, including tests that catch multiple assertions.

@@ -20,6 +20,7 @@ pub enum AutomaticRecordingMode {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AutomaticRecording {
+    #[serde(skip)]
     pub mode: AutomaticRecordingMode,
     pub directory: Option<PathBuf>,
 }
