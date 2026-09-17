@@ -940,11 +940,12 @@ fn core_failure_artifact(
     };
     let mode = match value.mode.as_deref().unwrap_or("all") {
         "all" => CoreFailureArtifactMode::All,
+        "html" => CoreFailureArtifactMode::Html,
         "text" => CoreFailureArtifactMode::Text,
         "none" => CoreFailureArtifactMode::None,
         other => {
             return Err(TuiTestError::usage(format!(
-                "unknown failure artifact mode {other:?}; expected all, text, or none"
+                "unknown failure artifact mode {other:?}; expected all, html, text, or none"
             )))
         }
     };

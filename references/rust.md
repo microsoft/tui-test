@@ -62,13 +62,3 @@ let terminal = Session::new("example").with_execution_context(ExecutionContext {
 `TuiTestError.details` includes the resolved locator stages, selection counts, style mismatches, process/runtime state, recent operations, and recent distinct screens. `TuiTestError.artifact` points to the committed `failure.json` when artifact output is configured.
 
 Full API: [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/)
-
-### Diagnostic exports
-
-Errors expose structured diagnostic details, including locator stages and bounded
-screen history. Artifact export is opt-in. Configured exports default to `all`;
-`none` writes no files, `text` writes JSON and terminal text, and `all` adds SVG.
-Trace retention independently selects `off`, `on`, or `on-failure`. Final test
-outcomes control retained traces, including tests that catch multiple assertions.
-
-The `text` and `all` modes also include a Markdown diagnostic report.

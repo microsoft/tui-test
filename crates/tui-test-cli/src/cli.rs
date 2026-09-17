@@ -182,6 +182,7 @@ pub struct Cli {
 pub enum FailureArtifactModeArg {
     #[default]
     All,
+    Html,
     Text,
     None,
 }
@@ -190,6 +191,7 @@ impl From<FailureArtifactModeArg> for tui_test::FailureArtifactMode {
     fn from(value: FailureArtifactModeArg) -> Self {
         match value {
             FailureArtifactModeArg::All => Self::All,
+            FailureArtifactModeArg::Html => Self::Html,
             FailureArtifactModeArg::Text => Self::Text,
             FailureArtifactModeArg::None => Self::None,
         }

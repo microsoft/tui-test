@@ -273,11 +273,11 @@ test("artifactPayload maps modes and resolves directories before native dispatch
     mode: "all",
     includeRecording: false,
   });
-  for (const mode of ["none", "text", "all"]) {
+  for (const mode of ["none", "text", "html", "all"]) {
     assert.equal(artifactPayload({ dir: ".", onFailure: mode }).mode, mode);
   }
   for (const mode of ["bundle", "json", "svg"]) {
-    assert.throws(() => artifactPayload({ dir: ".", onFailure: mode }), /expected all, text, or none/);
+    assert.throws(() => artifactPayload({ dir: ".", onFailure: mode }), /expected all, html, text, or none/);
   }
   for (const mode of [null, false, 0, ["all"], { toString: () => "all" }]) {
     assert.throws(
