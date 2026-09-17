@@ -43,7 +43,12 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_histo
 
 
 
-
+`artifacts["on_failure"]` selects `"none"`, `"text"`, `"html"`, or `"all"` (the
+configured default). `text` exports JSON, terminal text, and Markdown; `html`
+exports a standalone viewer; `all` exports those files plus SVG and timeline
+JSON. `include_recording` separately includes an available recording. Without
+`artifacts`, per-failure exports are disabled. Frames and checkpoints are bounded;
+missing evidence is reported explicitly.
 
 
 
@@ -359,3 +364,5 @@ screen history. Artifact export is opt-in. Configured exports default to `all`;
 `none` writes no files, `text` writes JSON and terminal text, and `all` adds SVG.
 Trace retention independently selects `off`, `on`, or `on-failure`. Final test
 outcomes control retained traces, including tests that catch multiple assertions.
+
+The `text` and `all` modes also include a Markdown diagnostic report.
