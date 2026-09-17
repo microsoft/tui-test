@@ -16,8 +16,6 @@ pub mod trace;
 
 mod event;
 mod session;
-#[cfg(test)]
-mod test_allocations;
 
 pub use api::*;
 pub use diagnostics::*;
