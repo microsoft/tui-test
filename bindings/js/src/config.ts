@@ -1,4 +1,13 @@
-import type { AutomaticRecording, Backend, Profile, Timeouts } from "./types.js";
+import path from "node:path";
+
+import type {
+  ArtifactOptions,
+  AutomaticRecording,
+  TraceOptions,
+  Backend,
+  Profile,
+  Timeouts,
+} from "./types.js";
 
 export const DEFAULT_COLS = 80;
 export const DEFAULT_ROWS = 30;
@@ -21,7 +30,12 @@ const TIMEOUT_CLASSES: readonly TimeoutClass[] = [
 ];
 const BACKENDS: readonly Backend[] = ["alacritty", "ghostty", "rio", "xtermjs"];
 const PROFILE_FIELDS = new Set(["scrollback", "colors"]);
-const RECORDING_MODES = new Set(["disabled", "on-failure", "always"]);
+const TRACE_MODES = new Set(["off", "on-failure", "on"]);
+const FAILURE_ARTIFACT_MODES = new Set([
+  "all",
+  "text",
+  "none",
+]);
 const COLOR_FIELDS = new Map([
   ["foreground", "foreground"],
   ["background", "background"],
@@ -126,15 +140,10 @@ export function recordingPayload(
   }
   const raw = profileObject(recording, "recording");
   const unknown = Object.keys(raw).filter(
-    (key) => key !== "mode" && key !== "directory",
+    (key) => key !== "directory",
   );
   if (unknown.length > 0) {
     throw new TypeError(`unknown recording field ${unknown.join(", ")}`);
-  }
-  if (raw.mode !== undefined && !RECORDING_MODES.has(String(raw.mode))) {
-    throw new TypeError(
-      `unknown recording mode "${String(raw.mode)}"; expected disabled, on-failure, or always`,
-    );
   }
   if (
     raw.directory !== undefined &&
@@ -143,6 +152,61 @@ export function recordingPayload(
     throw new TypeError("recording.directory must be a non-empty string");
   }
   return raw as AutomaticRecording;
+}
+
+export function tracePayload(trace?: TraceOptions): TraceOptions | undefined {
+  if (trace === undefined) return undefined;
+  const raw = profileObject(trace, "trace");
+  const unknown = Object.keys(raw).filter((key) => key !== "mode" && key !== "directory");
+  if (unknown.length) throw new TypeError(`unknown trace field ${unknown.join(", ")}`);
+  if (raw.mode !== undefined && (typeof raw.mode !== "string" || !TRACE_MODES.has(raw.mode))) {
+    throw new TypeError(`unknown trace mode "${String(raw.mode)}"; expected off, on-failure, or on`);
+  }
+  if (raw.directory !== undefined && (typeof raw.directory !== "string" || !raw.directory)) {
+    throw new TypeError("trace.directory must be a non-empty string");
+  }
+  return raw as TraceOptions;
+}
+
+export interface FailureArtifactPayload {
+  directory: string;
+  mode: "all" | "text" | "none";
+  includeRecording: boolean;
+}
+
+export function artifactPayload(
+  artifacts?: ArtifactOptions,
+): FailureArtifactPayload | undefined {
+  if (artifacts === undefined) {
+    return undefined;
+  }
+  const raw = profileObject(artifacts, "artifacts");
+  const unknown = Object.keys(raw).filter(
+    (key) => key !== "dir" && key !== "onFailure" && key !== "includeRecording",
+  );
+  if (unknown.length > 0) {
+    throw new TypeError(`unknown artifacts field ${unknown.join(", ")}`);
+  }
+  if (typeof raw.dir !== "string" || raw.dir.length === 0) {
+    throw new TypeError("artifacts.dir must be a non-empty string");
+  }
+  const mode = raw.onFailure === undefined ? "all" : raw.onFailure;
+  if (typeof mode !== "string" || !FAILURE_ARTIFACT_MODES.has(mode)) {
+    throw new TypeError(
+      `unknown artifacts.onFailure "${String(mode)}"; expected all, text, or none`,
+    );
+  }
+  if (
+    raw.includeRecording !== undefined &&
+    typeof raw.includeRecording !== "boolean"
+  ) {
+    throw new TypeError("artifacts.includeRecording must be a boolean");
+  }
+  return {
+    directory: path.resolve(raw.dir),
+    mode: mode as FailureArtifactPayload["mode"],
+    includeRecording: raw.includeRecording ?? false,
+  };
 }
 
 export function profilePayload(profile?: Profile): ProfilePayload | undefined {
