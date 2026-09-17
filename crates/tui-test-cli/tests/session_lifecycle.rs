@@ -1529,6 +1529,12 @@ fn json_failure_writes_and_reports_a_diagnostic_bundle() {
         serde_json::from_slice(&std::fs::read(manifest).unwrap()).unwrap();
     assert_eq!(report["context"]["test"], "cli-bundle");
     assert!(report["terminal"]["screen_history"]["screens"].is_array());
+    assert!(payload["artifact"]["report"]
+        .as_str()
+        .is_some_and(|path| std::path::Path::new(path).is_file()));
+    let path = std::path::Path::new(payload["artifact"]["report"].as_str().unwrap());
+    assert!(path.is_file());
+    assert_eq!(path.file_name().unwrap(), "failure.md");
     let human = sandbox.run(&[
         "--failure-artifacts",
         artifacts,
@@ -1540,7 +1546,8 @@ fn json_failure_writes_and_reports_a_diagnostic_bundle() {
     ]);
     assert_eq!(human.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&human.stderr);
-    assert!(stderr.contains("failure.json"));
+    assert!(stderr.contains("Agent report: "));
+    assert!(stderr.contains("failure.md"));
 
     sandbox.ok(&["close"]);
 }

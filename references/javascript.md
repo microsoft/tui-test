@@ -97,7 +97,7 @@ Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`,
 
 
 
-
+Failure artifact modes are `none`, `text`, `html`, and `all`. `text` writes JSON, terminal text, and Markdown; `html` writes a standalone viewer with embedded evidence; `all` adds the loose text/JSON/Markdown/SVG files and timeline JSON. Configured exports default to `all`; omitting `artifacts` disables them. `includeRecording: true` separately copies the automatic cast through the failure boundary.
 
 ## Input helpers
 
@@ -139,3 +139,5 @@ screen history. Artifact export is opt-in. Configured exports default to `all`;
 `none` writes no files, `text` writes JSON and terminal text, and `all` adds SVG.
 Trace retention independently selects `off`, `on`, or `on-failure`. Final test
 outcomes control retained traces, including tests that catch multiple assertions.
+
+The `text` and `all` modes also include a Markdown diagnostic report.

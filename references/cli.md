@@ -266,3 +266,5 @@ screen history. Artifact export is opt-in. Configured exports default to `all`;
 `none` writes no files, `text` writes JSON and terminal text, and `all` adds SVG.
 Trace retention independently selects `off`, `on`, or `on-failure`. Final test
 outcomes control retained traces, including tests that catch multiple assertions.
+
+The `text` and `all` modes also include a Markdown diagnostic report.
