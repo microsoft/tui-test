@@ -93,9 +93,11 @@ Capture options: `background` and `transparent` (SVG, APNG, and GIF).
 
 `restart({ gracefulTimeout: 5000 })` returns an `OpenResult`, preserving the last successful spawn's original working directory, options, and latest terminal size. The timeout is milliseconds after Ctrl-C before forced replacement; `0` skips the wait. Child exit preserves restart metadata; `close()` clears it. The terminal and automatic recording start fresh.
 
-Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, and `recording`.
+Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`, `trace`, and `screenHistoryLimit`.
 
-Recording modes: `disabled`, `on-failure`, and `always`.
+
+
+
 
 ## Input helpers
 
@@ -126,4 +128,14 @@ Helpers: `createTerminal`, `withTerminal`, `closeAllTracked`, `setTerminalDefaul
 
 `ExpectationError`, `UsageError`, `NoSessionError`, and `InternalError` extend `TuiTestError`.
 
+`TuiTestError.details` contains the structured operation, locator evaluation, style mismatches, process/runtime state, recent operations, and recent screens. `TuiTestError.artifact` identifies the committed bundle files. Terminal evidence and locator operands may be sensitive.
+
 Full API: [bindings/js/README.md](https://github.com/microsoft/tui-test/blob/main/bindings/js/README.md)
+
+### Diagnostic exports
+
+Errors expose structured diagnostic details, including locator stages and bounded
+screen history. Artifact export is opt-in. Configured exports default to `all`;
+`none` writes no files, `text` writes JSON and terminal text, and `all` adds SVG.
+Trace retention independently selects `off`, `on`, or `on-failure`. Final test
+outcomes control retained traces, including tests that catch multiple assertions.

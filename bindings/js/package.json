@@ -70,7 +70,6 @@
     "access": "public",
     "tag": "beta"
   },
-  "dependencies": {},
   "devDependencies": {
     "@napi-rs/cli": "^3.7.4",
     "@types/node": "^20.14.0",

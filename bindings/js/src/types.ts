@@ -90,10 +90,13 @@ export interface Profile {
 }
 
 export interface AutomaticRecording {
-  mode?: "disabled" | "on-failure" | "always";
   directory?: string;
 }
 
+export interface TraceOptions {
+  mode?: "on" | "off" | "on-failure";
+  directory?: string;
+}
 export interface SpawnOptions {
   backend?: Backend;
   cols?: number;
@@ -109,20 +112,102 @@ export interface SpawnOptions {
 
 export type Timeouts = NativeTimeouts;
 
-export interface TerminalArtifact {
-  text?: string;
-  screenshot?: string;
-}
-
 export interface ArtifactOptions {
   dir: string;
-  onFailure?: "svg" | "text" | "none";
+  onFailure?: "all" | "text" | "none";
+  includeRecording?: boolean;
 }
 
 export interface ClientOptions {
   backend?: Backend;
   profile?: Profile;
   timeouts?: Timeouts;
+  screenHistoryLimit?: number;
   artifacts?: ArtifactOptions;
   recording?: AutomaticRecording;
+  trace?: TraceOptions;
+}
+
+export type FailureReason =
+  | "completed"
+  | "test_failed"
+  | "timed_out"
+  | "session_exited"
+  | "cancelled"
+  | "locator_no_match"
+  | "locator_ambiguous"
+  | "unexpected_match"
+  | "match_not_actionable"
+  | "scalar_mismatch"
+  | "snapshot_mismatch"
+  | "emulator_fault"
+  | "internal_failure";
+
+export type LocatorFailureReason =
+  | "anchor_not_found"
+  | "anchor_ambiguous"
+  | "relative_region_no_match"
+  | "style_filter_removed_all"
+  | "link_filter_removed_all"
+  | "intersection_empty"
+  | "union_empty"
+  | "filter_removed_all"
+  | "nth_out_of_range"
+  | "outside_viewport"
+  | "matched_no_cells"
+  | "no_match"
+  | "ambiguous";
+
+export type FailureArtifactStatus = "written" | "partial" | "failed";
+export interface FailureTextPosition {
+  readonly row: number;
+  readonly column: number;
+}
+
+export interface FailureCellMismatch {
+  readonly location: FailureTextPosition;
+  readonly grapheme: string;
+  readonly property: string;
+  readonly operator: string;
+  readonly expected: string;
+  readonly actual: string;
+  readonly resolved?: string;
+  readonly reason: string;
+}
+
+export interface FailureLocatorDetails {
+  readonly reason?: LocatorFailureReason;
+  /** Selector descriptions leading to the failing stage. */
+  readonly selectors: readonly string[];
+  readonly stage_index?: number;
+  /** Sample candidate starts in terminal grid coordinates. */
+  readonly locations: readonly FailureTextPosition[];
+  readonly mismatches: readonly FailureCellMismatch[];
+}
+
+export interface FailureDetails {
+  readonly schema_version: number;
+  readonly operation: string;
+  readonly reason: FailureReason;
+  readonly summary: string;
+  readonly locator?: FailureLocatorDetails;
+  readonly comparison?: {
+    readonly kind: string;
+    readonly expected?: string;
+    readonly actual?: string;
+  };
+  readonly truncated: boolean;
+}
+
+export interface FailureArtifactRef {
+  readonly status: FailureArtifactStatus;
+  readonly directory: string;
+  readonly manifest?: string;
+  readonly report?: string;
+  readonly report_html?: string;
+  readonly timeline?: string;
+  readonly screen_text?: string;
+  readonly screen_svg?: string;
+  readonly recording?: string;
+  readonly errors?: readonly string[];
 }

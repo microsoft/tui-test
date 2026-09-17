@@ -1,11 +1,15 @@
-import type { TerminalArtifact } from "./types.js";
+import type {
+  FailureArtifactRef,
+  FailureDetails,
+} from "./types.js";
 
 export type ErrorKind = "assertion" | "usage" | "no_session" | "internal";
 
 export class TuiTestError extends Error {
   readonly kind: ErrorKind;
   readonly exitCode: number;
-  terminal?: TerminalArtifact;
+  readonly details?: FailureDetails;
+  readonly artifact?: FailureArtifactRef;
 
   constructor(message: string, kind: ErrorKind = "internal", exitCode = 5) {
     super(message);
@@ -39,7 +43,7 @@ export class InternalError extends TuiTestError {
   }
 }
 
-export function makeError(kind: string | undefined, message: string): TuiTestError {
+export function makeError(kind: ErrorKind, message: string): TuiTestError {
   switch (kind) {
     case "assertion":
       return new ExpectationError(message);
@@ -47,7 +51,9 @@ export function makeError(kind: string | undefined, message: string): TuiTestErr
       return new UsageError(message);
     case "no_session":
       return new NoSessionError(message);
-    default:
+    case "internal":
       return new InternalError(message);
+    default:
+      throw new TypeError(`unknown native error kind ${JSON.stringify(kind)}`);
   }
 }
