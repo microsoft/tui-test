@@ -1,9 +1,10 @@
 import asyncio
 import inspect
+import json
 import unittest
 from pathlib import Path
 
-from tui_test import Locator, TuiTest, UsageError, _native, unique_session
+from tui_test import Locator, NoSessionError, TuiTest, UsageError, _native, unique_session
 
 
 INVALID_CAPTURE_BACKGROUNDS = (
@@ -143,8 +144,43 @@ class NativeSurfaceTests(unittest.TestCase):
             session = _native.NativeSession(unique_session("native-number"))
             awaitable = session.resize(-1, 24)
             self.assertTrue(inspect.isawaitable(awaitable))
-            with self.assertRaises(_native.NativeUsageError):
+            with self.assertRaises(_native.NativeUsageError) as raised:
                 await awaitable
+            envelope = json.loads(
+                raised.exception._tui_test_error_json
+            )
+            self.assertEqual(envelope["kind"], "usage")
+            self.assertIn("cols", envelope["message"])
+            self.assertFalse(
+                hasattr(
+                    _native.NativeUsageError,
+                    "_tui_test_error_json",
+                )
+            )
+
+        asyncio.run(scenario())
+
+    def test_public_usage_and_no_session_errors_use_current_envelopes(self):
+        async def scenario():
+            terminal = TuiTest(unique_session("current-errors"))
+            for operation, public_type, kind in (
+                (lambda: terminal.resize(-1, 24), UsageError, "usage"),
+                (terminal.text, NoSessionError, "no_session"),
+            ):
+                with self.subTest(kind=kind):
+                    with self.assertRaises(public_type) as raised:
+                        await operation()
+                    error = raised.exception
+                    self.assertIsNone(error.details)
+                    self.assertIsNone(error.artifact)
+                    self.assertFalse(hasattr(error, "terminal"))
+                    raw = error.__cause__._tui_test_error_json
+                    self.assertIsInstance(raw, str)
+                    envelope = json.loads(raw)
+                    self.assertEqual(envelope["kind"], kind)
+                    self.assertEqual(envelope["message"], error.message)
+                    self.assertIsNone(envelope["details"])
+                    self.assertIsNone(envelope["artifact"])
 
         asyncio.run(scenario())
 
@@ -160,7 +196,7 @@ class NativeSurfaceTests(unittest.TestCase):
                 {"kind": "filter", "has_text": "x"},
             ):
                 with self.assertRaises(_native.NativeUsageError):
-                    await session.find_locator({"nodes": [stage], "root": 0})
+                    await session.find_locator({"nodes": [stage], "root": 0}, False)
 
         asyncio.run(scenario())
 
@@ -178,6 +214,31 @@ class NativeSurfaceTests(unittest.TestCase):
             with self.assertRaises(_native.NativeNoSessionError):
                 await session.wait_idle(2**63)
 
+        asyncio.run(scenario())
+
+    def test_screen_history_limit_is_validated_by_core(self):
+        async def scenario():
+            session = _native.NativeSession(unique_session("native-history"))
+            with self.assertRaises(_native.NativeUsageError) as raised:
+                await session.open(
+                    None,
+                    None,
+                    80,
+                    24,
+                    None,
+                    [],
+                    None,
+                    False,
+                    None,
+                    [],
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    51,
+                )
+            self.assertIn("at most 50", str(raised.exception))
         asyncio.run(scenario())
 
     def test_restart_validates_timeout_before_session_lookup(self):
@@ -211,7 +272,7 @@ class NativeStubTests(unittest.TestCase):
         self.assertIn("def open(", stub)
         self.assertIn("def restart(self, graceful_timeout_ms: int)", stub)
         self.assertIn(
-            "def find_locator(self, expression: typing.Dict[str, typing.Any])",
+            "def find_locator(self, expression: typing.Dict[str, typing.Any], require_one: bool)",
             stub,
         )
         self.assertIn("typing.Awaitable[", stub)
