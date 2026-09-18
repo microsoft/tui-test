@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, ExitStatus, MasterPty, PtySize};
 
 use crate::shell::Launch;
 
@@ -18,6 +18,21 @@ pub struct SpawnOptions {
     pub rows: u16,
     pub cwd: Option<String>,
     pub env: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProcessExit {
+    pub(crate) code: i32,
+    pub(crate) signal: Option<String>,
+}
+
+impl From<ExitStatus> for ProcessExit {
+    fn from(status: ExitStatus) -> Self {
+        Self {
+            code: status.exit_code() as i32,
+            signal: status.signal().map(str::to_string),
+        }
+    }
 }
 
 impl Pty {
@@ -152,10 +167,35 @@ impl Pty {
         Ok(())
     }
 
-    /// Return the exit code if the child has exited.
-    pub fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
-        self.child
-            .try_wait()
-            .map(|status| status.map(|status| status.exit_code() as i32))
+    /// Return the process status if the child has exited.
+    pub(crate) fn try_wait(&mut self) -> std::io::Result<Option<ProcessExit>> {
+        self.child.try_wait().map(|status| status.map(Into::into))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_exit_preserves_exit_code() {
+        assert_eq!(
+            ProcessExit::from(ExitStatus::with_exit_code(7)),
+            ProcessExit {
+                code: 7,
+                signal: None,
+            }
+        );
+    }
+
+    #[test]
+    fn process_exit_preserves_signal_and_fallback_code() {
+        assert_eq!(
+            ProcessExit::from(ExitStatus::with_signal("Terminated")),
+            ProcessExit {
+                code: 1,
+                signal: Some("Terminated".to_string()),
+            }
+        );
     }
 }

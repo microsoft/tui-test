@@ -163,6 +163,7 @@ class State:
     cwd: Optional[str]
     last_command: Optional[str]
     last_exit: Optional[int]
+    exit_signal: Optional[str]
     exited: Optional[int]
     ready: bool
     timeouts: Timeouts
@@ -183,6 +184,7 @@ class State:
             cwd=d.get("cwd"),
             last_command=d.get("last_command"),
             last_exit=d.get("last_exit"),
+            exit_signal=d.get("exit_signal"),
             exited=d.get("exited"),
             ready=d.get("ready", False),
             bell_count=d.get("bell_count", 0),

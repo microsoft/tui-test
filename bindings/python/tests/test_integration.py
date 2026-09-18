@@ -939,6 +939,12 @@ class IntegrationTests(unittest.TestCase):
                 with self.assertRaises(ExpectationError):
                     await su.wait_exit(timeout=30)
                 await su.signal("KILL")
+                await su.wait_exit(timeout=5000)
+                state = await su.state()
+                if sys.platform == "win32":
+                    self.assertIsNone(state.exit_signal)
+                else:
+                    self.assertIsInstance(state.exit_signal, str)
 
         run(scenario())
 

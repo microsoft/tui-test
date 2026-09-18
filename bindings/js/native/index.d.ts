@@ -323,6 +323,7 @@ export interface State {
   cwd: string | null
   last_command: string | null
   last_exit: number | null
+  exit_signal: string | null
   exited: number | null
   ready: boolean
   bell_count: number

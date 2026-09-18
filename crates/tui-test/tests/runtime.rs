@@ -495,6 +495,15 @@ fn process_exit_code(session: &Session) -> Option<i32> {
     state.exited
 }
 
+#[cfg(unix)]
+fn process_exit_signal(session: &Session) -> Option<String> {
+    let OperationResult::State(state) = session.execute(Operation::State).expect("read state")
+    else {
+        panic!("unexpected state result");
+    };
+    state.exit_signal
+}
+
 #[test]
 fn named_handles_share_a_process_local_terminal() {
     let name = format!("native-runtime-{}", std::process::id());
@@ -2160,6 +2169,7 @@ fn signal_derived_exit_status_is_preserved() {
     wait_for_exit(&session);
 
     assert_eq!(process_exit_code(&session), Some(1));
+    assert!(process_exit_signal(&session).is_some());
     session.close().expect("close signal exit");
 }
 

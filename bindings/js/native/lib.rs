@@ -265,6 +265,8 @@ pub struct State {
     pub last_command: Option<String>,
     #[napi(js_name = "last_exit")]
     pub last_exit: Option<i32>,
+    #[napi(js_name = "exit_signal")]
+    pub exit_signal: Option<String>,
     pub exited: Option<i32>,
     pub ready: bool,
     #[napi(js_name = "bell_count")]
@@ -318,6 +320,7 @@ impl From<CoreState> for State {
             cwd: value.cwd,
             last_command: value.last_command,
             last_exit: value.last_exit,
+            exit_signal: value.exit_signal,
             exited: value.exited,
             ready: value.ready,
             bell_count: value.bell_count as f64,

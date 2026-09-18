@@ -805,7 +805,14 @@ test("typed mouse and signal operations execute against a real program", async (
     await su.mouse.scroll("down", { amount: 1 });
     await su.mouse.click(1, 1);
     await su.signal("KILL");
-    assert.match(await su.text(), /ready/);
+    await su.waitExit({ timeout: 5000 });
+    const state = await su.state();
+    assert.match(state.text, /ready/);
+    if (process.platform === "win32") {
+      assert.equal(state.exit_signal, null);
+    } else {
+      assert.equal(typeof state.exit_signal, "string");
+    }
     await su.close();
     await assert.rejects(su.state(), (error) => error instanceof NoSessionError);
   } finally {
