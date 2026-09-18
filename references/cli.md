@@ -126,17 +126,9 @@ Interactive monitors mirror the session's keyboard, paste, and mouse modes.
 
 ## Failure diagnostics
 
-Assertion failures always include structured `details` in `--json` output. The details identify the operation, final reason, locator stages and candidate counts, style mismatches, process/runtime state, recent operations, and a bounded history of distinct screens.
+Configure `[trace]` before `open` or `run`. Use `mode = "on"` to retain every session or `"on-failure"` to retain failures. Each trace contains `trace.html`, `trace.md`, `trace.json`, `session.cast`, and `timeline.json`.
 
-For retained test/session traces, configure `[trace]` before `open` or `run`.
-`mode = "on"` retains every session, `"on-failure"` retains failures, and `"off"`
-is the default. Each retained trace includes `trace.md` and `trace.json` for
-agents, `session.cast` for asciicast replay, and a standalone `trace.html` for
-people. Successful sessions export on `close`; failed assertions export their
-pinned diagnostics immediately. Recording starts only when traces are enabled
-(or an explicit recording/artifact capture requests it).
-
-Write the complete set of offline artifacts:
+To write artifacts for one assertion:
 
 ```sh
 tui-test --json \
@@ -145,69 +137,16 @@ tui-test --json \
   expect text "Save" --fg green --timeout 5000
 ```
 
-Bundle mode writes:
+Artifact modes:
 
-| File | Consumer |
-| --- | --- |
-| `failure.md` | Agent-first diagnosis, expected/actual values, assertion checkpoint links, full retained screen text, style mismatches, runtime/context, and omissions. |
-| `failure.html` | Standalone trace viewer with a duration timeline, frame filmstrip, filterable Actions / Metadata sidebar, and Error / Cell / Call / Attachments panes. It starts at the pinned failure with explicit expected/observed values. Click actions or frames to navigate, and click terminal cells (or use arrow keys / coordinate inputs) to inspect their metadata. |
-| `failure.json` | Authoritative versioned manifest, committed last, including artifact hashes, sizes, omissions, sensitivity, and write errors. |
-| `timeline.json` | Versioned frame data used by the viewer: each `frames[]` entry has screen metadata, `svg`, a `cells[]` dictionary, and `grid[row][column]` indices into that dictionary. Cell colors retain `default`, ANSI indices, or RGB strings alongside resolved colors; widths distinguish wide glyphs from continuation cells. |
-| `current.txt`, `current.svg` | The pinned failure screen. |
-
-Artifact references use `report` for `failure.md`, `report_html` for `failure.html`, and `timeline` for `timeline.json`. Structured terminal history keeps recent samples in `screen_history.screens` and pinned assertion screens in `screen_history.checkpoints`; reports merge these by screen sequence. `runtime.session_name`, `runtime.shell`, and `runtime.timeouts` capture session identity and all effective timeout defaults; `operation.timeout_ms` is the failing operation's timeout, including a per-call override.
-
-Each retained action can carry `expectation`: a typed locator query plus its required outcome, a scalar subject/value, or an explicit unavailable reason. Passing assertions show their own selector, style, scope, occurrence and negation in the action list, banner and Call pane; they never borrow the failing assertion's expectation. Timeout values remain in Metadata, not the top header.
-
-The action list displays API-style query descriptions beside the operation, such as `getByText("Save")`, `getByStyle({ bold: true }).and(getByLink("test:docs"))`, and `.filter({ has: ..., hasNot: ... })`. These are reconstructed descriptions, not captured source code. Long expressions are ellipsized in the row but wrap in a selectable Locator block in Error details for the failure and Call details for each selected action. Selecting a successful action switches Error details to Call; Cell and Attachments stay open when selected.
-
-Locator diagnostics follow the expression tree. Each `stages[]` entry has an `expression_path` (`root`, `.within`, `.left`, `.right`, `.input`, `.has`, `.has_not`), `mode`, counts, and `evaluations`. Containment predicates are evaluated inside each candidate; repeated evaluations are aggregated by path. Counts on such entries are totals, not distinct whole-terminal candidates. Compound entries do not repeat their operand trees in `selector`; leaf selectors are retained when within the evidence budget.
-
-Only the decisive failing stage supplies cell mismatch highlights. An empty union operand or an empty `has_not` search is not itself a failure. Explicit uniqueness errors propagate from the offending operand and cannot be hidden by OR or negation. `link_filter_removed_all`, `intersection_empty`, `union_empty`, and `filter_removed_all` distinguish whole-match link refinement, cell-set composition, and containment rejection. At most 128 stage entries with an 8 KiB evidence budget each are retained, with sample/trace truncation flags when limited.
-
-The CLI daemon protocol is version 5. JS and Python native queries use one validated typed node-table/root expression input; the old linear-stage query format and style-link aliases are not accepted. `location()` requests final single-match resolution in the core, preserving explicit occurrence ordering on operands. The trace formatter handles text, style, exact-URI links, relative chains, AND/OR, filters, and occurrence placement without flattening the expression.
-
-The HTML embeds its scripts, styles, original frame images, cell metadata, Markdown and all available attachments as data. Attachments can be previewed and downloaded after the original directory is deleted; there are no sibling-file or network dependencies. File contents are checked against their recorded hashes before embedding. The embedded `failure.json` is a manifest snapshot taken before the HTML write, so it cannot include the HTML's own hash; the disk manifest adds that final entry. The viewer crops screenshot chrome for clarity, while SVG downloads preserve the original image. There are no before/after operation tabs: actions select their completion checkpoint, with individual retained frames available separately.
-
-The viewer uses tui-test's original emulator grids and SVG renderer, rather than reconstructing cell state in a second emulator. Asciinema-player supports seeking and markers, but does not expose cell metadata in its public API. Add `--failure-artifact-recording` to copy an immutable `session.cast` prefix through the failure boundary for continuous replay in an asciicast player. Recording is not required for frame inspection.
-
-Retention is bounded: at most 32 recent operations (each expectation and input limited to 8 KiB), 10 recent sampled screens by default (0-50 configurable, also bounded to 512 KiB with the current screen always retained), and 32 distinct action checkpoints bounded to 8 MiB. Enabled traces pin input returns as well as assertions and waits. Oversized expectations are replaced with an explicit unavailable reason, not a partial or inferred assertion. Setting `--screen-history-limit 0` disables historical checkpoint retention too. Passing checkpoints capture the screen at operation return; failure uses the pinned evaluation. Sampled screens do not represent every PTY write. Missing frames, evicted checkpoints, and oversized grids are reported explicitly, never substituted or interpolated. Play advances retained frames every 400 ms, stopping at the next retained checkpoint, not at original recording speed.
-
-The timeline is capped at 8 MiB, HTML at 128 MiB, Markdown at 1 MiB, and the whole bundle at 256 MiB. The HTML allowance includes base64-encoded evidence, including an optional recording of up to 64 MiB. Newest frames get the timeline budget first. Individual oversized SVGs or cell grids can be omitted while screen text and operation evidence remain; omissions are explicit. Attachment text previews are bounded to 512 KiB, with complete bytes available via Download.
-
-`--failure-artifact-mode` selects exported files, independently of structured error details and trace retention:
-
-| Mode | Files exported |
+| Mode | Files |
 | --- | --- |
 | `none` | No per-failure files. |
 | `text` | `failure.json`, `current.txt`, and `failure.md`. |
 | `html` | A standalone `failure.html` with its diagnostic data and evidence embedded. |
 | `all` | The text and HTML outputs plus `current.svg` and `timeline.json`. |
 
-Exports remain opt-in through `--failure-artifacts`; configured exports default to `all` in every language. `--failure-artifact-recording` independently adds an available `session.cast`, also embedded when HTML is requested. The former `bundle`, `json`, and `svg` presets are no longer accepted. An enabled `trace.mode` retains a complete trace using the `all` format; `none` does not override that separate setting.
-
-Diagnostic observations share immutable historical grids; passing snapshots do not clone those grids, and returned errors release their private raw observations after producing public details and artifacts. Style searches build mismatch descriptions only within their sampling budget. HTML generation checks the escaped payload size before allocating one output buffer. The viewer decodes attachments in chunks into one immutable Blob per file rather than retaining both full byte arrays and Blob copies.
-
-An unspecified trace setting is not an explicit `off` override: restart preserves the effective recording policy unless overridden. When a test finishes successfully in `on-failure` mode, all trace bundles created by its caught failures are discarded, not just the most recent one. Explicit per-failure artifacts retain their independent export behavior.
-
-Failure bundles can contain operands from both successful and failed assertions, raw typed/submitted input, key names and event types, mouse targets, terminal output, hyperlink targets, titles, screenshots, snapshot evidence, diagnostic context, and recordings. `recent_operations[].input` retains arguments and exact bytes accepted by the PTY writer up to 8 KiB per operation. An empty `sent_bytes` array means the keyboard protocol emitted no bytes; an absent array means bytes were not sent or not retained. Mouse input records the actual resolved cell, not an inferred cursor position. Environment values are not retained. Review bundles before uploading.
-
-### Viewer development
-
-The viewer lives in `trace-viewer` and is written in Svelte 5. The compiler and esbuild turn its components, scoped styles and client helpers into ordinary JavaScript and CSS embedded in a single HTML file. Opening a report requires no server, npm installation, CDN or network access.
-
-| Layer | Responsibility |
-| --- | --- |
-| `schema.js`, `model.js`, `format.js` | Validate embedded JSON once and normalize frames, actions, expectations, inputs, cell evidence, metadata and immutable attachment Blobs with bounded previews. Display fields use a common model; raw evidence stays separate. Missing checkpoints are explicit, never interpolated. |
-| `App.svelte`, `state.js` | Svelte `$state` and `$derived` connect the normalized report to pure selection/playback rules. A lifecycle-scoped `$effect` owns the playback timer. |
-| `components/` | `Header`, `Timeline`, `SideNav`, `BottomNav` and `TerminalViewer` define the workbench layout. Named Svelte snippets compose the six tab components; shared `TabBar`, `TabPanel`, `PropertyList` and `LocatorBlock` components handle repeated UI. Props and callback attributes make interactions explicit. Styles are scoped to their owning components. |
-| `TerminalScreen.svelte`, `CellOverlay.svelte`, `resources.js` | CSS container units fit the terminal without resize handlers; Svelte renders cell highlights. Image/download URLs have explicit disposal. Captured strings use Svelte's escaped interpolation, never `{@html}`; captured SVG only loads through inert image elements. |
-
-Run `npm ci --prefix trace-viewer`, then `npm run build --prefix trace-viewer`. The pinned Svelte 5 compiler emits client-side DOM code, and esbuild bundles it with the required Svelte helpers and license notices. The build writes minified JavaScript/CSS and the HTML template into `crates/tui-test/assets/trace-viewer`; commit those assets with source changes. It rejects unexpected runtime packages and enforces a 144 KiB raw / 48 KiB gzip shell budget, excluding trace data. Cargo builds and published crates use the checked-in assets without Node or npm. Viewer tooling is independent of the JavaScript binding.
-
-Run `npm run check --prefix trace-viewer` for Svelte/JavaScript types, accessibility warnings and stale assets, and `npm run test:unit --prefix trace-viewer` for parsing, component rendering and selection rules. From `trace-viewer`, run `npx playwright install chromium` once, then `npm test` for the offline browser suite. CI runs model/component tests on every platform and browser tests on Linux.
-
-To preview a captured report, run `npm run dev --prefix trace-viewer -- --report <path-to-saved-HTML>`. Open `trace-viewer/.preview/failure.html` and reload after edits; the watcher rebuilds the standalone viewer around the original embedded evidence.
+`--failure-artifact-recording` adds `session.cast`. Review artifacts before sharing because they can contain terminal output and other user data.
 
 ## Configure
 

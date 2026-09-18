@@ -41,24 +41,6 @@ Add `recording-raster` for APNG, GIF, and MP4. Add `ghostty`, `rio`, or `xtermjs
 
 Raster output uses installed fonts. Add a `recording-font-jetbrains-mono*` feature to bundle one.
 
-Configure a contextual session to write actionable failure bundles:
-
-```rust
-use std::path::PathBuf;
-use tui_test::{
-    ExecutionContext, FailureArtifactMode, FailureArtifactOptions, Session,
-};
-
-let terminal = Session::new("example").with_execution_context(ExecutionContext {
-    artifact: Some(FailureArtifactOptions {
-        directory: PathBuf::from("artifacts/failures"),
-        mode: FailureArtifactMode::All,
-        include_recording: false,
-    }),
-    ..ExecutionContext::default()
-});
-```
-
-`TuiTestError.details` includes the resolved locator stages, selection counts, style mismatches, process/runtime state, recent operations, and recent distinct screens. `TuiTestError.artifact` points to the committed `failure.json` when artifact output is configured.
+Use `ExecutionContext` with `FailureArtifactOptions` to write failure artifacts. `TuiTestError` exposes the structured details and artifact reference.
 
 Full API: [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/)

@@ -107,4 +107,4 @@ const terminal = new TuiTest("test", {
 });
 ```
 
-Agents should read `failure.md` first and use `failure.json` / `timeline.json` for exact structured evidence. Users can open `failure.html` directly from disk, select actions or filmstrip frames, read explicit expected/observed values, and click cells for style and mismatch metadata. The HTML embeds the available evidence for offline preview/download, including the pinned terminal text/SVG and an explicitly requested cast; it can be distributed alone. Review terminal evidence before uploading it.
+Open `failure.html` to view the failure. The artifact directory also contains the requested text, JSON, SVG, timeline, and recording files.

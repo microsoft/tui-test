@@ -41,26 +41,9 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_histo
 | `recording` | `AutomaticRecording \| dict` (directory only) | default recording directory |
 | `trace` | `TraceOptions \| dict` | `{"mode": "off", "directory": ".tui-test/traces"}` |
 
-`trace.mode` is `"on"` (all tests/sessions), `"off"` (default), or `"on-failure"`.
-Retained traces contain `trace.md`, `trace.json`, `session.cast`, and a standalone
-`trace.html`, plus screen/timeline evidence. There is no always-on cast by
-default; `recording` only chooses its directory. The async context managers
-supply the final test outcome. Direct callers can use `close(failed=True)` for
-an external failure or `close(failed=False)` when a test intentionally catches
-an assertion. Plain `close()` uses the session's recorded outcome.
+Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Each retained trace contains `trace.html`, `trace.md`, `trace.json`, `session.cast`, and `timeline.json`.
 
-`artifacts["on_failure"]` selects `"none"`, `"text"`, `"html"`, or `"all"` (the
-configured default). `text` exports JSON, terminal text, and Markdown; `html`
-exports a standalone viewer; `all` exports those files plus SVG and timeline
-JSON. `include_recording` separately includes an available recording. Without
-`artifacts`, per-failure exports are disabled. Frames and checkpoints are bounded;
-missing evidence is reported explicitly.
-
-`failure.html` can be distributed alone: its Attachments pane embeds the images, Markdown, structured evidence and included recording for offline preview/download. The trace layout shows expected/observed values alongside the terminal and labels the session, emulator, effective timeout defaults and failing assertion timeout. The embedded manifest snapshot excludes the HTML's own hash; the disk manifest includes it.
-
-Retained operation mappings can include `expectation`, containing the locator query and required outcome or a scalar subject/value. This includes passing assertions, is capped at 8 KiB per operation, and is marked unavailable if oversized. These operands can contain sensitive data. The selected assertion's expectation is shown even when it passes; timeout values are kept in Metadata rather than the top header.
-
-Expectations preserve composed query trees, including exact links, `and_`, `or_`, and `filter(has=..., has_not=...)`. Diagnostic stage mappings carry expression paths, per-path evaluation counts, and explicit truncation markers. The shared viewer shows an API-style query description beside each action; the spelling is a reconstructed description, not the original Python source. `location()` delegates final single-match resolution to the core using the validated expression transport.
+`artifacts["on_failure"]` selects `"none"`, `"text"`, `"html"`, or `"all"`. Use `include_recording` to include the cast in failure artifacts.
 
 #### Properties
 

@@ -92,13 +92,9 @@ Capture options: `background` and `transparent` (SVG, APNG, and GIF).
 
 Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`, `trace`, and `screen_history_limit`.
 
-Use `trace={"mode": "on-failure", "directory": "traces"}`; modes are `"on"`,
-`"off"`, and `"on-failure"`, defaulting to `"off"`. Retained traces contain
-agent-readable Markdown/JSON, an asciicast, and standalone HTML.
-`recording={"directory": "casts"}` chooses the raw cast directory without
-enabling automatic recording.
+Use `trace={"mode": "on-failure", "directory": "traces"}`. Traces default to `"off"` and each retained trace contains `trace.html`, `trace.md`, `trace.json`, `session.cast`, and `timeline.json`.
 
-Failure artifact modes are `none`, `text`, `html`, and `all`. `text` writes JSON, terminal text, and Markdown; `html` writes a standalone viewer with embedded evidence; `all` adds the loose text/JSON/Markdown/SVG files and timeline JSON. Configured exports default to `all`; omitting `artifacts` disables them. `include_recording=True` separately copies the automatic cast through the failure boundary.
+Failure artifact modes are `none`, `text`, `html`, and `all`. Use `include_recording=True` to include the cast.
 
 ## Input helpers
 
@@ -127,7 +123,5 @@ Helpers: `create_terminal`, `terminal`, `close_all_tracked`, `set_terminal_defau
 ## Errors
 
 `ExpectationError`, `UsageError`, `NoSessionError`, and `InternalError` extend `TuiTestError`.
-
-`TuiTestError.details` contains the structured operation, locator evaluation, style mismatches, process/runtime state, recent operations, and recent screens. `TuiTestError.artifact` identifies the committed bundle files. Terminal evidence and locator operands may be sensitive.
 
 Full API: [bindings/python/README.md](https://github.com/microsoft/tui-test/blob/main/bindings/python/README.md)

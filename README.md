@@ -144,6 +144,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `--session NAME` | Select a session. Default: `default` or `TUI_TEST_SESSION`. |
 | `--json` | Print JSON. |
 | `--verbose`, `-v` | Write a session log. |
+| `--failure-artifacts DIR` | Write structured assertion artifacts. |
+| `--failure-artifact-mode MODE` | Select `none`, `text`, `html`, or `all` (default when exports are enabled). |
+| `--failure-artifact-recording` | Copy the automatic cast through the failure boundary. |
+| `--diagnostic-context KEY=VALUE` | Add safe caller context to failure details. |
 
 CLI sessions persist between commands. `open` and `run` reuse a live session unless `--restart` is set.
 
@@ -161,7 +165,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | `daemon status` | Show daemon status. |
 | `daemon stop [--all]` | Stop one or all daemons. |
 
-`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, and `--timeout-<class> MS`. `open` also accepts `--shell`.
+`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, `--timeout-<class> MS`, and `--screen-history-limit COUNT`. `open` also accepts `--shell`.
 
 ### Text locators
 
@@ -304,6 +308,18 @@ The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`.
 | :---: | :---: |
 | <img alt="tui-test commands controlling a terminal session" src="static/tui-test-demo-controller.gif" width="420"> | <img alt="tui-test monitor showing the controlled terminal session" src="static/tui-test-demo-monitor.gif" width="420"> |
 
+### Diagnostics / trace viewer
+
+Add the following to `tui-test.toml` to retain failed traces, or use `mode = "on"` to retain every trace.
+
+```toml
+[trace]
+mode = "on-failure"
+directory = "./traces"
+```
+
+Open `trace.html` to view a trace; each trace also contains `trace.md`, `trace.json`, `session.cast`, and `timeline.json`.
+
 ### Configuration
 
 Create `tui-test.toml`:
@@ -316,13 +332,7 @@ scrollback = 10000
 background = "#000000"
 foreground = "#c0c0c0"
 red = "#800000"
-
-[trace]
-mode = "on-failure"
-directory = "./traces"
 ```
-
-Use `mode = "on"` to trace every session or `mode = "on-failure"` to trace failures. Open `trace.html` to view a trace. Each trace also includes `trace.md`, `trace.json`, `session.cast`, and `timeline.json`. See [failure diagnostics](references/cli.md#failure-diagnostics) for other export options.
 
 The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
 
