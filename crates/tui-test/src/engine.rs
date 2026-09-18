@@ -4625,6 +4625,61 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_capture_panics_remain_internal_errors_and_allow_recovery() {
+        for screen_dirty in [false, true] {
+            let engine = Engine::new(
+                "diagnostic-panic".into(),
+                Arc::new(Logger::disabled()),
+                PathBuf::new(),
+            );
+            engine
+                .execute(Operation::Run(sleeping_program(false)))
+                .unwrap();
+            {
+                let guard = engine.lock_session();
+                let session = guard.as_ref().unwrap();
+                let mut state = session.state.lock().unwrap();
+                state.emu = Box::new(PanickingTraceEmulator(AlacrittyEmu::new(
+                    80,
+                    24,
+                    &Profile::default(),
+                )));
+                // Cover both the pre-operation screen capture and the failure
+                // observation path when the cached screen does not need capture.
+                state.screen_dirty = screen_dirty;
+            }
+            for operation in [
+                Operation::ExpectBellCount {
+                    count: 1,
+                    timeout_ms: Some(0),
+                },
+                Operation::State,
+                Operation::WaitIdle {
+                    timeout_ms: Some(0),
+                },
+            ] {
+                let error = engine.execute(operation).unwrap_err();
+                assert_eq!(error.kind, ErrorKind::Internal);
+                assert!(error.message.contains("injected trace capture failure"));
+            }
+            let status = engine.status();
+            assert_eq!((status.cols, status.rows), (Some(80), Some(24)));
+            assert!(engine.is_open());
+            engine.execute(Operation::Close).unwrap();
+            assert!(!engine.is_open());
+
+            engine
+                .execute(Operation::Run(sleeping_program(false)))
+                .unwrap();
+            assert!(matches!(
+                engine.execute(Operation::State).unwrap(),
+                OperationResult::State(_)
+            ));
+            engine.execute(Operation::Close).unwrap();
+        }
+    }
+
+    #[test]
     fn trace_capture_panics_do_not_skip_close_or_escape_drop() {
         for close in [true, false] {
             let (engine, context, root) = trace_engine("trace-panic", TraceMode::On);

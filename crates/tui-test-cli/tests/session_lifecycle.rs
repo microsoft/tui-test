@@ -1133,13 +1133,62 @@ fn wait_ready_without_a_session_reports_no_session() {
 }
 
 #[test]
-fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
-    for &backend in Backend::ALL {
-        let sandbox = Sandbox::new("bells");
-        sandbox.ok(&["open", "--backend", backend.as_str()]);
+fn bell_command_fixture() {
+    if std::env::var_os("TUI_TEST_CLI_BELL_FIXTURE").is_none() {
+        return;
+    }
+    let mut stdout = std::io::stdout().lock();
+    let prompt = b"\x1b]133;A\x1b\\bells> \x1b]133;B\x1b\\";
+    stdout.write_all(prompt).unwrap();
+    stdout.flush().unwrap();
+    for line in std::io::stdin().lock().lines() {
+        let count = match line.unwrap().trim() {
+            "two" => 2,
+            "one" => 1,
+            command => panic!("unexpected bell fixture command: {command}"),
+        };
+        stdout.write_all(b"\x1b]133;C\x1b\\").unwrap();
+        stdout.write_all(&b"\x07\x07"[..count]).unwrap();
+        stdout.write_all(b"\x1b]133;D;0\x1b\\").unwrap();
+        stdout.write_all(prompt).unwrap();
+        stdout.flush().unwrap();
+    }
+}
 
-        sandbox.ok(&["submit", &two_bells_command()]);
-        sandbox.ok(&["expect", "bell", "2", "--timeout", "5000"]);
+#[test]
+fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
+    let fixture = std::env::current_exe().unwrap();
+    for &backend in Backend::ALL {
+        let sandbox = Sandbox::new(backend.as_str());
+        // Drive bell output directly, without shell startup/history work or a
+        // timed producer racing the concurrent daemon's wait registration.
+        sandbox.ok(&[
+            "--verbose",
+            "run",
+            "--backend",
+            backend.as_str(),
+            "--wait-ready",
+            "--env",
+            "TUI_TEST_CLI_BELL_FIXTURE=1",
+            "--",
+            fixture.to_str().unwrap(),
+            "--exact",
+            "bell_command_fixture",
+            "--nocapture",
+            "--test-threads=1",
+        ]);
+
+        let mut expectation = sandbox.spawn(&["expect", "bell", "2", "--timeout", "5000"]);
+        sandbox.wait_for_logged_operation("operation ExpectBellCount { count: 2,");
+        assert!(expectation.try_wait().unwrap().is_none());
+        sandbox.ok(&["submit", "two"]);
+        let output = expectation.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            backend.as_str(),
+            String::from_utf8_lossy(&output.stderr)
+        );
         sandbox.ok(&["wait", "command"]);
 
         let state = sandbox.ok(&["state"]);
@@ -1167,8 +1216,28 @@ fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
             assert_eq!(response["data"]["value"], 2, "{}", backend.as_str());
         }
 
-        sandbox.ok(&["submit", &delayed_bell_command()]);
-        sandbox.ok(&["wait", "bell", "--timeout", "5000"]);
+        let past_bells = sandbox.run(&["wait", "bell", "--timeout", "0"]);
+        assert_eq!(
+            past_bells.status.code(),
+            Some(1),
+            "{}: earlier bells must not satisfy a new wait",
+            backend.as_str()
+        );
+        let mut waiter = sandbox.spawn(&["wait", "bell", "--timeout", "5000"]);
+        sandbox.wait_for_logged_operation("operation WaitBell { timeout_ms: Some(5000) }");
+        assert!(
+            waiter.try_wait().unwrap().is_none(),
+            "{}: earlier bells must not satisfy a new wait",
+            backend.as_str()
+        );
+        sandbox.ok(&["submit", "one"]);
+        let output = waiter.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            backend.as_str(),
+            String::from_utf8_lossy(&output.stderr)
+        );
         sandbox.ok(&["expect", "bell", "3", "--timeout", "5000"]);
         let response: serde_json::Value =
             serde_json::from_str(&sandbox.ok(&["--json", "get", "bells"]))
@@ -1877,29 +1946,42 @@ fn usage_errors_do_not_capture_terminal_artifacts() {
 }
 
 #[test]
-fn diagnostic_capture_panics_do_not_kill_the_daemon() {
-    let sandbox = Sandbox::new("diagnostic-panic-containment");
-    sandbox.ok(&["open", "--no-wait-ready"]);
-    let resize = sandbox.run(&["resize", "0", "0"]);
-    assert_ne!(
-        resize.status.code(),
-        Some(4),
-        "diagnostic capture escaped the daemon: {}",
-        String::from_utf8_lossy(&resize.stderr)
-    );
-    let state = sandbox.run(&["state"]);
-    assert_eq!(
-        state.status.code(),
-        Some(5),
-        "corrupt diagnostic state should remain a contained internal error: {}",
-        String::from_utf8_lossy(&state.stderr)
-    );
-    let status = sandbox.run(&["daemon", "status"]);
-    assert!(
-        status.status.success(),
-        "daemon did not survive diagnostic capture panic: {}",
-        String::from_utf8_lossy(&status.stderr)
-    );
+fn invalid_resize_preserves_diagnostic_state_and_daemon() {
+    let sandbox = Sandbox::new("invalid-resize-diagnostics");
+    let opened: serde_json::Value = serde_json::from_str(&sandbox.ok(&[
+        "--json",
+        "open",
+        "--no-wait-ready",
+        "--cols",
+        "80",
+        "--rows",
+        "30",
+    ]))
+    .unwrap();
+    // Zero sizes used to inject an emulator panic. Validation must reject them
+    // instead; actual diagnostic panics are injected in the engine unit tests.
+    for (cols, rows) in [("0", "30"), ("80", "0"), ("0", "0")] {
+        let resize = sandbox.run(&["resize", cols, rows]);
+        assert_eq!(
+            resize.status.code(),
+            Some(2),
+            "invalid resize must be a usage error: {}",
+            String::from_utf8_lossy(&resize.stderr)
+        );
+        assert!(String::from_utf8_lossy(&resize.stderr).contains("greater than zero"));
+        let state: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "state"])).unwrap();
+        assert_eq!(state["data"]["cols"], 80);
+        assert_eq!(state["data"]["rows"], 30);
+        let status: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "daemon", "status"])).unwrap();
+        assert_eq!(status["data"]["pid"], opened["data"]["pid"]);
+        assert_eq!(status["data"]["shell_pid"], opened["data"]["shell_pid"]);
+    }
+    sandbox.ok(&["resize", "90", "26"]);
+    let state: serde_json::Value = serde_json::from_str(&sandbox.ok(&["--json", "state"])).unwrap();
+    assert_eq!(state["data"]["cols"], 90);
+    assert_eq!(state["data"]["rows"], 26);
     sandbox.ok(&["close"]);
 }
 
@@ -2018,22 +2100,6 @@ done
             "restart-argument".to_string(),
         ],
     )
-}
-
-fn two_bells_command() -> String {
-    if cfg!(windows) {
-        "[Console]::Out.Write([char]7); [Console]::Out.Write([char]7)".to_string()
-    } else {
-        "printf '\\a\\a'".to_string()
-    }
-}
-
-fn delayed_bell_command() -> String {
-    if cfg!(windows) {
-        "Start-Sleep -Seconds 1; [Console]::Out.Write([char]7)".to_string()
-    } else {
-        "sleep 1; printf '\\a'".to_string()
-    }
 }
 
 fn clipboard_command(base64: &str) -> String {

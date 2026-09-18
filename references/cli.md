@@ -79,7 +79,7 @@ than native binding stage arrays.
 | `mouse down\|up X Y [options]` | Press or release a button. |
 | `mouse drag X1 Y1 X2 Y2 [options]` | Drag. |
 | `mouse scroll up\|down [--amount N]` | Scroll. |
-| `resize COLS ROWS` | Resize. |
+| `resize COLS ROWS` | Resize. Zero dimensions are usage errors and leave the session unchanged. |
 | `signal NAME` | Send a signal. |
 
 Mouse button options are `--button left|middle|right`, `--alt`, `--ctrl`, and `--shift`.
@@ -94,7 +94,7 @@ Mouse button options are `--button left|middle|right`, `--alt`, `--ctrl`, and `-
 | `wait idle` | Wait for the screen to settle. |
 | `wait title TEXT` | Wait for a title. |
 | `wait clipboard [TEXT]` | Wait for a clipboard change or match. |
-| `wait bell` | Wait for a bell. |
+| `wait bell` | Wait for a bell received after this wait starts; earlier bells do not satisfy it. |
 
 Most waits accept `--timeout MS`. `expect`, `click`, and `highlight` retry. `find` reads the current screen.
 
