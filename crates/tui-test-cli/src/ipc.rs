@@ -205,6 +205,19 @@ fn check_readable(_: &Stream) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Probe a nonblocking, single-request connection while its operation waits.
+pub fn peer_disconnected(conn: &Stream) -> bool {
+    let mut reader = conn;
+    match check_readable(conn).and_then(|()| reader.read(&mut [0])) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(error) => !matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+        ),
+    }
+}
+
 /// Write one response line to an accepted connection.
 pub fn write_response(conn: &mut Stream, resp: &Response) -> anyhow::Result<()> {
     let mut line = serde_json::to_string(resp)?;

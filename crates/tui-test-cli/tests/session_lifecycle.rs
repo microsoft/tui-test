@@ -2,7 +2,7 @@
 
 use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
@@ -92,6 +92,29 @@ impl Sandbox {
     /// Captures output to catch daemon-inherited stdout pipe hangs.
     fn try_run(&self, args: &[&str]) -> Option<Output> {
         self.try_run_in(None, args)
+    }
+
+    fn spawn(&self, args: &[&str]) -> Child {
+        Command::new(BIN)
+            .args(["--session", &self.session])
+            .args(args)
+            .env("TUI_TEST_HOME", &self.home)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn concurrent client")
+    }
+
+    fn wait_for_logged_operation(&self, marker: &str) {
+        let log = self.home.join(format!("{}.log", self.session));
+        let started = Instant::now();
+        while !std::fs::read_to_string(&log).is_ok_and(|log| log.contains(marker)) {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "{marker} never reached the engine"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn try_run_in(&self, cwd: Option<PathBuf>, args: &[&str]) -> Option<Output> {
@@ -676,6 +699,118 @@ fn lifecycle_requests_interrupt_long_waits() {
     }
 }
 
+#[test]
+fn concurrent_expect_text_is_satisfied_by_another_client_submit() {
+    let sandbox = Sandbox::new("concurrent-expect");
+    sandbox.ok(&["--verbose", "open"]);
+    let mut waiter = sandbox.spawn(&[
+        "expect",
+        "text",
+        "concurrent-client-marker",
+        "--match",
+        "first",
+        "--timeout",
+        "5000",
+    ]);
+    sandbox.wait_for_logged_operation("concurrent-client-marker");
+    assert!(waiter.try_wait().unwrap().is_none());
+    let started = Instant::now();
+    sandbox.ok(&["submit", "echo concurrent-client-marker"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "submit waited for the expectation it needed to satisfy"
+    );
+    let output = waiter.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "concurrent expect failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn pending_wait_allows_input_mouse_resize_and_inspection() {
+    let sandbox = Sandbox::new("concurrent-controls");
+    sandbox.ok(&["--verbose", "open"]);
+    let mut waiter = sandbox.spawn(&["wait", "title", "never-set-title", "--timeout", "30000"]);
+    sandbox.wait_for_logged_operation("never-set-title");
+    assert!(waiter.try_wait().unwrap().is_none());
+    for args in [
+        vec!["type", "unused-input"],
+        vec!["key", "press", "Ctrl+C"],
+        vec!["mouse", "move", "1", "1"],
+        vec!["key", "press", "Ctrl+C"],
+        vec!["resize", "90", "26"],
+        vec!["state"],
+    ] {
+        let started = Instant::now();
+        sandbox.ok(&args);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{args:?} was serialized behind wait"
+        );
+        assert!(waiter.try_wait().unwrap().is_none());
+    }
+    let started = Instant::now();
+    sandbox.ok(&["close"]);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(!waiter.wait_with_output().unwrap().status.success());
+}
+
+#[test]
+fn abandoned_waiters_release_capacity_without_cancelling_other_clients() {
+    let sandbox = Sandbox::new("abandoned-waits");
+    sandbox.ok(&["--verbose", "open"]);
+    let mut waiter = sandbox.spawn(&[
+        "expect",
+        "text",
+        "surviving-client-marker",
+        "--match",
+        "first",
+        "--timeout",
+        "10000",
+    ]);
+    sandbox.wait_for_logged_operation("surviving-client-marker");
+    for _ in 0..16 {
+        for _ in 0..8 {
+            drop(monitor_stream(
+                &sandbox,
+                "{\"kind\":\"wait_title\",\"text\":\"never-set-title\",\"regex\":false,\
+                 \"not\":false,\"timeout_ms\":30000}\n",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(waiter.try_wait().unwrap().is_none());
+    let started = Instant::now();
+    sandbox.ok(&["submit", "echo surviving-client-marker"]);
+    sandbox.wait_for_text("surviving-client-marker", "2000");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let output = waiter.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "abandoned clients cancelled the surviving wait: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_exit_259_is_reported_and_allows_reopen() {
+    let sandbox = Sandbox::new("exit-259");
+    let first: serde_json::Value = serde_json::from_str(
+        &sandbox.ok(&["--json", "run", "--", "cmd.exe", "/d", "/c", "exit 259"]),
+    )
+    .unwrap();
+    sandbox.ok(&["wait", "exit", "--timeout", "2000"]);
+    let state: serde_json::Value = serde_json::from_str(&sandbox.ok(&["--json", "state"])).unwrap();
+    assert_eq!(state["data"]["exited"], 259);
+    let second: serde_json::Value = serde_json::from_str(&sandbox.ok(&["--json", "open"])).unwrap();
+    assert_ne!(first["data"]["shell_pid"], second["data"]["shell_pid"]);
+    sandbox.ok(&["submit", "echo after-exit-259"]);
+    sandbox.wait_for_text("after-exit-259", "2000");
+}
+
 #[cfg(unix)]
 #[test]
 fn close_is_bounded_when_a_descendant_keeps_the_pty_open() {
@@ -714,9 +849,7 @@ fn close_is_bounded_when_a_descendant_keeps_the_pty_open() {
         "shutdown waited for a descendant holding the PTY"
     );
     assert!(
-        closed.status.success()
-            || (closed.status.code() == Some(5)
-                && String::from_utf8_lossy(&closed.stderr).contains("teardown timed out")),
+        closed.status.success(),
         "unexpected close response: {closed:?}"
     );
     drop(child);
@@ -727,15 +860,21 @@ fn close_is_bounded_when_a_descendant_keeps_the_pty_open() {
 fn powershell_children_do_not_inherit_ctrl_c_ignore() {
     let sandbox = Sandbox::new("powershell-ctrl-c");
     sandbox.ok(&["open", "--shell", "powershell"]);
-    sandbox.ok(&[
-        "submit",
-        "Write-Output ('interrupt-'+'ready'); Start-Sleep -Seconds 30",
-    ]);
-    sandbox.wait_for_text("interrupt-ready", "5000");
-    sandbox.ok(&["signal", "INT"]);
-    sandbox.ok(&["wait", "command", "--timeout", "5000"]);
-    sandbox.ok(&["submit", "echo interrupt-survived"]);
-    sandbox.wait_for_text("interrupt-survived", "5000");
+    for (index, interrupt) in [vec!["signal", "INT"], vec!["key", "press", "Ctrl+C"]]
+        .into_iter()
+        .enumerate()
+    {
+        let marker = format!("interrupt-ready-{index}");
+        let command =
+            format!("Write-Output ('interrupt-'+'ready-{index}'); Start-Sleep -Seconds 30");
+        sandbox.ok(&["submit", &command]);
+        sandbox.wait_for_text(&marker, "5000");
+        sandbox.ok(&interrupt);
+        sandbox.ok(&["wait", "command", "--timeout", "5000"]);
+        sandbox.ok(&["submit", "echo interrupt-survived"]);
+        sandbox.ok(&["wait", "command", "--timeout", "5000"]);
+        sandbox.wait_for_text("interrupt-survived", "5000");
+    }
 }
 
 #[test]

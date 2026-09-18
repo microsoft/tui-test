@@ -17,6 +17,7 @@ use crate::protocol::{Request, Response};
 use crate::{config, ipc, monitor};
 
 const MAX_PENDING_REQUESTS: usize = 64;
+const MAX_PENDING_WAITS: usize = 64;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct Host {
@@ -26,6 +27,7 @@ struct Host {
     status: Mutex<Response>,
     last_activity: Arc<Mutex<Instant>>,
     stopping: AtomicBool,
+    waiters: Arc<AtomicUsize>,
 }
 
 struct ConnectionPermit(Arc<AtomicUsize>);
@@ -79,6 +81,7 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
         logging,
         last_activity: Arc::new(Mutex::new(Instant::now())),
         stopping: AtomicBool::new(false),
+        waiters: Arc::new(AtomicUsize::new(0)),
     });
     let (shutdown, shutdown_requests) = mpsc::channel();
     spawn_idle_watchdog(Arc::clone(&host), shutdown.clone());
@@ -165,8 +168,8 @@ fn handle_connection(
             let _ = ipc::write_response(reader.get_mut(), &Response::ok());
         }
         Request::Status => {
-            // Engine::status takes the session lock, which a wait can hold.
-            // Publish status after each operation instead of blocking probes.
+            // Startup/teardown can hold the session lock. Publish status after
+            // operations instead of making control-plane probes wait for it.
             let mut response = host.status.lock().unwrap().clone();
             if let Ok(Some(frame)) =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| host.engine.frame()))
@@ -213,6 +216,10 @@ fn handle_connection(
             }
         }
         request => {
+            if request.is_wait() {
+                spawn_wait(request, reader.into_inner(), Arc::clone(host));
+                return;
+            }
             if request_signal(&request).is_some_and(|name| {
                 matches!(
                     name.trim_start_matches("SIG").to_uppercase().as_str(),
@@ -231,6 +238,34 @@ fn handle_connection(
             }
         }
     }
+}
+
+fn spawn_wait(request: Request, mut conn: Stream, host: Arc<Host>) {
+    if host
+        .waiters
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            (count < MAX_PENDING_WAITS).then_some(count + 1)
+        })
+        .is_err()
+    {
+        let _ = ipc::write_response(
+            &mut conn,
+            &Response::from_error(tui_test::TuiTestError::internal("too many pending waits")),
+        );
+        return;
+    }
+    let permit = ConnectionPermit(Arc::clone(&host.waiters));
+    std::thread::spawn(move || {
+        let _permit = permit;
+        if conn.set_nonblocking(true).is_err() {
+            return;
+        }
+        let response = request.execute_cancellable(&host.engine, &|| {
+            host.stopping.load(Ordering::Acquire) || ipc::peer_disconnected(&conn)
+        });
+        *host.status.lock().unwrap() = status_response(&host.engine);
+        let _ = ipc::write_response(&mut conn, &response);
+    });
 }
 
 fn request_signal(request: &Request) -> Option<&str> {

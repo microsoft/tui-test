@@ -2,7 +2,9 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, ExitStatus, MasterPty, PtySize};
 
@@ -14,6 +16,108 @@ pub struct Pty {
     writer: Mutex<Option<Box<dyn Write + Send>>>,
     // Process control must never wait for a blocked input write.
     child: Mutex<Box<dyn Child + Send + Sync>>,
+    closed: Arc<AtomicBool>,
+}
+
+#[cfg(unix)]
+struct CancellableReader {
+    reader: Box<dyn Read + Send>,
+    readiness: std::os::fd::OwnedFd,
+    closed: Arc<AtomicBool>,
+    shutdown_started: Option<std::time::Instant>,
+}
+
+#[cfg(unix)]
+impl Read for CancellableReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        use std::os::fd::AsRawFd;
+
+        loop {
+            if self.closed.load(Ordering::Acquire) {
+                let started = self
+                    .shutdown_started
+                    .get_or_insert_with(std::time::Instant::now);
+                // Drain final output, but a descendant holding or continuously
+                // writing the slave must not keep teardown alive indefinitely.
+                if started.elapsed() >= Duration::from_millis(250) {
+                    return Ok(0);
+                }
+            }
+            match self.reader.read(buffer) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    let mut readiness = libc::pollfd {
+                        fd: self.readiness.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    // Wake immediately for final output/EOF rather than letting
+                    // the process watcher overtake a sleeping reader.
+                    let result = unsafe {
+                        libc::poll(&mut readiness, 1, crate::config::POLL_DELAY_MS as i32)
+                    };
+                    if result == -1 {
+                        let error = std::io::Error::last_os_error();
+                        if error.kind() != std::io::ErrorKind::Interrupted {
+                            return Err(error);
+                        }
+                    }
+                }
+                result => return result,
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn nonblocking_master(master: &dyn MasterPty) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::BorrowedFd;
+
+    let fd = master.as_raw_fd().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "PTY has no file descriptor",
+        )
+    })?;
+    // The master owns this descriptor. Duplicated readers/writers share its
+    // nonblocking flag, allowing both directions to observe shutdown.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // Poll a separately owned duplicate: kill can close the master and the OS
+    // can reuse its descriptor while the reader is still draining.
+    unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned()
+}
+
+fn child_status(child: &mut dyn Child) -> std::io::Result<Option<ProcessExit>> {
+    #[cfg(windows)]
+    if let Some(handle) = child.as_raw_handle() {
+        use windows_sys::Win32::Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+
+        // GetExitCodeProcess alone cannot distinguish STILL_ACTIVE from a real
+        // exit code of 259. The child lock keeps its process handle alive here.
+        return match unsafe { WaitForSingleObject(handle, 0) } {
+            WAIT_OBJECT_0 => {
+                let mut code = 0;
+                if unsafe { GetExitCodeProcess(handle, &mut code) } == 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(Some(ProcessExit {
+                        code: code as i32,
+                        signal: None,
+                    }))
+                }
+            }
+            WAIT_TIMEOUT => Ok(None),
+            WAIT_FAILED => Err(std::io::Error::last_os_error()),
+            status => Err(std::io::Error::other(format!(
+                "unexpected process wait status: {status}"
+            ))),
+        };
+    }
+    child.try_wait().map(|status| status.map(Into::into))
 }
 
 pub(crate) fn validate_size(cols: u16, rows: u16) -> Result<(), TuiTestError> {
@@ -94,6 +198,8 @@ impl Pty {
             pixel_width: 0,
             pixel_height: 0,
         })?;
+        #[cfg(unix)]
+        let readiness = nonblocking_master(pair.master.as_ref())?;
 
         let mut cmd = CommandBuilder::new(target);
         for arg in args {
@@ -117,12 +223,21 @@ impl Pty {
 
         let reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
+        let closed = Arc::new(AtomicBool::new(false));
+        #[cfg(unix)]
+        let reader = Box::new(CancellableReader {
+            reader,
+            readiness,
+            closed: closed.clone(),
+            shutdown_started: None,
+        });
 
         Ok((
             Pty {
                 master: Mutex::new(Some(pair.master)),
                 writer: Mutex::new(Some(writer)),
                 child: Mutex::new(child),
+                closed,
             },
             reader,
         ))
@@ -153,7 +268,7 @@ impl Pty {
         Self::spawn_with_cwd(&launch.target, &launch.args, &opts, cwd.as_deref())
     }
 
-    pub fn write(&self, data: &[u8]) -> std::io::Result<()> {
+    pub fn write(&self, mut data: &[u8]) -> std::io::Result<()> {
         let mut guard = self
             .writer
             .lock()
@@ -161,7 +276,23 @@ impl Pty {
         let writer = guard
             .as_mut()
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "PTY is closed"))?;
-        writer.write_all(data)?;
+        while !data.is_empty() {
+            if self.closed.load(Ordering::Acquire) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "PTY is closed",
+                ));
+            }
+            match writer.write(data) {
+                Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+                Ok(written) => data = &data[written..],
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(crate::config::POLL_DELAY_MS));
+                }
+                Err(error) => return Err(error),
+            }
+        }
         writer.flush()
     }
 
@@ -191,12 +322,13 @@ impl Pty {
     }
 
     pub fn kill(&self) {
+        self.closed.store(true, Ordering::Release);
         {
             let mut child = self
                 .child
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if !matches!(child.try_wait(), Ok(Some(_))) {
+            if !matches!(child_status(child.as_mut()), Ok(Some(_))) {
                 let _ = child.kill();
             }
         }
@@ -232,11 +364,11 @@ impl Pty {
 
     /// Return the process status if the child has exited.
     pub(crate) fn try_wait(&self) -> std::io::Result<Option<ProcessExit>> {
-        self.child
+        let mut child = self
+            .child
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .try_wait()
-            .map(|status| status.map(Into::into))
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        child_status(child.as_mut())
     }
 }
 
@@ -317,6 +449,7 @@ mod tests {
                 release: release_rx,
             }))),
             child: Mutex::new(Box::new(TestChild(Arc::new(AtomicBool::new(false))))),
+            closed: Arc::new(AtomicBool::new(false)),
         });
         let writer_pty = pty.clone();
         let writer = std::thread::spawn(move || writer_pty.write(b"blocked input"));

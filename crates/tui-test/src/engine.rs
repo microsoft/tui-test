@@ -1,8 +1,8 @@
 //! Reusable in-process terminal engine.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 use std::time::{Duration, Instant};
 
 use crate::api::{
@@ -43,7 +43,9 @@ use crate::terminal::locator::{self, Pattern};
 pub struct Engine {
     name: String,
     operations: Mutex<()>,
-    session: Mutex<Option<TerminalSession>>,
+    lifecycle: RwLock<()>,
+    pending_lifecycle: AtomicUsize,
+    session: RwLock<Option<TerminalSession>>,
     spawn_spec: Mutex<Option<SpawnSpec>>,
     live: Arc<Mutex<Option<LiveTarget>>>,
     interrupt: Mutex<Option<InterruptTarget>>,
@@ -53,6 +55,44 @@ pub struct Engine {
     recording: Mutex<RecordingState>,
     trace: Mutex<TraceState>,
     operation_history: Mutex<OperationHistory>,
+}
+
+struct LifecycleRequest<'a>(&'a AtomicUsize);
+
+impl<'a> LifecycleRequest<'a> {
+    fn new(pending: &'a AtomicUsize) -> Self {
+        pending.fetch_add(1, Ordering::AcqRel);
+        Self(pending)
+    }
+}
+
+impl Drop for LifecycleRequest<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+struct WaitContext<'a> {
+    session: &'a TerminalSession,
+    request_cancelled: &'a dyn Fn() -> bool,
+}
+
+impl WaitContext<'_> {
+    fn check_cancelled(&self) -> Result<(), TuiTestError> {
+        if (self.request_cancelled)() {
+            Err(TuiTestError::assertion("operation was cancelled"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl std::ops::Deref for WaitContext<'_> {
+    type Target = TerminalSession;
+
+    fn deref(&self) -> &Self::Target {
+        self.session
+    }
 }
 
 #[derive(Clone)]
@@ -220,7 +260,9 @@ impl Engine {
         Self {
             name,
             operations: Mutex::new(()),
-            session: Mutex::new(None),
+            lifecycle: RwLock::new(()),
+            pending_lifecycle: AtomicUsize::new(0),
+            session: RwLock::new(None),
             spawn_spec: Mutex::new(None),
             live: Arc::new(Mutex::new(None)),
             interrupt: Mutex::new(None),
@@ -246,6 +288,17 @@ impl Engine {
         operation: Operation,
         context: ExecutionContext,
     ) -> Result<OperationResult, TuiTestError> {
+        self.execute_with_context_cancellable(operation, context, &|| false)
+    }
+
+    /// Execute a request whose caller may disconnect. Cancellation is checked
+    /// during waits and never terminates the session or cancels another caller.
+    pub fn execute_with_context_cancellable(
+        &self,
+        operation: Operation,
+        context: ExecutionContext,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<OperationResult, TuiTestError> {
         if let Some(artifact) = &context.artifact {
             artifact.validate().map_err(TuiTestError::usage)?;
         }
@@ -254,10 +307,54 @@ impl Engine {
         }
         self.interrupt_for_operation(&operation);
         let interrupt_generation = self.interrupt_generation.load(Ordering::Acquire);
-        let _operation = self
-            .operations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let waiting = operation.is_wait();
+        let lifecycle = matches!(
+            operation,
+            Operation::Open(_)
+                | Operation::Run(_)
+                | Operation::Restart { .. }
+                | Operation::Close
+                | Operation::FinishTrace { .. }
+        );
+        // A wait pins its generation through diagnostics, but does not exclude
+        // input or resize. Announce lifecycle writers before locking so even a
+        // newly arriving waiter yields, independent of RwLock's fairness policy.
+        let pending = lifecycle.then(|| LifecycleRequest::new(&self.pending_lifecycle));
+        let cancelled =
+            || cancelled() || (waiting && self.pending_lifecycle.load(Ordering::Acquire) != 0);
+        let _shared = if lifecycle {
+            None
+        } else if waiting {
+            Some(loop {
+                if cancelled() {
+                    return Err(TuiTestError::assertion("operation was cancelled"));
+                }
+                match self.lifecycle.try_read() {
+                    Ok(guard) => break guard,
+                    Err(TryLockError::Poisoned(error)) => break error.into_inner(),
+                    Err(TryLockError::WouldBlock) => {
+                        std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
+                    }
+                }
+            })
+        } else {
+            Some(
+                self.lifecycle
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+        };
+        let _exclusive = lifecycle.then(|| {
+            self.lifecycle
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+        drop(pending);
+        let _operation = (!waiting).then(|| {
+            self.operations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
         if self.logger.enabled() {
             self.logger
                 .event(&format!("operation {}", operation_summary(&operation)));
@@ -299,7 +396,20 @@ impl Engine {
             );
         metadata.sequence = pending.sequence();
         let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute_inner(operation, &context, &mut metadata)
+            let result = self.execute_inner(operation, &context, &mut metadata, &cancelled);
+            if waiting && cancelled() {
+                let message = "operation was cancelled";
+                Err(
+                    TuiTestError::assertion(message).with_report(FailureReport::new(
+                        metadata.name.clone(),
+                        metadata.timeout_ms,
+                        FailureReason::Cancelled,
+                        message,
+                    )),
+                )
+            } else {
+                result
+            }
         }))
         .unwrap_or_else(|payload| {
             Err(TuiTestError::internal(format!(
@@ -374,6 +484,7 @@ impl Engine {
         operation: Operation,
         context: &ExecutionContext,
         metadata: &mut OperationMetadata,
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<OperationResult, TuiTestError> {
         match operation {
             Operation::FinishTrace { failed } => {
@@ -401,7 +512,7 @@ impl Engine {
                     .interrupt
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-                if let Some(session) = self.lock_session().take() {
+                if let Some(session) = self.write_session().take() {
                     session.kill();
                     drop(session);
                 }
@@ -423,6 +534,7 @@ impl Engine {
                         session,
                         Operation::Resize { cols, rows },
                         &mut metadata.input,
+                        cancelled,
                     )
                 });
                 if result.is_ok() {
@@ -437,7 +549,8 @@ impl Engine {
                 }
                 result
             }
-            other => self.with_session(|session| dispatch(session, other, &mut metadata.input)),
+            other => self
+                .with_session(|session| dispatch(session, other, &mut metadata.input, cancelled)),
         }
     }
 
@@ -601,7 +714,7 @@ impl Engine {
             SpawnCommand::Run(options) => options.recording = recording.clone(),
         }
         diagnostics.validate().map_err(TuiTestError::usage)?;
-        let mut current = self.lock_session();
+        let mut current = self.write_session();
         if let Some(previous) = current.as_ref() {
             if !restart && previous.is_alive()? {
                 return Ok(OpenResult {
@@ -695,7 +808,7 @@ impl Engine {
         let shell_pid = session.pid();
         let ready_timeout = open_ready_timeout(&session);
         let ready = if wait_ready.unwrap_or(program.is_none()) {
-            await_ready(&session, ready_timeout)
+            await_ready(&session, ready_timeout, &|| false)
         } else {
             session.is_ready()
         };
@@ -735,7 +848,7 @@ impl Engine {
             pty: session.pty.clone(),
             shell: session.shell.map(|value| value.as_str()),
         };
-        *self.lock_session() = Some(session);
+        *self.write_session() = Some(session);
         *self
             .live
             .lock()
@@ -754,10 +867,10 @@ impl Engine {
 
     fn with_session<F>(&self, operation: F) -> Result<OperationResult, TuiTestError>
     where
-        F: FnOnce(&mut TerminalSession) -> Result<OperationResult, TuiTestError>,
+        F: FnOnce(&TerminalSession) -> Result<OperationResult, TuiTestError>,
     {
-        let mut guard = self.lock_session();
-        let session = guard.as_mut().ok_or_else(TuiTestError::no_session)?;
+        let guard = self.lock_session();
+        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
         // The emulator is fed on the reader thread, where there is nobody to
         // return an error to, so a backend that failed to parse records it and
         // the next operation reports it. Checked before the operation runs:
@@ -777,8 +890,8 @@ impl Engine {
     }
 
     fn capture_current_screen_sequence(&self, force: bool, pin: bool) -> u64 {
-        let mut guard = self.lock_session();
-        let Some(session) = guard.as_mut() else {
+        let guard = self.lock_session();
+        let Some(session) = guard.as_ref() else {
             return 0;
         };
         let mut state = session
@@ -1331,8 +1444,8 @@ impl Engine {
                 RuntimeStatus {
                     session: self.name.clone(),
                     shell_pid: session.pid(),
-                    cols: Some(session.cols),
-                    rows: Some(session.rows),
+                    cols: Some(state.emu.size().0),
+                    rows: Some(state.emu.size().1),
                     shell: session.shell.map(|value| value.as_str().to_string()),
                     exited: state.exited,
                     timeouts: Some(effective_timeouts(session)),
@@ -1498,6 +1611,10 @@ impl Engine {
     }
 
     pub fn flush_recording(&self) -> Result<(), TuiTestError> {
+        let _lifecycle = self
+            .lifecycle
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _operation = self
             .operations
             .lock()
@@ -1584,9 +1701,15 @@ impl Engine {
         }
     }
 
-    fn lock_session(&self) -> MutexGuard<'_, Option<TerminalSession>> {
+    fn lock_session(&self) -> RwLockReadGuard<'_, Option<TerminalSession>> {
         self.session
-            .lock()
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write_session(&self) -> RwLockWriteGuard<'_, Option<TerminalSession>> {
+        self.session
+            .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
@@ -1718,11 +1841,14 @@ fn startup_readiness_error(operation: &str, timeout_ms: u64) -> TuiTestError {
     ))
 }
 
-fn await_ready(session: &TerminalSession, timeout_ms: u64) -> bool {
+fn await_ready(session: &TerminalSession, timeout_ms: u64, cancelled: &dyn Fn() -> bool) -> bool {
     let start = Instant::now();
     let cap = Duration::from_millis(timeout_ms);
     loop {
-        if session.cancelled.load(Ordering::Acquire) || !session.is_alive().unwrap_or(false) {
+        if cancelled()
+            || session.cancelled.load(Ordering::Acquire)
+            || !session.is_alive().unwrap_or(false)
+        {
             return false;
         }
         {
@@ -1801,10 +1927,15 @@ fn text_of(rows: &[Vec<EmuCell>]) -> String {
 }
 
 fn dispatch(
-    session: &mut TerminalSession,
+    session: &TerminalSession,
     operation: Operation,
     input: &mut Option<InputDetails>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<OperationResult, TuiTestError> {
+    let waiting = WaitContext {
+        session,
+        request_cancelled: cancelled,
+    };
     match operation {
         Operation::State => Ok(OperationResult::State(Box::new(state(session)))),
         Operation::Text { full } => Ok(OperationResult::Text(text_of(&grid(session, full)))),
@@ -1874,7 +2005,7 @@ fn dispatch(
             timeout_ms,
         } => {
             expect_colors(
-                session,
+                &waiting,
                 foreground.as_deref(),
                 background.as_deref(),
                 cursor.as_deref(),
@@ -1896,7 +2027,7 @@ fn dispatch(
             timeout_ms,
         } => {
             expect_mode(
-                session,
+                &waiting,
                 &mode,
                 enabled,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
@@ -1911,7 +2042,7 @@ fn dispatch(
             timeout_ms,
         } => {
             expect_cursor(
-                session,
+                &waiting,
                 visible,
                 shape.as_deref(),
                 x,
@@ -1970,7 +2101,7 @@ fn dispatch(
             not,
         } => {
             wait_title(
-                session,
+                &waiting,
                 &text,
                 regex,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
@@ -1980,7 +2111,7 @@ fn dispatch(
         }
         Operation::WaitClipboard { timeout_ms } => {
             wait_clipboard_change(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?;
             Ok(OperationResult::Unit)
@@ -1990,7 +2121,7 @@ fn dispatch(
             timeout_ms,
         } => {
             wait_clipboard_match(
-                session,
+                &waiting,
                 &pattern,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?;
@@ -1998,35 +2129,35 @@ fn dispatch(
         }
         Operation::WaitIdle { timeout_ms } => {
             wait_idle(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Idle)),
             )?;
             Ok(OperationResult::Unit)
         }
         Operation::WaitCommand { timeout_ms } => {
             wait_command(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Command)),
             )?;
             Ok(OperationResult::Unit)
         }
         Operation::WaitExit { timeout_ms } => {
             wait_exit(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Exit)),
             )?;
             Ok(OperationResult::Unit)
         }
         Operation::WaitReady { timeout_ms } => {
             wait_ready(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Ready)),
             )?;
             Ok(OperationResult::Unit)
         }
         Operation::WaitBell { timeout_ms } => {
             wait_bell(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?;
             Ok(OperationResult::Unit)
@@ -2043,7 +2174,7 @@ fn dispatch(
             timeout_ms,
         } => {
             wait_locator(
-                session,
+                &waiting,
                 &query,
                 not,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
@@ -2057,7 +2188,7 @@ fn dispatch(
             timeout_ms,
         } => {
             click_locator(
-                session,
+                &waiting,
                 &query,
                 options,
                 clicks,
@@ -2068,7 +2199,7 @@ fn dispatch(
         }
         Operation::HighlightLocator { query, timeout_ms } => {
             Ok(OperationResult::Matches(highlight_locator(
-                session,
+                &waiting,
                 &query,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?))
@@ -2080,7 +2211,7 @@ fn dispatch(
             timeout_ms,
         } => {
             expect_title(
-                session,
+                &waiting,
                 &text,
                 regex,
                 not,
@@ -2090,7 +2221,7 @@ fn dispatch(
         }
         Operation::ExpectExitCode { code, timeout_ms } => {
             expect_exit_code(
-                session,
+                &waiting,
                 code,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Command)),
             )?;
@@ -2102,7 +2233,7 @@ fn dispatch(
         }
         Operation::ExpectBellCount { count, timeout_ms } => {
             expect_bell_count(
-                session,
+                &waiting,
                 count,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?;
@@ -2208,9 +2339,17 @@ fn effective_timeouts(session: &TerminalSession) -> EffectiveTimeouts {
 }
 
 fn packed_screen(session: &TerminalSession, full: bool) -> PackedScreen {
-    let rows = grid(session, full);
+    let state = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let rows = if full {
+        state.emu.full_rows()
+    } else {
+        state.emu.viewable_rows()
+    };
     PackedScreen {
-        cols: session.cols,
+        cols: state.emu.size().0,
         rows: rows.len().min(u16::MAX as usize) as u16,
         utf8: rows_to_strings(&rows).join("\n").into_bytes(),
     }
@@ -2337,7 +2476,7 @@ fn resolve_expected_color(
 /// (`OSC 4`) are matched together, so a program that recolors several slots
 /// at once is asserted as a single state rather than a race between polls.
 fn expect_colors(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     foreground: Option<&str>,
     background: Option<&str>,
     cursor: Option<&str>,
@@ -2373,6 +2512,7 @@ fn expect_colors(
     let mut matched = false;
     let mut last = None;
     poll_until(
+        session,
         || {
             let (actual, actual_palette) = {
                 let state = session
@@ -2402,7 +2542,7 @@ fn expect_colors(
             matched || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if matched {
         return Ok(());
     }
@@ -2444,7 +2584,7 @@ fn modes_of(emu: &dyn Emulator) -> std::collections::BTreeMap<String, bool> {
 }
 
 fn expect_mode(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     name: &str,
     enabled: bool,
     timeout_ms: u64,
@@ -2461,12 +2601,13 @@ fn expect_mode(
     };
     let mut matched = false;
     poll_until(
+        session,
         || {
             matched = reached(session);
             matched || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if matched {
         return Ok(());
     }
@@ -2478,7 +2619,7 @@ fn expect_mode(
 }
 
 fn expect_cursor(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     visible: Option<bool>,
     shape: Option<&str>,
     x: Option<u16>,
@@ -2495,6 +2636,7 @@ fn expect_cursor(
     let mut last = None;
     let mut matched = false;
     poll_until(
+        session,
         || {
             let cursor = {
                 let state = session
@@ -2511,7 +2653,7 @@ fn expect_cursor(
             matched || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if matched {
         return Ok(());
     }
@@ -2683,14 +2825,19 @@ fn locate_center(session: &TerminalSession, text: &str) -> Option<(u16, u16)> {
         .and_then(|(x, y)| Some((u16::try_from(x).ok()?, u16::try_from(y).ok()?)))
 }
 
-fn poll_until<F: FnMut() -> bool>(mut predicate: F, timeout_ms: u64) -> bool {
+fn poll_until<F: FnMut() -> bool>(
+    session: &WaitContext<'_>,
+    mut predicate: F,
+    timeout_ms: u64,
+) -> Result<bool, TuiTestError> {
     let start = Instant::now();
     loop {
+        session.check_cancelled()?;
         if predicate() {
-            return true;
+            return Ok(true);
         }
         if start.elapsed() >= Duration::from_millis(timeout_ms) {
-            return false;
+            return Ok(false);
         }
         std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
     }
@@ -2737,13 +2884,14 @@ fn get_clipboard(session: &TerminalSession) -> Result<String, TuiTestError> {
 }
 
 fn wait_clipboard_match(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     pattern: &ClipboardPattern,
     timeout_ms: u64,
 ) -> Result<(), TuiTestError> {
     let mut matched = false;
     let mut read_error = None;
     poll_until(
+        session,
         || {
             let mut state = session
                 .state
@@ -2769,7 +2917,7 @@ fn wait_clipboard_match(
             matched || read_error.is_some() || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if let Some(error) = read_error {
         Err(error)
     } else if matched {
@@ -2788,7 +2936,8 @@ fn wait_clipboard_match(
     }
 }
 
-fn wait_clipboard_change(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+fn wait_clipboard_change(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
+    session.check_cancelled()?;
     let baseline = {
         let mut state = session
             .state
@@ -2807,6 +2956,7 @@ fn wait_clipboard_change(session: &TerminalSession, timeout_ms: u64) -> Result<(
     let mut changed = false;
     let mut read_error = None;
     poll_until(
+        session,
         || {
             let mut state = session
                 .state
@@ -2828,7 +2978,7 @@ fn wait_clipboard_change(session: &TerminalSession, timeout_ms: u64) -> Result<(
             changed || read_error.is_some() || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if let Some(error) = read_error {
         Err(error)
     } else if changed {
@@ -2852,7 +3002,7 @@ fn title_matches(session: &TerminalSession, pattern: &Pattern) -> bool {
 }
 
 fn wait_title(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     text: &str,
     regex: bool,
     timeout_ms: u64,
@@ -2862,12 +3012,13 @@ fn wait_title(
         .map_err(|error| TuiTestError::usage(format!("invalid regex: {error}")))?;
     let mut matched = false;
     poll_until(
+        session,
         || {
             matched = title_matches(session, &pattern) != not;
             matched || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if matched {
         Ok(())
     } else if session_stopped(session) {
@@ -2899,7 +3050,7 @@ fn wait_title(
 }
 
 fn expect_title(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     text: &str,
     regex: bool,
     not: bool,
@@ -2909,12 +3060,13 @@ fn expect_title(
         .map_err(|error| TuiTestError::usage(format!("invalid regex: {error}")))?;
     let mut matched = false;
     poll_until(
+        session,
         || {
             matched = title_matches(session, &pattern) != not;
             matched || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if matched {
         Ok(())
     } else if session_stopped(session) {
@@ -2943,10 +3095,11 @@ fn expect_title(
     }
 }
 
-fn wait_idle(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+fn wait_idle(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
     let quiet = Duration::from_millis(250);
     let mut capture_error = None;
     let settled = poll_until(
+        session,
         || {
             if session.cancelled.load(Ordering::Acquire) {
                 return true;
@@ -2959,7 +3112,7 @@ fn wait_idle(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestEr
             capture_error.is_some() || state.last_change.elapsed() >= quiet
         },
         timeout_ms,
-    );
+    )?;
     if let Some(error) = capture_error {
         Err(TuiTestError::internal(error))
     } else if session.cancelled.load(Ordering::Acquire) {
@@ -2996,14 +3149,14 @@ fn command_settled(session: &TerminalSession, baseline: u64) -> bool {
     tracker.finished_count() > baseline || !tracker.executing()
 }
 
-fn wait_command(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+fn wait_command(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
     let baseline = session
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .tracker
         .finished_count();
-    let settled = poll_until(|| command_settled(session, baseline), timeout_ms);
+    let settled = poll_until(session, || command_settled(session, baseline), timeout_ms)?;
     if session.cancelled.load(Ordering::Acquire) {
         Err(TuiTestError::assertion(
             "wait command: session was cancelled",
@@ -3032,9 +3185,10 @@ fn stall_reason(session: &TerminalSession) -> String {
     }
 }
 
-fn wait_exit(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+fn wait_exit(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
     let start = Instant::now();
     loop {
+        session.check_cancelled()?;
         let (exited, exit_error) = {
             let state = session
                 .state
@@ -3062,8 +3216,8 @@ fn wait_exit(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestEr
     }
 }
 
-fn wait_ready(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
-    if await_ready(session, timeout_ms) {
+fn wait_ready(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
+    if await_ready(session, timeout_ms, session.request_cancelled) {
         Ok(())
     } else {
         Err(TuiTestError::assertion(
@@ -3072,16 +3226,17 @@ fn wait_ready(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestE
     }
 }
 
-fn wait_bell(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+fn wait_bell(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
     let baseline = session.bells.sequence();
     let mut rang = false;
     poll_until(
+        session,
         || {
             rang = session.bells.sequence() != baseline;
             rang || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if rang {
         Ok(())
     } else if session_stopped(session) {
@@ -3270,7 +3425,7 @@ fn find_locator(
 }
 
 fn wait_locator(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     query: &LocatorQuery,
     not: bool,
     timeout_ms: u64,
@@ -3281,6 +3436,7 @@ fn wait_locator(
     let mut transitions = Vec::new();
     let mut last_signature = None;
     loop {
+        session.check_cancelled()?;
         let evaluated = evaluate_locator(session, query, false)?;
         let ambiguous = matches!(
             evaluated.evaluation.diagnostics.failure_reason,
@@ -3443,7 +3599,7 @@ fn observed_comparison_failure(
 }
 
 fn resolve_locator_click_point(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     query: &LocatorQuery,
     timeout_ms: u64,
 ) -> Result<(u16, u16), TuiTestError> {
@@ -3453,6 +3609,7 @@ fn resolve_locator_click_point(
     let mut transitions = Vec::new();
     let mut last_signature = None;
     loop {
+        session.check_cancelled()?;
         let (evaluated, outcome) = {
             let mut state = session
                 .state
@@ -3555,7 +3712,7 @@ fn resolve_locator_click_point(
 }
 
 fn click_locator(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     query: &LocatorQuery,
     options: crate::api::MouseOptions,
     clicks: u8,
@@ -3567,6 +3724,7 @@ fn click_locator(
     for _ in 0..clicks.max(1) {
         sequence.push_str(&mouse::click(x, y, options));
     }
+    session.check_cancelled()?;
     write_input(session, sequence.as_bytes(), input, Some((x, y)))
 }
 
@@ -3618,7 +3776,7 @@ fn matched_center(matched: &locator::LocatedMatch) -> Option<(usize, usize)> {
 }
 
 fn highlight_locator(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     query: &LocatorQuery,
     timeout_ms: u64,
 ) -> Result<Vec<TextMatch>, TuiTestError> {
@@ -3626,6 +3784,7 @@ fn highlight_locator(
     let description = query.selector.description();
     let mut resolved = None;
     poll_until(
+        session,
         || {
             let outcome = {
                 let mut state = session
@@ -3671,7 +3830,7 @@ fn highlight_locator(
             resolved.is_some() || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if let Some(matches) = resolved {
         Ok(matches)
     } else {
@@ -3926,7 +4085,7 @@ fn logical_color(color: Option<Color>) -> String {
 }
 
 fn expect_exit_code(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     code: i32,
     timeout_ms: u64,
 ) -> Result<(), TuiTestError> {
@@ -3936,7 +4095,7 @@ fn expect_exit_code(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .tracker
         .finished_count();
-    if !poll_until(|| command_settled(session, baseline), timeout_ms) {
+    if !poll_until(session, || command_settled(session, baseline), timeout_ms)? {
         return Err(TuiTestError::assertion(format!(
             "expected exit code {code}: timed out after {timeout_ms}ms; {}",
             stall_reason(session)
@@ -4003,18 +4162,19 @@ fn expect_output(session: &TerminalSession, text: &str, regex: bool) -> Result<(
 }
 
 fn expect_bell_count(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     expected: u64,
     timeout_ms: u64,
 ) -> Result<(), TuiTestError> {
     let mut actual = session.bells.count();
     poll_until(
+        session,
         || {
             actual = session.bells.count();
             actual >= expected || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if actual >= expected {
         Ok(())
     } else if session_stopped(session) {
@@ -4305,7 +4465,6 @@ mod tests {
         {
             let guard = engine.lock_session();
             let session = guard.as_ref().unwrap();
-            assert_eq!((session.cols, session.rows), (80, 24));
             let mut state = session.state.lock().unwrap();
             assert_eq!(state.emu.size(), (80, 24));
             assert!(state.emu.fault().is_none());

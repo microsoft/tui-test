@@ -27,7 +27,9 @@ For a new child, `--cwd` is relative to the invoking client's directory; omittin
 
 Each IPC connection must send its newline-terminated request within two seconds, with a maximum encoded size of 1 MiB. Incomplete connections are handled independently. This handshake deadline does not limit the requested operation's timeout.
 
-Daemon status probes and termination requests do not wait behind a pending terminal wait. Status combines the last completed operation's metadata with the live frame. Shutdown allows five seconds for engine teardown; if teardown stalls, the daemon stops and reports an internal error rather than hanging indefinitely.
+Waits and retrying assertions do not block another client's input, mouse, resize, inspection, or termination requests. For example, one client can `expect text "ready"` while another submits the command that prints it. Disconnecting a waiting client cancels only its request; it does not interrupt the child or other clients. Pending waits are bounded separately from the ordinary request queue.
+
+Lifecycle changes cancel pending waits before replacing their terminal generation, so an old expectation cannot succeed against a new child. Status combines the last completed operation's metadata with the live frame. Shutdown allows five seconds for engine teardown; if teardown stalls, the daemon stops and reports an internal error rather than hanging indefinitely. On Unix, teardown drains PTY output briefly rather than waiting indefinitely for descendants holding the slave; output arriving after that drain is not retained.
 
 ## Locate text
 

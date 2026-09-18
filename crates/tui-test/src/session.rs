@@ -90,8 +90,6 @@ pub struct Session {
     pub shell: Option<Shell>,
     pub backend: Backend,
     pub child_pid: Option<u32>,
-    pub cols: u16,
-    pub rows: u16,
     /// Per-class timeout defaults for the lifetime of this session.
     pub timeouts: crate::api::Timeouts,
     pub pty: Arc<Pty>,
@@ -213,6 +211,8 @@ impl Session {
         let reader_pty = pty.clone();
         let reader_logger = logger.clone();
         let reader_recorder = recorder.capture();
+        let reader_finished = Arc::new(AtomicBool::new(false));
+        let finished = reader_finished.clone();
         let mut reader = reader;
         let reader_handle = std::thread::spawn(move || {
             use std::io::Read;
@@ -250,6 +250,7 @@ impl Session {
                     }
                 }
             }
+            finished.store(true, Ordering::Release);
         });
 
         let watcher_state = state.clone();
@@ -259,6 +260,14 @@ impl Session {
             let status = watcher_pty.try_wait();
             match status {
                 Ok(Some(status)) => {
+                    // Preserve trailing output before publishing exit, without
+                    // waiting forever for descendants that inherited the PTY.
+                    let draining = Instant::now();
+                    while !reader_finished.load(Ordering::Acquire)
+                        && draining.elapsed() < Duration::from_millis(250)
+                    {
+                        std::thread::sleep(Duration::from_millis(crate::config::POLL_DELAY_MS));
+                    }
                     watcher_logger.event(&format!(
                         "process exited code={} signal={:?}",
                         status.code, status.signal
@@ -298,8 +307,6 @@ impl Session {
             shell,
             backend,
             child_pid,
-            cols,
-            rows,
             timeouts,
             pty,
             state,
@@ -331,7 +338,7 @@ impl Session {
         Ok(())
     }
 
-    pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), crate::api::TuiTestError> {
+    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), crate::api::TuiTestError> {
         validate_size(cols, rows)?;
         self.logger.event(&format!("resize {cols}x{rows}"));
         let mut state = self
@@ -344,8 +351,6 @@ impl Session {
             crate::api::TuiTestError::internal(format!("failed to resize PTY: {error}"))
         })?;
         resize_emulator_and_record(&mut state, &self.recorder, cols, rows);
-        self.cols = cols;
-        self.rows = rows;
         Ok(())
     }
 

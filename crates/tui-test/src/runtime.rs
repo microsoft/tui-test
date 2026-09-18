@@ -681,6 +681,10 @@ impl SessionRegistry {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     self.lock_sessions().get(name).cloned()
                 };
+                // The engine pins a terminal generation while it executes.
+                // Keep the selected owner, not the name lock: a concurrent
+                // close/reopen must not redirect this operation to a new owner.
+                drop(_generation);
                 session
                     .ok_or_else(TuiTestError::no_session)?
                     .execute_with_context(other, context)
