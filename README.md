@@ -144,10 +144,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `--session NAME` | Select a session. Default: `default` or `TUI_TEST_SESSION`. |
 | `--json` | Print JSON. |
 | `--verbose`, `-v` | Write a session log. |
-| `--failure-artifacts DIR` | Write structured assertion artifacts. |
-| `--failure-artifact-mode MODE` | Select `none`, `text`, `html`, or `all` (default when exports are enabled). |
-| `--failure-artifact-recording` | Copy the automatic cast through the failure boundary. |
-| `--diagnostic-context KEY=VALUE` | Add safe caller context to failure details. |
 
 CLI sessions persist between commands. `open` and `run` reuse a live session unless `--restart` is set.
 
@@ -165,7 +161,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | `daemon status` | Show daemon status. |
 | `daemon stop [--all]` | Stop one or all daemons. |
 
-`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, `--timeout-<class> MS`, and `--screen-history-limit COUNT`. `open` also accepts `--shell`.
+`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, and `--timeout-<class> MS`. `open` also accepts `--shell`.
 
 ### Text locators
 
@@ -321,29 +317,12 @@ background = "#000000"
 foreground = "#c0c0c0"
 red = "#800000"
 
-[recording]
-directory = "./casts"
-
 [trace]
 mode = "on-failure"
 directory = "./traces"
-
-[diagnostics]
-screen-history-limit = 10
 ```
 
-Trace modes are `off` (the default), `on` (every test/session), and `on-failure`.
-`recording` only selects the raw recording directory; it no longer has a `mode`.
-There is no always-on asciicast by default. Enabled traces capture a cast while
-the session runs and retain `trace.md`, `trace.json`, `session.cast`, and a
-standalone `trace.html`, alongside the original screen/timeline evidence.
-Successful traces are finalized on close; failure diagnostics are available at
-the failing operation. Test helpers supply the final outcome, so caught
-assertions in a passing test do not retain an `on-failure` trace.
-
-`--json` assertion failures include structured details. With `--failure-artifacts`, `all` mode writes `failure.md` for agents, a standalone `failure.html` trace viewer, `failure.json`, `timeline.json`, `current.txt`, and `current.svg`. The viewer opens at the failure with explicit expected/observed values, an action timeline and filmstrip, cell inspection, and labelled session/emulator/timeout metadata. Its Attachments pane embeds every available evidence file, including an opted-in recording, for offline preview and download. The HTML can be renamed or distributed alone; no server, CDN, sibling files, or network connection is needed.
-
-Frames come from the original emulator, not an asciicast re-emulation. Recent sampled screens and passing assertion checkpoints are retained separately; omissions are explicit rather than replaced with a nearby frame. The optional `session.cast` supports continuous replay in an asciicast player. See [failure diagnostics](references/cli.md#failure-diagnostics) for retention, formats, and limits. These files can contain terminal output, titles, locator operands, and other user-supplied values; review them before uploading.
+Use `mode = "on"` to trace every session or `mode = "on-failure"` to trace failures. Open `trace.html` to view a trace. Each trace also includes `trace.md`, `trace.json`, `session.cast`, and `timeline.json`. See [failure diagnostics](references/cli.md#failure-diagnostics) for other export options.
 
 The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
 
