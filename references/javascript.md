@@ -96,11 +96,9 @@ Capture options: `background` and `transparent` (SVG, APNG, and GIF).
 Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`, `trace`, and `screenHistoryLimit`.
 
 Use `trace: { mode: "on" | "off" | "on-failure", directory: "traces" }`.
-Traces default to `off`; retained traces contain agent-readable Markdown/JSON,
-an asciicast, and standalone HTML. `recording: { directory: "casts" }` chooses
-the raw cast directory without enabling automatic recording.
+Traces default to `off`. Users can open `trace.html` or replay `session.cast`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
 
-Failure artifact modes are `none`, `text`, `html`, and `all`. `text` writes JSON, terminal text, and Markdown; `html` writes a standalone viewer with embedded evidence; `all` adds the loose text/JSON/Markdown/SVG files and timeline JSON. Configured exports default to `all`; omitting `artifacts` disables them. `includeRecording: true` separately copies the automatic cast through the failure boundary.
+Failure artifact modes are `none`, `text`, `html`, and `all`. Use `includeRecording: true` to include the cast.
 
 ## Input helpers
 
@@ -130,7 +128,5 @@ Helpers: `createTerminal`, `withTerminal`, `closeAllTracked`, `setTerminalDefaul
 ## Errors
 
 `ExpectationError`, `UsageError`, `NoSessionError`, and `InternalError` extend `TuiTestError`.
-
-`TuiTestError.details` contains the structured operation, locator evaluation, style mismatches, process/runtime state, recent operations, and recent screens. `TuiTestError.artifact` identifies the committed bundle files. Terminal evidence and locator operands may be sensitive.
 
 Full API: [bindings/js/README.md](https://github.com/microsoft/tui-test/blob/main/bindings/js/README.md)

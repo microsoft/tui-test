@@ -308,6 +308,22 @@ The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`.
 | :---: | :---: |
 | <img alt="tui-test commands controlling a terminal session" src="static/tui-test-demo-controller.gif" width="420"> | <img alt="tui-test monitor showing the controlled terminal session" src="static/tui-test-demo-monitor.gif" width="420"> |
 
+### Diagnostics / trace viewer
+
+Add the following to `tui-test.toml` to retain failed traces, or use `mode = "on"` to retain every trace.
+
+```toml
+[trace]
+mode = "on-failure"
+directory = "./traces"
+```
+
+Users can open `trace.html` to review the trace or replay `session.cast`. Agents should read `trace.md` first and use `trace.json` and `timeline.json` for structured evidence instead of parsing the HTML.
+
+<p align="center">
+  <img alt="tui-test trace viewer showing a failed terminal assertion" src="static/trace-viewer.png">
+</p>
+
 ### Configuration
 
 Create `tui-test.toml`:
@@ -331,19 +347,6 @@ directory = "./traces"
 [diagnostics]
 screen-history-limit = 10
 ```
-
-Trace modes are `off` (the default), `on` (every test/session), and `on-failure`.
-`recording` only selects the raw recording directory; it no longer has a `mode`.
-There is no always-on asciicast by default. Enabled traces capture a cast while
-the session runs and retain `trace.md`, `trace.json`, `session.cast`, and a
-standalone `trace.html`, alongside the original screen/timeline evidence.
-Successful traces are finalized on close; failure diagnostics are available at
-the failing operation. Test helpers supply the final outcome, so caught
-assertions in a passing test do not retain an `on-failure` trace.
-
-`--json` assertion failures include structured details. With `--failure-artifacts`, `all` mode writes `failure.md` for agents, a standalone `failure.html` trace viewer, `failure.json`, `timeline.json`, `current.txt`, and `current.svg`. The viewer opens at the failure with explicit expected/observed values, an action timeline and filmstrip, cell inspection, and labelled session/emulator/timeout metadata. Its Attachments pane embeds every available evidence file, including an opted-in recording, for offline preview and download. The HTML can be renamed or distributed alone; no server, CDN, sibling files, or network connection is needed.
-
-Frames come from the original emulator, not an asciicast re-emulation. Recent sampled screens and passing assertion checkpoints are retained separately; omissions are explicit rather than replaced with a nearby frame. The optional `session.cast` supports continuous replay in an asciicast player. See [failure diagnostics](references/cli.md#failure-diagnostics) for retention, formats, and limits. These files can contain terminal output, titles, locator operands, and other user-supplied values; review them before uploading.
 
 The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
 

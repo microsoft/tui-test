@@ -46,26 +46,9 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `recording` | `{ directory? }` | default recording directory |
 | `trace` | `{ mode?, directory? }` | `{ mode: "off", directory: ".tui-test/traces" }` |
 
-`trace.mode` is `"on"` (all tests/sessions), `"off"` (default), or `"on-failure"`.
-Retained traces contain `trace.md`, `trace.json`, `session.cast`, and a standalone
-`trace.html`, plus screen/timeline evidence. There is no always-on cast by
-default; `recording` only chooses its directory. `withTerminal` supplies the
-final test outcome. Direct callers can use `close({ failed: true })` for an
-external failure or `close({ failed: false })` when a test intentionally catches
-an assertion. Plain `close()` uses the session's recorded outcome.
+Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Users can open `trace.html`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
 
-`artifacts.onFailure` selects `"none"`, `"text"`, `"html"`, or `"all"` (the
-configured default). `text` exports JSON, terminal text, and Markdown; `html`
-exports a standalone viewer; `all` exports those files plus SVG and timeline
-JSON. `includeRecording` separately includes an available recording. Without
-`artifacts`, per-failure exports are disabled. Frames and checkpoints are bounded;
-missing evidence is reported explicitly.
-
-The shared HTML viewer is maintained separately in the top-level `trace-viewer` directory, with generated assets embedded by the Rust crate. See [viewer development](../../references/cli.md#viewer-development). Viewer build tools are not binding dependencies. `recent_operations[].expectation` retains assertion operands, including successful locators, and `input` retains text, key event types, mouse targets and bytes accepted by the PTY writer. Each has an 8 KiB per-operation limit. These values may contain secrets.
-
-Composed locators retain their full query tree in operation expectations. The sidebar renders query descriptions such as `getByText("Docs").getByLink("test:docs")`, `.and(...)`, `.or(...)`, and `.filter({ has: ..., hasNot: ... })` beside actions. Full expressions wrap in the Error and Call panes. Diagnostic stages identify operand paths and aggregate candidate-bounded filter evaluations; only the decisive stage contributes mismatch overlays. `location()` uses the native expression input with final single-match resolution in the core.
-
-`failure.html` can be distributed alone: its Attachments pane embeds the images, Markdown, structured evidence and included recording for offline preview/download. The trace layout shows expected/observed values alongside the terminal and labels the session, emulator, effective timeout defaults and failing assertion timeout. The embedded manifest snapshot excludes the HTML's own hash; the disk manifest includes it.
+`artifacts.onFailure` selects `"none"`, `"text"`, `"html"`, or `"all"`. Use `includeRecording` to include the cast in failure artifacts.
 
 #### Properties
 
