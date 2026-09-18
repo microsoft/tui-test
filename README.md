@@ -321,7 +321,7 @@ directory = "./traces"
 Users can open `trace.html` to review the trace or replay `session.cast`. Agents should start with `trace.md`, then use `trace.json` and `timeline.json` for structured details.
 
 <p align="center">
-  <img alt="tui-test trace viewer showing a failed terminal assertion" src="static/trace-viewer.png" width="900">
+  <img alt="tui-test trace viewer showing a failed terminal assertion" src="static/trace-viewer.png">
 </p>
 
 ### Configuration
