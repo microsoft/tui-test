@@ -56,30 +56,111 @@ class _CapturingClient(client.TuiTest):
 
 
 class ClipboardPatternTests(unittest.TestCase):
-    def test_compiled_regex_flags_are_encoded(self):
-        self.assertEqual(
-            client._clipboard_pattern(
-                re.compile("ready", re.IGNORECASE | re.MULTILINE | re.DOTALL)
+    def test_compiled_patterns_keep_python_matching_semantics(self):
+        cases = (
+            (re.compile(r"(?<=prefix-)ready(?=-42)"), "prefix-ready-42", True),
+            (re.compile(r"^(\w+)-\1$"), "echo-echo", True),
+            (re.compile(r"^ready\Z"), "ready", True),
+            (re.compile(r"ready$"), "ready\n", True),
+            (re.compile(r"^i$", re.IGNORECASE), "\u0130", True),
+            (re.compile(r"^\w$"), "\u00b2", True),
+            (re.compile(r"^\w+$"), "e\u0301", False),
+            (re.compile(r"^\w+$", re.ASCII), "\u00e9", False),
+            (re.compile(r"(?a:^\w+$)"), "ready_42", True),
+            (re.compile(r"^ ready - [0-9]+ $", re.VERBOSE), "ready-42", True),
+            (re.compile(r"(?x: ^ ready - [0-9]+ $ )"), "ready-42", True),
+            (re.compile(r"[(?x:]"), "?", True),
+            (
+                re.compile(r"^ready.*end$", re.IGNORECASE | re.MULTILINE | re.DOTALL),
+                "before\nREADY\nend\nafter",
+                True,
             ),
-            ("(?ims:ready)", True),
         )
+        for pattern, value, matches in cases:
+            with self.subTest(pattern=pattern, value=value):
+                terminal = _CapturingClient("s")
+                terminal.fake.get_clipboard = mock.AsyncMock(return_value=value)
+                terminal.fake.wait_clipboard = mock.AsyncMock(
+                    side_effect=ExpectationError("clipboard did not change")
+                )
+                if matches:
+                    run(terminal.wait_clipboard(pattern, timeout=0))
+                    terminal.fake.wait_clipboard.assert_not_called()
+                else:
+                    with self.assertRaisesRegex(ExpectationError, "^wait_clipboard:"):
+                        run(terminal.wait_clipboard(pattern, timeout=0))
+                    terminal.fake.wait_clipboard.assert_awaited_once_with(None, False, 0)
+                terminal.fake.get_clipboard.assert_awaited_once_with()
 
-    def test_unsupported_top_level_and_scoped_flags_are_rejected(self):
-        for pattern in (
-            re.compile(".", re.ASCII),
-            re.compile(r"[ a]", re.VERBOSE),
-            re.compile(r"(?a:.)"),
-            re.compile(r"(?x:a b)"),
+    def test_plain_strings_and_change_waits_still_use_native_matching(self):
+        terminal = _CapturingClient("s")
+        run(terminal.wait_clipboard(timeout=123))
+        run(terminal.wait_clipboard("ready", timeout=456))
+        self.assertEqual(terminal.fake.calls, [
+            ("wait_clipboard", (None, False, 123)),
+            ("wait_clipboard", ("ready", False, 456)),
+        ])
+
+    def test_invalid_patterns_are_rejected_before_native_dispatch(self):
+        for pattern in (re.compile(b"ready"), b"ready", 42):
+            with self.subTest(pattern=pattern):
+                terminal = _CapturingClient("s")
+                with self.assertRaisesRegex(TypeError, "compiled text regex"):
+                    run(terminal.wait_clipboard(pattern))
+                self.assertEqual(terminal.fake.calls, [])
+
+    def test_regex_waits_share_one_deadline_across_clipboard_changes(self):
+        terminal = _CapturingClient("s")
+        terminal.fake.state = mock.AsyncMock(return_value={"timeouts": {"text": 100}})
+        terminal.fake.get_clipboard = mock.AsyncMock(
+            side_effect=["pending", "still pending", "ready"]
+        )
+        terminal.fake.wait_clipboard = mock.AsyncMock()
+        with mock.patch.object(
+            client.time, "monotonic_ns",
+            side_effect=[1_000_000_000, 1_020_000_000, 1_075_000_000],
         ):
-            with self.subTest(pattern=pattern.pattern):
-                with self.assertRaises(ValueError):
-                    client._clipboard_pattern(pattern)
+            run(terminal.wait_clipboard(re.compile("ready")))
+        terminal.fake.state.assert_awaited_once_with()
+        self.assertEqual(terminal.fake.wait_clipboard.await_args_list, [
+            mock.call(None, False, 80),
+            mock.call(None, False, 25),
+        ])
 
-    def test_flag_like_text_inside_a_character_class_is_not_rejected(self):
-        self.assertEqual(
-            client._clipboard_pattern(re.compile(r"[(?x:]")),
-            (r"[(?x:]", True),
-        )
+    def test_regex_waits_honor_client_and_per_call_timeouts(self):
+        for timeout, expected in ((None, 123), (0, 0), (456, 456), (2**63, 2**63)):
+            with self.subTest(timeout=timeout):
+                terminal = _CapturingClient("s", timeouts=Timeouts(text=123))
+                terminal.fake.get_clipboard = mock.AsyncMock(
+                    side_effect=["pending", "ready"]
+                )
+                terminal.fake.wait_clipboard = mock.AsyncMock()
+                with mock.patch.object(client.time, "monotonic_ns", return_value=0):
+                    run(terminal.wait_clipboard(re.compile("ready"), timeout=timeout))
+                terminal.fake.wait_clipboard.assert_awaited_once_with(None, False, expected)
+                self.assertEqual(terminal.fake.calls, [])
+
+    def test_regex_waits_validate_timeouts_even_when_the_clipboard_would_match(self):
+        for timeout in (-1, True, 1.5, "123", 2**64):
+            with self.subTest(timeout=timeout):
+                terminal = _CapturingClient("s")
+                terminal.fake.get_clipboard = mock.AsyncMock(return_value="ready")
+                with self.assertRaisesRegex(UsageError, "timeout_ms"):
+                    run(terminal.wait_clipboard(re.compile("ready"), timeout=timeout))
+                terminal.fake.get_clipboard.assert_not_called()
+                self.assertEqual(terminal.fake.calls, [])
+
+    def test_regex_wait_preserves_native_errors(self):
+        for error in (
+            NoSessionError("missing session"),
+            InternalError("clipboard unavailable"),
+        ):
+            with self.subTest(error=error):
+                terminal = _CapturingClient("s")
+                terminal.fake.error = error
+                with self.assertRaises(type(error)) as raised:
+                    run(terminal.wait_clipboard(re.compile("ready"), timeout=0))
+                self.assertIs(raised.exception, error)
 
 
 class TimeoutResolutionTests(unittest.TestCase):
@@ -613,6 +694,46 @@ class ClientTimeoutTests(unittest.TestCase):
 
 
 class RetryTests(unittest.TestCase):
+    def test_validation_errors_are_not_retried_or_cleaned_up(self):
+        for method, args in (("open", ()), ("run", ("program",))):
+            for error in (
+                UsageError("invalid cols"),
+                TypeError("invalid program"),
+                ValueError("invalid option"),
+            ):
+                with self.subTest(method=method, error=error):
+                    terminal = _CapturingClient("s")
+                    terminal.fake.error = error
+                    with self.assertRaises(type(error)) as raised:
+                        run(getattr(terminal, method)(*args, retries=2))
+                    self.assertIs(raised.exception, error)
+                    self.assertEqual([name for name, _ in terminal.fake.calls], [method])
+
+    def test_native_usage_errors_are_mapped_without_retrying_or_closing(self):
+        for method, args in (("open", ()), ("run", ("program",))):
+            with self.subTest(method=method):
+                terminal = _CapturingClient("s")
+                error = client.native.NativeUsageError("invalid cols")
+                error._tui_test_error_json = json.dumps({
+                    "kind": "usage", "message": "invalid cols",
+                })
+                terminal.fake.error = error
+                with self.assertRaises(UsageError) as raised:
+                    run(getattr(terminal, method)(*args, retries=2))
+                self.assertIs(raised.exception.__cause__, error)
+                self.assertEqual([name for name, _ in terminal.fake.calls], [method])
+
+    def test_synchronous_argument_errors_are_not_retried_or_cleaned_up(self):
+        for method, args in (("open", ()), ("run", ("program",))):
+            with self.subTest(method=method):
+                terminal = _CapturingClient("s")
+                start = mock.Mock(side_effect=TypeError("invalid argument"))
+                setattr(terminal.fake, method, start)
+                with self.assertRaises(TypeError):
+                    run(getattr(terminal, method)(*args, retries=2))
+                start.assert_called_once()
+                self.assertEqual(terminal.fake.calls, [])
+
     def test_retries_reattempt_and_reraise_last(self):
         terminal = _CapturingClient("s")
         attempts = {"count": 0}
@@ -631,6 +752,10 @@ class RetryTests(unittest.TestCase):
             run(terminal.open(retries=2))
         self.assertEqual(attempts["count"], 3)
         self.assertEqual(str(raised.exception), "attempt 3")
+        self.assertEqual(
+            [name for name, _ in terminal.fake.calls],
+            ["open", "close", "open", "close", "open"],
+        )
 
     def test_no_retries_single_attempt(self):
         terminal = _CapturingClient("s")

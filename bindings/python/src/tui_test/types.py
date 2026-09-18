@@ -20,6 +20,14 @@ class OpenResult(TypedDict):
     recording: str
 
 
+class Cursor(TypedDict):
+    x: int
+    y: int
+    visible: bool
+    shape: str
+    color: str
+
+
 @dataclass
 class Colors:
     foreground: Optional[str] = None
@@ -158,7 +166,7 @@ class TextMatch:
 class State:
     cols: int
     rows: int
-    cursor: Dict[str, Any]
+    cursor: Cursor
     title: Optional[str]
     cwd: Optional[str]
     last_command: Optional[str]

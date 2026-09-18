@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import gc
 import json
 import os
@@ -69,6 +70,34 @@ class IntegrationTests(unittest.TestCase):
                 await su.expect_exit_code(0)
                 st = await su.state()
                 self.assertGreater(st.cols, 0)
+
+        run(scenario())
+
+    def test_invalid_spawn_options_with_retries_preserve_existing_session(self):
+        async def scenario():
+            script = "import time; print('retry-owner-ready', flush=True); time.sleep(30)"
+            async with self._client() as su:
+                opened = await su.run(sys.executable, "-c", script)
+                await su.get_by_text("retry-owner-ready").wait(timeout=5000)
+                for options in ({"cols": -1}, {"timeouts": Timeouts(ready=-1)}):
+                    for method, args in (
+                        (su.open, ()),
+                        (su.run, (sys.executable, "-c", script)),
+                    ):
+                        with self.subTest(method=method.__name__, options=options):
+                            with self.assertRaises(UsageError):
+                                await method(*args, **options, retries=2, restart=True)
+                            self.assertIn(su.session, await tui_test.sessions())
+                            await su.get_by_text("retry-owner-ready").expect(timeout=0)
+                            reused = await su.run(sys.executable, "-c", script)
+                            self.assertEqual(reused["shell_pid"], opened["shell_pid"])
+                for method, args, options in (
+                    (su.open, (), {"shell": 123}),
+                    (su.run, (123,), {}),
+                ):
+                    with self.assertRaises(TypeError):
+                        await method(*args, **options, retries=2)
+                    await su.get_by_text("retry-owner-ready").expect(timeout=0)
 
         run(scenario())
 
@@ -487,14 +516,48 @@ class IntegrationTests(unittest.TestCase):
                     re.compile(r"^BUILD-[0-9]+$", re.IGNORECASE),
                     timeout=5000,
                 )
-                with self.assertRaises(ValueError):
-                    await su.wait_clipboard(re.compile(".", re.ASCII))
-                with self.assertRaises(ValueError):
-                    await su.wait_clipboard(re.compile(r"[ a]", re.VERBOSE))
-                with self.assertRaises(ValueError):
-                    await su.wait_clipboard(re.compile(r"(?x:a b)"))
-                with self.assertRaises(ValueError):
-                    await su.wait_clipboard(re.compile(r"(?a:.)"))
+                await su.wait_clipboard(re.compile(r"^build-\w+$", re.ASCII), timeout=0)
+                await su.wait_clipboard(
+                    re.compile(r"^ build - [0-9]+ $", re.VERBOSE), timeout=0
+                )
+                await su.wait_clipboard(re.compile(r"(?x: build - [0-9]+ )"), timeout=0)
+                await su.wait_clipboard(re.compile(r"(?a:^\w+-\d+$)"), timeout=0)
+
+        run(scenario())
+
+    def test_compiled_clipboard_patterns_use_python_semantics(self):
+        async def scenario():
+            async with self._client() as su:
+                await su.open(shell=SHELL)
+                for value, pattern, matches in (
+                    ("echo-echo", re.compile(r"^(\w+)-\1$"), True),
+                    ("prefix-ready", re.compile(r"(?<=prefix-)ready\Z"), True),
+                    ("\u0130", re.compile(r"^i$", re.IGNORECASE), True),
+                    ("\u00b2", re.compile(r"^\w$"), True),
+                    ("e\u0301", re.compile(r"^\w+$"), False),
+                    ("ready\n", re.compile(r"ready$"), True),
+                ):
+                    with self.subTest(value=value, pattern=pattern):
+                        encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
+                        await su.submit(clipboard_command(encoded))
+                        await su.wait_command()
+                        self.assertEqual(await su.get_clipboard(), value)
+                        if matches:
+                            await su.wait_clipboard(pattern, timeout=0)
+                        else:
+                            with self.assertRaises(ExpectationError):
+                                await su.wait_clipboard(pattern, timeout=0)
+                pending = asyncio.create_task(su.wait_clipboard(
+                    re.compile(r"(?<=next-)value\Z"), timeout=5000
+                ))
+                try:
+                    await su.submit(clipboard_command("bmV4dC12YWx1ZQ=="))
+                    await pending
+                    await su.wait_command()
+                finally:
+                    if not pending.done():
+                        pending.cancel()
+                        await asyncio.gather(pending, return_exceptions=True)
 
         run(scenario())
 
@@ -852,6 +915,9 @@ class IntegrationTests(unittest.TestCase):
                     set(cursor), {"x", "y", "visible", "shape", "color"}
                 )
                 self.assertIsInstance(cursor["visible"], bool)
+                self.assertIsInstance(cursor["x"], int)
+                self.assertIsInstance(cursor["y"], int)
+                self.assertIsInstance(cursor["color"], str)
                 self.assertIn(cursor["shape"], {"block", "underline", "bar"})
                 cells = await su.cells(0, 0, 2, 1)
                 self.assertTrue(cells)
