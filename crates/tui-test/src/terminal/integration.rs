@@ -76,6 +76,7 @@ impl CommandTracker {
         self.state.finished_count
     }
 
+    /// The last reported command status, cleared when a new command starts.
     pub fn last_exit(&self) -> Option<i32> {
         self.state.last_exit
     }
@@ -98,6 +99,7 @@ impl TrackerState {
         match marker {
             "A" => {
                 self.started = true;
+                self.prompt_active = false;
                 self.region = Region::None;
             }
             "B" => {
@@ -108,6 +110,7 @@ impl TrackerState {
             }
             "C" => {
                 self.prompt_active = false;
+                self.last_exit = None;
                 let cmd = clean(&self.command_buf);
                 let cmd = cmd.strip_prefix("> ").unwrap_or(&cmd).to_string();
                 self.last_command = Some(cmd);
@@ -117,6 +120,7 @@ impl TrackerState {
             }
             "D" => {
                 self.last_output = Some(clean(&self.output_buf));
+                self.prompt_active = false;
                 self.region = Region::None;
                 self.last_exit = exit.and_then(|s| s.trim().parse::<i32>().ok());
                 self.finished_count += 1;
@@ -240,6 +244,36 @@ mod tests {
         assert_eq!(t.last_exit(), Some(0));
         assert_eq!(t.finished_count(), 1);
         assert_eq!(t.last_output(), Some("hi"));
+    }
+
+    #[test]
+    fn a_new_prompt_is_not_ready_until_its_end_marker() {
+        let mut tracker = CommandTracker::new();
+        tracker.feed(&osc("B"));
+        assert!(tracker.is_ready());
+        tracker.feed(&osc("A"));
+        assert!(!tracker.is_ready());
+        tracker.feed(&osc("B"));
+        assert!(tracker.is_ready());
+        tracker.feed(&osc("D;0"));
+        assert!(!tracker.is_ready());
+        tracker.feed(&osc("B"));
+        assert!(tracker.is_ready());
+    }
+
+    #[test]
+    fn a_new_command_invalidates_the_previous_exit_code() {
+        let mut tracker = CommandTracker::new();
+        for marker in ["B", "C", "D;0", "A", "B"] {
+            tracker.feed(&osc(marker));
+        }
+        assert_eq!(tracker.last_exit(), Some(0));
+        tracker.feed(&osc("C"));
+        assert_eq!(tracker.last_exit(), None);
+        tracker.feed(&osc("A"));
+        assert_eq!(tracker.last_exit(), None);
+        tracker.feed(&osc("D;7"));
+        assert_eq!(tracker.last_exit(), Some(7));
     }
 
     #[test]

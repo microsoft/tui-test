@@ -18,7 +18,7 @@ use crate::shell::{self, Shell};
 use crate::terminal::backend::Backend;
 use crate::terminal::emu::{Emulator, MouseModeTracker};
 use crate::terminal::integration::CommandTracker;
-use crate::terminal::pty::{Pty, SpawnOptions};
+use crate::terminal::pty::{validate_cwd, validate_size, Pty, SpawnOptions};
 
 #[derive(Debug, Clone)]
 pub(crate) struct TextHighlight {
@@ -55,12 +55,35 @@ pub struct TermState {
     pub last_screen_sample: Instant,
     pub last_visual_change_ms: u64,
     pub diagnostic_error: Option<String>,
+    /// Time of the last observed visual change, not the last raw PTY output.
     pub last_change: Instant,
     pub awaiting_start: Option<u64>,
     pub exited: Option<i32>,
     pub exit_signal: Option<String>,
     pub exit_error: Option<String>,
     pub highlight: Option<TextHighlight>,
+}
+
+impl TermState {
+    pub(crate) fn awaiting_command_start(&self) -> bool {
+        self.awaiting_start
+            .is_some_and(|seen| self.tracker.started_count() == seen)
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        self.exited.is_none()
+            && self.exit_error.is_none()
+            && !self.awaiting_command_start()
+            && self.tracker.is_ready()
+    }
+
+    pub(crate) fn command_exit_code(&self) -> Option<i32> {
+        if self.awaiting_command_start() || self.tracker.executing() {
+            None
+        } else {
+            self.tracker.last_exit()
+        }
+    }
 }
 
 pub struct Session {
@@ -71,7 +94,7 @@ pub struct Session {
     pub rows: u16,
     /// Per-class timeout defaults for the lifetime of this session.
     pub timeouts: crate::api::Timeouts,
-    pub pty: Arc<Mutex<Pty>>,
+    pub pty: Arc<Pty>,
     pub state: Arc<Mutex<TermState>>,
     pub cancelled: Arc<AtomicBool>,
     pub(crate) bells: BellTracker,
@@ -105,6 +128,10 @@ impl Session {
         recording_path: Option<PathBuf>,
         recording_required: bool,
     ) -> anyhow::Result<Self> {
+        validate_size(cols, rows)?;
+        if let Some(cwd) = &cwd {
+            validate_cwd(cwd)?;
+        }
         diagnostics.validate().map_err(anyhow::Error::msg)?;
         let started_at = Instant::now();
         let bells = BellTracker::new(started_at);
@@ -179,7 +206,7 @@ impl Session {
         };
 
         let child_pid = pty.pid();
-        let pty = Arc::new(Mutex::new(pty));
+        let pty = Arc::new(pty);
         let cancelled = Arc::new(AtomicBool::new(false));
 
         let reader_state = state.clone();
@@ -211,7 +238,6 @@ impl Session {
                             st.visual_revision = st.visual_revision.wrapping_add(1);
                             st.screen_dirty = true;
                             st.mouse_mode.process(&buf[..n]);
-                            st.last_change = Instant::now();
                             st.highlight = None;
                             reader_recorder.on_data(&buf[..n]);
                             let _ = try_capture_visual_state(&mut st, false);
@@ -219,9 +245,7 @@ impl Session {
                         };
                         if !pending.is_empty() {
                             reader_logger.reply(&pending);
-                            if let Ok(mut p) = reader_pty.lock() {
-                                let _ = p.write(&pending);
-                            }
+                            let _ = reader_pty.write(&pending);
                         }
                     }
                 }
@@ -232,12 +256,7 @@ impl Session {
         let watcher_pty = pty.clone();
         let watcher_logger = logger.clone();
         let process_watcher = std::thread::spawn(move || loop {
-            let status = {
-                let mut pty = watcher_pty
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                pty.try_wait()
-            };
+            let status = watcher_pty.try_wait();
             match status {
                 Ok(Some(status)) => {
                     watcher_logger.event(&format!(
@@ -249,7 +268,6 @@ impl Session {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     st.exited = Some(status.code);
                     st.exit_signal = status.signal;
-                    st.last_change = Instant::now();
                     break;
                 }
                 Ok(None) => {
@@ -262,7 +280,6 @@ impl Session {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     st.exit_error = Some(error);
-                    st.last_change = Instant::now();
                     break;
                 }
             }
@@ -296,6 +313,9 @@ impl Session {
     }
 
     pub fn write(&self, data: &[u8]) -> anyhow::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
         self.logger.write(data);
         {
             let mut st = self
@@ -307,22 +327,25 @@ impl Session {
                 st.awaiting_start = Some(started_count);
             }
         }
-        self.pty
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .write(data)?;
+        self.pty.write(data)?;
         Ok(())
     }
 
-    pub fn resize(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
+    pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), crate::api::TuiTestError> {
+        validate_size(cols, rows)?;
         self.logger.event(&format!("resize {cols}x{rows}"));
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Keep output processing and recording on the old size unless the PTY
+        // accepts the resize. In particular, never feed zero sizes to an emulator.
+        self.pty.resize(cols, rows).map_err(|error| {
+            crate::api::TuiTestError::internal(format!("failed to resize PTY: {error}"))
+        })?;
+        resize_emulator_and_record(&mut state, &self.recorder, cols, rows);
         self.cols = cols;
         self.rows = rows;
-        resize_emulator_and_record(&self.state, &self.recorder, cols, rows);
-        self.pty
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .resize(cols, rows)?;
         Ok(())
     }
 
@@ -499,10 +522,7 @@ impl Session {
 
     pub fn kill(&self) {
         self.cancelled.store(true, Ordering::Release);
-        self.pty
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .close();
+        self.pty.close();
     }
 
     pub fn pid(&self) -> Option<u32> {
@@ -533,16 +553,9 @@ impl Session {
             return Ok(false);
         }
 
-        let exit_code = self
-            .pty
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .try_wait()
-            .map_err(|error| {
-                crate::api::TuiTestError::internal(format!(
-                    "failed to query process status: {error}"
-                ))
-            })?;
+        let exit_code = self.pty.try_wait().map_err(|error| {
+            crate::api::TuiTestError::internal(format!("failed to query process status: {error}"))
+        })?;
         let Some(status) = exit_code else {
             return Ok(true);
         };
@@ -559,11 +572,12 @@ impl Session {
     }
 
     pub fn is_ready(&self) -> bool {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .tracker
-            .is_ready()
+        !self.cancelled.load(Ordering::Acquire)
+            && self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_ready()
     }
 
     pub fn flush_recording(&self) -> Result<(), crate::api::TuiTestError> {
@@ -583,17 +597,14 @@ impl Session {
     }
 }
 
-fn resize_emulator_and_record(state: &Mutex<TermState>, recorder: &Recorder, cols: u16, rows: u16) {
-    let mut state = state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+fn resize_emulator_and_record(state: &mut TermState, recorder: &Recorder, cols: u16, rows: u16) {
     recorder.on_resize(cols, rows);
     state.emu.resize(cols, rows);
     state.visual_revision = state.visual_revision.wrapping_add(1);
     state.screen_dirty = true;
     state.last_change = Instant::now();
     state.highlight = None;
-    let _ = try_capture_visual_state(&mut state, true);
+    let _ = try_capture_visual_state(state, true);
 }
 
 pub(crate) fn capture_visual_state(state: &mut TermState, force: bool) -> u64 {
@@ -627,6 +638,7 @@ pub(crate) fn capture_visual_state(state: &mut TermState, force: bool) -> u64 {
     );
     if sequence != previous_sequence {
         state.last_visual_change_ms = elapsed;
+        state.last_change = Instant::now();
     }
     state.screen_dirty = false;
     state.last_screen_sample = Instant::now();
@@ -671,10 +683,7 @@ fn drain_reader_and_recorder(reader: &mut Option<JoinHandle<()>>, recorder: &mut
 impl Drop for Session {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
-        self.pty
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .close();
+        self.pty.close();
         drain_reader_and_recorder(&mut self.reader, &mut self.recorder);
     }
 }
@@ -842,7 +851,7 @@ mod tests {
         });
 
         let resize_started = Instant::now();
-        resize_emulator_and_record(&state, &recorder, 2, 1);
+        resize_emulator_and_record(&mut state.lock().unwrap(), &recorder, 2, 1);
         assert!(
             state
                 .lock()
