@@ -11,6 +11,10 @@ use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{GenericFilePath, GenericNamespaced};
 use tui_test::Backend;
 
+#[allow(dead_code)]
+#[path = "../src/config.rs"]
+mod cli_config;
+
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
 #[test]
@@ -210,15 +214,7 @@ impl Drop for Sandbox {
 /// Connect to the session socket and send one request line, leaving the stream
 /// open for whatever the request streams next.
 fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socket::Stream {
-    let raw = if cfg!(windows) {
-        format!("tui-test-{}.sock", sandbox.session)
-    } else {
-        sandbox
-            .home
-            .join(format!("{}.sock", sandbox.session))
-            .to_string_lossy()
-            .into_owned()
-    };
+    let raw = cli_config::socket_name_in(&sandbox.home, &sandbox.session);
     let name = if cfg!(windows) {
         raw.to_ns_name::<GenericNamespaced>()
     } else {
@@ -582,6 +578,164 @@ fn relative_recording_path_uses_the_invoking_client_directory() {
         std::fs::canonicalize(actual).unwrap(),
         std::fs::canonicalize(expected).unwrap()
     );
+}
+
+#[test]
+fn relative_spawn_cwd_and_screenshot_use_the_invoking_client_directory() {
+    let sandbox = Sandbox::new("client-cwd");
+    let daemon_cwd = sandbox.home.join("daemon");
+    let client_cwd = sandbox.home.join("client");
+    let child_cwd = client_cwd.join("child");
+    std::fs::create_dir_all(&daemon_cwd).unwrap();
+    std::fs::create_dir_all(&child_cwd).unwrap();
+    sandbox.ok_in(Some(&daemon_cwd), &["daemon", "start"]);
+    sandbox.ok_in(Some(&client_cwd), &["open", "--cwd", "child"]);
+    let state: serde_json::Value = serde_json::from_str(&sandbox.ok(&["--json", "state"])).unwrap();
+    assert_eq!(
+        std::fs::canonicalize(state["data"]["cwd"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(&child_cwd).unwrap(),
+    );
+    sandbox.ok_in(Some(&client_cwd), &["screenshot", "client.svg"]);
+    assert!(client_cwd.join("client.svg").is_file());
+    assert!(!daemon_cwd.join("client.svg").exists());
+
+    sandbox.ok_in(Some(&client_cwd), &["open", "--restart"]);
+    let state: serde_json::Value = serde_json::from_str(&sandbox.ok(&["--json", "state"])).unwrap();
+    assert_eq!(
+        std::fs::canonicalize(state["data"]["cwd"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(&client_cwd).unwrap(),
+    );
+}
+
+#[test]
+fn identical_session_names_in_different_homes_are_independent() {
+    let first = Sandbox::new("home-first");
+    let mut second = Sandbox::new("home-second");
+    second.session.clone_from(&first.session);
+    let a: serde_json::Value = serde_json::from_str(&first.ok(&["--json", "open"])).unwrap();
+    let b: serde_json::Value = serde_json::from_str(&second.ok(&["--json", "open"])).unwrap();
+    assert_ne!(a["data"]["pid"], b["data"]["pid"]);
+    assert_ne!(a["data"]["shell_pid"], b["data"]["shell_pid"]);
+    first.ok(&["close"]);
+    second.ok(&["submit", "echo independent-home"]);
+    second.wait_for_text("independent-home", "5000");
+    second.ok(&["daemon", "status"]);
+}
+
+#[test]
+fn incomplete_requests_do_not_block_other_clients_and_expire() {
+    let sandbox = Sandbox::new("incomplete-request");
+    sandbox.ok(&["daemon", "start"]);
+    let mut incomplete = monitor_stream(&sandbox, "{\"kind\":");
+    let started = Instant::now();
+    sandbox.ok(&["daemon", "status"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "status waited for an incomplete request"
+    );
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let _ = sender.send(incomplete.read(&mut [0]));
+    });
+    assert!(receiver.recv_timeout(Duration::from_millis(300)).is_err());
+    let result = receiver
+        .recv_timeout(Duration::from_secs(4))
+        .expect("incomplete request never expired");
+    assert!(
+        matches!(&result, Ok(0))
+            || result.as_ref().is_err_and(|error| matches!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::NotConnected
+            )),
+        "unexpected incomplete-request result: {result:?}"
+    );
+    reader.join().unwrap();
+    sandbox.ok(&["daemon", "status"]);
+}
+
+#[test]
+fn lifecycle_requests_interrupt_long_waits() {
+    for action in ["kill", "close"] {
+        let sandbox = Sandbox::new("lifecycle-during-wait");
+        sandbox.ok(&["open"]);
+        let _waiter = monitor_stream(
+            &sandbox,
+            "{\"kind\":\"wait_title\",\"text\":\"never-set-title\",\"regex\":false,\
+             \"not\":false,\"timeout_ms\":30000}\n",
+        );
+        std::thread::sleep(Duration::from_millis(150));
+        let started = Instant::now();
+        sandbox.ok(&["daemon", "status"]);
+        sandbox.ok(&[action]);
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{action} waited behind a long operation"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn close_is_bounded_when_a_descendant_keeps_the_pty_open() {
+    struct Descendant(String);
+    impl Drop for Descendant {
+        fn drop(&mut self) {
+            let _ = Command::new("kill").args(["-KILL", &self.0]).output();
+        }
+    }
+    let sandbox = Sandbox::new("descendant-pty");
+    let pid_file = sandbox.home.join("descendant.pid");
+    sandbox.ok(&[
+        "run",
+        "--",
+        "sh",
+        "-c",
+        "trap '' HUP; sleep 60 & printf '%s' \"$!\" > \"$1\"; wait",
+        "sh",
+        pid_file.to_str().unwrap(),
+    ]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let child = loop {
+        if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+            if !pid.is_empty() {
+                assert!(pid.parse::<u32>().is_ok_and(|pid| pid > 1));
+                break Descendant(pid);
+            }
+        }
+        assert!(Instant::now() < deadline, "descendant did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let started = Instant::now();
+    let closed = sandbox.run(&["close"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "shutdown waited for a descendant holding the PTY"
+    );
+    assert!(
+        closed.status.success()
+            || (closed.status.code() == Some(5)
+                && String::from_utf8_lossy(&closed.stderr).contains("teardown timed out")),
+        "unexpected close response: {closed:?}"
+    );
+    drop(child);
+}
+
+#[cfg(windows)]
+#[test]
+fn powershell_children_do_not_inherit_ctrl_c_ignore() {
+    let sandbox = Sandbox::new("powershell-ctrl-c");
+    sandbox.ok(&["open", "--shell", "powershell"]);
+    sandbox.ok(&[
+        "submit",
+        "Write-Output ('interrupt-'+'ready'); Start-Sleep -Seconds 30",
+    ]);
+    sandbox.wait_for_text("interrupt-ready", "5000");
+    sandbox.ok(&["signal", "INT"]);
+    sandbox.ok(&["wait", "command", "--timeout", "5000"]);
+    sandbox.ok(&["submit", "echo interrupt-survived"]);
+    sandbox.wait_for_text("interrupt-survived", "5000");
 }
 
 #[test]

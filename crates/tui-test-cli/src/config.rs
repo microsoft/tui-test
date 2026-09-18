@@ -50,14 +50,71 @@ const SOCKET_PATH_MAX: usize = 100;
 const SOCKET_DIGEST_HEX_LEN: usize = 16;
 
 pub fn socket_name(session: &str) -> String {
-    if cfg!(windows) {
-        return format!("tui-test-{session}.sock");
-    }
-    socket_path_in(&home_dir(), session)
-        .to_string_lossy()
-        .into_owned()
+    socket_name_in(&home_dir(), session)
 }
 
+pub fn socket_name_in(home: &std::path::Path, session: &str) -> String {
+    #[cfg(windows)]
+    {
+        let user = format!(
+            "{}\\{}",
+            std::env::var("USERDOMAIN").unwrap_or_default(),
+            std::env::var("USERNAME").unwrap_or_default(),
+        )
+        .to_lowercase();
+        pipe_name_in(home, &user, session)
+    }
+    #[cfg(not(windows))]
+    {
+        socket_path_in(home, session).to_string_lossy().into_owned()
+    }
+}
+
+#[cfg(windows)]
+fn pipe_name_in(home: &std::path::Path, user: &str, session: &str) -> String {
+    use std::os::windows::ffi::OsStrExt;
+
+    let absolute = std::path::absolute(home).unwrap_or_else(|_| home.to_path_buf());
+    // Canonicalize the existing ancestor too, so the endpoint is unchanged
+    // between the first client (before mkdir) and the newly started daemon.
+    let mut ancestor = absolute.as_path();
+    let canonical = loop {
+        if let Ok(canonical) = std::fs::canonicalize(ancestor) {
+            let suffix = absolute.strip_prefix(ancestor).expect("path ancestor");
+            break if suffix.as_os_str().is_empty() {
+                canonical
+            } else {
+                canonical.join(suffix)
+            };
+        }
+        match ancestor.parent() {
+            Some(parent) => ancestor = parent,
+            None => break absolute.clone(),
+        }
+    };
+    let mut path: Vec<u16> = canonical.as_os_str().encode_wide().collect();
+    let verbatim: Vec<_> = "\\\\?\\".encode_utf16().collect();
+    let unc: Vec<_> = "\\\\?\\UNC\\".encode_utf16().collect();
+    if path.starts_with(&unc) {
+        path.splice(..unc.len(), "\\\\".encode_utf16());
+    } else if path.starts_with(&verbatim) {
+        path.drain(..verbatim.len());
+    }
+    let mut digest = Sha256::new();
+    for component in [
+        path.into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+        user.as_bytes().to_vec(),
+        session.as_bytes().to_vec(),
+    ] {
+        digest.update((component.len() as u64).to_le_bytes());
+        digest.update(component);
+    }
+    format!("tui-test-{:x}.sock", digest.finalize())
+}
+
+#[cfg_attr(windows, allow(dead_code))]
 fn socket_path_in(dir: &std::path::Path, session: &str) -> PathBuf {
     let path = dir.join(format!("{session}.sock"));
     if path.as_os_str().len() <= SOCKET_PATH_MAX {
@@ -117,5 +174,33 @@ mod tests {
             socket_path_in(&dir, &format!("a{long}")),
             socket_path_in(&dir, &format!("b{long}")),
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pipe_names_are_scoped_to_home_user_and_session() {
+        let root = std::env::current_dir().unwrap();
+        let a = root.join("pipe-home-a");
+        let b = root.join("pipe-home-b");
+        let expected = pipe_name_in(&a, "domain\\alice", "work");
+        assert_eq!(
+            expected,
+            pipe_name_in(&a.join("."), "domain\\alice", "work")
+        );
+        assert_ne!(expected, pipe_name_in(&b, "domain\\alice", "work"));
+        assert_ne!(expected, pipe_name_in(&a, "domain\\bob", "work"));
+        assert_ne!(expected, pipe_name_in(&a, "domain\\alice", "other"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pipe_names_are_stable_before_and_after_home_creation() {
+        let home = std::env::temp_dir().join(format!("tui-test-pipe-home-{}", std::process::id()));
+        assert!(!home.exists());
+        let before = pipe_name_in(&home, "user", "work");
+        std::fs::create_dir_all(&home).unwrap();
+        let after = pipe_name_in(&home, "user", "work");
+        std::fs::remove_dir(&home).unwrap();
+        assert_eq!(before, after);
     }
 }

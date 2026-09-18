@@ -21,6 +21,14 @@ Use `--session NAME` to select a session. `open` and `run` reuse it unless `--re
 
 `restart` replays the last successful spawn, preserving its original working directory, options, and latest terminal size. It sends Ctrl-C and waits up to 5000 ms before forcing replacement; `--graceful-timeout 0` skips the wait. It works after child exit, but not after `close` or daemon shutdown. The terminal and automatic recording start fresh.
 
+For a new child, `--cwd` is relative to the invoking client's directory; omitting it uses that directory. Screenshot, manual recording, snapshot, and failure-artifact paths also belong to the invoking client, not the daemon's original directory. Paths in a config file remain relative to that file.
+
+`TUI_TEST_HOME` isolates daemon endpoints on Windows as well as Unix. Lifecycle `.pid.lock` files intentionally remain after shutdown; ownership is an OS file lock, not the file's age or existence.
+
+Each IPC connection must send its newline-terminated request within two seconds, with a maximum encoded size of 1 MiB. Incomplete connections are handled independently. This handshake deadline does not limit the requested operation's timeout.
+
+Daemon status probes and termination requests do not wait behind a pending terminal wait. Status combines the last completed operation's metadata with the live frame. Shutdown allows five seconds for engine teardown; if teardown stalls, the daemon stops and reports an internal error rather than hanging indefinitely.
+
 ## Locate text
 
 ```sh
