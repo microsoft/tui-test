@@ -888,7 +888,7 @@ class IntegrationTests(unittest.TestCase):
             await asyncio.wait_for(tui_test.close_all(), timeout=2)
             with self.assertRaises(ExpectationError) as raised:
                 await wait
-            self.assertIn("session exited before", str(raised.exception))
+            self.assertIn("operation was cancelled", str(raised.exception))
             self.assertNotIn(su.session, await tui_test.sessions())
 
         run(scenario())
@@ -1086,7 +1086,7 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
-    def test_cancelling_wait_keeps_native_operation_serialized(self):
+    def test_cancelling_wait_does_not_block_later_operations(self):
         async def scenario():
             async with self._client() as su:
                 await su.run(
@@ -1096,18 +1096,15 @@ class IntegrationTests(unittest.TestCase):
                 )
                 await su.get_by_text("cancel-ready").wait(timeout=5000)
                 wait = asyncio.create_task(
-                    su.get_by_text("never-visible").wait(timeout=350)
+                    su.get_by_text("never-visible").wait(timeout=2000)
                 )
                 await asyncio.sleep(0.05)
                 wait.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await wait
 
-                started = asyncio.get_running_loop().time()
-                state = await su.state()
-                elapsed = asyncio.get_running_loop().time() - started
+                state = await asyncio.wait_for(su.state(), timeout=1)
                 self.assertGreater(state.cols, 0)
-                self.assertGreaterEqual(elapsed, 0.15)
 
         run(scenario())
 
