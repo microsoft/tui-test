@@ -1,6 +1,6 @@
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -43,17 +43,49 @@ pub(crate) fn encode_png(
     frame: &Frame,
     renderer: &mut dyn FrameRenderer,
 ) -> anyhow::Result<()> {
-    let (width, height) = renderer.pixel_size();
-    let output = BufWriter::new(File::create(path)?);
-    let mut encoder = png::Encoder::new(output, width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
-    let mut writer = encoder.write_header()?;
-    let image = renderer.render(frame)?;
-    writer.write_image_data(image.as_raw())?;
-    writer.finish()?;
-    Ok(())
+    let (staged_path, file) = stage_png(path)?;
+    let result = (|| -> anyhow::Result<()> {
+        let (width, height) = renderer.pixel_size();
+        let mut output = BufWriter::new(file);
+        let mut encoder = png::Encoder::new(&mut output, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
+        let mut writer = encoder.write_header()?;
+        let image = renderer.render(frame)?;
+        writer.write_image_data(image.as_raw())?;
+        writer.finish()?;
+        output.flush()?;
+        drop(output);
+        std::fs::rename(&staged_path, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(staged_path);
+    }
+    result
+}
+
+fn stage_png(path: &Path) -> std::io::Result<(PathBuf, File)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    loop {
+        let staged_path = path.with_file_name(format!(
+            ".tui-test-png-{}-{}.stage",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged_path)
+        {
+            Ok(file) => return Ok((staged_path, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn encode_mp4(
@@ -501,6 +533,7 @@ mod tests {
     #[test]
     fn png_is_static_and_round_trips_dimensions_and_color() {
         let path = temp_path("png");
+        std::fs::write(&path, b"previous output").unwrap();
         let frame = frame(Color::Rgb(200, 10, 20), Duration::ZERO);
         let mut renderer = GridRenderer::with_zoom(1, 1, 1.5).unwrap();
         encode_png(&path, &frame, &mut renderer).unwrap();
@@ -517,6 +550,54 @@ mod tests {
         assert_eq!(&pixel[..3], &[200, 10, 20]);
 
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn failed_png_render_leaves_existing_output_and_no_staging_file() {
+        struct FailingRenderer;
+        impl FrameRenderer for FailingRenderer {
+            fn pixel_size(&self) -> (u32, u32) {
+                (1, 1)
+            }
+
+            fn render(&mut self, _: &Frame) -> anyhow::Result<crate::render::raster::RgbaFrame> {
+                anyhow::bail!("injected rendering failure")
+            }
+        }
+
+        let directory = temp_path("png-output");
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("output.png");
+        let frame = frame(Color::Rgb(1, 2, 3), Duration::ZERO);
+        std::fs::write(&path, b"previous output").unwrap();
+        let error = encode_png(&path, &frame, &mut FailingRenderer).unwrap_err();
+        assert!(error.to_string().contains("injected rendering failure"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous output");
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+
+        std::fs::remove_file(&path).unwrap();
+        assert!(encode_png(&path, &frame, &mut FailingRenderer).is_err());
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_png_replacement_removes_staging_file() {
+        let directory = temp_path("png-output");
+        let path = directory.join("output.png");
+        std::fs::create_dir_all(&path).unwrap();
+        let mut renderer = GridRenderer::new(1, 1);
+        assert!(encode_png(
+            &path,
+            &frame(Color::Rgb(1, 2, 3), Duration::ZERO),
+            &mut renderer
+        )
+        .is_err());
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        std::fs::remove_dir(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]

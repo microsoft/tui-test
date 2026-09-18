@@ -23,7 +23,11 @@ pub(super) fn worker_loop(
     receiver: mpsc::Receiver<Message>,
     mut primary: Option<cast::CastWriter>,
     logger: Arc<crate::logger::Logger>,
+    cols: u16,
+    rows: u16,
 ) {
+    let protected = primary.as_ref().map(cast::CastWriter::protect).transpose();
+    let mut seed = super::seed::State::new(cols, rows);
     let mut primary_decoder = cast::IncrementalDecoder::default();
     let mut primary_last_at = Instant::now();
     let mut active: Option<ActiveRecording> = None;
@@ -33,6 +37,7 @@ pub(super) fn worker_loop(
             Message::Data { at, bytes } => {
                 primary_last_at = at;
                 let text = primary_decoder.push(&bytes);
+                seed.process(text.as_bytes());
                 if !text.is_empty() {
                     if let Some(writer) = primary.as_mut() {
                         if let Err(error) = writer.write_output(at, &text) {
@@ -53,6 +58,7 @@ pub(super) fn worker_loop(
                 }
             }
             Message::Resize { at, cols, rows } => {
+                seed.resize(cols, rows);
                 if let Some(writer) = primary.as_mut() {
                     if let Err(error) = writer.write_resize(at, cols, rows) {
                         logger.event(&format!("automatic recording failed: {error}"));
@@ -65,24 +71,29 @@ pub(super) fn worker_loop(
                     remember_error(recording, result);
                 }
             }
-            Message::Start {
-                at,
-                request,
-                decoder,
-                reply,
-            } => {
+            Message::Start { at, request, reply } => {
                 if active.is_some() {
                     let _ = reply.send(Err(CaptureError::AlreadyActive));
                     continue;
                 }
                 let request = *request;
-                let writer = cast::CastWriter::create(
-                    &request.capture_path,
-                    request.cols,
-                    request.rows,
-                    &request.env,
-                    at,
-                );
+                let writer = (|| {
+                    let protected = protected
+                        .as_ref()
+                        .map_err(|error| std::io::Error::other(error.to_string()))?
+                        .as_ref();
+                    if let Some(protected) = protected {
+                        protected.check_path(&request.target_path)?;
+                    }
+                    cast::CastWriter::create_guarded(
+                        &request.capture_path,
+                        request.cols,
+                        request.rows,
+                        &request.env,
+                        at,
+                        protected,
+                    )
+                })();
                 let mut writer = match writer {
                     Ok(writer) => writer,
                     Err(error) => {
@@ -90,13 +101,14 @@ pub(super) fn worker_loop(
                         continue;
                     }
                 };
-                if let Err(error) = writer.write_output(at, &request.initial_output) {
+                if let Err(error) = writer.write_output(at, &seed.snapshot(&request.initial_output))
+                {
                     let _ = reply.send(Err(CaptureError::Io(error.to_string())));
                     continue;
                 }
                 active = Some(ActiveRecording {
                     writer,
-                    decoder: decoder.unwrap_or_else(|| primary_decoder.clone()),
+                    decoder: primary_decoder.clone(),
                     request,
                     started: at,
                     last_at: at,
@@ -109,7 +121,6 @@ pub(super) fn worker_loop(
                     let _ = reply.send(Err(CaptureError::NotActive));
                     continue;
                 };
-                let boundary = recording.decoder.clone();
                 let tail = recording.decoder.finish();
                 if !tail.is_empty() {
                     let result = recording.writer.write_output(recording.last_at, &tail);
@@ -127,7 +138,6 @@ pub(super) fn worker_loop(
                 let request = recording.request;
                 let _ = reply.send(Ok(StoppedRecording {
                     target_path: request.target_path,
-                    boundary,
                     #[cfg(feature = "recording-raster")]
                     capture_path: request.capture_path,
                     format: request.format,
