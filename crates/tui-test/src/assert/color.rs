@@ -55,7 +55,7 @@ fn invalid(got: &str) -> anyhow::Error {
 }
 
 fn parse_hex(hex: &str) -> anyhow::Result<(u8, u8, u8)> {
-    if hex.len() != 6 {
+    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         anyhow::bail!("hex color must be 6 digits");
     }
     let r = u8::from_str_radix(&hex[0..2], 16)?;
@@ -164,6 +164,18 @@ mod tests {
         assert!(matches!(
             Expected::parse("255,0,0").unwrap(),
             Expected::Rgb(255, 0, 0)
+        ));
+    }
+
+    #[test]
+    fn malformed_unicode_hex_colors_return_errors() {
+        for color in ["#aéabc", "#界abc", "#a💩a", "#ééé", "#gg0000"] {
+            let error = Expected::parse(color).unwrap_err();
+            assert!(error.to_string().contains("color must be"), "{color}");
+        }
+        assert!(matches!(
+            Expected::parse("#aBcD09").unwrap(),
+            Expected::Hex(0xab, 0xcd, 9)
         ));
     }
 

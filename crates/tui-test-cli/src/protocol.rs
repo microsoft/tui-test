@@ -232,6 +232,10 @@ pub enum Request {
 
 impl Request {
     pub fn execute(self, engine: &Engine) -> Response {
+        self.execute_cancellable(engine, &|| false)
+    }
+
+    pub fn execute_cancellable(self, engine: &Engine, cancelled: &dyn Fn() -> bool) -> Response {
         if let Request::WithContext {
             request,
             mut context,
@@ -250,9 +254,9 @@ impl Request {
                 context.retention = request_retention;
             }
             return match request.into_operation() {
-                Ok(operation) => {
-                    Response::from_result(engine.execute_with_context(operation, context))
-                }
+                Ok(operation) => Response::from_result(
+                    engine.execute_with_context_cancellable(operation, context, cancelled),
+                ),
                 Err(error) => Response::from_error(error),
             };
         }
@@ -263,7 +267,7 @@ impl Request {
             _ => None,
         };
         match self.into_operation() {
-            Ok(operation) => Response::from_result(engine.execute_with_context(
+            Ok(operation) => Response::from_result(engine.execute_with_context_cancellable(
                 operation,
                 ExecutionContext {
                     operation_name: Some(operation_name),
@@ -271,8 +275,32 @@ impl Request {
                     trace,
                     ..ExecutionContext::default()
                 },
+                cancelled,
             )),
             Err(error) => Response::from_error(error),
+        }
+    }
+
+    pub fn is_wait(&self) -> bool {
+        match self {
+            Self::WithContext { request, .. } => request.is_wait(),
+            Self::WaitTitle { .. }
+            | Self::WaitClipboard { .. }
+            | Self::WaitIdle { .. }
+            | Self::WaitCommand { .. }
+            | Self::WaitExit { .. }
+            | Self::WaitReady { .. }
+            | Self::WaitBell { .. }
+            | Self::ClickLocator { .. }
+            | Self::HighlightLocator { .. }
+            | Self::ExpectLocator { .. }
+            | Self::ExpectTitle { .. }
+            | Self::ExpectExitCode { .. }
+            | Self::ExpectMode { .. }
+            | Self::ExpectColors { .. }
+            | Self::ExpectCursor { .. }
+            | Self::ExpectBellCount { .. } => true,
+            _ => false,
         }
     }
 

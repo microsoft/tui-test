@@ -1,7 +1,8 @@
 //! Reusable in-process terminal engine.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 use std::time::{Duration, Instant};
 
 use crate::api::{
@@ -42,15 +43,56 @@ use crate::terminal::locator::{self, Pattern};
 pub struct Engine {
     name: String,
     operations: Mutex<()>,
-    session: Mutex<Option<TerminalSession>>,
+    lifecycle: RwLock<()>,
+    pending_lifecycle: AtomicUsize,
+    session: RwLock<Option<TerminalSession>>,
     spawn_spec: Mutex<Option<SpawnSpec>>,
     live: Arc<Mutex<Option<LiveTarget>>>,
     interrupt: Mutex<Option<InterruptTarget>>,
+    interrupt_generation: AtomicU64,
     logger: Arc<Logger>,
     default_recording_path: PathBuf,
     recording: Mutex<RecordingState>,
     trace: Mutex<TraceState>,
     operation_history: Mutex<OperationHistory>,
+}
+
+struct LifecycleRequest<'a>(&'a AtomicUsize);
+
+impl<'a> LifecycleRequest<'a> {
+    fn new(pending: &'a AtomicUsize) -> Self {
+        pending.fetch_add(1, Ordering::AcqRel);
+        Self(pending)
+    }
+}
+
+impl Drop for LifecycleRequest<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+struct WaitContext<'a> {
+    session: &'a TerminalSession,
+    request_cancelled: &'a dyn Fn() -> bool,
+}
+
+impl WaitContext<'_> {
+    fn check_cancelled(&self) -> Result<(), TuiTestError> {
+        if (self.request_cancelled)() {
+            Err(TuiTestError::assertion("operation was cancelled"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl std::ops::Deref for WaitContext<'_> {
+    type Target = TerminalSession;
+
+    fn deref(&self) -> &Self::Target {
+        self.session
+    }
 }
 
 #[derive(Clone)]
@@ -123,19 +165,20 @@ impl TraceState {
 
 #[derive(Clone)]
 struct InterruptTarget {
-    pty: Arc<Mutex<crate::terminal::pty::Pty>>,
+    pty: Arc<crate::terminal::pty::Pty>,
     cancelled: Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct LiveTarget {
     state: Arc<Mutex<TermState>>,
-    pty: Arc<Mutex<crate::terminal::pty::Pty>>,
+    pty: Arc<crate::terminal::pty::Pty>,
     shell: Option<&'static str>,
 }
 
 #[derive(Clone)]
 struct OperationMetadata {
     sequence: u64,
+    interrupt_generation: u64,
     name: String,
     timeout_ms: Option<u64>,
     started_at: Instant,
@@ -217,10 +260,13 @@ impl Engine {
         Self {
             name,
             operations: Mutex::new(()),
-            session: Mutex::new(None),
+            lifecycle: RwLock::new(()),
+            pending_lifecycle: AtomicUsize::new(0),
+            session: RwLock::new(None),
             spawn_spec: Mutex::new(None),
             live: Arc::new(Mutex::new(None)),
             interrupt: Mutex::new(None),
+            interrupt_generation: AtomicU64::new(0),
             logger,
             default_recording_path: recording_path.clone(),
             recording: Mutex::new(RecordingState {
@@ -242,16 +288,73 @@ impl Engine {
         operation: Operation,
         context: ExecutionContext,
     ) -> Result<OperationResult, TuiTestError> {
+        self.execute_with_context_cancellable(operation, context, &|| false)
+    }
+
+    /// Execute a request whose caller may disconnect. Cancellation is checked
+    /// during waits and never terminates the session or cancels another caller.
+    pub fn execute_with_context_cancellable(
+        &self,
+        operation: Operation,
+        context: ExecutionContext,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<OperationResult, TuiTestError> {
         if let Some(artifact) = &context.artifact {
             artifact.validate().map_err(TuiTestError::usage)?;
         }
         if let Some(trace) = &context.trace {
             trace.validate().map_err(TuiTestError::usage)?;
         }
-        let _operation = self
-            .operations
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.interrupt_for_operation(&operation);
+        let interrupt_generation = self.interrupt_generation.load(Ordering::Acquire);
+        let waiting = operation.is_wait();
+        let lifecycle = matches!(
+            operation,
+            Operation::Open(_)
+                | Operation::Run(_)
+                | Operation::Restart { .. }
+                | Operation::Close
+                | Operation::FinishTrace { .. }
+        );
+        // A wait pins its generation through diagnostics, but does not exclude
+        // input or resize. Announce lifecycle writers before locking so even a
+        // newly arriving waiter yields, independent of RwLock's fairness policy.
+        let pending = lifecycle.then(|| LifecycleRequest::new(&self.pending_lifecycle));
+        let cancelled =
+            || cancelled() || (waiting && self.pending_lifecycle.load(Ordering::Acquire) != 0);
+        let _shared = if lifecycle {
+            None
+        } else if waiting {
+            Some(loop {
+                if cancelled() {
+                    return Err(TuiTestError::assertion("operation was cancelled"));
+                }
+                match self.lifecycle.try_read() {
+                    Ok(guard) => break guard,
+                    Err(TryLockError::Poisoned(error)) => break error.into_inner(),
+                    Err(TryLockError::WouldBlock) => {
+                        std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
+                    }
+                }
+            })
+        } else {
+            Some(
+                self.lifecycle
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+        };
+        let _exclusive = lifecycle.then(|| {
+            self.lifecycle
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+        drop(pending);
+        let _operation = (!waiting).then(|| {
+            self.operations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
         if self.logger.enabled() {
             self.logger
                 .event(&format!("operation {}", operation_summary(&operation)));
@@ -268,6 +371,7 @@ impl Engine {
         let started_ms = self.current_session_elapsed_ms().unwrap_or(0);
         let mut metadata = OperationMetadata {
             sequence: 0,
+            interrupt_generation,
             name: name.clone(),
             timeout_ms: operation_timeout(&operation),
             started_at: Instant::now(),
@@ -292,7 +396,20 @@ impl Engine {
             );
         metadata.sequence = pending.sequence();
         let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute_inner(operation, &context, &mut metadata)
+            let result = self.execute_inner(operation, &context, &mut metadata, &cancelled);
+            if waiting && cancelled() {
+                let message = "operation was cancelled";
+                Err(
+                    TuiTestError::assertion(message).with_report(FailureReport::new(
+                        metadata.name.clone(),
+                        metadata.timeout_ms,
+                        FailureReason::Cancelled,
+                        message,
+                    )),
+                )
+            } else {
+                result
+            }
         }))
         .unwrap_or_else(|payload| {
             Err(TuiTestError::internal(format!(
@@ -367,6 +484,7 @@ impl Engine {
         operation: Operation,
         context: &ExecutionContext,
         metadata: &mut OperationMetadata,
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<OperationResult, TuiTestError> {
         match operation {
             Operation::FinishTrace { failed } => {
@@ -394,7 +512,7 @@ impl Engine {
                     .interrupt
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-                if let Some(session) = self.lock_session().take() {
+                if let Some(session) = self.write_session().take() {
                     session.kill();
                     drop(session);
                 }
@@ -416,6 +534,7 @@ impl Engine {
                         session,
                         Operation::Resize { cols, rows },
                         &mut metadata.input,
+                        cancelled,
                     )
                 });
                 if result.is_ok() {
@@ -430,7 +549,8 @@ impl Engine {
                 }
                 result
             }
-            other => self.with_session(|session| dispatch(session, other, &mut metadata.input)),
+            other => self
+                .with_session(|session| dispatch(session, other, &mut metadata.input, cancelled)),
         }
     }
 
@@ -485,12 +605,7 @@ impl Engine {
 
         if let Some(session) = self.lock_session().as_ref() {
             if session.is_alive()? {
-                if let Err(error) = session
-                    .pty
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .signal("INT")
-                {
+                if let Err(error) = session.pty.signal("INT") {
                     self.logger
                         .event(&format!("restart interrupt failed error={error}"));
                 }
@@ -564,6 +679,15 @@ impl Engine {
                 )
             }
         };
+        crate::terminal::pty::validate_size(cols, rows)?;
+        let cwd = match &spec.resolved_cwd {
+            Some(cwd) => cwd.clone(),
+            None => std::path::absolute(cwd.as_deref().unwrap_or(".")).map_err(|error| {
+                TuiTestError::usage(format!("failed to resolve session cwd: {error}"))
+            })?,
+        };
+        crate::terminal::pty::validate_cwd(&cwd)?;
+        spec.resolved_cwd = Some(cwd.clone());
         recording.validate()?;
         let mut trace_options = context.trace.clone().unwrap_or_default();
         trace_options.directory =
@@ -590,7 +714,7 @@ impl Engine {
             SpawnCommand::Run(options) => options.recording = recording.clone(),
         }
         diagnostics.validate().map_err(TuiTestError::usage)?;
-        let mut current = self.lock_session();
+        let mut current = self.write_session();
         if let Some(previous) = current.as_ref() {
             if !restart && previous.is_alive()? {
                 return Ok(OpenResult {
@@ -601,13 +725,6 @@ impl Engine {
                 });
             }
         }
-        let cwd = match &spec.resolved_cwd {
-            Some(cwd) => cwd.clone(),
-            None => std::path::absolute(cwd.as_deref().unwrap_or(".")).map_err(|error| {
-                TuiTestError::internal(format!("failed to resolve session cwd: {error}"))
-            })?,
-        };
-        spec.resolved_cwd = Some(cwd.clone());
         let recording_required = recording.directory.is_some();
         let recording_path = self.resolve_recording_path(&recording)?;
 
@@ -664,6 +781,22 @@ impl Engine {
             recording_required,
         )
         .map_err(|error| TuiTestError::internal(format!("failed to open session: {error}")))?;
+        {
+            let mut interrupt = self
+                .interrupt
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.interrupt_generation.load(Ordering::Acquire) != metadata.interrupt_generation {
+                session.cancelled.store(true, Ordering::Release);
+            }
+            *interrupt = Some(InterruptTarget {
+                pty: session.pty.clone(),
+                cancelled: session.cancelled.clone(),
+            });
+        }
+        if session.cancelled.load(Ordering::Acquire) {
+            session.pty.kill();
+        }
         self.recording
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -675,17 +808,17 @@ impl Engine {
         let shell_pid = session.pid();
         let ready_timeout = open_ready_timeout(&session);
         let ready = if wait_ready.unwrap_or(program.is_none()) {
-            await_ready(&session, ready_timeout)
+            await_ready(&session, ready_timeout, &|| false)
         } else {
-            session
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .tracker
-                .is_ready()
+            session.is_ready()
         };
-        if wait_ready == Some(true) && !ready {
-            let mut error = startup_readiness_error(&metadata.name, ready_timeout);
+        let cancelled = session.cancelled.load(Ordering::Acquire);
+        if cancelled || (wait_ready == Some(true) && !ready) {
+            let mut error = if cancelled {
+                TuiTestError::assertion("open: session startup was cancelled")
+            } else {
+                startup_readiness_error(&metadata.name, ready_timeout)
+            };
             error.observation = Some(Box::new(capture_failure_observation(&session)));
             let metadata = OperationMetadata {
                 started_ms: 0,
@@ -703,6 +836,10 @@ impl Engine {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .pending_startup_outcome = true;
+            *self
+                .interrupt
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
             session.kill();
             return Err(error);
         }
@@ -711,14 +848,7 @@ impl Engine {
             pty: session.pty.clone(),
             shell: session.shell.map(|value| value.as_str()),
         };
-        *self
-            .interrupt
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(InterruptTarget {
-            pty: session.pty.clone(),
-            cancelled: session.cancelled.clone(),
-        });
-        *self.lock_session() = Some(session);
+        *self.write_session() = Some(session);
         *self
             .live
             .lock()
@@ -737,10 +867,10 @@ impl Engine {
 
     fn with_session<F>(&self, operation: F) -> Result<OperationResult, TuiTestError>
     where
-        F: FnOnce(&mut TerminalSession) -> Result<OperationResult, TuiTestError>,
+        F: FnOnce(&TerminalSession) -> Result<OperationResult, TuiTestError>,
     {
-        let mut guard = self.lock_session();
-        let session = guard.as_mut().ok_or_else(TuiTestError::no_session)?;
+        let guard = self.lock_session();
+        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
         // The emulator is fed on the reader thread, where there is nobody to
         // return an error to, so a backend that failed to parse records it and
         // the next operation reports it. Checked before the operation runs:
@@ -760,8 +890,8 @@ impl Engine {
     }
 
     fn capture_current_screen_sequence(&self, force: bool, pin: bool) -> u64 {
-        let mut guard = self.lock_session();
-        let Some(session) = guard.as_mut() else {
+        let guard = self.lock_session();
+        let Some(session) = guard.as_ref() else {
             return 0;
         };
         let mut state = session
@@ -1314,8 +1444,8 @@ impl Engine {
                 RuntimeStatus {
                     session: self.name.clone(),
                     shell_pid: session.pid(),
-                    cols: Some(session.cols),
-                    rows: Some(session.rows),
+                    cols: Some(state.emu.size().0),
+                    rows: Some(state.emu.size().1),
                     shell: session.shell.map(|value| value.as_str().to_string()),
                     exited: state.exited,
                     timeouts: Some(effective_timeouts(session)),
@@ -1395,10 +1525,7 @@ impl Engine {
             return Ok(());
         }
         // A child that exits mid-write is a normal race, not a failure.
-        let written = pty
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .write(data);
+        let written = pty.write(data);
         match written {
             Err(error)
                 if !matches!(
@@ -1417,20 +1544,41 @@ impl Engine {
     }
 
     pub fn interrupt(&self) {
-        let target = self
-            .interrupt
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        if let Some(target) = target {
-            target
-                .cancelled
-                .store(true, std::sync::atomic::Ordering::Release);
-            target
-                .pty
+        let target = {
+            let target = self
+                .interrupt
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .kill();
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.interrupt_generation.fetch_add(1, Ordering::AcqRel);
+            if let Some(target) = target.as_ref() {
+                target.cancelled.store(true, Ordering::Release);
+            }
+            target.clone()
+        };
+        if let Some(target) = target {
+            target.pty.kill();
+        }
+    }
+
+    pub(crate) fn interrupt_for_operation(&self, operation: &Operation) {
+        match operation {
+            Operation::Close => self.interrupt(),
+            Operation::Signal { name }
+                if matches!(
+                    name.trim_start_matches("SIG").to_uppercase().as_str(),
+                    "TERM" | "KILL" | "QUIT"
+                ) =>
+            {
+                let target = self
+                    .interrupt
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                if let Some(target) = target {
+                    target.pty.kill();
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1463,6 +1611,10 @@ impl Engine {
     }
 
     pub fn flush_recording(&self) -> Result<(), TuiTestError> {
+        let _lifecycle = self
+            .lifecycle
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _operation = self
             .operations
             .lock()
@@ -1549,9 +1701,15 @@ impl Engine {
         }
     }
 
-    fn lock_session(&self) -> MutexGuard<'_, Option<TerminalSession>> {
+    fn lock_session(&self) -> RwLockReadGuard<'_, Option<TerminalSession>> {
         self.session
-            .lock()
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write_session(&self) -> RwLockWriteGuard<'_, Option<TerminalSession>> {
+        self.session
+            .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
@@ -1629,7 +1787,7 @@ fn capture_failure_observation_locked(
         exit_code: state.exited,
         status_error: state.exit_error.clone(),
         cancelled,
-        ready: state.tracker.is_ready(),
+        ready: !cancelled && state.is_ready(),
         command_running: state.tracker.executing(),
         last_command_exit: state.tracker.last_exit(),
     };
@@ -1683,11 +1841,14 @@ fn startup_readiness_error(operation: &str, timeout_ms: u64) -> TuiTestError {
     ))
 }
 
-fn await_ready(session: &TerminalSession, timeout_ms: u64) -> bool {
+fn await_ready(session: &TerminalSession, timeout_ms: u64, cancelled: &dyn Fn() -> bool) -> bool {
     let start = Instant::now();
     let cap = Duration::from_millis(timeout_ms);
     loop {
-        if session.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        if cancelled()
+            || session.cancelled.load(Ordering::Acquire)
+            || !session.is_alive().unwrap_or(false)
+        {
             return false;
         }
         {
@@ -1695,11 +1856,11 @@ fn await_ready(session: &TerminalSession, timeout_ms: u64) -> bool {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.tracker.is_ready() {
-                return true;
-            }
-            if state.exited.is_some() {
+            if state.exited.is_some() || state.exit_error.is_some() {
                 return false;
+            }
+            if state.is_ready() {
+                return true;
             }
         }
         if start.elapsed() >= cap {
@@ -1766,10 +1927,15 @@ fn text_of(rows: &[Vec<EmuCell>]) -> String {
 }
 
 fn dispatch(
-    session: &mut TerminalSession,
+    session: &TerminalSession,
     operation: Operation,
     input: &mut Option<InputDetails>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<OperationResult, TuiTestError> {
+    let waiting = WaitContext {
+        session,
+        request_cancelled: cancelled,
+    };
     match operation {
         Operation::State => Ok(OperationResult::State(Box::new(state(session)))),
         Operation::Text { full } => Ok(OperationResult::Text(text_of(&grid(session, full)))),
@@ -1839,7 +2005,7 @@ fn dispatch(
             timeout_ms,
         } => {
             expect_colors(
-                session,
+                &waiting,
                 foreground.as_deref(),
                 background.as_deref(),
                 cursor.as_deref(),
@@ -1861,7 +2027,7 @@ fn dispatch(
             timeout_ms,
         } => {
             expect_mode(
-                session,
+                &waiting,
                 &mode,
                 enabled,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
@@ -1876,7 +2042,7 @@ fn dispatch(
             timeout_ms,
         } => {
             expect_cursor(
-                session,
+                &waiting,
                 visible,
                 shape.as_deref(),
                 x,
@@ -1921,15 +2087,11 @@ fn dispatch(
             Ok(OperationResult::Unit)
         }
         Operation::Resize { cols, rows } => {
-            act(session.resize(cols, rows))?;
+            session.resize(cols, rows)?;
             Ok(OperationResult::Unit)
         }
         Operation::Signal { name } => {
-            act(session
-                .pty
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .signal(&name))?;
+            act(session.pty.signal(&name))?;
             Ok(OperationResult::Unit)
         }
         Operation::WaitTitle {
@@ -1939,7 +2101,7 @@ fn dispatch(
             not,
         } => {
             wait_title(
-                session,
+                &waiting,
                 &text,
                 regex,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
@@ -1949,7 +2111,7 @@ fn dispatch(
         }
         Operation::WaitClipboard { timeout_ms } => {
             wait_clipboard_change(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?;
             Ok(OperationResult::Unit)
@@ -1959,7 +2121,7 @@ fn dispatch(
             timeout_ms,
         } => {
             wait_clipboard_match(
-                session,
+                &waiting,
                 &pattern,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?;
@@ -1967,35 +2129,35 @@ fn dispatch(
         }
         Operation::WaitIdle { timeout_ms } => {
             wait_idle(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Idle)),
             )?;
             Ok(OperationResult::Unit)
         }
         Operation::WaitCommand { timeout_ms } => {
             wait_command(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Command)),
             )?;
             Ok(OperationResult::Unit)
         }
         Operation::WaitExit { timeout_ms } => {
             wait_exit(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Exit)),
             )?;
             Ok(OperationResult::Unit)
         }
         Operation::WaitReady { timeout_ms } => {
             wait_ready(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Ready)),
             )?;
             Ok(OperationResult::Unit)
         }
         Operation::WaitBell { timeout_ms } => {
             wait_bell(
-                session,
+                &waiting,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?;
             Ok(OperationResult::Unit)
@@ -2012,7 +2174,7 @@ fn dispatch(
             timeout_ms,
         } => {
             wait_locator(
-                session,
+                &waiting,
                 &query,
                 not,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
@@ -2026,7 +2188,7 @@ fn dispatch(
             timeout_ms,
         } => {
             click_locator(
-                session,
+                &waiting,
                 &query,
                 options,
                 clicks,
@@ -2037,7 +2199,7 @@ fn dispatch(
         }
         Operation::HighlightLocator { query, timeout_ms } => {
             Ok(OperationResult::Matches(highlight_locator(
-                session,
+                &waiting,
                 &query,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?))
@@ -2049,7 +2211,7 @@ fn dispatch(
             timeout_ms,
         } => {
             expect_title(
-                session,
+                &waiting,
                 &text,
                 regex,
                 not,
@@ -2059,7 +2221,7 @@ fn dispatch(
         }
         Operation::ExpectExitCode { code, timeout_ms } => {
             expect_exit_code(
-                session,
+                &waiting,
                 code,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Command)),
             )?;
@@ -2071,7 +2233,7 @@ fn dispatch(
         }
         Operation::ExpectBellCount { count, timeout_ms } => {
             expect_bell_count(
-                session,
+                &waiting,
                 count,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
             )?;
@@ -2152,7 +2314,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
         last_exit: state.tracker.last_exit(),
         exit_signal: state.exit_signal.clone(),
         exited: state.exited,
-        ready: state.tracker.is_ready(),
+        ready: !session.cancelled.load(Ordering::Acquire) && state.is_ready(),
         bell_count: bells.count,
         modes: crate::terminal::emu::TerminalMode::ALL
             .into_iter()
@@ -2177,9 +2339,17 @@ fn effective_timeouts(session: &TerminalSession) -> EffectiveTimeouts {
 }
 
 fn packed_screen(session: &TerminalSession, full: bool) -> PackedScreen {
-    let rows = grid(session, full);
+    let state = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let rows = if full {
+        state.emu.full_rows()
+    } else {
+        state.emu.viewable_rows()
+    };
     PackedScreen {
-        cols: session.cols,
+        cols: state.emu.size().0,
         rows: rows.len().min(u16::MAX as usize) as u16,
         utf8: rows_to_strings(&rows).join("\n").into_bytes(),
     }
@@ -2306,7 +2476,7 @@ fn resolve_expected_color(
 /// (`OSC 4`) are matched together, so a program that recolors several slots
 /// at once is asserted as a single state rather than a race between polls.
 fn expect_colors(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     foreground: Option<&str>,
     background: Option<&str>,
     cursor: Option<&str>,
@@ -2342,6 +2512,7 @@ fn expect_colors(
     let mut matched = false;
     let mut last = None;
     poll_until(
+        session,
         || {
             let (actual, actual_palette) = {
                 let state = session
@@ -2371,7 +2542,7 @@ fn expect_colors(
             matched || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if matched {
         return Ok(());
     }
@@ -2413,7 +2584,7 @@ fn modes_of(emu: &dyn Emulator) -> std::collections::BTreeMap<String, bool> {
 }
 
 fn expect_mode(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     name: &str,
     enabled: bool,
     timeout_ms: u64,
@@ -2430,12 +2601,13 @@ fn expect_mode(
     };
     let mut matched = false;
     poll_until(
+        session,
         || {
             matched = reached(session);
             matched || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if matched {
         return Ok(());
     }
@@ -2447,7 +2619,7 @@ fn expect_mode(
 }
 
 fn expect_cursor(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     visible: Option<bool>,
     shape: Option<&str>,
     x: Option<u16>,
@@ -2464,6 +2636,7 @@ fn expect_cursor(
     let mut last = None;
     let mut matched = false;
     poll_until(
+        session,
         || {
             let cursor = {
                 let state = session
@@ -2480,7 +2653,7 @@ fn expect_cursor(
             matched || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if matched {
         return Ok(());
     }
@@ -2652,14 +2825,19 @@ fn locate_center(session: &TerminalSession, text: &str) -> Option<(u16, u16)> {
         .and_then(|(x, y)| Some((u16::try_from(x).ok()?, u16::try_from(y).ok()?)))
 }
 
-fn poll_until<F: FnMut() -> bool>(mut predicate: F, timeout_ms: u64) -> bool {
+fn poll_until<F: FnMut() -> bool>(
+    session: &WaitContext<'_>,
+    mut predicate: F,
+    timeout_ms: u64,
+) -> Result<bool, TuiTestError> {
     let start = Instant::now();
     loop {
+        session.check_cancelled()?;
         if predicate() {
-            return true;
+            return Ok(true);
         }
         if start.elapsed() >= Duration::from_millis(timeout_ms) {
-            return false;
+            return Ok(false);
         }
         std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
     }
@@ -2706,13 +2884,14 @@ fn get_clipboard(session: &TerminalSession) -> Result<String, TuiTestError> {
 }
 
 fn wait_clipboard_match(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     pattern: &ClipboardPattern,
     timeout_ms: u64,
 ) -> Result<(), TuiTestError> {
     let mut matched = false;
     let mut read_error = None;
     poll_until(
+        session,
         || {
             let mut state = session
                 .state
@@ -2738,7 +2917,7 @@ fn wait_clipboard_match(
             matched || read_error.is_some() || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if let Some(error) = read_error {
         Err(error)
     } else if matched {
@@ -2757,7 +2936,8 @@ fn wait_clipboard_match(
     }
 }
 
-fn wait_clipboard_change(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+fn wait_clipboard_change(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
+    session.check_cancelled()?;
     let baseline = {
         let mut state = session
             .state
@@ -2776,6 +2956,7 @@ fn wait_clipboard_change(session: &TerminalSession, timeout_ms: u64) -> Result<(
     let mut changed = false;
     let mut read_error = None;
     poll_until(
+        session,
         || {
             let mut state = session
                 .state
@@ -2797,7 +2978,7 @@ fn wait_clipboard_change(session: &TerminalSession, timeout_ms: u64) -> Result<(
             changed || read_error.is_some() || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if let Some(error) = read_error {
         Err(error)
     } else if changed {
@@ -2821,7 +3002,7 @@ fn title_matches(session: &TerminalSession, pattern: &Pattern) -> bool {
 }
 
 fn wait_title(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     text: &str,
     regex: bool,
     timeout_ms: u64,
@@ -2831,12 +3012,13 @@ fn wait_title(
         .map_err(|error| TuiTestError::usage(format!("invalid regex: {error}")))?;
     let mut matched = false;
     poll_until(
+        session,
         || {
             matched = title_matches(session, &pattern) != not;
             matched || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if matched {
         Ok(())
     } else if session_stopped(session) {
@@ -2868,7 +3050,7 @@ fn wait_title(
 }
 
 fn expect_title(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     text: &str,
     regex: bool,
     not: bool,
@@ -2878,12 +3060,13 @@ fn expect_title(
         .map_err(|error| TuiTestError::usage(format!("invalid regex: {error}")))?;
     let mut matched = false;
     poll_until(
+        session,
         || {
             matched = title_matches(session, &pattern) != not;
             matched || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if matched {
         Ok(())
     } else if session_stopped(session) {
@@ -2912,21 +3095,29 @@ fn expect_title(
     }
 }
 
-fn wait_idle(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+fn wait_idle(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
     let quiet = Duration::from_millis(250);
-    if poll_until(
+    let mut capture_error = None;
+    let settled = poll_until(
+        session,
         || {
-            session
+            if session.cancelled.load(Ordering::Acquire) {
+                return true;
+            }
+            let mut state = session
                 .state
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .last_change
-                .elapsed()
-                >= quiet
-                || session.cancelled.load(std::sync::atomic::Ordering::Acquire)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            capture_error = try_capture_visual_state(&mut state, true).err();
+            capture_error.is_some() || state.last_change.elapsed() >= quiet
         },
         timeout_ms,
-    ) {
+    )?;
+    if let Some(error) = capture_error {
+        Err(TuiTestError::internal(error))
+    } else if session.cancelled.load(Ordering::Acquire) {
+        Err(TuiTestError::assertion("wait idle: session was cancelled"))
+    } else if settled {
         Ok(())
     } else {
         Err(TuiTestError::assertion(
@@ -2935,42 +3126,42 @@ fn wait_idle(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestEr
     }
 }
 
-fn awaiting_command_start(state: &TermState) -> bool {
-    state
-        .awaiting_start
-        .is_some_and(|seen| state.tracker.started_count() == seen)
-}
-
 fn command_settled(session: &TerminalSession, baseline: u64) -> bool {
     const QUIET: Duration = Duration::from_millis(300);
     if session.cancelled.load(std::sync::atomic::Ordering::Acquire) {
         return true;
     }
-    let state = session
+    let mut state = session
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if state.exited.is_some() {
         return true;
     }
-    let tracker = &state.tracker;
-    if !tracker.started() {
+    if !state.tracker.started() {
+        let _ = try_capture_visual_state(&mut state, true);
         return state.last_change.elapsed() >= QUIET;
     }
-    if awaiting_command_start(&state) {
+    if state.awaiting_command_start() {
         return false;
     }
+    let tracker = &state.tracker;
     tracker.finished_count() > baseline || !tracker.executing()
 }
 
-fn wait_command(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+fn wait_command(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
     let baseline = session
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .tracker
         .finished_count();
-    if poll_until(|| command_settled(session, baseline), timeout_ms) {
+    let settled = poll_until(session, || command_settled(session, baseline), timeout_ms)?;
+    if session.cancelled.load(Ordering::Acquire) {
+        Err(TuiTestError::assertion(
+            "wait command: session was cancelled",
+        ))
+    } else if settled {
         Ok(())
     } else {
         Err(TuiTestError::assertion(format!(
@@ -2985,7 +3176,7 @@ fn stall_reason(session: &TerminalSession) -> String {
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if awaiting_command_start(&state) {
+    if state.awaiting_command_start() {
         "the shell never started a command for the input that was sent, so there \
          is nothing to wait for (was the line submitted?)"
             .to_string()
@@ -2994,9 +3185,10 @@ fn stall_reason(session: &TerminalSession) -> String {
     }
 }
 
-fn wait_exit(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+fn wait_exit(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
     let start = Instant::now();
     loop {
+        session.check_cancelled()?;
         let (exited, exit_error) = {
             let state = session
                 .state
@@ -3004,7 +3196,10 @@ fn wait_exit(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestEr
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             (state.exited.is_some(), state.exit_error.clone())
         };
-        if exited || session.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        if session.cancelled.load(Ordering::Acquire) {
+            return Err(TuiTestError::assertion("wait exit: session was cancelled"));
+        }
+        if exited {
             return Ok(());
         }
         if let Some(error) = exit_error {
@@ -3021,8 +3216,8 @@ fn wait_exit(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestEr
     }
 }
 
-fn wait_ready(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
-    if await_ready(session, timeout_ms) {
+fn wait_ready(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
+    if await_ready(session, timeout_ms, session.request_cancelled) {
         Ok(())
     } else {
         Err(TuiTestError::assertion(
@@ -3031,16 +3226,17 @@ fn wait_ready(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestE
     }
 }
 
-fn wait_bell(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
+fn wait_bell(session: &WaitContext<'_>, timeout_ms: u64) -> Result<(), TuiTestError> {
     let baseline = session.bells.sequence();
     let mut rang = false;
     poll_until(
+        session,
         || {
             rang = session.bells.sequence() != baseline;
             rang || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if rang {
         Ok(())
     } else if session_stopped(session) {
@@ -3229,7 +3425,7 @@ fn find_locator(
 }
 
 fn wait_locator(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     query: &LocatorQuery,
     not: bool,
     timeout_ms: u64,
@@ -3240,6 +3436,7 @@ fn wait_locator(
     let mut transitions = Vec::new();
     let mut last_signature = None;
     loop {
+        session.check_cancelled()?;
         let evaluated = evaluate_locator(session, query, false)?;
         let ambiguous = matches!(
             evaluated.evaluation.diagnostics.failure_reason,
@@ -3402,7 +3599,7 @@ fn observed_comparison_failure(
 }
 
 fn resolve_locator_click_point(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     query: &LocatorQuery,
     timeout_ms: u64,
 ) -> Result<(u16, u16), TuiTestError> {
@@ -3412,6 +3609,7 @@ fn resolve_locator_click_point(
     let mut transitions = Vec::new();
     let mut last_signature = None;
     loop {
+        session.check_cancelled()?;
         let (evaluated, outcome) = {
             let mut state = session
                 .state
@@ -3514,7 +3712,7 @@ fn resolve_locator_click_point(
 }
 
 fn click_locator(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     query: &LocatorQuery,
     options: crate::api::MouseOptions,
     clicks: u8,
@@ -3526,6 +3724,7 @@ fn click_locator(
     for _ in 0..clicks.max(1) {
         sequence.push_str(&mouse::click(x, y, options));
     }
+    session.check_cancelled()?;
     write_input(session, sequence.as_bytes(), input, Some((x, y)))
 }
 
@@ -3577,7 +3776,7 @@ fn matched_center(matched: &locator::LocatedMatch) -> Option<(usize, usize)> {
 }
 
 fn highlight_locator(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     query: &LocatorQuery,
     timeout_ms: u64,
 ) -> Result<Vec<TextMatch>, TuiTestError> {
@@ -3585,6 +3784,7 @@ fn highlight_locator(
     let description = query.selector.description();
     let mut resolved = None;
     poll_until(
+        session,
         || {
             let outcome = {
                 let mut state = session
@@ -3630,7 +3830,7 @@ fn highlight_locator(
             resolved.is_some() || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if let Some(matches) = resolved {
         Ok(matches)
     } else {
@@ -3885,7 +4085,7 @@ fn logical_color(color: Option<Color>) -> String {
 }
 
 fn expect_exit_code(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     code: i32,
     timeout_ms: u64,
 ) -> Result<(), TuiTestError> {
@@ -3895,18 +4095,22 @@ fn expect_exit_code(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .tracker
         .finished_count();
-    if !poll_until(|| command_settled(session, baseline), timeout_ms) {
+    if !poll_until(session, || command_settled(session, baseline), timeout_ms)? {
         return Err(TuiTestError::assertion(format!(
             "expected exit code {code}: timed out after {timeout_ms}ms; {}",
             stall_reason(session)
+        )));
+    }
+    if session.cancelled.load(Ordering::Acquire) {
+        return Err(TuiTestError::assertion(format!(
+            "expected exit code {code}: session was cancelled"
         )));
     }
     let actual = session
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .tracker
-        .last_exit();
+        .command_exit_code();
     match actual {
         Some(actual) if actual == code => Ok(()),
         Some(actual) => Err(observed_comparison_failure(
@@ -3958,18 +4162,19 @@ fn expect_output(session: &TerminalSession, text: &str, regex: bool) -> Result<(
 }
 
 fn expect_bell_count(
-    session: &TerminalSession,
+    session: &WaitContext<'_>,
     expected: u64,
     timeout_ms: u64,
 ) -> Result<(), TuiTestError> {
     let mut actual = session.bells.count();
     poll_until(
+        session,
         || {
             actual = session.bells.count();
             actual >= expected || session_stopped(session)
         },
         timeout_ms,
-    );
+    )?;
     if actual >= expected {
         Ok(())
     } else if session_stopped(session) {
@@ -4238,6 +4443,120 @@ mod tests {
         }
     }
 
+    #[test]
+    fn failed_pty_resize_preserves_emulator_and_restart_dimensions() {
+        let engine = Engine::new(
+            "failed-resize".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        {
+            let guard = engine.lock_session();
+            guard.as_ref().unwrap().pty.close();
+        }
+        let error = engine
+            .execute(Operation::Resize { cols: 90, rows: 30 })
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Internal);
+        assert!(error.message.contains("PTY is closed"));
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            assert_eq!(state.emu.size(), (80, 24));
+            assert!(state.emu.fault().is_none());
+            state.emu.process(b"still valid");
+            state.screen_dirty = true;
+            assert!(try_capture_visual_state(&mut state, true).is_ok());
+        }
+        {
+            let guard = engine.spawn_spec.lock().unwrap();
+            let SpawnCommand::Run(options) = &guard.as_ref().unwrap().command else {
+                panic!("expected run metadata");
+            };
+            assert_eq!((options.cols, options.rows), (80, 24));
+        }
+        engine.execute(Operation::Close).unwrap();
+    }
+
+    #[test]
+    fn lifecycle_controls_cancel_an_operation_blocked_in_native_input() {
+        for control in ["interrupt", "close", "kill"] {
+            let engine = Arc::new(Engine::new(
+                format!("blocked-input-{control}"),
+                Arc::new(Logger::disabled()),
+                PathBuf::new(),
+            ));
+            let mut options = sleeping_program(false);
+            options.program = std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            options.args = vec![
+                "--exact".into(),
+                "terminal::pty::tests::unread_input_fixture".into(),
+                "--nocapture".into(),
+            ];
+            options.env = vec![("TUI_TEST_UNREAD_PTY_FIXTURE".into(), "1".into())];
+            engine.execute(Operation::Run(options)).unwrap();
+            engine
+                .execute(Operation::WaitLocator {
+                    query: LocatorQuery::text("unread-input-ready"),
+                    not: false,
+                    timeout_ms: Some(5_000),
+                })
+                .unwrap();
+            let pty = engine.lock_session().as_ref().unwrap().pty.clone();
+            let writer_engine = engine.clone();
+            let (written_tx, written_rx) = std::sync::mpsc::channel();
+            let writer = std::thread::spawn(move || {
+                let result = writer_engine.execute(Operation::Write {
+                    data: "x".repeat(8 * 1024 * 1024),
+                });
+                let _ = written_tx.send(result);
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            let blocked = matches!(
+                written_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            );
+            let control_engine = engine.clone();
+            let (controlled_tx, controlled_rx) = std::sync::mpsc::channel();
+            let controller = std::thread::spawn(move || {
+                let result = match control {
+                    "interrupt" => {
+                        control_engine.interrupt();
+                        Ok(OperationResult::Unit)
+                    }
+                    "close" => control_engine.execute(Operation::Close),
+                    _ => control_engine.execute(Operation::Signal {
+                        name: "KILL".into(),
+                    }),
+                };
+                let _ = controlled_tx.send(result);
+            });
+            let controlled = controlled_rx.recv_timeout(Duration::from_secs(2));
+            if controlled.is_err() {
+                pty.kill();
+            }
+            let written = written_rx.recv_timeout(Duration::from_secs(2));
+            writer.join().unwrap();
+            controller.join().unwrap();
+            engine.execute(Operation::Close).unwrap();
+            assert!(blocked, "fixture failed to block input");
+            controlled
+                .expect("lifecycle control queued behind blocked input")
+                .unwrap();
+            assert!(
+                written.expect("input did not unblock").is_err(),
+                "an interrupted write must not report success"
+            );
+        }
+    }
+
     fn populate_history(engine: &Engine) {
         let guard = engine.lock_session();
         let session = guard.as_ref().unwrap();
@@ -4302,6 +4621,61 @@ mod tests {
         }
         fn color(&self, slot: crate::profile::ColorSlot) -> crate::profile::Rgb {
             self.0.color(slot)
+        }
+    }
+
+    #[test]
+    fn diagnostic_capture_panics_remain_internal_errors_and_allow_recovery() {
+        for screen_dirty in [false, true] {
+            let engine = Engine::new(
+                "diagnostic-panic".into(),
+                Arc::new(Logger::disabled()),
+                PathBuf::new(),
+            );
+            engine
+                .execute(Operation::Run(sleeping_program(false)))
+                .unwrap();
+            {
+                let guard = engine.lock_session();
+                let session = guard.as_ref().unwrap();
+                let mut state = session.state.lock().unwrap();
+                state.emu = Box::new(PanickingTraceEmulator(AlacrittyEmu::new(
+                    80,
+                    24,
+                    &Profile::default(),
+                )));
+                // Cover both the pre-operation screen capture and the failure
+                // observation path when the cached screen does not need capture.
+                state.screen_dirty = screen_dirty;
+            }
+            for operation in [
+                Operation::ExpectBellCount {
+                    count: 1,
+                    timeout_ms: Some(0),
+                },
+                Operation::State,
+                Operation::WaitIdle {
+                    timeout_ms: Some(0),
+                },
+            ] {
+                let error = engine.execute(operation).unwrap_err();
+                assert_eq!(error.kind, ErrorKind::Internal);
+                assert!(error.message.contains("injected trace capture failure"));
+            }
+            let status = engine.status();
+            assert_eq!((status.cols, status.rows), (Some(80), Some(24)));
+            assert!(engine.is_open());
+            engine.execute(Operation::Close).unwrap();
+            assert!(!engine.is_open());
+
+            engine
+                .execute(Operation::Run(sleeping_program(false)))
+                .unwrap();
+            assert!(matches!(
+                engine.execute(Operation::State).unwrap(),
+                OperationResult::State(_)
+            ));
+            engine.execute(Operation::Close).unwrap();
         }
     }
 
@@ -5730,6 +6104,7 @@ mod tests {
         let pending = history.begin("run".into(), 110, 5, "run".into(), false, None);
         let metadata = OperationMetadata {
             sequence: pending.sequence(),
+            interrupt_generation: 0,
             name: "run".into(),
             timeout_ms: None,
             started_at: Instant::now(),
@@ -5791,6 +6166,7 @@ mod tests {
             std::thread::spawn(move || {
                 let metadata = OperationMetadata {
                     sequence: 0,
+                    interrupt_generation: 0,
                     name: "test.failure".into(),
                     timeout_ms: None,
                     started_at: Instant::now(),

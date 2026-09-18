@@ -420,6 +420,8 @@ impl Session {
         self.engine.execute_with_context(operation, context)
     }
 
+    /// Open or reuse a shell. The working directory must exist and be a directory;
+    /// terminal dimensions must be nonzero and supported by the platform.
     pub fn open(&self, options: OpenOptions) -> Result<OpenResult, TuiTestError> {
         match self.execute(Operation::Open(options))? {
             OperationResult::Open(result) => Ok(result),
@@ -429,6 +431,7 @@ impl Session {
         }
     }
 
+    /// Run a program with the same directory and size validation as [`Self::open`].
     pub fn run(&self, options: RunOptions) -> Result<OpenResult, TuiTestError> {
         match self.execute(Operation::Run(options))? {
             OperationResult::Open(result) => Ok(result),
@@ -438,10 +441,13 @@ impl Session {
         }
     }
 
+    /// Cancel pending operations, terminate the child, and release the terminal.
     pub fn close(&self) -> Result<(), TuiTestError> {
         self.execute(Operation::Close).map(|_| ())
     }
 
+    /// Cancel pending operations, including startup readiness, and terminate the
+    /// child without waiting for the operation queue or PTY input writer.
     pub fn interrupt(&self) {
         self.engine.interrupt();
     }
@@ -626,6 +632,18 @@ impl SessionRegistry {
         operation: Operation,
         context: ExecutionContext,
     ) -> Result<OperationResult, TuiTestError> {
+        if matches!(&operation, Operation::Close | Operation::Signal { .. }) {
+            if let Some(artifact) = &context.artifact {
+                artifact.validate().map_err(TuiTestError::usage)?;
+            }
+            if let Some(trace) = &context.trace {
+                trace.validate().map_err(TuiTestError::usage)?;
+            }
+            let session = self.lock_sessions().get(name).cloned();
+            if let Some(session) = session {
+                session.engine.interrupt_for_operation(&operation);
+            }
+        }
         let generation = self.generation(name);
         let _generation = generation
             .lock()
@@ -663,6 +681,10 @@ impl SessionRegistry {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     self.lock_sessions().get(name).cloned()
                 };
+                // The engine pins a terminal generation while it executes.
+                // Keep the selected owner, not the name lock: a concurrent
+                // close/reopen must not redirect this operation to a new owner.
+                drop(_generation);
                 session
                     .ok_or_else(TuiTestError::no_session)?
                     .execute_with_context(other, context)
@@ -685,14 +707,14 @@ impl SessionRegistry {
     }
 
     pub fn close(&self, name: &str) -> Result<(), TuiTestError> {
-        let generation = self.generation(name);
-        let _generation = generation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.close_locked(name, ExecutionContext::default())
+        self.execute(name, Operation::Close).map(|_| ())
     }
 
     pub fn close_all(&self) {
+        let opening = self.lock_sessions().values().cloned().collect::<Vec<_>>();
+        for session in opening {
+            session.interrupt();
+        }
         let mut removed = Vec::new();
         {
             let _lifecycle = self

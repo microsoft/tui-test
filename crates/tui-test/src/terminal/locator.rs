@@ -191,7 +191,17 @@ pub struct LocatedMatch {
 struct FlatGrid {
     chars: Vec<char>,
     sources: Vec<usize>,
+    source_ends: Vec<usize>,
     width: usize,
+}
+
+impl FlatGrid {
+    fn within(&self, (start, end): (usize, usize)) -> (usize, usize) {
+        (
+            self.sources.partition_point(|source| *source < start),
+            self.source_ends.partition_point(|source| *source <= end),
+        )
+    }
 }
 
 struct QueryGrid<'a> {
@@ -699,7 +709,7 @@ fn materialize_runs(grid: &QueryGrid<'_>, ranges: &[(usize, usize)]) -> Vec<Loca
     for &(mut start, end) in ranges {
         while start < end {
             let row_end = end.min((start / flat.width + 1) * flat.width);
-            if let Some(matched) = materialize(grid.rows, flat, (start, row_end)) {
+            if let Some(matched) = materialize_cells(grid.rows, flat, (start, row_end)) {
                 matches.push(matched);
             }
             start = row_end;
@@ -803,10 +813,8 @@ fn locate_text_observed(
         Some(regions) => regions
             .iter()
             .map(|&(a, b)| {
-                (
-                    start.max(flat.sources.partition_point(|source| *source < a)),
-                    end.min(flat.sources.partition_point(|source| *source < b)),
-                )
+                let (a, b) = flat.within((a, b));
+                (start.max(a), end.min(b))
             })
             .collect(),
         None => vec![(start, end)],
@@ -929,14 +937,22 @@ where
     }
     stats.raw = ranges.len();
     let ranges = if let Some(occurrence) = occurrence {
-        stats.sample_ambiguous_ranges(grid.rows, flat, &ranges, occurrence);
+        if stats.samples_ambiguity(occurrence, ranges.len()) {
+            stats.candidate_count = ranges.len();
+            let matches = ranges
+                .iter()
+                .take(64)
+                .filter_map(|range| materialize_cells(grid.rows, flat, *range))
+                .collect::<Vec<_>>();
+            stats.candidates = trace::sample(&matches);
+        }
         select(ranges, occurrence, "style")?
     } else {
         ranges
     };
     Ok(ranges
         .into_iter()
-        .filter_map(|range| materialize(grid.rows, flat, range))
+        .filter_map(|range| materialize_cells(grid.rows, flat, range))
         .collect())
 }
 
@@ -944,10 +960,7 @@ fn source_range(flat: &FlatGrid, (start, end): (usize, usize)) -> Option<(usize,
     if start >= end {
         return None;
     }
-    Some((
-        *flat.sources.get(start)?,
-        flat.sources.get(end - 1)?.saturating_add(1),
-    ))
+    Some((*flat.sources.get(start)?, *flat.source_ends.get(end - 1)?))
 }
 
 /// Resolve the simple lookup used by coordinate-based mouse input.
@@ -993,35 +1006,44 @@ fn selector_pattern(
 fn flatten(rows: &[Vec<EmuCell>], whitespace: WhitespaceMode) -> FlatGrid {
     let width = rows.iter().map(Vec::len).max().unwrap_or(0);
     let source = rows.iter().enumerate().flat_map(|(y, row)| {
-        (0..width).map(move |x| {
-            (
-                x + y * width,
-                row.get(x)
-                    .and_then(|cell| cell.ch.chars().next())
-                    .unwrap_or(' '),
-            )
+        (0..width).flat_map(move |x| {
+            let start = x + y * width;
+            let mut end = x + 1;
+            while row.get(end).is_some_and(|cell| cell.ch.is_empty()) {
+                end += 1;
+            }
+            // Every scalar in a grapheme maps to its complete physical cell
+            // span. Continuations have no text; missing cells are still blanks.
+            row.get(x)
+                .map_or(" ", |cell| cell.ch.as_str())
+                .chars()
+                .map(move |ch| ((start, end + y * width), ch))
         })
     });
     let mut chars = Vec::new();
     let mut sources = Vec::new();
+    let mut source_ends = Vec::new();
     let mut pending_space = None;
-    for (position, ch) in source {
+    for ((start, end), ch) in source {
         if whitespace == WhitespaceMode::Normalize && ch.is_whitespace() {
             if !chars.is_empty() && pending_space.is_none() {
-                pending_space = Some(position);
+                pending_space = Some((start, end));
             }
             continue;
         }
-        if let Some(position) = pending_space.take() {
+        if let Some((start, end)) = pending_space.take() {
             chars.push(' ');
-            sources.push(position);
+            sources.push(start);
+            source_ends.push(end);
         }
         chars.push(ch);
-        sources.push(position);
+        sources.push(start);
+        source_ends.push(end);
     }
     FlatGrid {
         chars,
         sources,
+        source_ends,
         width,
     }
 }
@@ -1094,8 +1116,8 @@ fn anchor_range(
         Some(regions) => regions
             .iter()
             .flat_map(|&(start, end)| {
-                let start = flat.sources.partition_point(|source| *source < start);
-                let end = flat.sources.partition_point(|source| *source < end);
+                let (start, end) = flat.within((start, end));
+                let end = end.max(start);
                 pattern
                     .ranges(&flat.chars[start..end])
                     .into_iter()
@@ -1162,11 +1184,39 @@ fn materialize(
     flat: &FlatGrid,
     (start, end): (usize, usize),
 ) -> Option<LocatedMatch> {
-    let (source_start, source_end) = source_range(flat, (start, end))?;
+    materialize_source(
+        rows,
+        flat.width,
+        source_range(flat, (start, end))?,
+        flat.chars[start..end].iter().collect(),
+    )
+}
+
+fn materialize_cells(
+    rows: &[Vec<EmuCell>],
+    flat: &FlatGrid,
+    (start, end): (usize, usize),
+) -> Option<LocatedMatch> {
+    let first = flat.sources.partition_point(|source| *source < start);
+    let last = flat.sources.partition_point(|source| *source < end);
+    materialize_source(
+        rows,
+        flat.width,
+        (start, end),
+        flat.chars[first..last].iter().collect(),
+    )
+}
+
+fn materialize_source(
+    rows: &[Vec<EmuCell>],
+    width: usize,
+    (source_start, source_end): (usize, usize),
+    text: String,
+) -> Option<LocatedMatch> {
     let mut cells = Vec::new();
     for position in source_start..source_end {
-        let y = position / flat.width;
-        let x = position % flat.width;
+        let y = position / width;
+        let x = position % width;
         if let Some(cell) = rows.get(y).and_then(|row| row.get(x)) {
             cells.push(MatchedCell {
                 x,
@@ -1194,7 +1244,7 @@ fn materialize(
     }
     Some(LocatedMatch {
         value: TextMatch {
-            text: flat.chars[start..end].iter().collect(),
+            text,
             start: TextPosition {
                 row: first.y.min(u32::MAX as usize) as u32,
                 column: first.x.min(u16::MAX as usize) as u16,
@@ -1276,6 +1326,148 @@ mod tests {
             Pattern::new(".", true).unwrap().ranges(&chars),
             vec![(0, 1), (1, 2), (2, 3)]
         );
+    }
+
+    fn unicode_grid() -> Vec<Vec<EmuCell>> {
+        vec![["你", "", "好", "", "e\u{301}", "!", " ", " "]
+            .into_iter()
+            .map(|ch| EmuCell {
+                ch: ch.into(),
+                ..EmuCell::blank()
+            })
+            .collect()]
+    }
+
+    #[test]
+    fn unicode_text_and_regex_matches_keep_every_scalar_and_physical_column() {
+        let rows = unicode_grid();
+        for (text, regex, start, end) in [
+            ("你好e\u{301}!", false, 0, 6),
+            ("你好", false, 0, 4),
+            ("好e\u{301}", false, 2, 5),
+            ("e\u{301}", false, 4, 5),
+            ("\u{301}", false, 4, 5),
+            ("好e\\p{M}", true, 2, 5),
+            ("!", false, 5, 6),
+        ] {
+            let selector = TextSelector {
+                regex,
+                ..TextSelector::new(text)
+            };
+            let found = locate(&rows, &selector).unwrap();
+            assert_eq!(found.len(), 1, "{text}");
+            assert_eq!(found[0].value.start.column, start, "{text}");
+            assert_eq!(found[0].value.end.column, end, "{text}");
+            assert_eq!(found[0].cells.len(), usize::from(end - start), "{text}");
+            let clicked = find(&rows, &Pattern::new(text, regex).unwrap(), true)
+                .unwrap()
+                .unwrap();
+            assert_eq!(clicked.first().unwrap().x, usize::from(start), "{text}");
+            assert_eq!(clicked.last().unwrap().x + 1, usize::from(end), "{text}");
+        }
+        assert!(locate(&rows, &TextSelector::new("你 好"))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn unicode_scopes_normalization_and_composition_use_cell_ranges() {
+        let mut rows = unicode_grid();
+        rows.push(
+            [" ", "e\u{301}", " ", " ", "好", "", " ", " "]
+                .into_iter()
+                .map(|ch| EmuCell {
+                    ch: ch.into(),
+                    ..EmuCell::blank()
+                })
+                .collect(),
+        );
+        let normalized = TextSelector {
+            whitespace: WhitespaceMode::Normalize,
+            ..TextSelector::new("好e\u{301}! e\u{301} 好")
+        };
+        let found = locate(&rows, &normalized).unwrap();
+        assert_eq!(found[0].value.text, normalized.text);
+        assert_eq!(found[0].value.start, TextPosition { row: 0, column: 2 });
+        assert_eq!(found[0].value.end, TextPosition { row: 1, column: 6 });
+
+        let mut scoped = TextSelector::new("e\u{301}");
+        scoped.scope.after = Some(TextAnchor {
+            text: "你好".into(),
+            regex: false,
+            occurrence: MatchOccurrence::Unique,
+        });
+        scoped.scope.before = Some(TextAnchor {
+            text: "!".into(),
+            regex: false,
+            occurrence: MatchOccurrence::Unique,
+        });
+        assert_eq!(locate(&rows, &scoped).unwrap()[0].value.start.column, 4);
+
+        let parent = LocatorQuery::text("你好e\u{301}!");
+        let query = LocatorQuery {
+            within: Some(Box::new(parent.clone())),
+            ..LocatorQuery::text("好e\u{301}")
+        };
+        let found = locate_query_text(&rows, &query.and(LocatorQuery::link(""))).unwrap();
+        assert_eq!(found[0].value.text, "好e\u{301}");
+        assert_eq!(
+            found[0].value.spans[0],
+            TextSpan {
+                row: 0,
+                start: 2,
+                end: 5
+            }
+        );
+        let found = locate_query_text(&rows, &parent.or(LocatorQuery::text("absent"))).unwrap();
+        assert_eq!(found[0].value.text, "你好e\u{301}!");
+        assert_eq!(found[0].value.end.column, 6);
+        let after = LocatorQuery {
+            within: Some(Box::new(LocatorQuery::text("你好"))),
+            direction: LocatorDirection::After,
+            ..LocatorQuery::text("e\u{301}")
+        };
+        assert_eq!(
+            locate_query_text(&rows, &after).unwrap()[0]
+                .value
+                .start
+                .column,
+            4
+        );
+    }
+
+    #[test]
+    fn unicode_style_runs_do_not_confuse_scalar_offsets_with_columns() {
+        let mut rows = unicode_grid();
+        for cell in &mut rows[0][2..5] {
+            cell.attrs.insert(Attrs::BOLD);
+        }
+        let query = LocatorQuery::style(TextStyle {
+            bold: Some(true),
+            ..TextStyle::default()
+        });
+        let found = locate_query_text(&rows, &query).unwrap();
+        assert_eq!(found[0].value.text, "好e\u{301}");
+        assert_eq!(
+            found[0].value.spans[0],
+            TextSpan {
+                row: 0,
+                start: 2,
+                end: 5
+            }
+        );
+        let grid = QueryGrid::new(&rows);
+        for region in [(2, 3), (3, 4)] {
+            assert!(locate_text_within(
+                &grid,
+                &TextSelector::new("好"),
+                Some(&[region]),
+                None,
+                None,
+            )
+            .unwrap()
+            .is_empty());
+        }
     }
 
     #[test]

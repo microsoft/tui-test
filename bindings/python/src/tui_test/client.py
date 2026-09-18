@@ -3,8 +3,10 @@ from __future__ import annotations
 import atexit
 import copy
 import json
+import operator
 import os
 import re
+import time
 from dataclasses import asdict
 from typing import (
     Any,
@@ -30,6 +32,7 @@ from .errors import (
     InternalError,
     NoSessionError,
     TuiTestError,
+    UsageError,
     make_error,
 )
 from .types import (
@@ -38,6 +41,7 @@ from .types import (
     Backend,
     BellEvent,
     Cell,
+    Cursor,
     LocatorDirection,
     MouseButton,
     OpenResult,
@@ -54,90 +58,6 @@ _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
 _ARTIFACT_MODES = ("all", "html", "text", "none")
 
 _T = TypeVar("_T")
-
-
-def _unsupported_scoped_regex_flag(source: str) -> Optional[str]:
-    escaped = False
-    in_class = False
-    class_can_close = False
-    index = 0
-    while index < len(source):
-        char = source[index]
-        if escaped:
-            escaped = False
-            index += 1
-            continue
-        if char == "\\":
-            escaped = True
-            index += 1
-            continue
-        if in_class:
-            if char == "]" and class_can_close:
-                in_class = False
-            elif char != "^" or class_can_close:
-                class_can_close = True
-            index += 1
-            continue
-        if char == "[":
-            in_class = True
-            class_can_close = False
-            index += 1
-            continue
-        if source.startswith("(?#", index):
-            end = source.find(")", index + 3)
-            index = len(source) if end < 0 else end + 1
-            continue
-        if source.startswith("(?", index):
-            cursor = index + 2
-            added = ""
-            while cursor < len(source) and source[cursor] in "aiLmsux":
-                added += source[cursor]
-                cursor += 1
-            if cursor < len(source) and source[cursor] == "-":
-                cursor += 1
-                while cursor < len(source) and source[cursor] in "imsx":
-                    cursor += 1
-            if cursor < len(source) and source[cursor] in ":)":
-                for flag in "aLx":
-                    if flag in added:
-                        return flag
-        index += 1
-    return None
-
-
-def _clipboard_pattern(
-    value: Optional[Union[str, Pattern[str]]],
-) -> Tuple[Optional[str], bool]:
-    if value is None:
-        return None, False
-    if isinstance(value, str):
-        return value, False
-    if not isinstance(value, re.Pattern) or not isinstance(value.pattern, str):
-        raise TypeError("clipboard pattern must be a string or compiled regex")
-
-    allowed_flags = re.UNICODE | re.IGNORECASE | re.MULTILINE | re.DOTALL | re.DEBUG
-    unsupported_flags = value.flags & ~allowed_flags
-    if unsupported_flags:
-        raise ValueError(
-            "unsupported clipboard regex flags: "
-            f"{re.RegexFlag(unsupported_flags)!s}"
-        )
-    scoped_flag = _unsupported_scoped_regex_flag(value.pattern)
-    if scoped_flag:
-        raise ValueError(
-            f"unsupported clipboard regex flag: {scoped_flag}"
-        )
-
-    enabled = ""
-    for flag, modifier in (
-        (re.IGNORECASE, "i"),
-        (re.MULTILINE, "m"),
-        (re.DOTALL, "s"),
-    ):
-        if value.flags & flag:
-            enabled += modifier
-    source = value.pattern
-    return (f"(?{enabled}:{source})" if enabled else source), True
 
 
 EnvLike = Union[Mapping[str, str], Iterable[Tuple[str, str]], None]
@@ -841,6 +761,8 @@ class TuiTest:
         for attempt in range(attempts):
             try:
                 return await self._await(start())
+            except (UsageError, TypeError, ValueError):
+                raise
             except Exception:
                 if attempt + 1 < attempts:
                     await self.close_quiet()
@@ -1072,7 +994,7 @@ class TuiTest:
     async def get_clipboard(self) -> str:
         return await self._await(self._native.get_clipboard())
 
-    async def get_cursor(self) -> Dict[str, int]:
+    async def get_cursor(self) -> Cursor:
         return await self._await(self._native.get_cursor())
 
     async def get_size(self) -> Dict[str, int]:
@@ -1159,13 +1081,44 @@ class TuiTest:
         *,
         timeout: Optional[int] = None,
     ) -> None:
-        pattern, regex = _clipboard_pattern(text)
+        timeout_ms = self._timeout("text", timeout)
+        if isinstance(text, re.Pattern) and isinstance(text.pattern, str):
+            await self._guarded(
+                "wait_clipboard", self._wait_clipboard_regex(text, timeout_ms)
+            )
+            return
+        if text is not None and not isinstance(text, str):
+            raise TypeError("clipboard pattern must be a string or compiled text regex")
         await self._guarded(
             "wait_clipboard",
-            self._native.wait_clipboard(
-                pattern, regex, self._timeout("text", timeout)
-            ),
+            self._native.wait_clipboard(text, False, timeout_ms),
         )
+
+    async def _wait_clipboard_regex(
+        self, pattern: Pattern[str], timeout_ms: Optional[int]
+    ) -> None:
+        if timeout_ms is not None:
+            try:
+                if isinstance(timeout_ms, bool):
+                    raise TypeError
+                timeout_ms = operator.index(timeout_ms)
+                if not 0 <= timeout_ms <= 2**64 - 1:
+                    raise ValueError
+            except (TypeError, ValueError, OverflowError):
+                raise UsageError(
+                    "timeout_ms must be an integer between 0 and {}".format(2**64 - 1)
+                ) from None
+        else:
+            state = await self._await(self._native.state())
+            timeout_ms = state["timeouts"]["text"]
+        deadline = time.monotonic_ns() + timeout_ms * 1_000_000
+        while True:
+            if pattern.search(await self.get_clipboard()) is not None:
+                return
+            # Reading the clipboard records its revision, so a change between
+            # the read and this wait is still observed by the native engine.
+            remaining = max(0, (deadline - time.monotonic_ns() + 999_999) // 1_000_000)
+            await self._await(self._native.wait_clipboard(None, False, remaining))
 
     async def wait_idle(self, *, timeout: Optional[int] = None) -> None:
         await self._guarded(
