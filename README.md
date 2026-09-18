@@ -336,6 +336,16 @@ scrollback = 10000
 background = "#000000"
 foreground = "#c0c0c0"
 red = "#800000"
+
+[recording]
+directory = "./casts"
+
+[trace]
+mode = "on-failure"
+directory = "./traces"
+
+[diagnostics]
+screen-history-limit = 10
 ```
 
 The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
