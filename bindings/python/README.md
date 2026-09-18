@@ -41,7 +41,7 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_histo
 | `recording` | `AutomaticRecording \| dict` (directory only) | default recording directory |
 | `trace` | `TraceOptions \| dict` | `{"mode": "off", "directory": ".tui-test/traces"}` |
 
-Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Each retained trace contains `trace.html`, `trace.md`, `trace.json`, `session.cast`, and `timeline.json`.
+Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Users can open `trace.html`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
 
 `artifacts["on_failure"]` selects `"none"`, `"text"`, `"html"`, or `"all"`. Use `include_recording` to include the cast in failure artifacts.
 

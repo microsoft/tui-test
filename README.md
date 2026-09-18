@@ -318,7 +318,7 @@ mode = "on-failure"
 directory = "./traces"
 ```
 
-Users can open `trace.html` to review the trace or replay `session.cast`. Agents should start with `trace.md`, then use `trace.json` and `timeline.json` for structured details.
+Users can open `trace.html` to review the trace or replay `session.cast`. Agents should read `trace.md` first and use `trace.json` and `timeline.json` for structured evidence instead of parsing the HTML.
 
 <p align="center">
   <img alt="tui-test trace viewer showing a failed terminal assertion" src="static/trace-viewer.png">

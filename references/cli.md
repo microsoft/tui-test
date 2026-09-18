@@ -126,7 +126,7 @@ Interactive monitors mirror the session's keyboard, paste, and mouse modes.
 
 ## Failure diagnostics
 
-Configure `[trace]` before `open` or `run`. Use `mode = "on"` to retain every session or `"on-failure"` to retain failures. Each trace contains `trace.html`, `trace.md`, `trace.json`, `session.cast`, and `timeline.json`.
+Configure `[trace]` before `open` or `run`. Use `mode = "on"` to retain every session or `"on-failure"` to retain failures. Users can open `trace.html` or replay `session.cast`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
 
 To write artifacts for one assertion:
 

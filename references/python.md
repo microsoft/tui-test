@@ -92,7 +92,7 @@ Capture options: `background` and `transparent` (SVG, APNG, and GIF).
 
 Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`, `trace`, and `screen_history_limit`.
 
-Use `trace={"mode": "on-failure", "directory": "traces"}`. Traces default to `"off"` and each retained trace contains `trace.html`, `trace.md`, `trace.json`, `session.cast`, and `timeline.json`.
+Use `trace={"mode": "on-failure", "directory": "traces"}`. Traces default to `"off"`. Users can open `trace.html` or replay `session.cast`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
 
 Failure artifact modes are `none`, `text`, `html`, and `all`. Use `include_recording=True` to include the cast.
 

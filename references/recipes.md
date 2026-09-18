@@ -107,4 +107,4 @@ const terminal = new TuiTest("test", {
 });
 ```
 
-Open `failure.html` to view the failure. The artifact directory also contains the requested text, JSON, SVG, timeline, and recording files.
+Users can open `failure.html` to view the failure. Agents should read `failure.md`, `failure.json`, and `timeline.json` instead.
