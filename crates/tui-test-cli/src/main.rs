@@ -308,6 +308,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
                 recording: Box::new(settings.recording),
+                style: Box::new(settings.style.clone()),
                 trace: settings.trace,
                 diagnostics: tui_test::DiagnosticRetentionOptions {
                     screen_history_limit: diagnostics
@@ -347,6 +348,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
                 recording: Box::new(settings.recording),
+                style: Box::new(settings.style.clone()),
                 trace: settings.trace,
                 diagnostics: tui_test::DiagnosticRetentionOptions {
                     screen_history_limit: diagnostics
