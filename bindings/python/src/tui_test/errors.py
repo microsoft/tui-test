@@ -1,23 +1,25 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from typing import Mapping, Optional
 
-
-@dataclass
-class TerminalArtifact:
-    text: Optional[str] = None
-    screenshot: Optional[str] = None
+from .diagnostics import FailureArtifactRef, FailureDetails
 
 
 class TuiTestError(Exception):
     kind: str = "internal"
     exit_code: int = 5
 
-    def __init__(self, message: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: Optional[FailureDetails] = None,
+        artifact: Optional[FailureArtifactRef] = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
-        self.terminal: Optional[TerminalArtifact] = None
+        self.details = details
+        self.artifact = artifact
 
 
 class ExpectationError(TuiTestError):
@@ -48,5 +50,19 @@ _BY_KIND = {
 }
 
 
-def make_error(kind: Optional[str], message: str) -> TuiTestError:
-    return _BY_KIND.get(kind or "", InternalError)(message)
+def make_error(
+    kind: str,
+    message: str,
+    *,
+    details: Optional[Mapping[str, object]] = None,
+    artifact: Optional[Mapping[str, object]] = None,
+) -> TuiTestError:
+    return _BY_KIND[kind](
+        message,
+        details=FailureDetails.from_dict(details) if details is not None else None,
+        artifact=(
+            FailureArtifactRef.from_dict(artifact)
+            if artifact is not None
+            else None
+        ),
+    )

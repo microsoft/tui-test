@@ -49,7 +49,7 @@ You can also download a binary from [GitHub Releases](https://github.com/microso
 
 | Language | Install | Reference |
 | --- | --- | --- |
-| Rust 1.90+ | `cargo add tui-test-rs@0.1.0-beta.3` | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
+| Rust 1.90+ | `cargo add tui-test-rs@0.1.0-beta.4` | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
 | Python 3.8+ | `pip install --pre tui-test` | [Python API](bindings/python/README.md) |
 | Node 20+ | `npm install @microsoft/tui-test@beta` | [JavaScript API](bindings/js/README.md) |
 
@@ -144,6 +144,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 | `--session NAME` | Select a session. Default: `default` or `TUI_TEST_SESSION`. |
 | `--json` | Print JSON. |
 | `--verbose`, `-v` | Write a session log. |
+| `--failure-artifacts DIR` | Write structured assertion artifacts. |
+| `--failure-artifact-mode MODE` | Select `none`, `text`, `html`, or `all` (default when exports are enabled). |
+| `--failure-artifact-recording` | Copy the automatic cast through the failure boundary. |
+| `--diagnostic-context KEY=VALUE` | Add safe caller context to failure details. |
 
 CLI sessions persist between commands. `open` and `run` reuse a live session unless `--restart` is set.
 
@@ -161,7 +165,7 @@ CLI sessions persist between commands. `open` and `run` reuse a live session unl
 | `daemon status` | Show daemon status. |
 | `daemon stop [--all]` | Stop one or all daemons. |
 
-`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, and `--timeout-<class> MS`. `open` also accepts `--shell`.
+`open` and `run` accept `--backend`, `--cols`, `--rows`, `--cwd`, repeatable `--env KEY=VALUE`, `--wait-ready`, `--no-wait-ready`, `--restart`, `--config`, `--profile`, `--timeout-<class> MS`, and `--screen-history-limit COUNT`. `open` also accepts `--shell`.
 
 ### Text locators
 
@@ -195,6 +199,16 @@ Locator options:
 | `--nth N` | Select a zero-based match. |
 
 Style options are `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, and `--blink`. Boolean styles accept `=false`.
+
+`--link URI` separately requires every matched cell, including spaces, to
+have that OSC 8 target. `--link ""` requires no link.
+
+Programmatic locators add `getByLink()` / `get_by_link()`, cell-set
+intersection and union (`and`/`or` in Rust and JavaScript, `and_`/`or_` in
+Python), and locator-only `filter` containment. AND/OR form new contiguous
+per-row runs; filters preserve whole matches. See the
+[JavaScript](bindings/js/README.md#compose-locators) and
+[Python](bindings/python/README.md#compose-locators) composition examples.
 
 `expect text` also accepts `--not` and `--timeout MS`. `click text` accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks N`, and `--timeout MS`. `highlight text` accepts `--timeout MS`.
 
@@ -294,6 +308,22 @@ The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`.
 | :---: | :---: |
 | <img alt="tui-test commands controlling a terminal session" src="static/tui-test-demo-controller.gif" width="420"> | <img alt="tui-test monitor showing the controlled terminal session" src="static/tui-test-demo-monitor.gif" width="420"> |
 
+### Diagnostics / trace viewer
+
+Add the following to `tui-test.toml` to retain failed traces, or use `mode = "on"` to retain every trace.
+
+```toml
+[trace]
+mode = "on-failure"
+directory = "./traces"
+```
+
+Users can open `trace.html` to review the trace or replay `session.cast`. Agents should read `trace.md` first and use `trace.json` and `timeline.json` for structured evidence instead of parsing the HTML.
+
+<p align="center">
+  <img alt="tui-test trace viewer showing a failed terminal assertion" src="static/trace-viewer.png">
+</p>
+
 ### Configuration
 
 Create `tui-test.toml`:
@@ -308,11 +338,15 @@ foreground = "#c0c0c0"
 red = "#800000"
 
 [recording]
-mode = "on-failure"
-directory = "./artifacts"
-```
+directory = "./casts"
 
-Recording modes are `disabled`, `on-failure`, and `always`. Default: `always`.
+[trace]
+mode = "on-failure"
+directory = "./traces"
+
+[diagnostics]
+screen-history-limit = 10
+```
 
 How screenshots and recordings are drawn is configurable too, from the font
 down to the window chrome:

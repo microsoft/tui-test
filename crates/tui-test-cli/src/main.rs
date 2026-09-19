@@ -24,8 +24,9 @@ use cli::{
 };
 use protocol::{GetField, MouseAction, Request, Response};
 use tui_test::{
-    CaptureBackground, LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence,
-    MouseOptions, TextAnchor, TextScope, TextSelector, TextStyle, WhitespaceMode,
+    CaptureBackground, ExecutionContext, FailureArtifactOptions, LocatorDirection, LocatorQuery,
+    LocatorSelector, MatchOccurrence, MouseOptions, TextAnchor, TextScope, TextSelector, TextStyle,
+    WhitespaceMode,
 };
 
 /// Agent skill router, installed as `SKILL.md`.
@@ -57,6 +58,13 @@ const SKILL_REFERENCES: &[(&str, &str)] = &[
 fn main() {
     let cli = Cli::parse_from(command_line_args());
     let session = config::session_name_from_env(cli.session.clone());
+    let execution_context = match build_execution_context(&cli) {
+        Ok(context) => context,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
 
     let Some(command) = cli.command else {
         let _ = Cli::command().print_help();
@@ -105,7 +113,7 @@ fn main() {
             cli.json,
         ),
         Command::Monitor { interactive } => monitor::run_client(&session, interactive),
-        command => run_remote(&session, command, cli.json, cli.verbose),
+        command => run_remote(&session, command, cli.json, cli.verbose, execution_context),
     };
     std::process::exit(code);
 }
@@ -134,7 +142,13 @@ fn has_command_before_separator(args: &[OsString]) -> bool {
             continue;
         }
         let value = arg.to_string_lossy();
-        if value == "--session" {
+        if matches!(
+            value.as_ref(),
+            "--session"
+                | "--failure-artifacts"
+                | "--failure-artifact-mode"
+                | "--diagnostic-context"
+        ) {
             skip_value = true;
         } else if value == "--json"
             || value == "--verbose"
@@ -149,9 +163,15 @@ fn has_command_before_separator(args: &[OsString]) -> bool {
 }
 
 /// Build the request for a daemon-backed command, then send it.
-fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32 {
+fn run_remote(
+    session: &str,
+    command: Command,
+    json: bool,
+    verbose: bool,
+    context: ExecutionContext,
+) -> i32 {
     let request = match build_request(command) {
-        Ok(r) => r,
+        Ok(request) => request.with_context(context),
         Err(e) => {
             eprintln!("{e}");
             return 2;
@@ -160,7 +180,7 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
 
     // Closing must remain available when the running daemon is from an older
     // client; every other command requires matching protocol behavior.
-    let allow_incompatible = matches!(&request, Request::Close);
+    let allow_incompatible = request.is_close();
     let socket = config::socket_name(session);
     if allow_incompatible && !ipc::is_running(&socket) {
         if json {
@@ -188,6 +208,41 @@ fn run_remote(session: &str, command: Command, json: bool, verbose: bool) -> i32
             4
         }
     }
+}
+
+fn build_execution_context(cli: &Cli) -> anyhow::Result<ExecutionContext> {
+    let artifact = match cli.failure_artifacts.as_ref() {
+        Some(directory) => {
+            let directory = if directory.is_absolute() {
+                directory.clone()
+            } else {
+                std::env::current_dir()?.join(directory)
+            };
+            Some(FailureArtifactOptions {
+                directory,
+                mode: cli.failure_artifact_mode.into(),
+                include_recording: cli.failure_artifact_recording,
+            })
+        }
+        None => None,
+    };
+    let mut diagnostic_context = std::collections::BTreeMap::new();
+    for pair in &cli.diagnostic_context {
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("--diagnostic-context must use KEY=VALUE"))?;
+        if key.trim().is_empty() {
+            anyhow::bail!("--diagnostic-context key must not be empty");
+        }
+        diagnostic_context.insert(key.to_string(), value.to_string());
+    }
+    Ok(ExecutionContext {
+        operation_name: None,
+        artifact,
+        diagnostic_context,
+        retention: Default::default(),
+        trace: None,
+    })
 }
 
 fn connect_to_daemon(
@@ -237,6 +292,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             restart,
             profile,
             timeouts,
+            diagnostics,
         } => {
             let settings = profile.resolve()?;
             Request::Open {
@@ -252,7 +308,13 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
                 recording: Box::new(settings.recording),
-                style: settings.style.clone(),
+                style: Box::new(settings.style.clone()),
+                trace: settings.trace,
+                diagnostics: tui_test::DiagnosticRetentionOptions {
+                    screen_history_limit: diagnostics
+                        .screen_history_limit
+                        .unwrap_or(settings.diagnostics.screen_history_limit),
+                },
             }
         }
         Command::Run {
@@ -268,6 +330,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             restart,
             profile,
             timeouts,
+            diagnostics,
         } => {
             let mut prog = vec![program];
             prog.extend(args);
@@ -285,7 +348,13 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
                 recording: Box::new(settings.recording),
-                style: settings.style.clone(),
+                style: Box::new(settings.style.clone()),
+                trace: settings.trace,
+                diagnostics: tui_test::DiagnosticRetentionOptions {
+                    screen_history_limit: diagnostics
+                        .screen_history_limit
+                        .unwrap_or(settings.diagnostics.screen_history_limit),
+                },
             }
         }
         Command::Restart { graceful_timeout } => Request::Restart {
@@ -584,18 +653,29 @@ fn map_style(args: TextStyleArgs) -> TextStyle {
         hidden: args.hidden,
         strikethrough: args.strikethrough,
         blink: args.blink,
-        link: args.link,
     }
 }
 
 fn map_query(args: TextQueryArgs, default: MatchOccurrence) -> LocatorQuery {
     let occurrence = map_occurrence(args.selector.match_mode, args.selector.nth, default);
-    LocatorQuery {
+    let query = LocatorQuery {
         selector: LocatorSelector::Text(map_selector(args.text, args.selector)),
-        occurrence,
+        occurrence: if args.link.is_some() {
+            MatchOccurrence::Any
+        } else {
+            occurrence.clone()
+        },
         within: None,
         direction: LocatorDirection::Within,
         style: map_style(*args.style),
+    };
+    match args.link {
+        Some(uri) => LocatorQuery {
+            occurrence,
+            within: Some(Box::new(query)),
+            ..LocatorQuery::link(uri)
+        },
+        None => query,
     }
 }
 
@@ -615,7 +695,7 @@ fn map_click(what: ClickCmd) -> Request {
             clicks,
             timeout,
         } => Request::ClickLocator {
-            query: map_query(query, MatchOccurrence::Unique),
+            query: map_query(query, MatchOccurrence::Any),
             button: MouseOptions::from(options).sgr_code(),
             clicks,
             timeout_ms: timeout,
@@ -664,27 +744,27 @@ fn map_expect(what: ExpectCmd) -> Request {
             enabled: !off,
             timeout_ms: timeout,
         },
-        ExpectCmd::Colors {
+        ExpectCmd::Colors(cli::ExpectColorsArgs {
             foreground,
             background,
             cursor,
             palette,
             timeout,
-        } => Request::ExpectColors {
+        }) => Request::ExpectColors {
             foreground,
             background,
             cursor,
             palette,
             timeout_ms: timeout,
         },
-        ExpectCmd::Cursor {
+        ExpectCmd::Cursor(cli::ExpectCursorArgs {
             visible,
             hidden,
             shape,
             x,
             y,
             timeout,
-        } => Request::ExpectCursor {
+        }) => Request::ExpectCursor {
             // `--visible` and `--hidden` are separate flags rather than one
             // optional boolean so that naming neither leaves visibility
             // unchecked, which is what a caller asserting only a shape wants.
@@ -811,8 +891,8 @@ fn daemon_lock_is_stale(path: &Path, stale_after: Duration) -> bool {
 /// Spawn or replace the daemon for this session when necessary.
 fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     let socket = config::socket_name(session);
-    if let Some(version) = running_daemon_identity(session, &socket)? {
-        if version == env!("CARGO_PKG_VERSION") {
+    if let Some(identity) = running_daemon_identity(session, &socket)? {
+        if identity.compatible() {
             report_existing_daemon(session, verbose);
             return Ok(DaemonStart::AlreadyRunning);
         }
@@ -822,12 +902,12 @@ fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     let _lock = DaemonLock::acquire(session)?;
 
     match running_daemon_identity(session, &socket)? {
-        Some(version) if version == env!("CARGO_PKG_VERSION") => {
+        Some(identity) if identity.compatible() => {
             report_existing_daemon(session, verbose);
             Ok(DaemonStart::AlreadyRunning)
         }
-        Some(version) => {
-            restart_daemon(session, &socket, &version, verbose)?;
+        Some(identity) => {
+            restart_daemon(session, &socket, &identity.to_string(), verbose)?;
             Ok(DaemonStart::Restarted)
         }
         None => {
@@ -837,9 +917,35 @@ fn ensure_daemon(session: &str, verbose: bool) -> anyhow::Result<DaemonStart> {
     }
 }
 
-fn running_daemon_identity(session: &str, socket: &str) -> anyhow::Result<Option<String>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DaemonIdentity {
+    version: String,
+    protocol_version: u32,
+}
+
+impl DaemonIdentity {
+    fn compatible(&self) -> bool {
+        self.version == env!("CARGO_PKG_VERSION")
+            && self.protocol_version == protocol::PROTOCOL_VERSION
+    }
+}
+
+impl std::fmt::Display for DaemonIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} (protocol {})",
+            self.version, self.protocol_version
+        )
+    }
+}
+
+fn running_daemon_identity(session: &str, socket: &str) -> anyhow::Result<Option<DaemonIdentity>> {
     match ipc::send(socket, &Request::Status) {
-        Ok(status) => Ok(Some(daemon_version(&status))),
+        Ok(status) => Ok(Some(DaemonIdentity {
+            version: daemon_version(&status),
+            protocol_version: daemon_protocol_version(&status),
+        })),
         Err(error) if ipc::is_running(socket) => anyhow::bail!(
             "could not verify the daemon for session '{session}': {error}; run \
              `tui-test --session {session} close`, then retry"
@@ -856,6 +962,16 @@ fn daemon_version(status: &Response) -> String {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("unknown")
         .to_string()
+}
+
+fn daemon_protocol_version(status: &Response) -> u32 {
+    status
+        .data
+        .as_ref()
+        .and_then(|data| data.get("protocol_version"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(0)
 }
 
 fn report_existing_daemon(session: &str, verbose: bool) {
@@ -1286,6 +1402,22 @@ fn print_response(resp: &Response, json: bool) -> i32 {
         if let Some(msg) = &resp.message {
             eprintln!("{msg}");
         }
+        if let Some(artifact) = &resp.artifact {
+            if let Some(path) = artifact.report_html.as_deref() {
+                eprintln!("Failure report: {path}");
+            }
+            if let Some(path) = artifact.report.as_deref() {
+                eprintln!("Agent report: {path}");
+            }
+            if let Some(path) = artifact.manifest.as_deref() {
+                eprintln!("Failure artifact: {path}");
+            } else {
+                eprintln!("Failure artifact was not written ({:?})", artifact.status);
+            }
+            for error in &artifact.errors {
+                eprintln!("Failure artifact error: {error}");
+            }
+        }
         exit_code(resp)
     }
 }
@@ -1347,10 +1479,12 @@ EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           [--background COLOR | --transparent]\n\
-          record stop | get-recording [session] > out.cast (always-on asciicast v2)\n\
+          record stop | get-recording [session] > out.cast (when tracing is enabled)\n\
 WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
-GLOBAL    --session NAME | --json | --verbose (log PTY traffic to ~/.tui-test/<session>.log)\n\
+GLOBAL    --session NAME | --json | --verbose | --failure-artifacts DIR\n\
+          [--failure-artifact-mode none|text|html|all]\n\
+          [--failure-artifact-recording] [--diagnostic-context KEY=VALUE]\n\
 EXIT      0 ok | 1 assertion/wait failed | 2 usage | 3 no session | 4 daemon/IPC | 5 internal\n\
 "
 }
@@ -1445,6 +1579,48 @@ mod tests {
     }
 
     #[test]
+    fn top_level_separator_expands_to_run_with_diagnostic_flags() {
+        for flags in [
+            vec!["--failure-artifacts", "run"],
+            vec!["--failure-artifact-mode", "text"],
+            vec!["--diagnostic-context", "test=save"],
+            vec![
+                "--failure-artifacts",
+                "artifacts",
+                "--failure-artifact-mode",
+                "text",
+                "--failure-artifact-recording",
+                "--diagnostic-context",
+                "test=save",
+                "--diagnostic-context",
+                "step=launch",
+            ],
+            vec![
+                "--failure-artifacts=artifacts",
+                "--failure-artifact-mode=text",
+                "--diagnostic-context=test=save",
+            ],
+        ] {
+            for explicit_run in [false, true] {
+                let mut args = vec!["tui-test", "--json", "--session", "demo"];
+                args.extend(&flags);
+                if explicit_run {
+                    args.push("run");
+                }
+                args.extend(["--", "vim", "--clean"]);
+                let rewritten = command_line_args_from(args.iter().map(OsString::from));
+                let cli = Cli::try_parse_from(rewritten)
+                    .unwrap_or_else(|error| panic!("{args:?}: {error}"));
+                assert!(matches!(
+                    cli.command,
+                    Some(Command::Run { program, args, .. })
+                        if program == "vim" && args == ["--clean"]
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn separator_after_a_subcommand_is_not_rewritten() {
         let args = command_line_args_from(
             ["tui-test", "run", "--", "vim", "--clean"]
@@ -1460,6 +1636,33 @@ mod tests {
                 ..
             }) if program == "vim" && args == ["--clean"]
         ));
+    }
+
+    #[test]
+    fn failure_artifact_flags_build_an_execution_context() {
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "--failure-artifacts",
+            "artifacts",
+            "--failure-artifact-mode",
+            "text",
+            "--failure-artifact-recording",
+            "--diagnostic-context",
+            "test=save",
+            "expect",
+            "text",
+            "missing",
+        ])
+        .unwrap();
+        let context = build_execution_context(&cli).unwrap();
+        let artifact = context.artifact.unwrap();
+        assert!(artifact.directory.is_absolute());
+        assert_eq!(artifact.mode, tui_test::FailureArtifactMode::Text);
+        assert!(artifact.include_recording);
+        assert_eq!(
+            context.diagnostic_context.get("test").map(String::as_str),
+            Some("save")
+        );
     }
 
     #[test]
@@ -1553,7 +1756,7 @@ mod tests {
             panic!("expected text locator");
         };
         assert_eq!(selector.scope.after.as_ref().unwrap().text, "Settings");
-        assert_eq!(query.occurrence, MatchOccurrence::Unique);
+        assert_eq!(query.occurrence, MatchOccurrence::Any);
         assert_eq!(query.style.foreground.as_deref(), Some("2"));
         assert_eq!(button, 22);
         assert_eq!(clicks, 1);
@@ -1595,12 +1798,25 @@ mod tests {
     #[test]
     fn daemon_identity_uses_package_version() {
         assert_eq!(
-            daemon_version(&Response::with(
-                json!({ "version": env!("CARGO_PKG_VERSION") })
-            )),
+            daemon_version(&Response::with(json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "protocol_version": protocol::PROTOCOL_VERSION,
+            }))),
             env!("CARGO_PKG_VERSION")
         );
+        assert_eq!(
+            daemon_protocol_version(&Response::with(json!({
+                "protocol_version": protocol::PROTOCOL_VERSION,
+            }))),
+            protocol::PROTOCOL_VERSION
+        );
         assert_eq!(daemon_version(&Response::with(json!({}))), "unknown");
+        assert_eq!(daemon_protocol_version(&Response::with(json!({}))), 0);
+        assert!(!DaemonIdentity {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            protocol_version: 0,
+        }
+        .compatible());
     }
 
     #[test]

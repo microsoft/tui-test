@@ -6,10 +6,11 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, Weak};
 use sha2::{Digest, Sha256};
 
 use crate::api::{
-    LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, MouseOptions, OpenOptions,
-    OpenResult, Operation, OperationResult, RunOptions, StyleSelector, TextMatch, TextSelector,
-    TuiTestError,
+    LinkSelector, LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, MouseOptions,
+    OpenOptions, OpenResult, Operation, OperationResult, RunOptions, StyleSelector, TextMatch,
+    TextSelector, TuiTestError,
 };
+use crate::diagnostics::ExecutionContext;
 use crate::engine::Engine;
 use crate::logger::Logger;
 
@@ -19,6 +20,7 @@ const MAX_COMPLETED_RECORDINGS: usize = 1024;
 pub struct Session {
     name: Arc<str>,
     engine: Arc<Engine>,
+    context: ExecutionContext,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -51,10 +53,23 @@ enum LocatorTarget {
 }
 
 impl LocatorTarget {
-    fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
+    fn same_owner(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Session(left), Self::Session(right)) => Arc::ptr_eq(&left.engine, &right.engine),
+            (Self::Handle(left), Self::Handle(right)) => {
+                Arc::ptr_eq(&left.registry.inner, &right.registry.inner) && left.name == right.name
+            }
+            _ => false,
+        }
+    }
+    fn execute(
+        &self,
+        operation_name: &'static str,
+        operation: Operation,
+    ) -> Result<OperationResult, TuiTestError> {
         match self {
-            Self::Session(session) => session.execute(operation),
-            Self::Handle(session) => session.execute(operation),
+            Self::Session(session) => session.execute_named(operation_name, operation),
+            Self::Handle(session) => session.execute_named(operation_name, operation),
         }
     }
 }
@@ -67,6 +82,13 @@ pub struct Locator {
     query: LocatorQuery,
 }
 
+/// Keep candidates containing `has` and containing no `has_not` matches.
+#[derive(Clone, Default)]
+pub struct LocatorFilterOptions {
+    pub has: Option<Locator>,
+    pub has_not: Option<Locator>,
+}
+
 impl Locator {
     fn new(target: LocatorTarget, query: LocatorQuery) -> Self {
         Self { target, query }
@@ -74,6 +96,70 @@ impl Locator {
 
     pub fn query(&self) -> &LocatorQuery {
         &self.query
+    }
+
+    fn require_same_owner(&self, other: &Self) -> Result<(), TuiTestError> {
+        if self.target.same_owner(&other.target) {
+            Ok(())
+        } else {
+            Err(TuiTestError::usage(
+                "locator operands must belong to the same terminal owner",
+            ))
+        }
+    }
+
+    /// Intersect selected cells and form contiguous per-row runs.
+    pub fn and(&self, other: &Self) -> Result<Self, TuiTestError> {
+        self.require_same_owner(other)?;
+        Ok(Self::new(
+            self.target.clone(),
+            self.query.clone().and(other.query.clone()),
+        ))
+    }
+
+    /// Union selected cells and form contiguous per-row runs.
+    pub fn or(&self, other: &Self) -> Result<Self, TuiTestError> {
+        self.require_same_owner(other)?;
+        Ok(Self::new(
+            self.target.clone(),
+            self.query.clone().or(other.query.clone()),
+        ))
+    }
+
+    pub fn filter(&self, options: LocatorFilterOptions) -> Result<Self, TuiTestError> {
+        if options.has.is_none() && options.has_not.is_none() {
+            return Err(TuiTestError::usage("filter requires has or hasNot"));
+        }
+        for locator in options.has.iter().chain(options.has_not.iter()) {
+            self.require_same_owner(locator)?;
+        }
+        Ok(Self::new(
+            self.target.clone(),
+            self.query.clone().filter(
+                options.has.map(|locator| locator.query),
+                options.has_not.map(|locator| locator.query),
+            ),
+        ))
+    }
+
+    /// Require every cell of each current match to have this link.
+    pub fn get_by_link(&self, selector: impl Into<LinkSelector>) -> Self {
+        self.get_by_link_relative(selector, LocatorDirection::Within)
+    }
+
+    pub fn get_by_link_relative(
+        &self,
+        selector: impl Into<LinkSelector>,
+        direction: LocatorDirection,
+    ) -> Self {
+        Self::new(
+            self.target.clone(),
+            LocatorQuery {
+                within: Some(Box::new(self.query.clone())),
+                direction,
+                ..LocatorQuery::link(selector)
+            },
+        )
     }
 
     pub fn get_by_text(&self, selector: impl Into<TextSelector>) -> Self {
@@ -144,14 +230,6 @@ impl Locator {
         locator
     }
 
-    fn strict_query(&self) -> LocatorQuery {
-        let mut query = self.query.clone();
-        if query.occurrence == MatchOccurrence::Any {
-            query.occurrence = MatchOccurrence::Unique;
-        }
-        query
-    }
-
     pub fn all(&self) -> Result<Vec<Self>, TuiTestError> {
         let matches = self.locations()?;
         if self.query.occurrence == MatchOccurrence::Any {
@@ -166,9 +244,12 @@ impl Locator {
     }
 
     pub fn locations(&self) -> Result<Vec<TextMatch>, TuiTestError> {
-        match self.target.execute(Operation::FindLocator {
-            query: self.query.clone(),
-        })? {
+        match self.target.execute(
+            "locator.find",
+            Operation::FindLocator {
+                query: self.query.clone(),
+            },
+        )? {
             OperationResult::Matches(matches) => Ok(matches),
             _ => Err(TuiTestError::internal(
                 "locator locations returned an unexpected result type",
@@ -177,22 +258,16 @@ impl Locator {
     }
 
     pub fn location(&self) -> Result<TextMatch, TuiTestError> {
-        let query = self.strict_query();
-        let description = query.selector.description();
-        match self.target.execute(Operation::FindLocator { query })? {
+        match self.target.execute(
+            "locator.location",
+            Operation::ResolveLocator {
+                query: self.query.clone(),
+            },
+        )? {
             OperationResult::Matches(mut matches) if matches.len() == 1 => Ok(matches.remove(0)),
-            OperationResult::Matches(_) => {
-                let diagnostic = match self.target.execute(Operation::Text { full: false }) {
-                    Ok(OperationResult::Text(screen)) => {
-                        format!("\n\nTerminal content:\n{screen}")
-                    }
-                    Ok(_) => "\n\nTerminal content unavailable: unexpected result type".to_string(),
-                    Err(error) => format!("\n\nTerminal content unavailable: {error}"),
-                };
-                Err(TuiTestError::assertion(format!(
-                    "no match found for '{description}'{diagnostic}"
-                )))
-            }
+            OperationResult::Matches(_) => Err(TuiTestError::internal(
+                "locator location returned an invalid match count",
+            )),
             _ => Err(TuiTestError::internal(
                 "locator location returned an unexpected result type",
             )),
@@ -213,11 +288,14 @@ impl Locator {
 
     fn wait_for(&self, not: bool, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
         self.target
-            .execute(Operation::WaitLocator {
-                query: self.query.clone(),
-                not,
-                timeout_ms,
-            })
+            .execute(
+                "locator.wait",
+                Operation::WaitLocator {
+                    query: self.query.clone(),
+                    not,
+                    timeout_ms,
+                },
+            )
             .map(|_| ())
     }
 
@@ -227,12 +305,15 @@ impl Locator {
 
     pub fn click_with(&self, options: LocatorClickOptions) -> Result<(), TuiTestError> {
         self.target
-            .execute(Operation::ClickLocator {
-                query: self.strict_query(),
-                options: options.mouse,
-                clicks: options.clicks,
-                timeout_ms: options.timeout_ms,
-            })
+            .execute(
+                "locator.click",
+                Operation::ClickLocator {
+                    query: self.query.clone(),
+                    options: options.mouse,
+                    clicks: options.clicks,
+                    timeout_ms: options.timeout_ms,
+                },
+            )
             .map(|_| ())
     }
 
@@ -242,10 +323,13 @@ impl Locator {
 
     pub fn highlight_with_timeout(&self, timeout_ms: Option<u64>) -> Result<(), TuiTestError> {
         self.target
-            .execute(Operation::HighlightLocator {
-                query: self.query.clone(),
-                timeout_ms,
-            })
+            .execute(
+                "locator.highlight",
+                Operation::HighlightLocator {
+                    query: self.query.clone(),
+                    timeout_ms,
+                },
+            )
             .map(|_| ())
     }
 
@@ -255,16 +339,25 @@ impl Locator {
 
     pub fn expect_with(&self, options: LocatorExpectOptions) -> Result<(), TuiTestError> {
         self.target
-            .execute(Operation::WaitLocator {
-                query: self.query.clone(),
-                not: options.not,
-                timeout_ms: options.timeout_ms,
-            })
+            .execute(
+                "locator.expect",
+                Operation::WaitLocator {
+                    query: self.query.clone(),
+                    not: options.not,
+                    timeout_ms: options.timeout_ms,
+                },
+            )
             .map(|_| ())
     }
 }
 
 impl Session {
+    pub fn get_by_link(&self, selector: impl Into<LinkSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Session(self.clone()),
+            LocatorQuery::link(selector),
+        )
+    }
     pub fn new(name: impl Into<String>) -> Self {
         let name = name.into();
         let recording_path = native_recording_path(&name);
@@ -275,6 +368,7 @@ impl Session {
                 Arc::new(Logger::disabled()),
                 recording_path,
             )),
+            context: ExecutionContext::default(),
         }
     }
 
@@ -297,7 +391,33 @@ impl Session {
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
-        self.engine.execute(operation)
+        self.engine
+            .execute_with_context(operation, self.context.clone())
+    }
+
+    pub fn execute_with_context(
+        &self,
+        operation: Operation,
+        context: ExecutionContext,
+    ) -> Result<OperationResult, TuiTestError> {
+        self.engine.execute_with_context(operation, context)
+    }
+
+    pub fn with_execution_context(&self, context: ExecutionContext) -> Self {
+        Self {
+            name: self.name.clone(),
+            engine: self.engine.clone(),
+            context,
+        }
+    }
+
+    fn execute_named(
+        &self,
+        operation_name: &'static str,
+        operation: Operation,
+    ) -> Result<OperationResult, TuiTestError> {
+        let context = self.context.clone().with_operation(operation_name);
+        self.engine.execute_with_context(operation, context)
     }
 
     pub fn open(&self, options: OpenOptions) -> Result<OpenResult, TuiTestError> {
@@ -356,9 +476,16 @@ impl Session {
 pub struct SessionHandle {
     name: Arc<str>,
     registry: SessionRegistry,
+    context: ExecutionContext,
 }
 
 impl SessionHandle {
+    pub fn get_by_link(&self, selector: impl Into<LinkSelector>) -> Locator {
+        Locator::new(
+            LocatorTarget::Handle(self.clone()),
+            LocatorQuery::link(selector),
+        )
+    }
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -378,7 +505,35 @@ impl SessionHandle {
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
-        self.registry.execute(&self.name, operation)
+        self.registry
+            .execute_with_context(&self.name, operation, self.context.clone())
+    }
+
+    pub fn execute_with_context(
+        &self,
+        operation: Operation,
+        context: ExecutionContext,
+    ) -> Result<OperationResult, TuiTestError> {
+        self.registry
+            .execute_with_context(&self.name, operation, context)
+    }
+
+    pub fn with_execution_context(&self, context: ExecutionContext) -> Self {
+        Self {
+            name: self.name.clone(),
+            registry: self.registry.clone(),
+            context,
+        }
+    }
+
+    fn execute_named(
+        &self,
+        operation_name: &'static str,
+        operation: Operation,
+    ) -> Result<OperationResult, TuiTestError> {
+        let context = self.context.clone().with_operation(operation_name);
+        self.registry
+            .execute_with_context(&self.name, operation, context)
     }
 
     pub fn open(&self, options: OpenOptions) -> Result<OpenResult, TuiTestError> {
@@ -400,7 +555,7 @@ impl SessionHandle {
     }
 
     pub fn close(&self) -> Result<(), TuiTestError> {
-        self.registry.close(&self.name)
+        self.execute(Operation::Close).map(|_| ())
     }
 
     pub fn recording(&self) -> std::io::Result<String> {
@@ -445,6 +600,7 @@ impl SessionRegistry {
         SessionHandle {
             name: Arc::from(name),
             registry: self.clone(),
+            context: ExecutionContext::default(),
         }
     }
 
@@ -461,6 +617,15 @@ impl SessionRegistry {
         name: &str,
         operation: Operation,
     ) -> Result<OperationResult, TuiTestError> {
+        self.execute_with_context(name, operation, ExecutionContext::default())
+    }
+
+    pub fn execute_with_context(
+        &self,
+        name: &str,
+        operation: Operation,
+        context: ExecutionContext,
+    ) -> Result<OperationResult, TuiTestError> {
         let generation = self.generation(name);
         let _generation = generation
             .lock()
@@ -473,7 +638,7 @@ impl SessionRegistry {
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 self.get_or_create_locked(name.to_string())
-                    .execute(operation)
+                    .execute_with_context(operation, context)
             }
             Operation::Restart { .. } => {
                 let _lifecycle = self
@@ -484,9 +649,11 @@ impl SessionRegistry {
                 let session = self.lock_sessions().get(name).cloned();
                 session
                     .ok_or_else(TuiTestError::no_restart_metadata)?
-                    .execute(operation)
+                    .execute_with_context(operation, context)
             }
-            Operation::Close => self.close_locked(name).map(|_| OperationResult::Unit),
+            Operation::Close => self
+                .close_locked(name, context)
+                .map(|_| OperationResult::Unit),
             other => {
                 let session = {
                     let _lifecycle = self
@@ -496,7 +663,9 @@ impl SessionRegistry {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     self.lock_sessions().get(name).cloned()
                 };
-                session.ok_or_else(TuiTestError::no_session)?.execute(other)
+                session
+                    .ok_or_else(TuiTestError::no_session)?
+                    .execute_with_context(other, context)
             }
         }
     }
@@ -520,7 +689,7 @@ impl SessionRegistry {
         let _generation = generation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.close_locked(name)
+        self.close_locked(name, ExecutionContext::default())
     }
 
     pub fn close_all(&self) {
@@ -573,7 +742,7 @@ impl SessionRegistry {
         std::fs::read_to_string(path)
     }
 
-    fn close_locked(&self, name: &str) -> Result<(), TuiTestError> {
+    fn close_locked(&self, name: &str, context: ExecutionContext) -> Result<(), TuiTestError> {
         let _lifecycle = self
             .inner
             .lifecycle
@@ -582,7 +751,9 @@ impl SessionRegistry {
         let Some(session) = self.lock_sessions().remove(name) else {
             return Ok(());
         };
-        let result = session.close();
+        let result = session
+            .execute_with_context(Operation::Close, context)
+            .map(|_| ());
         let removed = Self::replace_recording(
             &mut self.lock_recordings(),
             name.to_string(),

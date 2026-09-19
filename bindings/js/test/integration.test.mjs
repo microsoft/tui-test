@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
@@ -91,6 +91,30 @@ test("restart recreates a named session with an open result", async () => {
     );
   } finally {
     await su.closeQuiet();
+  }
+});
+
+test("restart preserves failure-artifact recording without trace options", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-test-restart-artifacts-"));
+  const su = new TuiTest(uniqueSession("restart-artifacts"), {
+    artifacts: { dir: root, onFailure: "text", includeRecording: true },
+  });
+  try {
+    const opened = await su.run(process.execPath, evalArgs);
+    assert.ok(opened.recording);
+    const restarted = await su.restart({ gracefulTimeout: 0 });
+    assert.ok(restarted.recording);
+    await su.getByText("ready").wait({ timeout: 5000 });
+    let failure;
+    await assert.rejects(su.getByText("missing restart marker").expect({ timeout: 0 }), (error) => {
+      failure = error;
+      return error instanceof ExpectationError;
+    });
+    assert.ok(failure.artifact.recording);
+    assert.match(await readFile(failure.artifact.recording, "utf8"), /ready/);
+  } finally {
+    await su.closeQuiet();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -226,16 +250,18 @@ test("recording API writes an asciicast file", async () => {
   }
 });
 
-test("automatic recording mode and directory are configurable", async () => {
+test("trace retention and recording directory are configurable", async () => {
   const root = mkdtempSync(join(tmpdir(), "tui-test-auto-recording-"));
   const disabled = new TuiTest(uniqueSession("recording-disabled"), {
-    recording: { mode: "disabled", directory: root },
+    recording: { directory: root },
+    trace: { mode: "off", directory: join(root, "traces") },
   });
   assert.equal((await disabled.open({ shell, waitReady: false })).recording, "");
   await disabled.close();
 
   const always = new TuiTest(uniqueSession("recording-always"), {
-    recording: { mode: "always", directory: root },
+    recording: { directory: root },
+    trace: { mode: "on", directory: join(root, "traces") },
   });
   const opened = await always.open({ shell, waitReady: false });
   assert.ok(opened.recording.startsWith(root));
@@ -248,7 +274,8 @@ test("failed open recording is readable before close", async () => {
   const root = mkdtempSync(join(tmpdir(), "tui-test-failed-open-"));
   const name = uniqueSession("recording-failed-open");
   const su = new TuiTest(name, {
-    recording: { mode: "on-failure", directory: root },
+    recording: { directory: root },
+    trace: { mode: "on-failure", directory: join(root, "traces") },
   });
   await assert.rejects(
     () =>
@@ -308,7 +335,7 @@ test("recording API exports styled Unicode to APNG and GIF", async () => {
 });
 
 test(
-  "assertion errors include the current terminal",
+  "assertion errors contain only actionable failure details",
   async () => {
     await withTerminal({ program: [process.execPath, ...evalArgs] }, async (su) => {
       await su.getByText("ready").wait({ timeout: 2000 });
@@ -319,24 +346,24 @@ test(
           error.message.includes(
             "locator.expect: timed out after 50ms waiting for 'text-that-is-not-on-screen' to be visible",
           ) &&
-          error.message.includes("Terminal content:\n╭") &&
-          error.message.includes("ready") &&
-          error.message.includes("\n╰"),
+          !error.message.includes("Terminal content:") &&
+          error.details.operation === "locator.expect" &&
+          error.details.terminal === undefined &&
+          error.details.recent_operations === undefined,
       );
       await assert.rejects(
         su.getByText("ready").wait({ state: "hidden", timeout: 50 }),
         (error) =>
           error instanceof ExpectationError &&
           error.message.includes("timed out after 50ms waiting for 'ready' to be hidden") &&
-          error.message.includes("Terminal content:\n╭"),
+          !error.message.includes("Terminal content:"),
       );
       await assert.rejects(
         su.expectOutput("missing"),
         (error) =>
           error instanceof ExpectationError &&
           error.message.includes("no command output tracked yet") &&
-          error.message.includes("Terminal content:\n╭") &&
-          error.message.includes("ready"),
+          !error.message.includes("Terminal content:"),
       );
     });
   },
@@ -585,6 +612,44 @@ test("locators support scoped text matches and style assertions", async () => {
   }
 });
 
+test("nested text and style clicks retain their full query and resolved input", async () => {
+  const program = "process.stdout.write('Review deployment\\r\\n\\x1b[36mView connection\\x1b[0m\\r\\nHelp: View connection\\r\\n'); setInterval(() => {}, 1000)";
+  const directory = mkdtempSync(join(tmpdir(), "tui-test-input-evidence-"));
+  await withTerminal({
+    program: [process.execPath, evalArgs[0], program],
+    waitReady: false,
+    artifacts: { dir: directory, onFailure: "text" },
+  }, async (terminal) => {
+    await terminal.getByText("Review deployment").wait({ timeout: 3000 });
+    await terminal
+      .getByText("Review deployment")
+      .getByText("View connection", { direction: "after" })
+      .getByStyle({ foreground: "6" })
+      .click();
+
+    await assert.rejects(
+      terminal.getByText("missing diagnostic marker").expect({ timeout: 0 }),
+      (error) => {
+        assert(error instanceof ExpectationError);
+        assert.equal(error.details.recent_operations, undefined);
+        const report = JSON.parse(readFileSync(error.artifact.manifest, "utf8"));
+        const click = report.recent_operations.find((operation) => operation.name === "locator.click");
+        assert(click);
+        const query = click.expectation.query;
+        assert.equal(query.selector.kind, "style");
+        assert.equal(query.selector.selector.style.foreground, "6");
+        assert.equal(query.within.selector.selector.text, "View connection");
+        assert.equal(query.within.direction, "after");
+        assert.equal(query.within.within.selector.selector.text, "Review deployment");
+        assert.deepEqual(click.input.arguments.target, { kind: "locator" });
+        assert.deepEqual(click.input.mouse_position, { column: 7, row: 1 });
+        assert.deepEqual(click.input.sent_bytes, [...new TextEncoder().encode("\x1b[<0;8;2M\x1b[<0;8;2m")]);
+        return true;
+      },
+    );
+  }).finally(() => rmSync(directory, { recursive: true, force: true }));
+});
+
 test("get-by locators are lazy, chainable, and actionable", async () => {
   const su = new TuiTest(uniqueSession("reusable-text-locators"));
   const script =
@@ -657,8 +722,8 @@ test("get-by locators are lazy, chainable, and actionable", async () => {
       su.getByText("missing-item").location(),
       (error) =>
         error instanceof ExpectationError &&
-        error.message.includes("Terminal content:") &&
-        error.message.includes("item item"),
+        !error.message.includes("Terminal content:") &&
+        error.details.locator.selectors.includes("missing-item"),
     );
 
     await nested.highlight();
@@ -669,6 +734,43 @@ test("get-by locators are lazy, chainable, and actionable", async () => {
     await su.getByText("item").first().highlight();
   } finally {
     await su.closeQuiet();
+  }
+});
+
+test("link locators compose cell sets and filter whole candidates", async () => {
+  const uri = "https://example.com";
+  const output = `\x1b[1mA\x1b]8;;${uri}\x1b\\B\x1b[22mC\x1b]8;;\x1b\\\r\n` +
+    `\x1b]8;;${uri}\x1b\\\x1b[1mA\x1b[22m \x1b[1mB\x1b[0m\x1b]8;;\x1b\\\r\n`;
+  for (const backend of ["alacritty", "ghostty", "rio", "xtermjs"]) {
+    const su = new TuiTest(uniqueSession("link-composition"), { backend });
+    try {
+      const script = `setTimeout(() => process.stdout.write(${JSON.stringify(output)}), 150);setInterval(() => {}, 1000)`;
+      await su.run(process.execPath, ["-e", script]);
+      const row = su.getByText("ABC");
+      const bold = su.getByStyle({ bold: true });
+      const link = su.getByLink(uri);
+      const intersection = row.and(bold).and(link);
+      await intersection.wait({ timeout: 3000 });
+      assert.equal((await intersection.location()).text, "B", backend);
+      assert.deepEqual((await intersection.locations())[0].spans, [{ row: 0, start: 1, end: 2 }]);
+      assert.equal((await row.and(bold).or(row.and(link)).location()).text, "ABC");
+      assert.equal((await row.filter({ has: link, hasNot: su.getByText("absent") }).location()).text, "ABC");
+      assert.equal(await row.filter({ hasNot: link }).count(), 0);
+      assert.equal(await row.getByLink(uri).count(), 0);
+      assert.equal(await row.getByLink("").count(), 0);
+      assert.equal(await su.getByText("AB").filter({ has: su.getByText("C") }).count(), 0);
+      const spaced = su.getByText("A B");
+      assert.equal((await spaced.getByStyle({ bold: true }).getByLink(uri).location()).text, "A B");
+      const pieces = spaced.and(bold).and(link);
+      assert.deepEqual((await pieces.locations()).map(match => match.text), ["A", "B"]);
+      await assert.rejects(pieces.location(), /match once/);
+      await intersection.click({ timeout: 100 });
+      await intersection.highlight({ timeout: 100 });
+      assert.equal((await (await pieces.all())[1].location()).text, "B");
+      await intersection.expect({ timeout: 100 });
+    } finally {
+      await su.closeQuiet();
+    }
   }
 });
 
@@ -704,7 +806,14 @@ test("typed mouse and signal operations execute against a real program", async (
     await su.mouse.scroll("down", { amount: 1 });
     await su.mouse.click(1, 1);
     await su.signal("KILL");
-    assert.match(await su.text(), /ready/);
+    await su.waitExit({ timeout: 5000 });
+    const state = await su.state();
+    assert.match(state.text, /ready/);
+    if (process.platform === "win32") {
+      assert.equal(state.exit_signal, null);
+    } else {
+      assert.equal(typeof state.exit_signal, "string");
+    }
     await su.close();
     await assert.rejects(su.state(), (error) => error instanceof NoSessionError);
   } finally {
@@ -774,19 +883,61 @@ test("sessions lists an open session", async () => {
 
 test("close evicts the session and retains its recording", async () => {
   const name = uniqueSession("recording");
-  const session = new TuiTest(name);
-  await session.open({ shell });
-  await session.submit("echo retained-recording");
-  await session.waitCommand();
-  await session.close();
+  const directory = mkdtempSync(join(tmpdir(), "tui-test-retained-trace-"));
+  const session = new TuiTest(name, { trace: { mode: "on", directory } });
+  try {
+    await session.open({ shell });
+    await session.submit("echo retained-recording");
+    await session.waitCommand();
+    await session.close();
 
-  assert.ok(!(await sessions()).includes(name));
-  await assert.rejects(session.state(), (error) => error instanceof NoSessionError);
-  assert.match(await getRecording(name), /retained-recording/);
-  await assert.rejects(
-    getRecording(uniqueSession("missing-recording")),
-    (error) => error instanceof NoSessionError,
-  );
+    assert.ok(!(await sessions()).includes(name));
+    await assert.rejects(session.state(), (error) => error instanceof NoSessionError);
+    assert.match(await getRecording(name), /retained-recording/);
+    await assert.rejects(
+      getRecording(uniqueSession("missing-recording")),
+      (error) => error instanceof NoSessionError,
+    );
+  } finally {
+    await session.closeQuiet();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("withTerminal retains traces according to the final test outcome", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-test-trace-outcomes-"));
+  try {
+    for (const [mode, failed] of [["on-failure", false], ["on-failure", true], ["on", false]]) {
+      const directory = join(root, `${mode}-${failed}`);
+      const run = () => withTerminal({
+        program: [process.execPath, ...evalArgs],
+        waitReady: false,
+        trace: { mode, directory },
+      }, async (terminal) => {
+        await terminal.getByText("ready").wait();
+        if (failed) throw new Error("external test failure");
+        for (let index = 0; index < 2; index++) {
+          await assert.rejects(terminal.getByText("missing expected marker").expect({ timeout: 0 }), ExpectationError);
+        }
+      });
+      if (failed) await assert.rejects(run, /external test failure/);
+      else await run();
+      const bundles = await readdir(directory);
+      if (mode === "on-failure" && !failed) {
+        assert.deepEqual(bundles, []);
+      } else {
+        assert.equal(bundles.length, 1);
+        const bundle = join(directory, bundles[0]);
+        const manifest = JSON.parse(await readFile(join(bundle, "trace.json"), "utf8"));
+        assert.equal(manifest.outcome, failed ? "failed" : "passed");
+        assert.match(await readFile(join(bundle, "session.cast"), "utf8"), /"version":2/);
+        assert.ok(existsSync(join(bundle, "trace.html")));
+        assert.ok(existsSync(join(bundle, "trace.md")));
+      }
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("any shared handle can close a reopened named session", async () => {

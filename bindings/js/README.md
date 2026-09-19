@@ -41,10 +41,14 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs"` | `"alacritty"` |
 | `timeouts` | `Timeouts` | built-in defaults |
 | `profile` | `Profile` | built-in profile |
-| `artifacts` | `{ dir, onFailure? }` | off |
-| `recording` | `{ mode?, directory? }` | `{ mode: "always" }` |
+| `screenHistoryLimit` | `number` | `10` |
+| `artifacts` | `{ dir, onFailure?, includeRecording? }` | off |
+| `recording` | `{ directory? }` | default recording directory |
+| `trace` | `{ mode?, directory? }` | `{ mode: "off", directory: ".tui-test/traces" }` |
 
-`artifacts.onFailure` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Users can open `trace.html`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
+
+`artifacts.onFailure` selects `"none"`, `"text"`, `"html"`, or `"all"`. Use `includeRecording` to include the cast in failure artifacts.
 
 #### Properties
 
@@ -66,7 +70,7 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `closeQuiet()` | Close without throwing. |
 | `[Symbol.asyncDispose]()` | Close from `await using`. |
 
-`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
+`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, `timeouts`, and `screenHistoryLimit`. `run()` accepts the same options except `shell`.
 
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
 
@@ -153,12 +157,48 @@ await save.click();
 | --- | --- |
 | `terminal.getByText(text, options?)` | `regex`, `full`, `whitespace` |
 | `terminal.getByStyle(style, options?)` | `full` |
+| `terminal.getByLink(uri, options?)` | `full` |
 | `locator.getByText(text, options?)` | `regex`, `full`, `whitespace`, `direction` |
 | `locator.getByStyle(style, options?)` | `full`, `direction` |
+| `locator.getByLink(uri, options?)` | `full`, `direction` |
 
 `whitespace` is `"exact"` or `"normalize"`. `direction` is `"within"`, `"after"`, or `"before"`.
 
 Style fields are `foreground`, `background`, `bold`, `dim`, `italic`, `underlineStyle`, `underlineColor`, `inverse`, `hidden`, `strikethrough`, and `blink`.
+
+`getByLink(uri)` matches an exact OSC 8 target, not visible URL text;
+`getByLink("")` requires no link. Root style/link selectors find runs within
+each row. Chained calls with the default `within` direction check whole
+matches. Styles skip blanks if visible text exists; links check every cell.
+
+#### Compose locators
+
+```js
+const link = terminal.getByLink("https://example.com");
+const bold = terminal.getByStyle({ bold: true });
+const boldLinkCells = bold.and(link);
+const either = link.or(terminal.getByText("Help"));
+const sections = terminal.getByText("Docs and Help");
+const containsLink = sections.filter({ has: link });
+const withoutOldText = sections.filter({ hasNot: terminal.getByText("old") });
+const entirelyLinked = sections.getByLink("https://example.com");
+```
+
+`.and()` keeps shared cells; `.or()` combines cells without duplicates.
+Adjacent cells merge within each physical row, even across original matches.
+Gaps and row breaks split runs. Counts and clicks use these runs, not
+Playwright element identities. Text keeps exact whitespace.
+
+`filter` accepts only locators. `has` requires a match inside each candidate;
+`hasNot` requires none. Both conditions apply when supplied, and the inner
+match may cover the whole candidate. For partially linked `"Docs"`,
+`filter({ has: link })` keeps the whole word, `getByLink(uri)` rejects it,
+and `.and(link)` returns its linked cells.
+
+Use locators from one `TuiTest`. Composition leaves them unchanged and reads
+one fresh snapshot when used. Selection order matters: `a.first().and(b)`
+differs from `a.and(b).first()`. Any `full` branch includes scrollback for the
+whole query. Errors, including `unique()` failures, propagate.
 
 #### Select matches
 
@@ -268,8 +308,14 @@ const terminal = new TuiTest("test", {
     colors: { foreground: "#ffffff", background: "#000000" },
   },
   timeouts: { text: 10_000, command: 60_000 },
-  artifacts: { dir: "artifacts", onFailure: "svg" },
-  recording: { mode: "on-failure", directory: "artifacts" },
+  screenHistoryLimit: 10,
+  artifacts: {
+    dir: "artifacts/failures",
+    onFailure: "all",
+    includeRecording: true,
+  },
+  trace: { mode: "on-failure", directory: "artifacts/traces" },
+  recording: { directory: "artifacts/casts" },
 });
 ```
 
@@ -284,6 +330,8 @@ const terminal = new TuiTest("test", {
 | `Profile`, `Colors` | Scrollback and colors. |
 | `Timeouts` | Text, idle, command, exit, and ready timeouts. |
 | `AutomaticRecording` | Automatic recording mode and directory. |
+| `FailureDetails` | Structured operation, locator, process, runtime, and screen evidence. |
+| `FailureArtifactRef` | Paths and write status for a failure artifact. |
 | `MouseButton` | `"left"`, `"middle"`, or `"right"`. |
 | `MouseClickOptions` | Button, modifiers, target text, and click count. |
 | `MouseButtonOptions` | Button and modifiers. |
@@ -301,6 +349,6 @@ const terminal = new TuiTest("test", {
 | `NoSessionError` | `3` |
 | `InternalError` | `5` |
 
-All errors extend `TuiTestError` and include `kind` and `exitCode`. Expectation errors can include `terminal.text` and `terminal.screenshot`.
+All errors extend `TuiTestError` and include `kind` and `exitCode`. Structured native failures expose `details` and `artifact`; expectation errors continue to populate compatibility `terminal.text` and `terminal.screenshot` fields. Failure artifacts can contain terminal output, titles, locator operands, and recordings, so review them before uploading.
 
 Sessions are local to the current process and cannot be controlled by the CLI. Cancelling a promise does not stop an active terminal operation.

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { uniqueSession } from "../dist/index.js";
+import { NativeRuntime } from "../dist/native.js";
 import {
   closeAllTracked,
   createTerminal,
@@ -87,6 +88,72 @@ test("untrackTerminal removes a terminal from the registry", async () => {
   untrackTerminal(stub);
   assert.equal(trackedCount(), 0);
   await closeAllTracked();
+});
+
+test("createTerminal forwards screen history retention to open and run", async () => {
+  const originals = {
+    open: NativeRuntime.prototype.open,
+    run: NativeRuntime.prototype.run,
+    close: NativeRuntime.prototype.close,
+  };
+  const calls = [];
+  NativeRuntime.prototype.open = async (options) => { calls.push(options); };
+  NativeRuntime.prototype.run = async (options) => { calls.push(options); };
+  NativeRuntime.prototype.close = async () => {};
+  try {
+    for (const program of [undefined, ["program"]]) {
+      const terminal = await createTerminal({ program, screenHistoryLimit: 17 });
+      try {
+        assert.equal(calls.at(-1).screenHistoryLimit, 17);
+      } finally {
+        await terminal.close();
+        untrackTerminal(terminal);
+      }
+    }
+  } finally {
+    Object.assign(NativeRuntime.prototype, originals);
+  }
+});
+
+test("withTerminal finalizes once and distinguishes callback and cleanup failures", async () => {
+  const originals = {
+    open: NativeRuntime.prototype.open,
+    close: NativeRuntime.prototype.close,
+  };
+  NativeRuntime.prototype.open = async () => {};
+  try {
+    for (const callbackFails of [false, true]) {
+      for (const cleanupFails of [false, true]) {
+        const callbackError = new Error("callback failed");
+        const cleanupError = new Error("cleanup failed");
+        const outcomes = [];
+        NativeRuntime.prototype.close = async (failed) => {
+          outcomes.push(failed);
+          if (cleanupFails) throw cleanupError;
+        };
+        const result = withTerminal({}, () => {
+          if (callbackFails) throw callbackError;
+          return "done";
+        });
+        if (callbackFails && cleanupFails) {
+          await assert.rejects(result, (error) => {
+            assert.ok(error instanceof AggregateError);
+            assert.deepEqual(error.errors, [callbackError, cleanupError]);
+            return true;
+          });
+        } else if (callbackFails || cleanupFails) {
+          await assert.rejects(result, (error) =>
+            error === (callbackFails ? callbackError : cleanupError));
+        } else {
+          assert.equal(await result, "done");
+        }
+        assert.deepEqual(outcomes, [callbackFails]);
+        assert.equal(trackedCount(), 0);
+      }
+    }
+  } finally {
+    Object.assign(NativeRuntime.prototype, originals);
+  }
 });
 
 test(

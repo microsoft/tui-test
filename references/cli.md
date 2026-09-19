@@ -17,6 +17,8 @@ Use the CLI for terminal work split across separate commands.
 
 Use `--session NAME` to select a session. `open` and `run` reuse it unless `--restart` is set.
 
+`open` and `run` accept `--screen-history-limit COUNT` to control how many distinct recent screens are retained for failures.
+
 `restart` replays the last successful spawn, preserving its original working directory, options, and latest terminal size. It sends Ctrl-C and waits up to 5000 ms before forcing replacement; `--graceful-timeout 0` skips the wait. It works after child exit, but not after `close` or daemon shutdown. The terminal and automatic recording start fresh.
 
 ## Locate text
@@ -40,10 +42,16 @@ Common options:
 | `--match any\|unique\|first\|last` | Select matches. |
 | `--nth N` | Select a zero-based match. |
 
-Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, `--blink`, and `--link`.
+Style options: `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-style`, `--underline-color`, `--inverse`, `--hidden`, `--strikethrough`, and `--blink`.
 
 `--link URL` matches that hyperlink on every cell, including spaces.
 Use `--link ""` for unlinked cells. Other style filters ignore spaces.
+
+`--link` is a separate whole-match constraint, not a style field. Native
+Rust/JavaScript/Python locators also support cell-set AND/OR and locator-based
+containment filters; the CLI does not expose a shell expression syntax for
+those operations. Locator protocol requests carry expression queries rather
+than native binding stage arrays.
 
 `click text` also accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks`, and `--timeout`.
 
@@ -114,8 +122,31 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 | `monitor` | Watch a session live. |
 | `monitor --interactive` | Forward keyboard, paste, and supported SGR mouse input; Ctrl+] detaches. |
 
-Interactive input follows the app's keyboard, paste, and mouse modes.
-Detaching restores the viewer's modes; read-only monitoring leaves them unchanged.
+Interactive monitors mirror the session's keyboard, paste, and mouse modes.
+
+## Failure diagnostics
+
+Configure `[trace]` before `open` or `run`. Use `mode = "on"` to retain every session or `"on-failure"` to retain failures. Users can open `trace.html` or replay `session.cast`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
+
+To write artifacts for one assertion:
+
+```sh
+tui-test --json \
+  --failure-artifacts ./artifacts/failures \
+  --diagnostic-context test=settings-save \
+  expect text "Save" --fg green --timeout 5000
+```
+
+Artifact modes:
+
+| Mode | Files |
+| --- | --- |
+| `none` | No per-failure files. |
+| `text` | `failure.json`, `current.txt`, and `failure.md`. |
+| `html` | A standalone `failure.html` with its diagnostic data and evidence embedded. |
+| `all` | The text and HTML outputs plus `current.svg` and `timeline.json`. |
+
+`--failure-artifact-recording` adds `session.cast`. Review artifacts before sharing because they can contain terminal output and other user data.
 
 ## Configure
 
@@ -124,11 +155,20 @@ Detaching restores the viewer's modes; read-only monitoring leaves them unchange
 scrollback = 10000
 
 [recording]
+directory = "./casts"
+
+[trace]
 mode = "on-failure"
-directory = "./artifacts"
+directory = "./traces"
+
+[diagnostics]
+screen-history-limit = 10
 ```
 
-Recording modes: `disabled`, `on-failure`, and `always`.
+Trace modes: `off`, `on-failure`, and `on`. The default is `off`.
+`recording.directory` is optional and independent of `trace.directory`.
+The old `recording.mode` field is rejected. Relative directories in a config
+file resolve beside that file.
 
 ### Styling screenshots and recordings
 
@@ -225,30 +265,26 @@ name:
 
 ```toml
 [recording]
-mode = "on-failure"
 directory = "./artifacts"
 
 [recording.style]
 canvas_background = "#101014"
 canvas_padding = 32
 
-[profiles.docs.recording]
-mode = "always"
-
 [profiles.docs.recording.style]
 font_size = 24
 ```
 
-The `docs` profile records always, still writes to `./artifacts`, and draws at
-24px over the `#101014` canvas with 32px of padding. Inheritance is key by key
-at every depth, so naming one style key keeps the rest of the file's look.
+The `docs` profile still writes to `./artifacts` and draws at 24px over the
+`#101014` canvas with 32px of padding. Inheritance is key by key at every
+depth, so naming one style key keeps the rest of the file's look. Whether a
+recording is kept is not a `[recording]` key: that follows `[trace] mode`.
 
 A fuller example, where each profile names a different mix:
 
 ```toml
 # What every profile gets unless it says otherwise.
 [recording]
-mode = "on-failure"
 directory = "./artifacts"
 
 [recording.style]
@@ -261,15 +297,14 @@ background = "#1a1a22"
 foreground = "#d8d8e8"
 divider = "#2a2a36"
 
-# Docs: always record, somewhere else, in bigger type.
+# Docs: record somewhere else, in bigger type.
 [profiles.docs.recording]
-mode = "always"
 directory = "./docs/media"
 
 [profiles.docs.recording.style]
 font_size = 24
 
-# CI: keep the file's mode and directory, strip the chrome so artifacts stay small.
+# CI: keep the file's directory, strip the chrome so artifacts stay small.
 [profiles.ci.recording.style]
 canvas_padding = 8
 
@@ -280,9 +315,6 @@ title_bar = false
 enabled = false
 
 # Demo: a light look for slides.
-[profiles.demo.recording]
-mode = "always"
-
 [profiles.demo.recording.style]
 canvas_background = "#f6f6f8"
 font_size = 20
@@ -296,11 +328,11 @@ width = 2
 color = "#8a8aa0"
 ```
 
-| Profile | mode | directory | what it keeps from the file |
-| --- | --- | --- | --- |
-| `docs` | `always` | `./docs/media` | the canvas, its padding, the title bar colors |
-| `ci` | `on-failure` | `./artifacts` | the font size and the title bar colors it did not name |
-| `demo` | `always` | `./artifacts` | the padding and the divider it did not name |
+| Profile | directory | what it keeps from the file |
+| --- | --- | --- |
+| `docs` | `./docs/media` | the canvas, its padding, the title bar colors |
+| `ci` | `./artifacts` | the font size and the title bar colors it did not name |
+| `demo` | `./artifacts` | the padding and the divider it did not name |
 
 `--profile` selects one, and `default` is what it selects when the flag is
 absent. Naming a profile the file does not define is an error, except for

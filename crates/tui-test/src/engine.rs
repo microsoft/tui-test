@@ -13,9 +13,26 @@ use crate::api::{
 use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
 use crate::config::{self, POLL_DELAY_MS};
+use crate::diagnostics::strings::{
+    base_error_message, capture_error_message, diagnostic_hints, diagnostic_operation_name,
+    format_timeout, locator_failure_message, operation_timeout, safe_operation_summary,
+    timeout_message, title_timeout_message_from_actual, truncate_diagnostic_value,
+};
+use crate::diagnostics::{
+    allocate_artifact_directory, allocate_trace_directory, elapsed_ms, failure_reason,
+    recording_temp_path, write_failure_artifact, ArtifactInputs, CellMismatch, CellStyleEvaluation,
+    ExecutionContext, FailureArtifactRef, FailureArtifactStatus, FailureObservation, FailureReason,
+    FailureReport, InputDetails, LocatorFailureReason, OperationEvent, OperationExpectation,
+    OperationHistory, PreparedRecording, ProcessDiagnostics, RecordingDiagnostics, RecordingStatus,
+    RuntimeDiagnostics, TraceMode, TraceOptions, TraceOutcome, RECORDING_COPY_LIMIT,
+};
+use crate::diagnostics::{comparison_failure, merge_failure_details};
 use crate::input::{keys, mouse};
 use crate::logger::Logger;
-use crate::session::{Session as TerminalSession, TermState, TextHighlight};
+use crate::session::{
+    capture_visual_state, try_capture_visual_state, Session as TerminalSession, TermState,
+    TextHighlight,
+};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::emu::{
     ClipboardType, CursorShape, Emulator, KeyboardMode, MouseMode, TerminalMode,
@@ -32,12 +49,16 @@ pub struct Engine {
     logger: Arc<Logger>,
     default_recording_path: PathBuf,
     recording: Mutex<RecordingState>,
+    trace: Mutex<TraceState>,
+    operation_history: Mutex<OperationHistory>,
 }
 
 #[derive(Clone)]
 struct SpawnSpec {
     command: SpawnCommand,
     resolved_cwd: Option<PathBuf>,
+    retention: crate::diagnostics::DiagnosticRetentionOptions,
+    trace: Option<TraceOptions>,
 }
 
 #[derive(Clone)]
@@ -76,6 +97,30 @@ struct RecordingState {
     failed: bool,
 }
 
+#[derive(Default)]
+struct TraceState {
+    options: TraceOptions,
+    artifact: Option<FailureArtifactRef>,
+    context: std::collections::BTreeMap<String, String>,
+    owned_directories: Vec<PathBuf>,
+    pending_startup_outcome: bool,
+}
+
+impl TraceState {
+    fn diagnostic_context(
+        &self,
+        context: &ExecutionContext,
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut diagnostic_context = self.context.clone();
+        diagnostic_context.extend(context.sanitized_context());
+        ExecutionContext {
+            diagnostic_context,
+            ..Default::default()
+        }
+        .sanitized_context()
+    }
+}
+
 #[derive(Clone)]
 struct InterruptTarget {
     pty: Arc<Mutex<crate::terminal::pty::Pty>>,
@@ -88,11 +133,44 @@ struct LiveTarget {
     shell: Option<&'static str>,
 }
 
+#[derive(Clone)]
+struct OperationMetadata {
+    sequence: u64,
+    name: String,
+    timeout_ms: Option<u64>,
+    started_at: Instant,
+    started_ms: u64,
+    screen_before: u64,
+    safe_summary: String,
+    is_assertion: bool,
+    expectation: Option<OperationExpectation>,
+    input: Option<InputDetails>,
+}
+
+impl OperationMetadata {
+    fn pending_event(&self, result: &str, screen_at_return: u64) -> OperationEvent {
+        OperationEvent {
+            sequence: self.sequence,
+            name: self.name.clone(),
+            started_ms: self.started_ms,
+            ended_ms: self.started_ms.saturating_add(elapsed_ms(self.started_at)),
+            result: result.into(),
+            screen_before: self.screen_before,
+            screen_at_return,
+            safe_summary: self.safe_summary.clone(),
+            is_assertion: self.is_assertion,
+            expectation: self.expectation.clone(),
+            input: self.input.clone(),
+        }
+    }
+}
+
 pub struct LiveFrame {
     pub grid: Vec<Vec<EmuCell>>,
     pub cursor: (u16, u16),
     pub size: (u16, u16),
     pub keyboard_mode: KeyboardMode,
+    pub cursor_key_application: bool,
     pub bracketed_paste: bool,
     pub mouse_mode: MouseMode,
     pub exited: Option<i32>,
@@ -147,13 +225,29 @@ impl Engine {
             default_recording_path: recording_path.clone(),
             recording: Mutex::new(RecordingState {
                 path: None,
-                mode: AutomaticRecordingMode::Always,
+                mode: AutomaticRecordingMode::Disabled,
                 failed: false,
             }),
+            trace: Mutex::new(TraceState::default()),
+            operation_history: Mutex::new(OperationHistory::new()),
         }
     }
 
     pub fn execute(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
+        self.execute_with_context(operation, ExecutionContext::default())
+    }
+
+    pub fn execute_with_context(
+        &self,
+        operation: Operation,
+        context: ExecutionContext,
+    ) -> Result<OperationResult, TuiTestError> {
+        if let Some(artifact) = &context.artifact {
+            artifact.validate().map_err(TuiTestError::usage)?;
+        }
+        if let Some(trace) = &context.trace {
+            trace.validate().map_err(TuiTestError::usage)?;
+        }
         let _operation = self
             .operations
             .lock()
@@ -162,8 +256,43 @@ impl Engine {
             self.logger
                 .event(&format!("operation {}", operation_summary(&operation)));
         }
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.execute_inner(operation)
+        let name = context
+            .operation_name
+            .clone()
+            .unwrap_or_else(|| diagnostic_operation_name(&operation).to_string());
+        let screen_before = self.capture_current_screen_sequence(true, false);
+        let canonical_name = diagnostic_operation_name(&operation);
+        let is_assertion = canonical_name.starts_with("expect.")
+            || canonical_name.starts_with("wait.")
+            || matches!(canonical_name, "locator.wait" | "locator.resolve");
+        let started_ms = self.current_session_elapsed_ms().unwrap_or(0);
+        let mut metadata = OperationMetadata {
+            sequence: 0,
+            name: name.clone(),
+            timeout_ms: operation_timeout(&operation),
+            started_at: Instant::now(),
+            started_ms,
+            screen_before,
+            safe_summary: safe_operation_summary(&operation),
+            is_assertion,
+            expectation: OperationExpectation::capture(&operation),
+            input: InputDetails::capture(&operation),
+        };
+        let pending = self
+            .operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .begin(
+                name,
+                started_ms,
+                screen_before,
+                metadata.safe_summary.clone(),
+                is_assertion,
+                metadata.expectation.clone(),
+            );
+        metadata.sequence = pending.sequence();
+        let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.execute_inner(operation, &context, &mut metadata)
         }))
         .unwrap_or_else(|payload| {
             Err(TuiTestError::internal(format!(
@@ -171,26 +300,92 @@ impl Engine {
                 panic_message(payload.as_ref())
             )))
         });
-        if result
+        let failed = result
             .as_ref()
-            .is_err_and(|error| matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal))
-        {
+            .is_err_and(|error| matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal));
+        if failed {
             self.recording
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .failed = true;
         }
+        if let Err(error) = &mut result {
+            self.prepare_failure_observation(error);
+        }
+        let pin_checkpoint = is_assertion
+            || (metadata.input.is_some()
+                && self
+                    .trace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .options
+                    .mode
+                    != TraceMode::Off);
+        let screen_at_return = result
+            .as_ref()
+            .err()
+            .and_then(|error| error.observation.as_deref())
+            .map_or_else(
+                || self.capture_current_screen_sequence(true, pin_checkpoint),
+                |observation| observation.screen_sequence,
+            );
+        let result_name = match &result {
+            Ok(_) => "ok",
+            Err(error) => error.kind.as_str(),
+        };
+        // Failure enrichment takes the session lock before the history lock.
+        let ended_ms = result
+            .as_ref()
+            .err()
+            .and_then(|error| error.observation.as_deref())
+            .map_or_else(
+                || self.current_session_elapsed_ms(),
+                |observation| Some(observation.captured_ms),
+            );
+        self.operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish(
+                pending,
+                ended_ms,
+                screen_at_return,
+                result_name,
+                metadata.input.clone(),
+            );
+        if let Err(error) = &mut result {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.finalize_failure(error, &context, &metadata);
+            }));
+            error.observation = None;
+            error.report = None;
+        }
         result
     }
 
-    fn execute_inner(&self, operation: Operation) -> Result<OperationResult, TuiTestError> {
+    fn execute_inner(
+        &self,
+        operation: Operation,
+        context: &ExecutionContext,
+        metadata: &mut OperationMetadata,
+    ) -> Result<OperationResult, TuiTestError> {
         match operation {
-            Operation::Open(options) => self.open(options).map(OperationResult::Open),
-            Operation::Run(options) => self.run(options).map(OperationResult::Open),
+            Operation::FinishTrace { failed } => {
+                self.finish_trace(context, Some(failed))?;
+                Ok(OperationResult::Unit)
+            }
+            Operation::Open(options) => self
+                .open(options, context, metadata)
+                .map(OperationResult::Open),
+            Operation::Run(options) => self
+                .run(options, context, metadata)
+                .map(OperationResult::Open),
             Operation::Restart {
                 graceful_timeout_ms,
-            } => self.restart(graceful_timeout_ms).map(OperationResult::Open),
+            } => self
+                .restart(graceful_timeout_ms, context, metadata)
+                .map(OperationResult::Open),
             Operation::Close => {
+                let trace_result = self.finish_trace(context, None);
                 *self
                     .live
                     .lock()
@@ -208,11 +403,21 @@ impl Engine {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 self.cleanup_recording();
+                self.trace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .pending_startup_outcome = false;
+                trace_result?;
                 Ok(OperationResult::Unit)
             }
             Operation::Resize { cols, rows } => {
-                let result = self
-                    .with_session(|session| dispatch(session, Operation::Resize { cols, rows }));
+                let result = self.with_session(|session| {
+                    dispatch(
+                        session,
+                        Operation::Resize { cols, rows },
+                        &mut metadata.input,
+                    )
+                });
                 if result.is_ok() {
                     if let Some(spec) = self
                         .spawn_spec
@@ -225,25 +430,52 @@ impl Engine {
                 }
                 result
             }
-            other => self.with_session(|session| dispatch(session, other)),
+            other => self.with_session(|session| dispatch(session, other, &mut metadata.input)),
         }
     }
 
-    fn open(&self, options: OpenOptions) -> Result<OpenResult, TuiTestError> {
-        self.spawn(SpawnSpec {
-            command: SpawnCommand::Open(options),
-            resolved_cwd: None,
-        })
+    fn open(
+        &self,
+        options: OpenOptions,
+        context: &ExecutionContext,
+        metadata: &OperationMetadata,
+    ) -> Result<OpenResult, TuiTestError> {
+        self.spawn(
+            SpawnSpec {
+                command: SpawnCommand::Open(options),
+                resolved_cwd: None,
+                retention: context.retention,
+                trace: context.trace.clone(),
+            },
+            context,
+            metadata,
+        )
     }
 
-    fn run(&self, options: RunOptions) -> Result<OpenResult, TuiTestError> {
-        self.spawn(SpawnSpec {
-            command: SpawnCommand::Run(options),
-            resolved_cwd: None,
-        })
+    fn run(
+        &self,
+        options: RunOptions,
+        context: &ExecutionContext,
+        metadata: &OperationMetadata,
+    ) -> Result<OpenResult, TuiTestError> {
+        self.spawn(
+            SpawnSpec {
+                command: SpawnCommand::Run(options),
+                resolved_cwd: None,
+                retention: context.retention,
+                trace: context.trace.clone(),
+            },
+            context,
+            metadata,
+        )
     }
 
-    fn restart(&self, graceful_timeout_ms: u64) -> Result<OpenResult, TuiTestError> {
+    fn restart(
+        &self,
+        graceful_timeout_ms: u64,
+        context: &ExecutionContext,
+        metadata: &OperationMetadata,
+    ) -> Result<OpenResult, TuiTestError> {
         let spec = self
             .spawn_spec
             .lock()
@@ -270,10 +502,20 @@ impl Engine {
             }
         }
 
-        self.spawn(spec.restart())
+        let mut context = context.clone();
+        if context.trace.is_none() {
+            context.trace = spec.trace.clone();
+        }
+        self.spawn(spec.restart(), &context, metadata)
     }
 
-    fn spawn(&self, mut spec: SpawnSpec) -> Result<OpenResult, TuiTestError> {
+    fn spawn(
+        &self,
+        mut spec: SpawnSpec,
+        context: &ExecutionContext,
+        metadata: &OperationMetadata,
+    ) -> Result<OpenResult, TuiTestError> {
+        let diagnostics = spec.retention;
         let (
             shell,
             program,
@@ -287,7 +529,7 @@ impl Engine {
             wait_ready,
             restart,
             timeouts,
-            recording,
+            mut recording,
         ) = match &spec.command {
             SpawnCommand::Open(options) => (
                 options.shell,
@@ -326,6 +568,31 @@ impl Engine {
             }
         };
         recording.validate()?;
+        let mut trace_options = context.trace.clone().unwrap_or_default();
+        trace_options.directory =
+            std::path::absolute(&trace_options.directory).map_err(|error| {
+                TuiTestError::internal(format!("failed to resolve trace directory: {error}"))
+            })?;
+        spec.trace = context.trace.as_ref().map(|_| trace_options.clone());
+        if context.trace.is_some() {
+            recording.mode = match trace_options.mode {
+                TraceMode::Off => AutomaticRecordingMode::Disabled,
+                TraceMode::On => AutomaticRecordingMode::Always,
+                TraceMode::OnFailure => AutomaticRecordingMode::OnFailure,
+            };
+        } else if context
+            .artifact
+            .as_ref()
+            .is_some_and(|artifact| artifact.include_recording)
+            && recording.mode == AutomaticRecordingMode::Disabled
+        {
+            recording.mode = AutomaticRecordingMode::OnFailure;
+        }
+        match &mut spec.command {
+            SpawnCommand::Open(options) => options.recording = recording.clone(),
+            SpawnCommand::Run(options) => options.recording = recording.clone(),
+        }
+        diagnostics.validate().map_err(TuiTestError::usage)?;
         let mut current = self.lock_session();
         if let Some(previous) = current.as_ref() {
             if !restart && previous.is_alive()? {
@@ -356,11 +623,26 @@ impl Engine {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         if let Some(previous) = current.take() {
+            self.finish_trace_with_session(&previous, context, None)?;
             previous.kill();
             drop(previous);
         }
         drop(current);
+        self.operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reset_session();
         self.discard_recording();
+        *self
+            .trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = TraceState {
+            options: trace_options,
+            artifact: None,
+            context: context.sanitized_context(),
+            owned_directories: Vec::new(),
+            pending_startup_outcome: false,
+        };
         *self
             .recording
             .lock()
@@ -380,6 +662,7 @@ impl Engine {
             Some(cwd),
             env,
             timeouts,
+            diagnostics,
             self.logger.clone(),
             recording_path.clone(),
             recording_required,
@@ -406,16 +689,26 @@ impl Engine {
                 .is_ready()
         };
         if wait_ready == Some(true) && !ready {
-            let message = assertion_message(
-                &session,
-                &format!(
-                    "open: the session started but reported no prompt within \
-                     {ready_timeout}ms; pass --no-wait-ready if it has no shell \
-                     integration"
-                ),
+            let mut error = startup_readiness_error(&metadata.name, ready_timeout);
+            error.observation = Some(Box::new(capture_failure_observation(&session)));
+            let metadata = OperationMetadata {
+                started_ms: 0,
+                screen_before: 0,
+                ..metadata.clone()
+            };
+            self.finalize_failure_with_session(
+                &mut error,
+                context,
+                &metadata,
+                Some(&session),
+                true,
             );
+            self.trace
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending_startup_outcome = true;
             session.kill();
-            return Err(TuiTestError::assertion(message));
+            return Err(error);
         }
         let live = LiveTarget {
             state: session.state.clone(),
@@ -458,14 +751,559 @@ impl Engine {
         // once the grid has stopped tracking the bytes, every answer read out
         // of it is a guess, and a wrong answer is worse than a failure.
         if let Some(fault) = session.fault() {
-            return Err(TuiTestError::internal(fault));
+            return Err(
+                TuiTestError::internal(fault.clone()).with_report(FailureReport::new(
+                    "terminal.operation",
+                    None,
+                    FailureReason::EmulatorFault,
+                    fault,
+                )),
+            );
         }
-        match operation(session) {
-            Err(mut error) if error.kind == ErrorKind::Assertion => {
-                error.message = assertion_message(session, &error.message);
-                Err(error)
+        operation(session)
+    }
+
+    fn capture_current_screen_sequence(&self, force: bool, pin: bool) -> u64 {
+        let mut guard = self.lock_session();
+        let Some(session) = guard.as_mut() else {
+            return 0;
+        };
+        let mut state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sequence = try_capture_visual_state(&mut state, force).unwrap_or(0);
+        if pin && sequence != 0 {
+            state.screen_history.pin_current();
+        }
+        sequence
+    }
+
+    fn current_session_elapsed_ms(&self) -> Option<u64> {
+        let guard = self.lock_session();
+        guard.as_ref().map(|session| {
+            let state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            elapsed_ms(state.started_at)
+        })
+    }
+
+    fn prepare_failure_observation(&self, error: &mut TuiTestError) {
+        if error.observation.is_some()
+            || !matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal)
+        {
+            return;
+        }
+        let guard = self.lock_session();
+        if let Some(session) = guard.as_ref() {
+            error.observation = safe_capture_failure_observation(session).map(Box::new);
+        }
+    }
+
+    fn finalize_failure(
+        &self,
+        error: &mut TuiTestError,
+        context: &ExecutionContext,
+        metadata: &OperationMetadata,
+    ) {
+        if !matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal) {
+            return;
+        }
+        if error.details.is_some() {
+            return;
+        }
+        let guard = self.lock_session();
+        self.finalize_failure_with_session(error, context, metadata, guard.as_ref(), false);
+    }
+
+    fn finalize_failure_with_session(
+        &self,
+        error: &mut TuiTestError,
+        context: &ExecutionContext,
+        metadata: &OperationMetadata,
+        session: Option<&TerminalSession>,
+        include_pending_operation: bool,
+    ) {
+        if !matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal) {
+            return;
+        }
+        if error.details.is_some() {
+            return;
+        }
+        let captured = if error.observation.is_none() {
+            session.and_then(safe_capture_failure_observation)
+        } else {
+            None
+        };
+        let observation = error.observation.as_deref().or(captured.as_ref());
+        let (summary, summary_truncated) =
+            truncate_diagnostic_value(base_error_message(&error.message), 64 * 1024);
+        let mut details = FailureReport::new(
+            metadata.name.clone(),
+            metadata.timeout_ms,
+            failure_reason(error, observation),
+            summary,
+        );
+        details.truncated = summary_truncated;
+        details.operation.elapsed_ms = metadata.started_at.elapsed().as_millis() as u64;
+        details.operation.started_screen_sequence = metadata.screen_before;
+        details.operation.failed_screen_sequence = observation
+            .as_ref()
+            .map_or(0, |value| value.screen_sequence);
+        if let Some(existing) = error.report.take() {
+            merge_failure_details(&mut details, *existing);
+        }
+        details.truncated |= details
+            .locator
+            .as_ref()
+            .is_some_and(|locator| locator.stages_truncated);
+        let trace = self
+            .trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .options
+            .clone();
+        let trace_artifact = (trace.mode != TraceMode::Off).then(|| trace.artifact_options());
+        if !context
+            .artifact
+            .iter()
+            .chain(trace_artifact.iter())
+            .any(|options| options.mode != crate::diagnostics::FailureArtifactMode::None)
+        {
+            let failure = details.failure_details();
+            error.message = failure.summary.clone();
+            error.details = Some(Box::new(failure));
+            return;
+        }
+        details.context = self
+            .trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .diagnostic_context(context);
+        details.recent_operations = self
+            .operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot();
+        if include_pending_operation {
+            details.recent_operations.push(
+                metadata.pending_event(
+                    error.kind.as_str(),
+                    observation
+                        .as_ref()
+                        .map_or(metadata.screen_before, |value| value.screen_sequence),
+                ),
+            );
+        }
+
+        details.truncated |= details.recent_operations.iter().any(|event| {
+            matches!(
+                event.expectation,
+                Some(OperationExpectation::Unavailable { .. })
+            ) || event
+                .input
+                .as_ref()
+                .is_some_and(InputDetails::is_unavailable)
+        });
+        if let Some(observation) = &observation {
+            details.terminal = Some(observation.terminal());
+            details.process = Some(observation.process.clone());
+            details.runtime = Some(RuntimeDiagnostics {
+                session_name: Some(self.name.clone()),
+                ..observation.runtime.clone()
+            });
+            details.recording = Some(self.recording_diagnostics(observation));
+        }
+        details.hints = diagnostic_hints(&details);
+
+        details.finish_signature();
+
+        let mut exports_truncated = false;
+        for (is_trace, options) in [
+            (false, context.artifact.as_ref()),
+            (true, trace_artifact.as_ref()),
+        ] {
+            let (Some(options), Some(observation)) = (options, observation) else {
+                continue;
+            };
+            if options.mode != crate::diagnostics::FailureArtifactMode::None {
+                let mut export_details = details.clone();
+                export_details.outcome = is_trace.then_some(TraceOutcome::Failed);
+                let allocated = if is_trace {
+                    allocate_trace_directory(&options.directory)
+                } else {
+                    allocate_artifact_directory(&options.directory)
+                };
+                let mut owned_directory = None;
+                let artifact = match allocated {
+                    Ok(directory) => {
+                        if is_trace {
+                            owned_directory = Some(directory.clone());
+                        }
+                        let prepared_recording = if options.include_recording {
+                            session.and_then(|session| {
+                                self.prepare_recording_artifact(
+                                    session,
+                                    observation,
+                                    &directory,
+                                    &mut export_details,
+                                )
+                            })
+                        } else {
+                            None
+                        };
+                        write_failure_artifact(
+                            options,
+                            ArtifactInputs {
+                                details: &mut export_details,
+                                observation,
+                                recording: prepared_recording,
+                            },
+                            directory,
+                        )
+                    }
+                    Err(error) => FailureArtifactRef {
+                        status: FailureArtifactStatus::Failed,
+                        directory: options.directory.to_string_lossy().into_owned(),
+                        manifest: None,
+                        report: None,
+                        report_html: None,
+                        timeline: None,
+                        screen_text: None,
+                        screen_svg: None,
+                        recording: None,
+                        errors: vec![format!(
+                            "failed to allocate failure artifact directory: {error}"
+                        )],
+                    },
+                };
+                if is_trace {
+                    let mut trace = self
+                        .trace
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    trace.artifact = Some(artifact.clone());
+                    trace.owned_directories.extend(owned_directory);
+                }
+                exports_truncated |= export_details.truncated;
+                if is_trace && artifact.status != FailureArtifactStatus::Written {
+                    if let Some(primary) = error.artifact.as_mut() {
+                        if primary.status == FailureArtifactStatus::Written {
+                            primary.status = FailureArtifactStatus::Partial;
+                        }
+                        primary.errors.push(format!(
+                            "trace export was not fully written at {}",
+                            artifact.directory
+                        ));
+                        primary.errors.extend(
+                            artifact
+                                .errors
+                                .iter()
+                                .map(|message| format!("trace: {message}")),
+                        );
+                    }
+                }
+                if !is_trace || error.artifact.is_none() {
+                    error.artifact = Some(Box::new(artifact));
+                }
             }
-            result => result,
+        }
+        details.truncated |= exports_truncated;
+        let failure = details.failure_details();
+        error.message = failure.summary.clone();
+        error.details = Some(Box::new(failure));
+    }
+
+    fn finish_trace(
+        &self,
+        context: &ExecutionContext,
+        failed: Option<bool>,
+    ) -> Result<(), TuiTestError> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let session = self.lock_session();
+            if let Some(session) = session.as_ref() {
+                self.finish_trace_with_session(session, context, failed)?;
+            } else {
+                self.finish_failed_startup_trace(failed)?;
+            }
+            Ok(())
+        }))
+        .unwrap_or_else(|payload| {
+            Err(TuiTestError::internal(format!(
+                "terminal trace finalization panicked: {}",
+                panic_message(payload.as_ref())
+            )))
+        })
+    }
+
+    fn finish_failed_startup_trace(&self, failed: Option<bool>) -> Result<(), TuiTestError> {
+        let Some(failed) = failed else {
+            return Ok(());
+        };
+        let mode = {
+            let trace = self
+                .trace
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !trace.pending_startup_outcome {
+                return Ok(());
+            }
+            trace.options.mode
+        };
+        if !failed && mode == TraceMode::OnFailure {
+            self.discard_trace_artifacts()?;
+        }
+        let mut recording = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !failed && recording.mode == AutomaticRecordingMode::OnFailure {
+            if let Some(path) = &recording.path {
+                match std::fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(TuiTestError::internal(format!(
+                            "failed to discard automatic recording {}: {error}",
+                            path.display()
+                        )));
+                    }
+                }
+            }
+        }
+        recording.failed = failed;
+        Ok(())
+    }
+
+    fn discard_trace_artifacts(&self) -> Result<(), TuiTestError> {
+        let mut trace = self
+            .trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while let Some(directory) = trace.owned_directories.last() {
+            std::fs::remove_dir_all(directory).map_err(|error| {
+                TuiTestError::internal(format!(
+                    "failed to discard superseded trace {}: {error}",
+                    directory.display()
+                ))
+            })?;
+            trace.owned_directories.pop();
+        }
+        trace.artifact = None;
+        Ok(())
+    }
+
+    fn finish_trace_with_session(
+        &self,
+        session: &TerminalSession,
+        context: &ExecutionContext,
+        failed: Option<bool>,
+    ) -> Result<(), TuiTestError> {
+        let previous_failed = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .failed;
+        if failed.is_some_and(|failed| failed != previous_failed) {
+            self.discard_trace_artifacts()?;
+        }
+        let failed = failed.unwrap_or(previous_failed);
+        self.recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .failed = failed;
+        let options = {
+            let trace = self
+                .trace
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if trace.options.mode == TraceMode::Off || trace.artifact.is_some() {
+                return Ok(());
+            }
+            trace.options.clone()
+        };
+        if options.mode == TraceMode::OnFailure && !failed {
+            return Ok(());
+        }
+        let observation = capture_failure_observation(session);
+        let mut details = FailureReport::new(
+            "test",
+            None,
+            if failed {
+                FailureReason::TestFailed
+            } else {
+                FailureReason::Completed
+            },
+            if failed {
+                "Test failed outside a terminal assertion."
+            } else {
+                "Session completed successfully."
+            },
+        );
+        details.outcome = Some(if failed {
+            TraceOutcome::Failed
+        } else {
+            TraceOutcome::Passed
+        });
+        details.operation.failed_screen_sequence = observation.screen_sequence;
+        details.operation.elapsed_ms = observation.captured_ms;
+        details.terminal = Some(observation.terminal());
+        details.runtime = Some(RuntimeDiagnostics {
+            session_name: Some(self.name.clone()),
+            ..observation.runtime.clone()
+        });
+        details.process = Some(observation.process.clone());
+        details.recording = Some(self.recording_diagnostics(&observation));
+        details.context = self
+            .trace
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .diagnostic_context(context);
+        details.recent_operations = self
+            .operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot();
+        details.truncated = details.recent_operations.iter().any(|event| {
+            matches!(
+                event.expectation,
+                Some(OperationExpectation::Unavailable { .. })
+            ) || event
+                .input
+                .as_ref()
+                .is_some_and(InputDetails::is_unavailable)
+        });
+        details.finish_signature();
+        let directory = allocate_trace_directory(&options.directory).map_err(|error| {
+            TuiTestError::internal(format!("failed to allocate trace directory: {error}"))
+        })?;
+        let recording =
+            self.prepare_recording_artifact(session, &observation, &directory, &mut details);
+        let artifact = write_failure_artifact(
+            &options.artifact_options(),
+            ArtifactInputs {
+                details: &mut details,
+                observation: &observation,
+                recording,
+            },
+            directory.clone(),
+        );
+        {
+            let mut trace = self
+                .trace
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            trace.artifact = Some(artifact.clone());
+            trace.owned_directories.push(directory);
+        }
+        if artifact.status != FailureArtifactStatus::Written {
+            let mut error = TuiTestError::internal(format!(
+                "trace could not be fully written at {}: {}",
+                artifact.directory,
+                if artifact.errors.is_empty() {
+                    "evidence was omitted; see the manifest for details".to_string()
+                } else {
+                    artifact.errors.join("; ")
+                }
+            ));
+            error.artifact = Some(Box::new(artifact));
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn prepare_recording_artifact(
+        &self,
+        session: &TerminalSession,
+        observation: &FailureObservation,
+        directory: &std::path::Path,
+        details: &mut FailureReport,
+    ) -> Option<PreparedRecording> {
+        if details
+            .recording
+            .as_ref()
+            .is_some_and(|recording| recording.status == RecordingStatus::Disabled)
+        {
+            return None;
+        }
+        let state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if details.outcome.is_none()
+            && (state.visual_revision != observation.output_revision
+                || state.screen_dirty
+                || state.screen_history.current_sequence() != observation.screen_sequence)
+        {
+            if let Some(recording) = details.recording.as_mut() {
+                recording.status = RecordingStatus::Omitted;
+                recording.reason = Some(
+                    "terminal output advanced after the pinned failure observation".to_string(),
+                );
+            }
+            return None;
+        }
+        let temporary_path = recording_temp_path(directory);
+        let result =
+            session.snapshot_automatic_recording(temporary_path.clone(), RECORDING_COPY_LIMIT);
+        drop(state);
+        match result {
+            Ok(snapshot) => {
+                if let Some(recording) = details.recording.as_mut() {
+                    recording.status = RecordingStatus::Live;
+                    recording.last_committed_ms = snapshot.last_committed_ms;
+                    recording.path = None;
+                    recording.bytes = Some(snapshot.bytes);
+                    recording.reason = None;
+                    recording.ephemeral = false;
+                }
+                Some(PreparedRecording {
+                    temporary_path,
+                    bytes: snapshot.bytes,
+                    sha256: snapshot.sha256,
+                })
+            }
+            Err(error) => {
+                let message = capture_error_message(&error);
+                if let Some(recording) = details.recording.as_mut() {
+                    recording.status = if message.contains("maximum byte limit") {
+                        RecordingStatus::Omitted
+                    } else {
+                        RecordingStatus::Failed
+                    };
+                    recording.reason = Some(message);
+                }
+                None
+            }
+        }
+    }
+
+    fn recording_diagnostics(&self, observation: &FailureObservation) -> RecordingDiagnostics {
+        let recording = self
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (status, reason) = match (&recording.mode, &recording.path) {
+            (AutomaticRecordingMode::Disabled, _) => {
+                (RecordingStatus::Disabled, Some("disabled".to_string()))
+            }
+            (_, Some(_)) => (RecordingStatus::Live, None),
+            _ => (
+                RecordingStatus::Unavailable,
+                Some("automatic recording could not be created".to_string()),
+            ),
+        };
+        RecordingDiagnostics {
+            mode: recording.mode,
+            status,
+            failure_offset_ms: observation.captured_ms,
+            last_committed_ms: None,
+            path: None,
+            bytes: None,
+            reason,
+            ephemeral: false,
         }
     }
 
@@ -514,6 +1352,7 @@ impl Engine {
                 cursor: state.emu.cursor(),
                 size: state.emu.size(),
                 keyboard_mode: state.emu.keyboard_mode(),
+                cursor_key_application: state.emu.cursor_key_application(),
                 bracketed_paste: state.emu.mode(TerminalMode::BracketedPaste),
                 mouse_mode: state.mouse_mode.relayable(),
                 exited: state.exited,
@@ -723,6 +1562,12 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        if let Err(error) = self.finish_trace(
+            &ExecutionContext::default(),
+            std::thread::panicking().then_some(true),
+        ) {
+            eprintln!("failed to finish terminal trace: {error}");
+        }
         if let Ok(session) = self.session.get_mut() {
             if let Some(session) = session.take() {
                 session.kill();
@@ -733,12 +1578,113 @@ impl Drop for Engine {
     }
 }
 
+fn capture_failure_observation(session: &TerminalSession) -> FailureObservation {
+    let mut state = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    capture_failure_observation_locked(session, &mut state)
+}
+
+fn safe_capture_failure_observation(session: &TerminalSession) -> Option<FailureObservation> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        capture_failure_observation(session)
+    })) {
+        Ok(observation) => Some(observation),
+        Err(payload) => {
+            let message = format!(
+                "terminal diagnostic capture panicked: {}",
+                panic_message(payload.as_ref())
+            );
+            let mut state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.diagnostic_error.is_none() {
+                state.diagnostic_error = Some(message);
+            }
+            None
+        }
+    }
+}
+
+fn capture_failure_observation_locked(
+    session: &TerminalSession,
+    state: &mut TermState,
+) -> FailureObservation {
+    let screen_sequence = capture_visual_state(state, true);
+    state.screen_history.pin_current();
+    let snapshot = svg_snapshot_from(state.emu.as_ref(), false);
+    let captured_ms = elapsed_ms(state.started_at);
+    let last_visual_change_ms = state.last_visual_change_ms;
+    let cancelled = session.cancelled.load(std::sync::atomic::Ordering::Acquire);
+    let process_state = if cancelled {
+        "cancelled"
+    } else if state.exited.is_some() {
+        "exited"
+    } else if state.exit_error.is_some() {
+        "unknown"
+    } else {
+        "running"
+    };
+    let process = ProcessDiagnostics {
+        pid: session.child_pid,
+        state: process_state.to_string(),
+        exit_code: state.exited,
+        status_error: state.exit_error.clone(),
+        cancelled,
+        ready: state.tracker.is_ready(),
+        command_running: state.tracker.executing(),
+        last_command_exit: state.tracker.last_exit(),
+    };
+    let runtime = RuntimeDiagnostics {
+        session_name: None,
+        shell: session.shell.map(|shell| shell.as_str().to_string()),
+        timeouts: Some(effective_timeouts(session)),
+        tui_test_version: env!("CARGO_PKG_VERSION").to_string(),
+        backend: session.backend.as_str().to_string(),
+        target_os: std::env::consts::OS.to_string(),
+        target_arch: std::env::consts::ARCH.to_string(),
+    };
+    FailureObservation {
+        rows: snapshot.rows,
+        cols: snapshot.cols,
+        title: snapshot.title,
+        cursor: snapshot.cursor,
+        cursor_position: state.emu.cursor(),
+        cursor_visible: state.emu.cursor_visible(),
+        cursor_shape: state.emu.cursor_shape(),
+        render_state: snapshot.render_state,
+        screen_sequence,
+        output_revision: state.visual_revision,
+        captured_ms,
+        last_visual_change_ms,
+        history: state.screen_history.clone(),
+        process,
+        runtime,
+    }
+}
+
 fn open_ready_timeout(session: &TerminalSession) -> u64 {
     session
         .timeouts
         .get(config::TimeoutClass::Ready)
         .or_else(|| config::TimeoutClass::Ready.env_ms())
         .unwrap_or(config::OPEN_READY_CAP_MS)
+}
+
+fn startup_readiness_error(operation: &str, timeout_ms: u64) -> TuiTestError {
+    let message = format!(
+        "open: the session started but reported no prompt within \
+         {timeout_ms}ms; pass --no-wait-ready if it has no shell \
+         integration"
+    );
+    TuiTestError::assertion(message.clone()).with_report(FailureReport::new(
+        operation,
+        Some(timeout_ms),
+        FailureReason::TimedOut,
+        message,
+    ))
 }
 
 fn await_ready(session: &TerminalSession, timeout_ms: u64) -> bool {
@@ -774,35 +1720,6 @@ fn viewable(session: &TerminalSession) -> Vec<Vec<EmuCell>> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .emu
         .viewable_rows()
-}
-
-/// The visible screen and the window title as of a single instant.
-///
-/// Read under one lock. Taking them separately lets the reader thread advance
-/// the terminal in between, which pairs a grid from one moment with a title
-/// from another: a shell writes its prompt and then sets its title, so a
-/// snapshot of a screen that never changed again could still come out
-/// different each time.
-fn grid_with_title(
-    session: &TerminalSession,
-    full: bool,
-    include_title: bool,
-) -> (Vec<Vec<EmuCell>>, Option<String>) {
-    let state = session
-        .state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let title = if include_title {
-        state.emu.title()
-    } else {
-        None
-    };
-    let rows = if full {
-        state.emu.full_rows()
-    } else {
-        state.emu.viewable_rows()
-    };
-    (rows, title)
 }
 
 fn grid(session: &TerminalSession, full: bool) -> Vec<Vec<EmuCell>> {
@@ -855,6 +1772,7 @@ fn text_of(rows: &[Vec<EmuCell>]) -> String {
 fn dispatch(
     session: &mut TerminalSession,
     operation: Operation,
+    input: &mut Option<InputDetails>,
 ) -> Result<OperationResult, TuiTestError> {
     match operation {
         Operation::State => Ok(OperationResult::State(Box::new(state(session)))),
@@ -985,19 +1903,25 @@ fn dispatch(
             Ok(OperationResult::BellEvents(session.bells.snapshot().events))
         }
         Operation::Write { data } => {
-            act(session.write(data.as_bytes()))?;
+            write_input(session, data.as_bytes(), input, None)?;
             Ok(OperationResult::Unit)
         }
         Operation::Submit { data } => {
-            act(session.submit(&data.unwrap_or_default()))?;
+            let mut bytes = data.unwrap_or_default().into_bytes();
+            let enter = session
+                .shell
+                .map(|shell| shell.return_char())
+                .unwrap_or("\r");
+            bytes.extend_from_slice(enter.as_bytes());
+            write_input(session, &bytes, input, None)?;
             Ok(OperationResult::Unit)
         }
         Operation::Key { keys, action } => {
-            key_action(session, keys, action)?;
+            key_action(session, keys, action, input)?;
             Ok(OperationResult::Unit)
         }
         Operation::Mouse { action } => {
-            mouse_action(session, action)?;
+            mouse_action(session, action, input)?;
             Ok(OperationResult::Unit)
         }
         Operation::Resize { cols, rows } => {
@@ -1080,9 +2004,12 @@ fn dispatch(
             )?;
             Ok(OperationResult::Unit)
         }
-        Operation::FindLocator { query } => {
-            Ok(OperationResult::Matches(find_locator(session, &query)?))
-        }
+        Operation::FindLocator { query } => Ok(OperationResult::Matches(find_locator(
+            session, &query, false,
+        )?)),
+        Operation::ResolveLocator { query } => Ok(OperationResult::Matches(find_locator(
+            session, &query, true,
+        )?)),
         Operation::WaitLocator {
             query,
             not,
@@ -1108,6 +2035,7 @@ fn dispatch(
                 options,
                 clicks,
                 timeout_ms.unwrap_or_else(|| session.timeout_for(config::TimeoutClass::Text)),
+                input,
             )?;
             Ok(OperationResult::Unit)
         }
@@ -1196,7 +2124,11 @@ fn dispatch(
             Ok(OperationResult::Unit)
         }
         Operation::StopRecording => Ok(OperationResult::Recording(session.stop_recording()?)),
-        Operation::Open(_) | Operation::Run(_) | Operation::Restart { .. } | Operation::Close => {
+        Operation::Open(_)
+        | Operation::Run(_)
+        | Operation::Restart { .. }
+        | Operation::Close
+        | Operation::FinishTrace { .. } => {
             Err(TuiTestError::internal("unsupported nested operation"))
         }
     }
@@ -1222,6 +2154,7 @@ fn state(session: &TerminalSession) -> crate::api::State {
         cwd: state.tracker.cwd().map(str::to_string),
         last_command: state.tracker.last_command().map(str::to_string),
         last_exit: state.tracker.last_exit(),
+        exit_signal: state.exit_signal.clone(),
         exited: state.exited,
         ready: state.tracker.is_ready(),
         bell_count: bells.count,
@@ -1577,7 +2510,7 @@ fn cursor_model(emu: &dyn Emulator) -> Cursor {
     }
 }
 
-fn cell_color(color: Option<Color>) -> CellColor {
+pub(crate) fn cell_color(color: Option<Color>) -> CellColor {
     match color {
         None => CellColor::Default,
         Some(Color::Rgb(r, g, b)) => CellColor::Rgb(r, g, b),
@@ -1585,10 +2518,24 @@ fn cell_color(color: Option<Color>) -> CellColor {
     }
 }
 
+fn write_input(
+    session: &TerminalSession,
+    bytes: &[u8],
+    input: &mut Option<InputDetails>,
+    position: Option<(u16, u16)>,
+) -> Result<(), TuiTestError> {
+    act(session.write(bytes))?;
+    if let Some(input) = input {
+        input.record_sent(bytes, position);
+    }
+    Ok(())
+}
+
 fn key_action(
     session: &TerminalSession,
     tokens: Vec<String>,
     action: crate::api::KeyAction,
+    input: &mut Option<InputDetails>,
 ) -> Result<(), TuiTestError> {
     // A backend with its own key encoder is preferred, per token, because it
     // reads terminal state the shared encoder does not model: ghostty's
@@ -1626,16 +2573,21 @@ fn key_action(
         }
     }
     if sequence.is_empty() {
+        if let Some(input) = input {
+            input.record_sent(&[], None);
+        }
         Ok(())
     } else {
-        act(session.write(&sequence))
+        write_input(session, &sequence, input, None)
     }
 }
 
 fn mouse_action(
     session: &TerminalSession,
     action: crate::api::MouseAction,
+    input: &mut Option<InputDetails>,
 ) -> Result<(), TuiTestError> {
+    let position;
     let sequence = match action {
         crate::api::MouseAction::Click {
             x,
@@ -1651,46 +2603,57 @@ fn mouse_action(
             } else {
                 (x.unwrap_or(0), y.unwrap_or(0))
             };
+            position = (x, y);
             let mut out = String::new();
             for _ in 0..clicks.max(1) {
                 out.push_str(&mouse::click(x, y, options));
             }
             out
         }
-        crate::api::MouseAction::Move { x, y } => mouse::motion(x, y),
-        crate::api::MouseAction::Down { x, y, options } => mouse::down(x, y, options),
-        crate::api::MouseAction::Up { x, y, options } => mouse::up(x, y, options),
+        crate::api::MouseAction::Move { x, y } => {
+            position = (x, y);
+            mouse::motion(x, y)
+        }
+        crate::api::MouseAction::Down { x, y, options } => {
+            position = (x, y);
+            mouse::down(x, y, options)
+        }
+        crate::api::MouseAction::Up { x, y, options } => {
+            position = (x, y);
+            mouse::up(x, y, options)
+        }
         crate::api::MouseAction::Drag {
             x1,
             y1,
             x2,
             y2,
             options,
-        } => format!(
-            "{}{}{}",
-            mouse::down(x1, y1, options),
-            mouse::drag_motion(x2, y2, options),
-            mouse::up(x2, y2, options)
-        ),
+        } => {
+            position = (x2, y2);
+            format!(
+                "{}{}{}",
+                mouse::down(x1, y1, options),
+                mouse::drag_motion(x2, y2, options),
+                mouse::up(x2, y2, options)
+            )
+        }
         crate::api::MouseAction::Scroll { direction, amount } => {
+            position = (0, 0);
             let up = direction.eq_ignore_ascii_case("up");
             (0..amount.max(1))
                 .map(|_| mouse::scroll(0, 0, up))
                 .collect()
         }
     };
-    act(session.write(sequence.as_bytes()))
+    write_input(session, sequence.as_bytes(), input, Some(position))
 }
 
 fn locate_center(session: &TerminalSession, text: &str) -> Option<(u16, u16)> {
-    let rows = viewable(session);
-    let pattern = Pattern::new(text, false).ok()?;
-    let cells = locator::find(&rows, &pattern, false).ok()??;
-    if cells.is_empty() {
-        return None;
-    }
-    let middle = &cells[cells.len() / 2];
-    Some((middle.x as u16, middle.y as u16))
+    let mut query = LocatorQuery::text(text);
+    query.occurrence = crate::api::MatchOccurrence::First;
+    let evaluated = evaluate_locator(session, &query, false).ok()?;
+    matched_center(evaluated.evaluation.matches.first()?)
+        .and_then(|(x, y)| Some((u16::try_from(x).ok()?, u16::try_from(y).ok()?)))
 }
 
 fn poll_until<F: FnMut() -> bool>(mut predicate: F, timeout_ms: u64) -> bool {
@@ -1887,12 +2850,24 @@ fn wait_title(
             if not { "hidden" } else { "visible" }
         )))
     } else {
-        Err(TuiTestError::assertion(title_timeout_message(
-            session,
-            &pattern.describe(),
-            timeout_ms,
-            not,
-        )))
+        let expected = pattern.describe();
+        // Share immutable history until a mismatch needs public diagnostics. The
+        // compared grid and its history stay pinned even if output advances during I/O.
+        let observation = capture_failure_observation(session);
+        let actual = observation.title.clone();
+        let message =
+            title_timeout_message_from_actual(actual.as_deref(), &expected, timeout_ms, not);
+        let mut error = comparison_failure(
+            "wait.title",
+            Some(timeout_ms),
+            FailureReason::TimedOut,
+            message,
+            "title",
+            Some(expected),
+            actual,
+        );
+        error.observation = Some(Box::new(observation));
+        Err(error)
     }
 }
 
@@ -1922,33 +2897,23 @@ fn expect_title(
             if not { "hidden" } else { "visible" }
         )))
     } else {
-        Err(TuiTestError::assertion(title_timeout_message(
-            session,
-            &pattern.describe(),
-            timeout_ms,
-            not,
-        )))
+        let expected = pattern.describe();
+        let observation = capture_failure_observation(session);
+        let actual = observation.title.clone();
+        let message =
+            title_timeout_message_from_actual(actual.as_deref(), &expected, timeout_ms, not);
+        let mut error = comparison_failure(
+            "expect.title",
+            Some(timeout_ms),
+            FailureReason::TimedOut,
+            message,
+            "title",
+            Some(expected),
+            actual,
+        );
+        error.observation = Some(Box::new(observation));
+        Err(error)
     }
-}
-
-/// Naming the title actually seen turns "expected X" into a diff a caller can
-/// act on, which matters more here than for text because the title is a single
-/// short string that the terminal screen does not show.
-fn title_timeout_message(
-    session: &TerminalSession,
-    pattern: &str,
-    timeout_ms: u64,
-    not: bool,
-) -> String {
-    let actual = match title_of(session) {
-        Some(title) => format!("'{title}'"),
-        None => "no title set".to_string(),
-    };
-    format!(
-        "timed out after {} waiting for the title '{pattern}' to be {}; the title is {actual}",
-        format_timeout(timeout_ms),
-        if not { "hidden" } else { "visible" },
-    )
 }
 
 fn wait_idle(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestError> {
@@ -2094,6 +3059,20 @@ fn wait_bell(session: &TerminalSession, timeout_ms: u64) -> Result<(), TuiTestEr
 }
 
 fn validate_locator_query(query: &LocatorQuery) -> Result<(), TuiTestError> {
+    validate_locator_node(query, 0, &mut 0)
+}
+
+fn validate_locator_node(
+    query: &LocatorQuery,
+    depth: usize,
+    count: &mut usize,
+) -> Result<(), TuiTestError> {
+    *count += 1;
+    if depth >= 64 || *count > 4096 {
+        return Err(TuiTestError::usage(
+            "locator expression exceeds the size or depth limit",
+        ));
+    }
     if query.within.is_none() && query.direction != crate::api::LocatorDirection::Within {
         return Err(TuiTestError::usage(
             "locator direction requires a preceding locator",
@@ -2109,47 +3088,148 @@ fn validate_locator_query(query: &LocatorQuery) -> Result<(), TuiTestError> {
             }
             validate_style(&selector.style)?;
         }
+        LocatorSelector::Link(_) => {}
+        LocatorSelector::And { .. }
+        | LocatorSelector::Or { .. }
+        | LocatorSelector::Filter { .. } => {
+            if query.within.is_some() || !query.style.is_empty() {
+                return Err(TuiTestError::usage(
+                    "composition nodes do not accept scope or style fields",
+                ));
+            }
+            if let LocatorSelector::Filter {
+                has: None,
+                has_not: None,
+                ..
+            } = &query.selector
+            {
+                return Err(TuiTestError::usage("filter requires has or hasNot"));
+            }
+            for child in query.selector.children() {
+                validate_locator_node(child, depth + 1, count)?;
+            }
+        }
     }
     if let Some(parent) = query.within.as_deref() {
-        validate_locator_query(parent)?;
+        validate_locator_node(parent, depth + 1, count)?;
     }
     validate_style(&query.style)?;
     Ok(())
 }
 
-fn locate_locator_in_state(
-    state: &TermState,
+struct EvaluatedLocator {
+    evaluation: locator::LocatorEvaluation,
+    screen_sequence: u64,
+    visible_rows: usize,
+}
+
+fn evaluate_locator_in_state_with_requirement(
+    state: &mut TermState,
     query: &LocatorQuery,
-) -> anyhow::Result<Vec<locator::LocatedMatch>> {
-    let rows = if query.uses_full_grid() {
+    require_one: bool,
+) -> anyhow::Result<EvaluatedLocator> {
+    let screen_sequence = capture_visual_state(state, true);
+    let visible_rows = state.emu.viewable_rows();
+    let visible_len = visible_rows.len();
+    let full = query.uses_full_grid();
+    let rows = if full {
         state.emu.full_rows()
     } else {
-        state.emu.viewable_rows()
+        visible_rows
     };
-    locator::locate_query(&rows, query, &mut |cell, style| {
-        cell_matches_style(cell, style, state.emu.as_ref())
+    let mut evaluation = locator::evaluate_query(
+        &rows,
+        query,
+        require_one,
+        &mut |cell, style, x, y, budget| {
+            evaluate_cell_style(cell, style, state.emu.as_ref(), x, y, budget)
+        },
+    )?;
+    if full {
+        evaluation.diagnostics.viewport_origin_y = rows
+            .len()
+            .saturating_sub(visible_len)
+            .min(u32::MAX as usize) as u32;
+    }
+    Ok(EvaluatedLocator {
+        evaluation,
+        screen_sequence,
+        visible_rows: visible_len,
     })
 }
 
-fn locate_locator(
+fn evaluate_locator(
     session: &TerminalSession,
     query: &LocatorQuery,
-) -> Result<Vec<locator::LocatedMatch>, TuiTestError> {
+    require_one: bool,
+) -> Result<EvaluatedLocator, TuiTestError> {
     validate_locator_query(query)?;
-    let state = session
+    let mut state = session
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    locate_locator_in_state(&state, query)
+    evaluate_locator_in_state_with_requirement(&mut state, query, require_one)
         .map_err(|error| TuiTestError::assertion(error.to_string()))
+}
+
+fn evaluate_locator_with_observation(
+    session: &TerminalSession,
+    query: &LocatorQuery,
+    require_one: bool,
+) -> Result<(EvaluatedLocator, FailureObservation), TuiTestError> {
+    validate_locator_query(query)?;
+    let mut state = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let evaluated = evaluate_locator_in_state_with_requirement(&mut state, query, require_one)
+        .map_err(|error| TuiTestError::assertion(error.to_string()))?;
+    let observation = capture_failure_observation_locked(session, &mut state);
+    Ok((evaluated, observation))
 }
 
 fn find_locator(
     session: &TerminalSession,
     query: &LocatorQuery,
+    require_one: bool,
 ) -> Result<Vec<TextMatch>, TuiTestError> {
-    locate_locator(session, query)
-        .map(|matches| matches.into_iter().map(|matched| matched.value).collect())
+    validate_locator_query(query)?;
+    let mut state = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let evaluated = evaluate_locator_in_state_with_requirement(&mut state, query, require_one)
+        .map_err(|error| TuiTestError::assertion(error.to_string()))?;
+    let failure = evaluated.evaluation.diagnostics.failure_reason;
+    if matches!(
+        failure,
+        Some(LocatorFailureReason::Ambiguous | LocatorFailureReason::AnchorAmbiguous)
+    ) || (require_one && evaluated.evaluation.matches.len() != 1)
+    {
+        let observation = capture_failure_observation_locked(session, &mut state);
+        drop(state);
+        let message = locator_failure_message(query, &evaluated.evaluation.diagnostics);
+        return Err(locator_failure_error(
+            if require_one {
+                "locator.location"
+            } else {
+                "locator.find"
+            },
+            None,
+            message,
+            evaluated,
+            Vec::new(),
+            false,
+            Some(observation),
+        ));
+    }
+    drop(state);
+    Ok(evaluated
+        .evaluation
+        .matches
+        .into_iter()
+        .map(|matched| matched.value)
+        .collect())
 }
 
 fn wait_locator(
@@ -2160,40 +3240,169 @@ fn wait_locator(
 ) -> Result<(), TuiTestError> {
     validate_locator_query(query)?;
     let description = query.selector.description();
-    let mut matched = false;
-    let mut last_error = None;
-    poll_until(
-        || {
-            match locate_locator(session, query) {
-                Ok(candidates) => {
-                    matched = candidates.is_empty() == not;
-                    last_error = None;
-                }
-                Err(error) => {
-                    matched = false;
-                    last_error = Some(error);
-                }
+    let started = Instant::now();
+    let mut transitions = Vec::new();
+    let mut last_signature = None;
+    loop {
+        let evaluated = evaluate_locator(session, query, false)?;
+        let ambiguous = matches!(
+            evaluated.evaluation.diagnostics.failure_reason,
+            Some(LocatorFailureReason::Ambiguous | LocatorFailureReason::AnchorAmbiguous)
+        );
+        let visible = !evaluated.evaluation.matches.is_empty() && !ambiguous;
+        let matched = !ambiguous && visible != not;
+        push_evaluation_transition(
+            &mut transitions,
+            &mut last_signature,
+            &evaluated,
+            if ambiguous {
+                "ambiguous"
+            } else if visible {
+                "matched"
+            } else {
+                "no_match"
+            },
+            started.elapsed().as_millis() as u64,
+        );
+        if matched {
+            return Ok(());
+        }
+        if session_stopped(session) || started.elapsed() >= Duration::from_millis(timeout_ms) {
+            let (final_evaluated, observation) =
+                evaluate_locator_with_observation(session, query, false)?;
+            let final_ambiguous = matches!(
+                final_evaluated.evaluation.diagnostics.failure_reason,
+                Some(LocatorFailureReason::Ambiguous | LocatorFailureReason::AnchorAmbiguous)
+            );
+            let final_visible = !final_evaluated.evaluation.matches.is_empty() && !final_ambiguous;
+            if !final_ambiguous && final_visible != not {
+                return Ok(());
             }
-            matched || session_stopped(session)
-        },
-        timeout_ms,
-    );
-    if matched {
-        Ok(())
-    } else if let Some(error) = last_error {
-        Err(error)
-    } else if session_stopped(session) {
-        Err(TuiTestError::assertion(format!(
-            "session exited before '{description}' became {}",
-            if not { "hidden" } else { "visible" }
-        )))
-    } else {
-        Err(TuiTestError::assertion(timeout_message(
-            &description,
-            timeout_ms,
-            not,
-        )))
+            push_evaluation_transition(
+                &mut transitions,
+                &mut last_signature,
+                &final_evaluated,
+                if final_ambiguous {
+                    "ambiguous"
+                } else if final_visible {
+                    "matched"
+                } else {
+                    "no_match"
+                },
+                started.elapsed().as_millis() as u64,
+            );
+            let stopped = observation.process.cancelled || observation.process.exit_code.is_some();
+            let message = if stopped {
+                format!(
+                    "session exited before '{description}' became {}",
+                    if not { "hidden" } else { "visible" }
+                )
+            } else if matches!(
+                final_evaluated.evaluation.diagnostics.failure_reason,
+                Some(
+                    LocatorFailureReason::Ambiguous
+                        | LocatorFailureReason::AnchorAmbiguous
+                        | LocatorFailureReason::AnchorNotFound
+                )
+            ) {
+                locator_failure_message(query, &final_evaluated.evaluation.diagnostics)
+            } else {
+                timeout_message(&description, timeout_ms, not)
+            };
+            return Err(locator_failure_error(
+                "locator.wait",
+                Some(timeout_ms),
+                message,
+                final_evaluated,
+                transitions,
+                not,
+                Some(observation),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
     }
+}
+
+fn push_evaluation_transition(
+    transitions: &mut Vec<crate::diagnostics::EvaluationTransition>,
+    last_signature: &mut Option<String>,
+    evaluated: &EvaluatedLocator,
+    outcome: &str,
+    elapsed_ms: u64,
+) {
+    let stage_counts = evaluated
+        .evaluation
+        .diagnostics
+        .stages
+        .iter()
+        .map(|stage| stage.selected_count)
+        .collect::<Vec<_>>();
+    let signature = format!(
+        "{outcome}:{:?}:{stage_counts:?}",
+        evaluated.evaluation.diagnostics.failure_reason
+    );
+    if last_signature.as_deref() == Some(signature.as_str()) {
+        return;
+    }
+    *last_signature = Some(signature);
+    transitions.push(crate::diagnostics::EvaluationTransition {
+        elapsed_ms,
+        screen_sequence: evaluated.screen_sequence,
+        outcome: outcome.to_string(),
+        stage_index: evaluated.evaluation.diagnostics.failure_stage,
+        stage_counts,
+    });
+    if transitions.len() > 16 {
+        transitions.remove(0);
+    }
+}
+
+fn locator_failure_error(
+    operation: &str,
+    timeout_ms: Option<u64>,
+    message: String,
+    evaluated: EvaluatedLocator,
+    transitions: Vec<crate::diagnostics::EvaluationTransition>,
+    negated: bool,
+    observation: Option<FailureObservation>,
+) -> TuiTestError {
+    let reason = if negated && !evaluated.evaluation.matches.is_empty() {
+        FailureReason::UnexpectedMatch
+    } else {
+        match evaluated.evaluation.diagnostics.failure_reason {
+            Some(LocatorFailureReason::Ambiguous | LocatorFailureReason::AnchorAmbiguous) => {
+                FailureReason::LocatorAmbiguous
+            }
+            Some(LocatorFailureReason::OutsideViewport)
+            | Some(LocatorFailureReason::MatchedNoCells) => FailureReason::MatchNotActionable,
+            _ => FailureReason::LocatorNoMatch,
+        }
+    };
+    let mut details = FailureReport::new(operation, timeout_ms, reason, message.clone());
+    details.operation.failed_screen_sequence = evaluated.screen_sequence;
+    details.locator = Some(evaluated.evaluation.diagnostics);
+    details.evaluation_transitions = transitions;
+    let mut error = TuiTestError::assertion(message).with_report(details);
+    error.observation = observation.map(Box::new);
+    error
+}
+
+#[allow(clippy::too_many_arguments)]
+fn observed_comparison_failure(
+    session: &TerminalSession,
+    operation: &str,
+    timeout_ms: Option<u64>,
+    reason: FailureReason,
+    message: String,
+    kind: &str,
+    expected: Option<String>,
+    actual: Option<String>,
+) -> TuiTestError {
+    let mut error = comparison_failure(
+        operation, timeout_ms, reason, message, kind, expected, actual,
+    );
+    error.observation = Some(Box::new(capture_failure_observation(session)));
+    error
 }
 
 fn resolve_locator_click_point(
@@ -2203,67 +3412,108 @@ fn resolve_locator_click_point(
 ) -> Result<(u16, u16), TuiTestError> {
     validate_locator_query(query)?;
     let description = query.selector.description();
-    let mut point = None;
-    let mut last_error = None;
-    poll_until(
-        || {
-            let outcome = {
-                let state = session
-                    .state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let visible_rows = state.emu.viewable_rows();
-                let visible_len = visible_rows.len();
-                let full = query.uses_full_grid();
-                let rows = if full {
-                    state.emu.full_rows()
-                } else {
-                    visible_rows
-                };
-                let candidates = locator::locate_query(&rows, query, &mut |cell, style| {
-                    cell_matches_style(cell, style, state.emu.as_ref())
-                })
-                .map_err(|error| TuiTestError::assertion(error.to_string()));
-                candidates.and_then(|candidates| {
-                    let viewport_offset = rows.len().saturating_sub(visible_len);
-                    click_point_from_candidates(
-                        candidates,
-                        &description,
-                        full,
-                        viewport_offset,
-                        visible_len,
-                    )
-                })
+    let started = Instant::now();
+    let mut transitions = Vec::new();
+    let mut last_signature = None;
+    loop {
+        let (evaluated, outcome) = {
+            let mut state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let visible_len = state.emu.viewable_rows().len();
+            let evaluated = evaluate_locator_in_state_with_requirement(&mut state, query, true)
+                .map_err(|error| TuiTestError::assertion(error.to_string()))?;
+            let full = query.uses_full_grid();
+            let viewport_offset = evaluated.evaluation.diagnostics.viewport_origin_y as usize;
+            let outcome = click_point_from_candidates(
+                evaluated.evaluation.matches.clone(),
+                &description,
+                full,
+                viewport_offset,
+                visible_len,
+            );
+            (evaluated, outcome)
+        };
+        match outcome {
+            Ok(Some(point)) => return Ok(point),
+            Ok(None) => push_evaluation_transition(
+                &mut transitions,
+                &mut last_signature,
+                &evaluated,
+                "no_match",
+                started.elapsed().as_millis() as u64,
+            ),
+            Err(_) => push_evaluation_transition(
+                &mut transitions,
+                &mut last_signature,
+                &evaluated,
+                "not_actionable",
+                started.elapsed().as_millis() as u64,
+            ),
+        }
+        if session_stopped(session) || started.elapsed() >= Duration::from_millis(timeout_ms) {
+            let (mut final_evaluated, observation) =
+                evaluate_locator_with_observation(session, query, true)?;
+            let full = query.uses_full_grid();
+            let viewport_offset = final_evaluated.evaluation.diagnostics.viewport_origin_y as usize;
+            let actionability = click_point_from_candidates(
+                final_evaluated.evaluation.matches.clone(),
+                &description,
+                full,
+                viewport_offset,
+                final_evaluated.visible_rows,
+            );
+            let actionability_error = match actionability {
+                Ok(Some(point)) => return Ok(point),
+                Ok(None) => None,
+                Err(error) => Some(error),
             };
-            match outcome {
-                Ok(Some(value)) => {
-                    point = Some(value);
-                    last_error = None;
-                }
-                Ok(None) => {
-                    last_error = None;
-                }
-                Err(error) => {
-                    last_error = Some(error);
-                }
-            }
-            point.is_some() || session_stopped(session)
-        },
-        timeout_ms,
-    );
-    if let Some(point) = point {
-        Ok(point)
-    } else if let Some(error) = last_error {
-        Err(error)
-    } else if session_stopped(session) {
-        Err(TuiTestError::assertion(format!(
-            "session exited before '{description}' could be clicked"
-        )))
-    } else {
-        Err(TuiTestError::assertion(format!(
-            "timed out after {} waiting for exactly one '{description}' match",
-            format_timeout(timeout_ms),
-        )))
+            let message =
+                if observation.process.cancelled || observation.process.exit_code.is_some() {
+                    format!("session exited before '{description}' could be clicked")
+                } else if let Some(error) = actionability_error {
+                    let reason = if error.message.contains("outside the visible viewport")
+                        || error.message.contains("in scrollback")
+                    {
+                        LocatorFailureReason::OutsideViewport
+                    } else {
+                        LocatorFailureReason::MatchedNoCells
+                    };
+                    final_evaluated.evaluation.diagnostics.failure_reason = Some(reason);
+                    final_evaluated.evaluation.diagnostics.failure_stage = final_evaluated
+                        .evaluation
+                        .diagnostics
+                        .stages
+                        .len()
+                        .checked_sub(1);
+                    error.message
+                } else if matches!(
+                    final_evaluated.evaluation.diagnostics.failure_reason,
+                    Some(
+                        LocatorFailureReason::Ambiguous
+                            | LocatorFailureReason::AnchorAmbiguous
+                            | LocatorFailureReason::AnchorNotFound
+                    )
+                ) {
+                    locator_failure_message(query, &final_evaluated.evaluation.diagnostics)
+                } else {
+                    format!(
+                        "timed out after {} waiting for exactly one '{description}' match",
+                        format_timeout(timeout_ms),
+                    )
+                };
+            return Err(locator_failure_error(
+                "locator.click",
+                Some(timeout_ms),
+                message,
+                final_evaluated,
+                transitions,
+                false,
+                Some(observation),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
     }
 }
 
@@ -2273,13 +3523,14 @@ fn click_locator(
     options: crate::api::MouseOptions,
     clicks: u8,
     timeout_ms: u64,
+    input: &mut Option<InputDetails>,
 ) -> Result<(), TuiTestError> {
     let (x, y) = resolve_locator_click_point(session, query, timeout_ms)?;
     let mut sequence = String::new();
     for _ in 0..clicks.max(1) {
         sequence.push_str(&mouse::click(x, y, options));
     }
-    act(session.write(sequence.as_bytes()))
+    write_input(session, sequence.as_bytes(), input, Some((x, y)))
 }
 
 fn click_point_from_candidates(
@@ -2337,7 +3588,6 @@ fn highlight_locator(
     validate_locator_query(query)?;
     let description = query.selector.description();
     let mut resolved = None;
-    let mut last_error = None;
     poll_until(
         || {
             let outcome = {
@@ -2378,17 +3628,8 @@ fn highlight_locator(
                     Err(error) => Err(TuiTestError::assertion(error.to_string())),
                 }
             };
-            match outcome {
-                Ok(Some(matches)) => {
-                    resolved = Some(matches);
-                    last_error = None;
-                }
-                Ok(None) => {
-                    last_error = None;
-                }
-                Err(error) => {
-                    last_error = Some(error);
-                }
+            if let Ok(Some(matches)) = outcome {
+                resolved = Some(matches);
             }
             resolved.is_some() || session_stopped(session)
         },
@@ -2396,17 +3637,84 @@ fn highlight_locator(
     );
     if let Some(matches) = resolved {
         Ok(matches)
-    } else if let Some(error) = last_error {
-        Err(error)
-    } else if session_stopped(session) {
-        Err(TuiTestError::assertion(format!(
-            "session exited before '{description}' could be highlighted"
-        )))
     } else {
-        Err(TuiTestError::assertion(format!(
-            "timed out after {} waiting for a '{description}' match to highlight",
-            format_timeout(timeout_ms),
-        )))
+        let (evaluated, observation, final_matches) = {
+            let mut state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let evaluated = evaluate_locator_in_state_with_requirement(&mut state, query, false)
+                .map_err(|error| TuiTestError::assertion(error.to_string()))?;
+            let final_matches = if evaluated.evaluation.matches.is_empty()
+                || matches!(
+                    evaluated.evaluation.diagnostics.failure_reason,
+                    Some(LocatorFailureReason::Ambiguous | LocatorFailureReason::AnchorAmbiguous)
+                ) {
+                None
+            } else {
+                let full_rows = state.emu.full_rows();
+                let visible_rows = state.emu.viewable_rows();
+                let viewport_offset = full_rows.len().saturating_sub(visible_rows.len());
+                let row_offset = if query.uses_full_grid() {
+                    0
+                } else {
+                    viewport_offset
+                };
+                state.highlight = Some(TextHighlight {
+                    cells: evaluated
+                        .evaluation
+                        .matches
+                        .iter()
+                        .flat_map(|matched| {
+                            matched
+                                .cells
+                                .iter()
+                                .map(|cell| (cell.x, row_offset.saturating_add(cell.y)))
+                        })
+                        .collect(),
+                    viewport_offset,
+                });
+                Some(
+                    evaluated
+                        .evaluation
+                        .matches
+                        .iter()
+                        .map(|matched| matched.value.clone())
+                        .collect::<Vec<_>>(),
+                )
+            };
+            let observation = capture_failure_observation_locked(session, &mut state);
+            (evaluated, observation, final_matches)
+        };
+        if let Some(matches) = final_matches {
+            return Ok(matches);
+        }
+        let message = if observation.process.cancelled || observation.process.exit_code.is_some() {
+            format!("session exited before '{description}' could be highlighted")
+        } else if matches!(
+            evaluated.evaluation.diagnostics.failure_reason,
+            Some(
+                LocatorFailureReason::Ambiguous
+                    | LocatorFailureReason::AnchorAmbiguous
+                    | LocatorFailureReason::AnchorNotFound
+            )
+        ) {
+            locator_failure_message(query, &evaluated.evaluation.diagnostics)
+        } else {
+            format!(
+                "timed out after {} waiting for a '{description}' match to highlight",
+                format_timeout(timeout_ms),
+            )
+        };
+        Err(locator_failure_error(
+            "locator.highlight",
+            Some(timeout_ms),
+            message,
+            evaluated,
+            Vec::new(),
+            false,
+            Some(observation),
+        ))
     }
 }
 
@@ -2450,46 +3758,134 @@ fn validate_style(style: &TextStyle) -> Result<(), TuiTestError> {
 }
 
 fn cell_matches_style(cell: &EmuCell, style: &TextStyle, colors: &dyn Emulator) -> bool {
-    for (expected, actual) in [
-        (style.bold, cell.has(Attrs::BOLD)),
-        (style.dim, cell.has(Attrs::DIM)),
-        (style.italic, cell.has(Attrs::ITALIC)),
-        (style.inverse, cell.has(Attrs::INVERSE)),
-        (style.hidden, cell.has(Attrs::INVISIBLE)),
-        (style.strikethrough, cell.has(Attrs::STRIKE)),
-        (style.blink, cell.has(Attrs::BLINK)),
+    evaluate_cell_style(cell, style, colors, 0, 0, 0).matched
+}
+
+fn evaluate_cell_style(
+    cell: &EmuCell,
+    style: &TextStyle,
+    colors: &dyn Emulator,
+    x: usize,
+    y: usize,
+    mismatch_limit: usize,
+) -> CellStyleEvaluation {
+    let mut result = CellStyleEvaluation {
+        matched: true,
+        mismatches: Vec::new(),
+        mismatches_truncated: false,
+    };
+    for (property, expected, actual) in [
+        ("bold", style.bold, cell.has(Attrs::BOLD)),
+        ("dim", style.dim, cell.has(Attrs::DIM)),
+        ("italic", style.italic, cell.has(Attrs::ITALIC)),
+        ("inverse", style.inverse, cell.has(Attrs::INVERSE)),
+        ("hidden", style.hidden, cell.has(Attrs::INVISIBLE)),
+        (
+            "strikethrough",
+            style.strikethrough,
+            cell.has(Attrs::STRIKE),
+        ),
+        ("blink", style.blink, cell.has(Attrs::BLINK)),
     ] {
-        if expected.is_some_and(|expected| expected != actual) {
-            return false;
-        }
-    }
-    if style
-        .underline_style
-        .as_deref()
-        .is_some_and(|expected| expected != cell.underline.name())
-    {
-        return false;
-    }
-    if let Some(expected) = style.link.as_deref() {
-        if expected != cell.uri().unwrap_or_default() {
-            return false;
-        }
-    }
-    for (spec, actual, foreground) in [
-        (&style.foreground, cell.fg, true),
-        (&style.background, cell.bg, false),
-        (&style.underline_color, cell.underline_color, true),
-    ] {
-        if let Some(spec) = spec {
-            let Ok(expected) = Expected::parse(spec) else {
-                return false;
-            };
-            if !color::matches(actual, &expected, colors, foreground) {
-                return false;
+        if let Some(expected) = expected {
+            if expected != actual
+                && !result.reject(mismatch_limit, || {
+                    style_mismatch(
+                        cell,
+                        x,
+                        y,
+                        property,
+                        expected.to_string(),
+                        actual.to_string(),
+                        None,
+                    )
+                })
+            {
+                return result;
             }
         }
     }
-    true
+    if let Some(expected) = style.underline_style.as_deref() {
+        let actual = cell.underline.name();
+        if expected != actual
+            && !result.reject(mismatch_limit, || {
+                style_mismatch(
+                    cell,
+                    x,
+                    y,
+                    "underline_style",
+                    expected.to_string(),
+                    actual.to_string(),
+                    None,
+                )
+            })
+        {
+            return result;
+        }
+    }
+    for (property, spec, actual, foreground) in [
+        ("foreground", &style.foreground, cell.fg, true),
+        ("background", &style.background, cell.bg, false),
+        (
+            "underline_color",
+            &style.underline_color,
+            cell.underline_color,
+            true,
+        ),
+    ] {
+        if let Some(spec) = spec {
+            if let Ok(expected) = Expected::parse(spec) {
+                if !color::matches(actual, &expected, colors, foreground)
+                    && !result.reject(mismatch_limit, || {
+                        style_mismatch(
+                            cell,
+                            x,
+                            y,
+                            property,
+                            expected.describe(),
+                            logical_color(actual),
+                            Some(colors.resolve(actual, foreground).to_hex()),
+                        )
+                    })
+                {
+                    return result;
+                }
+            }
+        }
+    }
+    result
+}
+
+fn style_mismatch(
+    cell: &EmuCell,
+    x: usize,
+    y: usize,
+    property: &str,
+    expected: String,
+    actual: String,
+    resolved: Option<String>,
+) -> CellMismatch {
+    CellMismatch {
+        location: crate::api::TextPosition {
+            row: y.min(u32::MAX as usize) as u32,
+            column: x.min(u16::MAX as usize) as u16,
+        },
+        grapheme: cell.ch.to_string(),
+        property: property.to_string(),
+        operator: "equals".to_string(),
+        expected,
+        actual,
+        resolved,
+        reason: "value_mismatch".to_string(),
+    }
+}
+
+fn logical_color(color: Option<Color>) -> String {
+    match color {
+        None => "default".to_string(),
+        Some(Color::Rgb(r, g, b)) => format!("#{r:02x}{g:02x}{b:02x}"),
+        Some(color) => color.to_index().to_string(),
+    }
 }
 
 fn expect_exit_code(
@@ -2509,18 +3905,34 @@ fn expect_exit_code(
             stall_reason(session)
         )));
     }
-    match session
+    let actual = session
         .state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .tracker
-        .last_exit()
-    {
+        .last_exit();
+    match actual {
         Some(actual) if actual == code => Ok(()),
-        Some(actual) => Err(TuiTestError::assertion(format!(
-            "expected exit code {code}, got {actual}"
-        ))),
-        None => Err(TuiTestError::assertion("no command exit code tracked yet")),
+        Some(actual) => Err(observed_comparison_failure(
+            session,
+            "expect.exit_code",
+            Some(timeout_ms),
+            FailureReason::ScalarMismatch,
+            format!("expected exit code {code}, got {actual}"),
+            "exit_code",
+            Some(code.to_string()),
+            Some(actual.to_string()),
+        )),
+        None => Err(observed_comparison_failure(
+            session,
+            "expect.exit_code",
+            Some(timeout_ms),
+            FailureReason::ScalarMismatch,
+            "no command exit code tracked yet".to_string(),
+            "exit_code",
+            Some(code.to_string()),
+            None,
+        )),
     }
 }
 
@@ -2569,9 +3981,18 @@ fn expect_bell_count(
             "session exited at bell count {actual} before reaching {expected}"
         )))
     } else {
-        Err(TuiTestError::assertion(format!(
-            "expected bell count {expected}: timed out after {timeout_ms}ms; current count is {actual}"
-        )))
+        Err(observed_comparison_failure(
+            session,
+            "expect.bell_count",
+            Some(timeout_ms),
+            FailureReason::TimedOut,
+            format!(
+                "expected bell count {expected}: timed out after {timeout_ms}ms; current count is {actual}"
+            ),
+            "bell_count",
+            Some(expected.to_string()),
+            Some(actual.to_string()),
+        ))
     }
 }
 
@@ -2586,8 +4007,14 @@ fn do_snapshot(
     // The title is off by default: a shell prompt routinely sets it to a
     // username, hostname, and absolute path, which would pin every baseline to
     // one machine and make it change on `cd` while the screen stayed the same.
-    let (rows, title) = grid_with_title(session, false, include_title);
-    let content = snapshot::serialize(&rows, session.cols, include_style, title.as_deref());
+    let observation = capture_failure_observation(session);
+    let title = include_title.then(|| observation.title.clone()).flatten();
+    let content = snapshot::serialize(
+        &observation.rows,
+        observation.cols,
+        include_style,
+        title.as_deref(),
+    );
     let base = cwd
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
@@ -2596,9 +4023,22 @@ fn do_snapshot(
         Ok(SnapshotStatus::Passed) => Ok(SnapshotResult::Passed),
         Ok(SnapshotStatus::Written) => Ok(SnapshotResult::Written),
         Ok(SnapshotStatus::Updated) => Ok(SnapshotResult::Updated),
-        Ok(SnapshotStatus::Failed { expected, actual }) => Err(TuiTestError::assertion(format!(
-            "snapshot mismatch\n--- expected ---\n{expected}\n--- actual ---\n{actual}"
-        ))),
+        Ok(SnapshotStatus::Failed { expected, actual }) => {
+            let message = format!(
+                "snapshot mismatch\n--- expected ---\n{expected}\n--- actual ---\n{actual}"
+            );
+            let mut error = comparison_failure(
+                "expect.snapshot",
+                None,
+                FailureReason::SnapshotMismatch,
+                message,
+                "snapshot",
+                Some(expected),
+                Some(actual),
+            );
+            error.observation = Some(Box::new(observation));
+            Err(error)
+        }
         Err(error) => Err(TuiTestError::internal(error.to_string())),
     }
 }
@@ -2757,28 +4197,6 @@ fn screenshot(
     }
 }
 
-fn timeout_message(pattern: &str, timeout_ms: u64, not: bool) -> String {
-    format!(
-        "timed out after {} waiting for '{pattern}' to be {}",
-        format_timeout(timeout_ms),
-        if not { "hidden" } else { "visible" }
-    )
-}
-
-fn assertion_message(session: &TerminalSession, message: &str) -> String {
-    let (rows, title) = grid_with_title(session, false, true);
-    let screen = snapshot::serialize(&rows, session.cols, false, title.as_deref());
-    format!("{message}\n\nTerminal content:\n{screen}")
-}
-
-fn format_timeout(timeout_ms: u64) -> String {
-    if timeout_ms.is_multiple_of(1_000) {
-        format!("{}s", timeout_ms / 1_000)
-    } else {
-        format!("{timeout_ms}ms")
-    }
-}
-
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
     if let Some(message) = payload.downcast_ref::<&'static str>() {
         message
@@ -2799,6 +4217,709 @@ mod tests {
     use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::cell::{NamedColor, UnderlineStyle};
     use crate::terminal::emu::Emulator;
+
+    fn sleeping_program(wait_ready: bool) -> RunOptions {
+        let (program, args) = if cfg!(windows) {
+            (
+                "powershell.exe",
+                vec!["-NoProfile", "-Command", "Start-Sleep -Seconds 30"],
+            )
+        } else {
+            ("sh", vec!["-c", "sleep 30"])
+        };
+        let defaults = OpenOptions::default();
+        RunOptions {
+            program: program.into(),
+            args: args.into_iter().map(str::to_string).collect(),
+            backend: defaults.backend,
+            profile: defaults.profile,
+            style: defaults.style,
+            cols: 80,
+            rows: 24,
+            cwd: None,
+            env: Vec::new(),
+            wait_ready: Some(wait_ready),
+            restart: false,
+            timeouts: crate::api::Timeouts {
+                ready: Some(20),
+                ..Default::default()
+            },
+            recording: AutomaticRecording {
+                mode: AutomaticRecordingMode::Disabled,
+                directory: None,
+            },
+        }
+    }
+
+    fn populate_history(engine: &Engine) {
+        let guard = engine.lock_session();
+        let session = guard.as_ref().unwrap();
+        let mut state = session.state.lock().unwrap();
+        for index in 0..32 {
+            state.emu.process(format!("\x1b[H{index:02}").as_bytes());
+            state.screen_dirty = true;
+            capture_visual_state(&mut state, true);
+            state.screen_history.pin_current();
+        }
+    }
+
+    fn trace_engine(name: &str, mode: TraceMode) -> (Engine, ExecutionContext, PathBuf) {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = Engine::new(
+            name.into(),
+            Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        );
+        let context = ExecutionContext {
+            trace: Some(TraceOptions {
+                mode,
+                directory: root.join("traces"),
+            }),
+            ..Default::default()
+        };
+        (engine, context, root)
+    }
+
+    struct PanickingTraceEmulator(AlacrittyEmu);
+
+    impl Emulator for PanickingTraceEmulator {
+        fn process(&mut self, bytes: &[u8]) {
+            self.0.process(bytes);
+        }
+        fn take_pending_writes(&mut self) -> Vec<u8> {
+            self.0.take_pending_writes()
+        }
+        fn mode(&self, mode: TerminalMode) -> bool {
+            self.0.mode(mode)
+        }
+        fn resize(&mut self, cols: u16, rows: u16) {
+            self.0.resize(cols, rows);
+        }
+        fn size(&self) -> (u16, u16) {
+            self.0.size()
+        }
+        fn cursor(&self) -> (u16, u16) {
+            self.0.cursor()
+        }
+        fn title(&self) -> Option<String> {
+            self.0.title()
+        }
+        fn cursor_shape(&self) -> CursorShape {
+            self.0.cursor_shape()
+        }
+        fn viewable_rows(&self) -> Vec<Vec<EmuCell>> {
+            panic!("injected trace capture failure")
+        }
+        fn full_rows(&self) -> Vec<Vec<EmuCell>> {
+            self.viewable_rows()
+        }
+        fn color(&self, slot: crate::profile::ColorSlot) -> crate::profile::Rgb {
+            self.0.color(slot)
+        }
+    }
+
+    #[test]
+    fn trace_capture_panics_do_not_skip_close_or_escape_drop() {
+        for close in [true, false] {
+            let (engine, context, root) = trace_engine("trace-panic", TraceMode::On);
+            engine
+                .execute_with_context(Operation::Run(sleeping_program(false)), context)
+                .unwrap();
+            {
+                let guard = engine.lock_session();
+                let session = guard.as_ref().unwrap();
+                let mut state = session.state.lock().unwrap();
+                state.emu = Box::new(PanickingTraceEmulator(AlacrittyEmu::new(
+                    80,
+                    24,
+                    &Profile::default(),
+                )));
+                state.screen_dirty = true;
+            }
+            let closed = if close {
+                let error = engine.execute(Operation::Close).unwrap_err();
+                assert_eq!(error.kind, ErrorKind::Internal);
+                assert!(error.message.contains("injected trace capture failure"));
+                Some(!engine.is_open())
+            } else {
+                None
+            };
+            let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(engine)));
+            std::fs::remove_dir_all(root).unwrap();
+            assert_ne!(
+                closed,
+                Some(false),
+                "trace capture must not prevent closing"
+            );
+            assert!(dropped.is_ok(), "trace capture must not panic during drop");
+        }
+    }
+
+    #[test]
+    fn trace_failure_preserves_startup_context_and_operation_overrides() {
+        let (engine, mut context, root) = trace_engine("trace-context", TraceMode::OnFailure);
+        context
+            .diagnostic_context
+            .insert("test".into(), "case".into());
+        context
+            .diagnostic_context
+            .insert("phase".into(), "startup".into());
+        engine
+            .execute_with_context(Operation::Run(sleeping_program(false)), context)
+            .unwrap();
+        let error = engine
+            .execute_with_context(
+                Operation::WaitLocator {
+                    query: LocatorQuery::text("missing trace marker"),
+                    not: false,
+                    timeout_ms: Some(0),
+                },
+                ExecutionContext {
+                    diagnostic_context: [("phase".into(), "assertion".into())].into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        let manifest: crate::diagnostics::FailureArtifactManifest = serde_json::from_slice(
+            &std::fs::read(error.artifact.unwrap().manifest.unwrap()).unwrap(),
+        )
+        .unwrap();
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            manifest.details.context.get("test").map(String::as_str),
+            Some("case")
+        );
+        assert_eq!(
+            manifest.details.context.get("phase").map(String::as_str),
+            Some("assertion")
+        );
+    }
+
+    #[test]
+    fn trace_context_merge_preserves_the_context_budget() {
+        let trace = TraceState {
+            context: (0..16)
+                .map(|index| (format!("session-{index}"), "startup".into()))
+                .collect(),
+            ..Default::default()
+        };
+        let context = ExecutionContext {
+            diagnostic_context: (0..16)
+                .map(|index| (format!("operation-{index}"), "x".repeat(512)))
+                .collect(),
+            ..Default::default()
+        };
+        let merged = trace.diagnostic_context(&context);
+        assert_eq!(merged.len(), 16);
+        assert!(merged.values().all(|value| value.len() <= 259));
+    }
+
+    #[test]
+    fn failed_startup_final_outcome_controls_on_failure_evidence() {
+        for failed in [false, true] {
+            let (engine, mut context, root) =
+                trace_engine("startup-retention", TraceMode::OnFailure);
+            context.artifact = Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.join("explicit-failures"),
+                mode: crate::diagnostics::FailureArtifactMode::Text,
+                include_recording: false,
+            });
+            let recording_directory = root.join("recordings");
+            let mut options = sleeping_program(true);
+            options.recording.directory = Some(recording_directory.clone());
+            let error = engine
+                .execute_with_context(Operation::Run(options), context)
+                .unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Assertion);
+            assert!(!engine.is_open());
+            assert!(error.observation.is_none());
+            let failure_manifest = error.artifact.unwrap().manifest.unwrap();
+            let failure_bytes = std::fs::read(&failure_manifest).unwrap();
+            let trace_artifact = engine.trace.lock().unwrap().artifact.clone().unwrap();
+            let trace_manifest = trace_artifact.manifest.unwrap();
+            let trace_bytes = std::fs::read(&trace_manifest).unwrap();
+            let trace_recording = trace_artifact.recording.unwrap();
+            let trace_recording_bytes = std::fs::read(&trace_recording).unwrap();
+            let recording_path = engine.recording_path().unwrap();
+            assert!(recording_path.starts_with(&recording_directory));
+            let recording_bytes = std::fs::read(&recording_path).unwrap();
+            let unrelated = recording_directory.join("keep.txt");
+            std::fs::write(&unrelated, "not owned by the engine").unwrap();
+
+            engine.execute(Operation::FinishTrace { failed }).unwrap();
+            engine.execute(Operation::FinishTrace { failed }).unwrap();
+            assert_eq!(std::path::Path::new(&trace_manifest).is_file(), failed);
+            assert_eq!(recording_path.is_file(), failed);
+            engine.execute(Operation::Close).unwrap();
+            engine.execute(Operation::Close).unwrap();
+            drop(engine);
+
+            assert_eq!(std::fs::read(&failure_manifest).unwrap(), failure_bytes);
+            assert_eq!(
+                std::fs::read_to_string(&unrelated).unwrap(),
+                "not owned by the engine"
+            );
+            if failed {
+                assert_eq!(std::fs::read(&trace_manifest).unwrap(), trace_bytes);
+                assert_eq!(
+                    std::fs::read(&trace_recording).unwrap(),
+                    trace_recording_bytes
+                );
+                assert_eq!(std::fs::read(&recording_path).unwrap(), recording_bytes);
+            } else {
+                assert!(!std::path::Path::new(&trace_manifest).exists());
+                assert!(!std::path::Path::new(&trace_recording).exists());
+                assert!(!recording_path.exists());
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_startup_outcomes_preserve_explicit_recording_policies() {
+        for mode in [
+            AutomaticRecordingMode::Disabled,
+            AutomaticRecordingMode::OnFailure,
+            AutomaticRecordingMode::Always,
+        ] {
+            for failed in [false, true] {
+                let (engine, _, root) = trace_engine("startup-recording", TraceMode::Off);
+                let path = root.join("automatic.cast");
+                let mut options = sleeping_program(true);
+                options.recording.mode = mode;
+                if mode == AutomaticRecordingMode::Disabled {
+                    std::fs::write(&path, "not owned by the engine").unwrap();
+                }
+                engine.execute(Operation::Run(options)).unwrap_err();
+                assert!(!engine.is_open());
+                let bytes = std::fs::read(&path).unwrap();
+                engine.execute(Operation::FinishTrace { failed }).unwrap();
+                engine.execute(Operation::Close).unwrap();
+                drop(engine);
+                if mode == AutomaticRecordingMode::OnFailure && !failed {
+                    assert!(!path.exists());
+                } else {
+                    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                }
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn failed_startup_recording_cleanup_errors_are_reported_and_retryable() {
+        let (engine, _, root) = trace_engine("startup-cleanup-error", TraceMode::Off);
+        let mut options = sleeping_program(true);
+        options.recording.mode = AutomaticRecordingMode::OnFailure;
+        engine.execute(Operation::Run(options)).unwrap_err();
+        let path = engine.recording_path().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+
+        let error = engine
+            .execute(Operation::FinishTrace { failed: false })
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Internal);
+        assert!(error
+            .message
+            .contains("failed to discard automatic recording"));
+        assert!(path.is_dir());
+        assert!(engine.recording.lock().unwrap().failed);
+
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        engine
+            .execute(Operation::FinishTrace { failed: false })
+            .unwrap();
+        assert!(!path.exists());
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_startup_retention_does_not_change_normal_close_contract() {
+        let (engine, context, root) = trace_engine("closed-retention", TraceMode::OnFailure);
+        engine
+            .execute_with_context(Operation::Run(sleeping_program(false)), context)
+            .unwrap();
+        let error = engine
+            .execute(Operation::WaitLocator {
+                query: LocatorQuery::text("missing trace marker"),
+                not: false,
+                timeout_ms: Some(0),
+            })
+            .unwrap_err();
+        engine.execute(Operation::Close).unwrap();
+        let trace_manifest = error.artifact.unwrap().manifest.unwrap();
+        let trace_bytes = std::fs::read(&trace_manifest).unwrap();
+        let recording_path = engine.recording_path().unwrap();
+        let recording_bytes = std::fs::read(&recording_path).unwrap();
+        engine
+            .execute(Operation::FinishTrace { failed: false })
+            .unwrap();
+        drop(engine);
+        assert_eq!(std::fs::read(&trace_manifest).unwrap(), trace_bytes);
+        assert_eq!(std::fs::read(&recording_path).unwrap(), recording_bytes);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn trace_retention_does_not_override_explicit_failure_exports() {
+        for (include_recording, shared_directory) in [(false, false), (true, false), (false, true)]
+        {
+            let (engine, context, root) = trace_engine("trace-exports", TraceMode::OnFailure);
+            let trace_directory = context.trace.as_ref().unwrap().directory.clone();
+            let failure_directory = if shared_directory {
+                trace_directory.clone()
+            } else {
+                root.join("failures")
+            };
+            engine
+                .execute_with_context(Operation::Run(sleeping_program(false)), context)
+                .unwrap();
+            let error = engine
+                .execute_with_context(
+                    Operation::WaitLocator {
+                        query: LocatorQuery::text("missing export marker"),
+                        not: false,
+                        timeout_ms: Some(0),
+                    },
+                    ExecutionContext {
+                        artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                            directory: failure_directory.clone(),
+                            mode: crate::diagnostics::FailureArtifactMode::Text,
+                            include_recording,
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .unwrap_err();
+            let artifact = error.artifact.unwrap();
+            let manifest_path = artifact.manifest.unwrap();
+            let manifest: crate::diagnostics::FailureArtifactManifest =
+                serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+            let trace_manifest = engine
+                .trace
+                .lock()
+                .unwrap()
+                .artifact
+                .as_ref()
+                .unwrap()
+                .manifest
+                .clone()
+                .unwrap();
+            assert_eq!(error.kind, ErrorKind::Assertion);
+            assert!(std::path::Path::new(&manifest_path).starts_with(&failure_directory));
+            assert!(std::path::Path::new(&manifest_path).ends_with("failure.json"));
+            assert!(manifest.details.outcome.is_none());
+            assert!(artifact.screen_text.is_some());
+            assert!(artifact.screen_svg.is_none());
+            assert_eq!(
+                manifest.files.iter().any(|file| file.kind == "recording"),
+                include_recording
+            );
+            assert!(std::path::Path::new(&trace_manifest).starts_with(&trace_directory));
+            assert!(std::path::Path::new(&trace_manifest).ends_with("trace.json"));
+            let trace_report: crate::diagnostics::FailureArtifactManifest =
+                serde_json::from_slice(&std::fs::read(&trace_manifest).unwrap()).unwrap();
+            assert_eq!(trace_report.details.outcome, Some(TraceOutcome::Failed));
+            assert!(trace_report
+                .files
+                .iter()
+                .any(|file| file.kind == "recording"));
+            if !include_recording {
+                assert!(manifest.details.recording.unwrap().path.is_none());
+            }
+            engine
+                .execute(Operation::FinishTrace { failed: false })
+                .unwrap();
+            engine.execute(Operation::Close).unwrap();
+            assert!(std::path::Path::new(&manifest_path).is_file());
+            assert!(!std::path::Path::new(&trace_manifest).exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn trace_and_explicit_failure_export_errors_are_independent() {
+        for fail_trace in [false, true] {
+            let (engine, context, root) = trace_engine("trace-export-errors", TraceMode::OnFailure);
+            let trace_directory = context.trace.as_ref().unwrap().directory.clone();
+            let failure_directory = root.join("failures");
+            std::fs::write(
+                if fail_trace {
+                    &trace_directory
+                } else {
+                    &failure_directory
+                },
+                "not a directory",
+            )
+            .unwrap();
+            engine
+                .execute_with_context(Operation::Run(sleeping_program(false)), context)
+                .unwrap();
+            let error = engine
+                .execute_with_context(
+                    Operation::WaitLocator {
+                        query: LocatorQuery::text("missing export marker"),
+                        not: false,
+                        timeout_ms: Some(0),
+                    },
+                    ExecutionContext {
+                        artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                            directory: failure_directory.clone(),
+                            mode: crate::diagnostics::FailureArtifactMode::Text,
+                            include_recording: false,
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .unwrap_err();
+            let artifact = error.artifact.unwrap();
+            let trace = engine.trace.lock().unwrap().artifact.clone().unwrap();
+            engine.execute(Operation::Close).unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(error.kind, ErrorKind::Assertion);
+            assert!(std::path::Path::new(&artifact.directory).starts_with(&failure_directory));
+            assert_eq!(artifact.manifest.is_some(), fail_trace);
+            assert_eq!(trace.manifest.is_some(), !fail_trace);
+            if fail_trace {
+                assert_eq!(artifact.status, FailureArtifactStatus::Partial);
+                assert!(artifact
+                    .errors
+                    .iter()
+                    .any(|error| error.contains("trace export")));
+            }
+            let failed_export = if fail_trace { trace } else { *artifact };
+            assert_eq!(failed_export.status, FailureArtifactStatus::Failed);
+            assert!(!failed_export.errors.is_empty());
+        }
+    }
+
+    #[test]
+    fn trace_final_outcome_still_controls_retention_after_caught_failures() {
+        for mode in [TraceMode::Off, TraceMode::On, TraceMode::OnFailure] {
+            for failed in [false, true] {
+                let (engine, context, root) = trace_engine("trace-retention", mode);
+                let directory = context.trace.as_ref().unwrap().directory.clone();
+                engine
+                    .execute_with_context(Operation::Run(sleeping_program(false)), context)
+                    .unwrap();
+                for _ in 0..2 {
+                    engine
+                        .execute(Operation::WaitLocator {
+                            query: LocatorQuery::text("missing trace marker"),
+                            not: false,
+                            timeout_ms: Some(0),
+                        })
+                        .unwrap_err();
+                }
+                engine.execute(Operation::FinishTrace { failed }).unwrap();
+                engine.execute(Operation::Close).unwrap();
+                engine.execute(Operation::Close).unwrap();
+                let bundles: Vec<_> = if directory.exists() {
+                    std::fs::read_dir(&directory)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let retained = mode == TraceMode::On || (mode == TraceMode::OnFailure && failed);
+                assert_eq!(
+                    bundles.len(),
+                    if retained {
+                        if failed {
+                            2
+                        } else {
+                            1
+                        }
+                    } else {
+                        0
+                    }
+                );
+                for bundle in bundles {
+                    let manifest: crate::diagnostics::FailureArtifactManifest =
+                        serde_json::from_slice(&std::fs::read(bundle.join("trace.json")).unwrap())
+                            .unwrap();
+                    assert_eq!(
+                        manifest.details.outcome,
+                        Some(if failed {
+                            TraceOutcome::Failed
+                        } else {
+                            TraceOutcome::Passed
+                        })
+                    );
+                }
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn failure_recording_boundary_does_not_limit_session_traces() {
+        let (engine, context, root) = trace_engine("trace-boundary", TraceMode::OnFailure);
+        engine
+            .execute_with_context(Operation::Run(sleeping_program(false)), context)
+            .unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let observation = capture_failure_observation(session);
+            {
+                let mut state = session.state.lock().unwrap();
+                state.emu.process(b"later output");
+                state.visual_revision += 1;
+                state.screen_dirty = true;
+                capture_visual_state(&mut state, true);
+            }
+            let mut details = FailureReport::new(
+                "locator.wait",
+                Some(0),
+                FailureReason::TimedOut,
+                "missing trace marker",
+            );
+            details.recording = Some(engine.recording_diagnostics(&observation));
+            let prepared =
+                engine.prepare_recording_artifact(session, &observation, &root, &mut details);
+            assert!(prepared.is_none());
+            assert_eq!(
+                details.recording.as_ref().unwrap().status,
+                RecordingStatus::Omitted
+            );
+            details.outcome = Some(TraceOutcome::Failed);
+            let prepared =
+                engine.prepare_recording_artifact(session, &observation, &root, &mut details);
+            let prepared = prepared.expect("a session trace can extend beyond its failure offset");
+            std::fs::remove_file(prepared.temporary_path).unwrap();
+        }
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn returned_failures_release_private_observations_including_failed_open() {
+        let root =
+            std::env::temp_dir().join(format!("tui-test-error-memory-{}", std::process::id()));
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Text,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let engine = Engine::new(
+            "error-memory".into(),
+            Arc::new(Logger::disabled()),
+            root.join("unused.cast"),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        populate_history(&engine);
+        for _ in 0..3 {
+            let error = engine
+                .execute_with_context(
+                    Operation::WaitLocator {
+                        query: LocatorQuery::text("missing diagnostic marker"),
+                        not: false,
+                        timeout_ms: Some(0),
+                    },
+                    context.clone(),
+                )
+                .unwrap_err();
+            assert!(error.observation.is_none());
+            assert!(error.details.is_some());
+            assert!(error.report.is_none());
+            assert!(error.artifact.as_ref().unwrap().manifest.is_some());
+            let cloned = error.clone();
+            assert!(cloned.observation.is_none());
+            assert_eq!(cloned.details, error.details);
+            assert_eq!(cloned.artifact, error.artifact);
+        }
+        engine.execute(Operation::Close).unwrap();
+
+        let failed_open = engine
+            .execute_with_context(Operation::Run(sleeping_program(true)), context)
+            .unwrap_err();
+        assert!(failed_open.observation.is_none());
+        assert!(failed_open.artifact.is_some());
+        let details = failed_open.details.unwrap();
+        assert!(!details.summary.is_empty());
+        assert!(failed_open.report.is_none());
+        let report: crate::diagnostics::FailureArtifactManifest = serde_json::from_slice(
+            &std::fs::read(failed_open.artifact.unwrap().manifest.unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            report.details.operation.failed_screen_sequence,
+            report
+                .details
+                .recent_operations
+                .last()
+                .unwrap()
+                .screen_at_return
+        );
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn successful_snapshots_preserve_the_compared_screen() {
+        let root =
+            std::env::temp_dir().join(format!("tui-test-snapshot-memory-{}", std::process::id()));
+        let directory = allocate_artifact_directory(&root).unwrap();
+        let engine = Engine::new(
+            "snapshot-memory".into(),
+            Arc::new(Logger::disabled()),
+            root.join("unused.cast"),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        populate_history(&engine);
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let cwd = Some(directory.to_string_lossy().into_owned());
+            for update in [true, false] {
+                let result =
+                    do_snapshot(session, "compared", update, false, false, cwd.clone()).unwrap();
+                assert!(matches!(
+                    result,
+                    SnapshotResult::Written | SnapshotResult::Passed
+                ));
+            }
+            let captured = capture_failure_observation(session);
+            {
+                let mut state = session.state.lock().unwrap();
+                state.emu.process(b"\x1b[HLATER OUTPUT");
+                state.screen_dirty = true;
+                capture_visual_state(&mut state, true);
+            }
+            assert!(!rows_to_strings(&captured.rows)
+                .join(
+                    "
+"
+                )
+                .contains("LATER OUTPUT"));
+            assert!(!captured
+                .terminal()
+                .screen_history
+                .screens
+                .last()
+                .unwrap()
+                .text
+                .contains("LATER OUTPUT"));
+            let result = do_snapshot(session, "compared", true, false, false, cwd).unwrap();
+            assert!(matches!(result, SnapshotResult::Updated));
+        }
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn successful_open_stores_the_complete_spawn_spec_and_tracks_resize() {
@@ -3078,12 +5199,168 @@ mod tests {
             },
             &emu,
         ));
+        let evaluation = evaluate_cell_style(
+            &cell,
+            &TextStyle {
+                foreground: Some("#ff0000".into()),
+                bold: Some(true),
+                ..TextStyle::default()
+            },
+            &emu,
+            3,
+            4,
+            usize::MAX,
+        );
+        assert!(!evaluation.matched);
+        assert_eq!(evaluation.mismatches.len(), 2);
+        assert_eq!(evaluation.mismatches[0].location.row, 4);
+        assert!(evaluation
+            .mismatches
+            .iter()
+            .any(|mismatch| mismatch.property == "foreground"));
+        assert!(evaluation
+            .mismatches
+            .iter()
+            .any(|mismatch| mismatch.property == "bold"));
+    }
+
+    #[test]
+    fn style_mismatch_evidence_respects_the_requested_budget() {
+        let emu = AlacrittyEmu::new(80, 24, &Profile::default());
+        let cell = EmuCell::blank();
+        let style = TextStyle {
+            bold: Some(true),
+            ..TextStyle::default()
+        };
+        assert!(!cell_matches_style(&cell, &style, &emu));
+        let boolean = evaluate_cell_style(&cell, &style, &emu, 0, 0, 0);
+        assert!(!boolean.matched);
+        assert!(boolean.mismatches.is_empty());
+        assert!(boolean.mismatches_truncated);
+        let limited = evaluate_cell_style(
+            &cell,
+            &TextStyle {
+                bold: Some(true),
+                italic: Some(true),
+                dim: Some(true),
+                ..TextStyle::default()
+            },
+            &emu,
+            0,
+            0,
+            1,
+        );
+        assert!(!limited.matched);
+        assert_eq!(limited.mismatches.len(), 1);
+        assert!(limited.mismatches_truncated);
+    }
+
+    #[test]
+    fn ambiguous_text_anchors_report_conflicting_locations() {
+        for occurrence in [
+            crate::api::MatchOccurrence::Any,
+            crate::api::MatchOccurrence::Unique,
+        ] {
+            for before in [false, true] {
+                let mut emu = AlacrittyEmu::new(80, 2, &Profile::default());
+                emu.process(b"ANCHOR target ANCHOR");
+                let anchor = crate::api::TextAnchor {
+                    text: "ANCHOR".into(),
+                    regex: false,
+                    occurrence: occurrence.clone(),
+                };
+                let mut selector = TextSelector::new("target");
+                if before {
+                    selector.scope.before = Some(anchor);
+                } else {
+                    selector.scope.after = Some(anchor);
+                }
+                let query = LocatorQuery::text(selector);
+                let evaluation = locator::evaluate_query(
+                    &emu.viewable_rows(),
+                    &query,
+                    false,
+                    &mut |cell, style, x, y, budget| {
+                        evaluate_cell_style(cell, style, &emu, x, y, budget)
+                    },
+                )
+                .unwrap();
+                let message = locator_failure_message(&query, &evaluation.diagnostics);
+                let error = locator_failure_error(
+                    "locator.find",
+                    None,
+                    message,
+                    EvaluatedLocator {
+                        evaluation,
+                        screen_sequence: 1,
+                        visible_rows: 2,
+                    },
+                    Vec::new(),
+                    false,
+                    None,
+                );
+                let report = error.report.unwrap();
+                assert_eq!(report.reason, FailureReason::LocatorAmbiguous);
+                let failure = report.failure_details().locator.unwrap();
+                assert_eq!(failure.reason, Some(LocatorFailureReason::AnchorAmbiguous));
+                assert_eq!(
+                    failure.locations,
+                    vec![
+                        crate::api::TextPosition { column: 0, row: 0 },
+                        crate::api::TextPosition { column: 14, row: 0 },
+                    ],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compact_failure_preserves_url_and_style_mismatch_location() {
+        let mut emu = AlacrittyEmu::new(10, 2, &Profile::default());
+        emu.process(b"\x1b]8;;test:docs\x07docs\x1b]8;;\x07");
+        let mut query = LocatorQuery::style(TextStyle {
+            bold: Some(true),
+            ..TextStyle::default()
+        });
+        query.within = Some(Box::new(LocatorQuery::link("test:docs")));
+        let evaluation = locator::evaluate_query(
+            &emu.viewable_rows(),
+            &query,
+            false,
+            &mut |cell, style, x, y, budget| evaluate_cell_style(cell, style, &emu, x, y, budget),
+        )
+        .unwrap();
+        let mut report = FailureReport::new(
+            "locator.resolve",
+            None,
+            FailureReason::LocatorNoMatch,
+            "style mismatch",
+        );
+        report.locator = Some(evaluation.diagnostics);
+        let details = report.failure_details();
+        let failure = details.locator.unwrap();
+        assert_eq!(
+            failure.reason,
+            Some(LocatorFailureReason::StyleFilterRemovedAll)
+        );
+        assert!(failure
+            .selectors
+            .iter()
+            .any(|selector| selector.contains("test:docs")));
+        assert_eq!(failure.mismatches[0].property, "bold");
+        assert_eq!(failure.mismatches[0].expected, "true");
+        assert_eq!(failure.mismatches[0].actual, "false");
+        assert_eq!(
+            failure.mismatches[0].location,
+            crate::api::TextPosition { column: 0, row: 0 }
+        );
+        assert!(!diagnostic_hints(&report)[0].message.contains("text"));
     }
 
     /// A link is matched by where it points, so a locator can find the cells
     /// of one link and ignore an identical-looking one pointing elsewhere.
     #[test]
-    fn style_locators_match_a_cell_by_its_link() {
+    fn link_locators_match_a_cell_by_its_link() {
         let emu = AlacrittyEmu::new(10, 2, &Profile::default());
         let linked = EmuCell {
             ch: "x".into(),
@@ -3094,20 +5371,15 @@ mod tests {
             ..EmuCell::blank()
         };
 
-        let with_link = |uri: &str| TextStyle {
-            link: Some(uri.into()),
-            ..TextStyle::default()
-        };
-        assert!(cell_matches_style(
-            &linked,
-            &with_link("https://example.com"),
-            &emu
-        ));
-        assert!(!cell_matches_style(
-            &linked,
-            &with_link("https://other.example"),
-            &emu
-        ));
+        let rows = vec![vec![linked]];
+        for (uri, count) in [("https://example.com", 1), ("https://other.example", 0)] {
+            let found =
+                locator::locate_query(&rows, &LocatorQuery::link(uri), &mut |cell, style| {
+                    cell_matches_style(cell, style, &emu)
+                })
+                .unwrap();
+            assert_eq!(found.len(), count);
+        }
     }
 
     /// An empty link is a real requirement, not an absent one: it asks for a
@@ -3127,19 +5399,18 @@ mod tests {
             })),
             ..plain.clone()
         };
-        let unlinked = TextStyle {
-            link: Some(String::new()),
-            ..TextStyle::default()
-        };
-
-        assert!(cell_matches_style(&plain, &unlinked, &emu));
-        assert!(!cell_matches_style(&linked, &unlinked, &emu));
+        let found = locator::locate_query(
+            &[vec![plain, linked]],
+            &LocatorQuery::link(""),
+            &mut |cell, style| cell_matches_style(cell, style, &emu),
+        )
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].value.spans[0].end, 1);
     }
 
-    /// A style that says nothing about links keeps matching either kind, so
-    /// adding the field does not narrow every existing query.
     #[test]
-    fn a_style_without_a_link_still_matches_a_linked_cell() {
+    fn appearance_matches_independently_of_links() {
         let emu = AlacrittyEmu::new(10, 2, &Profile::default());
         let linked = EmuCell {
             ch: "x".into(),
@@ -3273,5 +5544,298 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind, ErrorKind::Internal);
         assert!(error.message.contains("ffi-panic"));
+    }
+
+    #[test]
+    fn clean_screen_boundaries_reuse_the_grid_but_flush_dirty_output() {
+        let engine = Engine::new(
+            "cached-screen".into(),
+            Arc::new(Logger::disabled()),
+            std::env::temp_dir().join("unused-cached-screen.cast"),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            let sequence = capture_visual_state(&mut state, true);
+            state.screen_history.pin_current();
+            let frozen = state.screen_history.clone();
+            let sample_time = state.last_screen_sample;
+            let repeat_count = frozen.snapshot().screens.last().unwrap().repeat_count;
+            for _ in 0..1000 {
+                assert_eq!(capture_visual_state(&mut state, true), sequence);
+            }
+            assert_eq!(state.last_screen_sample, sample_time);
+            assert_eq!(
+                state
+                    .screen_history
+                    .snapshot()
+                    .screens
+                    .last()
+                    .unwrap()
+                    .repeat_count,
+                repeat_count + 1000,
+            );
+            assert_eq!(
+                frozen.snapshot().screens.last().unwrap().repeat_count,
+                repeat_count
+            );
+            state.emu.process(b"\x1b[HFRESH OUTPUT");
+            state.screen_dirty = true;
+            let changed = capture_visual_state(&mut state, true);
+            assert_ne!(changed, sequence);
+            assert!(!state.screen_dirty);
+            assert!(state
+                .screen_history
+                .snapshot()
+                .screens
+                .last()
+                .unwrap()
+                .text
+                .contains("FRESH OUTPUT"));
+        }
+        engine.execute(Operation::Close).unwrap();
+    }
+
+    #[test]
+    fn resolving_a_unique_locator_pins_an_assertion_checkpoint() {
+        let engine = Engine::new(
+            "resolve-checkpoint".into(),
+            Arc::new(Logger::disabled()),
+            std::env::temp_dir().join("unused-resolve-checkpoint.cast"),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let mut query = LocatorQuery::style(TextStyle {
+            bold: Some(false),
+            ..TextStyle::default()
+        });
+        query.occurrence = crate::api::MatchOccurrence::First;
+        engine.execute(Operation::ResolveLocator { query }).unwrap();
+        let event = engine
+            .operation_history
+            .lock()
+            .unwrap()
+            .snapshot()
+            .pop()
+            .unwrap();
+        let checkpoints = engine
+            .lock_session()
+            .as_ref()
+            .unwrap()
+            .state
+            .lock()
+            .unwrap()
+            .screen_history
+            .snapshot()
+            .checkpoints;
+        engine.execute(Operation::Close).unwrap();
+        assert!(event.is_assertion);
+        assert!(checkpoints
+            .iter()
+            .any(|frame| frame.sequence == event.screen_at_return));
+    }
+
+    #[test]
+    fn startup_readiness_failures_distinguish_timeout_from_process_exit() {
+        let engine = Engine::new(
+            "startup-readiness".into(),
+            Arc::new(Logger::disabled()),
+            std::env::current_dir()
+                .unwrap()
+                .join("unused-startup-readiness.cast"),
+        );
+        let timed_out = engine
+            .execute(Operation::Run(sleeping_program(true)))
+            .unwrap_err();
+        assert!(!engine.is_open());
+        let details = timed_out.details.unwrap();
+        assert_eq!(details.operation, "run");
+        assert_eq!(details.reason, FailureReason::TimedOut);
+        assert!(details.summary.contains("reported no prompt within 20ms"));
+
+        let mut options = sleeping_program(true);
+        let (program, args) = if cfg!(windows) {
+            ("cmd.exe", vec!["/D", "/C", "exit 7"])
+        } else {
+            ("sh", vec!["-c", "exit 7"])
+        };
+        options.program = program.into();
+        options.args = args.into_iter().map(str::to_string).collect();
+        options.timeouts.ready = Some(15_000);
+        let exited = engine.execute(Operation::Run(options)).unwrap_err();
+        assert!(!engine.is_open());
+        let details = exited.details.unwrap();
+        assert_eq!(details.operation, "run");
+        assert_eq!(details.reason, FailureReason::SessionExited);
+    }
+
+    #[test]
+    fn startup_readiness_failures_preserve_observed_exit_and_cancellation() {
+        let engine = Engine::new(
+            "startup-readiness-reasons".into(),
+            Arc::new(Logger::disabled()),
+            std::env::current_dir()
+                .unwrap()
+                .join("unused-startup-readiness-reasons.cast"),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let mut observation = {
+            let guard = engine.lock_session();
+            capture_failure_observation(guard.as_ref().unwrap())
+        };
+        engine.execute(Operation::Close).unwrap();
+        for (cancelled, exit_code, reason) in [
+            (false, None, FailureReason::TimedOut),
+            (false, Some(7), FailureReason::SessionExited),
+            (true, None, FailureReason::Cancelled),
+            (true, Some(7), FailureReason::Cancelled),
+        ] {
+            observation.process.cancelled = cancelled;
+            observation.process.exit_code = exit_code;
+            let error = startup_readiness_error("open", 25);
+            let report = error.report.as_ref().unwrap();
+            assert_eq!(report.operation.timeout_ms, Some(25));
+            assert_eq!(failure_reason(&error, Some(&observation)), reason);
+        }
+    }
+
+    #[test]
+    fn closing_a_session_preserves_the_operation_clock() {
+        let engine = Engine::new(
+            "close-clock".into(),
+            Arc::new(Logger::disabled()),
+            std::env::current_dir()
+                .unwrap()
+                .join("unused-close-clock.cast"),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        engine
+            .lock_session()
+            .as_ref()
+            .unwrap()
+            .state
+            .lock()
+            .unwrap()
+            .started_at = Instant::now() - Duration::from_secs(10);
+        engine.execute(Operation::Close).unwrap();
+        let event = engine
+            .operation_history
+            .lock()
+            .unwrap()
+            .snapshot()
+            .pop()
+            .unwrap();
+        assert_eq!(event.name, "close");
+        assert!(event.started_ms >= 10_000);
+        assert!(event.ended_ms >= event.started_ms);
+    }
+
+    #[test]
+    fn pending_startup_events_keep_the_allocated_sequence_after_history_reset() {
+        let mut history = OperationHistory::new();
+        let previous = history.begin("close".into(), 100, 5, "close".into(), false, None);
+        history.finish(previous, Some(110), 0, "ok", None);
+        let pending = history.begin("run".into(), 110, 5, "run".into(), false, None);
+        let metadata = OperationMetadata {
+            sequence: pending.sequence(),
+            name: "run".into(),
+            timeout_ms: None,
+            started_at: Instant::now(),
+            started_ms: 110,
+            screen_before: 5,
+            safe_summary: "run".into(),
+            is_assertion: false,
+            expectation: None,
+            input: None,
+        };
+        history.reset_session();
+        assert!(history.snapshot().is_empty());
+        let metadata = OperationMetadata {
+            started_ms: 0,
+            screen_before: 0,
+            ..metadata
+        };
+        let reported = metadata.pending_event("assertion", 1);
+        history.finish(pending, Some(reported.ended_ms), 1, "assertion", None);
+        assert_eq!(reported.sequence, 2);
+        assert_eq!(reported, history.snapshot()[0]);
+    }
+
+    #[test]
+    fn concurrent_history_and_failure_finalization_do_not_deadlock() {
+        const CHILD: &str = "TUI_TEST_HISTORY_LOCK_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "engine::tests::concurrent_history_and_failure_finalization_do_not_deadlock",
+                ])
+                .env(CHILD, "1")
+                .spawn()
+                .unwrap();
+            let started = Instant::now();
+            loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    assert!(status.success());
+                    return;
+                }
+                if started.elapsed() > Duration::from_secs(10) {
+                    child.kill().unwrap();
+                    child.wait().unwrap();
+                    panic!("operation history and failure finalization deadlocked");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let engine = Arc::new(Engine::new(
+            "history-lock".into(),
+            Arc::new(Logger::disabled()),
+            std::env::temp_dir().join("unused-history-lock.cast"),
+        ));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let reporter = {
+            let engine = engine.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let metadata = OperationMetadata {
+                    sequence: 0,
+                    name: "test.failure".into(),
+                    timeout_ms: None,
+                    started_at: Instant::now(),
+                    started_ms: 0,
+                    screen_before: 0,
+                    safe_summary: "synthetic failure".into(),
+                    is_assertion: false,
+                    expectation: None,
+                    input: None,
+                };
+                let context = ExecutionContext {
+                    artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                        directory: std::env::temp_dir().join("unused-history-lock"),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+                barrier.wait();
+                for _ in 0..2000 {
+                    let mut error = TuiTestError::internal("synthetic failure");
+                    engine.finalize_failure(&mut error, &context, &metadata);
+                }
+            })
+        };
+        barrier.wait();
+        for _ in 0..2000 {
+            engine.execute(Operation::Close).unwrap();
+        }
+        reporter.join().unwrap();
     }
 }

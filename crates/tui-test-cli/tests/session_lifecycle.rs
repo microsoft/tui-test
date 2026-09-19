@@ -548,7 +548,9 @@ fn monitor_input_is_delivered_while_a_long_operation_is_running() {
 #[test]
 fn get_recording_flushes_queued_output_before_reading() {
     let sandbox = Sandbox::new("recording-flush");
-    sandbox.ok(&["open"]);
+    let config = sandbox.home.join("trace.toml");
+    std::fs::write(&config, "[trace]\nmode = \"on\"\ndirectory = \"traces\"\n").unwrap();
+    sandbox.ok(&["open", "--config", config.to_str().unwrap()]);
     sandbox.ok(&["submit", "echo recording-flush-marker"]);
     sandbox.ok(&["wait", "command", "--timeout", "30000"]);
 
@@ -661,7 +663,8 @@ fn restart_gracefully_recreates_a_run_with_its_metadata() {
         &config,
         "[profiles.restart]\nscrollback = 432\n\
          [profiles.restart.timeouts]\ntext = 1234\n\
-         [profiles.restart.colors]\nforeground = \"#123456\"\n",
+         [profiles.restart.colors]\nforeground = \"#123456\"\n\
+         [trace]\nmode = \"on\"\ndirectory = \"traces\"\n",
     )
     .unwrap();
 
@@ -1061,11 +1064,10 @@ fn config_timeouts_apply_below_command_line_overrides() {
 #[test]
 fn a_screenshot_and_an_assertion_agree_on_a_color() {
     let sandbox = Sandbox::new("palette-agree");
-    // Printed lowercase so the match is the output, not the echoed command.
-    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)"; sleep 30"#;
-    sandbox.ok(&[
-        "run", "--cols", "44", "--", "bash", "--norc", "-c", print_red,
-    ]);
+    let mut command = vec!["run", "--cols", "44", "--"];
+    command.extend(colored_text_program());
+    sandbox.ok(&command);
+    sandbox.wait_for_text("qrsx", FIXTURE_START_TIMEOUT);
 
     // The default profile is the VGA palette, so slot 1 is #800000.
     sandbox.ok(&["expect", "text", "qrsx", "--fg", "#800000"]);
@@ -1089,8 +1091,7 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
     std::fs::write(&config, "[profiles.neon.colors]\nred = \"#ff00ff\"\n").expect("write config");
     let config_path = config.to_str().expect("utf-8 path");
 
-    let print_red = r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)"; sleep 30"#;
-    sandbox.ok(&[
+    let mut command = vec![
         "run",
         "--config",
         config_path,
@@ -1099,11 +1100,10 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
         "--cols",
         "44",
         "--",
-        "bash",
-        "--norc",
-        "-c",
-        print_red,
-    ]);
+    ];
+    command.extend(colored_text_program());
+    sandbox.ok(&command);
+    sandbox.wait_for_text("qrsx", FIXTURE_START_TIMEOUT);
 
     sandbox.ok(&["expect", "text", "qrsx", "--fg", "#ff00ff"]);
     let out = sandbox.run(&["expect", "text", "qrsx", "--fg", "#800000"]);
@@ -1120,6 +1120,28 @@ fn a_custom_profile_recolors_screenshots_and_assertions_together() {
         drawing.contains("fill=\"#ff00ff\""),
         "the screenshot follows the profile too"
     );
+}
+
+const FIXTURE_START_TIMEOUT: &str = "15000";
+
+fn colored_text_program() -> Vec<&'static str> {
+    // Repaint on Windows so startup console redraws cannot erase the fixture.
+    // Construct lowercase text so the assertion cannot match an echoed command.
+    if cfg!(windows) {
+        vec![
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "while ($true) { [Console]::Write(([char]27).ToString() + '[H' + ([char]27).ToString() + '[31m' + 'QRSX'.ToLowerInvariant() + ([char]27).ToString() + '[0m'); Start-Sleep -Milliseconds 100 }",
+        ]
+    } else {
+        vec![
+            "bash",
+            "--norc",
+            "-c",
+            r#"printf "\033[31m%s\033[0m\n" "$(echo QRSX | tr A-Z a-z)"; sleep 30"#,
+        ]
+    }
 }
 
 /// A profile that does not exist is an error naming the ones that do, rather
@@ -1318,7 +1340,7 @@ fn automatic_recording_mode_and_directory_come_from_config() {
     let config = sandbox.home.join("recording.toml");
     std::fs::write(
         &config,
-        "[recording]\nmode = \"disabled\"\ndirectory = \"casts\"\n",
+        "[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"off\"\n",
     )
     .unwrap();
     let config = config.to_str().unwrap();
@@ -1334,7 +1356,7 @@ fn failed_open_recording_is_readable_before_close() {
     let config = sandbox.home.join("recording.toml");
     std::fs::write(
         &config,
-        "[recording]\nmode = \"on-failure\"\ndirectory = \"casts\"\n",
+        "[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"on-failure\"\ndirectory = \"traces\"\n",
     )
     .unwrap();
     let config = config.to_str().unwrap();
@@ -1358,14 +1380,18 @@ fn failed_open_recording_is_readable_before_close() {
 fn failed_spawn_does_not_expose_a_previous_custom_recording() {
     let sandbox = Sandbox::new("recording-failed-spawn");
     let config = sandbox.home.join("recording.toml");
-    std::fs::write(&config, "[recording]\ndirectory = \"casts\"\n").unwrap();
+    std::fs::write(
+        &config,
+        "[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"on\"\ndirectory = \"traces\"\n",
+    )
+    .unwrap();
     let config = config.to_str().unwrap();
     sandbox.ok(&["open", "--config", config, "--no-wait-ready"]);
     sandbox.ok(&["close"]);
 
     std::fs::write(
         config,
-        "[recording]\nmode = \"on-failure\"\ndirectory = \"casts\"\n",
+        "[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"on-failure\"\ndirectory = \"traces\"\n",
     )
     .unwrap();
     assert!(!sandbox
@@ -1438,8 +1464,8 @@ fn explicit_wait_ready_fails_when_no_prompt_is_reported() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("Terminal content:"),
-        "the failure should show the screen it gave up on: {}",
+        !String::from_utf8_lossy(&out.stderr).contains("Terminal content:"),
+        "ordinary failures must not dump the terminal: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
@@ -1454,6 +1480,135 @@ fn explicit_wait_ready_fails_when_no_prompt_is_reported() {
         "the failed open left a session behind: {}",
         String::from_utf8_lossy(&after.stdout),
     );
+}
+
+#[test]
+fn json_failure_writes_and_reports_a_diagnostic_bundle() {
+    let sandbox = Sandbox::new("failure-artifact");
+    sandbox.ok(&["open", "--no-wait-ready"]);
+    let plain = sandbox.run(&[
+        "--json",
+        "expect",
+        "text",
+        "never-present",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(plain.status.code(), Some(1));
+    let plain: serde_json::Value =
+        serde_json::from_slice(&plain.stdout).expect("plain failure json response");
+    assert_eq!(plain["details"]["operation"], "locator.expect");
+    assert!(plain["details"].get("terminal").is_none());
+    assert!(plain["details"].get("recent_operations").is_none());
+
+    let artifacts = sandbox.home.join("failure-artifacts");
+    let artifacts = artifacts.to_str().unwrap();
+
+    let out = sandbox.run(&[
+        "--json",
+        "--failure-artifacts",
+        artifacts,
+        "--diagnostic-context",
+        "test=cli-bundle",
+        "expect",
+        "text",
+        "never-present",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let payload: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("failure json response");
+    assert_eq!(payload["details"]["schema_version"], 1);
+    assert_eq!(payload["details"]["operation"], "locator.expect");
+    assert!(payload["details"].get("context").is_none());
+    let manifest = payload["artifact"]["manifest"]
+        .as_str()
+        .expect("failure manifest path");
+    assert!(std::path::Path::new(manifest).is_file());
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest).unwrap()).unwrap();
+    assert_eq!(report["context"]["test"], "cli-bundle");
+    assert!(report["terminal"]["screen_history"]["screens"].is_array());
+    assert!(payload["artifact"]["report"]
+        .as_str()
+        .is_some_and(|path| std::path::Path::new(path).is_file()));
+    for (field, name) in [
+        ("report", "failure.md"),
+        ("report_html", "failure.html"),
+        ("timeline", "timeline.json"),
+    ] {
+        let path = std::path::Path::new(payload["artifact"][field].as_str().unwrap());
+        assert!(path.is_file());
+        assert_eq!(path.file_name().unwrap(), name);
+    }
+    let human = sandbox.run(&[
+        "--failure-artifacts",
+        artifacts,
+        "expect",
+        "text",
+        "never-present",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(human.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(stderr.contains("Failure report: "));
+    assert!(stderr.contains("failure.html"));
+    assert!(stderr.contains("Agent report: "));
+    assert!(stderr.contains("failure.md"));
+
+    sandbox.ok(&["close"]);
+}
+
+#[test]
+fn usage_errors_do_not_capture_terminal_artifacts() {
+    let sandbox = Sandbox::new("usage-no-artifact");
+    sandbox.ok(&["open", "--no-wait-ready"]);
+    let artifacts = sandbox.home.join("failure-artifacts");
+    let artifacts_arg = artifacts.to_str().unwrap();
+    let out = sandbox.run(&[
+        "--failure-artifacts",
+        artifacts_arg,
+        "expect",
+        "text",
+        "hello",
+        "--fg",
+        "not-a-color",
+        "--timeout",
+        "20",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("Terminal content:"));
+    assert!(!artifacts.exists());
+    sandbox.ok(&["close"]);
+}
+
+#[test]
+fn diagnostic_capture_panics_do_not_kill_the_daemon() {
+    let sandbox = Sandbox::new("diagnostic-panic-containment");
+    sandbox.ok(&["open", "--no-wait-ready"]);
+    let resize = sandbox.run(&["resize", "0", "0"]);
+    assert_ne!(
+        resize.status.code(),
+        Some(4),
+        "diagnostic capture escaped the daemon: {}",
+        String::from_utf8_lossy(&resize.stderr)
+    );
+    let state = sandbox.run(&["state"]);
+    assert_eq!(
+        state.status.code(),
+        Some(5),
+        "corrupt diagnostic state should remain a contained internal error: {}",
+        String::from_utf8_lossy(&state.stderr)
+    );
+    let status = sandbox.run(&["daemon", "status"]);
+    assert!(
+        status.status.success(),
+        "daemon did not survive diagnostic capture panic: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    sandbox.ok(&["close"]);
 }
 
 #[test]
@@ -1603,11 +1758,11 @@ fn clipboard_command(base64: &str) -> String {
 fn blinking_program() -> Vec<&'static str> {
     if cfg!(windows) {
         vec![
-            "pwsh",
+            "powershell.exe",
             "-NoLogo",
             "-NoProfile",
             "-Command",
-            "[Console]::Write(\"`e[5mX`e[0m\"); Start-Sleep -Seconds 30",
+            "while ($true) { [Console]::Write(([char]27).ToString() + '[H' + ([char]27).ToString() + '[5mX' + ([char]27).ToString() + '[0m'); Start-Sleep -Milliseconds 100 }",
         ]
     } else {
         vec!["sh", "-c", "printf '\\033[5mX\\033[0m'; sleep 30"]
@@ -1647,7 +1802,7 @@ fn ghostty_backend_is_used_end_to_end() {
     ];
     args.extend(blinking_program());
     sandbox.ok(&args);
-    sandbox.wait_for_text("X", "5000");
+    sandbox.wait_for_text("X", FIXTURE_START_TIMEOUT);
 
     let raw = sandbox.ok(&["--json", "cells", "0", "0"]);
     let payload: serde_json::Value = serde_json::from_str(&raw).expect("cells json");
@@ -2134,19 +2289,30 @@ fn status_reports_the_daemon_pid_not_the_child() {
 fn a_window_title_is_tracked_asserted_and_drawn() {
     for backend in Backend::ALL {
         let sandbox = Sandbox::new("title");
-        sandbox.ok(&[
-            "run",
-            "--backend",
-            backend.as_str(),
-            "--cols",
-            "40",
-            "--",
-            "bash",
-            "--norc",
-        ]);
+        let mut args = vec!["run", "--backend", backend.as_str(), "--cols", "40", "--"];
+        if cfg!(windows) {
+            args.extend([
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "$e=[char]27; [Console]::Write('TITLE_READY'); while (($value=[Console]::ReadLine()) -ne $null) { [Console]::Write($e.ToString() + ']2;' + $value + [char]7) }",
+            ]);
+        } else {
+            args.extend(["bash", "--norc"]);
+        }
+        sandbox.ok(&args);
+        if cfg!(windows) {
+            sandbox.wait_for_text("TITLE_READY", "10000");
+        }
         let before = sandbox.ok(&["get", "title"]);
 
-        sandbox.ok(&["submit", r#"printf '\033]2;vim: notes.md\007'"#]);
+        let set_title = if cfg!(windows) {
+            "vim: notes.md"
+        } else {
+            r#"printf '\033]2;vim: notes.md\007'"#
+        };
+        sandbox.ok(&["submit", set_title]);
         sandbox.ok(&["expect", "title", "vim", "--timeout", "5000"]);
         sandbox.ok(&["expect", "title", "notes\\.\\w+", "--regex"]);
         sandbox.ok(&["expect", "title", "emacs", "--not"]);
@@ -2182,7 +2348,12 @@ fn a_window_title_is_tracked_asserted_and_drawn() {
         );
 
         // An empty title clears it, which is how programs tidy up on exit.
-        sandbox.ok(&["submit", r#"printf '\033]2;\007'"#]);
+        let clear_title = if cfg!(windows) {
+            ""
+        } else {
+            r#"printf '\033]2;\007'"#
+        };
+        sandbox.ok(&["submit", clear_title]);
         sandbox.ok(&["wait", "title", "vim", "--not", "--timeout", "5000"]);
     }
 }
@@ -2198,19 +2369,24 @@ fn a_snapshot_records_the_title_only_when_asked() {
         let sandbox = Sandbox::new("snap-title");
         // Wide enough that the title is not truncated, so the assertion is
         // about whether it was recorded at all rather than how it was shortened.
-        let set_title = r#"clear; printf '\033]2;tui-test-user@host: /some/path\007'; sleep 30"#;
-        sandbox.ok(&[
-            "run",
-            "--backend",
-            backend.as_str(),
-            "--cols",
-            "40",
-            "--",
-            "bash",
-            "--norc",
-            "-c",
-            set_title,
-        ]);
+        let mut args = vec!["run", "--backend", backend.as_str(), "--cols", "40", "--"];
+        if cfg!(windows) {
+            args.extend([
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                r#"$e=[char]27; [Console]::Write("$e[2J$e[H$e]2;tui-test-user@host: /some/path$([char]7)"); Start-Sleep -Seconds 30"#,
+            ]);
+        } else {
+            args.extend([
+                "bash",
+                "--norc",
+                "-c",
+                r#"clear; printf '\033]2;tui-test-user@host: /some/path\007'; sleep 30"#,
+            ]);
+        }
+        sandbox.ok(&args);
         sandbox.ok(&["expect", "title", "tui-test-user@host", "--timeout", "5000"]);
 
         let plain = sandbox.ok_in(Some(&sandbox.home), &["expect", "snapshot", "plain", "-u"]);

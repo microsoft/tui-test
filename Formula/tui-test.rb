@@ -1,30 +1,30 @@
 class TuiTest < Formula
   desc "Control, inspect, test, and record terminal sessions"
   homepage "https://github.com/microsoft/tui-test"
-  version "0.1.0-beta.2"
+  version "0.1.0-beta.4"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/microsoft/tui-test/releases/download/0.1.0-beta.2/tui-test-aarch64-apple-darwin.tar.gz"
-      sha256 "a5a49eec33b8f977f3f1a782f0f8d81f0978a14e0407a6a5f15619d6ccd3c89c"
+      url "https://github.com/microsoft/tui-test/releases/download/0.1.0-beta.4/tui-test-aarch64-apple-darwin.tar.gz"
+      sha256 "dd105ad15813aa7391c8cbb17ccd895d965f2914a057b57c1f4f49b419229160"
     end
 
     on_intel do
-      url "https://github.com/microsoft/tui-test/releases/download/0.1.0-beta.2/tui-test-x86_64-apple-darwin.tar.gz"
-      sha256 "16143bf7cbbc29ecf9493cea15843a13cbba56f9952e530396091de96e33c59b"
+      url "https://github.com/microsoft/tui-test/releases/download/0.1.0-beta.4/tui-test-x86_64-apple-darwin.tar.gz"
+      sha256 "181d72de564f29b60482607d52f4d6c0e97b3b3102844984168cf112bc30984a"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/microsoft/tui-test/releases/download/0.1.0-beta.2/tui-test-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "f6cf1624cd722c36cc834b524fd50b493f66f8c4fb4a604b713fbc08e189ae3c"
+      url "https://github.com/microsoft/tui-test/releases/download/0.1.0-beta.4/tui-test-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "d93e06aaa60c7e5a1b7dab3f15dbb06f484d95ffdb6b2cc44ffb9f08f556f8da"
     end
 
     on_intel do
-      url "https://github.com/microsoft/tui-test/releases/download/0.1.0-beta.2/tui-test-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "e54ff48914e1d1e8250c7b9b34bd7a1e5915f802fc7492ce832554fcebf570b5"
+      url "https://github.com/microsoft/tui-test/releases/download/0.1.0-beta.4/tui-test-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "18579937967cc1f5880a4ae1c89fe98ea5eec5c0e6448259cfc5da83880120f3"
     end
   end
 

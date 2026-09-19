@@ -3,17 +3,23 @@ from __future__ import annotations
 from ._config import VERSION as __version__
 from ._ephemeral import unique_session
 from .client import Locator, TuiTest, close_all, get_recording, sessions
+from .diagnostics import (
+    FailureArtifactRef,
+    FailureArtifactStatus,
+    FailureDetails,
+    FailureReason,
+)
 from .errors import (
     ExpectationError,
     InternalError,
     NoSessionError,
     TuiTestError,
-    TerminalArtifact,
     UsageError,
 )
 from .types import (
     AutomaticRecording,
-    AutomaticRecordingMode,
+    TraceMode,
+    TraceOptions,
     Backend,
     BellEvent,
     Cell,
@@ -43,9 +49,13 @@ __all__ = [
     "UsageError",
     "NoSessionError",
     "InternalError",
-    "TerminalArtifact",
+    "FailureDetails",
+    "FailureReason",
+    "FailureArtifactRef",
+    "FailureArtifactStatus",
     "AutomaticRecording",
-    "AutomaticRecordingMode",
+    "TraceMode",
+    "TraceOptions",
     "BellEvent",
     "Cell",
     "Backend",

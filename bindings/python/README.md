@@ -27,7 +27,7 @@ async with TuiTest.ephemeral() as terminal:
 ### `TuiTest`
 
 ```python
-TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=None, recording=None)
+TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_history_limit=None, artifacts=None, recording=None)
 ```
 
 | Option | Type | Default |
@@ -36,10 +36,14 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, artifacts=No
 | `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs"` | `"alacritty"` |
 | `timeouts` | `Timeouts \| dict` | built-in defaults |
 | `profile` | `Profile \| dict` | built-in profile |
+| `screen_history_limit` | `int \| None` | core default |
 | `artifacts` | `dict` | off |
-| `recording` | `AutomaticRecording \| dict` | `{"mode": "always"}` |
+| `recording` | `AutomaticRecording \| dict` (directory only) | default recording directory |
+| `trace` | `TraceOptions \| dict` | `{"mode": "off", "directory": ".tui-test/traces"}` |
 
-`artifacts["on_failure"]` is `"svg"`, `"text"`, or `"none"`. Recording mode is `"disabled"`, `"on-failure"`, or `"always"`.
+Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Users can open `trace.html`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
+
+`artifacts["on_failure"]` selects `"none"`, `"text"`, `"html"`, or `"all"`. Use `include_recording` to include the cast in failure artifacts.
 
 #### Properties
 
@@ -152,12 +156,48 @@ await save.click()
 | --- | --- |
 | `terminal.get_by_text(text, **options)` | `regex`, `full`, `whitespace` |
 | `terminal.get_by_style(style, **options)` | `full` |
+| `terminal.get_by_link(uri, **options)` | `full` |
 | `locator.get_by_text(text, **options)` | `regex`, `full`, `whitespace`, `direction` |
 | `locator.get_by_style(style, **options)` | `full`, `direction` |
+| `locator.get_by_link(uri, **options)` | `full`, `direction` |
 
 `whitespace` is `"exact"` or `"normalize"`. `direction` is `"within"`, `"after"`, or `"before"`.
 
 `TextStyle` fields are `foreground`, `background`, `bold`, `dim`, `italic`, `underline_style`, `underline_color`, `inverse`, `hidden`, `strikethrough`, and `blink`.
+
+`get_by_link(uri)` matches an exact OSC 8 target, not visible URL text;
+`get_by_link("")` requires no link. Root style/link selectors find runs within
+each row. Chained calls with the default `within` direction check whole
+matches. Styles skip blanks if visible text exists; links check every cell.
+
+#### Compose locators
+
+```python
+link = terminal.get_by_link("https://example.com")
+bold = terminal.get_by_style(TextStyle(bold=True))
+bold_link_cells = bold.and_(link)
+either = link.or_(terminal.get_by_text("Help"))
+sections = terminal.get_by_text("Docs and Help")
+contains_link = sections.filter(has=link)
+without_old_text = sections.filter(has_not=terminal.get_by_text("old"))
+entirely_linked = sections.get_by_link("https://example.com")
+```
+
+`and_()` keeps shared cells; `or_()` combines cells without duplicates. Adjacent
+cells merge within each physical row, even across original matches. Gaps and
+row breaks split runs. Counts and clicks use these runs; text keeps exact
+whitespace.
+
+`filter` accepts only locators. `has` requires a match inside each candidate;
+`has_not` requires none. Both conditions apply when supplied, and the inner
+match may cover the whole candidate. For partially linked `"Docs"`,
+`filter(has=link)` keeps the whole word, `get_by_link(uri)` rejects it, and
+`and_(link)` returns its linked cells.
+
+Use locators from one `TuiTest`. Composition leaves them unchanged and reads
+one fresh snapshot when used. Selection order matters: `a.first().and_(b)`
+differs from `a.and_(b).first()`. Any `full` branch includes scrollback for the
+whole query. Errors propagate.
 
 #### Select matches
 
@@ -268,8 +308,9 @@ terminal = TuiTest(
         colors=Colors(foreground="#ffffff", background="#000000"),
     ),
     timeouts=Timeouts(text=10_000, command=60_000),
-    artifacts={"dir": "artifacts", "on_failure": "svg"},
-    recording=AutomaticRecording(mode="on-failure", directory="artifacts"),
+    artifacts={"dir": "artifacts", "on_failure": "all"},
+    trace={"mode": "on-failure", "directory": "artifacts/traces"},
+    recording=AutomaticRecording(directory="artifacts/casts"),
 )
 ```
 
@@ -287,6 +328,8 @@ terminal = TuiTest(
 | `Colors` | Terminal palette. |
 | `MouseButton` | `"left"`, `"middle"`, or `"right"`. |
 | `TextPosition`, `TextSpan` | Match coordinates. |
+| `FailureDetails` | Structured operation, locator, process, runtime, and screen evidence. |
+| `FailureArtifactRef` | Paths and write status for a failure artifact. |
 
 `__version__` contains the package version.
 
@@ -299,6 +342,6 @@ terminal = TuiTest(
 | `NoSessionError` | `3` |
 | `InternalError` | `5` |
 
-All errors extend `TuiTestError`. Expectation errors can include `terminal.text` and `terminal.screenshot`.
+All errors extend `TuiTestError`. Structured native failures expose `details` and `artifact`; expectation errors continue to populate compatibility `terminal.text` and `terminal.screenshot` fields. Failure artifacts can contain terminal output, titles, locator operands, and recordings, so review them before uploading.
 
 Sessions are local to the current process and cannot be controlled by the CLI. Cancelling a task does not stop an active terminal operation.

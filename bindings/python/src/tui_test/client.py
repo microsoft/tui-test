@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import atexit
 import copy
+import json
 import os
 import re
-import time
 from dataclasses import asdict
 from typing import (
     Any,
@@ -29,12 +29,12 @@ from .errors import (
     ExpectationError,
     InternalError,
     NoSessionError,
-    TerminalArtifact,
     TuiTestError,
-    UsageError,
+    make_error,
 )
 from .types import (
     AutomaticRecording,
+    TraceOptions,
     Backend,
     BellEvent,
     Cell,
@@ -49,8 +49,9 @@ from .types import (
     Timeouts,
 )
 
-_TERMINAL_MARKER = "Terminal content:\n"
+_ERROR_JSON_ATTRIBUTE = "_tui_test_error_json"
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
+_ARTIFACT_MODES = ("all", "html", "text", "none")
 
 _T = TypeVar("_T")
 
@@ -146,14 +147,47 @@ _Occurrence = Union[Literal["any", "unique", "first", "last"], int]
 async def _await_native(awaitable: Awaitable[_T]) -> _T:
     try:
         return await awaitable
-    except native.NativeAssertionError as error:
-        raise ExpectationError(str(error)) from error
-    except native.NativeUsageError as error:
-        raise UsageError(str(error)) from error
-    except native.NativeNoSessionError as error:
-        raise NoSessionError(str(error)) from error
-    except native.NativeInternalError as error:
-        raise InternalError(str(error)) from error
+    except (
+        native.NativeAssertionError,
+        native.NativeUsageError,
+        native.NativeNoSessionError,
+        native.NativeInternalError,
+    ) as error:
+        raise _decode_native_error(error) from error
+
+
+def _decode_native_error(error: Exception) -> TuiTestError:
+    raw = getattr(error, _ERROR_JSON_ATTRIBUTE, None)
+    if not isinstance(raw, str):
+        return InternalError(
+            "malformed native error envelope: expected a JSON string"
+        )
+    try:
+        envelope = json.loads(raw)
+        if not isinstance(envelope, Mapping):
+            raise TypeError("expected an object")
+        kind = envelope["kind"]
+        if kind not in ("assertion", "usage", "no_session", "internal"):
+            raise ValueError("invalid error kind")
+        message = envelope["message"]
+        if not isinstance(message, str):
+            raise TypeError("message must be a string")
+        details = envelope.get("details")
+        artifact = envelope.get("artifact")
+        if details is not None and not isinstance(details, Mapping):
+            raise TypeError("details must be an object or null")
+        if artifact is not None and not isinstance(artifact, Mapping):
+            raise TypeError("artifact must be an object or null")
+        return make_error(
+            kind,
+            message,
+            details=details,
+            artifact=artifact,
+        )
+    except (AttributeError, KeyError, TypeError, ValueError) as decode_error:
+        return InternalError(
+            "malformed native error envelope: {}".format(decode_error)
+        )
 
 
 def _atexit_close_all() -> None:
@@ -226,19 +260,19 @@ def _text_query_value(
     full: bool,
     whitespace: str,
     direction: LocatorDirection,
-    within: Optional[List[Dict[str, object]]],
-) -> List[Dict[str, object]]:
-    stages = copy.deepcopy(within) if within is not None else []
-    stages.append(
+    within: Optional["_LocatorQuery"],
+) -> "_LocatorQuery":
+    return _append_node(
+        within,
         _text_stage_value(
             text,
             regex=regex,
             full=full,
             whitespace=whitespace,
             direction=direction,
-        )
+        ),
+        relative=True,
     )
-    return stages
 
 
 def _style_query_value(
@@ -246,33 +280,130 @@ def _style_query_value(
     *,
     full: bool,
     direction: LocatorDirection,
-    within: Optional[List[Dict[str, object]]],
-) -> List[Dict[str, object]]:
+    within: Optional["_LocatorQuery"],
+) -> "_LocatorQuery":
+    if not isinstance(style, TextStyle):
+        raise TypeError("style must be a TextStyle")
     style_value = asdict(style)
+    if set(vars(style)) - set(TextStyle.__dataclass_fields__):
+        raise ValueError("unknown style property")
     if not any(value is not None for value in style_value.values()):
         raise ValueError("get_by_style requires at least one style property")
     if direction not in ("within", "after", "before"):
         raise ValueError("locator direction must be within, after, or before")
-    stages = copy.deepcopy(within) if within is not None else []
-    stages.append(
+    return _append_node(
+        within,
         {
             "kind": "style",
             "direction": direction,
             "style": style_value,
             "full": full,
             **_occurrence_fields("any"),
-        }
+        },
+        relative=True,
     )
-    return stages
 
 
-def _extract_terminal_text(message: Optional[str]) -> Optional[str]:
-    if not message:
-        return None
-    index = message.find(_TERMINAL_MARKER)
-    if index == -1:
-        return None
-    return message[index + len(_TERMINAL_MARKER):].rstrip("\n") or None
+def _link_query_value(
+    uri: str,
+    *,
+    full: bool,
+    direction: LocatorDirection,
+    within: Optional["_LocatorQuery"],
+) -> "_LocatorQuery":
+    if not isinstance(uri, str):
+        raise TypeError("get_by_link requires a URI string")
+    if direction not in ("within", "after", "before"):
+        raise ValueError("locator direction must be within, after, or before")
+    return _append_node(
+        within,
+        {
+            "kind": "link",
+            "link": uri,
+            "full": full,
+            "direction": direction,
+            **_occurrence_fields("any"),
+        },
+        relative=True,
+    )
+
+
+class _LocatorQuery:
+    def __init__(self, nodes: List[Dict[str, object]], root: int) -> None:
+        self.nodes = nodes
+        self.root = root
+
+    def payload(self) -> Dict[str, object]:
+        return {"nodes": self.nodes, "root": self.root}
+
+    def current(self) -> Dict[str, object]:
+        return self.nodes[self.root]
+
+
+def _append_node(
+    query: Optional[_LocatorQuery],
+    node: Dict[str, object],
+    *,
+    relative: bool = False,
+) -> _LocatorQuery:
+    result = copy.deepcopy(query) if query is not None else _LocatorQuery([], 0)
+    if len(result.nodes) >= 256:
+        raise ValueError("locator expression exceeds 256 nodes")
+    if relative:
+        if query is None and node.get("direction", "within") != "within":
+            raise ValueError("locator direction requires a parent locator")
+        if query is not None:
+            node["within"] = result.root
+    result.root = len(result.nodes)
+    result.nodes.append(node)
+    return result
+
+
+def _append_operand(query: _LocatorQuery, other: _LocatorQuery) -> int:
+    offset = len(query.nodes)
+    if offset + len(other.nodes) >= 256:
+        raise ValueError("locator expression exceeds 256 nodes")
+    for node in copy.deepcopy(other.nodes):
+        for field in ("within", "left", "right", "input", "has", "has_not"):
+            reference = node.get(field)
+            if reference is not None:
+                if not isinstance(reference, int):
+                    raise TypeError("locator operand reference must be an integer")
+                node[field] = reference + offset
+        query.nodes.append(node)
+    return offset + other.root
+
+
+def _artifact_values(
+    artifacts: Optional[Dict[str, Any]],
+) -> Tuple[Optional[str], Optional[str], bool]:
+    if artifacts is None:
+        return None, None, False
+    if not isinstance(artifacts, dict):
+        raise TypeError("artifacts must be a dict")
+
+    mode = artifacts.get("on_failure", "all")
+    if mode not in _ARTIFACT_MODES:
+        raise ValueError(
+            "artifacts.on_failure must be all, html, text, or none"
+        )
+    include_recording = artifacts.get("include_recording", False)
+    if not isinstance(include_recording, bool):
+        raise TypeError("artifacts.include_recording must be a bool")
+
+    directory = artifacts.get("dir")
+    absolute_directory = None  # type: Optional[str]
+    if directory is not None:
+        try:
+            absolute_directory = os.path.abspath(os.fsdecode(directory))
+        except TypeError:
+            raise TypeError("artifacts.dir must be path-like") from None
+    if mode != "none" and not absolute_directory:
+        raise ValueError(
+            "artifacts.dir is required unless artifacts.on_failure is none"
+        )
+
+    return absolute_directory, mode, include_recording
 
 
 _MOUSE_BUTTON_CODES = {
@@ -414,24 +545,18 @@ class _Mouse:
 
 
 class Locator:
-    """A lazy text/style query resolved against the current terminal grid."""
+    """A lazy cell query resolved against the current terminal grid."""
 
     def __init__(
-        self, client: "TuiTest", query: List[Dict[str, object]]
+        self, client: "TuiTest", query: _LocatorQuery
     ) -> None:
         self._client = client
         self._query = copy.deepcopy(query)
 
     def _with_occurrence(self, occurrence: _Occurrence) -> "Locator":
         query = copy.deepcopy(self._query)
-        query[-1].update(_occurrence_fields(occurrence))
+        query.current().update(_occurrence_fields(occurrence))
         return Locator(self._client, query)
-
-    def _strict_query(self) -> List[Dict[str, object]]:
-        query = copy.deepcopy(self._query)
-        if query[-1]["occurrence"] == "any":
-            query[-1]["occurrence"] = "unique"
-        return query
 
     def any(self) -> "Locator":
         return self._with_occurrence("any")
@@ -482,40 +607,90 @@ class Locator:
             within=self._query,
         )
 
+    def get_by_link(
+        self,
+        uri: str,
+        *,
+        full: bool = False,
+        direction: LocatorDirection = "within",
+    ) -> "Locator":
+        return Locator(
+            self._client,
+            _link_query_value(
+                uri, full=full, direction=direction, within=self._query,
+            ),
+        )
+
+    def _operand(self, other: "Locator") -> _LocatorQuery:
+        if not isinstance(other, Locator) or other._client is not self._client:
+            raise ValueError(
+                "locator operands must belong to the same terminal owner"
+            )
+        return other._query
+
+    def _combine(self, kind: str, other: "Locator") -> "Locator":
+        query = copy.deepcopy(self._query)
+        right = _append_operand(query, self._operand(other))
+        return Locator(
+            self._client,
+            _append_node(query, {
+                "kind": kind,
+                "left": query.root,
+                "right": right,
+                **_occurrence_fields("any"),
+            }),
+        )
+
+    def and_(self, other: "Locator") -> "Locator":
+        """Intersect selected cells and form contiguous per-row runs."""
+        return self._combine("and", other)
+
+    def or_(self, other: "Locator") -> "Locator":
+        """Union selected cells and form contiguous per-row runs."""
+        return self._combine("or", other)
+
+    def filter(
+        self,
+        *,
+        has: Optional["Locator"] = None,
+        has_not: Optional["Locator"] = None,
+    ) -> "Locator":
+        """Keep whole matches containing has and containing no has_not matches."""
+        if has is None and has_not is None:
+            raise ValueError("filter requires has or has_not")
+        query = copy.deepcopy(self._query)
+        positive = (
+            None if has is None else _append_operand(query, self._operand(has))
+        )
+        negative = (
+            None if has_not is None
+            else _append_operand(query, self._operand(has_not))
+        )
+        return Locator(
+            self._client,
+            _append_node(query, {
+                "kind": "filter",
+                "input": query.root,
+                "has": positive,
+                "has_not": negative,
+                **_occurrence_fields("any"),
+            }),
+        )
+
     async def locations(self) -> List[TextMatch]:
         values = await self._client._guarded(
             "locator.locations",
-            self._client._native.find_locator(self._query),
+            self._client._native.find_locator(self._query.payload(), False),
         )
         return [TextMatch.from_dict(value) for value in values]
 
     async def location(self) -> TextMatch:
-        query = self._strict_query()
         values = await self._client._guarded(
             "locator.location",
-            self._client._native.find_locator(query),
+            self._client._native.find_locator(self._query.payload(), True),
         )
         if len(values) != 1:
-            current = self._query[-1]
-            description = (
-                repr(current["text"])
-                if current["kind"] == "text"
-                else "style"
-            )
-            message = "locator.location: no match found for {}".format(
-                description
-            )
-            try:
-                message += "\n\nTerminal content:\n{}".format(
-                    await self._client.text()
-                )
-            except TuiTestError as diagnostic_error:
-                message += "\n\nTerminal content unavailable: {}".format(
-                    diagnostic_error
-                )
-            error = ExpectationError(message)
-            await self._client._capture_artifacts(error)
-            raise error
+            raise InternalError("locator.location: native returned an invalid match count")
         return TextMatch.from_dict(values[0])
 
     async def count(self) -> int:
@@ -523,7 +698,7 @@ class Locator:
 
     async def all(self) -> List["Locator"]:
         matches = await self.locations()
-        if self._query[-1]["occurrence"] == "any":
+        if self._query.current()["occurrence"] == "any":
             return [self.nth(index) for index in range(len(matches))]
         return [Locator(self._client, self._query) for _ in matches]
 
@@ -538,7 +713,7 @@ class Locator:
         await self._client._guarded(
             "locator.wait",
             self._client._native.wait_locator(
-                self._query,
+                self._query.payload(),
                 state == "hidden",
                 self._client._timeout("text", timeout),
             ),
@@ -564,7 +739,7 @@ class Locator:
         await self._client._guarded(
             "locator.click",
             self._client._native.click_locator(
-                self._strict_query(),
+                self._query.payload(),
                 code,
                 clicks,
                 self._client._timeout("text", timeout),
@@ -575,7 +750,7 @@ class Locator:
         await self._client._guarded(
             "locator.highlight",
             self._client._native.highlight_locator(
-                self._query,
+                self._query.payload(),
                 self._client._timeout("text", timeout),
             ),
         )
@@ -589,7 +764,7 @@ class Locator:
         await self._client._guarded(
             "locator.expect",
             self._client._native.expect_locator(
-                self._query,
+                self._query.payload(),
                 not_,
                 self._client._timeout("text", timeout),
             ),
@@ -604,21 +779,32 @@ class TuiTest:
         backend: Optional[Backend] = None,
         timeouts: Optional[Timeouts] = None,
         profile: Optional[Profile] = None,
+        screen_history_limit: Optional[int] = None,
         artifacts: Optional[Dict[str, Any]] = None,
         recording: Optional[AutomaticRecording] = None,
+        trace: Optional[TraceOptions] = None,
     ) -> None:
         self._session = cfg.resolve_session(session)
         recording_values = cfg.normalize_recording(recording) or {}
+        trace_values = cfg.normalize_trace(trace) or {}
+        (
+            artifact_directory,
+            artifact_mode,
+            artifact_include_recording,
+        ) = _artifact_values(artifacts)
         self._native = native.NativeSession(
             self._session,
-            recording_values.get("mode"),
             recording_values.get("directory"),
+            artifact_directory,
+            artifact_mode,
+            artifact_include_recording,
+            trace_values.get("mode"),
+            trace_values.get("directory"),
         )
         self._backend = cfg.normalize_backend(backend)
         self._timeouts = cfg.normalize_timeouts(timeouts)
         self._profile = cfg.normalize_profile(profile)
-        self._artifacts = artifacts
-        self._artifact_counter = 0
+        self._screen_history_limit = screen_history_limit
         self.keyboard = _Keyboard(self)
         self.mouse = _Mouse(self)
 
@@ -644,47 +830,7 @@ class TuiTest:
         except ExpectationError as error:
             error.message = f"{op_name}: {error.message}"
             error.args = (error.message,)
-            await self._capture_artifacts(error)
             raise
-
-    async def _capture_artifacts(self, error: ExpectationError) -> None:
-        artifacts = self._artifacts
-        if artifacts is None:
-            return
-        mode = artifacts.get("on_failure", "svg")
-        if mode == "none":
-            return
-        text = None  # type: Optional[str]
-        screenshot_path = None  # type: Optional[str]
-        try:
-            text = _extract_terminal_text(error.message)
-        except Exception:
-            pass
-        if mode == "svg":
-            try:
-                screenshot_path = await self._write_artifact_svg()
-            except Exception:
-                pass
-        if text is None and screenshot_path is None:
-            return
-        try:
-            error.terminal = TerminalArtifact(text=text, screenshot=screenshot_path)
-        except Exception:
-            pass
-
-    async def _write_artifact_svg(self) -> Optional[str]:
-        directory = self._artifacts.get("dir") if self._artifacts else None
-        if not directory:
-            return None
-        os.makedirs(directory, exist_ok=True)
-        self._artifact_counter += 1
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        filename = "{}-{}-{}.svg".format(
-            self._session, timestamp, self._artifact_counter
-        )
-        path = os.path.join(directory, filename)
-        await self.screenshot(path)
-        return path
 
     async def _spawn(
         self,
@@ -722,21 +868,23 @@ class TuiTest:
             profile if profile is not None else self._profile
         )
         timeout_values = _session_timeout_values(timeouts)
-        return await self._spawn(
-            lambda: self._native.open(
-                shell,
-                cfg.normalize_backend(
-                    backend if backend is not None else self._backend
-                ),
-                cols,
-                rows,
-                cwd,
-                env_values,
-                wait_ready,
-                restart,
-                *profile_values,
-                *timeout_values,
+        native_args = (
+            shell,
+            cfg.normalize_backend(
+                backend if backend is not None else self._backend
             ),
+            cols,
+            rows,
+            cwd,
+            env_values,
+            wait_ready,
+            restart,
+            *profile_values,
+            *timeout_values,
+            self._screen_history_limit,
+        )
+        return await self._spawn(
+            lambda: self._native.open(*native_args),
             retries,
         )
 
@@ -760,30 +908,32 @@ class TuiTest:
             profile if profile is not None else self._profile
         )
         timeout_values = _session_timeout_values(timeouts)
-        return await self._spawn(
-            lambda: self._native.run(
-                program,
-                list(args),
-                cfg.normalize_backend(
-                    backend if backend is not None else self._backend
-                ),
-                cols,
-                rows,
-                cwd,
-                env_values,
-                wait_ready,
-                restart,
-                *profile_values,
-                *timeout_values,
+        native_args = (
+            program,
+            list(args),
+            cfg.normalize_backend(
+                backend if backend is not None else self._backend
             ),
+            cols,
+            rows,
+            cwd,
+            env_values,
+            wait_ready,
+            restart,
+            *profile_values,
+            *timeout_values,
+            self._screen_history_limit,
+        )
+        return await self._spawn(
+            lambda: self._native.run(*native_args),
             retries,
         )
 
     async def restart(self, *, graceful_timeout: int = 5_000) -> OpenResult:
         return await self._await(self._native.restart(graceful_timeout))
 
-    async def close(self) -> None:
-        await self._await(self._native.close())
+    async def close(self, *, failed: Optional[bool] = None) -> None:
+        await self._await(self._native.close(failed))
 
     async def close_quiet(self) -> None:
         try:
@@ -843,7 +993,7 @@ class TuiTest:
         full: bool,
         whitespace: str,
         direction: LocatorDirection,
-        within: Optional[List[Dict[str, object]]],
+        within: Optional[_LocatorQuery],
     ) -> Locator:
         return Locator(
             self,
@@ -870,13 +1020,19 @@ class TuiTest:
             within=None,
         )
 
+    def get_by_link(self, uri: str, *, full: bool = False) -> Locator:
+        return Locator(
+            self,
+            _link_query_value(uri, full=full, direction="within", within=None),
+        )
+
     def _make_style_locator(
         self,
         style: TextStyle,
         *,
         full: bool,
         direction: LocatorDirection,
-        within: Optional[List[Dict[str, object]]],
+        within: Optional[_LocatorQuery],
     ) -> Locator:
         return Locator(
             self,
@@ -1100,7 +1256,12 @@ class TuiTest:
         return self
 
     async def __aexit__(self, *exc: Any) -> None:
-        await self.close_quiet()
+        failed = bool(exc and exc[0] is not None)
+        try:
+            await self.close(failed=failed)
+        except Exception:
+            if not failed:
+                raise
 
 
 async def sessions() -> List[str]:

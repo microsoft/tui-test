@@ -9,7 +9,7 @@ MouseButton = Literal["left", "middle", "right"]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]
 RecordingFormat = Literal["apng", "gif", "mp4", "cast"]
-AutomaticRecordingMode = Literal["disabled", "on-failure", "always"]
+TraceMode = Literal["off", "on-failure", "on"]
 LocatorDirection = Literal["within", "after", "before"]
 
 
@@ -60,7 +60,11 @@ class Timeouts:
 
 @dataclass
 class AutomaticRecording:
-    mode: Optional[AutomaticRecordingMode] = None
+    directory: Optional[str] = None
+
+@dataclass
+class TraceOptions:
+    mode: Optional[TraceMode] = None
     directory: Optional[str] = None
 
 
@@ -118,7 +122,6 @@ class TextStyle:
     hidden: Optional[bool] = None
     strikethrough: Optional[bool] = None
     blink: Optional[bool] = None
-    link: Optional[str] = None
 
 
 @dataclass
@@ -160,6 +163,7 @@ class State:
     cwd: Optional[str]
     last_command: Optional[str]
     last_exit: Optional[int]
+    exit_signal: Optional[str]
     exited: Optional[int]
     ready: bool
     timeouts: Timeouts
@@ -180,6 +184,7 @@ class State:
             cwd=d.get("cwd"),
             last_command=d.get("last_command"),
             last_exit=d.get("last_exit"),
+            exit_signal=d.get("exit_signal"),
             exited=d.get("exited"),
             ready=d.get("ready", False),
             bell_count=d.get("bell_count", 0),

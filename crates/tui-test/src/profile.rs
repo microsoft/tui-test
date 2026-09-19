@@ -345,7 +345,6 @@ impl Default for Profile {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RecordingConfig {
-    pub mode: Option<crate::api::AutomaticRecordingMode>,
     pub directory: Option<PathBuf>,
     /// How screenshots and recordings taken under this profile are drawn.
     pub style: Option<crate::render::style::Style>,
@@ -401,7 +400,6 @@ impl RecordingConfig {
     /// field, the style whole.
     fn over(&self, base: &RecordingConfig) -> Self {
         Self {
-            mode: self.mode.or(base.mode),
             directory: self.directory.clone().or_else(|| base.directory.clone()),
             style: self.style.clone().or_else(|| base.style.clone()),
         }
@@ -428,6 +426,24 @@ pub struct Settings {
     pub recording: crate::api::AutomaticRecording,
     /// How this session's screenshots and recordings are drawn.
     pub style: crate::render::style::Style,
+    pub diagnostics: crate::diagnostics::DiagnosticRetentionOptions,
+    pub trace: crate::diagnostics::TraceOptions,
+}
+
+impl From<ConfigProfile> for Settings {
+    fn from(value: ConfigProfile) -> Self {
+        Self {
+            profile: Profile {
+                scrollback: value.scrollback.unwrap_or(DEFAULT_SCROLLBACK),
+                colors: value.colors,
+            },
+            timeouts: value.timeouts,
+            recording: crate::api::AutomaticRecording::default(),
+            style: crate::render::style::Style::default(),
+            diagnostics: crate::diagnostics::DiagnosticRetentionOptions::default(),
+            trace: crate::diagnostics::TraceOptions::default(),
+        }
+    }
 }
 
 /// A parsed config file.
@@ -436,6 +452,8 @@ pub struct Settings {
 pub struct ConfigFile {
     pub profiles: BTreeMap<String, ConfigProfile>,
     pub recording: RecordingConfig,
+    pub diagnostics: crate::diagnostics::DiagnosticRetentionOptions,
+    pub trace: crate::diagnostics::TraceOptions,
 }
 
 impl ConfigFile {
@@ -489,6 +507,8 @@ impl ConfigFile {
                 .validate()
                 .map_err(|error| anyhow::anyhow!("profile {name:?}: {error}"))?;
         }
+        config.diagnostics.validate().map_err(anyhow::Error::msg)?;
+        config.trace.validate().map_err(anyhow::Error::msg)?;
         Ok(config)
     }
 
@@ -513,6 +533,12 @@ impl ConfigFile {
         config.recording.anchor(&parent);
         for profile in config.profiles.values_mut() {
             profile.recording.anchor(&parent);
+        }
+        if config.trace.directory.is_relative() {
+            config.trace.directory = path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(&config.trace.directory);
         }
         Ok(config)
     }
@@ -546,19 +572,20 @@ impl ConfigFile {
                 .cloned()
                 .unwrap_or_default()),
         }?;
+        // Resolved before the profile is consumed: a profile overrides the
+        // file's recording key by key, and the style rides along with it.
         let recording = profile.recording.over(&self.recording);
-        Ok(Settings {
-            profile: Profile {
-                scrollback: profile.scrollback.unwrap_or(DEFAULT_SCROLLBACK),
-                colors: profile.colors,
-            },
-            timeouts: profile.timeouts,
-            recording: crate::api::AutomaticRecording {
-                mode: recording.mode.unwrap_or_default(),
-                directory: recording.directory,
-            },
-            style: recording.style.unwrap_or_default(),
-        })
+        let mut settings: Settings = profile.into();
+        // The mode is not a recording key any more: the engine derives it from
+        // the trace mode, so only the directory comes from here.
+        settings.recording = crate::api::AutomaticRecording {
+            directory: recording.directory,
+            ..crate::api::AutomaticRecording::default()
+        };
+        settings.style = recording.style.unwrap_or_default();
+        settings.diagnostics = self.diagnostics;
+        settings.trace = self.trace.clone();
+        Ok(settings)
     }
 }
 
@@ -697,6 +724,19 @@ mod tests {
         assert_eq!(Profile::default().scrollback, 10_000);
     }
 
+    #[test]
+    fn diagnostics_history_limit_is_loaded() {
+        let config = ConfigFile::parse("[diagnostics]\nscreen-history-limit = 3\n").unwrap();
+        assert_eq!(
+            config
+                .settings(None)
+                .unwrap()
+                .diagnostics
+                .screen_history_limit,
+            3
+        );
+    }
+
     /// Every field is individually optional, so a profile can set one color
     /// without restating the palette.
     #[test]
@@ -752,16 +792,24 @@ mod tests {
     }
 
     #[test]
-    fn automatic_recording_configuration_is_loaded() {
-        let config =
-            ConfigFile::parse("[recording]\nmode = \"on-failure\"\ndirectory = \"artifacts\"\n")
-                .unwrap();
-        let recording = config.settings(None).unwrap().recording;
+    fn recording_directory_and_trace_retention_are_separate() {
+        let config = ConfigFile::parse("[recording]\ndirectory = \"casts\"\n[trace]\nmode = \"on-failure\"\ndirectory = \"traces\"\n").unwrap();
+        let settings = config.settings(None).unwrap();
+        assert_eq!(settings.recording.directory, Some(PathBuf::from("casts")));
         assert_eq!(
-            recording.mode,
-            crate::api::AutomaticRecordingMode::OnFailure
+            settings.trace.mode,
+            crate::diagnostics::TraceMode::OnFailure
         );
-        assert_eq!(recording.directory, Some(PathBuf::from("artifacts")));
+        assert_eq!(settings.trace.directory, PathBuf::from("traces"));
+        assert_eq!(
+            ConfigFile::default().trace.mode,
+            crate::diagnostics::TraceMode::Off
+        );
+        for mode in ["always", "on-failure", "disabled"] {
+            assert!(ConfigFile::parse(&format!("[recording]\nmode = \"{mode}\"\n")).is_err());
+        }
+        assert!(ConfigFile::parse("[trace]\nmode = \"always\"\n").is_err());
+        assert!(ConfigFile::parse("[trace]\ndirectory = \"\"\n").is_err());
     }
 
     #[test]
@@ -893,19 +941,18 @@ mod tests {
     #[test]
     fn the_documented_per_profile_example_does_what_it_says() {
         let config = ConfigFile::parse(
-            "[recording]\nmode = \"on-failure\"\ndirectory = \"./artifacts\"\n\
+            "[recording]\ndirectory = \"./artifacts\"\n\
              \n[recording.style]\ncanvas_background = \"#101014\"\ncanvas_padding = 32\n\
-             \n[profiles.docs.recording]\nmode = \"always\"\n\
+             \n[profiles.docs.recording]\ndirectory = \"./docs/media\"\n\
              \n[profiles.docs.recording.style]\nfont_size = 24\n",
         )
         .expect("the documented example parses");
 
         let docs = config.settings(Some("docs")).unwrap();
         assert_eq!(
-            docs.recording.mode,
-            crate::api::AutomaticRecordingMode::Always
+            docs.recording.directory,
+            Some(PathBuf::from("./docs/media"))
         );
-        assert_eq!(docs.recording.directory, Some(PathBuf::from("./artifacts")));
         assert_eq!(docs.style.font_size, 24.0);
         assert_eq!(docs.style.canvas_background, Rgb::new(0x10, 0x10, 0x14));
         assert_eq!(docs.style.canvas_top(), 32);
@@ -918,12 +965,10 @@ mod tests {
     fn the_documented_profile_overrides_resolve_as_written() {
         let config = ConfigFile::parse(include_str!("testdata/profiles.toml"))
             .expect("the documented example parses");
-        let mode = |name| config.settings(Some(name)).unwrap().recording.mode;
         let style = |name| config.settings(Some(name)).unwrap().style;
         let directory = |name| config.settings(Some(name)).unwrap().recording.directory;
 
-        // docs: overrides both policies and one style key.
-        assert_eq!(mode("docs"), crate::api::AutomaticRecordingMode::Always);
+        // docs: overrides the directory and one style key.
         assert_eq!(directory("docs"), Some(PathBuf::from("./docs/media")));
         assert_eq!(style("docs").font_size, 24.0);
         assert_eq!(
@@ -933,8 +978,7 @@ mod tests {
         );
         assert_eq!(style("docs").canvas_top(), 30);
 
-        // ci: names no policy at all, so both come from the file.
-        assert_eq!(mode("ci"), crate::api::AutomaticRecordingMode::OnFailure);
+        // ci: names no directory at all, so it comes from the file.
         assert_eq!(directory("ci"), Some(PathBuf::from("./artifacts")));
         assert_eq!(style("ci").canvas_top(), 8, "its own gap");
         assert!(!style("ci").window.title_bar);
@@ -947,7 +991,6 @@ mod tests {
         assert_eq!(style("ci").font_size, 17.0);
 
         // demo: a look of its own, still inheriting the file's directory.
-        assert_eq!(mode("demo"), crate::api::AutomaticRecordingMode::Always);
         assert_eq!(directory("demo"), Some(PathBuf::from("./artifacts")));
         assert_eq!(style("demo").canvas_background, Rgb::new(0xf6, 0xf6, 0xf8));
         assert_eq!(style("demo").border.width, 2.0);
@@ -962,7 +1005,7 @@ mod tests {
     #[test]
     fn naming_the_default_profile_matches_omitting_it() {
         let config = ConfigFile::parse(
-            "[recording]\nmode = \"always\"\n\n[profiles.docs.recording]\nmode = \"disabled\"\n",
+            "[recording]\ndirectory = \"a\"\n\n[profiles.docs.recording]\ndirectory = \"b\"\n",
         )
         .unwrap();
 
@@ -971,8 +1014,8 @@ mod tests {
                 .settings(Some(DEFAULT_PROFILE))
                 .unwrap()
                 .recording
-                .mode,
-            config.settings(None).unwrap().recording.mode,
+                .directory,
+            config.settings(None).unwrap().recording.directory,
             "the flag's own default must not be an error on a config without it"
         );
         assert!(
@@ -984,7 +1027,7 @@ mod tests {
     #[test]
     fn a_profile_that_names_no_style_keeps_the_file_style() {
         let config = ConfigFile::parse(
-            "[recording]\nmode = \"on-failure\"\n\
+            "[recording]\ndirectory = \"artifacts\"\n\
              \n[recording.style]\nfont_size = 30\n\
              \n[profiles.ops.recording]\ndirectory = \"shots\"\n",
         )
@@ -1004,36 +1047,40 @@ mod tests {
     #[test]
     fn a_profile_recording_inherits_field_by_field() {
         let config = ConfigFile::parse(
-            "[recording]\nmode = \"on-failure\"\ndirectory = \"artifacts\"\n\
+            "[recording]\ndirectory = \"artifacts\"\n\
              \n[profiles.docs.recording.style]\nfont_size = 24\n\
-             \n[profiles.ci.recording]\nmode = \"always\"\n",
+             \n[profiles.ci.recording]\ndirectory = \"ci-artifacts\"\n",
         )
         .unwrap();
 
         let docs = config.settings(Some("docs")).unwrap();
         assert_eq!(docs.style.font_size, 24.0, "the profile's style applies");
         assert_eq!(
-            docs.recording.mode,
-            crate::api::AutomaticRecordingMode::OnFailure,
-            "and naming only a style leaves the file's mode alone"
+            docs.recording.directory,
+            Some(PathBuf::from("artifacts")),
+            "and naming only a style leaves the file's directory alone"
         );
-        assert_eq!(docs.recording.directory, Some(PathBuf::from("artifacts")));
 
         let ci = config.settings(Some("ci")).unwrap();
-        assert_eq!(
-            ci.recording.mode,
-            crate::api::AutomaticRecordingMode::Always
-        );
-        assert_eq!(
-            ci.recording.directory,
-            Some(PathBuf::from("artifacts")),
-            "changing the mode leaves the directory alone"
-        );
+        assert_eq!(ci.recording.directory, Some(PathBuf::from("ci-artifacts")));
         assert_eq!(
             ci.style,
             crate::render::style::Style::default(),
             "and a profile naming no style gets the default"
         );
+    }
+
+    #[test]
+    fn trace_directory_is_relative_to_config_without_a_recording_directory() {
+        let root =
+            std::env::temp_dir().join(format!("tui-test-trace-config-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("tui-test.toml");
+        std::fs::write(&path, "[trace]\nmode = \"on\"\ndirectory = \"traces\"\n").unwrap();
+        let settings = ConfigFile::load(&path).unwrap().settings(None).unwrap();
+        assert_eq!(settings.trace.directory, root.join("traces"));
+        assert!(settings.recording.directory.is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

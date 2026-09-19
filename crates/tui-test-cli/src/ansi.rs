@@ -5,6 +5,11 @@ pub const ERASE_DISPLAY: &str = "\x1b[J";
 pub const ERASE_LINE: &str = "\x1b[K";
 pub const SGR_START: &str = "\x1b[0";
 
+pub const APPLICATION_CURSOR_ENABLE: &str = "\x1b[?1h";
+pub const APPLICATION_CURSOR_DISABLE: &str = "\x1b[?1l";
+pub const APPLICATION_CURSOR_SAVE: &[u8] = b"\x1b[?1s";
+pub const APPLICATION_CURSOR_RESTORE: &[u8] = b"\x1b[?1r";
+
 pub const BRACKETED_PASTE_ENABLE: &str = "\x1b[?2004h";
 pub const BRACKETED_PASTE_DISABLE: &str = "\x1b[?2004l";
 pub const BRACKETED_PASTE_SAVE: &[u8] = b"\x1b[?2004s";

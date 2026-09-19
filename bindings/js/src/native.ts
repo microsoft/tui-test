@@ -1,12 +1,17 @@
 import { InternalError, UsageError, makeError } from "./errors.js";
+import type { ErrorKind, TuiTestError } from "./errors.js";
+import type { FailureArtifactRef, FailureDetails } from "./types.js";
 import type {
   AutomaticRecordingOptions,
+  TraceOptions,
   BellEvent,
   Cell,
   ClipboardWaitOptions,
   Cursor,
   EffectiveTimeouts,
-  LocatorStage,
+  FailureArtifactOptions,
+  LocatorExpression,
+  LocatorNode,
   LocatorStyle,
   MouseClickOptions,
   OpenOptions,
@@ -33,10 +38,11 @@ type RuntimeRunOptions = Omit<RunOptions, "backend"> & { backend?: string };
 type RuntimeRecordingOptions = Omit<RecordingOptions, "format"> & {
   format?: "apng" | "gif" | "mp4" | "cast";
 };
-export type RuntimeLocatorStage = Omit<LocatorStage, "kind" | "direction"> & {
-  kind: "text" | "style";
+export type RuntimeLocatorNode = Omit<LocatorNode, "kind" | "direction"> & {
+  kind: "text" | "style" | "link" | "and" | "or" | "filter";
   direction?: "within" | "after" | "before";
 };
+export type RuntimeLocatorExpression = { nodes: RuntimeLocatorNode[]; root: number };
 export type RuntimeLocatorStyle = LocatorStyle;
 
 const ERROR_PREFIX = "__tui_test_native_error__:";
@@ -104,14 +110,66 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function mapNativeError(error: unknown): Error {
+interface NativeErrorEnvelope {
+  kind: ErrorKind;
+  message: string;
+  details?: FailureDetails;
+  artifact?: FailureArtifactRef;
+}
+
+function isNativeErrorEnvelope(value: unknown): value is NativeErrorEnvelope {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    (value.kind === "assertion" ||
+      value.kind === "usage" ||
+      value.kind === "no_session" ||
+      value.kind === "internal") &&
+    "message" in value &&
+    typeof value.message === "string"
+  );
+}
+
+function attachStructuredFailure(
+  mapped: ReturnType<typeof makeError>,
+  envelope: NativeErrorEnvelope,
+): void {
+  Object.defineProperties(mapped, {
+    details: {
+      configurable: true,
+      enumerable: true,
+      value: envelope.details,
+    },
+    artifact: {
+      configurable: true,
+      enumerable: true,
+      value: envelope.artifact,
+    },
+  });
+}
+
+export function mapNativeError(error: unknown): TuiTestError {
   const message = errorMessage(error);
   const encodedAt = message.indexOf(ERROR_PREFIX);
   if (encodedAt >= 0) {
     const encoded = message.slice(encodedAt + ERROR_PREFIX.length);
-    const newline = encoded.indexOf("\n");
-    if (newline >= 0) {
-      const mapped = makeError(encoded.slice(0, newline), encoded.slice(newline + 1));
+    try {
+      const envelope: unknown = JSON.parse(encoded);
+      if (!isNativeErrorEnvelope(envelope)) {
+        throw new TypeError("native error envelope has an invalid shape");
+      }
+      const mapped = makeError(envelope.kind, envelope.message);
+      attachStructuredFailure(mapped, envelope);
+      Object.defineProperty(mapped, "cause", {
+        configurable: true,
+        value: error,
+      });
+      return mapped;
+    } catch (parseError) {
+      const detail =
+        parseError instanceof Error ? parseError.message : String(parseError);
+      const mapped = new InternalError(`malformed native error envelope: ${detail}`);
       Object.defineProperty(mapped, "cause", {
         configurable: true,
         value: error,
@@ -145,21 +203,27 @@ async function invoke<T>(action: () => Promise<T>): Promise<T> {
 async function createSession(
   name: string,
   recording?: AutomaticRecordingOptions,
+  artifacts?: FailureArtifactOptions,
+  trace?: TraceOptions,
 ): Promise<NativeSessionHandle> {
   const binding = await loadBinding();
-  return new binding.NativeSession(name, recording);
+  return new binding.NativeSession(name, recording, artifacts, trace);
 }
 
 export class NativeRuntime {
   #session: Promise<NativeSessionHandle>;
 
-  constructor(name: string, recording?: AutomaticRecordingOptions) {
-    this.#session = createSession(name, recording);
+  constructor(
+    name: string,
+    recording?: AutomaticRecordingOptions,
+    artifacts?: FailureArtifactOptions,
+    trace?: TraceOptions,
+  ) {
+    this.#session = createSession(name, recording, artifacts, trace);
   }
 
   async #call<T>(action: (session: NativeSessionHandle) => Promise<T>): Promise<T> {
-    const session = await this.#session;
-    return invoke(() => action(session));
+    return invoke(async () => action(await this.#session));
   }
 
   open(options?: RuntimeOpenOptions): Promise<OpenResult> {
@@ -174,8 +238,8 @@ export class NativeRuntime {
     return this.#call((session) => session.restart(gracefulTimeoutMs));
   }
 
-  close(): Promise<void> {
-    return this.#call((session) => session.close());
+  close(failed?: boolean): Promise<void> {
+    return this.#call((session) => session.close(failed));
   }
 
   state(): Promise<State> {
@@ -186,49 +250,52 @@ export class NativeRuntime {
     return this.#call((session) => session.text(full));
   }
 
-  findLocator(stages: RuntimeLocatorStage[]): Promise<TextMatch[]> {
+  findLocator(
+    expression: RuntimeLocatorExpression,
+    requireOne = false,
+  ): Promise<TextMatch[]> {
     return this.#call((session) =>
-      session.findLocator(stages as LocatorStage[]),
+      session.findLocator(expression as LocatorExpression, requireOne),
     );
   }
 
   waitLocator(
-    stages: RuntimeLocatorStage[],
+    expression: RuntimeLocatorExpression,
     not = false,
     timeoutMs?: number,
   ): Promise<void> {
     return this.#call((session) =>
-      session.waitLocator(stages as LocatorStage[], not, timeoutMs),
+      session.waitLocator(expression as LocatorExpression, not, timeoutMs),
     );
   }
 
   clickLocator(
-    stages: RuntimeLocatorStage[],
+    expression: RuntimeLocatorExpression,
     button = 0,
     clicks = 1,
     timeoutMs?: number,
   ): Promise<void> {
     return this.#call((session) =>
-      session.clickLocator(stages as LocatorStage[], button, clicks, timeoutMs),
+      session.clickLocator(expression as LocatorExpression, button, clicks, timeoutMs),
     );
   }
 
   highlightLocator(
-    stages: RuntimeLocatorStage[],
+    expression: RuntimeLocatorExpression,
     timeoutMs?: number,
   ): Promise<TextMatch[]> {
     return this.#call((session) =>
-      session.highlightLocator(stages as LocatorStage[], timeoutMs),
+      session.highlightLocator(expression as LocatorExpression, timeoutMs),
     );
   }
 
   expectLocator(
-    stages: RuntimeLocatorStage[],
+    expression: RuntimeLocatorExpression,
     not = false,
     timeoutMs?: number,
   ): Promise<void> {
     return this.#call((session) =>
-      session.expectLocator(stages as LocatorStage[], not, timeoutMs),
+      session.expectLocator(expression as LocatorExpression, not, timeoutMs),
     );
   }
 

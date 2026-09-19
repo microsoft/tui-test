@@ -19,7 +19,7 @@ from typing import (
 from ._config import IS_MACOS, IS_WINDOWS
 from ._ephemeral import unique_session
 from .client import TuiTest
-from .types import AutomaticRecording, Backend, Profile, Timeouts
+from .types import AutomaticRecording, Backend, Profile, Timeouts, TraceOptions
 
 __all__ = [
     "TerminalOptions",
@@ -53,8 +53,10 @@ class TerminalOptions:
     wait_ready: Optional[bool] = None
     timeouts: Optional[Timeouts] = None
     profile: Optional[Profile] = None
+    screen_history_limit: Optional[int] = None
     artifacts: Optional[Dict[str, Any]] = None
     recording: Optional[AutomaticRecording] = None
+    trace: Optional[TraceOptions] = None
 
 
 _DEFAULTABLE = frozenset(TerminalOptions.__dataclass_fields__)
@@ -150,10 +152,14 @@ def _client_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
         kwargs["timeouts"] = opts.timeouts
     if opts.profile is not None:
         kwargs["profile"] = opts.profile
+    if opts.screen_history_limit is not None:
+        kwargs["screen_history_limit"] = opts.screen_history_limit
     if opts.artifacts is not None:
         kwargs["artifacts"] = opts.artifacts
     if opts.recording is not None:
         kwargs["recording"] = opts.recording
+    if opts.trace is not None:
+        kwargs["trace"] = opts.trace
     return kwargs
 
 
@@ -195,9 +201,9 @@ async def create_terminal(**options: Any) -> TuiTest:
 async def terminal(**options: Any) -> AsyncIterator[TuiTest]:
     term = await create_terminal(**options)
     try:
-        yield term
+        async with term:
+            yield term
     finally:
-        await term.close_quiet()
         untrack_terminal(term)
 
 
