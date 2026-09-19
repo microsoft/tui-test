@@ -2,16 +2,19 @@
 //!
 //! Every value here was a constant in [`crate::render::svg`], which the raster
 //! path reads too, so one struct threaded through that renderer reaches SVG,
-//! APNG, GIF and MP4 alike. The defaults reproduce those constants exactly:
-//! rendering with [`Style::default`] has to produce the same bytes as before
-//! this existed, and a test holds that.
+//! APNG, GIF and MP4 alike.
 //!
-//! Not yet reachable from `tui-test.toml`. The renderers read it, sessions
-//! carry it, and it will be configured under a profile's recording section,
-//! but nothing deserializes it into a session yet, so every render currently
-//! uses [`Style::default`]. Keys are spelled as in the rest of the config
-//! file — `font_size`, not `font-size` — matching how
+//! It is read from `[recording.style]` in `tui-test.toml`, resolved into
+//! [`crate::profile::Settings`] against the profile in use, carried on the
+//! open request, and stored on the session, so a screenshot and a recording of
+//! that session are drawn the same way. Keys are spelled as in the rest of the
+//! config file — `font_size`, not `font-size` — matching how
 //! [`crate::profile::Colors`] spells `bright_black`.
+//!
+//! [`Style::default`] is pinned by a golden test, so the default look cannot
+//! drift by accident. Changing it deliberately means regenerating that file
+//! with `TUI_TEST_UPDATE_GOLDEN=1`, which lands the new bytes in a diff a
+//! reviewer can read.
 
 use std::path::{Path, PathBuf};
 
