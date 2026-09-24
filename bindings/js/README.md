@@ -72,6 +72,10 @@ Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Use
 
 `open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, `timeouts`, and `screenHistoryLimit`. `run()` accepts the same options except `shell`.
 
+Validation errors are not retried and do not close an existing session, even when `retries` or `restart` is set.
+
+Automatic process-wide exit cleanup is installed only on the main thread. Worker code should explicitly close its sessions; a worker's exit does not perform global cleanup.
+
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
 
 #### Input
@@ -298,6 +302,8 @@ await withTerminal({ program: ["my-app"] }, async (terminal) => {
   await terminal.getByText("Ready").expect();
 });
 ```
+
+`createTerminal()` and `withTerminal()` apply `timeouts` to both startup and later waits, including values from `setTerminalDefaults()`.
 
 ### Configuration
 

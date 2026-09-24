@@ -460,6 +460,64 @@ test("restart forwards timeout and preserves result and errors", async () => {
   }
 });
 
+test("open and run do not retry or close on validation errors", async () => {
+  const originals = {
+    open: NativeRuntime.prototype.open,
+    run: NativeRuntime.prototype.run,
+    close: NativeRuntime.prototype.close,
+  };
+  try {
+    for (const method of ["open", "run"]) {
+      const calls = [];
+      const error = new UsageError("invalid spawn options");
+      NativeRuntime.prototype[method] = async () => {
+        calls.push(method);
+        throw error;
+      };
+      NativeRuntime.prototype.close = async () => { calls.push("close"); };
+      const terminal = new TuiTest(uniqueSession("invalid-spawn"));
+      const action = method === "open"
+        ? terminal.open({ retries: 2 })
+        : terminal.run("program", [], { retries: 2 });
+      await assert.rejects(action, (actual) => actual === error);
+      assert.deepEqual(calls, [method]);
+    }
+  } finally {
+    Object.assign(NativeRuntime.prototype, originals);
+  }
+});
+
+test("open and run still clean up and retry transient failures", async () => {
+  const originals = {
+    open: NativeRuntime.prototype.open,
+    run: NativeRuntime.prototype.run,
+    close: NativeRuntime.prototype.close,
+  };
+  try {
+    for (const method of ["open", "run"]) {
+      const calls = [];
+      const errors = [new Error("first attempt"), new Error("second attempt")];
+      const result = { shell_pid: 42, session: "retry", ready: true, recording: "" };
+      NativeRuntime.prototype[method] = async () => {
+        calls.push(method);
+        if (errors.length) throw errors.shift();
+        return result;
+      };
+      NativeRuntime.prototype.close = async () => { calls.push("close"); };
+      const terminal = new TuiTest(uniqueSession("retry-spawn"));
+      assert.equal(
+        await (method === "open"
+          ? terminal.open({ retries: 2 })
+          : terminal.run("program", [], { retries: 2 })),
+        result,
+      );
+      assert.deepEqual(calls, [method, "close", method, "close", method]);
+    }
+  } finally {
+    Object.assign(NativeRuntime.prototype, originals);
+  }
+});
+
 test("unknown timeout classes are rejected before native dispatch", async () => {
   assert.throws(() => timeoutsPayload({ comand: 100 }), /comand/);
   assert.throws(() => new TuiTest("s", { timeouts: { txt: 100 } }), /txt/);

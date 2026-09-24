@@ -43,6 +43,9 @@ fn shift(prev: &EmuCell, cur: &EmuCell) -> Map<String, Value> {
     if prev.bg != cur.bg {
         m.insert("bg".into(), color_value(cur.bg));
     }
+    if prev.underline_color != cur.underline_color {
+        m.insert("underline_color".into(), color_value(cur.underline_color));
+    }
     for (attr, key) in [
         (Attrs::BOLD, "bold"),
         (Attrs::DIM, "dim"),
@@ -85,8 +88,9 @@ fn baseline() -> EmuCell {
 /// they are asked for. It is emitted only when there is something to put in
 /// it, so a plain snapshot is still just the box.
 ///
-/// A style shift covers the colors, the SGR attributes, the underline and the
-/// link. The link is not an SGR attribute — `SGR 0` clears every other entry
+/// A style shift covers foreground, background and underline colors, the SGR
+/// attributes, the underline style and the link. The link is not an SGR
+/// attribute — `SGR 0` clears every other entry
 /// here and leaves it running — but it is carried on a cell the same way, so
 /// it is recorded with them rather than behind a second switch a reader has to
 /// remember to turn on.
@@ -421,5 +425,39 @@ mod tests {
             &styled(UnderlineStyle::Curly)
         )
         .is_empty());
+    }
+
+    #[test]
+    fn underline_colors_record_slots_rgb_and_resets() {
+        let colored = |color| EmuCell {
+            underline_color: color,
+            ..EmuCell::blank()
+        };
+        let rows = [vec![
+            colored(Some(Color::from_index(1))),
+            colored(Some(Color::Rgb(1, 2, 3))),
+            colored(None),
+        ]];
+        let serialized = serialize(&rows, 3, true, None);
+        let attributes: Value =
+            serde_json::from_str(serialized.split_once("╯\n").unwrap().1).unwrap();
+        assert_eq!(attributes["colors"]["0,0"]["underline_color"], json!(1));
+        assert_eq!(
+            attributes["colors"]["1,0"]["underline_color"],
+            json!("#010203")
+        );
+        assert_eq!(
+            attributes["colors"]["2,0"]["underline_color"],
+            json!("default")
+        );
+        assert_ne!(
+            serialized,
+            serialize(&[vec![EmuCell::blank(); 3]], 3, true, None)
+        );
+        assert_eq!(
+            serialize(&rows, 3, false, None),
+            serialize(&[vec![EmuCell::blank(); 3]], 3, false, None)
+        );
+        assert!(shift(&rows[0][0], &rows[0][0]).is_empty());
     }
 }

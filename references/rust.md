@@ -35,6 +35,13 @@ Core types:
 | `ExecutionContext`, `FailureArtifactOptions` | Attach diagnostic context and write failure artifacts. |
 | `FailureDetails`, `FailureArtifactRef` | Inspect structured failures without parsing messages. |
 
+Cloned sessions and named session handles can wait on one thread while another
+thread sends input or resizes the terminal. Lifecycle operations cancel pending
+waits before changing the terminal generation; an old wait cannot observe the
+replacement child. `close()` also cancels startup and pending input. On Unix,
+closing or dropping a session drains output for a bounded interval, even if a
+descendant retains the PTY slave.
+
 Locator methods: `get_by_text`, `get_by_style`, `any`, `unique`, `first`, `last`, `nth`, `locations`, `location`, `count`, `all`, `wait`, `wait_hidden`, `expect`, `click`, and `highlight`. Option variants are `wait_with_timeout`, `expect_with`, `click_with`, and `highlight_with_timeout`.
 
 Add `recording-raster` for APNG, GIF, and MP4. Add `ghostty`, `rio`, or `xtermjs` for another backend.

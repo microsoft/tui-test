@@ -1,3 +1,4 @@
+import { isMainThread } from "node:worker_threads";
 import { InternalError, UsageError, makeError } from "./errors.js";
 import type { ErrorKind, TuiTestError } from "./errors.js";
 import type { FailureArtifactRef, FailureDetails } from "./types.js";
@@ -66,7 +67,8 @@ let cachedBinding: NativeBinding | undefined;
 let exitHookInstalled = false;
 
 function installExitHook(): void {
-  if (exitHookInstalled) {
+  // The native registry is process-wide, but workers have their own exit events.
+  if (!isMainThread || exitHookInstalled) {
     return;
   }
   exitHookInstalled = true;
