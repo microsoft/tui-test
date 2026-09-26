@@ -858,12 +858,13 @@ impl FailureObservation {
     }
 
     pub(crate) fn svg(&self) -> String {
-        crate::render::svg::render_svg_with_zoom(
+        crate::render::svg::render_svg(
             &self.rows,
             self.cols,
             &self.render_state,
             self.cursor,
             self.title.as_deref(),
+            &crate::render::style::Style::default(),
             1.0,
             None,
         )
