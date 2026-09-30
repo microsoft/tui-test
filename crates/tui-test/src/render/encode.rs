@@ -321,6 +321,7 @@ fn gif_timeline(frames: &[Frame]) -> Vec<GifStep> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::style::Style;
     use std::io::BufReader;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -473,16 +474,16 @@ mod tests {
                     );
                     let pixel = decode_first_png_pixel(
                         &path,
-                        (crate::render::raster::CANVAS_PADDING + 20) * scale,
-                        (crate::render::raster::CANVAS_PADDING + 48) * scale,
+                        (Style::default().canvas_left() + 20) * scale,
+                        (Style::default().canvas_top() + 48) * scale,
                     );
                     assert_eq!(&pixel[..3], &[200, 10, 20]);
                 }
                 RecordingFormat::Gif => {
                     let decoded = decode_gif(
                         &path,
-                        (crate::render::raster::CANVAS_PADDING + 20) * scale,
-                        (crate::render::raster::CANVAS_PADDING + 48) * scale,
+                        (Style::default().canvas_left() + 20) * scale,
+                        (Style::default().canvas_top() + 48) * scale,
                     );
                     assert_eq!(decoded.frames, 2);
                     assert_eq!(decoded.dimensions, renderer.pixel_size());
@@ -502,7 +503,8 @@ mod tests {
     fn png_is_static_and_round_trips_dimensions_and_color() {
         let path = temp_path("png");
         let frame = frame(Color::Rgb(200, 10, 20), Duration::ZERO);
-        let mut renderer = GridRenderer::with_zoom(1, 1, 1.5).unwrap();
+        let style = Style::default();
+        let mut renderer = GridRenderer::with_zoom(1, 1, 1.5, style.clone()).unwrap();
         encode_png(&path, &frame, &mut renderer).unwrap();
 
         let bytes = std::fs::read(&path).unwrap();
@@ -511,8 +513,8 @@ mod tests {
         assert!(!chunks.iter().any(|(kind, _)| kind == b"acTL"));
         let pixel = decode_first_png_pixel(
             &path,
-            ((crate::render::raster::CANVAS_PADDING + 20) as f64 * 1.5) as u32,
-            ((crate::render::raster::CANVAS_PADDING + 48) as f64 * 1.5) as u32,
+            ((style.canvas_left() + 20) as f64 * 1.5) as u32,
+            ((style.canvas_top() + 48) as f64 * 1.5) as u32,
         );
         assert_eq!(&pixel[..3], &[200, 10, 20]);
 

@@ -1,4 +1,4 @@
-use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
+use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use super::font::GlyphOutline;
 use crate::profile::Rgb;
@@ -115,16 +115,8 @@ pub(super) fn fill_circle(pixmap: &mut Pixmap, x: f32, y: f32, radius: f32, colo
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn fill_rounded_rect(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radius: f32,
-    color: Rgb,
-) {
+/// The one rounded rectangle every panel, shadow layer and border is cut from.
+fn rounded_rect_path(x: f32, y: f32, width: f32, height: f32, radius: f32) -> Option<Path> {
     let right = x + width;
     let bottom = y + height;
     let radius = radius.min(width / 2.0).min(height / 2.0);
@@ -139,7 +131,53 @@ pub(super) fn fill_rounded_rect(
     path.line_to(x, y + radius);
     path.quad_to(x, y, x + radius, y);
     path.close();
-    let Some(path) = path.finish() else {
+    path.finish()
+}
+
+/// Draw the panel's border. Inset by half the stroke because tiny-skia, like
+/// SVG, centers a stroke on its path, and a border straddling the panel edge
+/// would bleed into the padding.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn stroke_rounded_rect(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+    color: Rgb,
+    stroke_width: f32,
+) {
+    let inset = stroke_width / 2.0;
+    let Some(path) = rounded_rect_path(
+        x + inset,
+        y + inset,
+        (width - stroke_width).max(0.0),
+        (height - stroke_width).max(0.0),
+        (radius - inset).max(0.0),
+    ) else {
+        return;
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, 255);
+    let stroke = Stroke {
+        width: stroke_width,
+        ..Stroke::default()
+    };
+    pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn fill_rounded_rect(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    radius: f32,
+    color: Rgb,
+) {
+    let Some(path) = rounded_rect_path(x, y, width, height, radius) else {
         return;
     };
     let mut paint = Paint::default();
@@ -164,21 +202,7 @@ pub(super) fn fill_rounded_rect_alpha(
     color: Rgb,
     alpha: u8,
 ) {
-    let right = x + width;
-    let bottom = y + height;
-    let radius = radius.min(width / 2.0).min(height / 2.0);
-    let mut path = PathBuilder::new();
-    path.move_to(x + radius, y);
-    path.line_to(right - radius, y);
-    path.quad_to(right, y, right, y + radius);
-    path.line_to(right, bottom - radius);
-    path.quad_to(right, bottom, right - radius, bottom);
-    path.line_to(x + radius, bottom);
-    path.quad_to(x, bottom, x, bottom - radius);
-    path.line_to(x, y + radius);
-    path.quad_to(x, y, x + radius, y);
-    path.close();
-    let Some(path) = path.finish() else {
+    let Some(path) = rounded_rect_path(x, y, width, height, radius) else {
         return;
     };
     let mut paint = Paint::default();

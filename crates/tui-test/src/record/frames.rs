@@ -481,7 +481,18 @@ mod tests {
         let encoded = std::fs::read(&apng_path).unwrap();
         assert_eq!(&encoded[..8], b"\x89PNG\r\n\x1a\n");
         assert!(encoded.windows(4).any(|window| window == b"acTL"));
-        assert_eq!(renderer.pixel_size(), (196, 244));
+        // Derived from the style rather than pinned, so a deliberate change to
+        // a default gap does not read as a broken encoder test.
+        let style = crate::render::style::Style::default();
+        let (panel_width, panel_height) = crate::render::svg::pixel_size(2, 1, &style);
+        assert_eq!(
+            renderer.pixel_size(),
+            // The renderer is built at scale 2.
+            (
+                (panel_width + style.canvas_horizontal().unwrap()) * 2,
+                (panel_height + style.canvas_vertical().unwrap()) * 2
+            )
+        );
 
         std::fs::remove_file(cast_path).unwrap();
         std::fs::remove_file(apng_path).unwrap();

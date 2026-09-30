@@ -72,7 +72,7 @@ struct FrameCell {
 
 impl FrameCell {
     fn capture(cell: &EmuCell, width: u8, colors: &dyn RenderColors) -> Self {
-        let style = svg::style_of(cell, colors);
+        let style = svg::cell_paint(cell, colors);
         Self {
             char: cell.ch.to_string(),
             link: cell.uri().map(str::to_string),
@@ -120,11 +120,16 @@ fn timeline_with_limit(
     let mut timeline = Timeline {
         schema_version: 1,
         failure_screen_sequence: observation.screen_sequence,
-        geometry: Geometry {
-            grid_x: svg::CANVAS_PADDING as f32 + svg::MARGIN_X,
-            grid_y: svg::CANVAS_PADDING as f32 + svg::HEADER_H + svg::CONTENT_PADDING_TOP,
-            cell_width: svg::CELL_W,
-            cell_height: svg::CELL_H,
+        // The trace viewer draws its own grid rather than the styled SVG, so
+        // it is placed with the default geometry.
+        geometry: {
+            let style = crate::render::style::Style::default();
+            Geometry {
+                grid_x: style.canvas_left() as f32 + style.content_left(),
+                grid_y: style.canvas_top() as f32 + style.header_height() + style.content_top(),
+                cell_width: style.cell_width(),
+                cell_height: style.cell_height(),
+            }
         },
         frames: sources
             .values()
@@ -188,7 +193,7 @@ fn timeline_with_limit(
             } else {
                 frame.omission = None;
                 let cursor = &frame.screen.cursor;
-                frame.svg = Some(svg::render_svg_with_zoom(
+                frame.svg = Some(svg::render_svg(
                     &source.rows,
                     frame.screen.size.cols,
                     &source.render_state,
@@ -196,6 +201,7 @@ fn timeline_with_limit(
                         .visible
                         .then_some((cursor.column, usize::from(cursor.row))),
                     frame.screen.title.as_deref(),
+                    &crate::render::style::Style::default(),
                     1.0,
                     None,
                 ));

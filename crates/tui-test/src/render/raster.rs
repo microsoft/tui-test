@@ -17,11 +17,17 @@ mod font;
 use draw::{
     draw_glyph, fill_antialiased_rect, fill_circle, fill_pixel_rect, fill_rounded_rect,
     fill_rounded_rect_alpha, fill_top_rounded_rect, format_glyph_sequence, is_default_ignorable,
-    unpremultiply, unsupported_grapheme,
+    stroke_rounded_rect, unpremultiply, unsupported_grapheme,
 };
 use font::{FontSystem, GlyphKey};
 
-pub(crate) use svg::{CANVAS_BACKGROUND, CANVAS_PADDING};
+use crate::render::style::Style;
+
+/// The largest canvas that will be allocated, in pixels.
+///
+/// Generous: a 4K frame is 8 megapixels, so this allows more than ten of them
+/// and still caps the buffer at about 400 MB.
+const MAX_PIXELS: u64 = 100_000_000;
 
 #[derive(Debug)]
 pub struct RgbaFrame {
@@ -58,67 +64,93 @@ pub struct GridRenderer {
     height: u32,
     pixmap: Pixmap,
     fonts: FontSystem,
+    style: Style,
+    /// Overrides the style's canvas background for one capture.
     background: Option<CaptureBackground>,
 }
 
 impl GridRenderer {
+    /// The canvas this renderer draws onto.
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     pub fn new(cols: u16, rows: usize) -> Self {
         Self::with_scale(cols, rows, 1)
     }
 
     pub fn with_scale(cols: u16, rows: usize, scale: u32) -> Self {
-        Self::with_zoom(cols, rows, f64::from(scale))
+        Self::with_zoom(cols, rows, f64::from(scale), Style::default())
             .expect("recording raster scale must fit output dimensions")
     }
 
-    pub fn with_zoom(cols: u16, rows: usize, zoom: f64) -> anyhow::Result<Self> {
-        Self::with_zoom_background_and_size(cols, rows, zoom, None, false)
+    pub fn with_zoom(cols: u16, rows: usize, zoom: f64, style: Style) -> anyhow::Result<Self> {
+        Self::with_zoom_background_and_size(cols, rows, zoom, style, None, false)
     }
 
     pub fn with_zoom_and_background(
         cols: u16,
         rows: usize,
         zoom: f64,
+        style: Style,
         background: Option<CaptureBackground>,
     ) -> anyhow::Result<Self> {
-        Self::with_zoom_background_and_size(cols, rows, zoom, background, false)
+        Self::with_zoom_background_and_size(cols, rows, zoom, style, background, false)
     }
 
     pub(crate) fn for_screenshot(
         cols: u16,
         rows: usize,
         zoom: f64,
+        style: Style,
         background: Option<CaptureBackground>,
     ) -> anyhow::Result<Self> {
-        Self::with_zoom_background_and_size(cols, rows, zoom, background, true)
+        Self::with_zoom_background_and_size(cols, rows, zoom, style, background, true)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn with_zoom_background_and_size(
         cols: u16,
         rows: usize,
         zoom: f64,
+        style: Style,
         background: Option<CaptureBackground>,
         exact_size: bool,
     ) -> anyhow::Result<Self> {
         if !zoom.is_finite() || zoom <= 0.0 || zoom > f64::from(f32::MAX) {
             anyhow::bail!("recording zoom must be finite and greater than zero");
         }
+        // Before pixel_size, which is where an unbounded font size overflows.
+        style.validate().map_err(|error| anyhow::anyhow!(error))?;
         let (base_width, base_height) = if exact_size {
-            svg::exact_pixel_size(cols, rows)
+            svg::exact_pixel_size(cols, rows, &style)
         } else {
-            svg::pixel_size(cols, rows)
+            svg::pixel_size(cols, rows, &style)
         };
-        let padding = CANVAS_PADDING
-            .checked_mul(2)
-            .expect("recording canvas padding must fit in u32");
+        let horizontal = style
+            .canvas_horizontal()
+            .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
+        let vertical = style
+            .canvas_vertical()
+            .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
         let width = base_width
-            .checked_add(padding)
+            .checked_add(horizontal)
             .ok_or_else(|| anyhow::anyhow!("recording width must fit in u32"))?;
         let height = base_height
-            .checked_add(padding)
+            .checked_add(vertical)
             .ok_or_else(|| anyhow::anyhow!("recording height must fit in u32"))?;
         let width = scaled_dimension(width, zoom, "width")?;
         let height = scaled_dimension(height, zoom, "height")?;
+        // Each axis can pass its own bound while the area is enormous: a
+        // 500x200 grid at the largest allowed font and padding is under
+        // u32::MAX on both axes and still a 312 GB pixmap. The product is what
+        // gets allocated, so the product is what has to be bounded.
+        let pixels = u64::from(width) * u64::from(height);
+        if pixels > MAX_PIXELS {
+            anyhow::bail!(
+                "recording is {width}x{height}, which is {pixels} pixels; the limit is {MAX_PIXELS}"
+            );
+        }
         Ok(Self {
             max_cols: cols,
             max_rows: rows,
@@ -129,7 +161,8 @@ impl GridRenderer {
             pixmap: Pixmap::new(width, height).ok_or_else(|| {
                 anyhow::anyhow!("terminal recording dimensions must fit a pixmap")
             })?,
-            fonts: FontSystem::new(),
+            fonts: FontSystem::new(&style.font),
+            style,
             background,
         })
     }
@@ -152,15 +185,28 @@ impl FrameRenderer for GridRenderer {
 
         let scale = self.scale;
         let colors = &frame.render_state;
+        let style = &self.style;
         let (base_width, base_height) = if self.exact_size {
-            svg::exact_pixel_size(cols, rows)
+            svg::exact_pixel_size(cols, rows, style)
         } else {
-            svg::pixel_size(cols, rows)
+            svg::pixel_size(cols, rows, style)
         };
         let panel_width = scaled_dimension(base_width, f64::from(self.scale), "frame width")?;
         let panel_height = scaled_dimension(base_height, f64::from(self.scale), "frame height")?;
-        let origin_x = (self.width - panel_width) as f32 / 2.0;
-        let origin_y = (self.height - panel_height) as f32 / 2.0;
+        // The window sits at its own left and top gap. A frame smaller than the
+        // canvas -- the terminal shrank mid-recording -- is still centred, but
+        // within the area the gaps leave rather than the whole image. With
+        // equal gaps this is the midpoint it always was.
+        let pad_left = style.canvas_left() as f32 * scale;
+        let pad_top = style.canvas_top() as f32 * scale;
+        let pad_right = style.canvas_right() as f32 * scale;
+        let pad_bottom = style.canvas_bottom() as f32 * scale;
+        let content_width = (self.width as f32 - pad_left - pad_right).max(0.0);
+        let content_height = (self.height as f32 - pad_top - pad_bottom).max(0.0);
+        let origin_x = pad_left + (content_width - panel_width as f32).max(0.0) / 2.0;
+        let origin_y = pad_top + (content_height - panel_height as f32).max(0.0) / 2.0;
+        // A capture may override the configured canvas, including with nothing
+        // at all; naming none leaves the style in charge.
         match self.background {
             Some(CaptureBackground::Transparent) => {
                 self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
@@ -171,9 +217,9 @@ impl FrameRenderer for GridRenderer {
             }
             None => {
                 self.pixmap.fill(tiny_skia::Color::from_rgba8(
-                    CANVAS_BACKGROUND.r,
-                    CANVAS_BACKGROUND.g,
-                    CANVAS_BACKGROUND.b,
+                    style.canvas_background.r,
+                    style.canvas_background.g,
+                    style.canvas_background.b,
                     255,
                 ));
             }
@@ -185,6 +231,7 @@ impl FrameRenderer for GridRenderer {
             panel_width as f32,
             panel_height as f32,
             scale,
+            style,
         );
         fill_rounded_rect(
             &mut self.pixmap,
@@ -192,52 +239,60 @@ impl FrameRenderer for GridRenderer {
             origin_y,
             panel_width as f32,
             panel_height as f32,
-            svg::WINDOW_RADIUS * scale,
+            style.border.radius * scale,
             colors.resolve(None, false),
         );
-        fill_top_rounded_rect(
-            &mut self.pixmap,
-            origin_x,
-            origin_y,
-            panel_width as f32,
-            (svg::HEADER_H - svg::TITLE_DIVIDER_H) * scale,
-            svg::WINDOW_RADIUS * scale,
-            svg::TITLE_BG,
-        );
-        fill_antialiased_rect(
-            &mut self.pixmap,
-            origin_x,
-            origin_y + (svg::HEADER_H - svg::TITLE_DIVIDER_H) * scale,
-            panel_width as f32,
-            svg::TITLE_DIVIDER_H * scale,
-            svg::TITLE_DIVIDER,
-        );
-        for (index, color) in svg::TRAFFIC_LIGHTS.iter().copied().enumerate() {
-            let cx = origin_x + (svg::MARGIN_X + 5.0 + index as f32 * 20.0) * scale;
-            let cy = origin_y + svg::HEADER_H / 2.0 * scale;
-            fill_circle(&mut self.pixmap, cx, cy, svg::DOT_R * scale, color);
-        }
-        fill_circle(
-            &mut self.pixmap,
-            origin_x + (svg::MARGIN_X + 5.0) * scale,
-            origin_y + svg::HEADER_H / 2.0 * scale,
-            svg::RED_DOT_R * scale,
-            svg::RED_DOT_COLOR,
-        );
-
+        // One decision, as in the SVG path: with no title bar there is no
+        // rounded strip, no divider, no controls and no title text, rather
+        // than each of them drawn at a collapsed height over the grid.
         let mut missing = BTreeSet::new();
-        draw_title(
-            &mut self.pixmap,
-            &mut self.fonts,
-            frame.title.as_deref(),
-            cols,
-            rows,
-            base_width as f32,
-            origin_x,
-            origin_y,
-            scale,
-            &mut missing,
-        );
+        if style.window.title_bar {
+            fill_top_rounded_rect(
+                &mut self.pixmap,
+                origin_x,
+                origin_y,
+                panel_width as f32,
+                (style.header_height() - style.divider_height()) * scale,
+                style.border.radius * scale,
+                style.window.background,
+            );
+            fill_antialiased_rect(
+                &mut self.pixmap,
+                origin_x,
+                origin_y + (style.header_height() - style.divider_height()) * scale,
+                panel_width as f32,
+                style.divider_height() * scale,
+                style.window.divider,
+            );
+            let lights = style.window.traffic_lights();
+            for (index, color) in lights.iter().copied().enumerate() {
+                let cx = origin_x + (style.content_left() + 5.0 + index as f32 * 20.0) * scale;
+                let cy = origin_y + style.header_height() / 2.0 * scale;
+                fill_circle(&mut self.pixmap, cx, cy, svg::DOT_R * scale, color);
+            }
+            if !lights.is_empty() {
+                fill_circle(
+                    &mut self.pixmap,
+                    origin_x + (style.content_left() + 5.0) * scale,
+                    origin_y + style.header_height() / 2.0 * scale,
+                    svg::RED_DOT_R * scale,
+                    svg::RED_DOT_COLOR,
+                );
+            }
+            draw_title(
+                &mut self.pixmap,
+                &mut self.fonts,
+                frame.title.as_deref(),
+                cols,
+                rows,
+                base_width as f32,
+                origin_x,
+                origin_y,
+                scale,
+                &mut missing,
+                style,
+            );
+        }
 
         let blank = EmuCell::blank();
         for (y, row) in grid.iter().enumerate() {
@@ -252,10 +307,10 @@ impl FrameRenderer for GridRenderer {
                     run += 1;
                 }
                 if background != colors.resolve(None, false) {
-                    let left = grid_x(origin_x, x, scale);
-                    let right = grid_x(origin_x, x + run, scale);
-                    let top = grid_y(origin_y, y, scale);
-                    let bottom = grid_y(origin_y, y + 1, scale);
+                    let left = grid_x(origin_x, x, scale, style);
+                    let right = grid_x(origin_x, x + run, scale, style);
+                    let top = grid_y(origin_y, y, scale, style);
+                    let bottom = grid_y(origin_y, y + 1, scale, style);
                     fill_pixel_rect(&mut self.pixmap, left, top, right, bottom, background);
                 }
                 x += run;
@@ -269,8 +324,8 @@ impl FrameRenderer for GridRenderer {
                 if cell.ch.as_str() == CONTINUATION {
                     continue;
                 }
-                let style = svg::style_of(cell, colors);
-                if style.invisible {
+                let paint = svg::cell_paint(cell, colors);
+                if paint.invisible {
                     continue;
                 }
                 let span = if row
@@ -281,16 +336,20 @@ impl FrameRenderer for GridRenderer {
                 } else {
                     1
                 };
-                let cell_origin_x = origin_x + (svg::MARGIN_X + x as f32 * svg::CELL_W) * scale;
+                let cell_origin_x =
+                    origin_x + (style.content_left() + x as f32 * style.cell_width()) * scale;
                 let cell_origin_y = origin_y
-                    + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + y as f32 * svg::CELL_H) * scale;
-                let cell_width = svg::CELL_W * span as f32 * scale;
-                let cell_height = svg::CELL_H * scale;
+                    + (style.header_height()
+                        + style.content_top()
+                        + y as f32 * style.cell_height())
+                        * scale;
+                let cell_width = style.cell_width() * span as f32 * scale;
+                let cell_height = style.cell_height() * scale;
                 let baseline = origin_y
-                    + (svg::HEADER_H
-                        + svg::CONTENT_PADDING_TOP
-                        + y as f32 * svg::CELL_H
-                        + svg::FONT_BASELINE)
+                    + (style.header_height()
+                        + style.content_top()
+                        + y as f32 * style.cell_height()
+                        + style.baseline())
                         * scale;
 
                 if unsupported_grapheme(cell.ch.as_str()) {
@@ -303,8 +362,8 @@ impl FrameRenderer for GridRenderer {
                     }
                     let key = GlyphKey {
                         character,
-                        bold: style.bold,
-                        italic: style.italic,
+                        bold: paint.bold,
+                        italic: paint.italic,
                     };
                     match fonts.resolve(key) {
                         Some(glyph) => draw_glyph(
@@ -315,8 +374,8 @@ impl FrameRenderer for GridRenderer {
                             cell_width,
                             cell_height,
                             baseline,
-                            style.fg,
-                            svg::FONT_SIZE,
+                            paint.fg,
+                            style.font_size,
                             scale,
                         ),
                         None => {
@@ -325,24 +384,24 @@ impl FrameRenderer for GridRenderer {
                     }
                 }
 
-                if style.underline {
+                if paint.underline {
                     fill_antialiased_rect(
                         pixmap,
                         cell_origin_x,
                         cell_origin_y + cell_height - 3.0 * scale,
                         cell_width,
                         scale.max(1.0),
-                        style.fg,
+                        paint.fg,
                     );
                 }
-                if style.strike {
+                if paint.strike {
                     fill_antialiased_rect(
                         pixmap,
                         cell_origin_x,
-                        baseline - svg::FONT_SIZE * 0.32 * scale,
+                        baseline - style.font_size * 0.32 * scale,
                         cell_width,
                         scale.max(1.0),
-                        style.fg,
+                        paint.fg,
                     );
                 }
             }
@@ -359,6 +418,21 @@ impl FrameRenderer for GridRenderer {
                 origin_y,
                 scale,
                 &mut missing,
+                style,
+            );
+        }
+
+        // Last, so the content it frames cannot paint over it.
+        if style.border.width > 0.0 {
+            stroke_rounded_rect(
+                &mut self.pixmap,
+                origin_x,
+                origin_y,
+                panel_width as f32,
+                panel_height as f32,
+                style.border.radius * scale,
+                style.border.color,
+                style.border.width * scale,
             );
         }
 
@@ -386,12 +460,13 @@ impl FrameRenderer for GridRenderer {
     }
 }
 
-fn grid_x(origin_x: f32, column: usize, scale: f32) -> u32 {
-    (origin_x + (svg::MARGIN_X + column as f32 * svg::CELL_W) * scale).round() as u32
+fn grid_x(origin_x: f32, column: usize, scale: f32, style: &Style) -> u32 {
+    (origin_x + (style.content_left() + column as f32 * style.cell_width()) * scale).round() as u32
 }
 
-fn grid_y(origin_y: f32, row: usize, scale: f32) -> u32 {
-    (origin_y + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + row as f32 * svg::CELL_H) * scale)
+fn grid_y(origin_y: f32, row: usize, scale: f32, style: &Style) -> u32 {
+    (origin_y
+        + (style.header_height() + style.content_top() + row as f32 * style.cell_height()) * scale)
         .round() as u32
 }
 
@@ -406,6 +481,7 @@ fn draw_cursor(
     panel_origin_y: f32,
     scale: f32,
     missing: &mut BTreeSet<String>,
+    style: &Style,
 ) {
     let Some(row) = grid.get(cy) else {
         return;
@@ -422,15 +498,16 @@ fn draw_cursor(
         1
     };
     let column = usize::from(cx);
-    let origin_x = panel_origin_x + (svg::MARGIN_X + f32::from(cx) * svg::CELL_W) * scale;
+    let origin_x =
+        panel_origin_x + (style.content_left() + f32::from(cx) * style.cell_width()) * scale;
     let origin_y = panel_origin_y
-        + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + cy as f32 * svg::CELL_H) * scale;
-    let cell_width = svg::CELL_W * span as f32 * scale;
-    let cell_height = svg::CELL_H * scale;
-    let left = grid_x(panel_origin_x, column, scale);
-    let right = grid_x(panel_origin_x, column + span, scale);
-    let top = grid_y(panel_origin_y, cy, scale);
-    let bottom = grid_y(panel_origin_y, cy + 1, scale);
+        + (style.header_height() + style.content_top() + cy as f32 * style.cell_height()) * scale;
+    let cell_width = style.cell_width() * span as f32 * scale;
+    let cell_height = style.cell_height() * scale;
+    let left = grid_x(panel_origin_x, column, scale, style);
+    let right = grid_x(panel_origin_x, column + span, scale, style);
+    let top = grid_y(panel_origin_y, cy, scale, style);
+    let bottom = grid_y(panel_origin_y, cy + 1, scale, style);
     let thickness = (2.0 * scale).round().max(1.0) as u32;
     let color = colors.color(ColorSlot::Cursor);
     match colors.cursor_shape() {
@@ -464,8 +541,8 @@ fn draw_cursor(
     if cell.ch.as_str() == CONTINUATION || cell.ch.chars().all(char::is_whitespace) {
         return;
     }
-    let style = svg::style_of(cell, colors);
-    if style.invisible {
+    let paint = svg::cell_paint(cell, colors);
+    if paint.invisible {
         return;
     }
     if unsupported_grapheme(cell.ch.as_str()) {
@@ -473,7 +550,10 @@ fn draw_cursor(
         return;
     }
     let baseline = panel_origin_y
-        + (svg::HEADER_H + svg::CONTENT_PADDING_TOP + cy as f32 * svg::CELL_H + svg::FONT_BASELINE)
+        + (style.header_height()
+            + style.content_top()
+            + cy as f32 * style.cell_height()
+            + style.baseline())
             * scale;
     for character in cell.ch.chars() {
         if is_default_ignorable(character) {
@@ -481,8 +561,8 @@ fn draw_cursor(
         }
         let key = GlyphKey {
             character,
-            bold: style.bold,
-            italic: style.italic,
+            bold: paint.bold,
+            italic: paint.italic,
         };
         match fonts.resolve(key) {
             Some(glyph) => draw_glyph(
@@ -494,7 +574,7 @@ fn draw_cursor(
                 cell_height,
                 baseline,
                 svg::bg_of(cell, colors),
-                svg::FONT_SIZE,
+                style.font_size,
                 scale,
             ),
             None => {
@@ -504,8 +584,16 @@ fn draw_cursor(
     }
 }
 
-fn draw_shadow(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, scale: f32) {
-    for (spread, offset_y, alpha) in svg::SHADOW_LAYERS {
+fn draw_shadow(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    scale: f32,
+    style: &Style,
+) {
+    for (spread, offset_y, alpha) in style.shadow_layers() {
         let spread = spread * scale;
         fill_rounded_rect_alpha(
             pixmap,
@@ -513,8 +601,8 @@ fn draw_shadow(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, sca
             y - spread + offset_y * scale,
             width + spread * 2.0,
             height + spread * 2.0,
-            svg::WINDOW_RADIUS * scale + spread,
-            svg::SHADOW_COLOR,
+            style.border.radius * scale + spread,
+            style.shadow.color,
             alpha,
         );
     }
@@ -532,14 +620,15 @@ fn draw_title(
     origin_y: f32,
     scale: f32,
     missing: &mut BTreeSet<String>,
+    style: &Style,
 ) {
-    let Some(title) = svg::visible_title(title, cols, rows, panel_width) else {
+    let Some(title) = svg::visible_title(title, cols, rows, panel_width, style) else {
         return;
     };
-    let advance = svg::title_advance();
+    let advance = svg::title_advance(style);
     let title_width = crate::terminal::cell::display_width(&title) as f32 * advance * scale;
     let mut x = origin_x + (panel_width * scale - title_width) / 2.0;
-    let baseline = origin_y + (svg::HEADER_H / 2.0 + svg::TITLE_FONT_SIZE * 0.35) * scale;
+    let baseline = origin_y + (style.header_height() / 2.0 + style.title_font_size * 0.35) * scale;
 
     for character in title.chars() {
         let columns = crate::terminal::cell::display_width(&character.to_string()).max(1);
@@ -557,10 +646,10 @@ fn draw_title(
                     x,
                     origin_y,
                     width,
-                    svg::HEADER_H * scale,
+                    style.header_height() * scale,
                     baseline,
-                    svg::TITLE_FG,
-                    svg::TITLE_FONT_SIZE,
+                    style.window.foreground,
+                    style.title_font_size,
                     scale,
                 ),
                 None => {

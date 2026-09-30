@@ -31,6 +31,10 @@ pub enum Request {
         /// project-local config against.
         #[serde(default)]
         profile: tui_test::profile::Profile,
+        /// How this session's screenshots and recordings are drawn, resolved
+        /// from the config file by the client for the same reason.
+        #[serde(default)]
+        style: Box<tui_test::render::style::Style>,
         cols: u16,
         rows: u16,
         cwd: Option<String>,
@@ -410,6 +414,7 @@ impl Request {
                 program,
                 backend,
                 profile,
+                style,
                 cols,
                 rows,
                 cwd,
@@ -429,6 +434,7 @@ impl Request {
                     Ok(Operation::Run(RunOptions {
                         backend,
                         profile,
+                        style: *style,
                         program: executable,
                         args: parts.collect(),
                         cols,
@@ -444,6 +450,7 @@ impl Request {
                     Ok(Operation::Open(OpenOptions {
                         backend,
                         profile,
+                        style: *style,
                         shell,
                         cols,
                         rows,
@@ -811,6 +818,7 @@ mod tests {
             program: None,
             backend: Backend::default(),
             profile: Default::default(),
+            style: Box::default(),
             cols: 80,
             rows: 30,
             cwd: None,
