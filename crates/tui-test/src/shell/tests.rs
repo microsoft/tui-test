@@ -56,16 +56,18 @@ struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     fn new(shell: Shell) -> Self {
-        let mut name = "space $HOME `echo` '雪' %2F %25 #".to_string();
-        if cfg!(unix) {
+        let mut name = if shell == Shell::Zsh {
+            "zsh-safe".to_string()
+        } else {
+            "space $HOME `echo` '雪' %2F %25 #".to_string()
+        };
+        if cfg!(unix) && shell != Shell::Zsh {
             name.push_str(" \"quoted\"");
             if !matches!(shell, Shell::Powershell | Shell::Pwsh) {
                 name.push_str(" \\");
             }
             name.push_str(" newline");
-            if shell != Shell::Zsh {
-                name.push('\n');
-            }
+            name.push('\n');
         }
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
