@@ -49,7 +49,11 @@ impl TestDirectory {
     fn new(shell: Shell) -> Self {
         let mut name = "space $HOME `echo` '雪' %2F %25 #".to_string();
         if cfg!(unix) {
-            name.push_str(" \"quoted\" \\ newline\n");
+            name.push_str(" \"quoted\"");
+            if !matches!(shell, Shell::Powershell | Shell::Pwsh) {
+                name.push_str(" \\");
+            }
+            name.push_str(" newline\n");
         }
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
