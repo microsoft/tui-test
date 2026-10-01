@@ -53,7 +53,10 @@ impl TestDirectory {
             if !matches!(shell, Shell::Powershell | Shell::Pwsh) {
                 name.push_str(" \\");
             }
-            name.push_str(" newline\n");
+            name.push_str(" newline");
+            if shell != Shell::Zsh {
+                name.push('\n');
+            }
         }
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
