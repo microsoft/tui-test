@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { uniqueSession } from "../dist/index.js";
+import { UsageError, uniqueSession } from "../dist/index.js";
 import { NativeRuntime } from "../dist/native.js";
 import {
   closeAllTracked,
   createTerminal,
   defaultShell,
+  resetTerminalDefaults,
+  setTerminalDefaults,
   terminalSnapshot,
   trackTerminal,
   trackedCount,
@@ -108,6 +110,69 @@ test("createTerminal forwards screen history retention to open and run", async (
       } finally {
         await terminal.close();
         untrackTerminal(terminal);
+      }
+    }
+  } finally {
+    Object.assign(NativeRuntime.prototype, originals);
+  }
+});
+
+test("createTerminal forwards default and per-call timeouts to startup and waits", async () => {
+  const originals = {
+    open: NativeRuntime.prototype.open,
+    run: NativeRuntime.prototype.run,
+    waitReady: NativeRuntime.prototype.waitReady,
+    close: NativeRuntime.prototype.close,
+  };
+  const calls = [];
+  NativeRuntime.prototype.open = async (options) => { calls.push(options.timeouts); };
+  NativeRuntime.prototype.run = async (options) => { calls.push(options.timeouts); };
+  NativeRuntime.prototype.waitReady = async (timeout) => { calls.push(timeout); };
+  NativeRuntime.prototype.close = async () => {};
+  const defaults = { text: 100, idle: 200, command: 300, exit: 400, ready: 500 };
+  setTerminalDefaults({ timeouts: defaults });
+  try {
+    for (const program of [undefined, ["program"]]) {
+      for (const timeouts of [undefined, { text: 10, ready: 0 }]) {
+        const options = { program };
+        if (timeouts !== undefined) options.timeouts = timeouts;
+        const terminal = await createTerminal(options);
+        try {
+          const expected = timeouts ?? defaults;
+          assert.deepEqual(calls.at(-1), expected);
+          await terminal.waitReady();
+          assert.equal(calls.at(-1), expected.ready);
+        } finally {
+          await terminal.close();
+          untrackTerminal(terminal);
+        }
+      }
+    }
+  } finally {
+    resetTerminalDefaults();
+    Object.assign(NativeRuntime.prototype, originals);
+  }
+});
+
+test("createTerminal untracks validation failures without closing an existing session", async () => {
+  const originals = {
+    open: NativeRuntime.prototype.open,
+    run: NativeRuntime.prototype.run,
+    close: NativeRuntime.prototype.close,
+  };
+  let closes = 0;
+  NativeRuntime.prototype.close = async () => { closes++; };
+  try {
+    for (const error of [new UsageError("invalid cols"), new TypeError("invalid env")]) {
+      NativeRuntime.prototype.open = async () => { throw error; };
+      NativeRuntime.prototype.run = async () => { throw error; };
+      for (const program of [undefined, ["program"]]) {
+        await assert.rejects(
+          createTerminal({ session: "existing", program, retries: 0 }),
+          (actual) => actual === error,
+        );
+        assert.equal(closes, 0);
+        assert.equal(trackedCount(), 0);
       }
     }
   } finally {

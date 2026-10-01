@@ -829,6 +829,9 @@ export class TuiTest {
       try {
         return await action();
       } catch (error) {
+        if (error instanceof UsageError) {
+          throw error;
+        }
         lastError = error;
         if (attempt < retries) {
           await this.closeQuiet();

@@ -45,3 +45,9 @@ toml.workspace = true
 tiny-skia = { workspace = true, optional = true }
 ttf-parser.workspace = true
 unicode-width.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }

@@ -1,6 +1,7 @@
 import { TuiTest } from "../client.js";
 import { IS_MACOS, IS_WINDOWS } from "../config.js";
 import { uniqueSession } from "../ephemeral.js";
+import { UsageError } from "../errors.js";
 import type {
   ArtifactOptions,
   AutomaticRecording,
@@ -101,7 +102,7 @@ function clientOptions(opts: CreateTerminalOptions): ClientOptions {
 
 function spawnOptions(opts: CreateTerminalOptions): SpawnOptions {
   const spawn: SpawnOptions = { retries: opts.retries ?? 2 };
-  for (const key of ["cols", "rows", "cwd", "env", "waitReady"] as const) {
+  for (const key of ["cols", "rows", "cwd", "env", "waitReady", "timeouts"] as const) {
     const value = opts[key];
     if (value !== undefined) {
       Object.assign(spawn, { [key]: value });
@@ -126,7 +127,9 @@ export async function createTerminal(
       await terminal.open({ shell: opts.shell, ...spawn });
     }
   } catch (error) {
-    await terminal.closeQuiet();
+    if (!(error instanceof UsageError) && !(error instanceof TypeError)) {
+      await terminal.closeQuiet();
+    }
     untrackTerminal(terminal);
     throw error;
   }

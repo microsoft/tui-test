@@ -21,6 +21,16 @@ Use `--session NAME` to select a session. `open` and `run` reuse it unless `--re
 
 `restart` replays the last successful spawn, preserving its original working directory, options, and latest terminal size. It sends Ctrl-C and waits up to 5000 ms before forcing replacement; `--graceful-timeout 0` skips the wait. It works after child exit, but not after `close` or daemon shutdown. The terminal and automatic recording start fresh.
 
+For a new child, `--cwd` is relative to the invoking client's directory; omitting it uses that directory. Screenshot, manual recording, snapshot, and failure-artifact paths also belong to the invoking client, not the daemon's original directory. Paths in a config file remain relative to that file.
+
+`TUI_TEST_HOME` isolates daemon endpoints on Windows as well as Unix. Lifecycle `.pid.lock` files intentionally remain after shutdown; ownership is an OS file lock, not the file's age or existence.
+
+Each IPC connection must send its newline-terminated request within two seconds, with a maximum encoded size of 1 MiB. Incomplete connections are handled independently. This handshake deadline does not limit the requested operation's timeout.
+
+Waits and retrying assertions do not block another client's input, mouse, resize, inspection, or termination requests. For example, one client can `expect text "ready"` while another submits the command that prints it. Disconnecting a waiting client cancels only its request; it does not interrupt the child or other clients. Pending waits are bounded separately from the ordinary request queue.
+
+Lifecycle changes cancel pending waits before replacing their terminal generation, so an old expectation cannot succeed against a new child. Status combines the last completed operation's metadata with the live frame. Shutdown allows five seconds for engine teardown; if teardown stalls, the daemon stops and reports an internal error rather than hanging indefinitely. On Unix, teardown drains PTY output briefly rather than waiting indefinitely for descendants holding the slave; output arriving after that drain is not retained.
+
 ## Locate text
 
 ```sh
@@ -69,7 +79,7 @@ than native binding stage arrays.
 | `mouse down\|up X Y [options]` | Press or release a button. |
 | `mouse drag X1 Y1 X2 Y2 [options]` | Drag. |
 | `mouse scroll up\|down [--amount N]` | Scroll. |
-| `resize COLS ROWS` | Resize. |
+| `resize COLS ROWS` | Resize. Zero dimensions are usage errors and leave the session unchanged. |
 | `signal NAME` | Send a signal. |
 
 Mouse button options are `--button left|middle|right`, `--alt`, `--ctrl`, and `--shift`.
@@ -84,7 +94,7 @@ Mouse button options are `--button left|middle|right`, `--alt`, `--ctrl`, and `-
 | `wait idle` | Wait for the screen to settle. |
 | `wait title TEXT` | Wait for a title. |
 | `wait clipboard [TEXT]` | Wait for a clipboard change or match. |
-| `wait bell` | Wait for a bell. |
+| `wait bell` | Wait for a bell received after this wait starts; earlier bells do not satisfy it. |
 
 Most waits accept `--timeout MS`. `expect`, `click`, and `highlight` retry. `find` reads the current screen.
 

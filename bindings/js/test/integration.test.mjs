@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
+import { Worker } from "node:worker_threads";
 
 import {
   ExpectationError,
@@ -91,6 +93,65 @@ test("restart recreates a named session with an open result", async () => {
     );
   } finally {
     await su.closeQuiet();
+  }
+});
+
+test("invalid open and run options with retries preserve the existing session", async () => {
+  const terminal = new TuiTest(uniqueSession("invalid-spawn-preserves"));
+  try {
+    const opened = await terminal.run(process.execPath, evalArgs);
+    await terminal.getByText("ready").wait({ timeout: 5000 });
+    for (const options of [{ cols: -1 }, { timeouts: { ready: -1 } }]) {
+      const invalid = { ...options, retries: 2, restart: true };
+      for (const action of [
+        () => terminal.open(invalid),
+        () => terminal.run(process.execPath, evalArgs, invalid),
+      ]) {
+        await assert.rejects(action, UsageError);
+        assert.ok((await sessions()).includes(terminal.session));
+        await terminal.getByText("ready").expect({ timeout: 0 });
+        const reused = await terminal.run(process.execPath, evalArgs);
+        assert.equal(reused.shell_pid, opened.shell_pid);
+      }
+    }
+  } finally {
+    await terminal.closeQuiet();
+  }
+});
+
+test("worker exit leaves terminals owned by the main thread open", {
+  skip: !!process.versions.bun || typeof globalThis.Deno !== "undefined",
+  timeout: 20_000,
+}, async (t) => {
+  const terminal = new TuiTest(uniqueSession("worker-owner"));
+  try {
+    await terminal.run(process.execPath, evalArgs);
+    await terminal.getByText("ready").wait({ timeout: 5000 });
+    for (const explicitExit of [false, true]) {
+      const worker = new Worker(`
+        const assert = require("node:assert/strict");
+        const { workerData } = require("node:worker_threads");
+        (async () => {
+          const sdk = await import(workerData.url);
+          assert.ok((await sdk.sessions()).includes(workerData.session));
+          if (workerData.explicitExit) process.exit(0);
+        })().catch((error) => { throw error; });
+      `, {
+        eval: true,
+        workerData: {
+          url: new URL("../dist/index.js", import.meta.url).href,
+          session: terminal.session,
+          explicitExit,
+        },
+      });
+      t.after(() => worker.terminate());
+      const [code] = await once(worker, "exit");
+      assert.equal(code, 0);
+      assert.ok((await sessions()).includes(terminal.session));
+      await terminal.getByText("ready").expect({ timeout: 0 });
+    }
+  } finally {
+    await terminal.closeQuiet();
   }
 });
 

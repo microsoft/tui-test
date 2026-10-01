@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 use crate::config::home_dir;
@@ -56,14 +58,13 @@ pub fn scripts_dir() -> PathBuf {
     home_dir().join("shell")
 }
 
-fn zdotdir() -> PathBuf {
-    home_dir().join("zsh")
-}
-
 /// Materialize the bundled shell-integration scripts into the home directory.
 pub fn write_integration_scripts() -> std::io::Result<()> {
-    let dir = scripts_dir();
-    std::fs::create_dir_all(&dir)?;
+    write_scripts_to(&scripts_dir())
+}
+
+fn write_scripts_to(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
     let files: &[(&str, &str)] = &[
         (
             "shellIntegration.bash",
@@ -112,10 +113,9 @@ pub fn write_integration_scripts() -> std::io::Result<()> {
     Ok(())
 }
 
-fn setup_zsh_dotfiles() -> std::io::Result<()> {
-    let dir = zdotdir();
+fn setup_zsh_dotfiles(src: &Path) -> std::io::Result<PathBuf> {
+    let dir = src.with_file_name("zsh");
     std::fs::create_dir_all(&dir)?;
-    let src = scripts_dir();
     std::fs::copy(src.join("shellIntegration-rc.zsh"), dir.join(".zshrc"))?;
     std::fs::copy(
         src.join("shellIntegration-profile.zsh"),
@@ -123,7 +123,7 @@ fn setup_zsh_dotfiles() -> std::io::Result<()> {
     )?;
     std::fs::copy(src.join("shellIntegration-env.zsh"), dir.join(".zshenv"))?;
     std::fs::copy(src.join("shellIntegration-login.zsh"), dir.join(".zlogin"))?;
-    Ok(())
+    Ok(dir)
 }
 
 pub struct Launch {
@@ -135,7 +135,10 @@ pub struct Launch {
 /// Compute how to launch a shell with integration wired in.
 pub fn shell_launch(shell: Shell) -> anyhow::Result<Launch> {
     write_integration_scripts()?;
-    let dir = scripts_dir();
+    launch_with_scripts(shell, &scripts_dir())
+}
+
+fn launch_with_scripts(shell: Shell, dir: &Path) -> anyhow::Result<Launch> {
     let mut env: Vec<(String, String)> = Vec::new();
 
     let (target, args) = match shell {
@@ -166,9 +169,9 @@ pub fn shell_launch(shell: Shell) -> anyhow::Result<Launch> {
                 vec![
                     "-NoLogo".to_string(),
                     "-NoProfile".to_string(),
-                    "-noexit".to_string(),
-                    "-command".to_string(),
-                    format!(". \"{script}\""),
+                    "-NoExit".to_string(),
+                    "-EncodedCommand".to_string(),
+                    powershell_encoded_command(&format!("& {}", powershell_literal(&script))),
                 ],
             )
         }
@@ -178,19 +181,19 @@ pub fn shell_launch(shell: Shell) -> anyhow::Result<Launch> {
                 windows_exe("fish"),
                 vec![
                     "--init-command".to_string(),
-                    format!(". {}", script.replace(' ', "\\ ")),
+                    format!("source -- {}", fish_literal(&script)),
                 ],
             )
         }
         Shell::Zsh => {
-            setup_zsh_dotfiles()?;
+            let zdotdir = setup_zsh_dotfiles(dir)?;
             let user_zdotdir = std::env::var("ZDOTDIR")
                 .ok()
                 .or_else(|| dirs::home_dir().map(|p| path_str(&p)))
                 .unwrap_or_else(|| "~".to_string());
-            env.push(("ZDOTDIR".to_string(), path_str(&zdotdir())));
+            env.push(("ZDOTDIR".to_string(), path_str(&zdotdir)));
             env.push(("USER_ZDOTDIR".to_string(), user_zdotdir));
-            (windows_exe("zsh"), vec![])
+            (windows_exe("zsh"), vec!["-d".to_string()])
         }
         Shell::Cmd => {
             env.push(("PROMPT".to_string(), "$G ".to_string()));
@@ -213,10 +216,13 @@ pub fn shell_launch(shell: Shell) -> anyhow::Result<Launch> {
             ],
         ),
         Shell::Nushell => {
-            let script = path_str(&dir.join("shellIntegration.nu")).replace('\\', "/");
+            let script = path_str(&dir.join("shellIntegration.nu"));
             (
                 windows_exe("nu"),
-                vec!["--execute".to_string(), format!("source '{script}'")],
+                vec![
+                    "--execute".to_string(),
+                    format!("source {}", nu_literal(&script)),
+                ],
             )
         }
     };
@@ -227,6 +233,38 @@ pub fn shell_launch(shell: Shell) -> anyhow::Result<Launch> {
 fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
+
+fn powershell_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn powershell_encoded_command(command: &str) -> String {
+    let bytes = command
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    BASE64_STANDARD.encode(bytes)
+}
+
+fn fish_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+fn nu_literal(value: &str) -> String {
+    // Unlike $"...", an ordinary Nushell double-quoted string does not interpolate.
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+    )
+}
+
+#[cfg(test)]
+mod tests;
 
 fn windows_exe(name: &str) -> String {
     if cfg!(windows) {

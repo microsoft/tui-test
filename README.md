@@ -354,6 +354,12 @@ The CLI checks the current directory, the platform config directory, then `~/.tu
 
 Shells: bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, and nushell.
 
+Shell integration preserves literal characters (including `%`, spaces, and
+Unicode) in working directories by reporting percent-encoded file URIs.
+PowerShell reports native exit codes for failed native commands and `1` for
+failed cmdlets or `throw`, rather than reusing an earlier native exit code.
+`cmd` integration remains prompt-only.
+
 Backends: Alacritty, Ghostty, Rio, and xterm.js. Default: Alacritty.
 
 ### Exit codes

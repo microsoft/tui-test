@@ -67,6 +67,8 @@ Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Use
 
 `open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
 
+Validation errors are not retried and do not close an existing session, even when `retries` or `restart` is set.
+
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
 
 #### Input
@@ -92,7 +94,7 @@ The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, 
 | `await get_output()` | `str \| None` |
 | `await get_exit_code()` | `int \| None` |
 | `await get_cwd()` | `str \| None` |
-| `await get_cursor()` | `dict` |
+| `await get_cursor()` | `Cursor` |
 | `await get_size()` | `dict` |
 | `await get_title()` | `str \| None` |
 | `await get_clipboard()` | `str` |
@@ -116,7 +118,7 @@ The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, 
 | `await expect_bell_count(count, timeout=None)` | Wait until the cumulative bell count reaches `count`. |
 | `await expect_snapshot(name, **options)` | Assert or update a snapshot. |
 
-`wait_clipboard()` waits for the next change. A string matches text. A compiled `re.Pattern` matches a regular expression.
+`wait_clipboard()` waits for the next change. A string matches text. A compiled text `re.Pattern` uses Python's `search()` matcher, preserving its flags, Unicode behavior, lookarounds, and backreferences. Compiled bytes patterns are rejected with `TypeError`.
 
 Snapshot options are `update`, `include_style`, and `include_title`.
 
@@ -297,6 +299,8 @@ async with terminal(program=("my-app",)) as app:
     await app.get_by_text("Ready").expect()
 ```
 
+`create_terminal()` and `terminal()` apply `timeouts` to both startup and later waits, including values from `set_terminal_defaults()`.
+
 ### Configuration
 
 ```python
@@ -319,6 +323,7 @@ terminal = TuiTest(
 | Type | Description |
 | --- | --- |
 | `State` | Session state and visible text. |
+| `Cursor` | Typed dictionary with integer `x`/`y`, boolean `visible`, and string `shape`/`color`. |
 | `Cell` | One terminal cell and its style. |
 | `TextMatch` | Matched text, positions, and spans. |
 | `TextStyle` | Locator style fields. |

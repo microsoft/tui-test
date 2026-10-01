@@ -789,6 +789,31 @@ pub enum Operation {
 }
 
 impl Operation {
+    /// Whether this operation polls an existing session. Such operations can
+    /// run alongside input without holding the command serialization lock.
+    pub fn is_wait(&self) -> bool {
+        matches!(
+            self,
+            Self::WaitTitle { .. }
+                | Self::WaitClipboard { .. }
+                | Self::WaitClipboardMatch { .. }
+                | Self::WaitIdle { .. }
+                | Self::WaitCommand { .. }
+                | Self::WaitExit { .. }
+                | Self::WaitReady { .. }
+                | Self::WaitBell { .. }
+                | Self::WaitLocator { .. }
+                | Self::ClickLocator { .. }
+                | Self::HighlightLocator { .. }
+                | Self::ExpectTitle { .. }
+                | Self::ExpectExitCode { .. }
+                | Self::ExpectMode { .. }
+                | Self::ExpectColors { .. }
+                | Self::ExpectCursor { .. }
+                | Self::ExpectBellCount { .. }
+        )
+    }
+
     /// Wait for clipboard text or a regex.
     pub fn wait_clipboard_match(
         pattern: impl Into<ClipboardPattern>,
