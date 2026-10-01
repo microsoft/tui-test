@@ -193,7 +193,7 @@ fn launch_with_scripts(shell: Shell, dir: &Path) -> anyhow::Result<Launch> {
                 .unwrap_or_else(|| "~".to_string());
             env.push(("ZDOTDIR".to_string(), path_str(&zdotdir)));
             env.push(("USER_ZDOTDIR".to_string(), user_zdotdir));
-            (windows_exe("zsh"), vec![])
+            (windows_exe("zsh"), vec!["-d".to_string()])
         }
         Shell::Cmd => {
             env.push(("PROMPT".to_string(), "$G ".to_string()));

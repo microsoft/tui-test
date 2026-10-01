@@ -43,6 +43,15 @@ fn powershell_passes_an_encoded_literal_script_path() {
     }
 }
 
+#[test]
+fn zsh_disables_global_startup_files() {
+    let directory = TestDirectory::new(Shell::Zsh);
+    let scripts = directory.0.join("shell");
+    write_scripts_to(&scripts).unwrap();
+    let launch = launch_with_scripts(Shell::Zsh, &scripts).unwrap();
+    assert_eq!(launch.args, ["-d"]);
+}
+
 struct TestDirectory(PathBuf);
 
 impl TestDirectory {
