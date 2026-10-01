@@ -888,7 +888,10 @@ class IntegrationTests(unittest.TestCase):
             await asyncio.wait_for(tui_test.close_all(), timeout=2)
             with self.assertRaises(ExpectationError) as raised:
                 await wait
-            self.assertIn("operation was cancelled", str(raised.exception))
+            self.assertRegex(
+                str(raised.exception),
+                r"operation was cancelled|session exited before",
+            )
             self.assertNotIn(su.session, await tui_test.sessions())
 
         run(scenario())

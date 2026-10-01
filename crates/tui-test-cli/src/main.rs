@@ -1337,12 +1337,13 @@ fn daemon_stop(session: &str, all: bool, targeted: bool, json: bool) -> i32 {
         eprintln!("no daemon running for session '{session}'");
         return 3;
     }
-    match ipc::send_with_timeout(&socket, &Request::Shutdown, DAEMON_STOP_TIMEOUT) {
-        Ok(resp) if resp.ok => {
+    match shutdown_daemon(&socket)
+        .and_then(|_| wait_for_daemon_state(&socket, false, DAEMON_STATE_TIMEOUT))
+    {
+        Ok(()) => {
             report_stopped(&[session.to_string()], json);
             0
         }
-        Ok(resp) => print_response(&resp, json),
         Err(e) => {
             eprintln!("request failed: {e}");
             4
@@ -1353,12 +1354,10 @@ fn daemon_stop(session: &str, all: bool, targeted: bool, json: bool) -> i32 {
 fn stop_all_daemons(json: bool) -> i32 {
     let mut stopped = Vec::new();
     for name in running_sessions() {
-        if ipc::send_with_timeout(
-            &config::socket_name(&name),
-            &Request::Shutdown,
-            DAEMON_STOP_TIMEOUT,
-        )
-        .is_ok()
+        let socket = config::socket_name(&name);
+        if shutdown_daemon(&socket)
+            .and_then(|_| wait_for_daemon_state(&socket, false, DAEMON_STATE_TIMEOUT))
+            .is_ok()
         {
             stopped.push(name);
         }

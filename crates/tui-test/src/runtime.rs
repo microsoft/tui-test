@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, RwLock, Weak};
 
 use sha2::{Digest, Sha256};
 
@@ -577,8 +577,151 @@ pub struct SessionRegistry {
 struct RegistryInner {
     sessions: Mutex<HashMap<String, Session>>,
     recordings: Mutex<CompletedRecordings>,
-    generations: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    generations: Mutex<HashMap<String, Weak<Generation>>>,
     lifecycle: RwLock<()>,
+}
+
+struct Generation {
+    state: Mutex<GenerationState>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct GenerationState {
+    shared: usize,
+    exclusive: bool,
+    waiting_exclusive: usize,
+    closing: bool,
+    publishing: bool,
+}
+
+struct GenerationOperation {
+    generation: Arc<Generation>,
+    exclusive: bool,
+    publishing: bool,
+}
+
+struct GenerationClose {
+    generation: Arc<Generation>,
+}
+
+impl Generation {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(GenerationState::default()),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn start_operation(self: &Arc<Self>, exclusive: bool, publishing: bool) -> GenerationOperation {
+        debug_assert!(!publishing || exclusive);
+        let mut state = self.lock_state();
+        if exclusive {
+            state.waiting_exclusive += 1;
+            while state.closing || state.exclusive || state.shared != 0 {
+                state = self
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            state.waiting_exclusive -= 1;
+            state.exclusive = true;
+            state.publishing = publishing;
+        } else {
+            while state.closing || state.exclusive || state.waiting_exclusive != 0 {
+                state = self
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            state.shared += 1;
+        }
+        GenerationOperation {
+            generation: Arc::clone(self),
+            exclusive,
+            publishing,
+        }
+    }
+
+    fn start_close(self: &Arc<Self>) -> GenerationClose {
+        let mut state = self.lock_state();
+        while state.closing {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        state.closing = true;
+        while state.publishing {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        GenerationClose {
+            generation: Arc::clone(self),
+        }
+    }
+
+    fn lock_state(&self) -> MutexGuard<'_, GenerationState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl GenerationOperation {
+    fn published(&mut self) {
+        if !self.publishing {
+            return;
+        }
+        let mut state = self.generation.lock_state();
+        debug_assert!(state.publishing, "generation publication was not active");
+        state.publishing = false;
+        self.publishing = false;
+        self.generation.changed.notify_all();
+    }
+}
+
+impl Drop for GenerationOperation {
+    fn drop(&mut self) {
+        let mut state = self.generation.lock_state();
+        if self.exclusive {
+            debug_assert!(state.exclusive, "exclusive operation was not active");
+            state.exclusive = false;
+            if self.publishing {
+                debug_assert!(state.publishing, "generation publication was not active");
+                state.publishing = false;
+            }
+        } else {
+            debug_assert!(state.shared != 0, "shared operation was not active");
+            state.shared = state.shared.saturating_sub(1);
+        }
+        self.generation.changed.notify_all();
+    }
+}
+
+impl GenerationClose {
+    fn wait_until_idle(&self) {
+        let mut state = self.generation.lock_state();
+        while state.exclusive || state.shared != 0 {
+            state = self
+                .generation
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        debug_assert!(state.closing);
+    }
+}
+
+impl Drop for GenerationClose {
+    fn drop(&mut self) {
+        let mut state = self.generation.lock_state();
+        debug_assert!(state.closing, "close operation was not active");
+        state.closing = false;
+        self.generation.changed.notify_all();
+    }
 }
 
 #[derive(Default)]
@@ -644,35 +787,48 @@ impl SessionRegistry {
                 session.engine.interrupt_for_operation(&operation);
             }
         }
+        if matches!(&operation, Operation::Close) {
+            return self
+                .close_with_context(name, context)
+                .map(|_| OperationResult::Unit);
+        }
         let generation = self.generation(name);
-        let _generation = generation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match operation {
             Operation::Open(_) | Operation::Run(_) => {
+                let existing = self.lock_sessions().get(name).cloned();
+                let _pending = existing
+                    .as_ref()
+                    .map(|session| session.engine.lifecycle_request());
+                let mut generation_operation = generation.start_operation(true, true);
                 let _lifecycle = self
                     .inner
                     .lifecycle
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                self.get_or_create_locked(name.to_string())
-                    .execute_with_context(operation, context)
+                let session = self.get_or_create_locked(name.to_string());
+                generation_operation.published();
+                session.execute_with_context(operation, context)
             }
             Operation::Restart { .. } => {
+                let session = self
+                    .lock_sessions()
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(TuiTestError::no_restart_metadata)?;
+                let _pending = session.engine.lifecycle_request();
+                let _generation_operation = generation.start_operation(true, false);
                 let _lifecycle = self
                     .inner
                     .lifecycle
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let session = self.lock_sessions().get(name).cloned();
-                session
-                    .ok_or_else(TuiTestError::no_restart_metadata)?
-                    .execute_with_context(operation, context)
+                session.execute_with_context(operation, context)
             }
-            Operation::Close => self
-                .close_locked(name, context)
-                .map(|_| OperationResult::Unit),
+            Operation::Close => {
+                unreachable!("close operations are dispatched before generation locking")
+            }
             other => {
+                let _generation_operation = generation.start_operation(false, false);
                 let session = {
                     let _lifecycle = self
                         .inner
@@ -681,10 +837,6 @@ impl SessionRegistry {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     self.lock_sessions().get(name).cloned()
                 };
-                // The engine pins a terminal generation while it executes.
-                // Keep the selected owner, not the name lock: a concurrent
-                // close/reopen must not redirect this operation to a new owner.
-                drop(_generation);
                 session
                     .ok_or_else(TuiTestError::no_session)?
                     .execute_with_context(other, context)
@@ -707,7 +859,42 @@ impl SessionRegistry {
     }
 
     pub fn close(&self, name: &str) -> Result<(), TuiTestError> {
-        self.execute(name, Operation::Close).map(|_| ())
+        self.close_with_context(name, ExecutionContext::default())
+    }
+
+    fn close_with_context(
+        &self,
+        name: &str,
+        context: ExecutionContext,
+    ) -> Result<(), TuiTestError> {
+        let generation = self.generation(name);
+        let close = generation.start_close();
+        let session = { self.lock_sessions().get(name).cloned() };
+        if let Some(session) = session {
+            session.interrupt();
+        }
+        close.wait_until_idle();
+        let (result, removed) = {
+            let _lifecycle = self
+                .inner
+                .lifecycle
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(session) = self.lock_sessions().remove(name) else {
+                return Ok(());
+            };
+            let result = session
+                .execute_with_context(Operation::Close, context)
+                .map(|_| ());
+            let removed = Self::replace_recording(
+                &mut self.lock_recordings(),
+                name.to_string(),
+                session.retained_recording_path(),
+            );
+            (result, removed)
+        };
+        Self::remove_recording_files(removed);
+        result
     }
 
     pub fn close_all(&self) {
@@ -741,9 +928,7 @@ impl SessionRegistry {
 
     pub fn recording(&self, name: &str) -> std::io::Result<String> {
         let generation = self.generation(name);
-        let _generation = generation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _operation = generation.start_operation(true, false);
         let (session, completed) = {
             let _lifecycle = self
                 .inner
@@ -764,27 +949,6 @@ impl SessionRegistry {
         std::fs::read_to_string(path)
     }
 
-    fn close_locked(&self, name: &str, context: ExecutionContext) -> Result<(), TuiTestError> {
-        let _lifecycle = self
-            .inner
-            .lifecycle
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(session) = self.lock_sessions().remove(name) else {
-            return Ok(());
-        };
-        let result = session
-            .execute_with_context(Operation::Close, context)
-            .map(|_| ());
-        let removed = Self::replace_recording(
-            &mut self.lock_recordings(),
-            name.to_string(),
-            session.retained_recording_path(),
-        );
-        Self::remove_recording_files(removed);
-        result
-    }
-
     fn lock_sessions(&self) -> MutexGuard<'_, HashMap<String, Session>> {
         self.inner
             .sessions
@@ -799,7 +963,7 @@ impl SessionRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn generation(&self, name: &str) -> Arc<Mutex<()>> {
+    fn generation(&self, name: &str) -> Arc<Generation> {
         let mut generations = self
             .inner
             .generations
@@ -809,7 +973,7 @@ impl SessionRegistry {
         if let Some(generation) = generations.get(name).and_then(Weak::upgrade) {
             return generation;
         }
-        let generation = Arc::new(Mutex::new(()));
+        let generation = Arc::new(Generation::new());
         generations.insert(name.to_string(), Arc::downgrade(&generation));
         generation
     }
@@ -898,7 +1062,295 @@ fn tui_test_error_to_io_error(error: TuiTestError) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{ErrorKind, Operation};
+    use crate::api::{AutomaticRecording, AutomaticRecordingMode, ErrorKind, Operation};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    #[derive(Clone, Copy)]
+    enum NamedCloseEntry {
+        Close,
+        Execute,
+        ExecuteWithContext,
+    }
+
+    fn assert_named_close_interrupts_wait(entry: NamedCloseEntry) {
+        let registry = Arc::new(SessionRegistry::default());
+        let name = match entry {
+            NamedCloseEntry::Close => "close-interrupts-wait",
+            NamedCloseEntry::Execute => "execute-close-interrupts-wait",
+            NamedCloseEntry::ExecuteWithContext => "execute-with-context-close-interrupts-wait",
+        };
+        let log_path =
+            std::env::temp_dir().join(format!("tui-test-{name}-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&log_path);
+        let session = Session {
+            name: Arc::from(name),
+            engine: Arc::new(Engine::new(
+                name.to_string(),
+                Arc::new(Logger::to_file(&log_path).expect("create operation log")),
+                native_recording_path(name),
+            )),
+            context: ExecutionContext::default(),
+        };
+        session
+            .open(OpenOptions {
+                wait_ready: Some(false),
+                recording: AutomaticRecording {
+                    mode: AutomaticRecordingMode::Always,
+                    ..AutomaticRecording::default()
+                },
+                ..OpenOptions::default()
+            })
+            .expect("open target session");
+        registry
+            .lock_sessions()
+            .insert(name.to_string(), session.clone());
+        let existing_handle = registry.session(name);
+
+        let other = registry.session(format!("{name}-other"));
+        other
+            .open(OpenOptions {
+                wait_ready: Some(false),
+                ..OpenOptions::default()
+            })
+            .expect("open unrelated session");
+
+        let waiting_registry = Arc::clone(&registry);
+        let (wait_sent, wait_received) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let result = waiting_registry.execute(
+                name,
+                Operation::WaitLocator {
+                    query: LocatorQuery::text("text-that-will-never-appear"),
+                    not: false,
+                    timeout_ms: Some(30_000),
+                },
+            );
+            let _ = wait_sent.send(result);
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if std::fs::read_to_string(&log_path)
+                .is_ok_and(|log| log.contains("operation WaitLocator"))
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "wait operation did not start");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let start = Instant::now();
+        assert!(matches!(
+            registry.execute(other.name(), Operation::State),
+            Ok(OperationResult::State(_))
+        ));
+        assert!(start.elapsed() < Duration::from_secs(2));
+
+        let recording_registry = Arc::clone(&registry);
+        let (recording_started, recording_entered) = mpsc::sync_channel(1);
+        let (recording_sent, recording_received) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            recording_started.send(()).expect("signal recording read");
+            let result = recording_registry.recording(name);
+            let _ = recording_sent.send(result);
+        });
+        recording_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("recording read thread started");
+        assert!(matches!(
+            recording_received.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        let lifecycle_registry = Arc::clone(&registry);
+        let (lifecycle_held, lifecycle_entered) = mpsc::sync_channel(1);
+        let (lifecycle_release, lifecycle_released) = mpsc::sync_channel(1);
+        let (lifecycle_done, lifecycle_finished) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let unrelated_operation = lifecycle_registry
+                .inner
+                .lifecycle
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            lifecycle_held.send(()).expect("signal lifecycle reader");
+            lifecycle_released.recv().expect("release lifecycle reader");
+            drop(unrelated_operation);
+            let _ = lifecycle_done.send(());
+        });
+        lifecycle_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("unrelated lifecycle reader entered");
+
+        let close_registry = Arc::clone(&registry);
+        let (close_sent, close_received) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let result = match entry {
+                NamedCloseEntry::Close => close_registry.close(name),
+                NamedCloseEntry::Execute => {
+                    close_registry.execute(name, Operation::Close).map(|_| ())
+                }
+                NamedCloseEntry::ExecuteWithContext => close_registry
+                    .execute_with_context(name, Operation::Close, ExecutionContext::default())
+                    .map(|_| ()),
+            };
+            let _ = close_sent.send(result);
+        });
+
+        let close_result = match close_received.recv_timeout(Duration::from_secs(2)) {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = lifecycle_release.send(());
+                session.interrupt();
+                let _ = close_received.recv_timeout(Duration::from_secs(2));
+                let _ = wait_received.recv_timeout(Duration::from_secs(2));
+                let _ = recording_received.recv_timeout(Duration::from_secs(2));
+                panic!("named close did not interrupt the wait: {error}");
+            }
+        };
+        close_result.expect("close target session");
+        lifecycle_release
+            .send(())
+            .expect("release unrelated lifecycle reader");
+        lifecycle_finished
+            .recv_timeout(Duration::from_secs(2))
+            .expect("unrelated lifecycle reader released");
+        assert_eq!(
+            wait_received
+                .recv_timeout(Duration::from_secs(2))
+                .expect("wait completed after close")
+                .unwrap_err()
+                .kind,
+            ErrorKind::Assertion
+        );
+        let recording = recording_received
+            .recv_timeout(Duration::from_secs(2))
+            .expect("recording read completed after close")
+            .expect("read retained recording");
+        assert!(!recording.is_empty());
+        assert!(!registry.lock_sessions().contains_key(name));
+        assert!(matches!(
+            registry.execute(other.name(), Operation::State),
+            Ok(OperationResult::State(_))
+        ));
+
+        existing_handle
+            .open(OpenOptions {
+                wait_ready: Some(false),
+                ..OpenOptions::default()
+            })
+            .expect("reopen through existing named handle");
+        existing_handle.close().expect("close replacement session");
+        other.close().expect("close unrelated session");
+        let _ = std::fs::remove_file(log_path);
+    }
+
+    #[test]
+    fn close_interrupts_in_flight_wait_and_publishes_recording() {
+        assert_named_close_interrupts_wait(NamedCloseEntry::Close);
+    }
+
+    #[test]
+    fn execute_close_interrupts_in_flight_wait_and_publishes_recording() {
+        assert_named_close_interrupts_wait(NamedCloseEntry::Execute);
+    }
+
+    #[test]
+    fn execute_with_context_close_interrupts_in_flight_wait_and_publishes_recording() {
+        assert_named_close_interrupts_wait(NamedCloseEntry::ExecuteWithContext);
+    }
+
+    #[test]
+    fn queued_exclusive_operation_blocks_later_shared_operations() {
+        let generation = Arc::new(Generation::new());
+        let initial_shared = generation.start_operation(false, false);
+
+        let exclusive_generation = Arc::clone(&generation);
+        let (exclusive_acquired, exclusive_entered) = mpsc::sync_channel(1);
+        let (exclusive_release, exclusive_released) = mpsc::sync_channel(1);
+        let exclusive = std::thread::spawn(move || {
+            let _operation = exclusive_generation.start_operation(true, false);
+            exclusive_acquired.send(()).expect("signal exclusive entry");
+            exclusive_released
+                .recv()
+                .expect("release exclusive operation");
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if generation.lock_state().waiting_exclusive != 0 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "exclusive operation did not queue"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let shared_generation = Arc::clone(&generation);
+        let (shared_acquired, shared_entered) = mpsc::sync_channel(1);
+        let shared = std::thread::spawn(move || {
+            let _operation = shared_generation.start_operation(false, false);
+            shared_acquired.send(()).expect("signal shared entry");
+        });
+        assert!(matches!(
+            shared_entered.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        drop(initial_shared);
+        exclusive_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("exclusive operation entered");
+        assert!(matches!(
+            shared_entered.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        exclusive_release
+            .send(())
+            .expect("release exclusive operation");
+        exclusive.join().expect("join exclusive operation");
+        shared_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("shared operation entered after exclusive");
+        shared.join().expect("join shared operation");
+    }
+
+    #[test]
+    fn close_waits_until_an_opening_session_is_published() {
+        let generation = Arc::new(Generation::new());
+        let mut opening = generation.start_operation(true, true);
+
+        let closing_generation = Arc::clone(&generation);
+        let (close_started, close_entered) = mpsc::sync_channel(1);
+        let (close_finished, close_done) = mpsc::sync_channel(1);
+        let close = std::thread::spawn(move || {
+            let close = closing_generation.start_close();
+            close_started.send(()).expect("signal close start");
+            close.wait_until_idle();
+            close_finished.send(()).expect("signal close completion");
+        });
+
+        assert!(matches!(
+            close_entered.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        opening.published();
+        close_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("close started after publication");
+        assert!(matches!(
+            close_done.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(opening);
+        close_done
+            .recv_timeout(Duration::from_secs(2))
+            .expect("close completed after opening operation");
+        close.join().expect("join close operation");
+    }
 
     #[test]
     fn registry_reuses_names_and_lists_only_open_sessions() {

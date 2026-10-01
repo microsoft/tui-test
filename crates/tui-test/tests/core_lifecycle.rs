@@ -260,6 +260,39 @@ fn pending_wait_cannot_observe_a_replacement_session() {
 }
 
 #[test]
+fn named_restart_cancels_a_pending_wait() {
+    let registry = SessionRegistry::default();
+    let session = registry.session("named-wait-generation");
+    session.run(options("quiet")).unwrap();
+    let waiting = session.clone();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        finished_tx
+            .send(waiting.execute(expect_marker(30_000)))
+            .unwrap();
+    });
+    assert!(finished_rx
+        .recv_timeout(Duration::from_millis(150))
+        .is_err());
+
+    let mut run = options("commands");
+    run.restart = true;
+    run.wait_ready = Some(true);
+    let started = Instant::now();
+    session.run(run).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+    let error = finished_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Assertion);
+    assert!(error.message.contains("cancelled"));
+    waiter.join().unwrap();
+
+    session.close().unwrap();
+}
+
+#[test]
 fn cancelling_one_wait_preserves_other_waits_and_the_child() {
     let engine = Arc::new(Engine::new(
         "request-cancellation".into(),

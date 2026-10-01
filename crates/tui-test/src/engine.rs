@@ -1560,6 +1560,10 @@ impl Engine {
         }
     }
 
+    pub(crate) fn lifecycle_request(&self) -> impl Drop + '_ {
+        LifecycleRequest::new(&self.pending_lifecycle)
+    }
+
     pub(crate) fn interrupt_for_operation(&self, operation: &Operation) {
         match operation {
             Operation::Close => self.interrupt(),

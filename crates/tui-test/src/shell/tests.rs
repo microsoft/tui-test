@@ -25,18 +25,19 @@ fn nushell_source_uses_a_non_interpolating_literal() {
 }
 
 #[test]
-fn powershell_passes_the_script_as_a_file_not_as_code() {
-    let dir = Path::new("space $HOME `echo` '雪'");
+fn powershell_passes_an_encoded_literal_script_path() {
+    let dir = Path::new("space $HOME `echo` '雪' \"quoted\" \\ newline\n");
     for shell in [Shell::Powershell, Shell::Pwsh] {
         let launch = launch_with_scripts(shell, dir).unwrap();
+        let script = path_str(&dir.join("shellIntegration.ps1"));
         assert_eq!(
             launch.args,
             [
                 "-NoLogo",
                 "-NoProfile",
                 "-NoExit",
-                "-File",
-                &path_str(&dir.join("shellIntegration.ps1")),
+                "-EncodedCommand",
+                &powershell_encoded_command(&format!("& {}", powershell_literal(&script))),
             ]
         );
     }

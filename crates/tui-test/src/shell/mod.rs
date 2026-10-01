@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 use crate::config::home_dir;
@@ -168,8 +170,8 @@ fn launch_with_scripts(shell: Shell, dir: &Path) -> anyhow::Result<Launch> {
                     "-NoLogo".to_string(),
                     "-NoProfile".to_string(),
                     "-NoExit".to_string(),
-                    "-File".to_string(),
-                    script,
+                    "-EncodedCommand".to_string(),
+                    powershell_encoded_command(&format!("& {}", powershell_literal(&script))),
                 ],
             )
         }
@@ -230,6 +232,18 @@ fn launch_with_scripts(shell: Shell, dir: &Path) -> anyhow::Result<Launch> {
 
 fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
+}
+
+fn powershell_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn powershell_encoded_command(command: &str) -> String {
+    let bytes = command
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    BASE64_STANDARD.encode(bytes)
 }
 
 fn fish_literal(value: &str) -> String {
