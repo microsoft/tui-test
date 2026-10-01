@@ -38,6 +38,19 @@ impl Drop for ConnectionPermit {
     }
 }
 
+fn try_acquire_permit(counter: &AtomicUsize, limit: usize) -> bool {
+    let mut count = counter.load(Ordering::Acquire);
+    loop {
+        if count >= limit {
+            return false;
+        }
+        match counter.compare_exchange_weak(count, count + 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(current) => count = current,
+        }
+    }
+}
+
 pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
     #[cfg(windows)]
     {
@@ -96,12 +109,7 @@ pub fn run(session_name: String, verbose: bool) -> anyhow::Result<()> {
         }
         match listener.accept() {
             Ok(conn) => {
-                if readers
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                        (count < MAX_PENDING_REQUESTS).then_some(count + 1)
-                    })
-                    .is_err()
-                {
+                if !try_acquire_permit(&readers, MAX_PENDING_REQUESTS) {
                     continue;
                 }
                 let permit = ConnectionPermit(Arc::clone(&readers));
@@ -241,13 +249,7 @@ fn handle_connection(
 }
 
 fn spawn_wait(request: Request, mut conn: Stream, host: Arc<Host>) {
-    if host
-        .waiters
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-            (count < MAX_PENDING_WAITS).then_some(count + 1)
-        })
-        .is_err()
-    {
+    if !try_acquire_permit(&host.waiters, MAX_PENDING_WAITS) {
         let _ = ipc::write_response(
             &mut conn,
             &Response::from_error(tui_test::TuiTestError::internal("too many pending waits")),
