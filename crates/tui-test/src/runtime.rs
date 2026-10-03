@@ -420,6 +420,8 @@ impl Session {
         self.engine.execute_with_context(operation, context)
     }
 
+    /// Open or reuse a shell. The working directory must exist and be a directory;
+    /// terminal dimensions must be nonzero and supported by the platform.
     pub fn open(&self, options: OpenOptions) -> Result<OpenResult, TuiTestError> {
         match self.execute(Operation::Open(options))? {
             OperationResult::Open(result) => Ok(result),
@@ -429,6 +431,7 @@ impl Session {
         }
     }
 
+    /// Run a program with the same directory and size validation as [`Self::open`].
     pub fn run(&self, options: RunOptions) -> Result<OpenResult, TuiTestError> {
         match self.execute(Operation::Run(options))? {
             OperationResult::Open(result) => Ok(result),
@@ -438,10 +441,13 @@ impl Session {
         }
     }
 
+    /// Cancel pending operations, terminate the child, and release the terminal.
     pub fn close(&self) -> Result<(), TuiTestError> {
         self.execute(Operation::Close).map(|_| ())
     }
 
+    /// Cancel pending operations, including startup readiness, and terminate the
+    /// child without waiting for the operation queue or PTY input writer.
     pub fn interrupt(&self) {
         self.engine.interrupt();
     }
@@ -576,20 +582,23 @@ struct RegistryInner {
 }
 
 struct Generation {
-    phase: Mutex<GenerationPhase>,
+    state: Mutex<GenerationState>,
     changed: Condvar,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GenerationPhase {
-    Idle,
-    Running,
-    ClosingIdle,
-    ClosingRunning,
+#[derive(Default)]
+struct GenerationState {
+    shared: usize,
+    exclusive: bool,
+    waiting_exclusive: usize,
+    closing: bool,
+    publishing: bool,
 }
 
 struct GenerationOperation {
     generation: Arc<Generation>,
+    exclusive: bool,
+    publishing: bool,
 }
 
 struct GenerationClose {
@@ -599,67 +608,94 @@ struct GenerationClose {
 impl Generation {
     fn new() -> Self {
         Self {
-            phase: Mutex::new(GenerationPhase::Idle),
+            state: Mutex::new(GenerationState::default()),
             changed: Condvar::new(),
         }
     }
 
-    fn start_operation(self: &Arc<Self>) -> GenerationOperation {
-        let mut phase = self.lock_phase();
-        while *phase != GenerationPhase::Idle {
-            phase = self
-                .changed
-                .wait(phase)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+    fn start_operation(self: &Arc<Self>, exclusive: bool, publishing: bool) -> GenerationOperation {
+        debug_assert!(!publishing || exclusive);
+        let mut state = self.lock_state();
+        if exclusive {
+            state.waiting_exclusive += 1;
+            while state.closing || state.exclusive || state.shared != 0 {
+                state = self
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            state.waiting_exclusive -= 1;
+            state.exclusive = true;
+            state.publishing = publishing;
+        } else {
+            while state.closing || state.exclusive || state.waiting_exclusive != 0 {
+                state = self
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            state.shared += 1;
         }
-        *phase = GenerationPhase::Running;
         GenerationOperation {
             generation: Arc::clone(self),
+            exclusive,
+            publishing,
         }
     }
 
     fn start_close(self: &Arc<Self>) -> GenerationClose {
-        let mut phase = self.lock_phase();
-        loop {
-            match *phase {
-                GenerationPhase::Idle => {
-                    *phase = GenerationPhase::ClosingIdle;
-                    break;
-                }
-                GenerationPhase::Running => {
-                    *phase = GenerationPhase::ClosingRunning;
-                    break;
-                }
-                GenerationPhase::ClosingIdle | GenerationPhase::ClosingRunning => {
-                    phase = self
-                        .changed
-                        .wait(phase)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                }
-            }
+        let mut state = self.lock_state();
+        while state.closing {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        state.closing = true;
+        while state.publishing {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         GenerationClose {
             generation: Arc::clone(self),
         }
     }
 
-    fn lock_phase(&self) -> MutexGuard<'_, GenerationPhase> {
-        self.phase
+    fn lock_state(&self) -> MutexGuard<'_, GenerationState> {
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
+impl GenerationOperation {
+    fn published(&mut self) {
+        if !self.publishing {
+            return;
+        }
+        let mut state = self.generation.lock_state();
+        debug_assert!(state.publishing, "generation publication was not active");
+        state.publishing = false;
+        self.publishing = false;
+        self.generation.changed.notify_all();
+    }
+}
+
 impl Drop for GenerationOperation {
     fn drop(&mut self) {
-        let mut phase = self.generation.lock_phase();
-        match *phase {
-            GenerationPhase::Running => *phase = GenerationPhase::Idle,
-            GenerationPhase::ClosingRunning => *phase = GenerationPhase::ClosingIdle,
-            GenerationPhase::Idle | GenerationPhase::ClosingIdle => {
-                debug_assert!(false, "operation released from an invalid generation phase");
-                return;
+        let mut state = self.generation.lock_state();
+        if self.exclusive {
+            debug_assert!(state.exclusive, "exclusive operation was not active");
+            state.exclusive = false;
+            if self.publishing {
+                debug_assert!(state.publishing, "generation publication was not active");
+                state.publishing = false;
             }
+        } else {
+            debug_assert!(state.shared != 0, "shared operation was not active");
+            state.shared = state.shared.saturating_sub(1);
         }
         self.generation.changed.notify_all();
     }
@@ -667,29 +703,23 @@ impl Drop for GenerationOperation {
 
 impl GenerationClose {
     fn wait_until_idle(&self) {
-        let mut phase = self.generation.lock_phase();
-        while *phase == GenerationPhase::ClosingRunning {
-            phase = self
+        let mut state = self.generation.lock_state();
+        while state.exclusive || state.shared != 0 {
+            state = self
                 .generation
                 .changed
-                .wait(phase)
+                .wait(state)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        debug_assert_eq!(*phase, GenerationPhase::ClosingIdle);
+        debug_assert!(state.closing);
     }
 }
 
 impl Drop for GenerationClose {
     fn drop(&mut self) {
-        let mut phase = self.generation.lock_phase();
-        *phase = match *phase {
-            GenerationPhase::ClosingIdle => GenerationPhase::Idle,
-            GenerationPhase::ClosingRunning => GenerationPhase::Running,
-            GenerationPhase::Idle | GenerationPhase::Running => {
-                debug_assert!(false, "close released from an invalid generation phase");
-                return;
-            }
-        };
+        let mut state = self.generation.lock_state();
+        debug_assert!(state.closing, "close operation was not active");
+        state.closing = false;
         self.generation.changed.notify_all();
     }
 }
@@ -745,38 +775,60 @@ impl SessionRegistry {
         operation: Operation,
         context: ExecutionContext,
     ) -> Result<OperationResult, TuiTestError> {
-        if matches!(operation, Operation::Close) {
+        if matches!(&operation, Operation::Close | Operation::Signal { .. }) {
+            if let Some(artifact) = &context.artifact {
+                artifact.validate().map_err(TuiTestError::usage)?;
+            }
+            if let Some(trace) = &context.trace {
+                trace.validate().map_err(TuiTestError::usage)?;
+            }
+            let session = self.lock_sessions().get(name).cloned();
+            if let Some(session) = session {
+                session.engine.interrupt_for_operation(&operation);
+            }
+        }
+        if matches!(&operation, Operation::Close) {
             return self
                 .close_with_context(name, context)
                 .map(|_| OperationResult::Unit);
         }
         let generation = self.generation(name);
-        let _operation = generation.start_operation();
         match operation {
             Operation::Open(_) | Operation::Run(_) => {
+                let existing = self.lock_sessions().get(name).cloned();
+                let _pending = existing
+                    .as_ref()
+                    .map(|session| session.engine.lifecycle_request());
+                let mut generation_operation = generation.start_operation(true, true);
                 let _lifecycle = self
                     .inner
                     .lifecycle
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                self.get_or_create_locked(name.to_string())
-                    .execute_with_context(operation, context)
+                let session = self.get_or_create_locked(name.to_string());
+                generation_operation.published();
+                session.execute_with_context(operation, context)
             }
             Operation::Restart { .. } => {
+                let session = self
+                    .lock_sessions()
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(TuiTestError::no_restart_metadata)?;
+                let _pending = session.engine.lifecycle_request();
+                let _generation_operation = generation.start_operation(true, false);
                 let _lifecycle = self
                     .inner
                     .lifecycle
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let session = self.lock_sessions().get(name).cloned();
-                session
-                    .ok_or_else(TuiTestError::no_restart_metadata)?
-                    .execute_with_context(operation, context)
+                session.execute_with_context(operation, context)
             }
             Operation::Close => {
                 unreachable!("close operations are dispatched before generation locking")
             }
             other => {
+                let _generation_operation = generation.start_operation(false, false);
                 let session = {
                     let _lifecycle = self
                         .inner
@@ -846,6 +898,10 @@ impl SessionRegistry {
     }
 
     pub fn close_all(&self) {
+        let opening = self.lock_sessions().values().cloned().collect::<Vec<_>>();
+        for session in opening {
+            session.interrupt();
+        }
         let mut removed = Vec::new();
         {
             let _lifecycle = self
@@ -872,7 +928,7 @@ impl SessionRegistry {
 
     pub fn recording(&self, name: &str) -> std::io::Result<String> {
         let generation = self.generation(name);
-        let _operation = generation.start_operation();
+        let _operation = generation.start_operation(true, false);
         let (session, completed) = {
             let _lifecycle = self
                 .inner
@@ -1202,6 +1258,98 @@ mod tests {
     #[test]
     fn execute_with_context_close_interrupts_in_flight_wait_and_publishes_recording() {
         assert_named_close_interrupts_wait(NamedCloseEntry::ExecuteWithContext);
+    }
+
+    #[test]
+    fn queued_exclusive_operation_blocks_later_shared_operations() {
+        let generation = Arc::new(Generation::new());
+        let initial_shared = generation.start_operation(false, false);
+
+        let exclusive_generation = Arc::clone(&generation);
+        let (exclusive_acquired, exclusive_entered) = mpsc::sync_channel(1);
+        let (exclusive_release, exclusive_released) = mpsc::sync_channel(1);
+        let exclusive = std::thread::spawn(move || {
+            let _operation = exclusive_generation.start_operation(true, false);
+            exclusive_acquired.send(()).expect("signal exclusive entry");
+            exclusive_released
+                .recv()
+                .expect("release exclusive operation");
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if generation.lock_state().waiting_exclusive != 0 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "exclusive operation did not queue"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let shared_generation = Arc::clone(&generation);
+        let (shared_acquired, shared_entered) = mpsc::sync_channel(1);
+        let shared = std::thread::spawn(move || {
+            let _operation = shared_generation.start_operation(false, false);
+            shared_acquired.send(()).expect("signal shared entry");
+        });
+        assert!(matches!(
+            shared_entered.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        drop(initial_shared);
+        exclusive_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("exclusive operation entered");
+        assert!(matches!(
+            shared_entered.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        exclusive_release
+            .send(())
+            .expect("release exclusive operation");
+        exclusive.join().expect("join exclusive operation");
+        shared_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("shared operation entered after exclusive");
+        shared.join().expect("join shared operation");
+    }
+
+    #[test]
+    fn close_waits_until_an_opening_session_is_published() {
+        let generation = Arc::new(Generation::new());
+        let mut opening = generation.start_operation(true, true);
+
+        let closing_generation = Arc::clone(&generation);
+        let (close_started, close_entered) = mpsc::sync_channel(1);
+        let (close_finished, close_done) = mpsc::sync_channel(1);
+        let close = std::thread::spawn(move || {
+            let close = closing_generation.start_close();
+            close_started.send(()).expect("signal close start");
+            close.wait_until_idle();
+            close_finished.send(()).expect("signal close completion");
+        });
+
+        assert!(matches!(
+            close_entered.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        opening.published();
+        close_entered
+            .recv_timeout(Duration::from_secs(2))
+            .expect("close started after publication");
+        assert!(matches!(
+            close_done.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(opening);
+        close_done
+            .recv_timeout(Duration::from_secs(2))
+            .expect("close completed after opening operation");
+        close.join().expect("join close operation");
     }
 
     #[test]

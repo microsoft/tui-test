@@ -2,8 +2,8 @@ import asyncio
 import unittest
 from unittest import mock
 
-from tui_test import InternalError, TuiTest, testing
-from tui_test.types import Colors, Profile
+from tui_test import InternalError, TuiTest, UsageError, testing
+from tui_test.types import Colors, Profile, Timeouts
 
 
 def run(coro):
@@ -190,6 +190,48 @@ class OptionPlumbingTests(unittest.TestCase):
         self.assertEqual(created[0].kwargs["profile"], profile)
         self.assertEqual(created[0].kwargs["screen_history_limit"], 17)
         self.assertEqual(created[0].kwargs["artifacts"], {"dir": "from-defaults"})
+
+    def test_startup_timeouts_are_forwarded_from_defaults_and_overrides(self):
+        defaults = Timeouts(text=100, idle=200, command=300, exit=400, ready=500)
+        testing.set_terminal_defaults(timeouts=defaults)
+        for program in (None, ["program", "arg"]):
+            for timeouts in (None, Timeouts(text=10, ready=0)):
+                with self.subTest(program=program, timeouts=timeouts):
+                    term = mock.Mock()
+                    term.open = mock.AsyncMock()
+                    term.run = mock.AsyncMock()
+                    with mock.patch.object(testing, "TuiTest", return_value=term) as ctor, \
+                         mock.patch.object(testing, "track_terminal"):
+                        run(testing.create_terminal(program=program, timeouts=timeouts))
+                    expected = timeouts if timeouts is not None else defaults
+                    self.assertEqual(ctor.call_args.kwargs["timeouts"], expected)
+                    if program:
+                        term.run.assert_awaited_once_with(
+                            "program", "arg", retries=2, timeouts=expected
+                        )
+                    else:
+                        term.open.assert_awaited_once_with(
+                            shell=None, retries=2, timeouts=expected
+                        )
+
+    def test_validation_failures_untrack_without_closing_existing_sessions(self):
+        for program in (None, ["program"]):
+            for error in (
+                UsageError("invalid cols"),
+                TypeError("invalid program"),
+                ValueError("invalid option"),
+            ):
+                with self.subTest(program=program, error=error):
+                    term = mock.Mock()
+                    term.open = mock.AsyncMock(side_effect=error)
+                    term.run = mock.AsyncMock(side_effect=error)
+                    term.close_quiet = mock.AsyncMock()
+                    with mock.patch.object(testing, "TuiTest", return_value=term):
+                        with self.assertRaises(type(error)) as raised:
+                            run(testing.create_terminal(session="existing", program=program))
+                    self.assertIs(raised.exception, error)
+                    term.close_quiet.assert_not_called()
+                    self.assertEqual(testing.tracked_count(), 0)
 
     def test_unknown_create_option_is_rejected(self):
         with self.assertRaises(TypeError):

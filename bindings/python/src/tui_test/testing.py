@@ -19,6 +19,7 @@ from typing import (
 from ._config import IS_MACOS, IS_WINDOWS
 from ._ephemeral import unique_session
 from .client import TuiTest
+from .errors import UsageError
 from .types import AutomaticRecording, Backend, Profile, Timeouts, TraceOptions
 
 __all__ = [
@@ -165,7 +166,7 @@ def _client_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
 
 def _spawn_kwargs(opts: TerminalOptions) -> Dict[str, Any]:
     kwargs = {"retries": 2 if opts.retries is None else opts.retries}  # type: Dict[str, Any]
-    for name in ("cols", "rows", "cwd", "env", "wait_ready"):
+    for name in ("cols", "rows", "cwd", "env", "wait_ready", "timeouts"):
         value = getattr(opts, name)
         if value is not None:
             kwargs[name] = value
@@ -190,8 +191,9 @@ async def create_terminal(**options: Any) -> TuiTest:
             await term.run(program[0], *program[1:], **spawn)
         else:
             await term.open(shell=opts.shell, **spawn)
-    except BaseException:
-        await term.close_quiet()
+    except BaseException as error:
+        if not isinstance(error, (UsageError, TypeError, ValueError)):
+            await term.close_quiet()
         untrack_terminal(term)
         raise
     return term

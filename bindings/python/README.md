@@ -92,7 +92,7 @@ The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, 
 | `await get_output()` | `str \| None` |
 | `await get_exit_code()` | `int \| None` |
 | `await get_cwd()` | `str \| None` |
-| `await get_cursor()` | `dict` |
+| `await get_cursor()` | `Cursor` |
 | `await get_size()` | `dict` |
 | `await get_title()` | `str \| None` |
 | `await get_clipboard()` | `str` |
@@ -116,7 +116,7 @@ The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, 
 | `await expect_bell_count(count, timeout=None)` | Wait until the cumulative bell count reaches `count`. |
 | `await expect_snapshot(name, **options)` | Assert or update a snapshot. |
 
-`wait_clipboard()` waits for the next change. A string matches text. A compiled `re.Pattern` matches a regular expression.
+`wait_clipboard()` waits for the next change. A string matches text. A compiled text `re.Pattern` uses Python's `search()` semantics; bytes patterns are rejected.
 
 Snapshot options are `update`, `include_style`, and `include_title`.
 
@@ -319,6 +319,7 @@ terminal = TuiTest(
 | Type | Description |
 | --- | --- |
 | `State` | Session state and visible text. |
+| `Cursor` | Typed dictionary with integer `x`/`y`, boolean `visible`, and string `shape`/`color`. |
 | `Cell` | One terminal cell and its style. |
 | `TextMatch` | Matched text, positions, and spans. |
 | `TextStyle` | Locator style fields. |

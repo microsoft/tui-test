@@ -3,8 +3,9 @@ import inspect
 import json
 import unittest
 from pathlib import Path
+from typing import get_type_hints
 
-from tui_test import Locator, NoSessionError, TuiTest, UsageError, _native, unique_session
+from tui_test import Cursor, Locator, NoSessionError, State, TuiTest, UsageError, _native, unique_session
 
 
 INVALID_CAPTURE_BACKGROUNDS = (
@@ -259,6 +260,24 @@ class NativeSurfaceTests(unittest.TestCase):
 
 
 class NativeStubTests(unittest.TestCase):
+    def test_cursor_annotations_match_the_native_result(self):
+        self.assertEqual(get_type_hints(Cursor), {
+            "x": int,
+            "y": int,
+            "visible": bool,
+            "shape": str,
+            "color": str,
+        })
+        self.assertIs(get_type_hints(TuiTest.get_cursor)["return"], Cursor)
+        self.assertIs(get_type_hints(State)["cursor"], Cursor)
+        stub = (
+            Path(__file__).resolve().parents[1] / "src" / "tui_test" / "_native.pyi"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "def get_cursor(self) -> typing.Awaitable[tui_test.Cursor]: ...",
+            stub,
+        )
+
     def test_native_futures_are_annotated_as_awaitables(self):
         stub = (
             Path(__file__).resolve().parents[1]

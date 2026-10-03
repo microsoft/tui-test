@@ -2079,6 +2079,7 @@ dependencies = [
  "flate2",
  "fontdb",
  "gif",
+ "libc",
  "libghostty-vt",
  "png",
  "portable-pty",
@@ -2092,6 +2093,7 @@ dependencies = [
  "toml",
  "ttf-parser",
  "unicode-width",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

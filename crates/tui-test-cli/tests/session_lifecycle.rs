@@ -2,7 +2,7 @@
 
 use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
@@ -10,6 +10,10 @@ use std::time::{Duration, Instant};
 use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{GenericFilePath, GenericNamespaced};
 use tui_test::Backend;
+
+#[allow(dead_code)]
+#[path = "../src/config.rs"]
+mod cli_config;
 
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
@@ -88,6 +92,29 @@ impl Sandbox {
     /// Captures output to catch daemon-inherited stdout pipe hangs.
     fn try_run(&self, args: &[&str]) -> Option<Output> {
         self.try_run_in(None, args)
+    }
+
+    fn spawn(&self, args: &[&str]) -> Child {
+        Command::new(BIN)
+            .args(["--session", &self.session])
+            .args(args)
+            .env("TUI_TEST_HOME", &self.home)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn concurrent client")
+    }
+
+    fn wait_for_logged_operation(&self, marker: &str) {
+        let log = self.home.join(format!("{}.log", self.session));
+        let started = Instant::now();
+        while !std::fs::read_to_string(&log).is_ok_and(|log| log.contains(marker)) {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "{marker} never reached the engine"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn try_run_in(&self, cwd: Option<PathBuf>, args: &[&str]) -> Option<Output> {
@@ -210,15 +237,7 @@ impl Drop for Sandbox {
 /// Connect to the session socket and send one request line, leaving the stream
 /// open for whatever the request streams next.
 fn monitor_stream(sandbox: &Sandbox, request: &str) -> interprocess::local_socket::Stream {
-    let raw = if cfg!(windows) {
-        format!("tui-test-{}.sock", sandbox.session)
-    } else {
-        sandbox
-            .home
-            .join(format!("{}.sock", sandbox.session))
-            .to_string_lossy()
-            .into_owned()
-    };
+    let raw = cli_config::socket_name_in(&sandbox.home, &sandbox.session);
     let name = if cfg!(windows) {
         raw.to_ns_name::<GenericNamespaced>()
     } else {
@@ -585,6 +604,280 @@ fn relative_recording_path_uses_the_invoking_client_directory() {
 }
 
 #[test]
+fn relative_spawn_cwd_and_screenshot_use_the_invoking_client_directory() {
+    let sandbox = Sandbox::new("client-cwd");
+    let daemon_cwd = sandbox.home.join("daemon");
+    let client_cwd = sandbox.home.join("client");
+    let child_cwd = client_cwd.join("child");
+    std::fs::create_dir_all(&daemon_cwd).unwrap();
+    std::fs::create_dir_all(&child_cwd).unwrap();
+    sandbox.ok_in(Some(&daemon_cwd), &["daemon", "start"]);
+    sandbox.ok_in(Some(&client_cwd), &["open", "--cwd", "child"]);
+    let state: serde_json::Value = serde_json::from_str(&sandbox.ok(&["--json", "state"])).unwrap();
+    assert_eq!(
+        std::fs::canonicalize(state["data"]["cwd"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(&child_cwd).unwrap(),
+    );
+    sandbox.ok_in(Some(&client_cwd), &["screenshot", "client.svg"]);
+    assert!(client_cwd.join("client.svg").is_file());
+    assert!(!daemon_cwd.join("client.svg").exists());
+
+    sandbox.ok_in(Some(&client_cwd), &["open", "--restart"]);
+    let state: serde_json::Value = serde_json::from_str(&sandbox.ok(&["--json", "state"])).unwrap();
+    assert_eq!(
+        std::fs::canonicalize(state["data"]["cwd"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(&client_cwd).unwrap(),
+    );
+}
+
+#[test]
+fn identical_session_names_in_different_homes_are_independent() {
+    let first = Sandbox::new("home-first");
+    let mut second = Sandbox::new("home-second");
+    second.session.clone_from(&first.session);
+    let a: serde_json::Value = serde_json::from_str(&first.ok(&["--json", "open"])).unwrap();
+    let b: serde_json::Value = serde_json::from_str(&second.ok(&["--json", "open"])).unwrap();
+    assert_ne!(a["data"]["pid"], b["data"]["pid"]);
+    assert_ne!(a["data"]["shell_pid"], b["data"]["shell_pid"]);
+    first.ok(&["close"]);
+    second.ok(&["submit", "echo independent-home"]);
+    second.wait_for_text("independent-home", "5000");
+    second.ok(&["daemon", "status"]);
+}
+
+#[test]
+fn incomplete_requests_do_not_block_other_clients_and_expire() {
+    let sandbox = Sandbox::new("incomplete-request");
+    sandbox.ok(&["daemon", "start"]);
+    let mut incomplete = monitor_stream(&sandbox, "{\"kind\":");
+    let started = Instant::now();
+    sandbox.ok(&["daemon", "status"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "status waited for an incomplete request"
+    );
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let _ = sender.send(incomplete.read(&mut [0]));
+    });
+    assert!(receiver.recv_timeout(Duration::from_millis(300)).is_err());
+    let result = receiver
+        .recv_timeout(Duration::from_secs(4))
+        .expect("incomplete request never expired");
+    assert!(
+        matches!(&result, Ok(0))
+            || result.as_ref().is_err_and(|error| matches!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::NotConnected
+            )),
+        "unexpected incomplete-request result: {result:?}"
+    );
+    reader.join().unwrap();
+    sandbox.ok(&["daemon", "status"]);
+}
+
+#[test]
+fn lifecycle_requests_interrupt_long_waits() {
+    for action in ["kill", "close"] {
+        let sandbox = Sandbox::new("lifecycle-during-wait");
+        sandbox.ok(&["open"]);
+        let _waiter = monitor_stream(
+            &sandbox,
+            "{\"kind\":\"wait_title\",\"text\":\"never-set-title\",\"regex\":false,\
+             \"not\":false,\"timeout_ms\":30000}\n",
+        );
+        std::thread::sleep(Duration::from_millis(150));
+        let started = Instant::now();
+        sandbox.ok(&["daemon", "status"]);
+        sandbox.ok(&[action]);
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{action} waited behind a long operation"
+        );
+    }
+}
+
+#[test]
+fn concurrent_expect_text_is_satisfied_by_another_client_submit() {
+    let sandbox = Sandbox::new("concurrent-expect");
+    sandbox.ok(&["--verbose", "open"]);
+    let mut waiter = sandbox.spawn(&[
+        "expect",
+        "text",
+        "concurrent-client-marker",
+        "--match",
+        "first",
+        "--timeout",
+        "5000",
+    ]);
+    sandbox.wait_for_logged_operation("concurrent-client-marker");
+    assert!(waiter.try_wait().unwrap().is_none());
+    let started = Instant::now();
+    sandbox.ok(&["submit", "echo concurrent-client-marker"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "submit waited for the expectation it needed to satisfy"
+    );
+    let output = waiter.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "concurrent expect failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn pending_wait_allows_input_mouse_resize_and_inspection() {
+    let sandbox = Sandbox::new("concurrent-controls");
+    sandbox.ok(&["--verbose", "open"]);
+    let mut waiter = sandbox.spawn(&["wait", "title", "never-set-title", "--timeout", "30000"]);
+    sandbox.wait_for_logged_operation("never-set-title");
+    assert!(waiter.try_wait().unwrap().is_none());
+    for args in [
+        vec!["type", "unused-input"],
+        vec!["key", "press", "Ctrl+C"],
+        vec!["mouse", "move", "1", "1"],
+        vec!["key", "press", "Ctrl+C"],
+        vec!["resize", "90", "26"],
+        vec!["state"],
+    ] {
+        let started = Instant::now();
+        sandbox.ok(&args);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{args:?} was serialized behind wait"
+        );
+        assert!(waiter.try_wait().unwrap().is_none());
+    }
+    let started = Instant::now();
+    sandbox.ok(&["close"]);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(!waiter.wait_with_output().unwrap().status.success());
+}
+
+#[test]
+fn abandoned_waiters_release_capacity_without_cancelling_other_clients() {
+    let sandbox = Sandbox::new("abandoned-waits");
+    sandbox.ok(&["--verbose", "open"]);
+    let mut waiter = sandbox.spawn(&[
+        "expect",
+        "text",
+        "surviving-client-marker",
+        "--match",
+        "first",
+        "--timeout",
+        "10000",
+    ]);
+    sandbox.wait_for_logged_operation("surviving-client-marker");
+    for _ in 0..16 {
+        for _ in 0..8 {
+            drop(monitor_stream(
+                &sandbox,
+                "{\"kind\":\"wait_title\",\"text\":\"never-set-title\",\"regex\":false,\
+                 \"not\":false,\"timeout_ms\":30000}\n",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(waiter.try_wait().unwrap().is_none());
+    let started = Instant::now();
+    sandbox.ok(&["submit", "echo surviving-client-marker"]);
+    sandbox.wait_for_text("surviving-client-marker", "2000");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let output = waiter.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "abandoned clients cancelled the surviving wait: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_exit_259_is_reported_and_allows_reopen() {
+    let sandbox = Sandbox::new("exit-259");
+    let first: serde_json::Value = serde_json::from_str(
+        &sandbox.ok(&["--json", "run", "--", "cmd.exe", "/d", "/c", "exit 259"]),
+    )
+    .unwrap();
+    sandbox.ok(&["wait", "exit", "--timeout", "2000"]);
+    let state: serde_json::Value = serde_json::from_str(&sandbox.ok(&["--json", "state"])).unwrap();
+    assert_eq!(state["data"]["exited"], 259);
+    let second: serde_json::Value = serde_json::from_str(&sandbox.ok(&["--json", "open"])).unwrap();
+    assert_ne!(first["data"]["shell_pid"], second["data"]["shell_pid"]);
+    sandbox.ok(&["submit", "echo after-exit-259"]);
+    sandbox.wait_for_text("after-exit-259", "2000");
+}
+
+#[cfg(unix)]
+#[test]
+fn close_is_bounded_when_a_descendant_keeps_the_pty_open() {
+    struct Descendant(String);
+    impl Drop for Descendant {
+        fn drop(&mut self) {
+            let _ = Command::new("kill").args(["-KILL", &self.0]).output();
+        }
+    }
+    let sandbox = Sandbox::new("descendant-pty");
+    let pid_file = sandbox.home.join("descendant.pid");
+    sandbox.ok(&[
+        "run",
+        "--",
+        "sh",
+        "-c",
+        "trap '' HUP; sleep 60 & printf '%s' \"$!\" > \"$1\"; wait",
+        "sh",
+        pid_file.to_str().unwrap(),
+    ]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let child = loop {
+        if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+            if !pid.is_empty() {
+                assert!(pid.parse::<u32>().is_ok_and(|pid| pid > 1));
+                break Descendant(pid);
+            }
+        }
+        assert!(Instant::now() < deadline, "descendant did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let started = Instant::now();
+    let closed = sandbox.run(&["close"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "shutdown waited for a descendant holding the PTY"
+    );
+    assert!(
+        closed.status.success(),
+        "unexpected close response: {closed:?}"
+    );
+    drop(child);
+}
+
+#[cfg(windows)]
+#[test]
+fn powershell_children_do_not_inherit_ctrl_c_ignore() {
+    let sandbox = Sandbox::new("powershell-ctrl-c");
+    sandbox.ok(&["open", "--shell", "powershell"]);
+    for (index, interrupt) in [vec!["signal", "INT"], vec!["key", "press", "Ctrl+C"]]
+        .into_iter()
+        .enumerate()
+    {
+        let marker = format!("interrupt-ready-{index}");
+        let command =
+            format!("Write-Output ('interrupt-'+'ready-{index}'); Start-Sleep -Seconds 30");
+        sandbox.ok(&["submit", &command]);
+        sandbox.wait_for_text(&marker, "5000");
+        sandbox.ok(&interrupt);
+        sandbox.ok(&["wait", "command", "--timeout", "5000"]);
+        sandbox.ok(&["submit", "echo interrupt-survived"]);
+        sandbox.ok(&["wait", "command", "--timeout", "5000"]);
+        sandbox.wait_for_text("interrupt-survived", "5000");
+    }
+}
+
+#[test]
 fn close_is_idempotent() {
     let sandbox = Sandbox::new("idempotent");
     sandbox.ok(&["open"]);
@@ -840,13 +1133,62 @@ fn wait_ready_without_a_session_reports_no_session() {
 }
 
 #[test]
-fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
-    for &backend in Backend::ALL {
-        let sandbox = Sandbox::new("bells");
-        sandbox.ok(&["open", "--backend", backend.as_str()]);
+fn bell_command_fixture() {
+    if std::env::var_os("TUI_TEST_CLI_BELL_FIXTURE").is_none() {
+        return;
+    }
+    let mut stdout = std::io::stdout().lock();
+    let prompt = b"\x1b]133;A\x1b\\bells> \x1b]133;B\x1b\\";
+    stdout.write_all(prompt).unwrap();
+    stdout.flush().unwrap();
+    for line in std::io::stdin().lock().lines() {
+        let count = match line.unwrap().trim() {
+            "two" => 2,
+            "one" => 1,
+            command => panic!("unexpected bell fixture command: {command}"),
+        };
+        stdout.write_all(b"\x1b]133;C\x1b\\").unwrap();
+        stdout.write_all(&b"\x07\x07"[..count]).unwrap();
+        stdout.write_all(b"\x1b]133;D;0\x1b\\").unwrap();
+        stdout.write_all(prompt).unwrap();
+        stdout.flush().unwrap();
+    }
+}
 
-        sandbox.ok(&["submit", &two_bells_command()]);
-        sandbox.ok(&["expect", "bell", "2", "--timeout", "5000"]);
+#[test]
+fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
+    let fixture = std::env::current_exe().unwrap();
+    for &backend in Backend::ALL {
+        let sandbox = Sandbox::new(backend.as_str());
+        // Drive bell output directly, without shell startup/history work or a
+        // timed producer racing the concurrent daemon's wait registration.
+        sandbox.ok(&[
+            "--verbose",
+            "run",
+            "--backend",
+            backend.as_str(),
+            "--wait-ready",
+            "--env",
+            "TUI_TEST_CLI_BELL_FIXTURE=1",
+            "--",
+            fixture.to_str().unwrap(),
+            "--exact",
+            "bell_command_fixture",
+            "--nocapture",
+            "--test-threads=1",
+        ]);
+
+        let mut expectation = sandbox.spawn(&["expect", "bell", "2", "--timeout", "5000"]);
+        sandbox.wait_for_logged_operation("operation ExpectBellCount { count: 2,");
+        assert!(expectation.try_wait().unwrap().is_none());
+        sandbox.ok(&["submit", "two"]);
+        let output = expectation.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            backend.as_str(),
+            String::from_utf8_lossy(&output.stderr)
+        );
         sandbox.ok(&["wait", "command"]);
 
         let state = sandbox.ok(&["state"]);
@@ -874,8 +1216,28 @@ fn bell_count_wait_and_expect_are_exposed_over_the_cli() {
             assert_eq!(response["data"]["value"], 2, "{}", backend.as_str());
         }
 
-        sandbox.ok(&["submit", &delayed_bell_command()]);
-        sandbox.ok(&["wait", "bell", "--timeout", "5000"]);
+        let past_bells = sandbox.run(&["wait", "bell", "--timeout", "0"]);
+        assert_eq!(
+            past_bells.status.code(),
+            Some(1),
+            "{}: earlier bells must not satisfy a new wait",
+            backend.as_str()
+        );
+        let mut waiter = sandbox.spawn(&["wait", "bell", "--timeout", "5000"]);
+        sandbox.wait_for_logged_operation("operation WaitBell { timeout_ms: Some(5000) }");
+        assert!(
+            waiter.try_wait().unwrap().is_none(),
+            "{}: earlier bells must not satisfy a new wait",
+            backend.as_str()
+        );
+        sandbox.ok(&["submit", "one"]);
+        let output = waiter.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            backend.as_str(),
+            String::from_utf8_lossy(&output.stderr)
+        );
         sandbox.ok(&["expect", "bell", "3", "--timeout", "5000"]);
         let response: serde_json::Value =
             serde_json::from_str(&sandbox.ok(&["--json", "get", "bells"]))
@@ -1584,29 +1946,42 @@ fn usage_errors_do_not_capture_terminal_artifacts() {
 }
 
 #[test]
-fn diagnostic_capture_panics_do_not_kill_the_daemon() {
-    let sandbox = Sandbox::new("diagnostic-panic-containment");
-    sandbox.ok(&["open", "--no-wait-ready"]);
-    let resize = sandbox.run(&["resize", "0", "0"]);
-    assert_ne!(
-        resize.status.code(),
-        Some(4),
-        "diagnostic capture escaped the daemon: {}",
-        String::from_utf8_lossy(&resize.stderr)
-    );
-    let state = sandbox.run(&["state"]);
-    assert_eq!(
-        state.status.code(),
-        Some(5),
-        "corrupt diagnostic state should remain a contained internal error: {}",
-        String::from_utf8_lossy(&state.stderr)
-    );
-    let status = sandbox.run(&["daemon", "status"]);
-    assert!(
-        status.status.success(),
-        "daemon did not survive diagnostic capture panic: {}",
-        String::from_utf8_lossy(&status.stderr)
-    );
+fn invalid_resize_preserves_diagnostic_state_and_daemon() {
+    let sandbox = Sandbox::new("invalid-resize-diagnostics");
+    let opened: serde_json::Value = serde_json::from_str(&sandbox.ok(&[
+        "--json",
+        "open",
+        "--no-wait-ready",
+        "--cols",
+        "80",
+        "--rows",
+        "30",
+    ]))
+    .unwrap();
+    // Zero sizes used to inject an emulator panic. Validation must reject them
+    // instead; actual diagnostic panics are injected in the engine unit tests.
+    for (cols, rows) in [("0", "30"), ("80", "0"), ("0", "0")] {
+        let resize = sandbox.run(&["resize", cols, rows]);
+        assert_eq!(
+            resize.status.code(),
+            Some(2),
+            "invalid resize must be a usage error: {}",
+            String::from_utf8_lossy(&resize.stderr)
+        );
+        assert!(String::from_utf8_lossy(&resize.stderr).contains("greater than zero"));
+        let state: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "state"])).unwrap();
+        assert_eq!(state["data"]["cols"], 80);
+        assert_eq!(state["data"]["rows"], 30);
+        let status: serde_json::Value =
+            serde_json::from_str(&sandbox.ok(&["--json", "daemon", "status"])).unwrap();
+        assert_eq!(status["data"]["pid"], opened["data"]["pid"]);
+        assert_eq!(status["data"]["shell_pid"], opened["data"]["shell_pid"]);
+    }
+    sandbox.ok(&["resize", "90", "26"]);
+    let state: serde_json::Value = serde_json::from_str(&sandbox.ok(&["--json", "state"])).unwrap();
+    assert_eq!(state["data"]["cols"], 90);
+    assert_eq!(state["data"]["rows"], 26);
     sandbox.ok(&["close"]);
 }
 
@@ -1725,22 +2100,6 @@ done
             "restart-argument".to_string(),
         ],
     )
-}
-
-fn two_bells_command() -> String {
-    if cfg!(windows) {
-        "[Console]::Out.Write([char]7); [Console]::Out.Write([char]7)".to_string()
-    } else {
-        "printf '\\a\\a'".to_string()
-    }
-}
-
-fn delayed_bell_command() -> String {
-    if cfg!(windows) {
-        "Start-Sleep -Seconds 1; [Console]::Out.Write([char]7)".to_string()
-    } else {
-        "sleep 1; printf '\\a'".to_string()
-    }
 }
 
 fn clipboard_command(base64: &str) -> String {
