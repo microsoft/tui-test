@@ -5,7 +5,7 @@ Control, inspect, and test terminal apps from Python.
 ## Install
 
 ```sh
-pip install --pre tui-test
+pip install tui-test
 ```
 
 Python 3.8+ is supported.

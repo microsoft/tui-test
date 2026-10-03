@@ -7,7 +7,7 @@ Use `tui_test` from Python code and tests.
 ## Start
 
 ```sh
-pip install --pre tui-test
+pip install tui-test
 ```
 
 ```python
