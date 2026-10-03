@@ -5,7 +5,7 @@ Control, inspect, and test terminal apps from JavaScript or TypeScript.
 ## Install
 
 ```sh
-npm install @microsoft/tui-test@beta
+npm install @microsoft/tui-test
 ```
 
 Node 20+ is supported. The package is ESM only. Bun and Deno support is best effort. Deno 2 needs local `node_modules` and `--allow-ffi`.
