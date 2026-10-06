@@ -14,9 +14,6 @@
   <a href="#configuration">Configuration</a>
 </p>
 
-> [!IMPORTANT]
-> `tui-test` is undergoing a major rewrite. These docs cover the beta releases.
-
 ## Installation
 
 ### CLI
@@ -33,13 +30,12 @@ brew install tui-test
 macOS and Linux:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | TUI_TEST_VERSION=beta sh
+curl --proto '=https' --tlsv1.2 -LsSf https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.sh | sh
 ```
 
 Windows:
 
 ```powershell
-$env:TUI_TEST_VERSION = "beta"
 irm https://raw.githubusercontent.com/microsoft/tui-test/main/install/install.ps1 | iex
 ```
 
@@ -49,9 +45,9 @@ You can also download a binary from [GitHub Releases](https://github.com/microso
 
 | Language | Install | Reference |
 | --- | --- | --- |
-| Rust 1.90+ | `cargo add tui-test-rs@0.1.0-beta.4` | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
-| Python 3.8+ | `pip install --pre tui-test` | [Python API](bindings/python/README.md) |
-| Node 20+ | `npm install @microsoft/tui-test@beta` | [JavaScript API](bindings/js/README.md) |
+| Rust 1.90+ | `cargo add tui-test-rs@0.1.0` | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
+| Python 3.8+ | `pip install tui-test` | [Python API](bindings/python/README.md) |
+| Node 20+ | `npm install @microsoft/tui-test` | [JavaScript API](bindings/js/README.md) |
 
 Add the Rust `recording-raster` feature for APNG, GIF, and MP4 output. It uses installed fonts; `recording-font-jetbrains-mono*` bundles a font.
 

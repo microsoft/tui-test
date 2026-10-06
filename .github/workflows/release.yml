@@ -3,11 +3,12 @@ name: Release
 on:
   push:
     tags:
-      - "*-beta.*"
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+"
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing beta release tag to publish (for example, 0.1.0-beta.4)
+        description: Existing release tag to publish (for example, 0.1.0)
         required: true
         type: string
 
@@ -35,11 +36,11 @@ jobs:
 
       - run: sudo apt-get update && sudo apt-get install -y ripgrep
 
-      - name: Verify beta release tag
+      - name: Verify release tag
         shell: bash
         run: |
-          if [[ ! "$RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
-            echo "Release tag must match <major>.<minor>.<patch>-beta.<number>." >&2
+          if [[ ! "$RELEASE_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]; then
+            echo "Release tag must match <major>.<minor>.<patch> or <major>.<minor>.<patch>-beta.<number>." >&2
             exit 1
           fi
 
@@ -105,7 +106,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         if: contains(matrix.target, 'musl')
         with:
           tool: cargo-zigbuild
@@ -188,7 +189,7 @@ jobs:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
 
-      - uses: taiki-e/install-action@e67fa11c4b9316fa714ddf0abed07a0c3143b95b # v2.87.4
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         if: matrix.zigbuild
         with:
           tool: cargo-zigbuild
@@ -309,7 +310,7 @@ jobs:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
 
-      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         if: runner.os == 'Linux' && contains(matrix.target, 'aarch64')
         with:
           platforms: arm64
@@ -428,6 +429,10 @@ jobs:
           NPM_CONFIG_REGISTRY: https://registry.npmjs.org
         run: |
           version="$RELEASE_TAG"
+          npm_tag=latest
+          if [[ "$version" == *-beta.* ]]; then
+            npm_tag=beta
+          fi
           packages=(
             tui-test-darwin-arm64
             tui-test-darwin-x64
@@ -449,7 +454,7 @@ jobs:
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "$name@$version is already published"
             else
-              npm publish "$tarball" --access public --provenance --tag beta
+              npm publish "$tarball" --access public --provenance --tag "$npm_tag"
             fi
           done
 
@@ -533,10 +538,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "$RELEASE_TAG" \
-            --generate-notes \
-            --prerelease \
-            artifacts/*
+          release_args=(--generate-notes)
+          if [[ "$RELEASE_TAG" == *-beta.* ]]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" "${release_args[@]}" artifacts/*
 
   update-homebrew:
     name: Open Homebrew formula update

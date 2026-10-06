@@ -30,6 +30,20 @@ impl CastWriter {
         env: &[(String, String)],
         start: Instant,
     ) -> io::Result<Self> {
+        Self::create_guarded(path, cols, rows, env, start, None)
+    }
+
+    pub(super) fn create_guarded(
+        path: &Path,
+        cols: u16,
+        rows: u16,
+        env: &[(String, String)],
+        start: Instant,
+        protected: Option<&super::path::ProtectedFile>,
+    ) -> io::Result<Self> {
+        if let Some(protected) = protected {
+            protected.check_path(path)?;
+        }
         if let Some(parent) = path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -39,8 +53,14 @@ impl CastWriter {
         let sink = OpenOptions::new()
             .create(true)
             .write(true)
-            .truncate(true)
+            .truncate(false)
             .open(path)?;
+        // Check the opened file too, before truncation, so a path alias cannot
+        // destroy the automatic stream even if it changes during the open.
+        if let Some(protected) = protected {
+            protected.check_file(path, &sink)?;
+        }
+        sink.set_len(0)?;
         let mut writer = Self {
             start,
             path: path.to_path_buf(),
@@ -65,6 +85,10 @@ impl CastWriter {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    pub(super) fn protect(&self) -> io::Result<super::path::ProtectedFile> {
+        super::path::ProtectedFile::new(&self.path, self.sink.get_ref())
     }
 
     pub fn last_committed(&self) -> Option<Duration> {
@@ -106,12 +130,16 @@ impl CastWriter {
     }
 }
 
+/// Paint the visible state; the worker appends `seed::State` so subsequent
+/// output also retains the live rendition, modes and parser boundary.
 pub(crate) fn snapshot_to_ansi(emulator: &dyn Emulator) -> String {
     let rows = emulator.viewable_rows();
     let (cols, _) = emulator.size();
     let cursor = emulator.cursor();
     let blank = EmuCell::blank();
-    let mut output = String::from("\x1b[0m\x1b[?7l\x1b[2J\x1b[H");
+    // ED 2 can push even an empty viewport into history, which changes later
+    // resize reflow. Erasing from home clears it without inventing history.
+    let mut output = String::from("\x1b(B\x0f\x1b]8;;\x1b\\\x1b[0m\x1b[?7l\x1b[H\x1b[J");
     for index in 0..=u8::MAX {
         write_osc_color(
             &mut output,
@@ -141,8 +169,8 @@ pub(crate) fn snapshot_to_ansi(emulator: &dyn Emulator) -> String {
     let _ = write!(
         output,
         "\x1b[0m\x1b[{};{}H\x1b[{} q\x1b[?7h{}",
-        cursor.1 + 1,
-        cursor.0 + 1,
+        u32::from(cursor.1) + 1,
+        u32::from(cursor.0) + 1,
         match emulator.cursor_shape() {
             CursorShape::Block => 2,
             CursorShape::Underline => 4,
@@ -193,10 +221,19 @@ fn write_style(output: &mut String, cell: &EmuCell) {
     }
     push_color(&mut codes, cell.fg, true, "");
     push_color(&mut codes, cell.bg, false, "");
-    if cell.underline.is_underlined() {
-        push_color(&mut codes, cell.underline_color, true, "5");
-    }
+    push_color(&mut codes, cell.underline_color, true, "5");
     let _ = write!(output, "\x1b[{}m", codes.join(";"));
+    match &cell.hyperlink {
+        Some(link) => {
+            let _ = write!(
+                output,
+                "\x1b]8;id={};{}\x1b\\",
+                link.id.as_deref().unwrap_or_default(),
+                link.uri
+            );
+        }
+        None => output.push_str("\x1b]8;;\x1b\\"),
+    }
 }
 
 fn push_color(codes: &mut Vec<String>, color: Option<Color>, foreground: bool, prefix: &str) {

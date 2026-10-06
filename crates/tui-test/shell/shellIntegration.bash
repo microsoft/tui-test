@@ -13,7 +13,22 @@ elif [ -r ~/.profile ]; then
 fi
 
 __su_osc() { builtin printf '\033]133;%s\007' "$1"; }
-__su_cwd() { builtin printf '\033]7;file://%s%s\007' "${HOSTNAME:-}" "$PWD"; }
+__su_cwd() {
+    # Iterate over UTF-8 bytes, not characters, when percent-encoding the URI.
+    local LC_ALL=C p=$PWD encoded='' byte c hex i
+    for ((i = 0; i < ${#p}; i++)); do
+        c=${p:i:1}
+        case "$c" in
+            [a-zA-Z0-9/._~:-]) encoded+=$c ;;
+            *)
+                builtin printf -v byte '%d' "'$c"
+                builtin printf -v hex '%%%02X' "$((byte & 255))"
+                encoded+=$hex
+                ;;
+        esac
+    done
+    builtin printf '\033]7;file://%s%s\007' "${HOSTNAME:-}" "$encoded"
+}
 
 __su_preexec_invoke() {
     [ -n "$COMP_LINE" ] && return

@@ -7,7 +7,7 @@ Use `@microsoft/tui-test` from JavaScript or TypeScript.
 ## Start
 
 ```sh
-npm install @microsoft/tui-test@beta
+npm install @microsoft/tui-test
 ```
 
 ```js
