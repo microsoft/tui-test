@@ -228,8 +228,6 @@ impl NativeSession {
                     Operation::Open(OpenOptions {
                         backend: parse_backend(backend.as_deref())?,
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
-                        // Resolved from the config file by the client; the bindings take
-                        // their settings as explicit arguments and read no config.
                         style: Default::default(),
                         shell: parse_shell(shell.as_deref())?,
                         cols: integer_u16(&cols, "cols")?,
@@ -314,8 +312,6 @@ impl NativeSession {
                     Operation::Run(RunOptions {
                         backend: parse_backend(backend.as_deref())?,
                         profile: profile_from_parts(profile_scrollback.as_ref(), &profile_colors)?,
-                        // Resolved from the config file by the client; the bindings take
-                        // their settings as explicit arguments and read no config.
                         style: Default::default(),
                         program,
                         args,

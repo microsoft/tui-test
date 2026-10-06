@@ -20,11 +20,6 @@ use crate::terminal::emu::{CursorShape, Emulator};
 pub(crate) const DOT_R: f32 = 7.0;
 pub(crate) const RED_DOT_R: f32 = 2.5;
 pub(crate) const RED_DOT_COLOR: Rgb = Rgb::new(105, 17, 10);
-/// Title bar text, smaller than the grid font so the chrome does not compete
-/// with the terminal content itself.
-/// Where the rightmost traffic light ends. A centred title is kept clear of
-/// this on both sides, so it can never be drawn over the controls.
-/// How far the traffic lights reach from the panel edge.
 fn dots_right(style: &Style) -> f32 {
     style.content_left() + 5.0 + 2.0 * 20.0 + DOT_R
 }
@@ -146,9 +141,7 @@ pub(crate) fn bg_of(cell: &EmuCell, colors: &dyn RenderColors) -> Rgb {
     }
 }
 
-/// What to paint one cell's text with, after inverse and dim have been
-/// resolved. Distinct from [`crate::render::style::Style`], which describes
-/// the whole image rather than a cell in it.
+/// Cell colors and attributes after inverse and dim are resolved.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct CellPaint {
     pub fg: Rgb,
@@ -178,11 +171,7 @@ pub(crate) fn cell_paint(cell: &EmuCell, colors: &dyn RenderColors) -> CellPaint
     }
 }
 
-/// Escape a value going into a double-quoted XML attribute.
-///
-/// [`escape`] is for text content, where a quote is harmless. Inside an
-/// attribute a quote closes it, so a font family named `Foo" onload="x` would
-/// otherwise write arbitrary markup into the document.
+/// Escape text and quotes for a double-quoted XML attribute.
 fn escape_attribute(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -260,9 +249,6 @@ fn write_text_run(
             (false, true) => r#" text-decoration="line-through""#,
             (false, false) => "",
         };
-        // Only when the variant names a family of its own; otherwise the root
-        // font-family already says it, and repeating it on every run would
-        // bloat the document for no change in what is drawn.
         let resolved = style.font.resolve(paint.bold, paint.italic);
         let family = if resolved == style.font.family {
             String::new()
@@ -292,13 +278,6 @@ fn write_text_run(
     }
 }
 
-/// Draw the window title centred in the title bar.
-///
-/// The title is chrome rather than grid content, so unlike a cell run it is
-/// not forced to a `textLength`: stretching a proportional string to a
-/// computed width would distort it. It is instead truncated to what fits, and
-/// kept clear of the traffic lights by reserving the same margin on both
-/// sides, which also keeps it centred on the space that remains.
 pub(crate) fn title_advance(style: &Style) -> f32 {
     style.title_font_size * (style.cell_width() / style.font_size)
 }
@@ -329,7 +308,12 @@ pub(crate) fn visible_title(
     style: &Style,
 ) -> Option<String> {
     const GAP: f32 = 8.0;
-    let available = width - 2.0 * (dots_right(style) + GAP);
+    let margin = if style.window.traffic_lights {
+        dots_right(style) + GAP
+    } else {
+        style.content_left().max(style.content_right()).max(GAP)
+    };
+    let available = width - 2.0 * margin;
     let fits = (available / title_advance(style)).floor().max(0.0) as usize;
     if fits == 0 {
         return None;
@@ -474,8 +458,6 @@ pub(crate) fn render_svg(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{font_size}px">"#
     );
     nerd_font.write_defs(&mut out);
-    // A capture may override the configured canvas, including with nothing at
-    // all; naming none leaves the style in charge.
     match background {
         Some(CaptureBackground::Transparent) => {}
         Some(CaptureBackground::Color(color)) => {
@@ -511,12 +493,9 @@ pub(crate) fn render_svg(
         r#"<g transform="translate({pad_left:.0} {pad_top:.0})"><rect width="{panel_width:.0}" height="{panel_height:.0}" rx="{radius:.0}" fill="{}"/>"#,
         hex(colors.resolve(None, false))
     );
-    // The whole title bar is one decision. Each piece used to be drawn
-    // unconditionally, so turning the bar off left a strip of title color
-    // across the grid's top corners, the close button's dot at 0,0, and the
-    // title written over the first row of content.
     if style.window.title_bar {
         let title_bottom = header_h - divider_h;
+        let radius = radius.min(panel_width / 2.0).min(title_bottom);
         let right_curve = panel_width - radius;
         let _ = write!(
             out,
@@ -538,8 +517,6 @@ pub(crate) fn render_svg(
                 cy = header_h / 2.0,
             );
         }
-        // The darker centre of the close button belongs with the lights, not
-        // beside them, or it survives them being turned off.
         if !lights.is_empty() {
             let _ = write!(
                 out,
@@ -1348,8 +1325,35 @@ mod tests {
         );
     }
 
-    /// A title too long for the bar is truncated rather than drawn over the
-    /// window controls or past the panel edge.
+    #[test]
+    fn title_uses_the_space_released_by_disabled_traffic_lights() {
+        let mut style = Style::default();
+        assert_eq!(visible_title(Some("title"), 12, 1, 150.0, &style), None);
+        style.window.traffic_lights = false;
+        assert_eq!(
+            visible_title(Some("title"), 12, 1, 150.0, &style).as_deref(),
+            Some("title - 12x1")
+        );
+        let svg = render_svg(&[], 12, &colors(), None, Some("title"), &style, 1.0, None);
+        assert!(svg.contains(">title - 12x1</text>"));
+    }
+
+    #[test]
+    fn title_bar_radius_stays_within_its_bounds() {
+        let mut style = Style::default();
+        style.border.radius = 10_000.0;
+        for (cols, expected) in [
+            (1, "M0 20.0 Q0 0 20.0 0 H20.0 Q40.0 0 40.0 20.0 V33.0 H0 Z"),
+            (
+                40,
+                "M0 33.0 Q0 0 33.0 0 H397.0 Q430.0 0 430.0 33.0 V33.0 H0 Z",
+            ),
+        ] {
+            let svg = render_svg(&[], cols, &colors(), None, None, &style, 1.0, None);
+            assert!(svg.contains(expected), "{svg}");
+        }
+    }
+
     #[test]
     fn truncates_a_title_that_does_not_fit() {
         let rows = vec![vec![cell("x", None, None); 20]];

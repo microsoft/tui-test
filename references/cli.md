@@ -280,6 +280,22 @@ The `docs` profile still writes to `./artifacts` and draws at 24px over the
 depth, so naming one style key keeps the rest of the file's look. Whether a
 recording is kept is not a `[recording]` key: that follows `[trace] mode`.
 
+This also applies when the file uses uniform padding and a profile overrides one side:
+
+```toml
+[recording.style]
+canvas_padding = 30
+content_padding = 20
+
+[profiles.docs.recording.style.canvas_padding]
+bottom = 48
+
+[profiles.docs.recording.style.content_padding]
+bottom = 48
+```
+
+The `docs` profile keeps 30px of canvas padding and 20px of content padding on the other three sides.
+
 A fuller example, where each profile names a different mix:
 
 ```toml

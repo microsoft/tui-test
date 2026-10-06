@@ -129,6 +129,7 @@ impl Session {
         recording_path: Option<PathBuf>,
         recording_required: bool,
     ) -> anyhow::Result<Self> {
+        style.validate().map_err(anyhow::Error::msg)?;
         validate_size(cols, rows)?;
         if let Some(cwd) = &cwd {
             validate_cwd(cwd)?;

@@ -682,6 +682,7 @@ impl Engine {
                 )
             }
         };
+        style.validate().map_err(TuiTestError::usage)?;
         crate::terminal::pty::validate_size(cols, rows)?;
         let cwd = match &spec.resolved_cwd {
             Some(cwd) => cwd.clone(),

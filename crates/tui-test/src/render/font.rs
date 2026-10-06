@@ -111,10 +111,7 @@ impl Catalog {
     }
 }
 
-/// The bundled, nerd and system faces. Scanning the system is the expensive
-/// part and does not depend on the style, so it happens once for the process;
-/// a style naming its own font files gets a clone of this with those files
-/// added rather than paying for the scan again.
+/// Scan system fonts once; each style adds its files to a clone.
 fn base_database() -> &'static fontdb::Database {
     static BASE: OnceLock<fontdb::Database> = OnceLock::new();
     BASE.get_or_init(|| {
@@ -126,41 +123,27 @@ fn base_database() -> &'static fontdb::Database {
     })
 }
 
-/// The catalog to draw a style with. Which faces win depends on the families
-/// that style names, so the ordering cannot be computed once for the process.
-/// Keyed by the style's fonts: a run uses one, or one per profile.
 pub(crate) fn catalog_for(font: &FontFamilies) -> Arc<Catalog> {
     static CATALOGS: OnceLock<Mutex<HashMap<FontFamilies, Arc<Catalog>>>> = OnceLock::new();
     let mut catalogs = CATALOGS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        // A panic while a catalog was being built must not make every later
-        // render panic too: the map itself is still consistent.
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(existing) = catalogs.get(font) {
         return Arc::clone(existing);
     }
-    // Built while holding the lock. Ranking every face is slow enough that
-    // letting concurrent callers each build their own copy costs far more
-    // than making them wait for the one that will be cached anyway.
+    // Hold the lock to avoid duplicate, expensive font ranking.
     let catalog = Arc::new(build_catalog(font));
     catalogs.insert(font.clone(), Arc::clone(&catalog));
     catalog
 }
 
-/// No real font comes close to this. The cap exists because the path comes from
-/// a config file, and a config file is found in the working directory: checking
-/// out an untrusted repository must not let it name `/dev/zero` and exhaust
-/// memory.
+/// Bound memory use for font paths from untrusted config files.
 const MAX_FONT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Read a font a config named, rather than handing fontdb the path. fontdb
-/// reads to the end of whatever it is given, so it is the wrong thing to point
-/// at an arbitrary path: only a regular file is read, and only up to the cap.
-/// A path that names nothing is not an error, for the same reason a family no
-/// face provides is not -- the style falls back.
+/// Unlike fontdb's path loader, read only regular files with a size limit.
+/// Unavailable files use the normal font fallback.
 fn load_named_font(database: &mut fontdb::Database, path: &Path) {
-    // A fifo never returns and a device never ends, so neither is opened.
     if !path.metadata().is_ok_and(|meta| meta.is_file()) {
         return;
     }
@@ -228,10 +211,7 @@ fn style_index(bold: bool, italic: bool) -> usize {
     usize::from(bold) | (usize::from(italic) << 1)
 }
 
-/// Split a CSS font stack, which is what a family is: the SVG path passes it
-/// straight into `font-family`, so face selection has to read it the same way
-/// rather than as one unmatchable string. Commas inside quotes are part of the
-/// name, not separators.
+/// Split a CSS font stack without splitting commas inside quoted names.
 fn split_font_stack(stack: &str) -> Vec<String> {
     let mut families = Vec::new();
     let mut current = String::new();
@@ -252,8 +232,6 @@ fn split_font_stack(stack: &str) -> Vec<String> {
         .collect()
 }
 
-/// A CSS generic names a class of font rather than a face, so it can never
-/// match one. The SVG reader resolves these itself; here they are noise.
 fn is_css_generic(family: &str) -> bool {
     matches!(
         family.to_ascii_lowercase().as_str(),
@@ -274,16 +252,12 @@ fn is_css_generic(family: &str) -> bool {
 }
 
 fn preferred_families(font: &FontFamilies, bold: bool, italic: bool) -> Vec<String> {
-    // A style that names its own fonts outranks the environment variable, which
-    // exists for reaching the catalog when no config can. A style that names
-    // none leaves the variable exactly as authoritative as it was.
+    // Explicit style fonts take priority over the environment variable.
     let named = if font == &FontFamilies::default() {
         Vec::new()
     } else {
         let resolved = font.resolve(bold, italic);
         let mut stacks = vec![resolved];
-        // Only when the variant named a family of its own; otherwise resolve
-        // already returned the base and splitting it twice is wasted work.
         if resolved != font.family {
             stacks.push(font.family.as_str());
         }

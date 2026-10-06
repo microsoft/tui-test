@@ -329,19 +329,7 @@ impl Default for Profile {
     }
 }
 
-/// Recording settings as written in the config file.
-///
-/// `mode` and `directory` are independent policies, so each is optional and a
-/// profile inherits the ones it does not name. Whole-table replacement would
-/// mean that naming a directory also reset the mode the file established.
-///
-/// `style` inherits the same way, key by key and at every depth: a profile
-/// naming `font_size` keeps the file's background and padding. It once
-/// replaced the file's style whole, on the theory that a look is a coherent
-/// thing, but a partial TOML table conventionally reads as an override, the
-/// two policies beside it merge, and the value a profile silently fell back
-/// to was the built-in default rather than the file's -- so the rule produced
-/// a look nobody chose precisely when it claimed to prevent one.
+/// Recording settings. Profiles inherit omitted keys from the file.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RecordingConfig {
@@ -350,8 +338,6 @@ pub struct RecordingConfig {
     pub style: Option<crate::render::style::Style>,
 }
 
-/// Fill every key `overlay` does not name from `base`, recursing into
-/// sub-tables so depth does not change the rule.
 fn fill_missing(overlay: &mut toml::Value, base: &toml::Value) {
     let (toml::Value::Table(overlay), toml::Value::Table(base)) = (overlay, base) else {
         return;
@@ -389,15 +375,11 @@ impl RecordingConfig {
                 *directory = parent.join(&*directory);
             }
         }
-        // Font files for the same reason: a repository carrying its own font
-        // renders the same wherever the checkout sits.
         if let Some(style) = self.style.as_mut() {
             style.font.resolve_paths(parent);
         }
     }
 
-    /// This table's values, falling back to `base`: the policies field by
-    /// field, the style whole.
     fn over(&self, base: &RecordingConfig) -> Self {
         Self {
             directory: self.directory.clone().or_else(|| base.directory.clone()),
@@ -413,8 +395,7 @@ pub struct ConfigProfile {
     pub scrollback: Option<usize>,
     pub colors: Colors,
     pub timeouts: crate::api::Timeouts,
-    /// Recording settings for this profile, each field falling back to the
-    /// file's own `[recording]` when it names none.
+    /// Overrides for the file's `[recording]` table.
     pub recording: RecordingConfig,
 }
 
@@ -457,23 +438,27 @@ pub struct ConfigFile {
 }
 
 impl ConfigFile {
-    /// A profile naming one style key means "the file's look, with that key
-    /// changed" -- not "the built-in defaults, with that key changed". By the
-    /// time the typed config exists serde has already filled in every key the
-    /// profile left out, so which keys it actually named is recovered from the
-    /// raw document. Parsing twice keeps the typed parse as the one that
-    /// reports errors, with its spans intact.
+    /// Merge raw keys before serde fills omitted fields with built-in defaults.
     fn inherit_profile_styles(&mut self, toml_text: &str) -> anyhow::Result<()> {
-        let document: toml::Value = match toml::from_str(toml_text) {
-            Ok(document) => document,
-            Err(_) => return Ok(()),
-        };
+        let document: toml::Value = toml::from_str(toml_text)?;
         let Some(base) = document
             .get("recording")
             .and_then(|recording| recording.get("style"))
         else {
             return Ok(());
         };
+        let mut base = base.clone();
+        // Expand shorthand so per-side overrides inherit the uniform value.
+        for key in ["canvas_padding", "content_padding"] {
+            if let Some(value @ toml::Value::Integer(_)) = base.get_mut(key) {
+                *value = toml::Value::Table(
+                    ["top", "right", "bottom", "left"]
+                        .map(|side| (side.to_string(), value.clone()))
+                        .into_iter()
+                        .collect(),
+                );
+            }
+        }
         let raw_profiles = document.get("profiles").and_then(toml::Value::as_table);
         for (name, profile) in self.profiles.iter_mut() {
             let Some(named) = raw_profiles
@@ -484,7 +469,7 @@ impl ConfigFile {
                 continue;
             };
             let mut merged = named.clone();
-            fill_missing(&mut merged, base);
+            fill_missing(&mut merged, &base);
             profile.recording.style = Some(
                 merged
                     .try_into()
@@ -498,9 +483,6 @@ impl ConfigFile {
         let mut config: Self = toml::from_str(toml_text)?;
         config.inherit_profile_styles(toml_text)?;
         config.recording.validate()?;
-        // Every profile's own table too. Validating only the file's left an
-        // invalid per-profile value to surface when a session opened, far
-        // from the config that caused it.
         for (name, profile) in &config.profiles {
             profile
                 .recording
@@ -526,10 +508,6 @@ impl ConfigFile {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        // A relative directory means "beside this config", wherever the
-        // process happens to be running from. That has to hold for a
-        // profile's table as much as the file's, or the same suite writes
-        // recordings somewhere else when run from another directory.
         config.recording.anchor(&parent);
         for profile in config.profiles.values_mut() {
             profile.recording.anchor(&parent);
@@ -552,9 +530,6 @@ impl ConfigFile {
     /// The named profile and its session timeout defaults.
     pub fn settings(&self, name: Option<&str>) -> anyhow::Result<Settings> {
         let profile = match name {
-            // Naming the default explicitly is the same as not naming one.
-            // Otherwise `--profile default` failed on every config that did
-            // not declare the profile the flag already defaults to.
             Some(name) if name == DEFAULT_PROFILE && !self.profiles.contains_key(name) => {
                 Ok(ConfigProfile::default())
             }
@@ -572,12 +547,9 @@ impl ConfigFile {
                 .cloned()
                 .unwrap_or_default()),
         }?;
-        // Resolved before the profile is consumed: a profile overrides the
-        // file's recording key by key, and the style rides along with it.
         let recording = profile.recording.over(&self.recording);
         let mut settings: Settings = profile.into();
-        // The mode is not a recording key any more: the engine derives it from
-        // the trace mode, so only the directory comes from here.
+        // The engine derives recording retention from the trace mode.
         settings.recording = crate::api::AutomaticRecording {
             directory: recording.directory,
             ..crate::api::AutomaticRecording::default()
@@ -817,9 +789,6 @@ mod tests {
         assert!(ConfigFile::parse("[recording]\ndirectory = \"\"\n").is_err());
     }
 
-    /// A style is inherited or replaced whole, never half-merged. Naming one
-    /// key does not leave the rest of the file's theme showing through, which
-    /// would be a look neither config asked for.
     #[test]
     fn a_profile_style_overrides_the_file_style_key_by_key() {
         let config = ConfigFile::parse(
@@ -852,6 +821,56 @@ mod tests {
         let plain = config.settings(Some("plain")).unwrap().style;
         assert_eq!(plain.font_size, 20.0, "naming no style inherits the file's");
         assert_eq!(plain.canvas_background, Rgb::new(255, 0, 0));
+    }
+
+    #[test]
+    fn profile_padding_overrides_preserve_unnamed_sides() {
+        for (base, overlay, canvas, content) in [
+            (
+                "canvas_padding = 30\ncontent_padding = 20",
+                "[profiles.docs.recording.style.canvas_padding]\nbottom = 48\n\
+                 [profiles.docs.recording.style.content_padding]\nbottom = 48",
+                [30, 30, 48, 30],
+                [20, 20, 48, 20],
+            ),
+            (
+                "[recording.style.canvas_padding]\ntop = 30\n\
+                 [recording.style.content_padding]\ntop = 20",
+                "[profiles.docs.recording.style.canvas_padding]\nbottom = 48\n\
+                 [profiles.docs.recording.style.content_padding]\nbottom = 48",
+                [30, 24, 48, 24],
+                [20, 15, 48, 15],
+            ),
+            (
+                "[recording.style.canvas_padding]\ntop = 30\n\
+                 [recording.style.content_padding]\ntop = 20",
+                "[profiles.docs.recording.style]\ncanvas_padding = 0\ncontent_padding = 0",
+                [0; 4],
+                [0; 4],
+            ),
+        ] {
+            let config =
+                ConfigFile::parse(&format!("[recording.style]\n{base}\n{overlay}")).unwrap();
+            let style = config.settings(Some("docs")).unwrap().style;
+            assert_eq!(
+                [
+                    style.canvas_top(),
+                    style.canvas_right(),
+                    style.canvas_bottom(),
+                    style.canvas_left(),
+                ],
+                canvas
+            );
+            assert_eq!(
+                [
+                    style.content_top(),
+                    style.content_right(),
+                    style.content_bottom(),
+                    style.content_left(),
+                ],
+                content.map(|side| side as f32)
+            );
+        }
     }
 
     #[test]

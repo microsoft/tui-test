@@ -1009,8 +1009,6 @@ fn open_options(
     Ok(CoreOpenOptions {
         backend: value.backend.map(Into::into).unwrap_or_default(),
         profile,
-        // Resolved from the config file by the client; the bindings take their
-        // settings as explicit arguments and read no config.
         style: Default::default(),
         shell: value.shell.map(Into::into),
         cols: match value.cols {
@@ -1044,8 +1042,6 @@ fn run_options(
     Ok(CoreRunOptions {
         backend: value.backend.map(Into::into).unwrap_or_default(),
         profile,
-        // Resolved from the config file by the client; the bindings take their
-        // settings as explicit arguments and read no config.
         style: Default::default(),
         program: value.program,
         args: value.args.unwrap_or_default(),

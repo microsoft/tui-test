@@ -1,20 +1,8 @@
 //! How a screenshot or recording is drawn.
 //!
-//! Every value here was a constant in [`crate::render::svg`], which the raster
-//! path reads too, so one struct threaded through that renderer reaches SVG,
-//! APNG, GIF and MP4 alike.
-//!
-//! It is read from `[recording.style]` in `tui-test.toml`, resolved into
-//! [`crate::profile::Settings`] against the profile in use, carried on the
-//! open request, and stored on the session, so a screenshot and a recording of
-//! that session are drawn the same way. Keys are spelled as in the rest of the
-//! config file — `font_size`, not `font-size` — matching how
-//! [`crate::profile::Colors`] spells `bright_black`.
-//!
-//! [`Style::default`] is pinned by a golden test, so the default look cannot
-//! drift by accident. Changing it deliberately means regenerating that file
-//! with `TUI_TEST_UPDATE_GOLDEN=1`, which lands the new bytes in a diff a
-//! reviewer can read.
+//! `[recording.style]` resolves through [`crate::profile::Settings`] into the
+//! session. SVG and raster output share the same style.
+//! Regenerate the default golden with `TUI_TEST_UPDATE_GOLDEN=1` after intentional changes.
 
 use std::path::{Path, PathBuf};
 
@@ -22,25 +10,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::profile::Rgb;
 
-/// The font stack used when nothing names one.
-///
-/// A CSS-style list rather than one family because this is written straight
-/// into the SVG's `font-family`, where the reader picks the first it has. The
-/// raster path does not read it: that path resolves faces through its own
-/// catalog, so a family named here moves an SVG and not yet a recording.
+/// The default CSS font stack for SVG and raster output.
 pub const DEFAULT_FONT_FAMILY: &str =
     "'Cascadia Code','JetBrains Mono','Fira Code',Menlo,Consolas,'DejaVu Sans Mono',monospace";
 
-/// The grid font size that the cell geometry was originally drawn around.
 const DEFAULT_FONT_SIZE: f32 = 17.0;
-/// Cell width and height as a fraction of the font size.
-///
-/// The renderer used to hold 10x21 for a 17px font as three independent
-/// constants, so changing the size alone tore the layout. Keeping them as
-/// ratios means one knob moves the whole grid, and at 17px they multiply back
-/// to exactly 10.0 and 21.0 in `f32`, so existing output is unchanged.
-/// Ceilings that keep a config value from reaching arithmetic it would break.
-/// Generous enough that no real recording comes near them.
 const MAX_FONT_SIZE: f32 = 1_000.0;
 const MAX_LENGTH: f32 = 10_000.0;
 const MAX_PADDING: u32 = 10_000;
@@ -48,13 +22,7 @@ const MAX_PADDING: u32 = 10_000;
 const CELL_W_RATIO: f32 = 10.0 / DEFAULT_FONT_SIZE;
 const CELL_H_RATIO: f32 = 21.0 / DEFAULT_FONT_SIZE;
 
-/// Font families, one per style the terminal can ask for.
-///
-/// A single family covers all four when a face carries its own bold and
-/// italic. They are separate because many terminal fonts ship as siblings
-/// rather than as one family with weights — Berkeley Mono and the Nerd Font
-/// patches among them — and because a reader may want a different italic than
-/// the one the family provides.
+/// Font families, with optional overrides for bold and italic text.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FontFamilies {
@@ -63,13 +31,8 @@ pub struct FontFamilies {
     pub bold: Option<String>,
     pub italic: Option<String>,
     pub bold_italic: Option<String>,
-    /// Extra font files or directories to load, on top of the system fonts and
-    /// whatever `fonts/` directories tui-test finds.
-    ///
-    /// A relative path is resolved against the config file that named it, so a
-    /// repository can carry its own fonts and a checkout renders the same
-    /// wherever it sits. Naming a family that no loaded face provides is not
-    /// an error: it falls back, exactly as an unavailable system font does.
+    /// Extra font files or directories, relative to the config file.
+    /// Unavailable fonts fall back to bundled and system fonts.
     pub files: Vec<PathBuf>,
 }
 
@@ -86,9 +49,7 @@ impl Default for FontFamilies {
 }
 
 impl FontFamilies {
-    /// The family to draw with, falling back to `family` for any variant that
-    /// names none. Bold italic falls through bold then italic first, so
-    /// setting only one of them still applies to the combination.
+    /// Bold italic falls back through bold, italic, then the base family.
     pub fn resolve(&self, bold: bool, italic: bool) -> &str {
         let pick = match (bold, italic) {
             (true, true) => self
@@ -103,7 +64,6 @@ impl FontFamilies {
         pick.unwrap_or(&self.family)
     }
 
-    /// Every family named, so a font loader knows which ones to look for.
     pub fn named(&self) -> impl Iterator<Item = &str> {
         std::iter::once(self.family.as_str()).chain(
             [
@@ -116,8 +76,6 @@ impl FontFamilies {
         )
     }
 
-    /// Resolve relative `files` against the directory holding the config that
-    /// named them, so a repository can carry its own fonts.
     pub fn resolve_paths(&mut self, config_dir: &Path) {
         for file in &mut self.files {
             if file.is_relative() {
@@ -131,12 +89,9 @@ impl FontFamilies {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WindowStyle {
-    /// Draw the title bar. With it off the grid keeps its own margin but the
-    /// bar, its divider and the traffic lights are all gone, and the panel is
-    /// shorter by that much.
+    /// Draw the title bar, divider, and controls above the grid.
     pub title_bar: bool,
-    /// Draw the three traffic lights. Ignored when the title bar is off,
-    /// since they live on it.
+    /// Draw the three controls when the title bar is visible.
     pub traffic_lights: bool,
     pub background: Rgb,
     pub foreground: Rgb,
@@ -144,8 +99,6 @@ pub struct WindowStyle {
 }
 
 impl WindowStyle {
-    /// The traffic lights to draw, empty when they are turned off or there is
-    /// no title bar to hold them.
     pub fn traffic_lights(&self) -> &[Rgb] {
         const LIGHTS: [Rgb; 3] = [
             Rgb::new(236, 106, 94),
@@ -172,10 +125,7 @@ impl Default for WindowStyle {
     }
 }
 
-/// A border drawn around the terminal panel.
-///
-/// Off by default: the panel has never had one, and a zero width keeps it that
-/// way rather than drawing a hairline nobody asked for.
+/// A panel border. A zero width disables it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BorderStyle {
@@ -196,12 +146,6 @@ impl Default for BorderStyle {
 }
 
 /// The drop shadow under the panel.
-///
-/// `offset` moves it down, `spread` widens it. The softness comes from
-/// stacking rounded rectangles that each grow a little and fade a little,
-/// which every SVG renderer can draw and the raster path reproduces exactly.
-/// That stack is derived rather than configured: it is a drawing trick, and
-/// publishing it as config would freeze it into the file format forever.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ShadowStyle {
@@ -225,13 +169,7 @@ impl Default for ShadowStyle {
 }
 
 impl ShadowStyle {
-    /// The stacked rectangles, as `(spread, offset, alpha)` drawn largest
-    /// first.
-    ///
-    /// Four layers, each stepping two sevenths of the spread and a fifth of
-    /// the offset inward while gaining alpha. Those fractions are what
-    /// reproduce the original 7/5/3/1 by 5/4/3/2 stack exactly at the
-    /// defaults.
+    /// `(spread, offset, alpha)` layers, largest first, shared by both renderers.
     fn layers(&self) -> [(f32, f32, u8); 4] {
         let spread_step = self.spread * 2.0 / 7.0;
         let offset_step = self.offset / 5.0;
@@ -246,11 +184,8 @@ impl ShadowStyle {
     }
 }
 
-/// A gap on four sides.
-///
-/// One number covers every side. A table sets them individually, and a side it
-/// does not name keeps that gap's own default, which is why the sides are
-/// optional: the canvas and the window's inside do not default alike.
+/// One number covers every side. A table sets individual sides.
+/// Omitted sides inherit file settings, then the canvas or content defaults.
 ///
 /// ```toml
 /// canvas_padding = 24
@@ -327,12 +262,9 @@ pub struct Style {
     pub font: FontFamilies,
     /// Grid font size in pixels. Cell width and height follow it.
     pub font_size: f32,
-    /// Title bar font size, smaller than the grid so the chrome does not
-    /// compete with the terminal content.
+    /// Title bar font size in pixels.
     pub title_font_size: f32,
-    /// The area around the panel. Named for the canvas because a recording
-    /// has three backgrounds: this one, the title bar's, and the terminal's
-    /// own under `[colors]`.
+    /// Background outside the panel, separate from the title bar and terminal.
     pub canvas_background: Rgb,
     /// The width of that area on every side of the panel.
     pub canvas_padding: Padding,
@@ -360,14 +292,7 @@ impl Default for Style {
 }
 
 impl Style {
-    /// Reject a style that cannot be drawn.
-    ///
-    /// Follows the same shape as `resolve_zoom`: finite, positive, and
-    /// bounded. Without it a config file reaches the renderers with values
-    /// they cannot express — a non-finite size writes a literal `NaN` into the
-    /// SVG, a zero or negative one collapses the grid to nothing, and an
-    /// enormous padding overflows the canvas arithmetic. Each of those failed
-    /// far from the config that caused it, or not at all.
+    /// Reject non-finite values, invalid sizes, and excessive dimensions.
     pub fn validate(&self) -> Result<(), String> {
         for (name, value) in [
             ("font_size", self.font_size),

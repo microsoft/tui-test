@@ -23,10 +23,7 @@ use font::{FontSystem, GlyphKey};
 
 use crate::render::style::Style;
 
-/// The largest canvas that will be allocated, in pixels.
-///
-/// Generous: a 4K frame is 8 megapixels, so this allows more than ten of them
-/// and still caps the buffer at about 400 MB.
+/// Limit the RGBA buffer to 400 MB.
 const MAX_PIXELS: u64 = 100_000_000;
 
 #[derive(Debug)]
@@ -70,7 +67,6 @@ pub struct GridRenderer {
 }
 
 impl GridRenderer {
-    /// The canvas this renderer draws onto.
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
     }
@@ -120,7 +116,6 @@ impl GridRenderer {
         if !zoom.is_finite() || zoom <= 0.0 || zoom > f64::from(f32::MAX) {
             anyhow::bail!("recording zoom must be finite and greater than zero");
         }
-        // Before pixel_size, which is where an unbounded font size overflows.
         style.validate().map_err(|error| anyhow::anyhow!(error))?;
         let (base_width, base_height) = if exact_size {
             svg::exact_pixel_size(cols, rows, &style)
@@ -141,10 +136,6 @@ impl GridRenderer {
             .ok_or_else(|| anyhow::anyhow!("recording height must fit in u32"))?;
         let width = scaled_dimension(width, zoom, "width")?;
         let height = scaled_dimension(height, zoom, "height")?;
-        // Each axis can pass its own bound while the area is enormous: a
-        // 500x200 grid at the largest allowed font and padding is under
-        // u32::MAX on both axes and still a 312 GB pixmap. The product is what
-        // gets allocated, so the product is what has to be bounded.
         let pixels = u64::from(width) * u64::from(height);
         if pixels > MAX_PIXELS {
             anyhow::bail!(
@@ -193,10 +184,7 @@ impl FrameRenderer for GridRenderer {
         };
         let panel_width = scaled_dimension(base_width, f64::from(self.scale), "frame width")?;
         let panel_height = scaled_dimension(base_height, f64::from(self.scale), "frame height")?;
-        // The window sits at its own left and top gap. A frame smaller than the
-        // canvas -- the terminal shrank mid-recording -- is still centred, but
-        // within the area the gaps leave rather than the whole image. With
-        // equal gaps this is the midpoint it always was.
+        // Center smaller frames inside the configured padding after a resize.
         let pad_left = style.canvas_left() as f32 * scale;
         let pad_top = style.canvas_top() as f32 * scale;
         let pad_right = style.canvas_right() as f32 * scale;
@@ -205,8 +193,6 @@ impl FrameRenderer for GridRenderer {
         let content_height = (self.height as f32 - pad_top - pad_bottom).max(0.0);
         let origin_x = pad_left + (content_width - panel_width as f32).max(0.0) / 2.0;
         let origin_y = pad_top + (content_height - panel_height as f32).max(0.0) / 2.0;
-        // A capture may override the configured canvas, including with nothing
-        // at all; naming none leaves the style in charge.
         match self.background {
             Some(CaptureBackground::Transparent) => {
                 self.pixmap.fill(tiny_skia::Color::TRANSPARENT);
@@ -242,9 +228,6 @@ impl FrameRenderer for GridRenderer {
             style.border.radius * scale,
             colors.resolve(None, false),
         );
-        // One decision, as in the SVG path: with no title bar there is no
-        // rounded strip, no divider, no controls and no title text, rather
-        // than each of them drawn at a collapsed height over the grid.
         let mut missing = BTreeSet::new();
         if style.window.title_bar {
             fill_top_rounded_rect(
