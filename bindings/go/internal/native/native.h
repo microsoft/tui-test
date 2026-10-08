@@ -228,6 +228,14 @@ typedef struct TuiOptionalF64 {
   double value;
 } TuiOptionalF64;
 
+typedef struct TuiScreenshotOptions {
+  bool full;
+  struct TuiString path;
+  struct TuiOptionalF64 zoom;
+  struct TuiString background;
+  bool transparent;
+} TuiScreenshotOptions;
+
 typedef struct TuiRecordingOptions {
   struct TuiString path;
   struct TuiString format;
@@ -676,11 +684,7 @@ struct TuiResult *tui_snapshot(struct TuiString session,
  * throughout this call; see TuiString and the input structure contracts.
  */
 struct TuiResult *tui_screenshot(struct TuiString session,
-                                 bool full,
-                                 struct TuiString path,
-                                 struct TuiOptionalF64 zoom,
-                                 struct TuiString background,
-                                 bool transparent);
+                                 const struct TuiScreenshotOptions *options);
 
 /**
  * # Safety

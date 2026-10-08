@@ -12,7 +12,7 @@ The Rust adapter source stays in `native/` and delegates to the existing `tui-te
 
 Terminal behavior, session synchronization, locator evaluation, assertions, diagnostics, traces, artifacts, and recording remain in the Rust engine. Go owns option ergonomics, query construction, error presentation, and test cleanup. The `tuitesttest` package reports the test result through failure-aware close so the engine can retain on-failure traces. Keep new terminal behavior in the engine so language bindings share it.
 
-The native library and Go module must have matching versions. The C ABI is private to this binding. Native allocations must be released by their matching Rust functions, and native code must not retain Go pointers.
+The packaged native library and Go module must come from the same source release. Runtime compatibility is checked separately with the private ABI version described below. Native allocations must be released by their matching Rust functions, and native code must not retain Go pointers.
 
 ## Build from source
 
@@ -24,7 +24,7 @@ From the repository root:
 cargo build --locked -p tui-test-go
 ```
 
-The native adapter enables the same terminal backends and recording features as the JavaScript and Python bindings. The build verifies the generated C header against the checked-in `internal/native/native.h`.
+The native adapter enables the same terminal backends and recording features as the JavaScript and Python bindings. The build verifies the generated C header against the checked-in `bindings/go/internal/native/native.h`.
 
 Set `TUI_TEST_GO_NATIVE_LIBRARY` to the built library before running a Go application or test. For Linux:
 
@@ -82,11 +82,9 @@ cargo test --workspace -- --test-threads=1
 
 The [CI workflow](../../.github/workflows/ci.yml) first smoke-tests `TUI_TEST_GO_NATIVE_LIBRARY`, then embeds the host library and runs the Go checks and smoke example through the bundled path. It also runs the JavaScript and Python binding regression suites.
 
-`TestCloseInterruptsPendingWait` is explicitly skipped for the accepted shared-runtime limitation in [issue #207](https://github.com/microsoft/tui-test/issues/207). Its regression body remains in place. Remove the skip and run the test when the upstream fix is incorporated. The `CloseAll` interruption test remains active.
-
 ### Updating the C header
 
-When changing the native ABI, regenerate the header from the Rust definitions with cbindgen. From the repository root on Linux or macOS:
+When changing the native ABI, regenerate the header from the Rust definitions with cbindgen. Cargo obtains the repository's pinned cbindgen build dependency; no separate cbindgen executable is required. From the repository root on Linux or macOS:
 
 ```sh
 TUI_TEST_GO_UPDATE_HEADER=1 cargo build -p tui-test-go
@@ -102,9 +100,11 @@ Remove-Item Env:TUI_TEST_GO_UPDATE_HEADER
 cargo build --locked -p tui-test-go
 ```
 
-Review the generated `internal/native/native.h` alongside the Rust and Go changes. The second build checks the header without rewriting it.
+Review the generated `bindings/go/internal/native/native.h` alongside the Rust and Go changes. The second build checks the header without rewriting it.
 
-The private ABI version is separate from the workspace release version. The exported `tui_abi_version()` function in `native/src/lib.rs` currently returns `3`. Go registers that symbol as `nativeFunctionTable.AbiVersion`; `loadNativeFunctions` in `internal/native/loader.go` requires the returned value to equal `3`, and `checkNativeVersion` in `internal/native/session.go` repeats that requirement before a session operation. When the private C ABI changes incompatibly, update all three values together. The CI override and bundled smoke runs both initialize the native engine, so either run fails with an incompatible-version error if the Rust value and Go requirement differ.
+The private ABI version is separate from the workspace release version. Increment it when old and new Go/native components are not interchangeable, including changes to required symbols, function signatures, structure layouts, or field meanings. Header-preserving refactors and additive behavior behind an unchanged ABI do not require a bump.
+
+The exported `tui_abi_version()` function in `bindings/go/native/src/lib.rs` currently returns `4`. Go registers that symbol as `nativeFunctionTable.AbiVersion`; `loadNativeFunctions` in `bindings/go/internal/native/loader.go` requires the returned value to equal `4`, and `checkNativeVersion` in `bindings/go/internal/native/session.go` repeats that requirement before a session operation. Set all three locations to the same incremented value. The CI override and bundled smoke runs both initialize the native engine, so either run fails with an incompatible-version error if the Rust value and Go requirement differ.
 
 After changing ABI types, compare the Go layouts against the C compiler's sizes, alignments, and field offsets:
 

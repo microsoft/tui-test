@@ -51,5 +51,6 @@ func nativeInputLayouts() []nativeLayoutPair {
 		{binding: reflect.TypeFor[abiQuery](), compiler: reflect.TypeFor[C.TuiQuery]()},
 		{binding: reflect.TypeFor[abiOptionalF64](), compiler: reflect.TypeFor[C.TuiOptionalF64]()},
 		{binding: reflect.TypeFor[abiRecordingOptions](), compiler: reflect.TypeFor[C.TuiRecordingOptions]()},
+		{binding: reflect.TypeFor[abiScreenshotOptions](), compiler: reflect.TypeFor[C.TuiScreenshotOptions]()},
 	}
 }
