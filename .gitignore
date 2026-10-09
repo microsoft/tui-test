@@ -14,3 +14,6 @@ trace-viewer/node_modules/
 trace-viewer/.preview/
 trace-viewer/test-results/
 trace-viewer/playwright-report/
+/bindings/go/internal/native/embedded/**/*.dll
+/bindings/go/internal/native/embedded/**/*.so
+/bindings/go/internal/native/embedded/**/*.dylib

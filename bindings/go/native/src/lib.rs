@@ -45,7 +45,7 @@ fn finish_trace_and_close(
 }
 #[no_mangle]
 pub extern "C" fn tui_abi_version() -> u32 {
-    3
+    4
 }
 #[no_mangle]
 /// # Safety
@@ -877,19 +877,19 @@ pub unsafe extern "C" fn tui_snapshot(
 /// throughout this call; see TuiString and the input structure contracts.
 pub unsafe extern "C" fn tui_screenshot(
     session: TuiString,
-    full: bool,
-    path: TuiString,
-    zoom: TuiOptionalF64,
-    background: TuiString,
-    transparent: bool,
+    options: *const TuiScreenshotOptions,
 ) -> *mut TuiResult {
+    if options.is_null() {
+        return boundary(|| Err(TuiTestError::usage("screenshot options pointer is null")));
+    }
+    let options = unsafe { *options };
     unsafe {
         execute(session, "screenshot", || {
             Ok(Operation::Screenshot {
-                full,
-                path: path.optional()?,
-                zoom: zoom.option(),
-                background: input::capture_background(background, transparent)?,
+                full: options.full,
+                path: options.path.optional()?,
+                zoom: options.zoom.option(),
+                background: input::capture_background(options.background, options.transparent)?,
             })
         })
     }

@@ -305,7 +305,6 @@ func TestNamedHandlesReopen(t *testing.T) {
 }
 
 func TestCloseInterruptsPendingWait(t *testing.T) {
-	t.Skip("Known upstream limitation accepted for this binding: named Close blocks behind pending waits; https://github.com/microsoft/tui-test/issues/207")
 	terminal := newTerminal(t, tuitest.ClientOptions{})
 	verifyWaitInterruption(t, terminal, func() error { return terminal.Close() })
 }

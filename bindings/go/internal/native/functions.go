@@ -56,7 +56,7 @@ type nativeFunctionTable struct {
 	ExpectOutput     func(abiString, abiString, bool) *abiResult
 	ExpectBellCount  func(abiString, uint64, abiOptionalU64) *abiResult
 	Snapshot         func(abiString, abiString, bool, bool, bool, abiString) *abiResult
-	Screenshot       func(abiString, bool, abiString, abiOptionalF64, abiString, bool) *abiResult
+	Screenshot       func(abiString, *abiScreenshotOptions) *abiResult
 	StartRecording   func(abiString, abiRecordingOptions) *abiResult
 }
 
