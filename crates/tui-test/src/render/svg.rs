@@ -335,9 +335,15 @@ fn write_title(
     let header_h = style.header_height();
     let title_font_size = style.title_font_size;
     let title_fg = style.window.foreground;
+    let resolved = style.font.resolve(true, false);
+    let family = if resolved == style.font.family {
+        String::new()
+    } else {
+        format!(r#" font-family="{}""#, escape_attribute(resolved))
+    };
     let _ = write!(
         out,
-        r#"<text x="{cx:.2}" y="{baseline:.2}" fill="{fill}" font-size="{title_font_size}px" font-weight="bold" text-anchor="middle" xml:space="preserve">{esc}</text>"#,
+        r#"<text x="{cx:.2}" y="{baseline:.2}" fill="{fill}" font-size="{title_font_size}px"{family} font-weight="bold" text-anchor="middle" xml:space="preserve">{esc}</text>"#,
         cx = width / 2.0,
         baseline = header_h / 2.0 + title_font_size * 0.35,
         fill = hex(title_fg),
@@ -1323,6 +1329,31 @@ mod tests {
             titled.contains(r#"<text x="215.00""#),
             "centred on the panel, not on the grid origin: {titled}"
         );
+    }
+
+    #[test]
+    fn title_uses_the_configured_bold_font_family() {
+        for bold in [None, Some("Base Mono"), Some(r#"Heavy "Mono" & Co"#)] {
+            let style = Style {
+                font: crate::render::style::FontFamilies {
+                    family: "Base Mono".into(),
+                    bold: bold.map(str::to_string),
+                    ..Default::default()
+                },
+                ..Style::default()
+            };
+            let svg = render_svg(&[], 40, &colors(), None, Some("title"), &style, 1.0, None);
+            let title = svg
+                .split("<text ")
+                .find(|element| element.contains(">title - 40x1</text>"))
+                .expect("title element");
+            assert!(title.contains(r#"font-weight="bold""#));
+            if bold.is_some_and(|family| family != "Base Mono") {
+                assert!(title.contains(r#"font-family="Heavy &quot;Mono&quot; &amp; Co""#));
+            } else {
+                assert!(!title.contains("font-family="));
+            }
+        }
     }
 
     #[test]
