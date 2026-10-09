@@ -367,7 +367,9 @@ background = "#0b0b12"
 foreground = "#d8d8e8"
 ```
 
-<img alt="tui-test drawn with a dark canvas, chrome and palette" src="static/style-midnight.svg" width="400">
+<p align="center">
+  <img alt="tui-test drawn with a dark canvas, chrome and palette" src="static/style-midnight.svg" width="400">
+</p>
 
 Profiles override individual keys and inherit the rest from the file.
 See the [style types and defaults](crates/tui-test/src/render/style.rs) for all options.
