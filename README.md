@@ -375,6 +375,37 @@ directory = "./traces"
 screen-history-limit = 10
 ```
 
+Set the appearance of screenshots and recordings with `[recording.style]`:
+
+```toml
+[recording.style]
+font_size = 18
+canvas_background = "#05050a"
+canvas_padding = 30
+
+[recording.style.window]
+background = "#15151f"
+foreground = "#c8c8e0"
+divider = "#2a2a3a"
+
+[recording.style.border]
+width = 1
+color = "#3a3a52"
+radius = 12
+
+[profiles.default.colors]
+background = "#0b0b12"
+foreground = "#d8d8e8"
+```
+
+<p align="center">
+  <img alt="tui-test drawn with a dark canvas, chrome and palette" src="static/style-midnight.svg" width="400">
+</p>
+
+Profiles override individual keys and inherit the rest from the file.
+See the [style types and defaults](crates/tui-test/src/render/style.rs) for all options.
+The [CLI reference](references/cli.md#styling-screenshots-and-recordings) explains profile overrides.
+
 The CLI checks the current directory, the platform config directory, then `~/.tui-test`. Use `--config PATH` or `TUI_TEST_CONFIG` to select a file.
 
 ### Shells and backends

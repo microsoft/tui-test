@@ -636,6 +636,7 @@ impl Engine {
             program,
             backend,
             profile,
+            style,
             cols,
             rows,
             cwd,
@@ -650,6 +651,7 @@ impl Engine {
                 None,
                 options.backend,
                 options.profile,
+                options.style.clone(),
                 options.cols,
                 options.rows,
                 options.cwd.clone(),
@@ -668,6 +670,7 @@ impl Engine {
                     Some(program),
                     options.backend,
                     options.profile,
+                    options.style.clone(),
                     options.cols,
                     options.rows,
                     options.cwd.clone(),
@@ -679,6 +682,7 @@ impl Engine {
                 )
             }
         };
+        style.validate().map_err(TuiTestError::usage)?;
         crate::terminal::pty::validate_size(cols, rows)?;
         let cwd = match &spec.resolved_cwd {
             Some(cwd) => cwd.clone(),
@@ -770,6 +774,7 @@ impl Engine {
             program.clone(),
             backend,
             profile,
+            style,
             cols,
             rows,
             Some(cwd),
@@ -4338,14 +4343,21 @@ fn screenshot(
             let zoom = crate::api::resolve_zoom(zoom)?;
             let format = ScreenshotFormat::infer(&path)?;
             let snapshot = svg_snapshot(session, full);
+            let style = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .style
+                .clone();
             match format {
                 ScreenshotFormat::Svg => {
-                    let svg = crate::render::svg::render_svg_with_zoom(
+                    let svg = crate::render::svg::render_svg(
                         &snapshot.rows,
                         snapshot.cols,
                         &snapshot.render_state,
                         snapshot.cursor,
                         snapshot.title.as_deref(),
+                        &style,
                         zoom,
                         background,
                     );
@@ -4367,6 +4379,7 @@ fn screenshot(
                             snapshot.cols,
                             rows,
                             zoom,
+                            style,
                             background,
                         )
                         .map_err(|error| TuiTestError::internal(error.to_string()))?;
@@ -4430,6 +4443,7 @@ mod tests {
             args: args.into_iter().map(str::to_string).collect(),
             backend: defaults.backend,
             profile: defaults.profile,
+            style: defaults.style,
             cols: 80,
             rows: 24,
             cwd: None,
@@ -5311,6 +5325,7 @@ mod tests {
             backend: crate::Backend::Alacritty,
             shell: None,
             profile,
+            style: crate::render::style::Style::default(),
             cols: 87,
             rows: 29,
             cwd: Some(cwd.clone()),
@@ -5376,6 +5391,9 @@ mod tests {
             &snapshot.render_state,
             snapshot.cursor,
             snapshot.title.as_deref(),
+            &crate::render::style::Style::default(),
+            1.0,
+            None,
         );
 
         assert_eq!(svg.matches('X').count(), 2, "text plus block redraw: {svg}");

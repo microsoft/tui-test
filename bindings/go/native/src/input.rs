@@ -215,6 +215,7 @@ pub(crate) unsafe fn open(value: TuiOpenOptions) -> Result<OpenOptions> {
         backend,
         shell,
         profile,
+        style: Default::default(),
         cols: u16_option(value.cols, "cols")?.unwrap_or(80),
         rows: u16_option(value.rows, "rows")?.unwrap_or(30),
         cwd: unsafe { value.cwd.optional()? },

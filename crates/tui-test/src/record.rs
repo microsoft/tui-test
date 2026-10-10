@@ -35,6 +35,9 @@ pub(crate) struct StartRecording {
     pub initial_output: String,
     #[cfg(feature = "recording-raster")]
     pub zoom: f64,
+    /// Frame style; not stored in the asciicast data.
+    #[cfg(feature = "recording-raster")]
+    pub style: crate::render::style::Style,
     #[cfg(feature = "recording-raster")]
     pub background: Option<crate::api::CaptureBackground>,
     #[cfg(feature = "recording-raster")]
@@ -50,6 +53,8 @@ pub(crate) struct StoppedRecording {
     pub format: RecordingFormat,
     #[cfg(feature = "recording-raster")]
     pub zoom: f64,
+    #[cfg(feature = "recording-raster")]
+    pub style: crate::render::style::Style,
     #[cfg(feature = "recording-raster")]
     pub background: Option<crate::api::CaptureBackground>,
     #[cfg(feature = "recording-raster")]
@@ -402,6 +407,8 @@ mod tests {
                 #[cfg(feature = "recording-raster")]
                 zoom: 1.0,
                 #[cfg(feature = "recording-raster")]
+                style: crate::render::style::Style::default(),
+                #[cfg(feature = "recording-raster")]
                 background: None,
                 #[cfg(feature = "recording-raster")]
                 timeline: frames::TimelineOptions::default(),
@@ -440,6 +447,8 @@ mod tests {
             initial_output: String::new(),
             #[cfg(feature = "recording-raster")]
             zoom: 1.0,
+            #[cfg(feature = "recording-raster")]
+            style: crate::render::style::Style::default(),
             #[cfg(feature = "recording-raster")]
             background: None,
             #[cfg(feature = "recording-raster")]
@@ -485,6 +494,8 @@ mod tests {
                 initial_output: String::new(),
                 #[cfg(feature = "recording-raster")]
                 zoom: 1.0,
+                #[cfg(feature = "recording-raster")]
+                style: crate::render::style::Style::default(),
                 #[cfg(feature = "recording-raster")]
                 background: None,
                 #[cfg(feature = "recording-raster")]
@@ -655,6 +666,8 @@ mod tests {
             rows: 4,
             env: Vec::new(),
             initial_output: String::new(),
+            #[cfg(feature = "recording-raster")]
+            style: crate::render::style::Style::default(),
             #[cfg(feature = "recording-raster")]
             zoom: 1.0,
             #[cfg(feature = "recording-raster")]
