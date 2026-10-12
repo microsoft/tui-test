@@ -124,6 +124,31 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 
 Interactive monitors mirror the session's keyboard, paste, and mouse modes.
 
+APNG, GIF, and MP4 recordings capture frames from the session's live emulator.
+Exports encode these frames without replay through another emulator. Cast files
+retain terminal output and resize events; the external player selects its own
+emulator.
+
+Recordings retain frames in memory until export. They merge identical states and
+apply the configured frame rate.
+
+This Unix example starts recording inside an alternate screen. The exported
+animation preserves the primary screen when the program returns to it.
+The pause keeps the alternate screen visible for one second.
+
+```sh
+session="live-recording-$$"
+tui-test --session "$session" run --backend xtermjs --cols 24 --rows 4 sh -c \
+  'stty -echo; printf "\033[?25lPRIMARY\033[?47h\033[H\033[2JALTERNATE"; read -r reply; printf "\033[?1049l"; read -r reply'
+tui-test --session "$session" expect text ALTERNATE
+tui-test --session "$session" record start live-recording.apng
+sleep 1
+tui-test --session "$session" key press Enter
+tui-test --session "$session" expect text PRIMARY
+tui-test --session "$session" record stop
+tui-test --session "$session" close
+```
+
 ## Failure diagnostics
 
 Configure `[trace]` before `open` or `run`. Use `mode = "on"` to retain every session or `"on-failure"` to retain failures. Users can open `trace.html` or replay `session.cast`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
