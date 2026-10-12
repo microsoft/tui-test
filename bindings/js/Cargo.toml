@@ -11,7 +11,7 @@ publish = false
 [lib]
 name = "tui_test_node"
 path = "native/lib.rs"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib"]
 test = false
 
 [dependencies]
@@ -19,12 +19,7 @@ napi = { version = "3", default-features = false, features = ["napi4", "dyn-symb
 napi-derive = "3"
 serde = { workspace = true }
 serde_json = { workspace = true }
-tui-test = { workspace = true, features = [
-    "ghostty",
-    "rio",
-    "xtermjs",
-    "recording-font-jetbrains-mono-styles",
-] }
+libloading = "0.9"
 
 [build-dependencies]
 napi-build = "2"

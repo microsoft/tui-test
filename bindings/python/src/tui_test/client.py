@@ -1231,7 +1231,3 @@ async def get_recording(session: Optional[str] = None) -> str:
         return await _await_native(native.recording(name))
     except NoSessionError as error:
         raise NoSessionError(f"no recording for session '{name}'") from error
-
-
-async def _panic_probe() -> None:
-    await _await_native(native.panic_probe())

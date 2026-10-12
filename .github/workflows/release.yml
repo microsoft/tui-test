@@ -205,7 +205,11 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: node-${{ matrix.target }}
-          path: bindings/js/native/*.node
+          path: |
+            bindings/js/native/*.node
+            bindings/js/native/libtui_test_ffi.*.so
+            bindings/js/native/libtui_test_ffi.*.dylib
+            bindings/js/native/tui_test_ffi.*.dll
           if-no-files-found: error
 
   package-node:
@@ -278,22 +282,25 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            compatibility: "2_28"
+            wheel: cp311-manylinux_x86_64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            compatibility: "2_28"
+            wheel: cp311-manylinux_aarch64
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            compatibility: "musllinux_1_2"
+            wheel: cp311-musllinux_x86_64
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            compatibility: "musllinux_1_2"
+            wheel: cp311-musllinux_aarch64
           - target: x86_64-apple-darwin
             os: macos-latest
+            wheel: cp311-macosx_x86_64
           - target: aarch64-apple-darwin
             os: macos-latest
+            wheel: cp311-macosx_arm64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            wheel: cp311-win_amd64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -303,6 +310,14 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
+
+      - name: Set up Rust for host wheel builds
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
 
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         if: runner.os != 'Linux'
@@ -316,51 +331,27 @@ jobs:
           platforms: arm64
 
       - name: Build Python wheel
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        uses: pypa/cibuildwheel@b3395e271a35f73dad77f21802abe9b986dfe299 # v4.3.1
         with:
-          command: build
-          working-directory: bindings/python
-          target: ${{ matrix.target }}
-          manylinux: ${{ matrix.compatibility || 'auto' }}
-          args: --release --locked --out dist --compatibility pypi
-          before-script-linux: |
-            set -euo pipefail
-            version=0.16.0
-            case "$(uname -m)" in
-              x86_64|amd64)
-                arch=x86_64
-                sha256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
-                ;;
-              aarch64|arm64)
-                arch=aarch64
-                sha256=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
-                ;;
-              *)
-                echo "unsupported Zig host architecture: $(uname -m)" >&2
-                exit 1
-                ;;
-            esac
-            if command -v yum >/dev/null 2>&1; then
-              yum install -y curl xz
-            elif command -v apt-get >/dev/null 2>&1; then
-              apt-get update
-              apt-get install -y --no-install-recommends curl xz-utils
-            fi
-            archive="zig-${arch}-linux-${version}.tar.xz"
-            curl -fsSLo "/tmp/${archive}" \
-              "https://ziglang.org/download/${version}/${archive}"
-            echo "${sha256}  /tmp/${archive}" | sha256sum -c -
-            tar -xJf "/tmp/${archive}" -C /opt
-            ln -s "/opt/zig-${arch}-linux-${version}/zig" /usr/local/bin/zig
-            zig version
+          package-dir: bindings/python
+          output-dir: bindings/python/dist
+          only: ${{ matrix.wheel }}
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.target }}
+          CIBW_ENVIRONMENT_PASS_LINUX: CARGO_BUILD_TARGET
+          CIBW_ENVIRONMENT_LINUX: PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          CIBW_BEFORE_ALL_LINUX: bash {project}/.github/scripts/release/prepare-python-linux.sh
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
+          CIBW_MUSLLINUX_X86_64_IMAGE: musllinux_1_2
+          CIBW_MUSLLINUX_AARCH64_IMAGE: musllinux_1_2
+          CIBW_TEST_COMMAND: python {project}/bindings/python/examples/shared_library.py
 
       - name: Build Python sdist
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        working-directory: bindings/python
         run: |
-          sudo chown -R "$(id -u):$(id -g)" dist
-          python -m pip install --disable-pip-version-check "maturin>=1.5,<2"
-          maturin sdist --manifest-path native/Cargo.toml --out dist
+          python -m pip install --disable-pip-version-check build
+          python -m build --sdist bindings/python --outdir bindings/python/dist
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -374,7 +365,7 @@ jobs:
           shopt -s nullglob
           wheels=(bindings/python/dist/*.whl)
           test "${#wheels[@]}" -eq 1
-          [[ "${wheels[0]}" == *abi3* ]]
+          [[ "${wheels[0]}" == *py3-none* ]]
           python -m venv package-test-python-38
           package-test-python-38/bin/python -m pip install \
             --disable-pip-version-check bindings/python/dist/*.whl

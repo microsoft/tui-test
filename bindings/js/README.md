@@ -10,6 +10,17 @@ npm install @microsoft/tui-test
 
 Node 20+ is supported. The package is ESM only. Bun and Deno support is best effort. Deno 2 needs local `node_modules` and `--allow-ffi`.
 
+The Node addon loads the shared `tui-test-ffi` library through its generated C ABI.
+Each platform package includes the addon and its matching library.
+The library stays loaded for the process lifetime, including calls from workers.
+Set `TUI_TEST_NATIVE_LIBRARY` before the first operation to select another compatible library.
+The addon rejects an incompatible ABI version.
+
+For a local build, run `npm ci`, then `npm run build`.
+Use `npm run build:native:debug` for a debug build.
+These commands build both native components and copy them into `native/`.
+They also regenerate the N-API declarations and apply the shared-library loader extension.
+
 ## Quick start
 
 ```js
@@ -18,10 +29,12 @@ import { TuiTest } from "@microsoft/tui-test";
 const terminal = TuiTest.ephemeral();
 
 try {
-  await terminal.run("my-app");
+  await terminal.run(process.execPath, [
+    "-e",
+    "console.log('Ready'); setInterval(() => {}, 1000)",
+  ]);
   await terminal.getByText("Ready").expect();
-  await terminal.getByText("Continue").click();
-  await terminal.getByText("Done").expect();
+  console.log(await terminal.text());
 } finally {
   await terminal.closeQuiet();
 }

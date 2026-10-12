@@ -29,6 +29,22 @@ for (const nativePackage of nativePackages) {
     throw new Error(`Missing native addon in ${nativePackage}`);
   }
 
+  const platform = path.basename(nativePackage);
+  const library = platform.startsWith("win32-")
+    ? `tui_test_ffi.${platform}.dll`
+    : `libtui_test_ffi.${platform}.${platform.startsWith("darwin-") ? "dylib" : "so"}`;
+  const source = path.join(bindingsDirectory, "artifacts", library);
+  if (!fs.existsSync(source)) {
+    throw new Error(`Missing shared engine in ${source}`);
+  }
+  fs.copyFileSync(source, path.join(nativePackage, library));
+  const manifestPath = path.join(nativePackage, "package.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  if (manifest.files !== undefined) {
+    manifest.files = [...new Set([...manifest.files, library])];
+  }
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
   runNpm([
     "pack",
     nativePackage,

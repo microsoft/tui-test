@@ -8,11 +8,25 @@ The public `tuitest` package at the module root owns clients, options, results, 
 
 The `internal/native` package owns the C ABI, purego calls, native memory lifetimes, and library loading. It copies results into Go-owned values before releasing Rust allocations. Dependencies run from the public package into `internal/native`; the native package does not import the public package.
 
-The Rust adapter source stays in `native/` and delegates to the existing `tui-test` session registry and operations. Source builds load that adapter from the path in `TUI_TEST_GO_NATIVE_LIBRARY` and keep it loaded for the process lifetime.
+The shared Rust adapter lives in `../../crates/tui-test-ffi/` and delegates to the existing session registry and operations.
+Go, Python, and JavaScript use the same library. Source builds select its path through `TUI_TEST_NATIVE_LIBRARY`.
+The library stays loaded for the process lifetime.
 
 Terminal behavior, session synchronization, locator evaluation, assertions, diagnostics, traces, artifacts, and recording remain in the Rust engine. Go owns option ergonomics, query construction, error presentation, and test cleanup. The `tuitesttest` package reports the test result through failure-aware close so the engine can retain on-failure traces. Keep new terminal behavior in the engine so language bindings share it.
 
-The native library and Go module must come from the same source revision. The C ABI is private to this binding. Native allocations must be released by their matching Rust functions, and native code must not retain Go pointers.
+The native library and Go module must come from the same source revision.
+The C ABI is an internal contract shared by all language bindings, not a stable public C SDK.
+Native allocations must be released by their matching Rust functions, and native code must not retain Go pointers.
+
+`internal/native/abi.go` and `internal/native/functions.go` are generated from the Rust ABI declarations.
+Do not edit these files directly. From the repository root, regenerate them with:
+
+```sh
+cargo run --locked -p tui-test-bindgen
+```
+
+The same command updates the C header, Python declarations, and Node declarations.
+Use `cargo run --locked -p tui-test-bindgen -- --check` to check for stale output.
 
 ## Build from source
 
@@ -21,34 +35,34 @@ Install Go 1.26 or newer, Rust 1.90 or newer, and Zig 0.16.0. Linux needs a nati
 From the repository root:
 
 ```sh
-cargo build --locked -p tui-test-go
+cargo build --locked -p tui-test-ffi
 ```
 
-The native adapter enables the same terminal backends and recording features as the JavaScript and Python bindings. Zig is required by the Ghostty dependency.
+The shared library enables all terminal backends and bundled recording font styles. Zig is required by the Ghostty dependency.
 
-Set `TUI_TEST_GO_NATIVE_LIBRARY` to the built library before running a Go application or test. For Linux:
+Set `TUI_TEST_NATIVE_LIBRARY` to the built library before running a Go application or test. For Linux:
 
 ```sh
 cd bindings/go
-TUI_TEST_GO_NATIVE_LIBRARY=../../target/debug/libtui_test_go.so CGO_ENABLED=0 go test ./...
+TUI_TEST_NATIVE_LIBRARY=../../target/debug/libtui_test_ffi.so CGO_ENABLED=0 go test ./...
 ```
 
 On macOS, run from `bindings/go`:
 
 ```sh
-TUI_TEST_GO_NATIVE_LIBRARY=../../target/debug/libtui_test_go.dylib CGO_ENABLED=0 go test ./...
+TUI_TEST_NATIVE_LIBRARY=../../target/debug/libtui_test_ffi.dylib CGO_ENABLED=0 go test ./...
 ```
 
 On Windows amd64, run from the repository root:
 
 ```powershell
 Set-Location bindings/go
-$env:TUI_TEST_GO_NATIVE_LIBRARY = (Resolve-Path ../../target/debug/tui_test_go.dll)
+$env:TUI_TEST_NATIVE_LIBRARY = (Resolve-Path ../../target/debug/tui_test_ffi.dll)
 $env:CGO_ENABLED = '0'
 go test ./...
 ```
 
-For a release build, use `cargo build --release --locked -p tui-test-go` and point the environment variable at the library under `target/release`.
+For a release build, use `cargo build --release --locked -p tui-test-ffi` and point the environment variable at the library under `target/release`.
 
 To consume unpublished changes from another Go module, build the library as above, then add a local module replacement in the consuming project:
 
@@ -59,7 +73,7 @@ go get github.com/microsoft/tui-test/bindings/go
 
 ## Validate changes
 
-After setting `TUI_TEST_GO_NATIVE_LIBRARY`, run these commands from `bindings/go`:
+After setting `TUI_TEST_NATIVE_LIBRARY`, run these commands from `bindings/go`:
 
 ```sh
 gofmt -l .

@@ -19,6 +19,9 @@
     "native/index.js",
     "native/index.d.ts",
     "native/*.node",
+    "native/*.dylib",
+    "native/*.so",
+    "native/*.dll",
     "README.md"
   ],
   "engines": {
@@ -39,8 +42,8 @@
     ]
   },
   "scripts": {
-    "build:native": "napi build --platform --esm --release --strip --output-dir native --js index.js --dts index.d.ts",
-    "build:native:debug": "napi build --platform --esm --output-dir native --js index.js --dts index.d.ts",
+    "build:native": "node scripts/build-native.mjs",
+    "build:native:debug": "node scripts/build-native.mjs --debug",
     "build:ts": "npm run clean && tsc -p tsconfig.json",
     "build": "npm run build:native && npm run build:ts",
     "create:npm-dirs": "napi create-npm-dirs",

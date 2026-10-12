@@ -8,8 +8,6 @@ __pycache__/
 bindings/js/target
 bindings/js/native/target
 bindings/python/target
-bindings/python/native/target
-bindings/python/stub-gen/target
 trace-viewer/node_modules/
 trace-viewer/.preview/
 trace-viewer/test-results/

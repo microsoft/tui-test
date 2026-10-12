@@ -1,0 +1,16 @@
+[package]
+name = "tui-test-bindgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+cbindgen = "0.29"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "3"

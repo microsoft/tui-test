@@ -1,10 +1,10 @@
 [workspace]
 members = [
-    "bindings/go/native",
     "bindings/js",
-    "bindings/python/native",
     "crates/tui-test",
     "crates/tui-test-cli",
+    "crates/tui-test-ffi",
+    "tools/bindgen",
 ]
 default-members = [
     "crates/tui-test",

@@ -1,1100 +1,193 @@
 #![deny(clippy::all)]
 
-use std::any::Any;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+mod abi;
+mod convert;
+mod types;
 
-use napi::bindgen_prelude::{
-    spawn_blocking, Buffer, Either, FromNapiValue, JsObjectValue, Object, ValidateNapiValue,
-};
+use abi::*;
+use convert::*;
+use types::*;
+
+use napi::bindgen_prelude::spawn_blocking;
 use napi::{Error, Result, Status};
-use std::collections::HashMap;
-
 use napi_derive::napi;
-use tui_test::profile::{Profile as CoreProfile, Rgb};
-use tui_test::shell::Shell as CoreShell;
-use tui_test::{
-    global_registry, AutomaticRecording as CoreAutomaticRecording, Backend as CoreBackend,
-    BellEvent as CoreBellEvent, CaptureBackground, Cell as CoreCell, CellColor, ClipboardPattern,
-    Cursor as CoreCursor, DiagnosticRetentionOptions as CoreDiagnosticRetentionOptions,
-    EffectiveTimeouts as CoreEffectiveTimeouts, ErrorKind,
-    ExecutionContext as CoreExecutionContext, FailureArtifactMode as CoreFailureArtifactMode,
-    FailureArtifactOptions as CoreFailureArtifactOptions, KeyAction,
-    LocatorDirection as CoreLocatorDirection, LocatorQuery as CoreLocatorQuery,
-    MatchOccurrence as CoreMatchOccurrence, MouseAction, MouseOptions as CoreMouseOptions,
-    OpenOptions as CoreOpenOptions, OpenResult as CoreOpenResult, Operation, OperationResult,
-    RecordingFormat as CoreRecordingFormat, RunOptions as CoreRunOptions,
-    ScreenshotResult as CoreScreenshotResult, SessionHandle, Size as CoreSize,
-    SnapshotResult as CoreSnapshotResult, State as CoreState, TerminalColors as CoreTerminalColors,
-    TextMatch as CoreTextMatch, TextStyle as CoreTextStyle, Timeouts as CoreTimeouts, TuiTestError,
-    WhitespaceMode as CoreWhitespaceMode,
-};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 
 const ERROR_PREFIX: &str = "__tui_test_native_error__:";
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
-#[napi(string_enum = "lowercase")]
-pub enum Backend {
-    Alacritty,
-    Ghostty,
-    Rio,
-    Xtermjs,
+struct Library {
+    functions: Functions,
+    // Keep the library loaded until all native calls and result guards finish.
+    _library: libloading::Library,
 }
 
-impl From<Backend> for CoreBackend {
-    fn from(value: Backend) -> Self {
-        match value {
-            Backend::Alacritty => Self::Alacritty,
-            Backend::Ghostty => Self::Ghostty,
-            Backend::Rio => Self::Rio,
-            Backend::Xtermjs => Self::Xtermjs,
-        }
-    }
-}
-
-#[napi(string_enum = "lowercase")]
-pub enum Shell {
-    Bash,
-    Powershell,
-    Pwsh,
-    Cmd,
-    Fish,
-    Zsh,
-    Xonsh,
-    Elvish,
-    Nushell,
-}
-
-impl From<Shell> for CoreShell {
-    fn from(value: Shell) -> Self {
-        match value {
-            Shell::Bash => Self::Bash,
-            Shell::Powershell => Self::Powershell,
-            Shell::Pwsh => Self::Pwsh,
-            Shell::Cmd => Self::Cmd,
-            Shell::Fish => Self::Fish,
-            Shell::Zsh => Self::Zsh,
-            Shell::Xonsh => Self::Xonsh,
-            Shell::Elvish => Self::Elvish,
-            Shell::Nushell => Self::Nushell,
-        }
-    }
-}
-
-#[napi(string_enum = "lowercase")]
-pub enum RecordingFormat {
-    Apng,
-    Gif,
-    Mp4,
-    Cast,
-}
-
-impl From<RecordingFormat> for CoreRecordingFormat {
-    fn from(value: RecordingFormat) -> Self {
-        match value {
-            RecordingFormat::Apng => Self::Apng,
-            RecordingFormat::Gif => Self::Gif,
-            RecordingFormat::Mp4 => Self::Mp4,
-            RecordingFormat::Cast => Self::Cast,
-        }
-    }
-}
-
-#[napi(object)]
-pub struct Timeouts {
-    pub text: Option<f64>,
-    pub idle: Option<f64>,
-    pub command: Option<f64>,
-    pub exit: Option<f64>,
-    pub ready: Option<f64>,
-}
-
-#[napi(object)]
-pub struct AutomaticRecordingOptions {
-    pub directory: Option<String>,
-}
-
-#[napi(object)]
-pub struct TraceOptions {
-    pub mode: Option<String>,
-    pub directory: Option<String>,
-}
-
-#[napi(object)]
-pub struct FailureArtifactOptions {
-    pub directory: String,
-    pub mode: Option<String>,
-    pub include_recording: Option<bool>,
-}
-
-#[napi(object)]
-pub struct OpenOptions {
-    pub backend: Option<Backend>,
-    pub shell: Option<Shell>,
-    pub cols: Option<f64>,
-    pub rows: Option<f64>,
-    pub cwd: Option<String>,
-    pub env: Option<Vec<(String, String)>>,
-    pub wait_ready: Option<bool>,
-    pub restart: Option<bool>,
-    pub profile_scrollback: Option<f64>,
-    pub profile_colors: Option<Vec<(String, String)>>,
-    pub timeouts: Option<Timeouts>,
-    pub screen_history_limit: Option<f64>,
-}
-
-#[napi(object)]
-pub struct RunOptions {
-    pub backend: Option<Backend>,
-    pub program: String,
-    pub args: Option<Vec<String>>,
-    pub cols: Option<f64>,
-    pub rows: Option<f64>,
-    pub cwd: Option<String>,
-    pub env: Option<Vec<(String, String)>>,
-    pub wait_ready: Option<bool>,
-    pub restart: Option<bool>,
-    pub profile_scrollback: Option<f64>,
-    pub profile_colors: Option<Vec<(String, String)>>,
-    pub timeouts: Option<Timeouts>,
-    pub screen_history_limit: Option<f64>,
-}
-
-#[napi(object, use_nullable = true)]
-pub struct OpenResult {
-    #[napi(js_name = "shell_pid")]
-    pub shell_pid: Option<u32>,
-    pub session: String,
-    pub ready: bool,
-    pub recording: String,
-}
-
-impl From<CoreOpenResult> for OpenResult {
-    fn from(value: CoreOpenResult) -> Self {
-        Self {
-            shell_pid: value.shell_pid,
-            session: value.session,
-            ready: value.ready,
-            recording: value.recording,
-        }
-    }
-}
-
-#[napi(object)]
-pub struct Cursor {
-    pub x: u16,
-    pub y: u16,
-    pub visible: bool,
-    pub shape: String,
-    pub color: String,
-}
-
-impl From<CoreCursor> for Cursor {
-    fn from(value: CoreCursor) -> Self {
-        Self {
-            x: value.x,
-            y: value.y,
-            visible: value.visible,
-            shape: value.shape,
-            color: value.color,
-        }
-    }
-}
-
-#[napi(object)]
-pub struct Size {
-    pub cols: u16,
-    pub rows: u16,
-}
-
-impl From<CoreSize> for Size {
-    fn from(value: CoreSize) -> Self {
-        Self {
-            cols: value.cols,
-            rows: value.rows,
-        }
-    }
-}
-
-#[napi(object)]
-pub struct EffectiveTimeouts {
-    pub text: f64,
-    pub idle: f64,
-    pub command: f64,
-    pub exit: f64,
-    pub ready: f64,
-}
-
-impl From<CoreEffectiveTimeouts> for EffectiveTimeouts {
-    fn from(value: CoreEffectiveTimeouts) -> Self {
-        Self {
-            text: value.text as f64,
-            idle: value.idle as f64,
-            command: value.command as f64,
-            exit: value.exit as f64,
-            ready: value.ready as f64,
-        }
-    }
-}
-
-#[napi(object)]
-pub struct BellEvent {
-    pub sequence: f64,
-    #[napi(js_name = "elapsed_ms")]
-    pub elapsed_ms: f64,
-}
-
-impl From<CoreBellEvent> for BellEvent {
-    fn from(value: CoreBellEvent) -> Self {
-        Self {
-            sequence: value.sequence as f64,
-            elapsed_ms: value.elapsed_ms as f64,
-        }
-    }
-}
-
-#[napi(object, use_nullable = true)]
-pub struct State {
-    #[napi(js_name = "session_shell")]
-    pub session_shell: Option<String>,
-    pub cols: u16,
-    pub rows: u16,
-    pub cursor: Cursor,
-    pub title: Option<String>,
-    pub cwd: Option<String>,
-    #[napi(js_name = "last_command")]
-    pub last_command: Option<String>,
-    #[napi(js_name = "last_exit")]
-    pub last_exit: Option<i32>,
-    #[napi(js_name = "exit_signal")]
-    pub exit_signal: Option<String>,
-    pub exited: Option<i32>,
-    pub ready: bool,
-    #[napi(js_name = "bell_count")]
-    pub bell_count: f64,
-    pub modes: HashMap<String, bool>,
-    #[napi(js_name = "mouse_mode")]
-    pub mouse_mode: String,
-    pub colors: TerminalColors,
-    pub timeouts: EffectiveTimeouts,
-    pub text: String,
-}
-
-/// The colors the terminal is painting with.
-#[napi(object)]
-pub struct TerminalColors {
-    /// The default foreground (`OSC 10`).
-    pub foreground: String,
-    /// The default background (`OSC 11`).
-    pub background: String,
-    /// The cursor color (`OSC 12`).
-    pub cursor: String,
-    /// Palette entries a program overrode (`OSC 4`), keyed by index.
-    ///
-    /// Only entries that differ from the profile are listed.
-    pub palette: HashMap<String, String>,
-}
-
-impl From<CoreTerminalColors> for TerminalColors {
-    fn from(value: CoreTerminalColors) -> Self {
-        Self {
-            foreground: value.foreground,
-            background: value.background,
-            cursor: value.cursor,
-            palette: value
-                .palette
-                .into_iter()
-                .map(|(index, color)| (index.to_string(), color))
-                .collect(),
-        }
-    }
-}
-
-impl From<CoreState> for State {
-    fn from(value: CoreState) -> Self {
-        Self {
-            session_shell: value.session_shell,
-            cols: value.cols,
-            rows: value.rows,
-            cursor: value.cursor.into(),
-            title: value.title,
-            cwd: value.cwd,
-            last_command: value.last_command,
-            last_exit: value.last_exit,
-            exit_signal: value.exit_signal,
-            exited: value.exited,
-            ready: value.ready,
-            bell_count: value.bell_count as f64,
-            modes: value.modes.into_iter().collect(),
-            mouse_mode: value.mouse_mode,
-            colors: value.colors.into(),
-            timeouts: value.timeouts.into(),
-            text: value.text,
-        }
-    }
-}
-
-#[napi(string_enum = "lowercase")]
-pub enum UnderlineStyle {
-    None,
-    Single,
-    Double,
-    Curly,
-    Dotted,
-    Dashed,
-}
-
-fn underline_style(value: String) -> std::result::Result<UnderlineStyle, TuiTestError> {
-    match value.as_str() {
-        "none" => Ok(UnderlineStyle::None),
-        "single" => Ok(UnderlineStyle::Single),
-        "double" => Ok(UnderlineStyle::Double),
-        "curly" => Ok(UnderlineStyle::Curly),
-        "dotted" => Ok(UnderlineStyle::Dotted),
-        "dashed" => Ok(UnderlineStyle::Dashed),
-        _ => Err(TuiTestError::internal(format!(
-            "terminal returned unknown underline style '{value}'"
-        ))),
-    }
-}
+static LIBRARY: OnceLock<Arc<Library>> = OnceLock::new();
+static LIBRARY_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 #[napi]
-pub type Color = Either<u32, String>;
+pub fn configure_library(path: String) -> Result<()> {
+    *LIBRARY_PATH
+        .lock()
+        .map_err(|_| internal("library path lock poisoned"))? = Some(path.into());
+    Ok(())
+}
 
-fn color(value: CellColor) -> Color {
-    match value {
-        CellColor::Default => Either::B("default".to_string()),
-        CellColor::Indexed(index) => Either::A(u32::from(index)),
-        CellColor::Rgb(red, green, blue) => Either::B(format!("#{red:02x}{green:02x}{blue:02x}")),
+fn library() -> Result<Arc<Library>> {
+    if let Some(library) = LIBRARY.get() {
+        return Ok(library.clone());
     }
-}
-
-#[napi(object)]
-pub struct Cell {
-    pub x: u16,
-    pub y: u16,
-    pub r#char: String,
-    pub fg: Color,
-    pub bg: Color,
-    pub bold: bool,
-    pub dim: bool,
-    pub italic: bool,
-    pub inverse: bool,
-    pub invisible: bool,
-    pub strike: bool,
-    pub blink: bool,
-    pub underline: bool,
-    #[napi(js_name = "underline_style")]
-    pub underline_style: UnderlineStyle,
-    #[napi(js_name = "underline_color")]
-    pub underline_color: Color,
-    /// The OSC 8 URI this cell links to, empty when it links nowhere.
-    pub link: String,
-    /// The link's `id=` parameter, empty when the sequence carried none.
-    ///
-    /// Identifies a link across a wrap rather than describing where it points:
-    /// a program that wraps its own links tags each run with a shared `id=`.
-    ///
-    /// Backend-dependent. Ghostty reports a link's URI and nothing else, so
-    /// this is always empty there and no locator matches on it.
-    #[napi(js_name = "link_id")]
-    pub link_id: String,
-}
-
-impl TryFrom<CoreCell> for Cell {
-    type Error = TuiTestError;
-
-    fn try_from(value: CoreCell) -> std::result::Result<Self, Self::Error> {
-        Ok(Self {
-            x: value.x,
-            y: value.y,
-            r#char: value.char,
-            fg: color(value.fg),
-            bg: color(value.bg),
-            bold: value.bold,
-            dim: value.dim,
-            italic: value.italic,
-            inverse: value.inverse,
-            invisible: value.invisible,
-            strike: value.strike,
-            blink: value.blink,
-            underline: value.underline,
-            underline_style: underline_style(value.underline_style)?,
-            underline_color: color(value.underline_color),
-            link: value.link,
-            link_id: value.link_id,
-        })
+    let configured = LIBRARY_PATH
+        .lock()
+        .map_err(|_| internal("library path lock poisoned"))?;
+    if let Some(library) = LIBRARY.get() {
+        return Ok(library.clone());
     }
+    let path = std::env::var_os("TUI_TEST_NATIVE_LIBRARY")
+        .map(PathBuf::from)
+        .or_else(|| configured.clone())
+        .ok_or_else(|| internal("shared native library path is not configured"))?;
+    let loaded = unsafe { libloading::Library::new(&path) }.map_err(|error| {
+        internal(format!(
+            "failed to load shared native library {}: {error}",
+            path.display()
+        ))
+    })?;
+    let version = unsafe { loaded.get::<unsafe extern "C" fn() -> u32>(b"tui_abi_version\0") }
+        .map_err(|error| internal(format!("failed to read native ABI version: {error}")))?;
+    let actual = unsafe { version() };
+    if actual != ABI_VERSION {
+        return Err(internal(format!(
+            "native ABI version mismatch: expected {ABI_VERSION}, got {actual}"
+        )));
+    }
+    let functions = unsafe { Functions::load(&loaded) }
+        .map_err(|error| internal(format!("failed to load native ABI symbols: {error}")))?;
+    let loaded = Arc::new(Library {
+        functions,
+        _library: loaded,
+    });
+    let _ = LIBRARY.set(loaded.clone());
+    Ok(loaded)
 }
 
-#[napi(object)]
-pub struct TextPosition {
-    pub row: u32,
-    pub column: u16,
+fn error(kind: &str, message: impl Into<String>) -> Error {
+    Error::new(
+        Status::GenericFailure,
+        format!(
+            "{ERROR_PREFIX}{}",
+            serde_json::json!({
+                "kind": kind, "message": message.into(),
+            })
+        ),
+    )
 }
 
-#[napi(object)]
-pub struct TextSpan {
-    pub row: u32,
-    pub start: u16,
-    pub end: u16,
+fn internal(message: impl Into<String>) -> Error {
+    error("internal", message)
+}
+fn usage(message: impl Into<String>) -> Error {
+    error("usage", message)
 }
 
-#[napi(object)]
-pub struct TextMatch {
-    pub text: String,
-    pub start: TextPosition,
-    pub end: TextPosition,
-    pub spans: Vec<TextSpan>,
-}
-
-impl From<CoreTextMatch> for TextMatch {
-    fn from(value: CoreTextMatch) -> Self {
-        Self {
-            text: value.text,
-            start: TextPosition {
-                row: value.start.row,
-                column: value.start.column,
-            },
-            end: TextPosition {
-                row: value.end.row,
-                column: value.end.column,
-            },
-            spans: value
-                .spans
-                .into_iter()
-                .map(|span| TextSpan {
-                    row: span.row,
-                    start: span.start,
-                    end: span.end,
-                })
-                .collect(),
+fn boundary<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("non-string panic payload");
+            Err(internal(format!("native binding panicked: {message}")))
         }
     }
 }
 
-#[napi(object)]
-/// Private native-owned packed screen snapshot.
-///
-/// `utf8` decodes to exactly `rows` newline-delimited logical rows. Trailing
-/// spaces and blank rows are retained. UTF-8 byte offsets are not terminal cell
-/// offsets when rows contain Unicode graphemes.
-pub struct PackedScreen {
-    #[napi(readonly)]
-    /// Logical column count.
-    pub cols: u16,
-    #[napi(readonly)]
-    /// Number of logical rows encoded in `utf8`.
-    pub rows: u16,
-    #[napi(readonly, ts_type = "Uint8Array")]
-    /// Detached native-owned UTF-8 bytes. Treat this private snapshot as immutable.
-    pub utf8: Buffer,
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    spawn_blocking(move || boundary(work))
+        .await
+        .map_err(|error| internal(format!("native worker failed: {error}")))?
 }
 
-#[napi(object)]
-pub struct MouseClickOptions {
-    pub x: Option<f64>,
-    pub y: Option<f64>,
-    pub on_text: Option<String>,
-    pub button: Option<f64>,
-    pub clicks: Option<f64>,
+struct ResultGuard<'a> {
+    pointer: *mut TuiResult,
+    library: &'a Library,
 }
 
-#[napi(string_enum = "lowercase")]
-pub enum LocatorNodeKind {
-    Text,
-    Style,
-    Link,
-    And,
-    Or,
-    Filter,
+impl Drop for ResultGuard<'_> {
+    fn drop(&mut self) {
+        unsafe { (self.library.functions.tui_result_free)(self.pointer) };
+    }
 }
 
-#[napi(string_enum = "lowercase")]
-pub enum LocatorStageDirection {
-    Within,
-    After,
-    Before,
-}
-
-#[derive(Default)]
-#[napi(object, object_from_js = false)]
-pub struct LocatorStyle {
-    pub foreground: Option<String>,
-    pub background: Option<String>,
-    pub bold: Option<bool>,
-    pub dim: Option<bool>,
-    pub italic: Option<bool>,
-    pub underline_style: Option<String>,
-    pub underline_color: Option<String>,
-    pub inverse: Option<bool>,
-    pub hidden: Option<bool>,
-    pub strikethrough: Option<bool>,
-    pub blink: Option<bool>,
-}
-
-#[napi(object, object_from_js = false)]
-pub struct LocatorNode {
-    pub kind: LocatorNodeKind,
-    pub direction: Option<LocatorStageDirection>,
-    pub text: Option<String>,
-    pub regex: Option<bool>,
-    pub full: Option<bool>,
-    pub whitespace: Option<String>,
-    pub occurrence: Option<String>,
-    pub nth: Option<f64>,
-    pub style: Option<LocatorStyle>,
-    pub link: Option<String>,
-    pub within: Option<f64>,
-    pub left: Option<f64>,
-    pub right: Option<f64>,
-    pub input: Option<f64>,
-    pub has: Option<f64>,
-    pub has_not: Option<f64>,
-}
-
-#[napi(object, object_from_js = false)]
-pub struct LocatorExpression {
-    pub nodes: Vec<LocatorNode>,
-    pub root: f64,
-}
-
-// Reject unknown fields before conversion so misspelled predicates cannot
-// silently broaden a locator.
-macro_rules! strict_locator_input {
-    ($name:ident { $($field:ident => $key:literal),* $(,)? }) => {
-        impl ValidateNapiValue for $name {}
-        impl FromNapiValue for $name {
-            unsafe fn from_napi_value(env: napi::sys::napi_env, value: napi::sys::napi_value) -> Result<Self> {
-                unsafe { Object::validate(env, value)?; }
-                let object = unsafe { Object::from_napi_value(env, value)? };
-                for key in Object::keys(&object)? {
-                    if ![$($key),*].contains(&key.as_str()) {
-                        return Err(Error::new(Status::InvalidArg, format!("unknown locator field {key:?}")));
-                    }
-                }
-                Ok(Self { $($field: object.get_named_property($key)?),* })
+fn result<T>(
+    library: &Library,
+    pointer: *mut TuiResult,
+    convert: impl FnOnce(&TuiResult) -> Result<T>,
+) -> Result<T> {
+    if pointer.is_null() {
+        return Err(internal("native operation returned a null result"));
+    }
+    let guard = ResultGuard { pointer, library };
+    let value = unsafe { &*guard.pointer };
+    if value.error_kind != 0 {
+        let kind = match value.error_kind {
+            1 => "assertion",
+            2 => "usage",
+            3 => "no_session",
+            _ => "internal",
+        };
+        let mut envelope = serde_json::json!({"kind": kind, "message": text(value.error_message)});
+        for (key, value) in [
+            ("details", value.error_details),
+            ("artifact", value.error_artifact),
+        ] {
+            if let Some(value) = optional_text(value) {
+                envelope[key] = serde_json::from_str(&value)
+                    .map_err(|error| internal(format!("invalid native {key}: {error}")))?;
             }
         }
-    };
-}
-
-strict_locator_input!(LocatorStyle {
-    foreground => "foreground", background => "background", bold => "bold",
-    dim => "dim", italic => "italic", underline_style => "underlineStyle",
-    underline_color => "underlineColor", inverse => "inverse", hidden => "hidden",
-    strikethrough => "strikethrough", blink => "blink",
-});
-strict_locator_input!(LocatorNode {
-    kind => "kind", direction => "direction", text => "text", regex => "regex",
-    full => "full", whitespace => "whitespace", occurrence => "occurrence",
-    nth => "nth", style => "style", link => "link", within => "within",
-    left => "left", right => "right", input => "input", has => "has", has_not => "hasNot",
-});
-strict_locator_input!(LocatorExpression { nodes => "nodes", root => "root" });
-
-#[napi(object)]
-pub struct TitleOptions {
-    pub regex: Option<bool>,
-    pub not: Option<bool>,
-    pub timeout_ms: Option<f64>,
-}
-
-#[napi(object)]
-pub struct ClipboardWaitOptions {
-    pub regex: Option<bool>,
-    pub timeout_ms: Option<f64>,
-}
-
-#[napi(object)]
-pub struct SnapshotOptions {
-    pub update: Option<bool>,
-    pub include_style: Option<bool>,
-    pub include_title: Option<bool>,
-    pub cwd: Option<String>,
-}
-
-#[napi(object)]
-pub struct ScreenshotOptions {
-    pub full: Option<bool>,
-    pub path: Option<String>,
-    pub zoom: Option<f64>,
-    pub background: Option<String>,
-    pub transparent: Option<bool>,
-}
-
-#[napi(object)]
-pub struct RecordingOptions {
-    pub path: String,
-    pub format: Option<RecordingFormat>,
-    pub fps: Option<f64>,
-    pub speed: Option<f64>,
-    pub idle_time_limit: Option<f64>,
-    pub zoom: Option<f64>,
-    pub background: Option<String>,
-    pub transparent: Option<bool>,
-}
-
-#[napi(string_enum = "lowercase")]
-pub enum SnapshotResult {
-    Passed,
-    Written,
-    Updated,
-}
-
-impl From<CoreSnapshotResult> for SnapshotResult {
-    fn from(value: CoreSnapshotResult) -> Self {
-        match value {
-            CoreSnapshotResult::Passed => Self::Passed,
-            CoreSnapshotResult::Written => Self::Written,
-            CoreSnapshotResult::Updated => Self::Updated,
-        }
-    }
-}
-
-fn native_error(error: TuiTestError) -> Error {
-    #[derive(serde::Serialize)]
-    struct ErrorEnvelope<'a> {
-        kind: &'a str,
-        message: &'a str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        details: Option<&'a tui_test::FailureDetails>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        artifact: Option<&'a tui_test::FailureArtifactRef>,
-    }
-
-    let envelope = ErrorEnvelope {
-        kind: error.kind.as_str(),
-        message: &error.message,
-        details: error.details.as_deref(),
-        artifact: error.artifact.as_deref(),
-    };
-    let body = serde_json::to_string(&envelope).unwrap_or_else(|serialization_error| {
-        serde_json::json!({
-            "kind": "internal",
-            "message": format!("failed to serialize native error: {serialization_error}"),
-        })
-        .to_string()
-    });
-    Error::new(Status::GenericFailure, format!("{ERROR_PREFIX}{body}"))
-}
-
-fn capture_background(
-    background: Option<String>,
-    transparent: bool,
-) -> Result<Option<CaptureBackground>> {
-    if background.is_some() && transparent {
-        return Err(native_error(TuiTestError::usage(
-            "background and transparent options conflict",
-        )));
-    }
-    if transparent {
-        return Ok(Some(CaptureBackground::Transparent));
-    }
-    background
-        .map(|value| CaptureBackground::parse(&value).map_err(native_error))
-        .transpose()
-}
-
-fn panic_message(payload: &(dyn Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "non-string panic payload".to_string()
-    }
-}
-
-fn ffi_boundary<T>(work: impl FnOnce() -> std::result::Result<T, TuiTestError>) -> Result<T> {
-    match catch_unwind(AssertUnwindSafe(work)) {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(error)) => Err(native_error(error)),
-        Err(payload) => Err(native_error(TuiTestError::internal(format!(
-            "native binding panicked: {}",
-            panic_message(payload.as_ref())
-        )))),
-    }
-}
-
-async fn blocking<T>(
-    context: &'static str,
-    work: impl FnOnce() -> std::result::Result<T, TuiTestError> + Send + 'static,
-) -> Result<T>
-where
-    T: Send + 'static,
-{
-    spawn_blocking(move || ffi_boundary(work))
-        .await
-        .map_err(|error| {
-            native_error(TuiTestError::internal(format!(
-                "{context} worker failed: {error}"
-            )))
-        })?
-}
-
-fn timeout(value: Option<f64>, name: &str) -> std::result::Result<Option<u64>, TuiTestError> {
-    value
-        .map(|value| integer(value, name, u64::MAX))
-        .transpose()
-}
-
-fn integer(value: f64, name: &str, max: u64) -> std::result::Result<u64, TuiTestError> {
-    let max = max.min(MAX_SAFE_INTEGER);
-    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > max as f64 {
-        return Err(TuiTestError::usage(format!(
-            "{name} must be an integer between 0 and {max}"
-        )));
-    }
-    Ok(value as u64)
-}
-
-fn u16_value(value: f64, name: &str) -> std::result::Result<u16, TuiTestError> {
-    Ok(integer(value, name, u64::from(u16::MAX))? as u16)
-}
-
-fn u8_value(value: f64, name: &str) -> std::result::Result<u8, TuiTestError> {
-    Ok(integer(value, name, u64::from(u8::MAX))? as u8)
-}
-
-fn mouse_options(value: f64) -> std::result::Result<CoreMouseOptions, TuiTestError> {
-    let code = u8_value(value, "button")?;
-    CoreMouseOptions::from_sgr_code(code)
-        .ok_or_else(|| TuiTestError::usage(format!("invalid mouse button code {code}")))
-}
-
-fn core_occurrence(
-    value: Option<String>,
-    nth: Option<f64>,
-    default: CoreMatchOccurrence,
-    name: &str,
-) -> std::result::Result<CoreMatchOccurrence, TuiTestError> {
-    if let Some(index) = nth {
-        if let Some(value) = value.as_deref().filter(|value| *value != "nth") {
-            return Err(TuiTestError::usage(format!(
-                "{name} cannot be used with occurrence '{value}'"
-            )));
-        }
-        return Ok(CoreMatchOccurrence::Nth(
-            integer(index, name, usize::MAX as u64)? as usize,
+        return Err(Error::new(
+            Status::GenericFailure,
+            format!("{ERROR_PREFIX}{envelope}"),
         ));
     }
-    match value.as_deref() {
-        None => Ok(default),
-        Some("any") => Ok(CoreMatchOccurrence::Any),
-        Some("unique") => Ok(CoreMatchOccurrence::Unique),
-        Some("first") => Ok(CoreMatchOccurrence::First),
-        Some("last") => Ok(CoreMatchOccurrence::Last),
-        Some("nth") => Err(TuiTestError::usage(format!("{name} requires an nth index"))),
-        Some(value) => Err(TuiTestError::usage(format!(
-            "{name} must be any, unique, first, last, or nth (got '{value}')"
-        ))),
-    }
+    convert(value)
 }
 
-fn core_style(style: LocatorStyle) -> CoreTextStyle {
-    CoreTextStyle {
-        foreground: style.foreground,
-        background: style.background,
-        bold: style.bold,
-        dim: style.dim,
-        italic: style.italic,
-        underline_style: style.underline_style,
-        underline_color: style.underline_color,
-        inverse: style.inverse,
-        hidden: style.hidden,
-        strikethrough: style.strikethrough,
-        blink: style.blink,
-    }
+fn unit(_: &TuiResult) -> Result<()> {
+    Ok(())
 }
-
-fn core_query(
-    expression: LocatorExpression,
-) -> std::result::Result<CoreLocatorQuery, TuiTestError> {
-    use tui_test::locator_query::{
-        LocatorExpression as Expression, LocatorNode as Node, LocatorNodeKind as Kind,
-    };
-    let mut nodes = Vec::new();
-    for (index, node) in expression.nodes.into_iter().enumerate() {
-        let occurrence = core_occurrence(
-            node.occurrence,
-            node.nth,
-            CoreMatchOccurrence::Any,
-            &format!("nodes[{index}].nth"),
-        )?;
-        let reference = |value: Option<f64>| {
-            value
-                .map(|v| integer(v, "locator reference", 255).map(|v| v as usize))
-                .transpose()
-        };
-        let whitespace = match node.whitespace.as_deref() {
-            None => None,
-            Some("exact") => Some(CoreWhitespaceMode::Exact),
-            Some("normalize") => Some(CoreWhitespaceMode::Normalize),
-            Some(value) => {
-                return Err(TuiTestError::usage(format!("invalid whitespace {value:?}")))
-            }
-        };
-        nodes.push(Node {
-            kind: match node.kind {
-                LocatorNodeKind::Text => Kind::Text,
-                LocatorNodeKind::Style => Kind::Style,
-                LocatorNodeKind::Link => Kind::Link,
-                LocatorNodeKind::And => Kind::And,
-                LocatorNodeKind::Or => Kind::Or,
-                LocatorNodeKind::Filter => Kind::Filter,
-            },
-            occurrence,
-            text: node.text,
-            regex: node.regex,
-            whitespace,
-            full: node.full,
-            style: node.style.map(core_style),
-            link: node.link,
-            within: reference(node.within)?,
-            left: reference(node.left)?,
-            right: reference(node.right)?,
-            input: reference(node.input)?,
-            has: reference(node.has)?,
-            has_not: reference(node.has_not)?,
-            direction: node.direction.map(|direction| match direction {
-                LocatorStageDirection::Within => CoreLocatorDirection::Within,
-                LocatorStageDirection::After => CoreLocatorDirection::After,
-                LocatorStageDirection::Before => CoreLocatorDirection::Before,
-            }),
-        });
-    }
-    Expression {
-        nodes,
-        root: integer(expression.root, "locator root", 255)? as usize,
-    }
-    .into_query()
+fn string_result(value: &TuiResult) -> Result<String> {
+    Ok(text(value.text))
 }
-
-fn i32_value(value: f64, name: &str) -> std::result::Result<i32, TuiTestError> {
-    if !value.is_finite()
-        || value.fract() != 0.0
-        || value < f64::from(i32::MIN)
-        || value > f64::from(i32::MAX)
-    {
-        return Err(TuiTestError::usage(format!(
-            "{name} must be an integer between {} and {}",
-            i32::MIN,
-            i32::MAX
-        )));
-    }
-    Ok(value as i32)
-}
-
-fn core_timeouts(value: Option<Timeouts>) -> std::result::Result<CoreTimeouts, TuiTestError> {
-    let Some(value) = value else {
-        return Ok(CoreTimeouts::default());
-    };
-    Ok(CoreTimeouts {
-        text: timeout(value.text, "timeouts.text")?,
-        idle: timeout(value.idle, "timeouts.idle")?,
-        command: timeout(value.command, "timeouts.command")?,
-        exit: timeout(value.exit, "timeouts.exit")?,
-        ready: timeout(value.ready, "timeouts.ready")?,
-    })
-}
-
-fn core_recording(
-    value: Option<AutomaticRecordingOptions>,
-) -> std::result::Result<CoreAutomaticRecording, TuiTestError> {
-    let Some(value) = value else {
-        return Ok(CoreAutomaticRecording::default());
-    };
-    Ok(CoreAutomaticRecording {
-        directory: value.directory.map(Into::into),
-        ..CoreAutomaticRecording::default()
-    })
-}
-
-fn core_trace(
-    value: Option<TraceOptions>,
-) -> std::result::Result<Option<tui_test::TraceOptions>, TuiTestError> {
-    let Some(value) = value else { return Ok(None) };
-    let mode = match value.mode.as_deref().unwrap_or("off") {
-        "off" => tui_test::TraceMode::Off,
-        "on-failure" => tui_test::TraceMode::OnFailure,
-        "on" => tui_test::TraceMode::On,
-        other => {
-            return Err(TuiTestError::usage(format!(
-                "unknown trace mode {other:?}; expected off, on-failure, or on"
-            )))
-        }
-    };
-    let options = tui_test::TraceOptions {
-        mode,
-        directory: value
-            .directory
-            .map(Into::into)
-            .unwrap_or_else(|| tui_test::TraceOptions::default().directory),
-    };
-    options.validate().map_err(TuiTestError::usage)?;
-    Ok(Some(options))
-}
-
-fn core_failure_artifact(
-    value: Option<FailureArtifactOptions>,
-) -> std::result::Result<Option<CoreFailureArtifactOptions>, TuiTestError> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let mode = match value.mode.as_deref().unwrap_or("all") {
-        "all" => CoreFailureArtifactMode::All,
-        "html" => CoreFailureArtifactMode::Html,
-        "text" => CoreFailureArtifactMode::Text,
-        "none" => CoreFailureArtifactMode::None,
-        other => {
-            return Err(TuiTestError::usage(format!(
-                "unknown failure artifact mode {other:?}; expected all, html, text, or none"
-            )))
-        }
-    };
-    let options = CoreFailureArtifactOptions {
-        directory: value.directory.into(),
-        mode,
-        include_recording: value.include_recording.unwrap_or(false),
-    };
-    options.validate().map_err(TuiTestError::usage)?;
-    Ok(Some(options))
-}
-
-fn core_diagnostics(
-    screen_history_limit: Option<f64>,
-) -> std::result::Result<CoreDiagnosticRetentionOptions, TuiTestError> {
-    let mut diagnostics = CoreDiagnosticRetentionOptions::default();
-    if let Some(limit) = screen_history_limit {
-        diagnostics.screen_history_limit = u16_value(limit, "screenHistoryLimit")?;
-    }
-    diagnostics.validate().map_err(TuiTestError::usage)?;
-    Ok(diagnostics)
-}
-
-fn core_profile(
-    scrollback: Option<f64>,
-    colors: &[(String, String)],
-) -> std::result::Result<CoreProfile, TuiTestError> {
-    let mut profile = CoreProfile::default();
-    if let Some(scrollback) = scrollback {
-        profile.scrollback = integer(scrollback, "profile.scrollback", usize::MAX as u64)? as usize;
-    }
-    for (name, value) in colors {
-        let value = Rgb::parse(value)
-            .map_err(|error| TuiTestError::usage(format!("profile.colors.{name}: {error}")))?;
-        if !profile.colors.set_named(name, value) {
-            return Err(TuiTestError::usage(format!(
-                "unknown profile color {name:?}"
-            )));
-        }
-    }
-    Ok(profile)
-}
-
-fn open_options(
-    value: Option<OpenOptions>,
-    recording: CoreAutomaticRecording,
-) -> std::result::Result<CoreOpenOptions, TuiTestError> {
-    let Some(value) = value else {
-        return Ok(CoreOpenOptions {
-            recording,
-            ..CoreOpenOptions::default()
-        });
-    };
-    let profile = core_profile(
-        value.profile_scrollback,
-        value.profile_colors.as_deref().unwrap_or_default(),
-    )?;
-    Ok(CoreOpenOptions {
-        backend: value.backend.map(Into::into).unwrap_or_default(),
-        profile,
-        shell: value.shell.map(Into::into),
-        cols: match value.cols {
-            Some(cols) => u16_value(cols, "cols")?,
-            None => tui_test::config::DEFAULT_COLS,
-        },
-        rows: match value.rows {
-            Some(rows) => u16_value(rows, "rows")?,
-            None => tui_test::config::DEFAULT_ROWS,
-        },
-        cwd: value.cwd,
-        env: value.env.unwrap_or_default(),
-        wait_ready: value.wait_ready,
-        restart: value.restart.unwrap_or(false),
-        timeouts: core_timeouts(value.timeouts)?,
-        recording,
-    })
-}
-
-fn run_options(
-    value: RunOptions,
-    recording: CoreAutomaticRecording,
-) -> std::result::Result<CoreRunOptions, TuiTestError> {
-    if value.program.is_empty() {
-        return Err(TuiTestError::usage("program must not be empty"));
-    }
-    let profile = core_profile(
-        value.profile_scrollback,
-        value.profile_colors.as_deref().unwrap_or_default(),
-    )?;
-    Ok(CoreRunOptions {
-        backend: value.backend.map(Into::into).unwrap_or_default(),
-        profile,
-        program: value.program,
-        args: value.args.unwrap_or_default(),
-        cols: match value.cols {
-            Some(cols) => u16_value(cols, "cols")?,
-            None => tui_test::config::DEFAULT_COLS,
-        },
-        rows: match value.rows {
-            Some(rows) => u16_value(rows, "rows")?,
-            None => tui_test::config::DEFAULT_ROWS,
-        },
-        cwd: value.cwd,
-        env: value.env.unwrap_or_default(),
-        wait_ready: value.wait_ready,
-        restart: value.restart.unwrap_or(false),
-        timeouts: core_timeouts(value.timeouts)?,
-        recording,
-    })
-}
-
-fn unexpected(operation: &str) -> TuiTestError {
-    TuiTestError::internal(format!("{operation} returned an unexpected result type"))
-}
-
-fn execute_core(
-    handle: &SessionHandle,
-    context: &CoreExecutionContext,
-    operation_name: &'static str,
-    operation: Operation,
-) -> std::result::Result<OperationResult, TuiTestError> {
-    handle.execute_with_context(operation, context.clone().with_operation(operation_name))
-}
-
-async fn execute<T>(
-    handle: SessionHandle,
-    context: CoreExecutionContext,
-    operation_name: &'static str,
-    operation: Operation,
-    convert: impl FnOnce(OperationResult) -> std::result::Result<T, TuiTestError> + Send + 'static,
-) -> Result<T>
-where
-    T: Send + 'static,
-{
-    blocking(operation_name, move || {
-        let result = execute_core(&handle, &context, operation_name, operation)?;
-        convert(result)
-    })
-    .await
+fn optional_string_result(value: &TuiResult) -> Result<Option<String>> {
+    Ok(optional_text(value.text))
 }
 
 #[napi]
 pub struct NativeSession {
-    handle: SessionHandle,
-    recording: CoreAutomaticRecording,
-    context: CoreExecutionContext,
+    name: String,
+    context: serde_json::Value,
+    recording_directory: Option<String>,
+}
+
+impl NativeSession {
+    async fn call<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Library, TuiString) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let context = self.context.to_string();
+        blocking(move || {
+            let library = library()?;
+            work(&library, borrowed(&context))
+        })
+        .await
+    }
 }
 
 #[napi]
@@ -1106,153 +199,180 @@ impl NativeSession {
         artifacts: Option<FailureArtifactOptions>,
         trace: Option<TraceOptions>,
     ) -> Result<Self> {
+        let mut context = serde_json::json!({"name": name});
+        if let Some(options) = artifacts {
+            context["artifact_directory"] = options.directory.into();
+            context["artifact_mode"] = options.mode.unwrap_or_else(|| "all".into()).into();
+            context["artifact_include_recording"] =
+                options.include_recording.unwrap_or(false).into();
+        }
+        if let Some(options) = trace {
+            context["trace_mode"] = options.mode.unwrap_or_else(|| "off".into()).into();
+            context["trace_directory"] = options.directory.into();
+        }
         Ok(Self {
-            handle: global_registry().session(name),
-            recording: core_recording(recording).map_err(native_error)?,
-            context: CoreExecutionContext {
-                artifact: core_failure_artifact(artifacts).map_err(native_error)?,
-                trace: core_trace(trace).map_err(native_error)?,
-                ..CoreExecutionContext::default()
-            },
+            name,
+            context,
+            recording_directory: recording.and_then(|options| options.directory),
         })
     }
 
     #[napi]
     pub fn name(&self) -> String {
-        self.handle.name().to_string()
+        self.name.clone()
     }
 
     #[napi]
     pub async fn open(&self, options: Option<OpenOptions>) -> Result<OpenResult> {
-        let handle = self.handle.clone();
-        let recording = self.recording.clone();
-        let context = self.context.clone();
-        blocking("open", move || {
-            let diagnostics = core_diagnostics(
-                options
-                    .as_ref()
-                    .and_then(|value| value.screen_history_limit),
-            )?;
-            let mut context = context;
-            context.retention = diagnostics;
-            let result = execute_core(
-                &handle,
-                &context,
-                "open",
-                Operation::Open(open_options(options, recording)?),
-            )?;
-            match result {
-                OperationResult::Open(value) => Ok(value.into()),
-                _ => Err(unexpected("open")),
-            }
+        let options = options.unwrap_or_default();
+        let context = session_context(&self.context, options.screen_history_limit)?;
+        let directory = self.recording_directory.clone();
+        blocking(move || {
+            let library = library()?;
+            let input = OpenInput::new(options, directory)?;
+            result(
+                &library,
+                unsafe { (library.functions.tui_open_ptr)(borrowed(&context), &input.options) },
+                open_result,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn run(&self, options: RunOptions) -> Result<OpenResult> {
-        let handle = self.handle.clone();
-        let recording = self.recording.clone();
-        let context = self.context.clone();
-        blocking("run", move || {
-            let diagnostics = core_diagnostics(options.screen_history_limit)?;
-            let mut context = context;
-            context.retention = diagnostics;
-            let result = execute_core(
-                &handle,
-                &context,
-                "run",
-                Operation::Run(run_options(options, recording)?),
+        let context = session_context(&self.context, options.screen_history_limit)?;
+        let directory = self.recording_directory.clone();
+        blocking(move || {
+            let library = library()?;
+            let args = options.args.unwrap_or_default();
+            let borrowed_args: Vec<_> = args.iter().map(|value| borrowed(value)).collect();
+            let input = OpenInput::new(
+                OpenOptions {
+                    backend: options.backend,
+                    cols: options.cols,
+                    rows: options.rows,
+                    cwd: options.cwd,
+                    env: options.env,
+                    wait_ready: options.wait_ready,
+                    restart: options.restart,
+                    profile_scrollback: options.profile_scrollback,
+                    profile_colors: options.profile_colors,
+                    timeouts: options.timeouts,
+                    ..Default::default()
+                },
+                directory,
             )?;
-            match result {
-                OperationResult::Open(value) => Ok(value.into()),
-                _ => Err(unexpected("run")),
-            }
+            result(
+                &library,
+                unsafe {
+                    (library.functions.tui_run_ptr)(
+                        borrowed(&context),
+                        &input.options,
+                        borrowed(&options.program),
+                        borrowed_args.as_ptr(),
+                        borrowed_args.len(),
+                    )
+                },
+                open_result,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn restart(&self, graceful_timeout_ms: f64) -> Result<OpenResult> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("restart", move || {
-            let result = execute_core(
-                &handle,
-                &context,
-                "restart",
-                Operation::Restart {
-                    graceful_timeout_ms: integer(
-                        graceful_timeout_ms,
-                        "gracefulTimeoutMs",
-                        u64::MAX,
-                    )?,
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_restart)(
+                        session,
+                        integer(graceful_timeout_ms, "gracefulTimeoutMs", u64::MAX)?,
+                    )
                 },
-            )?;
-            match result {
-                OperationResult::Open(value) => Ok(value.into()),
-                _ => Err(unexpected("restart")),
-            }
+                open_result,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn close(&self, failed: Option<bool>) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("close", move || {
-            let trace = if let Some(failed) = failed {
-                execute_core(
-                    &handle,
-                    &context,
-                    "trace.finish",
-                    Operation::FinishTrace { failed },
-                )
-            } else {
-                Ok(OperationResult::Unit)
-            };
-            let closed = execute_core(&handle, &context, "close", Operation::Close);
-            if let Err(error) = trace {
-                if error.kind != ErrorKind::NoSession {
-                    return Err(error);
-                }
-            }
-            closed?;
-            Ok(())
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_close)(session, optional_bool(failed)) },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn state(&self) -> Result<State> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "state",
-            Operation::State,
-            |result| match result {
-                OperationResult::State(value) => Ok((*value).into()),
-                _ => Err(unexpected("state")),
-            },
-        )
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_state)(session) },
+                |value| Ok(state(&value.state)),
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn text(&self, full: Option<bool>) -> Result<String> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "text",
-            Operation::Text {
-                full: full.unwrap_or(false),
-            },
-            |result| match result {
-                OperationResult::Text(value) => Ok(value),
-                _ => Err(unexpected("text")),
-            },
-        )
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_text)(session, full.unwrap_or(false)) },
+                string_result,
+            )
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn packed_screen(&self, full: Option<bool>) -> Result<PackedScreen> {
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_packed_screen)(session, full.unwrap_or(false)) },
+                |value| {
+                    Ok(PackedScreen {
+                        cols: value.size.cols,
+                        rows: value.size.rows,
+                        utf8: bytes(value.text).to_vec().into(),
+                    })
+                },
+            )
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn cells(&self, x: f64, y: f64, w: Option<f64>, h: Option<f64>) -> Result<Vec<Cell>> {
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_cells)(
+                        session,
+                        u16_value(x, "x")?,
+                        u16_value(y, "y")?,
+                        u16_value(w.unwrap_or(1.0), "w")?,
+                        u16_value(h.unwrap_or(1.0), "h")?,
+                    )
+                },
+                |value| {
+                    array(value.cells, value.cells_len)
+                        .iter()
+                        .map(cell)
+                        .collect()
+                },
+            )
+        })
         .await
     }
 
@@ -1262,31 +382,21 @@ impl NativeSession {
         expression: LocatorExpression,
         require_one: Option<bool>,
     ) -> Result<Vec<TextMatch>> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("findLocator", move || {
-            let query = core_query(expression)?;
-            let require_one = require_one.unwrap_or(false);
-            let operation = if require_one {
-                Operation::ResolveLocator { query }
-            } else {
-                Operation::FindLocator { query }
-            };
-            match execute_core(
-                &handle,
-                &context,
-                if require_one {
-                    "locator.location"
-                } else {
-                    "locator.locations"
+        self.call(move |library, session| {
+            let query = query(expression)?;
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_find_locator)(
+                        session,
+                        TuiQuery {
+                            json: borrowed(&query),
+                        },
+                        require_one.unwrap_or(false),
+                    )
                 },
-                operation,
-            )? {
-                OperationResult::Matches(matches) => {
-                    Ok(matches.into_iter().map(TextMatch::from).collect())
-                }
-                _ => Err(unexpected("findLocator")),
-            }
+                matches,
+            )
         })
         .await
     }
@@ -1298,23 +408,47 @@ impl NativeSession {
         not: Option<bool>,
         timeout_ms: Option<f64>,
     ) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("waitLocator", move || {
-            let query = core_query(expression)?;
-            match execute_core(
-                &handle,
-                &context,
-                "locator.wait",
-                Operation::WaitLocator {
-                    query,
-                    not: not.unwrap_or(false),
-                    timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+        self.call(move |library, session| {
+            let query = query(expression)?;
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_wait_locator)(
+                        session,
+                        TuiQuery {
+                            json: borrowed(&query),
+                        },
+                        wait_options(timeout_ms, false, not.unwrap_or(false))?,
+                    )
                 },
-            )? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("waitLocator")),
-            }
+                unit,
+            )
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn expect_locator(
+        &self,
+        expression: LocatorExpression,
+        not: Option<bool>,
+        timeout_ms: Option<f64>,
+    ) -> Result<()> {
+        self.call(move |library, session| {
+            let query = query(expression)?;
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_expect_locator)(
+                        session,
+                        TuiQuery {
+                            json: borrowed(&query),
+                        },
+                        wait_options(timeout_ms, false, not.unwrap_or(false))?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
@@ -1327,24 +461,23 @@ impl NativeSession {
         clicks: Option<f64>,
         timeout_ms: Option<f64>,
     ) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("clickLocator", move || {
-            let query = core_query(expression)?;
-            match execute_core(
-                &handle,
-                &context,
-                "locator.click",
-                Operation::ClickLocator {
-                    query,
-                    options: mouse_options(button.unwrap_or(0.0))?,
-                    clicks: u8_value(clicks.unwrap_or(1.0), "clicks")?,
-                    timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+        self.call(move |library, session| {
+            let query = query(expression)?;
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_click_locator)(
+                        session,
+                        TuiQuery {
+                            json: borrowed(&query),
+                        },
+                        mouse_options(button.unwrap_or(0.0))?,
+                        u8_value(clicks.unwrap_or(1.0), "clicks")?,
+                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                    )
                 },
-            )? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("clickLocator")),
-            }
+                unit,
+            )
         })
         .await
     }
@@ -1355,362 +488,295 @@ impl NativeSession {
         expression: LocatorExpression,
         timeout_ms: Option<f64>,
     ) -> Result<Vec<TextMatch>> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("highlightLocator", move || {
-            let query = core_query(expression)?;
-            match execute_core(
-                &handle,
-                &context,
-                "locator.highlight",
-                Operation::HighlightLocator {
-                    query,
-                    timeout_ms: timeout(timeout_ms, "timeoutMs")?,
+        self.call(move |library, session| {
+            let query = query(expression)?;
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_highlight_locator)(
+                        session,
+                        TuiQuery {
+                            json: borrowed(&query),
+                        },
+                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                    )
                 },
-            )? {
-                OperationResult::Matches(matches) => {
-                    Ok(matches.into_iter().map(TextMatch::from).collect())
-                }
-                _ => Err(unexpected("highlightLocator")),
-            }
+                matches,
+            )
         })
         .await
     }
 
     #[napi]
-    pub async fn expect_locator(
-        &self,
-        expression: LocatorExpression,
-        not: Option<bool>,
-        timeout_ms: Option<f64>,
-    ) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("expectLocator", move || {
-            let query = core_query(expression)?;
-            match execute_core(
-                &handle,
-                &context,
-                "locator.expect",
-                Operation::WaitLocator {
-                    query,
-                    not: not.unwrap_or(false),
-                    timeout_ms: timeout(timeout_ms, "timeoutMs")?,
-                },
-            )? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("expectLocator")),
-            }
-        })
-        .await
-    }
-
-    #[napi]
-    pub async fn packed_screen(&self, full: Option<bool>) -> Result<PackedScreen> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "packedScreen",
-            Operation::PackedScreen {
-                full: full.unwrap_or(false),
-            },
-            |result| match result {
-                OperationResult::PackedScreen(value) => Ok(PackedScreen {
-                    cols: value.cols,
-                    rows: value.rows,
-                    utf8: value.utf8.into(),
-                }),
-                _ => Err(unexpected("packedScreen")),
-            },
-        )
-        .await
-    }
-
-    #[napi]
-    pub async fn cells(&self, x: f64, y: f64, w: Option<f64>, h: Option<f64>) -> Result<Vec<Cell>> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("cells", move || {
-            let operation = Operation::Cells {
-                x: u16_value(x, "x")?,
-                y: u16_value(y, "y")?,
-                w: u16_value(w.unwrap_or(1.0), "w")?,
-                h: u16_value(h.unwrap_or(1.0), "h")?,
-            };
-            match execute_core(&handle, &context, "cells", operation)? {
-                OperationResult::Cells(values) => values.into_iter().map(Cell::try_from).collect(),
-                _ => Err(unexpected("cells")),
-            }
-        })
-        .await
+    pub async fn panic_probe(&self) -> Result<()> {
+        blocking(|| panic!("intentional native panic probe")).await
     }
 
     #[napi]
     pub async fn get_command(&self) -> Result<Option<String>> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "getCommand",
-            Operation::GetCommand,
-            |result| match result {
-                OperationResult::Command(value) => Ok(value),
-                _ => Err(unexpected("getCommand")),
-            },
-        )
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_get_command)(session) },
+                optional_string_result,
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn get_output(&self) -> Result<Option<String>> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "getOutput",
-            Operation::GetOutput,
-            |result| match result {
-                OperationResult::Output(value) => Ok(value),
-                _ => Err(unexpected("getOutput")),
-            },
-        )
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_get_output)(session) },
+                optional_string_result,
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn get_exit_code(&self) -> Result<Option<i32>> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "getExitCode",
-            Operation::GetExitCode,
-            |result| match result {
-                OperationResult::ExitCode(value) => Ok(value),
-                _ => Err(unexpected("getExitCode")),
-            },
-        )
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_get_exit_code)(session) },
+                |value| Ok(value.exit_code.present.then_some(value.exit_code.value)),
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn get_cwd(&self) -> Result<Option<String>> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "getCwd",
-            Operation::GetCwd,
-            |result| match result {
-                OperationResult::Cwd(value) => Ok(value),
-                _ => Err(unexpected("getCwd")),
-            },
-        )
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_get_cwd)(session) },
+                optional_string_result,
+            )
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn get_title(&self) -> Result<Option<String>> {
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_get_title)(session) },
+                optional_string_result,
+            )
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn get_clipboard(&self) -> Result<String> {
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_get_clipboard)(session) },
+                string_result,
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn get_cursor(&self) -> Result<Cursor> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "getCursor",
-            Operation::GetCursor,
-            |result| match result {
-                OperationResult::Cursor(value) => Ok(value.into()),
-                _ => Err(unexpected("getCursor")),
-            },
-        )
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_get_cursor)(session) },
+                |value| Ok(cursor(value.cursor)),
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn get_size(&self) -> Result<Size> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "getSize",
-            Operation::GetSize,
-            |result| match result {
-                OperationResult::Size(value) => Ok(value.into()),
-                _ => Err(unexpected("getSize")),
-            },
-        )
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_get_size)(session) },
+                |value| {
+                    Ok(Size {
+                        cols: value.size.cols,
+                        rows: value.size.rows,
+                    })
+                },
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn get_bell_count(&self) -> Result<f64> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "getBellCount",
-            Operation::GetBellCount,
-            |result| match result {
-                OperationResult::BellCount(value) => Ok(value as f64),
-                _ => Err(unexpected("getBellCount")),
-            },
-        )
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_get_bell_count)(session) },
+                |value| Ok(value.number as f64),
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn get_bell_events(&self) -> Result<Vec<BellEvent>> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "getBellEvents",
-            Operation::GetBellEvents,
-            |result| match result {
-                OperationResult::BellEvents(events) => {
-                    Ok(events.into_iter().map(Into::into).collect())
-                }
-                _ => Err(unexpected("getBellEvents")),
-            },
-        )
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_get_bell_events)(session) },
+                |value| {
+                    Ok(array(value.bells, value.bells_len)
+                        .iter()
+                        .map(|value| BellEvent {
+                            sequence: value.sequence as f64,
+                            elapsed_ms: value.elapsed_ms as f64,
+                        })
+                        .collect())
+                },
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn write(&self, data: String) -> Result<()> {
-        self.unit("write", Operation::Write { data }).await
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_write)(session, borrowed(&data)) },
+                unit,
+            )
+        })
+        .await
     }
 
     #[napi(js_name = "type")]
     pub async fn type_text(&self, text: String) -> Result<()> {
-        self.unit("type", Operation::Write { data: text }).await
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_type)(session, borrowed(&text)) },
+                unit,
+            )
+        })
+        .await
     }
 
     #[napi]
     pub async fn submit(&self, data: Option<String>) -> Result<()> {
-        self.unit("submit", Operation::Submit { data }).await
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_submit)(session, optional_borrowed(data.as_deref()))
+                },
+                unit,
+            )
+        })
+        .await
     }
 
     #[napi]
     pub async fn press(&self, keys: Vec<String>) -> Result<()> {
-        self.unit(
-            "press",
-            Operation::Key {
-                keys,
-                action: KeyAction::Press,
-            },
-        )
-        .await
+        self.keys(keys, 0).await
     }
 
     #[napi]
     pub async fn key_down(&self, keys: Vec<String>) -> Result<()> {
-        self.unit(
-            "keydown",
-            Operation::Key {
-                keys,
-                action: KeyAction::Down,
-            },
-        )
-        .await
+        self.keys(keys, 1).await
     }
 
     #[napi]
     pub async fn repeat(&self, keys: Vec<String>) -> Result<()> {
-        self.unit(
-            "repeat",
-            Operation::Key {
-                keys,
-                action: KeyAction::Repeat,
-            },
-        )
-        .await
+        self.keys(keys, 2).await
     }
 
     #[napi]
     pub async fn key_up(&self, keys: Vec<String>) -> Result<()> {
-        self.unit(
-            "keyup",
-            Operation::Key {
-                keys,
-                action: KeyAction::Up,
-            },
-        )
-        .await
+        self.keys(keys, 3).await
     }
 
     #[napi]
     pub async fn mouse_click(&self, options: Option<MouseClickOptions>) -> Result<()> {
-        let options = options.unwrap_or(MouseClickOptions {
-            x: None,
-            y: None,
-            on_text: None,
-            button: None,
-            clicks: None,
-        });
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("mouseClick", move || {
-            let action = MouseAction::Click {
-                x: options.x.map(|value| u16_value(value, "x")).transpose()?,
-                y: options.y.map(|value| u16_value(value, "y")).transpose()?,
-                on_text: options.on_text,
-                options: mouse_options(options.button.unwrap_or(0.0))?,
-                clicks: u8_value(options.clicks.unwrap_or(1.0), "clicks")?,
-            };
-            match execute_core(
-                &handle,
-                &context,
-                "mouse.click",
-                Operation::Mouse { action },
-            )? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("mouseClick")),
-            }
+        let options = options.unwrap_or_default();
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_mouse_click)(
+                        session,
+                        optional_integer(options.x, "x", u16::MAX.into())?,
+                        optional_integer(options.y, "y", u16::MAX.into())?,
+                        optional_borrowed(options.on_text.as_deref()),
+                        mouse_options(options.button.unwrap_or(0.0))?,
+                        u8_value(options.clicks.unwrap_or(1.0), "clicks")?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("mouseMove", move || {
-            let action = MouseAction::Move {
-                x: u16_value(x, "x")?,
-                y: u16_value(y, "y")?,
-            };
-            match execute_core(&handle, &context, "mouse.move", Operation::Mouse { action })? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("mouseMove")),
-            }
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_mouse_move)(
+                        session,
+                        u16_value(x, "x")?,
+                        u16_value(y, "y")?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn mouse_down(&self, x: f64, y: f64, button: Option<f64>) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("mouseDown", move || {
-            let action = MouseAction::Down {
-                x: u16_value(x, "x")?,
-                y: u16_value(y, "y")?,
-                options: mouse_options(button.unwrap_or(0.0))?,
-            };
-            match execute_core(&handle, &context, "mouse.down", Operation::Mouse { action })? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("mouseDown")),
-            }
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_mouse_down)(
+                        session,
+                        u16_value(x, "x")?,
+                        u16_value(y, "y")?,
+                        mouse_options(button.unwrap_or(0.0))?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn mouse_up(&self, x: f64, y: f64, button: Option<f64>) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("mouseUp", move || {
-            let action = MouseAction::Up {
-                x: u16_value(x, "x")?,
-                y: u16_value(y, "y")?,
-                options: mouse_options(button.unwrap_or(0.0))?,
-            };
-            match execute_core(&handle, &context, "mouse.up", Operation::Mouse { action })? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("mouseUp")),
-            }
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_mouse_up)(
+                        session,
+                        u16_value(x, "x")?,
+                        u16_value(y, "y")?,
+                        mouse_options(button.unwrap_or(0.0))?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
@@ -1724,118 +790,115 @@ impl NativeSession {
         y2: f64,
         button: Option<f64>,
     ) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("mouseDrag", move || {
-            let action = MouseAction::Drag {
-                x1: u16_value(x1, "x1")?,
-                y1: u16_value(y1, "y1")?,
-                x2: u16_value(x2, "x2")?,
-                y2: u16_value(y2, "y2")?,
-                options: mouse_options(button.unwrap_or(0.0))?,
-            };
-            match execute_core(&handle, &context, "mouse.drag", Operation::Mouse { action })? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("mouseDrag")),
-            }
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_mouse_drag)(
+                        session,
+                        u16_value(x1, "x1")?,
+                        u16_value(y1, "y1")?,
+                        u16_value(x2, "x2")?,
+                        u16_value(y2, "y2")?,
+                        mouse_options(button.unwrap_or(0.0))?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn mouse_scroll(&self, direction: String, amount: Option<f64>) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("mouseScroll", move || {
-            let action = MouseAction::Scroll {
-                direction,
-                amount: u16_value(amount.unwrap_or(3.0), "amount")?,
-            };
-            match execute_core(
-                &handle,
-                &context,
-                "mouse.scroll",
-                Operation::Mouse { action },
-            )? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("mouseScroll")),
-            }
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_mouse_scroll)(
+                        session,
+                        borrowed(&direction),
+                        u16_value(amount.unwrap_or(3.0), "amount")?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn resize(&self, cols: f64, rows: f64) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("resize", move || {
-            let operation = Operation::Resize {
-                cols: u16_value(cols, "cols")?,
-                rows: u16_value(rows, "rows")?,
-            };
-            match execute_core(&handle, &context, "resize", operation)? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("resize")),
-            }
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_resize)(
+                        session,
+                        u16_value(cols, "cols")?,
+                        u16_value(rows, "rows")?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn signal(&self, name: String) -> Result<()> {
-        self.unit("signal", Operation::Signal { name }).await
-    }
-
-    #[napi]
-    pub async fn get_title(&self) -> Result<Option<String>> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "getTitle",
-            Operation::GetTitle,
-            |result| match result {
-                OperationResult::Title(value) => Ok(value),
-                _ => Err(unexpected("getTitle")),
-            },
-        )
-        .await
-    }
-
-    #[napi]
-    pub async fn get_clipboard(&self) -> Result<String> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "getClipboard",
-            Operation::GetClipboard,
-            |result| match result {
-                OperationResult::Clipboard(value) => Ok(value),
-                _ => Err(unexpected("getClipboard")),
-            },
-        )
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_signal)(session, borrowed(&name)) },
+                unit,
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn wait_title(&self, text: String, options: Option<TitleOptions>) -> Result<()> {
-        let options = options.unwrap_or(TitleOptions {
-            regex: None,
-            not: None,
-            timeout_ms: None,
-        });
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("waitTitle", move || {
-            let operation = Operation::WaitTitle {
-                text,
-                regex: options.regex.unwrap_or(false),
-                timeout_ms: timeout(options.timeout_ms, "timeoutMs")?,
-                not: options.not.unwrap_or(false),
-            };
-            match execute_core(&handle, &context, "waitTitle", operation)? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("waitTitle")),
-            }
+        let options = options.unwrap_or_default();
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_wait_title)(
+                        session,
+                        borrowed(&text),
+                        wait_options(
+                            options.timeout_ms,
+                            options.regex.unwrap_or(false),
+                            options.not.unwrap_or(false),
+                        )?,
+                    )
+                },
+                unit,
+            )
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn expect_title(&self, text: String, options: Option<TitleOptions>) -> Result<()> {
+        let options = options.unwrap_or_default();
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_expect_title)(
+                        session,
+                        borrowed(&text),
+                        wait_options(
+                            options.timeout_ms,
+                            options.regex.unwrap_or(false),
+                            options.not.unwrap_or(false),
+                        )?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
@@ -1846,146 +909,158 @@ impl NativeSession {
         text: Option<String>,
         options: Option<ClipboardWaitOptions>,
     ) -> Result<()> {
-        let options = options.unwrap_or(ClipboardWaitOptions {
-            regex: None,
-            timeout_ms: None,
-        });
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("waitClipboard", move || {
-            let regex = options.regex.unwrap_or(false);
-            let timeout_ms = timeout(options.timeout_ms, "timeoutMs")?;
-            let operation = match text {
-                Some(text) => {
-                    let pattern = if regex {
-                        ClipboardPattern::regex(&text).map_err(|error| {
-                            TuiTestError::usage(format!("invalid regex: {error}"))
-                        })?
-                    } else {
-                        text.into()
-                    };
-                    Operation::WaitClipboardMatch {
-                        pattern,
-                        timeout_ms,
-                    }
-                }
-                None if regex => return Err(TuiTestError::usage("clipboard regex requires text")),
-                None => Operation::WaitClipboard { timeout_ms },
-            };
-            match execute_core(&handle, &context, "waitClipboard", operation)? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("waitClipboard")),
-            }
-        })
-        .await
-    }
-
-    #[napi]
-    pub async fn expect_title(&self, text: String, options: Option<TitleOptions>) -> Result<()> {
-        let options = options.unwrap_or(TitleOptions {
-            regex: None,
-            not: None,
-            timeout_ms: None,
-        });
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("expectTitle", move || {
-            let operation = Operation::ExpectTitle {
-                text,
-                regex: options.regex.unwrap_or(false),
-                not: options.not.unwrap_or(false),
-                timeout_ms: timeout(options.timeout_ms, "timeoutMs")?,
-            };
-            match execute_core(&handle, &context, "expectTitle", operation)? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("expectTitle")),
-            }
+        let options = options.unwrap_or_default();
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_wait_clipboard)(
+                        session,
+                        optional_borrowed(text.as_deref()),
+                        wait_options(options.timeout_ms, options.regex.unwrap_or(false), false)?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn wait_idle(&self, timeout_ms: Option<f64>) -> Result<()> {
-        self.timeout_unit("waitIdle", timeout_ms, |timeout_ms| Operation::WaitIdle {
-            timeout_ms,
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_wait_idle)(
+                        session,
+                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn wait_command(&self, timeout_ms: Option<f64>) -> Result<()> {
-        self.timeout_unit("waitCommand", timeout_ms, |timeout_ms| {
-            Operation::WaitCommand { timeout_ms }
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_wait_command)(
+                        session,
+                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn wait_exit(&self, timeout_ms: Option<f64>) -> Result<()> {
-        self.timeout_unit("waitExit", timeout_ms, |timeout_ms| Operation::WaitExit {
-            timeout_ms,
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_wait_exit)(
+                        session,
+                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn wait_ready(&self, timeout_ms: Option<f64>) -> Result<()> {
-        self.timeout_unit("waitReady", timeout_ms, |timeout_ms| Operation::WaitReady {
-            timeout_ms,
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_wait_ready)(
+                        session,
+                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn wait_bell(&self, timeout_ms: Option<f64>) -> Result<()> {
-        self.timeout_unit("waitBell", timeout_ms, |timeout_ms| Operation::WaitBell {
-            timeout_ms,
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_wait_bell)(
+                        session,
+                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn expect_exit_code(&self, code: f64, timeout_ms: Option<f64>) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("expectExitCode", move || {
-            let operation = Operation::ExpectExitCode {
-                code: i32_value(code, "code")?,
-                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
-            };
-            match execute_core(&handle, &context, "expectExitCode", operation)? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("expectExitCode")),
-            }
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_expect_exit_code)(
+                        session,
+                        i32_value(code, "code")?,
+                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
 
     #[napi]
     pub async fn expect_output(&self, text: String, regex: Option<bool>) -> Result<()> {
-        self.unit(
-            "expectOutput",
-            Operation::ExpectOutput {
-                text,
-                regex: regex.unwrap_or(false),
-            },
-        )
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_expect_output)(
+                        session,
+                        borrowed(&text),
+                        regex.unwrap_or(false),
+                    )
+                },
+                unit,
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn expect_bell_count(&self, count: f64, timeout_ms: Option<f64>) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking("expectBellCount", move || {
-            let operation = Operation::ExpectBellCount {
-                count: integer(count, "count", u64::MAX)?,
-                timeout_ms: timeout(timeout_ms, "timeoutMs")?,
-            };
-            match execute_core(&handle, &context, "expectBellCount", operation)? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected("expectBellCount")),
-            }
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_expect_bell_count)(
+                        session,
+                        integer(count, "count", u64::MAX)?,
+                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
@@ -1996,138 +1071,117 @@ impl NativeSession {
         name: String,
         options: Option<SnapshotOptions>,
     ) -> Result<SnapshotResult> {
-        let options = options.unwrap_or(SnapshotOptions {
-            update: None,
-            include_style: None,
-            include_title: None,
-            cwd: None,
-        });
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "snapshot",
-            Operation::Snapshot {
-                name,
-                update: options.update.unwrap_or(false),
-                include_style: options.include_style.unwrap_or(false),
-                include_title: options.include_title.unwrap_or(false),
-                cwd: options.cwd,
-            },
-            |result| match result {
-                OperationResult::Snapshot(value) => Ok(value.into()),
-                _ => Err(unexpected("snapshot")),
-            },
-        )
+        let options = options.unwrap_or_default();
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_snapshot)(
+                        session,
+                        borrowed(&name),
+                        options.update.unwrap_or(false),
+                        options.include_style.unwrap_or(false),
+                        options.include_title.unwrap_or(false),
+                        optional_borrowed(options.cwd.as_deref()),
+                    )
+                },
+                |value| match value.snapshot {
+                    0 => Ok(SnapshotResult::Passed),
+                    1 => Ok(SnapshotResult::Written),
+                    2 => Ok(SnapshotResult::Updated),
+                    _ => Err(internal(
+                        "native operation returned an unknown snapshot result",
+                    )),
+                },
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn screenshot(&self, options: Option<ScreenshotOptions>) -> Result<String> {
-        let options = options.unwrap_or(ScreenshotOptions {
-            full: None,
-            path: None,
-            zoom: None,
-            background: None,
-            transparent: None,
-        });
-        let background =
-            capture_background(options.background, options.transparent.unwrap_or(false))?;
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "screenshot",
-            Operation::Screenshot {
-                full: options.full.unwrap_or(false),
-                path: options.path,
-                zoom: options.zoom,
-                background,
-            },
-            |result| match result {
-                OperationResult::Screenshot(CoreScreenshotResult::Path(value))
-                | OperationResult::Screenshot(CoreScreenshotResult::Text(value)) => Ok(value),
-                _ => Err(unexpected("screenshot")),
-            },
-        )
+        let options = options.unwrap_or_default();
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_screenshot)(
+                        session,
+                        options.full.unwrap_or(false),
+                        optional_borrowed(options.path.as_deref()),
+                        optional_float(options.zoom),
+                        optional_borrowed(options.background.as_deref()),
+                        options.transparent.unwrap_or(false),
+                    )
+                },
+                string_result,
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn start_recording(&self, options: RecordingOptions) -> Result<()> {
-        let fps = options
-            .fps
-            .map(|value| u8_value(value, "fps"))
-            .transpose()
-            .map_err(native_error)?;
-        let background =
-            capture_background(options.background, options.transparent.unwrap_or(false))?;
-        self.unit(
-            "startRecording",
-            Operation::StartRecording {
-                path: options.path,
-                format: options.format.map(Into::into),
-                fps,
-                speed: options.speed,
-                idle_time_limit: options.idle_time_limit,
-                zoom: options.zoom,
-                background,
-            },
-        )
+        self.call(move |library, session| {
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_start_recording)(
+                        session,
+                        TuiRecordingOptions {
+                            path: borrowed(&options.path),
+                            format: optional_borrowed(options.format.as_ref().map(|format| {
+                                match format {
+                                    RecordingFormat::Apng => "apng",
+                                    RecordingFormat::Gif => "gif",
+                                    RecordingFormat::Mp4 => "mp4",
+                                    RecordingFormat::Cast => "cast",
+                                }
+                            })),
+                            fps: optional_integer(options.fps, "fps", u8::MAX.into())?,
+                            speed: optional_float(options.speed),
+                            idle_time_limit: optional_float(options.idle_time_limit),
+                            zoom: optional_float(options.zoom),
+                            background: optional_borrowed(options.background.as_deref()),
+                            transparent: options.transparent.unwrap_or(false),
+                        },
+                    )
+                },
+                unit,
+            )
+        })
         .await
     }
 
     #[napi]
     pub async fn stop_recording(&self) -> Result<String> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            "stopRecording",
-            Operation::StopRecording,
-            |result| match result {
-                OperationResult::Recording(path) => Ok(path),
-                _ => Err(unexpected("stopRecording")),
-            },
-        )
-        .await
-    }
-
-    #[napi]
-    pub async fn panic_probe(&self) -> Result<()> {
-        blocking("panicProbe", || -> std::result::Result<(), TuiTestError> {
-            panic!("intentional native panic probe")
+        self.call(|library, session| {
+            result(
+                library,
+                unsafe { (library.functions.tui_stop_recording)(session) },
+                string_result,
+            )
         })
         .await
     }
 }
 
 impl NativeSession {
-    async fn unit(&self, operation_name: &'static str, operation: Operation) -> Result<()> {
-        execute(
-            self.handle.clone(),
-            self.context.clone(),
-            operation_name,
-            operation,
-            move |result| match result {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected(operation_name)),
-            },
-        )
-        .await
-    }
-
-    async fn timeout_unit(
-        &self,
-        operation_name: &'static str,
-        timeout_ms: Option<f64>,
-        operation: impl FnOnce(Option<u64>) -> Operation + Send + 'static,
-    ) -> Result<()> {
-        let handle = self.handle.clone();
-        let context = self.context.clone();
-        blocking(operation_name, move || {
-            let operation = operation(timeout(timeout_ms, "timeoutMs")?);
-            match execute_core(&handle, &context, operation_name, operation)? {
-                OperationResult::Unit => Ok(()),
-                _ => Err(unexpected(operation_name)),
-            }
+    async fn keys(&self, keys: Vec<String>, action: u32) -> Result<()> {
+        self.call(move |library, session| {
+            let borrowed_keys: Vec<_> = keys.iter().map(|value| borrowed(value)).collect();
+            result(
+                library,
+                unsafe {
+                    (library.functions.tui_key)(
+                        session,
+                        borrowed_keys.as_ptr(),
+                        borrowed_keys.len(),
+                        action,
+                    )
+                },
+                unit,
+            )
         })
         .await
     }
@@ -2135,41 +1189,48 @@ impl NativeSession {
 
 #[napi]
 pub async fn sessions() -> Result<Vec<String>> {
-    blocking("sessions", || Ok(global_registry().sessions())).await
-}
-
-#[napi]
-pub async fn close_all() -> Result<()> {
-    blocking("closeAll", || {
-        global_registry().close_all();
-        Ok(())
+    blocking(|| {
+        let library = library()?;
+        result(
+            &library,
+            unsafe { (library.functions.tui_sessions)() },
+            |value| {
+                Ok(array(value.strings, value.strings_len)
+                    .iter()
+                    .map(|value| text(*value))
+                    .collect())
+            },
+        )
     })
     .await
 }
 
 #[napi]
+pub async fn close_all() -> Result<()> {
+    blocking(close_all_sync).await
+}
+
+#[napi]
 pub fn close_all_sync() -> Result<()> {
-    ffi_boundary(|| {
-        global_registry().close_all();
-        Ok(())
+    boundary(|| {
+        let library = library()?;
+        result(
+            &library,
+            unsafe { (library.functions.tui_close_all)() },
+            unit,
+        )
     })
 }
 
 #[napi]
 pub async fn recording(name: String) -> Result<String> {
-    blocking("recording", move || {
-        global_registry().recording(&name).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                TuiTestError::new(
-                    ErrorKind::NoSession,
-                    format!("no recording for session '{name}'"),
-                )
-            } else {
-                TuiTestError::internal(format!(
-                    "failed to read the recording for session '{name}': {error}"
-                ))
-            }
-        })
+    blocking(move || {
+        let library = library()?;
+        result(
+            &library,
+            unsafe { (library.functions.tui_recording)(borrowed(&name)) },
+            string_result,
+        )
     })
     .await
 }

@@ -53,20 +53,42 @@ jobs:
           cache: npm
           cache-dependency-path: bindings/js/package-lock.json
 
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: bindings/go/go.mod
+          cache-dependency-path: bindings/go/go.sum
+
       - run: cargo fmt --all -- --check
+      - name: Verify generated native declarations
+        run: cargo run --locked -p tui-test-bindgen -- --check
+      - name: Test native package assembly
+        if: runner.os == 'Linux'
+        run: node --test .github/scripts/release/package-node.test.mjs
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
-      - run: cargo build
+      - run: cargo build -p tui-test-cli -p tui-test-ffi
       - run: cargo test --workspace -- --test-threads=1
+
+      - name: Test Go binding
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) library=libtui_test_ffi.so ;;
+            macOS) library=libtui_test_ffi.dylib ;;
+            Windows) library=tui_test_ffi.dll ;;
+            *) echo "Unsupported runner: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          export TUI_TEST_NATIVE_LIBRARY="$GITHUB_WORKSPACE/target/debug/$library"
+          export CGO_ENABLED=0
+          cd bindings/go
+          go test ./...
+          go run ./examples/smoke
 
       - name: Install Python binding
         run: python -m pip install --disable-pip-version-check -e ./bindings/python
 
       - name: Test Python binding
         run: python -m unittest discover -s bindings/python/tests -v
-
-      - name: Verify generated Python stubs
-        run: python bindings/python/scripts/generate_stubs.py --check
 
       - name: Install Node dependencies
         run: npm ci --prefix bindings/js

@@ -1,4 +1,4 @@
-//! Private typed C ABI for the Go binding. All borrowed input buffers must
+//! Shared typed C ABI for language bindings. All borrowed input buffers must
 //! remain valid for the call. Inputs are copied before entering the engine;
 //! output storage belongs to Rust until tui_result_free is called.
 mod input;
@@ -9,12 +9,14 @@ use tui_test::api::*;
 use tui_test::runtime::global_registry;
 pub use types::*;
 
+pub const ABI_VERSION: u32 = 3;
+
 type Result<T> = std::result::Result<T, TuiTestError>;
 fn boundary(f: impl FnOnce() -> Result<OperationResult>) -> *mut TuiResult {
     match catch_unwind(AssertUnwindSafe(|| f().map(output::operation))) {
         Ok(Ok(value)) => value,
         Ok(Err(error)) => output::error(error),
-        Err(_) => output::error(TuiTestError::internal("native Go adapter panicked")),
+        Err(_) => output::error(TuiTestError::internal("native engine adapter panicked")),
     }
 }
 unsafe fn execute(
@@ -45,7 +47,7 @@ fn finish_trace_and_close(
 }
 #[no_mangle]
 pub extern "C" fn tui_abi_version() -> u32 {
-    3
+    ABI_VERSION
 }
 #[no_mangle]
 /// # Safety
@@ -138,7 +140,7 @@ pub extern "C" fn tui_sessions() -> *mut TuiResult {
         output::sessions(global_registry().sessions())
     })) {
         Ok(value) => value,
-        Err(_) => output::error(TuiTestError::internal("native Go adapter panicked")),
+        Err(_) => output::error(TuiTestError::internal("native engine adapter panicked")),
     }
 }
 #[no_mangle]

@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { TuiTest } from "../dist/index.js";
@@ -12,6 +17,56 @@ import {
 import { NativeRuntime, mapNativeError } from "../dist/native.js";
 
 const ERROR_PREFIX = "__tui_test_native_error__:";
+
+function checkLibraryFailure(library, expected) {
+  const script = `
+    (async () => {
+      const assert = (await import("node:assert/strict")).default;
+      const { NativeRuntime } = await import(${JSON.stringify(new URL("../dist/native.js", import.meta.url).href)});
+      const { InternalError } = await import(${JSON.stringify(new URL("../dist/index.js", import.meta.url).href)});
+      await assert.rejects(new NativeRuntime("loader-check").state(), (error) => {
+        assert.ok(error instanceof InternalError);
+        assert.match(error.message, new RegExp(${JSON.stringify(expected)}));
+        return true;
+      });
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  const args = typeof globalThis.Deno === "undefined" ? ["-e", script] : ["eval", script];
+  const child = spawnSync(process.execPath, args, {
+    encoding: "utf8",
+    env: { ...process.env, TUI_TEST_NATIVE_LIBRARY: library },
+  });
+  assert.equal(child.status, 0, child.stderr);
+}
+
+test("shared library override failures retain the public error taxonomy", () => {
+  checkLibraryFailure(
+    fileURLToPath(new URL("./does-not-exist/native-library", import.meta.url)),
+    "failed to load shared native library",
+  );
+});
+
+test("shared library rejects incompatible versions and missing symbols", (t) => {
+  if (process.platform === "win32" || spawnSync("cc", ["--version"]).status !== 0) {
+    t.skip("This fixture requires a Unix C compiler");
+    return;
+  }
+  const directory = mkdtempSync(join(tmpdir(), "tui-test-node-abi-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const fixture = fileURLToPath(new URL("./fixtures/abi-version.c", import.meta.url));
+  for (const [version, expected] of [
+    [0, "native ABI version mismatch: expected 3, got 0"],
+    [3, "failed to load native ABI symbols"],
+  ]) {
+    const library = join(directory, `abi-${version}.${process.platform === "darwin" ? "dylib" : "so"}`);
+    const compiled = spawnSync("cc", [
+      process.platform === "darwin" ? "-dynamiclib" : "-shared",
+      "-fPIC", `-DABI_VERSION=${version}`, fixture, "-o", library,
+    ], { encoding: "utf8" });
+    assert.equal(compiled.status, 0, compiled.stderr);
+    checkLibraryFailure(library, expected);
+  }
+});
 
 test("native JSON error envelopes expose structured diagnostics", () => {
   const details = {

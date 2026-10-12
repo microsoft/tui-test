@@ -9,17 +9,20 @@ export declare class NativeSession {
   close(failed?: boolean | undefined | null): Promise<void>
   state(): Promise<State>
   text(full?: boolean | undefined | null): Promise<string>
-  findLocator(expression: LocatorExpression, requireOne?: boolean | undefined | null): Promise<Array<TextMatch>>
-  waitLocator(expression: LocatorExpression, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
-  clickLocator(expression: LocatorExpression, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
-  highlightLocator(expression: LocatorExpression, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
-  expectLocator(expression: LocatorExpression, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
   packedScreen(full?: boolean | undefined | null): Promise<PackedScreen>
   cells(x: number, y: number, w?: number | undefined | null, h?: number | undefined | null): Promise<Array<Cell>>
+  findLocator(expression: LocatorExpression, requireOne?: boolean | undefined | null): Promise<Array<TextMatch>>
+  waitLocator(expression: LocatorExpression, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  expectLocator(expression: LocatorExpression, not?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  clickLocator(expression: LocatorExpression, button?: number | undefined | null, clicks?: number | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  highlightLocator(expression: LocatorExpression, timeoutMs?: number | undefined | null): Promise<Array<TextMatch>>
+  panicProbe(): Promise<void>
   getCommand(): Promise<string | null>
   getOutput(): Promise<string | null>
   getExitCode(): Promise<number | null>
   getCwd(): Promise<string | null>
+  getTitle(): Promise<string | null>
+  getClipboard(): Promise<string>
   getCursor(): Promise<Cursor>
   getSize(): Promise<Size>
   getBellCount(): Promise<number>
@@ -39,11 +42,9 @@ export declare class NativeSession {
   mouseScroll(direction: string, amount?: number | undefined | null): Promise<void>
   resize(cols: number, rows: number): Promise<void>
   signal(name: string): Promise<void>
-  getTitle(): Promise<string | null>
-  getClipboard(): Promise<string>
   waitTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
-  waitClipboard(text?: string | undefined | null, options?: ClipboardWaitOptions | undefined | null): Promise<void>
   expectTitle(text: string, options?: TitleOptions | undefined | null): Promise<void>
+  waitClipboard(text?: string | undefined | null, options?: ClipboardWaitOptions | undefined | null): Promise<void>
   waitIdle(timeoutMs?: number | undefined | null): Promise<void>
   waitCommand(timeoutMs?: number | undefined | null): Promise<void>
   waitExit(timeoutMs?: number | undefined | null): Promise<void>
@@ -56,7 +57,6 @@ export declare class NativeSession {
   screenshot(options?: ScreenshotOptions | undefined | null): Promise<string>
   startRecording(options: RecordingOptions): Promise<void>
   stopRecording(): Promise<string>
-  panicProbe(): Promise<void>
 }
 
 export interface AutomaticRecordingOptions {
@@ -116,6 +116,8 @@ export declare function closeAllSync(): void
 
 export type Color =
   number | string
+
+export declare function configureLibrary(path: string): void
 
 export interface Cursor {
   x: number

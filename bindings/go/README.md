@@ -30,10 +30,10 @@ Use a host-native build. Cross-compilation also requires the destination Rust ta
 2. From that checkout's repository root, build the native library:
 
    ```sh
-   cargo build --locked -p tui-test-go
+   cargo build --locked -p tui-test-ffi
    ```
 
-   The debug library is `target/debug/libtui_test_go.so` on Linux, `target/debug/libtui_test_go.dylib` on macOS, or `target/debug/tui_test_go.dll` on Windows. See [building and maintaining the Go binding](CONTRIBUTING.md#build-from-source) for release builds and platform-specific test commands.
+   The debug library is `target/debug/libtui_test_ffi.so` on Linux, `target/debug/libtui_test_ffi.dylib` on macOS, or `target/debug/tui_test_ffi.dll` on Windows. See [building and maintaining the Go binding](CONTRIBUTING.md#build-from-source) for release builds and platform-specific test commands.
 
 3. In the Go application module, point the module path at the same checkout, then add it:
 
@@ -44,21 +44,21 @@ Use a host-native build. Cross-compilation also requires the destination Rust ta
 
    The replacement makes the selected checkout—not a separately resolved remote version—the source of the Go module. When changing revisions, check out the new revision, rebuild the library, and keep the replacement pointed at that checkout.
 
-4. Set `TUI_TEST_GO_NATIVE_LIBRARY` to the absolute path of the library before running the application. On Linux or macOS:
+4. Set `TUI_TEST_NATIVE_LIBRARY` to the absolute path of the library before running the application. On Linux or macOS:
 
    ```sh
-   export TUI_TEST_GO_NATIVE_LIBRARY=/absolute/path/to/tui-test/target/debug/libtui_test_go.so
+   export TUI_TEST_NATIVE_LIBRARY=/absolute/path/to/tui-test/target/debug/libtui_test_ffi.so
    go run .
    ```
 
    Use the `.dylib` path shown above on macOS. On Windows PowerShell:
 
    ```powershell
-   $env:TUI_TEST_GO_NATIVE_LIBRARY = (Resolve-Path C:\path\to\tui-test\target\debug\tui_test_go.dll)
+   $env:TUI_TEST_NATIVE_LIBRARY = (Resolve-Path C:\path\to\tui-test\target\debug\tui_test_ffi.dll)
    go run .
    ```
 
-The binding loads the configured engine on first use and keeps it loaded for the process lifetime. It does not download anything at runtime. Running the quick start below succeeds when its output contains `hello`. An empty `TUI_TEST_GO_NATIVE_LIBRARY`, an unloadable library, or a library from an incompatible revision returns an initialization error before the terminal opens.
+The binding loads the configured engine on first use and keeps it loaded for the process lifetime. It does not download anything at runtime. Running the quick start below succeeds when its output contains `hello`. An empty `TUI_TEST_NATIVE_LIBRARY`, an unloadable library, or a library from an incompatible revision returns an initialization error before the terminal opens.
 
 ## Quick start
 

@@ -42,6 +42,10 @@ const nonzeroExitArgs =
   typeof globalThis.Deno === "undefined"
     ? ["-e", "process.exit(7)"]
     : ["eval", "Deno.exit(7)"];
+const runtimeScript = (script) =>
+  typeof globalThis.Deno === "undefined"
+    ? ["-e", script]
+    : ["eval", `import process from "node:process"; ${script}`];
 
 test("echo roundtrip drives a real session", async () => {
   await withTerminal({ shell }, async (su) => {
@@ -606,7 +610,7 @@ test("locators support scoped text matches and style assertions", async () => {
     "process.stdout.write('Settings One\\n  Save\\nSettings Two\\n  Save\\n\\x1b[1mWarning\\x1b[0m\\n\\x1b[1mPart\\x1b[0mial\\n');" +
     "setInterval(() => {}, 1000)";
   try {
-    await su.run(process.execPath, ["-e", script]);
+    await su.run(process.execPath, runtimeScript(script));
     await su.getByText("Warning").wait({ timeout: 2000 });
     const matches = await su
       .getByText("Settings")
@@ -805,7 +809,7 @@ test("link locators compose cell sets and filter whole candidates", async () => 
     const su = new TuiTest(uniqueSession("link-composition"), { backend });
     try {
       const script = `setTimeout(() => process.stdout.write(${JSON.stringify(output)}), 150);setInterval(() => {}, 1000)`;
-      await su.run(process.execPath, ["-e", script]);
+      await su.run(process.execPath, runtimeScript(script));
       const row = su.getByText("ABC");
       const bold = su.getByStyle({ bold: true });
       const link = su.getByLink(uri);
@@ -888,7 +892,7 @@ test("ghostty backend preserves blink", async () => {
   try {
     await su.run(
       process.execPath,
-      ["-e", "process.stdout.write('\\u001b[5mX\\u001b[0m'); setInterval(() => {}, 1000)"],
+      runtimeScript("process.stdout.write('\\u001b[5mX\\u001b[0m'); setInterval(() => {}, 1000)"),
       { cols: 10, rows: 2 },
     );
     await su.getByText("X").wait({ timeout: 5000 });

@@ -10,6 +10,54 @@ pip install tui-test
 
 Python 3.8+ is supported.
 
+The wheel contains an ordinary shared library. Python uses generated `ctypes`
+declarations for its typed C ABI. The package has no Python native extension.
+
+Set `TUI_TEST_NATIVE_LIBRARY` to an absolute library path to override the bundled
+library. The loader checks the ABI version before the first operation.
+
+### Build from source
+
+Install Rust 1.90 or later and the build dependencies for the supported terminal
+backends. Build a wheel with the standard Python build frontend:
+
+```sh
+python -m pip install build
+env -u CARGO_TARGET_DIR python -m build bindings/python
+```
+
+The build uses `setuptools-rust` with `Binding.NoBinding`. Wheels use
+`py3-none-<platform>` tags. The source distribution includes the shared ABI,
+the Rust engine, and their assets. Source builds need Cargo dependency access.
+
+For cross builds, set `CARGO_BUILD_TARGET` and pass
+`-C--build-option=--plat-name=<platform>` to `python -m build --wheel`.
+Build Linux release wheels in the required manylinux or musllinux container.
+Use `auditwheel repair` before publication. Setuptools-rust disables static
+libc linkage for musl shared libraries.
+
+For a checkout, use the shared library directly:
+
+```sh
+env -u CARGO_TARGET_DIR cargo build -p tui-test-ffi
+PYTHONPATH=bindings/python/src \
+TUI_TEST_NATIVE_LIBRARY="$PWD/target/debug/libtui_test_ffi.dylib" \
+python bindings/python/examples/shared_library.py
+```
+
+Use `libtui_test_ffi.so` on Linux or `tui_test_ffi.dll` on Windows.
+The example proves that a copied screen remains valid after the session closes.
+
+Each asynchronous call uses a separate worker thread. A blocked wait cannot
+prevent `close()` from interrupting waits. Cancellation releases each native
+result when its call returns.
+
+Cancellation stops the Python await, not the native operation. A canceled
+`open()`, `run()`, or `restart()` can still complete. The adapter does not close
+the session automatically after cancellation. This preserves any replacement
+session with the same name. The caller remains responsible for explicit session
+cleanup; cancellation does not confirm that a spawn stopped.
+
 ## Quick start
 
 ```python

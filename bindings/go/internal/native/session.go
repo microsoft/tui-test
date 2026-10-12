@@ -46,8 +46,8 @@ func checkNativeVersion() error {
 	if err := loadNativeEngine(); err != nil {
 		return &Error{Kind: InternalError, Message: err.Error()}
 	}
-	if version := nativeFunctions.AbiVersion(); version != 3 {
-		return &Error{Kind: InternalError, Message: fmt.Sprintf("native ABI version %d is incompatible with required version 3", version)}
+	if version := nativeFunctions.AbiVersion(); version != abiVersion {
+		return &Error{Kind: InternalError, Message: fmt.Sprintf("native ABI version %d is incompatible with required version %d", version, abiVersion)}
 	}
 	return nil
 }
