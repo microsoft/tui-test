@@ -867,6 +867,31 @@ pub unsafe extern "C" fn tui_screenshot(
     }
 }
 #[no_mangle]
+/// Pointer form for foreign callers with limited aggregate argument support.
+///
+/// # Safety
+/// options must point to a valid TuiScreenshotOptions for this call.
+/// Its borrowed buffers follow the same contract as tui_screenshot.
+pub unsafe extern "C" fn tui_screenshot_ptr(
+    session: TuiString,
+    options: *const TuiScreenshotOptions,
+) -> *mut TuiResult {
+    if options.is_null() {
+        return boundary(|| Err(TuiTestError::usage("screenshot options pointer is null")));
+    }
+    let options = unsafe { *options };
+    unsafe {
+        tui_screenshot(
+            session,
+            options.full,
+            options.path,
+            options.zoom,
+            options.background,
+            options.transparent,
+        )
+    }
+}
+#[no_mangle]
 /// # Safety
 /// Borrowed input buffers must be valid and readable for their stated lengths
 /// throughout this call; see TuiString and the input structure contracts.

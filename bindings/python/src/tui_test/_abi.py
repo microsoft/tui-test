@@ -104,6 +104,10 @@ class TuiRecordingOptions(ctypes.Structure):
     pass
 
 
+class TuiScreenshotOptions(ctypes.Structure):
+    pass
+
+
 TuiString._fields_ = [
     ("data", ctypes.POINTER(ctypes.c_uint8)),
     ("len", ctypes.c_size_t),
@@ -296,6 +300,15 @@ TuiRecordingOptions._fields_ = [
 ]
 
 
+TuiScreenshotOptions._fields_ = [
+    ("full", ctypes.c_bool),
+    ("path", TuiString),
+    ("zoom", TuiOptionalF64),
+    ("background", TuiString),
+    ("transparent", ctypes.c_bool),
+]
+
+
 TuiState._fields_ = [
     ("session_shell", TuiString),
     ("cols", ctypes.c_uint16),
@@ -456,5 +469,7 @@ def configure(library):
     library.tui_snapshot.restype = ctypes.POINTER(TuiResult)
     library.tui_screenshot.argtypes = [TuiString, ctypes.c_bool, TuiString, TuiOptionalF64, TuiString, ctypes.c_bool]
     library.tui_screenshot.restype = ctypes.POINTER(TuiResult)
+    library.tui_screenshot_ptr.argtypes = [TuiString, ctypes.POINTER(TuiScreenshotOptions)]
+    library.tui_screenshot_ptr.restype = ctypes.POINTER(TuiResult)
     library.tui_start_recording.argtypes = [TuiString, TuiRecordingOptions]
     library.tui_start_recording.restype = ctypes.POINTER(TuiResult)

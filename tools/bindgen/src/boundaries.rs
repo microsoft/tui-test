@@ -585,6 +585,7 @@ fn input_models(
         ("MouseOptions", "MouseOptions"),
         ("Operation::WaitTitle", "WaitOptions"),
         ("Operation::StartRecording", "RecordingOptions"),
+        ("Operation::Screenshot", "ScreenshotOptions"),
     ] {
         if model == "MouseOptions" {
             c.push_str("/// button: 0 left, 1 middle, 2 right.\n");

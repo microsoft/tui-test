@@ -13,6 +13,9 @@ Go and Python use the same library. JavaScript uses the crate's optional N-API b
 Source builds select the Go/Python library path through `TUI_TEST_NATIVE_LIBRARY`.
 The library stays loaded for the process lifetime.
 
+Go uses pointer entrypoints for open, run, and screenshot options.
+The screenshot pointer avoids a PureGo aggregate-argument failure on Linux AMD64.
+
 Terminal behavior, session synchronization, locator evaluation, assertions, diagnostics, traces, artifacts, and recording remain in the Rust engine. Go owns option ergonomics, query construction, error presentation, and test cleanup. The `tuitesttest` package reports the test result through failure-aware close so the engine can retain on-failure traces. Keep new terminal behavior in the engine so language bindings share it.
 
 The native library and Go module must come from the same source revision.

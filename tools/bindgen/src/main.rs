@@ -252,15 +252,11 @@ fn go_function_name(function: &ItemFn) -> String {
 }
 
 fn go_functions(functions: &[&ItemFn]) -> Result<String> {
+    let names: BTreeSet<_> = functions.iter().map(|f| f.sig.ident.to_string()).collect();
     let functions: Vec<_> = functions
         .iter()
         .copied()
-        .filter(|function| {
-            !matches!(
-                function.sig.ident.to_string().as_str(),
-                "tui_open" | "tui_run"
-            )
-        })
+        .filter(|function| !names.contains(&format!("{}_ptr", function.sig.ident)))
         .collect();
     let mut out = format!("// {NOTICE}\npackage native\n\ntype nativeFunctionTable struct {{\n");
     for function in &functions {
@@ -374,6 +370,21 @@ fn python(structs: &[&ItemStruct], functions: &[&ItemFn], version: &str) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn go_prefers_pointer_entrypoints() {
+        let value = syn::parse_str::<ItemFn>(
+            "pub unsafe extern \"C\" fn tui_screenshot(options: TuiScreenshotOptions) {}",
+        )
+        .unwrap();
+        let pointer = syn::parse_str::<ItemFn>(
+            "pub unsafe extern \"C\" fn tui_screenshot_ptr(options: *const TuiScreenshotOptions) {}",
+        ).unwrap();
+        let output = go_functions(&[&value, &pointer]).unwrap();
+        assert!(output.contains("Screenshot func(*abiScreenshotOptions)"));
+        assert!(output.contains("symbol: \"tui_screenshot_ptr\""));
+        assert!(!output.contains("symbol: \"tui_screenshot\""));
+    }
 
     #[test]
     fn python_defines_embedded_structures_before_use() {

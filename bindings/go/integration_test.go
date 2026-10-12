@@ -2,9 +2,11 @@ package tuitest_test
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"os"
 	"path/filepath"
 	"slices"
@@ -251,6 +253,24 @@ func TestScreenshotsAndSnapshots(t *testing.T) {
 	requireNoError(t, err)
 	if _, statErr := os.Stat(transparent); statErr != nil {
 		t.Fatal(statErr)
+	}
+	data, err := os.ReadFile(transparent)
+	requireNoError(t, err)
+	baseline, err := png.DecodeConfig(bytes.NewReader(data))
+	requireNoError(t, err)
+	for index, options := range []tuitest.ScreenshotOptions{
+		{Zoom: tuitest.Ptr(2.0), Transparent: true},
+		{Zoom: tuitest.Ptr(2.0), Background: "#123456"},
+	} {
+		path, err := terminal.Screenshot(filepath.Join(directory, fmt.Sprintf("scaled-%d.png", index)), options)
+		requireNoError(t, err)
+		data, err := os.ReadFile(path)
+		requireNoError(t, err)
+		scaled, err := png.DecodeConfig(bytes.NewReader(data))
+		requireNoError(t, err)
+		if scaled.Width != 2*baseline.Width || scaled.Height != 2*baseline.Height {
+			t.Fatalf("scaled screenshot=%dx%d, baseline=%dx%d", scaled.Width, scaled.Height, baseline.Width, baseline.Height)
+		}
 	}
 	_, err = terminal.Screenshot(filepath.Join(directory, "conflict.png"), tuitest.ScreenshotOptions{Background: "#000000", Transparent: true})
 	requireKind(t, err, tuitest.UsageError)

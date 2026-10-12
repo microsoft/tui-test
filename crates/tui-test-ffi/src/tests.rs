@@ -37,6 +37,15 @@ fn pointer_options_reject_null_and_preserve_validation() {
             tui_run_ptr(session, std::ptr::null(), text(""), std::ptr::null(), 0),
             tui_open_ptr(session, &options),
             tui_run_ptr(session, &options, text(""), std::ptr::null(), 0),
+            tui_screenshot_ptr(session, std::ptr::null()),
+            tui_screenshot_ptr(
+                session,
+                &TuiScreenshotOptions {
+                    background: text("#000000"),
+                    transparent: true,
+                    ..Default::default()
+                },
+            ),
         ]
     };
     for result in results {

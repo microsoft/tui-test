@@ -55,7 +55,7 @@ type nativeFunctionTable struct {
 	ExpectOutput     func(abiString, abiString, bool) *abiResult
 	ExpectBellCount  func(abiString, uint64, abiOptionalU64) *abiResult
 	Snapshot         func(abiString, abiString, bool, bool, bool, abiString) *abiResult
-	Screenshot       func(abiString, bool, abiString, abiOptionalF64, abiString, bool) *abiResult
+	Screenshot       func(abiString, *abiScreenshotOptions) *abiResult
 	StartRecording   func(abiString, abiRecordingOptions) *abiResult
 }
 
@@ -114,7 +114,7 @@ func nativeRegistrations(table *nativeFunctionTable) []nativeRegistration {
 		{symbol: "tui_expect_output", target: &table.ExpectOutput},
 		{symbol: "tui_expect_bell_count", target: &table.ExpectBellCount},
 		{symbol: "tui_snapshot", target: &table.Snapshot},
-		{symbol: "tui_screenshot", target: &table.Screenshot},
+		{symbol: "tui_screenshot_ptr", target: &table.Screenshot},
 		{symbol: "tui_start_recording", target: &table.StartRecording},
 	}
 }

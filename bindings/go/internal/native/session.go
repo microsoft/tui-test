@@ -423,7 +423,11 @@ func (runtime *Session) ExpectBellCount(count uint64, timeout *time.Duration) er
 
 func (runtime *Session) Screenshot(path string, options ScreenshotOptions) (string, error) {
 	return runtime.textResult(func(session abiString, memory *nativeMemory) *abiResult {
-		return nativeFunctions.Screenshot(session, options.Full, memory.nonemptyText(path), nativeFloat(options.Zoom), memory.nonemptyText(options.Background), options.Transparent)
+		return nativeFunctions.Screenshot(session, &abiScreenshotOptions{
+			full: options.Full, path: memory.nonemptyText(path),
+			zoom: nativeFloat(options.Zoom), background: memory.nonemptyText(options.Background),
+			transparent: options.Transparent,
+		})
 	})
 }
 

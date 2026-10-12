@@ -229,6 +229,14 @@ typedef struct TuiOptionalF64 {
   double value;
 } TuiOptionalF64;
 
+typedef struct TuiScreenshotOptions {
+  bool full;
+  struct TuiString path;
+  struct TuiOptionalF64 zoom;
+  struct TuiString background;
+  bool transparent;
+} TuiScreenshotOptions;
+
 typedef struct TuiRecordingOptions {
   struct TuiString path;
   struct TuiString format;
@@ -686,6 +694,16 @@ struct TuiResult *tui_screenshot(struct TuiString session,
                                  struct TuiOptionalF64 zoom,
                                  struct TuiString background,
                                  bool transparent);
+
+/**
+ * Pointer form for foreign callers with limited aggregate argument support.
+ *
+ * # Safety
+ * options must point to a valid TuiScreenshotOptions for this call.
+ * Its borrowed buffers follow the same contract as tui_screenshot.
+ */
+struct TuiResult *tui_screenshot_ptr(struct TuiString session,
+                                     const struct TuiScreenshotOptions *options);
 
 /**
  * # Safety
