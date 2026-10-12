@@ -11,7 +11,9 @@ npm install @microsoft/tui-test
 Node 20+ is supported. The package is ESM only. Bun and Deno support is best effort. Deno 2 needs local `node_modules` and `--allow-ffi`.
 
 Each platform package contains one self-contained `.node` addon.
-The addon uses the optional `napi` feature in `tui-test-ffi` and calls the typed C ABI directly.
+The addon uses the optional `napi` feature in `tui-test-ffi` and calls Rust operations directly.
+It shares safe execution, context validation, and close logic with the C ABI adapter.
+It converts owned Rust results into JavaScript values without C result pointers.
 It needs no companion shared library or CLI.
 `TUI_TEST_NATIVE_LIBRARY` applies only to Go and Python; JavaScript ignores it.
 

@@ -1,10 +1,11 @@
-//! Shared typed C ABI for language bindings. All borrowed input buffers must
-//! remain valid for the call. Inputs are copied before entering the engine;
-//! output storage belongs to Rust until tui_result_free is called.
+//! Native language adapters with shared Rust execution and an optional N-API adapter.
+//! C ABI input buffers must remain valid for the call. The adapter copies inputs
+//! before execution; C output storage belongs to Rust until tui_result_free.
 mod input;
 #[cfg(all(feature = "napi", not(test)))]
 mod napi;
 mod output;
+mod session;
 mod types;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use tui_test::api::*;
@@ -28,9 +29,7 @@ unsafe fn execute(
 ) -> *mut TuiResult {
     boundary(|| {
         let (session, context) = unsafe { input::session(session)? };
-        global_registry()
-            .session(session)
-            .execute_with_context(operation()?, context.with_operation(operation_name))
+        session::execute(session, context, operation_name, operation()?)
     })
 }
 
@@ -159,21 +158,7 @@ pub extern "C" fn tui_close_all() -> *mut TuiResult {
 pub unsafe extern "C" fn tui_recording(session: TuiString) -> *mut TuiResult {
     boundary(|| {
         let session = unsafe { session.required()? };
-        global_registry()
-            .recording(&session)
-            .map(OperationResult::Recording)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    TuiTestError::new(
-                        ErrorKind::NoSession,
-                        format!("no recording for session '{session}'"),
-                    )
-                } else {
-                    TuiTestError::internal(format!(
-                        "failed to read recording for session '{session}': {e}"
-                    ))
-                }
-            })
+        session::recording(&session)
     })
 }
 #[no_mangle]
@@ -183,24 +168,7 @@ pub unsafe extern "C" fn tui_recording(session: TuiString) -> *mut TuiResult {
 pub unsafe extern "C" fn tui_close(session: TuiString, failed: TuiOptionalBool) -> *mut TuiResult {
     boundary(|| {
         let (name, context) = unsafe { input::session(session)? };
-        let handle = global_registry().session(name);
-        if let Some(failed) = failed.option() {
-            return finish_trace_and_close(
-                || {
-                    handle.execute_with_context(
-                        Operation::FinishTrace { failed },
-                        context.clone().with_operation("trace.finish"),
-                    )
-                },
-                || {
-                    handle.execute_with_context(
-                        Operation::Close,
-                        context.clone().with_operation("close"),
-                    )
-                },
-            );
-        }
-        handle.execute_with_context(Operation::Close, context.with_operation("close"))
+        session::close(name, context, failed.option())
     })
 }
 #[no_mangle]

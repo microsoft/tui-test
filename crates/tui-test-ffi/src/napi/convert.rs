@@ -1,49 +1,10 @@
-use super::{internal, types::*, usage, MAX_SAFE_INTEGER};
-use crate::types::*;
+use super::{internal, native_error, types::*, usage, MAX_SAFE_INTEGER};
 use napi::bindgen_prelude::Either;
 use napi::Result;
+use tui_test::api::{self, OperationResult};
+use tui_test::profile::{Profile, Rgb};
+use tui_test::terminal::backend::Backend as TerminalBackend;
 
-pub fn borrowed(value: &str) -> TuiString {
-    TuiString {
-        data: value.as_ptr(),
-        len: value.len(),
-    }
-}
-
-pub fn optional_borrowed(value: Option<&str>) -> TuiString {
-    value.map(borrowed).unwrap_or_default()
-}
-
-pub fn array<'a, T>(data: *const T, len: usize) -> &'a [T] {
-    if len == 0 {
-        &[]
-    } else {
-        unsafe { std::slice::from_raw_parts(data, len) }
-    }
-}
-
-pub fn bytes<'a>(value: TuiString) -> &'a [u8] {
-    array(value.data, value.len)
-}
-pub fn text(value: TuiString) -> String {
-    String::from_utf8_lossy(bytes(value)).into_owned()
-}
-pub fn optional_text(value: TuiString) -> Option<String> {
-    (!value.data.is_null()).then(|| text(value))
-}
-
-pub fn optional_bool(value: Option<bool>) -> TuiOptionalBool {
-    TuiOptionalBool {
-        present: value.is_some(),
-        value: value.unwrap_or_default(),
-    }
-}
-pub fn optional_float(value: Option<f64>) -> TuiOptionalF64 {
-    TuiOptionalF64 {
-        present: value.is_some(),
-        value: value.unwrap_or_default(),
-    }
-}
 pub fn integer(value: f64, name: &str, max: u64) -> Result<u64> {
     let max = max.min(MAX_SAFE_INTEGER);
     if !value.is_finite() || value < 0.0 || value.fract() != 0.0 || value > max as f64 {
@@ -53,21 +14,23 @@ pub fn integer(value: f64, name: &str, max: u64) -> Result<u64> {
     }
     Ok(value as u64)
 }
-pub fn optional_integer(value: Option<f64>, name: &str, max: u64) -> Result<TuiOptionalU64> {
-    Ok(TuiOptionalU64 {
-        present: value.is_some(),
-        value: value
-            .map(|value| integer(value, name, max))
-            .transpose()?
-            .unwrap_or_default(),
-    })
+
+pub fn optional_integer(value: Option<f64>, name: &str, max: u64) -> Result<Option<u64>> {
+    value.map(|value| integer(value, name, max)).transpose()
 }
+
 pub fn u16_value(value: f64, name: &str) -> Result<u16> {
     Ok(integer(value, name, u16::MAX.into())? as u16)
 }
+
+pub fn optional_u16(value: Option<f64>, name: &str) -> Result<Option<u16>> {
+    value.map(|value| u16_value(value, name)).transpose()
+}
+
 pub fn u8_value(value: f64, name: &str) -> Result<u8> {
     Ok(integer(value, name, u8::MAX.into())? as u8)
 }
+
 pub fn i32_value(value: f64, name: &str) -> Result<i32> {
     if !value.is_finite()
         || value.fract() != 0.0
@@ -82,130 +45,81 @@ pub fn i32_value(value: f64, name: &str) -> Result<i32> {
     }
     Ok(value as i32)
 }
-pub fn wait_options(timeout: Option<f64>, regex: bool, not: bool) -> Result<TuiWaitOptions> {
-    Ok(TuiWaitOptions {
-        timeout_ms: optional_integer(timeout, "timeoutMs", u64::MAX)?,
-        regex,
-        not,
-    })
-}
-pub fn mouse_options(value: f64) -> Result<TuiMouseOptions> {
+
+pub fn mouse_options(value: f64) -> Result<api::MouseOptions> {
     let code = u8_value(value, "button")?;
     if code & !31 != 0 || code & 3 == 3 {
         return Err(usage(format!("invalid mouse button code {code}")));
     }
-    Ok(TuiMouseOptions {
-        button: (code & 3).into(),
+    Ok(api::MouseOptions {
+        button: match code & 3 {
+            0 => api::MouseButton::Left,
+            1 => api::MouseButton::Middle,
+            _ => api::MouseButton::Right,
+        },
         shift: code & 4 != 0,
         alt: code & 8 != 0,
         ctrl: code & 16 != 0,
     })
 }
-pub fn session_context(context: &serde_json::Value, limit: Option<f64>) -> Result<String> {
-    let mut context = context.clone();
-    if let Some(limit) = limit {
-        context["screen_history_limit"] = u16_value(limit, "screenHistoryLimit")?.into();
+
+pub fn open_options(value: OpenOptions, directory: Option<String>) -> Result<api::OpenOptions> {
+    let mut profile = Profile::default();
+    if let Some(scrollback) = optional_integer(
+        value.profile_scrollback,
+        "profile.scrollback",
+        usize::MAX as u64,
+    )? {
+        profile.scrollback = scrollback as usize;
     }
-    Ok(context.to_string())
-}
-
-pub struct OpenInput {
-    pub options: TuiOpenOptions,
-    _value: OpenOptions,
-    _env: Vec<TuiPair>,
-    _colors: Vec<TuiPair>,
-    _directory: Option<String>,
-}
-
-impl OpenInput {
-    pub fn new(value: OpenOptions, directory: Option<String>) -> Result<Self> {
-        let pairs = |pairs: &Option<Vec<(String, String)>>| -> Vec<TuiPair> {
-            pairs
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .map(|(key, value)| TuiPair {
-                    key: borrowed(key),
-                    value: borrowed(value),
-                })
-                .collect()
-        };
-        let env = pairs(&value.env);
-        let colors = pairs(&value.profile_colors);
-        let timeouts = value.timeouts.as_ref();
-        let options = TuiOpenOptions {
-            backend: optional_borrowed(value.backend.as_ref().map(|value| match value {
-                Backend::Alacritty => "alacritty",
-                Backend::Ghostty => "ghostty",
-                Backend::Rio => "rio",
-                Backend::Xtermjs => "xtermjs",
-            })),
-            shell: optional_borrowed(value.shell.as_ref().map(|value| match value {
-                Shell::Bash => "bash",
-                Shell::Powershell => "powershell",
-                Shell::Pwsh => "pwsh",
-                Shell::Cmd => "cmd",
-                Shell::Fish => "fish",
-                Shell::Zsh => "zsh",
-                Shell::Xonsh => "xonsh",
-                Shell::Elvish => "elvish",
-                Shell::Nushell => "nushell",
-            })),
-            cols: optional_integer(value.cols, "cols", u16::MAX.into())?,
-            rows: optional_integer(value.rows, "rows", u16::MAX.into())?,
-            cwd: optional_borrowed(value.cwd.as_deref()),
-            env: env.as_ptr(),
-            env_len: env.len(),
-            wait_ready: optional_bool(value.wait_ready),
-            restart: value.restart.unwrap_or(false),
-            scrollback: optional_integer(
-                value.profile_scrollback,
-                "profile.scrollback",
-                usize::MAX as u64,
-            )?,
-            colors: colors.as_ptr(),
-            colors_len: colors.len(),
-            timeouts: TuiTimeouts {
-                text: optional_integer(
-                    timeouts.and_then(|value| value.text),
-                    "timeouts.text",
-                    u64::MAX,
-                )?,
-                idle: optional_integer(
-                    timeouts.and_then(|value| value.idle),
-                    "timeouts.idle",
-                    u64::MAX,
-                )?,
-                command: optional_integer(
-                    timeouts.and_then(|value| value.command),
-                    "timeouts.command",
-                    u64::MAX,
-                )?,
-                exit: optional_integer(
-                    timeouts.and_then(|value| value.exit),
-                    "timeouts.exit",
-                    u64::MAX,
-                )?,
-                ready: optional_integer(
-                    timeouts.and_then(|value| value.ready),
-                    "timeouts.ready",
-                    u64::MAX,
-                )?,
-            },
-            recording_directory: optional_borrowed(directory.as_deref()),
-            ..Default::default()
-        };
-        Ok(Self {
-            options,
-            _value: value,
-            _env: env,
-            _colors: colors,
-            _directory: directory,
-        })
+    for (name, color) in value.profile_colors.unwrap_or_default() {
+        let color = Rgb::parse(&color).map_err(usage)?;
+        if !profile.colors.set_named(&name, color) {
+            return Err(usage(format!("unknown profile color {name:?}")));
+        }
     }
+    let timeouts = value.timeouts.unwrap_or_default();
+    Ok(api::OpenOptions {
+        backend: match value.backend {
+            None => Default::default(),
+            Some(Backend::Alacritty) => TerminalBackend::Alacritty,
+            Some(Backend::Ghostty) => TerminalBackend::Ghostty,
+            Some(Backend::Rio) => TerminalBackend::Rio,
+            Some(Backend::Xtermjs) => TerminalBackend::Xtermjs,
+        },
+        shell: value.shell.map(|shell| match shell {
+            Shell::Bash => tui_test::shell::Shell::Bash,
+            Shell::Powershell => tui_test::shell::Shell::Powershell,
+            Shell::Pwsh => tui_test::shell::Shell::Pwsh,
+            Shell::Cmd => tui_test::shell::Shell::Cmd,
+            Shell::Fish => tui_test::shell::Shell::Fish,
+            Shell::Zsh => tui_test::shell::Shell::Zsh,
+            Shell::Xonsh => tui_test::shell::Shell::Xonsh,
+            Shell::Elvish => tui_test::shell::Shell::Elvish,
+            Shell::Nushell => tui_test::shell::Shell::Nushell,
+        }),
+        profile,
+        cols: u16_value(value.cols.unwrap_or(80.0), "cols")?,
+        rows: u16_value(value.rows.unwrap_or(30.0), "rows")?,
+        cwd: value.cwd,
+        env: value.env.unwrap_or_default(),
+        wait_ready: value.wait_ready,
+        restart: value.restart.unwrap_or(false),
+        timeouts: api::Timeouts {
+            text: optional_integer(timeouts.text, "timeouts.text", u64::MAX)?,
+            idle: optional_integer(timeouts.idle, "timeouts.idle", u64::MAX)?,
+            command: optional_integer(timeouts.command, "timeouts.command", u64::MAX)?,
+            exit: optional_integer(timeouts.exit, "timeouts.exit", u64::MAX)?,
+            ready: optional_integer(timeouts.ready, "timeouts.ready", u64::MAX)?,
+        },
+        recording: api::AutomaticRecording {
+            mode: api::AutomaticRecordingMode::Disabled,
+            directory: directory.map(Into::into),
+        },
+    })
 }
 
-pub fn query(expression: LocatorExpression) -> Result<String> {
+pub fn query(expression: LocatorExpression) -> Result<api::LocatorQuery> {
     let mut nodes = Vec::with_capacity(expression.nodes.len());
     for (index, node) in expression.nodes.into_iter().enumerate() {
         let occurrence = if let Some(nth) = node.nth {
@@ -237,89 +151,120 @@ pub fn query(expression: LocatorExpression) -> Result<String> {
             "has": reference(node.has)?, "has_not": reference(node.has_not)?,
         }));
     }
-    Ok(
-        serde_json::json!({"nodes": nodes, "root": integer(expression.root, "locator root", 255)?})
-            .to_string(),
+    serde_json::from_value::<tui_test::locator_query::LocatorExpression>(
+        serde_json::json!({"nodes": nodes, "root": integer(expression.root, "locator root", 255)?}),
     )
+    .map_err(|error| usage(format!("invalid locator expression: {error}")))?
+    .into_query()
+    .map_err(native_error)
 }
 
-pub fn open_result(value: &TuiResult) -> Result<OpenResult> {
+pub fn unit(value: OperationResult) -> Result<()> {
+    match value {
+        OperationResult::Unit => Ok(()),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+
+pub fn string_result(value: OperationResult) -> Result<String> {
+    match value {
+        OperationResult::Text(value)
+        | OperationResult::Clipboard(value)
+        | OperationResult::Recording(value)
+        | OperationResult::Screenshot(
+            api::ScreenshotResult::Path(value) | api::ScreenshotResult::Text(value),
+        ) => Ok(value),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+
+pub fn optional_string_result(value: OperationResult) -> Result<Option<String>> {
+    match value {
+        OperationResult::Command(value)
+        | OperationResult::Output(value)
+        | OperationResult::Cwd(value)
+        | OperationResult::Title(value) => Ok(value),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+
+pub fn open_result(value: OperationResult) -> Result<OpenResult> {
+    let OperationResult::Open(value) = value else {
+        return Err(internal("native operation returned an unexpected result"));
+    };
     Ok(OpenResult {
-        shell_pid: value
-            .open
-            .shell_pid
-            .present
-            .then_some(value.open.shell_pid.value as u32),
-        session: text(value.open.session),
-        ready: value.open.ready,
-        recording: text(value.open.recording),
+        shell_pid: value.shell_pid,
+        session: value.session,
+        ready: value.ready,
+        recording: value.recording,
     })
 }
-pub fn cursor(value: TuiCursor) -> Cursor {
+
+pub fn cursor(value: api::Cursor) -> Cursor {
     Cursor {
         x: value.x,
         y: value.y,
         visible: value.visible,
-        shape: text(value.shape),
-        color: text(value.color),
+        shape: value.shape,
+        color: value.color,
     }
 }
-pub fn state(value: &TuiState) -> State {
+
+pub fn state(value: api::State) -> State {
     State {
-        session_shell: optional_text(value.session_shell),
+        session_shell: value.session_shell,
         cols: value.cols,
         rows: value.rows,
         cursor: cursor(value.cursor),
-        title: optional_text(value.title),
-        cwd: optional_text(value.cwd),
-        last_command: optional_text(value.last_command),
-        last_exit: value.last_exit.present.then_some(value.last_exit.value),
-        exit_signal: optional_text(value.exit_signal),
-        exited: value.exited.present.then_some(value.exited.value),
+        title: value.title,
+        cwd: value.cwd,
+        last_command: value.last_command,
+        last_exit: value.last_exit,
+        exit_signal: value.exit_signal,
+        exited: value.exited,
         ready: value.ready,
         bell_count: value.bell_count as f64,
-        modes: array(value.modes, value.modes_len)
-            .iter()
-            .map(|value| (text(value.name), value.enabled))
-            .collect(),
-        mouse_mode: text(value.mouse_mode),
+        modes: value.modes.into_iter().collect(),
+        mouse_mode: value.mouse_mode,
         colors: TerminalColors {
-            foreground: text(value.colors.foreground),
-            background: text(value.colors.background),
-            cursor: text(value.colors.cursor),
-            palette: array(value.colors.palette, value.colors.palette_len)
-                .iter()
-                .map(|value| (text(value.key), text(value.value)))
+            foreground: value.colors.foreground,
+            background: value.colors.background,
+            cursor: value.colors.cursor,
+            palette: value
+                .colors
+                .palette
+                .into_iter()
+                .map(|(index, color)| (index.to_string(), color))
                 .collect(),
         },
         timeouts: EffectiveTimeouts {
-            text: value.timeouts.text.value as f64,
-            idle: value.timeouts.idle.value as f64,
-            command: value.timeouts.command.value as f64,
-            exit: value.timeouts.exit.value as f64,
-            ready: value.timeouts.ready.value as f64,
+            text: value.timeouts.text as f64,
+            idle: value.timeouts.idle as f64,
+            command: value.timeouts.command as f64,
+            exit: value.timeouts.exit as f64,
+            ready: value.timeouts.ready as f64,
         },
-        text: text(value.text),
+        text: value.text,
     }
 }
-pub fn color(value: TuiColor) -> Result<Color> {
-    match value.kind {
-        0 => Ok(Either::B("default".into())),
-        1 => Ok(Either::A(value.index.into())),
-        2 => Ok(Either::B(format!(
-            "#{:02x}{:02x}{:02x}",
-            value.red, value.green, value.blue
-        ))),
-        _ => Err(internal("terminal returned unknown color kind")),
+
+pub fn color(value: api::CellColor) -> Color {
+    match value {
+        api::CellColor::Default => Either::B("default".into()),
+        api::CellColor::Indexed(index) => Either::A(index.into()),
+        api::CellColor::Rgb(red, green, blue) => {
+            Either::B(format!("#{red:02x}{green:02x}{blue:02x}"))
+        }
     }
 }
-pub fn cell(value: &TuiCell) -> Result<Cell> {
+
+pub fn cell(value: api::Cell) -> Result<Cell> {
     Ok(Cell {
         x: value.x,
         y: value.y,
-        r#char: text(value.character),
-        fg: color(value.fg)?,
-        bg: color(value.bg)?,
+        r#char: value.char,
+        fg: color(value.fg),
+        bg: color(value.bg),
         bold: value.bold,
         dim: value.dim,
         italic: value.italic,
@@ -328,7 +273,7 @@ pub fn cell(value: &TuiCell) -> Result<Cell> {
         strike: value.strike,
         blink: value.blink,
         underline: value.underline,
-        underline_style: match text(value.underline_style).as_str() {
+        underline_style: match value.underline_style.as_str() {
             "none" => UnderlineStyle::None,
             "single" => UnderlineStyle::Single,
             "double" => UnderlineStyle::Double,
@@ -341,16 +286,20 @@ pub fn cell(value: &TuiCell) -> Result<Cell> {
                 )))
             }
         },
-        underline_color: color(value.underline_color)?,
-        link: text(value.link),
-        link_id: text(value.link_id),
+        underline_color: color(value.underline_color),
+        link: value.link,
+        link_id: value.link_id,
     })
 }
-pub fn matches(value: &TuiResult) -> Result<Vec<TextMatch>> {
-    Ok(array(value.matches, value.matches_len)
-        .iter()
+
+pub fn matches(value: OperationResult) -> Result<Vec<TextMatch>> {
+    let OperationResult::Matches(value) = value else {
+        return Err(internal("native operation returned an unexpected result"));
+    };
+    Ok(value
+        .into_iter()
         .map(|value| TextMatch {
-            text: text(value.text),
+            text: value.text,
             start: TextPosition {
                 row: value.start.row,
                 column: value.start.column,
@@ -359,8 +308,9 @@ pub fn matches(value: &TuiResult) -> Result<Vec<TextMatch>> {
                 row: value.end.row,
                 column: value.end.column,
             },
-            spans: array(value.spans, value.spans_len)
-                .iter()
+            spans: value
+                .spans
+                .into_iter()
                 .map(|value| TextSpan {
                     row: value.row,
                     start: value.start,

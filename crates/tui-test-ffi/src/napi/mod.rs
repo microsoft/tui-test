@@ -4,8 +4,10 @@ mod convert;
 mod types;
 
 use self::types::*;
-use crate::types::*;
+use crate::session::{self, SessionInput};
 use convert::*;
+use tui_test::api::{self, KeyAction, MouseAction, Operation, OperationResult};
+use tui_test::runtime::global_registry;
 
 use ::napi::bindgen_prelude::spawn_blocking;
 use ::napi::{Error, Result, Status};
@@ -33,6 +35,25 @@ fn usage(message: impl Into<String>) -> Error {
     error("usage", message)
 }
 
+fn native_error(error: api::TuiTestError) -> Error {
+    let mut envelope = serde_json::json!({
+        "kind": error.kind.as_str(), "message": error.message,
+    });
+    if let Some(details) = error.details {
+        envelope["details"] = match serde_json::to_value(details) {
+            Ok(value) => value,
+            Err(error) => return internal(format!("failed to serialize native details: {error}")),
+        };
+    }
+    if let Some(artifact) = error.artifact {
+        envelope["artifact"] = match serde_json::to_value(artifact) {
+            Ok(value) => value,
+            Err(error) => return internal(format!("failed to serialize native artifact: {error}")),
+        };
+    }
+    Error::new(Status::GenericFailure, format!("{ERROR_PREFIX}{envelope}"))
+}
+
 fn boundary<T>(work: impl FnOnce() -> Result<T>) -> Result<T> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
         Ok(result) => result,
@@ -55,71 +76,36 @@ async fn blocking<T: Send + 'static>(
         .map_err(|error| internal(format!("native worker failed: {error}")))?
 }
 
-struct ResultGuard {
-    pointer: *mut TuiResult,
-}
-
-impl Drop for ResultGuard {
-    fn drop(&mut self) {
-        unsafe { crate::tui_result_free(self.pointer) };
-    }
-}
-
-fn result<T>(pointer: *mut TuiResult, convert: impl FnOnce(&TuiResult) -> Result<T>) -> Result<T> {
-    if pointer.is_null() {
-        return Err(internal("native operation returned a null result"));
-    }
-    let guard = ResultGuard { pointer };
-    let value = unsafe { &*guard.pointer };
-    if value.error_kind != 0 {
-        let kind = match value.error_kind {
-            1 => "assertion",
-            2 => "usage",
-            3 => "no_session",
-            _ => "internal",
-        };
-        let mut envelope = serde_json::json!({"kind": kind, "message": text(value.error_message)});
-        for (key, value) in [
-            ("details", value.error_details),
-            ("artifact", value.error_artifact),
-        ] {
-            if let Some(value) = optional_text(value) {
-                envelope[key] = serde_json::from_str(&value)
-                    .map_err(|error| internal(format!("invalid native {key}: {error}")))?;
-            }
-        }
-        return Err(Error::new(
-            Status::GenericFailure,
-            format!("{ERROR_PREFIX}{envelope}"),
-        ));
-    }
-    convert(value)
-}
-
-fn unit(_: &TuiResult) -> Result<()> {
-    Ok(())
-}
-fn string_result(value: &TuiResult) -> Result<String> {
-    Ok(text(value.text))
-}
-fn optional_string_result(value: &TuiResult) -> Result<Option<String>> {
-    Ok(optional_text(value.text))
+async fn execute<T: Send + 'static>(
+    context: SessionInput,
+    operation_name: &'static str,
+    operation: impl FnOnce() -> Result<Operation> + Send + 'static,
+    convert: impl FnOnce(OperationResult) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    blocking(move || {
+        let (name, context) = context.validate().map_err(native_error)?;
+        convert(
+            session::execute(name, context, operation_name, operation()?).map_err(native_error)?,
+        )
+    })
+    .await
 }
 
 #[napi]
 pub struct NativeSession {
     name: String,
-    context: serde_json::Value,
+    context: SessionInput,
     recording_directory: Option<String>,
 }
 
 impl NativeSession {
     async fn call<T: Send + 'static>(
         &self,
-        work: impl FnOnce(TuiString) -> Result<T> + Send + 'static,
+        operation_name: &'static str,
+        operation: impl FnOnce() -> Result<Operation> + Send + 'static,
+        convert: impl FnOnce(OperationResult) -> Result<T> + Send + 'static,
     ) -> Result<T> {
-        let context = self.context.to_string();
-        blocking(move || work(borrowed(&context))).await
+        execute(self.context.clone(), operation_name, operation, convert).await
     }
 }
 
@@ -132,16 +118,18 @@ impl NativeSession {
         artifacts: Option<FailureArtifactOptions>,
         trace: Option<TraceOptions>,
     ) -> Result<Self> {
-        let mut context = serde_json::json!({"name": name});
+        let mut context = SessionInput {
+            name: name.clone(),
+            ..Default::default()
+        };
         if let Some(options) = artifacts {
-            context["artifact_directory"] = options.directory.into();
-            context["artifact_mode"] = options.mode.unwrap_or_else(|| "all".into()).into();
-            context["artifact_include_recording"] =
-                options.include_recording.unwrap_or(false).into();
+            context.artifact_directory = Some(options.directory);
+            context.artifact_mode = Some(options.mode.unwrap_or_else(|| "all".into()));
+            context.artifact_include_recording = options.include_recording.unwrap_or(false);
         }
         if let Some(options) = trace {
-            context["trace_mode"] = options.mode.unwrap_or_else(|| "off".into()).into();
-            context["trace_directory"] = options.directory.into();
+            context.trace_mode = Some(options.mode.unwrap_or_else(|| "off".into()));
+            context.trace_directory = options.directory;
         }
         Ok(Self {
             name,
@@ -158,143 +146,161 @@ impl NativeSession {
     #[napi]
     pub async fn open(&self, options: Option<OpenOptions>) -> Result<OpenResult> {
         let options = options.unwrap_or_default();
-        let context = session_context(&self.context, options.screen_history_limit)?;
+        let mut context = self.context.clone();
+        context.screen_history_limit =
+            optional_u16(options.screen_history_limit, "screenHistoryLimit")?;
         let directory = self.recording_directory.clone();
-        blocking(move || {
-            let input = OpenInput::new(options, directory)?;
-            result(
-                unsafe { crate::tui_open_ptr(borrowed(&context), &input.options) },
-                open_result,
-            )
-        })
+        execute(
+            context,
+            "open",
+            move || Ok(Operation::Open(open_options(options, directory)?)),
+            open_result,
+        )
         .await
     }
 
     #[napi]
     pub async fn run(&self, options: RunOptions) -> Result<OpenResult> {
-        let context = session_context(&self.context, options.screen_history_limit)?;
+        let mut context = self.context.clone();
+        context.screen_history_limit =
+            optional_u16(options.screen_history_limit, "screenHistoryLimit")?;
         let directory = self.recording_directory.clone();
-        blocking(move || {
-            let args = options.args.unwrap_or_default();
-            let borrowed_args: Vec<_> = args.iter().map(|value| borrowed(value)).collect();
-            let input = OpenInput::new(
-                OpenOptions {
-                    backend: options.backend,
-                    cols: options.cols,
-                    rows: options.rows,
-                    cwd: options.cwd,
-                    env: options.env,
-                    wait_ready: options.wait_ready,
-                    restart: options.restart,
-                    profile_scrollback: options.profile_scrollback,
-                    profile_colors: options.profile_colors,
-                    timeouts: options.timeouts,
-                    ..Default::default()
-                },
-                directory,
-            )?;
-            result(
-                unsafe {
-                    crate::tui_run_ptr(
-                        borrowed(&context),
-                        &input.options,
-                        borrowed(&options.program),
-                        borrowed_args.as_ptr(),
-                        borrowed_args.len(),
-                    )
-                },
-                open_result,
-            )
-        })
+        execute(
+            context,
+            "run",
+            move || {
+                let open = open_options(
+                    OpenOptions {
+                        backend: options.backend,
+                        cols: options.cols,
+                        rows: options.rows,
+                        cwd: options.cwd,
+                        env: options.env,
+                        wait_ready: options.wait_ready,
+                        restart: options.restart,
+                        profile_scrollback: options.profile_scrollback,
+                        profile_colors: options.profile_colors,
+                        timeouts: options.timeouts,
+                        ..Default::default()
+                    },
+                    directory,
+                )?;
+                if options.program.is_empty() {
+                    return Err(usage("program must not be empty"));
+                }
+                Ok(Operation::Run(api::RunOptions {
+                    program: options.program,
+                    args: options.args.unwrap_or_default(),
+                    backend: open.backend,
+                    profile: open.profile,
+                    cols: open.cols,
+                    rows: open.rows,
+                    cwd: open.cwd,
+                    env: open.env,
+                    wait_ready: open.wait_ready,
+                    restart: open.restart,
+                    timeouts: open.timeouts,
+                    recording: open.recording,
+                }))
+            },
+            open_result,
+        )
         .await
     }
 
     #[napi]
     pub async fn restart(&self, graceful_timeout_ms: f64) -> Result<OpenResult> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_restart(
-                        session,
-                        integer(graceful_timeout_ms, "gracefulTimeoutMs", u64::MAX)?,
-                    )
-                },
-                open_result,
-            )
-        })
+        self.call(
+            "restart",
+            move || {
+                Ok(Operation::Restart {
+                    graceful_timeout_ms: integer(
+                        graceful_timeout_ms,
+                        "gracefulTimeoutMs",
+                        u64::MAX,
+                    )?,
+                })
+            },
+            open_result,
+        )
         .await
     }
 
     #[napi]
     pub async fn close(&self, failed: Option<bool>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe { crate::tui_close(session, optional_bool(failed)) },
-                unit,
-            )
+        let context = self.context.clone();
+        blocking(move || {
+            let (name, context) = context.validate().map_err(native_error)?;
+            unit(session::close(name, context, failed).map_err(native_error)?)
         })
         .await
     }
 
     #[napi]
     pub async fn state(&self) -> Result<State> {
-        self.call(|session| {
-            result(unsafe { crate::tui_state(session) }, |value| {
-                Ok(state(&value.state))
-            })
-        })
+        self.call(
+            "state",
+            || Ok(Operation::State),
+            |value| match value {
+                OperationResult::State(value) => Ok(state(*value)),
+                _ => Err(internal("native operation returned an unexpected result")),
+            },
+        )
         .await
     }
 
     #[napi]
     pub async fn text(&self, full: Option<bool>) -> Result<String> {
-        self.call(move |session| {
-            result(
-                unsafe { crate::tui_text(session, full.unwrap_or(false)) },
-                string_result,
-            )
-        })
+        self.call(
+            "text",
+            move || {
+                Ok(Operation::Text {
+                    full: full.unwrap_or(false),
+                })
+            },
+            string_result,
+        )
         .await
     }
 
     #[napi]
     pub async fn packed_screen(&self, full: Option<bool>) -> Result<PackedScreen> {
-        self.call(move |session| {
-            result(
-                unsafe { crate::tui_packed_screen(session, full.unwrap_or(false)) },
-                |value| {
-                    Ok(PackedScreen {
-                        cols: value.size.cols,
-                        rows: value.size.rows,
-                        utf8: bytes(value.text).to_vec().into(),
-                    })
-                },
-            )
-        })
+        self.call(
+            "packedScreen",
+            move || {
+                Ok(Operation::PackedScreen {
+                    full: full.unwrap_or(false),
+                })
+            },
+            |value| match value {
+                OperationResult::PackedScreen(value) => Ok(PackedScreen {
+                    cols: value.cols,
+                    rows: value.rows,
+                    utf8: value.utf8.into(),
+                }),
+                _ => Err(internal("native operation returned an unexpected result")),
+            },
+        )
         .await
     }
 
     #[napi]
     pub async fn cells(&self, x: f64, y: f64, w: Option<f64>, h: Option<f64>) -> Result<Vec<Cell>> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_cells(
-                        session,
-                        u16_value(x, "x")?,
-                        u16_value(y, "y")?,
-                        u16_value(w.unwrap_or(1.0), "w")?,
-                        u16_value(h.unwrap_or(1.0), "h")?,
-                    )
-                },
-                |value| {
-                    array(value.cells, value.cells_len)
-                        .iter()
-                        .map(cell)
-                        .collect()
-                },
-            )
-        })
+        self.call(
+            "cells",
+            move || {
+                Ok(Operation::Cells {
+                    x: u16_value(x, "x")?,
+                    y: u16_value(y, "y")?,
+                    w: u16_value(w.unwrap_or(1.0), "w")?,
+                    h: u16_value(h.unwrap_or(1.0), "h")?,
+                })
+            },
+            |value| match value {
+                OperationResult::Cells(value) => value.into_iter().map(cell).collect(),
+                _ => Err(internal("native operation returned an unexpected result")),
+            },
+        )
         .await
     }
 
@@ -304,21 +310,23 @@ impl NativeSession {
         expression: LocatorExpression,
         require_one: Option<bool>,
     ) -> Result<Vec<TextMatch>> {
-        self.call(move |session| {
-            let query = query(expression)?;
-            result(
-                unsafe {
-                    crate::tui_find_locator(
-                        session,
-                        TuiQuery {
-                            json: borrowed(&query),
-                        },
-                        require_one.unwrap_or(false),
-                    )
-                },
-                matches,
-            )
-        })
+        let require_one = require_one.unwrap_or(false);
+        self.call(
+            if require_one {
+                "locator.location"
+            } else {
+                "locator.locations"
+            },
+            move || {
+                let query = query(expression)?;
+                Ok(if require_one {
+                    Operation::ResolveLocator { query }
+                } else {
+                    Operation::FindLocator { query }
+                })
+            },
+            matches,
+        )
         .await
     }
 
@@ -329,21 +337,17 @@ impl NativeSession {
         not: Option<bool>,
         timeout_ms: Option<f64>,
     ) -> Result<()> {
-        self.call(move |session| {
-            let query = query(expression)?;
-            result(
-                unsafe {
-                    crate::tui_wait_locator(
-                        session,
-                        TuiQuery {
-                            json: borrowed(&query),
-                        },
-                        wait_options(timeout_ms, false, not.unwrap_or(false))?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "locator.wait",
+            move || {
+                Ok(Operation::WaitLocator {
+                    query: query(expression)?,
+                    not: not.unwrap_or(false),
+                    timeout_ms: optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
 
@@ -354,21 +358,17 @@ impl NativeSession {
         not: Option<bool>,
         timeout_ms: Option<f64>,
     ) -> Result<()> {
-        self.call(move |session| {
-            let query = query(expression)?;
-            result(
-                unsafe {
-                    crate::tui_expect_locator(
-                        session,
-                        TuiQuery {
-                            json: borrowed(&query),
-                        },
-                        wait_options(timeout_ms, false, not.unwrap_or(false))?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "locator.expect",
+            move || {
+                Ok(Operation::WaitLocator {
+                    query: query(expression)?,
+                    not: not.unwrap_or(false),
+                    timeout_ms: optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
 
@@ -380,23 +380,18 @@ impl NativeSession {
         clicks: Option<f64>,
         timeout_ms: Option<f64>,
     ) -> Result<()> {
-        self.call(move |session| {
-            let query = query(expression)?;
-            result(
-                unsafe {
-                    crate::tui_click_locator(
-                        session,
-                        TuiQuery {
-                            json: borrowed(&query),
-                        },
-                        mouse_options(button.unwrap_or(0.0))?,
-                        u8_value(clicks.unwrap_or(1.0), "clicks")?,
-                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "locator.click",
+            move || {
+                Ok(Operation::ClickLocator {
+                    query: query(expression)?,
+                    options: mouse_options(button.unwrap_or(0.0))?,
+                    clicks: u8_value(clicks.unwrap_or(1.0), "clicks")?,
+                    timeout_ms: optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
 
@@ -406,21 +401,16 @@ impl NativeSession {
         expression: LocatorExpression,
         timeout_ms: Option<f64>,
     ) -> Result<Vec<TextMatch>> {
-        self.call(move |session| {
-            let query = query(expression)?;
-            result(
-                unsafe {
-                    crate::tui_highlight_locator(
-                        session,
-                        TuiQuery {
-                            json: borrowed(&query),
-                        },
-                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
-                    )
-                },
-                matches,
-            )
-        })
+        self.call(
+            "locator.highlight",
+            move || {
+                Ok(Operation::HighlightLocator {
+                    query: query(expression)?,
+                    timeout_ms: optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            matches,
+        )
         .await
     }
 
@@ -431,226 +421,257 @@ impl NativeSession {
 
     #[napi]
     pub async fn get_command(&self) -> Result<Option<String>> {
-        self.call(|session| {
-            result(
-                unsafe { crate::tui_get_command(session) },
-                optional_string_result,
-            )
-        })
+        self.call(
+            "getCommand",
+            || Ok(Operation::GetCommand),
+            optional_string_result,
+        )
         .await
     }
-
     #[napi]
     pub async fn get_output(&self) -> Result<Option<String>> {
-        self.call(|session| {
-            result(
-                unsafe { crate::tui_get_output(session) },
-                optional_string_result,
-            )
-        })
+        self.call(
+            "getOutput",
+            || Ok(Operation::GetOutput),
+            optional_string_result,
+        )
         .await
     }
-
     #[napi]
     pub async fn get_exit_code(&self) -> Result<Option<i32>> {
-        self.call(|session| {
-            result(unsafe { crate::tui_get_exit_code(session) }, |value| {
-                Ok(value.exit_code.present.then_some(value.exit_code.value))
-            })
-        })
+        self.call(
+            "getExitCode",
+            || Ok(Operation::GetExitCode),
+            |value| match value {
+                OperationResult::ExitCode(value) => Ok(value),
+                _ => Err(internal("native operation returned an unexpected result")),
+            },
+        )
         .await
     }
-
     #[napi]
     pub async fn get_cwd(&self) -> Result<Option<String>> {
-        self.call(|session| {
-            result(
-                unsafe { crate::tui_get_cwd(session) },
-                optional_string_result,
-            )
-        })
-        .await
-    }
-
-    #[napi]
-    pub async fn get_title(&self) -> Result<Option<String>> {
-        self.call(|session| {
-            result(
-                unsafe { crate::tui_get_title(session) },
-                optional_string_result,
-            )
-        })
-        .await
-    }
-
-    #[napi]
-    pub async fn get_clipboard(&self) -> Result<String> {
-        self.call(|session| result(unsafe { crate::tui_get_clipboard(session) }, string_result))
+        self.call("getCwd", || Ok(Operation::GetCwd), optional_string_result)
             .await
     }
-
+    #[napi]
+    pub async fn get_title(&self) -> Result<Option<String>> {
+        self.call(
+            "getTitle",
+            || Ok(Operation::GetTitle),
+            optional_string_result,
+        )
+        .await
+    }
+    #[napi]
+    pub async fn get_clipboard(&self) -> Result<String> {
+        self.call(
+            "getClipboard",
+            || Ok(Operation::GetClipboard),
+            string_result,
+        )
+        .await
+    }
     #[napi]
     pub async fn get_cursor(&self) -> Result<Cursor> {
-        self.call(|session| {
-            result(unsafe { crate::tui_get_cursor(session) }, |value| {
-                Ok(cursor(value.cursor))
-            })
-        })
+        self.call(
+            "getCursor",
+            || Ok(Operation::GetCursor),
+            |value| match value {
+                OperationResult::Cursor(value) => Ok(cursor(value)),
+                _ => Err(internal("native operation returned an unexpected result")),
+            },
+        )
         .await
     }
-
     #[napi]
     pub async fn get_size(&self) -> Result<Size> {
-        self.call(|session| {
-            result(unsafe { crate::tui_get_size(session) }, |value| {
-                Ok(Size {
-                    cols: value.size.cols,
-                    rows: value.size.rows,
-                })
-            })
-        })
+        self.call(
+            "getSize",
+            || Ok(Operation::GetSize),
+            |value| match value {
+                OperationResult::Size(value) => Ok(Size {
+                    cols: value.cols,
+                    rows: value.rows,
+                }),
+                _ => Err(internal("native operation returned an unexpected result")),
+            },
+        )
         .await
     }
-
     #[napi]
     pub async fn get_bell_count(&self) -> Result<f64> {
-        self.call(|session| {
-            result(unsafe { crate::tui_get_bell_count(session) }, |value| {
-                Ok(value.number as f64)
-            })
-        })
+        self.call(
+            "getBellCount",
+            || Ok(Operation::GetBellCount),
+            |value| match value {
+                OperationResult::BellCount(value) => Ok(value as f64),
+                _ => Err(internal("native operation returned an unexpected result")),
+            },
+        )
         .await
     }
-
     #[napi]
     pub async fn get_bell_events(&self) -> Result<Vec<BellEvent>> {
-        self.call(|session| {
-            result(unsafe { crate::tui_get_bell_events(session) }, |value| {
-                Ok(array(value.bells, value.bells_len)
-                    .iter()
+        self.call(
+            "getBellEvents",
+            || Ok(Operation::GetBellEvents),
+            |value| match value {
+                OperationResult::BellEvents(value) => Ok(value
+                    .into_iter()
                     .map(|value| BellEvent {
                         sequence: value.sequence as f64,
                         elapsed_ms: value.elapsed_ms as f64,
                     })
-                    .collect())
-            })
-        })
+                    .collect()),
+                _ => Err(internal("native operation returned an unexpected result")),
+            },
+        )
         .await
     }
 
     #[napi]
     pub async fn write(&self, data: String) -> Result<()> {
-        self.call(move |session| {
-            result(unsafe { crate::tui_write(session, borrowed(&data)) }, unit)
-        })
-        .await
-    }
-
-    #[napi(js_name = "type")]
-    pub async fn type_text(&self, text: String) -> Result<()> {
-        self.call(move |session| result(unsafe { crate::tui_type(session, borrowed(&text)) }, unit))
+        self.call("write", move || Ok(Operation::Write { data }), unit)
             .await
     }
-
+    #[napi(js_name = "type")]
+    pub async fn type_text(&self, text: String) -> Result<()> {
+        self.call("type", move || Ok(Operation::Write { data: text }), unit)
+            .await
+    }
     #[napi]
     pub async fn submit(&self, data: Option<String>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe { crate::tui_submit(session, optional_borrowed(data.as_deref())) },
-                unit,
-            )
-        })
-        .await
+        self.call("submit", move || Ok(Operation::Submit { data }), unit)
+            .await
     }
-
     #[napi]
     pub async fn press(&self, keys: Vec<String>) -> Result<()> {
-        self.keys(keys, 0).await
+        self.call(
+            "press",
+            move || {
+                Ok(Operation::Key {
+                    keys,
+                    action: KeyAction::Press,
+                })
+            },
+            unit,
+        )
+        .await
     }
-
     #[napi]
     pub async fn key_down(&self, keys: Vec<String>) -> Result<()> {
-        self.keys(keys, 1).await
+        self.call(
+            "keyDown",
+            move || {
+                Ok(Operation::Key {
+                    keys,
+                    action: KeyAction::Down,
+                })
+            },
+            unit,
+        )
+        .await
     }
-
     #[napi]
     pub async fn repeat(&self, keys: Vec<String>) -> Result<()> {
-        self.keys(keys, 2).await
+        self.call(
+            "repeat",
+            move || {
+                Ok(Operation::Key {
+                    keys,
+                    action: KeyAction::Repeat,
+                })
+            },
+            unit,
+        )
+        .await
     }
-
     #[napi]
     pub async fn key_up(&self, keys: Vec<String>) -> Result<()> {
-        self.keys(keys, 3).await
+        self.call(
+            "keyUp",
+            move || {
+                Ok(Operation::Key {
+                    keys,
+                    action: KeyAction::Up,
+                })
+            },
+            unit,
+        )
+        .await
     }
 
     #[napi]
     pub async fn mouse_click(&self, options: Option<MouseClickOptions>) -> Result<()> {
         let options = options.unwrap_or_default();
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_mouse_click(
-                        session,
-                        optional_integer(options.x, "x", u16::MAX.into())?,
-                        optional_integer(options.y, "y", u16::MAX.into())?,
-                        optional_borrowed(options.on_text.as_deref()),
-                        mouse_options(options.button.unwrap_or(0.0))?,
-                        u8_value(options.clicks.unwrap_or(1.0), "clicks")?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "mouse.click",
+            move || {
+                Ok(Operation::Mouse {
+                    action: MouseAction::Click {
+                        x: optional_u16(options.x, "x")?,
+                        y: optional_u16(options.y, "y")?,
+                        on_text: options.on_text,
+                        options: mouse_options(options.button.unwrap_or(0.0))?,
+                        clicks: u8_value(options.clicks.unwrap_or(1.0), "clicks")?,
+                    },
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn mouse_move(&self, x: f64, y: f64) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe { crate::tui_mouse_move(session, u16_value(x, "x")?, u16_value(y, "y")?) },
-                unit,
-            )
-        })
+        self.call(
+            "mouse.move",
+            move || {
+                Ok(Operation::Mouse {
+                    action: MouseAction::Move {
+                        x: u16_value(x, "x")?,
+                        y: u16_value(y, "y")?,
+                    },
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn mouse_down(&self, x: f64, y: f64, button: Option<f64>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_mouse_down(
-                        session,
-                        u16_value(x, "x")?,
-                        u16_value(y, "y")?,
-                        mouse_options(button.unwrap_or(0.0))?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "mouse.down",
+            move || {
+                Ok(Operation::Mouse {
+                    action: MouseAction::Down {
+                        x: u16_value(x, "x")?,
+                        y: u16_value(y, "y")?,
+                        options: mouse_options(button.unwrap_or(0.0))?,
+                    },
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn mouse_up(&self, x: f64, y: f64, button: Option<f64>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_mouse_up(
-                        session,
-                        u16_value(x, "x")?,
-                        u16_value(y, "y")?,
-                        mouse_options(button.unwrap_or(0.0))?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "mouse.up",
+            move || {
+                Ok(Operation::Mouse {
+                    action: MouseAction::Up {
+                        x: u16_value(x, "x")?,
+                        y: u16_value(y, "y")?,
+                        options: mouse_options(button.unwrap_or(0.0))?,
+                    },
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn mouse_drag(
         &self,
@@ -660,106 +681,93 @@ impl NativeSession {
         y2: f64,
         button: Option<f64>,
     ) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_mouse_drag(
-                        session,
-                        u16_value(x1, "x1")?,
-                        u16_value(y1, "y1")?,
-                        u16_value(x2, "x2")?,
-                        u16_value(y2, "y2")?,
-                        mouse_options(button.unwrap_or(0.0))?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "mouse.drag",
+            move || {
+                Ok(Operation::Mouse {
+                    action: MouseAction::Drag {
+                        x1: u16_value(x1, "x1")?,
+                        y1: u16_value(y1, "y1")?,
+                        x2: u16_value(x2, "x2")?,
+                        y2: u16_value(y2, "y2")?,
+                        options: mouse_options(button.unwrap_or(0.0))?,
+                    },
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn mouse_scroll(&self, direction: String, amount: Option<f64>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_mouse_scroll(
-                        session,
-                        borrowed(&direction),
-                        u16_value(amount.unwrap_or(3.0), "amount")?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "mouse.scroll",
+            move || {
+                Ok(Operation::Mouse {
+                    action: MouseAction::Scroll {
+                        direction,
+                        amount: u16_value(amount.unwrap_or(3.0), "amount")?,
+                    },
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn resize(&self, cols: f64, rows: f64) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_resize(session, u16_value(cols, "cols")?, u16_value(rows, "rows")?)
-                },
-                unit,
-            )
-        })
+        self.call(
+            "resize",
+            move || {
+                Ok(Operation::Resize {
+                    cols: u16_value(cols, "cols")?,
+                    rows: u16_value(rows, "rows")?,
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn signal(&self, name: String) -> Result<()> {
-        self.call(move |session| {
-            result(unsafe { crate::tui_signal(session, borrowed(&name)) }, unit)
-        })
-        .await
+        self.call("signal", move || Ok(Operation::Signal { name }), unit)
+            .await
     }
 
     #[napi]
     pub async fn wait_title(&self, text: String, options: Option<TitleOptions>) -> Result<()> {
         let options = options.unwrap_or_default();
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_wait_title(
-                        session,
-                        borrowed(&text),
-                        wait_options(
-                            options.timeout_ms,
-                            options.regex.unwrap_or(false),
-                            options.not.unwrap_or(false),
-                        )?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "waitTitle",
+            move || {
+                Ok(Operation::WaitTitle {
+                    text,
+                    regex: options.regex.unwrap_or(false),
+                    not: options.not.unwrap_or(false),
+                    timeout_ms: optional_integer(options.timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn expect_title(&self, text: String, options: Option<TitleOptions>) -> Result<()> {
         let options = options.unwrap_or_default();
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_expect_title(
-                        session,
-                        borrowed(&text),
-                        wait_options(
-                            options.timeout_ms,
-                            options.regex.unwrap_or(false),
-                            options.not.unwrap_or(false),
-                        )?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "expectTitle",
+            move || {
+                Ok(Operation::ExpectTitle {
+                    text,
+                    regex: options.regex.unwrap_or(false),
+                    not: options.not.unwrap_or(false),
+                    timeout_ms: optional_integer(options.timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn wait_clipboard(
         &self,
@@ -767,145 +775,135 @@ impl NativeSession {
         options: Option<ClipboardWaitOptions>,
     ) -> Result<()> {
         let options = options.unwrap_or_default();
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_wait_clipboard(
-                        session,
-                        optional_borrowed(text.as_deref()),
-                        wait_options(options.timeout_ms, options.regex.unwrap_or(false), false)?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "waitClipboard",
+            move || {
+                let timeout_ms = optional_integer(options.timeout_ms, "timeoutMs", u64::MAX)?;
+                match text {
+                    Some(text) => Ok(Operation::WaitClipboardMatch {
+                        pattern: if options.regex.unwrap_or(false) {
+                            api::ClipboardPattern::regex(&text)
+                                .map_err(|error| usage(format!("invalid regex: {error}")))?
+                        } else {
+                            text.into()
+                        },
+                        timeout_ms,
+                    }),
+                    None if options.regex.unwrap_or(false) => {
+                        Err(usage("clipboard regex requires text"))
+                    }
+                    None => Ok(Operation::WaitClipboard { timeout_ms }),
+                }
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn wait_idle(&self, timeout_ms: Option<f64>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_wait_idle(
-                        session,
-                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "waitIdle",
+            move || {
+                Ok(Operation::WaitIdle {
+                    timeout_ms: optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn wait_command(&self, timeout_ms: Option<f64>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_wait_command(
-                        session,
-                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "waitCommand",
+            move || {
+                Ok(Operation::WaitCommand {
+                    timeout_ms: optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn wait_exit(&self, timeout_ms: Option<f64>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_wait_exit(
-                        session,
-                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "waitExit",
+            move || {
+                Ok(Operation::WaitExit {
+                    timeout_ms: optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn wait_ready(&self, timeout_ms: Option<f64>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_wait_ready(
-                        session,
-                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "waitReady",
+            move || {
+                Ok(Operation::WaitReady {
+                    timeout_ms: optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn wait_bell(&self, timeout_ms: Option<f64>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_wait_bell(
-                        session,
-                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "waitBell",
+            move || {
+                Ok(Operation::WaitBell {
+                    timeout_ms: optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn expect_exit_code(&self, code: f64, timeout_ms: Option<f64>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_expect_exit_code(
-                        session,
-                        i32_value(code, "code")?,
-                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "expectExitCode",
+            move || {
+                Ok(Operation::ExpectExitCode {
+                    code: i32_value(code, "code")?,
+                    timeout_ms: optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn expect_output(&self, text: String, regex: Option<bool>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_expect_output(session, borrowed(&text), regex.unwrap_or(false))
-                },
-                unit,
-            )
-        })
+        self.call(
+            "expectOutput",
+            move || {
+                Ok(Operation::ExpectOutput {
+                    text,
+                    regex: regex.unwrap_or(false),
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn expect_bell_count(&self, count: f64, timeout_ms: Option<f64>) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_expect_bell_count(
-                        session,
-                        integer(count, "count", u64::MAX)?,
-                        optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
-                    )
-                },
-                unit,
-            )
-        })
+        self.call(
+            "expectBellCount",
+            move || {
+                Ok(Operation::ExpectBellCount {
+                    count: integer(count, "count", u64::MAX)?,
+                    timeout_ms: optional_integer(timeout_ms, "timeoutMs", u64::MAX)?,
+                })
+            },
+            unit,
+        )
         .await
     }
 
@@ -916,117 +914,91 @@ impl NativeSession {
         options: Option<SnapshotOptions>,
     ) -> Result<SnapshotResult> {
         let options = options.unwrap_or_default();
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_snapshot(
-                        session,
-                        borrowed(&name),
-                        options.update.unwrap_or(false),
-                        options.include_style.unwrap_or(false),
-                        options.include_title.unwrap_or(false),
-                        optional_borrowed(options.cwd.as_deref()),
-                    )
-                },
-                |value| match value.snapshot {
-                    0 => Ok(SnapshotResult::Passed),
-                    1 => Ok(SnapshotResult::Written),
-                    2 => Ok(SnapshotResult::Updated),
-                    _ => Err(internal(
-                        "native operation returned an unknown snapshot result",
-                    )),
-                },
-            )
-        })
+        self.call(
+            "expectSnapshot",
+            move || {
+                Ok(Operation::Snapshot {
+                    name,
+                    update: options.update.unwrap_or(false),
+                    include_style: options.include_style.unwrap_or(false),
+                    include_title: options.include_title.unwrap_or(false),
+                    cwd: options.cwd,
+                })
+            },
+            |value| match value {
+                OperationResult::Snapshot(value) => Ok(match value {
+                    api::SnapshotResult::Passed => SnapshotResult::Passed,
+                    api::SnapshotResult::Written => SnapshotResult::Written,
+                    api::SnapshotResult::Updated => SnapshotResult::Updated,
+                }),
+                _ => Err(internal("native operation returned an unexpected result")),
+            },
+        )
         .await
     }
-
     #[napi]
     pub async fn screenshot(&self, options: Option<ScreenshotOptions>) -> Result<String> {
         let options = options.unwrap_or_default();
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_screenshot(
-                        session,
-                        options.full.unwrap_or(false),
-                        optional_borrowed(options.path.as_deref()),
-                        optional_float(options.zoom),
-                        optional_borrowed(options.background.as_deref()),
+        self.call(
+            "screenshot",
+            move || {
+                Ok(Operation::Screenshot {
+                    full: options.full.unwrap_or(false),
+                    path: options.path,
+                    zoom: options.zoom,
+                    background: session::capture_background(
+                        options.background,
                         options.transparent.unwrap_or(false),
                     )
-                },
-                string_result,
-            )
-        })
+                    .map_err(native_error)?,
+                })
+            },
+            string_result,
+        )
         .await
     }
-
     #[napi]
     pub async fn start_recording(&self, options: RecordingOptions) -> Result<()> {
-        self.call(move |session| {
-            result(
-                unsafe {
-                    crate::tui_start_recording(
-                        session,
-                        TuiRecordingOptions {
-                            path: borrowed(&options.path),
-                            format: optional_borrowed(options.format.as_ref().map(|format| {
-                                match format {
-                                    RecordingFormat::Apng => "apng",
-                                    RecordingFormat::Gif => "gif",
-                                    RecordingFormat::Mp4 => "mp4",
-                                    RecordingFormat::Cast => "cast",
-                                }
-                            })),
-                            fps: optional_integer(options.fps, "fps", u8::MAX.into())?,
-                            speed: optional_float(options.speed),
-                            idle_time_limit: optional_float(options.idle_time_limit),
-                            zoom: optional_float(options.zoom),
-                            background: optional_borrowed(options.background.as_deref()),
-                            transparent: options.transparent.unwrap_or(false),
-                        },
+        self.call(
+            "startRecording",
+            move || {
+                Ok(Operation::StartRecording {
+                    path: options.path,
+                    format: options.format.map(|format| match format {
+                        RecordingFormat::Apng => api::RecordingFormat::Apng,
+                        RecordingFormat::Gif => api::RecordingFormat::Gif,
+                        RecordingFormat::Mp4 => api::RecordingFormat::Mp4,
+                        RecordingFormat::Cast => api::RecordingFormat::Cast,
+                    }),
+                    fps: options.fps.map(|fps| u8_value(fps, "fps")).transpose()?,
+                    speed: options.speed,
+                    idle_time_limit: options.idle_time_limit,
+                    zoom: options.zoom,
+                    background: session::capture_background(
+                        options.background,
+                        options.transparent.unwrap_or(false),
                     )
-                },
-                unit,
-            )
-        })
+                    .map_err(native_error)?,
+                })
+            },
+            unit,
+        )
         .await
     }
-
     #[napi]
     pub async fn stop_recording(&self) -> Result<String> {
-        self.call(|session| result(unsafe { crate::tui_stop_recording(session) }, string_result))
-            .await
-    }
-}
-
-impl NativeSession {
-    async fn keys(&self, keys: Vec<String>, action: u32) -> Result<()> {
-        self.call(move |session| {
-            let borrowed_keys: Vec<_> = keys.iter().map(|value| borrowed(value)).collect();
-            result(
-                unsafe {
-                    crate::tui_key(session, borrowed_keys.as_ptr(), borrowed_keys.len(), action)
-                },
-                unit,
-            )
-        })
+        self.call(
+            "stopRecording",
+            || Ok(Operation::StopRecording),
+            string_result,
+        )
         .await
     }
 }
 
 #[napi]
 pub async fn sessions() -> Result<Vec<String>> {
-    blocking(|| {
-        result(crate::tui_sessions(), |value| {
-            Ok(array(value.strings, value.strings_len)
-                .iter()
-                .map(|value| text(*value))
-                .collect())
-        })
-    })
-    .await
+    blocking(|| Ok(global_registry().sessions())).await
 }
 
 #[napi]
@@ -1036,16 +1008,13 @@ pub async fn close_all() -> Result<()> {
 
 #[napi]
 pub fn close_all_sync() -> Result<()> {
-    boundary(|| result(crate::tui_close_all(), unit))
+    boundary(|| {
+        global_registry().close_all();
+        Ok(())
+    })
 }
 
 #[napi]
 pub async fn recording(name: String) -> Result<String> {
-    blocking(move || {
-        result(
-            unsafe { crate::tui_recording(borrowed(&name)) },
-            string_result,
-        )
-    })
-    .await
+    blocking(move || string_result(session::recording(&name).map_err(native_error)?)).await
 }

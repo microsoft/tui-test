@@ -597,8 +597,12 @@ test("private packed screens retain full UTF-8 logical rows and own their bytes"
     const second = await runtime.packedScreen(false);
     assert.notStrictEqual(first.utf8, second.utf8);
     assert.match(decoder.decode(second.utf8), /I🙂R/);
+    const retainedBytes = Uint8Array.from(second.utf8);
+    const retainedCells = structuredClone(cells);
     await su.close();
     assert.equal(first.utf8.length > 0, true);
+    assert.deepEqual(Uint8Array.from(second.utf8), retainedBytes);
+    assert.deepEqual(cells, retainedCells);
   } finally {
     await su.closeQuiet();
   }

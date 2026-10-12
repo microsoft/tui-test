@@ -16,7 +16,7 @@ The library stays loaded for the process lifetime.
 Terminal behavior, session synchronization, locator evaluation, assertions, diagnostics, traces, artifacts, and recording remain in the Rust engine. Go owns option ergonomics, query construction, error presentation, and test cleanup. The `tuitesttest` package reports the test result through failure-aware close so the engine can retain on-failure traces. Keep new terminal behavior in the engine so language bindings share it.
 
 The native library and Go module must come from the same source revision.
-The C ABI is an internal contract shared by all language bindings, not a stable public C SDK.
+The C ABI is an internal contract shared by Go and Python, not a stable public C SDK.
 Native allocations must be released by their matching Rust functions, and native code must not retain Go pointers.
 
 `internal/native/abi.go` and `internal/native/functions.go` are generated from the Rust ABI declarations.

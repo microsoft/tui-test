@@ -167,6 +167,49 @@ test("native constructor validation errors use the public error taxonomy", async
 
 import { NativeSession } from "../native/index.js";
 
+test("owned native inputs preserve numeric and operation validation", async () => {
+  const session = new NativeSession(`owned-validation-${process.pid}`);
+  const failures = [
+    [() => session.open({ cols: 65536 }), /cols must be an integer between 0 and 65535/],
+    [() => session.open({ timeouts: { text: Number.NaN } }), /timeouts.text must be an integer/],
+    [() => session.run({ program: "" }), /program must not be empty/],
+    [() => session.run({ program: "unused", screenHistoryLimit: 65535 }), /screen history limit/],
+    [() => session.resize(1.5, 20), /cols must be an integer/],
+    [() => session.waitIdle(Number.MAX_SAFE_INTEGER + 1), /timeoutMs must be an integer/],
+    [() => session.mouseDown(0, 0, 3), /invalid mouse button code 3/],
+    [() => session.mouseClick({ x: -1 }), /x must be an integer/],
+    [() => session.expectExitCode(2147483648), /code must be an integer/],
+    [() => session.startRecording({ path: "unused", fps: 256 }), /fps must be an integer/],
+    [() => session.screenshot({ background: "#000000", transparent: true }), /background and transparent options conflict/],
+    [() => session.waitClipboard(undefined, { regex: true }), /clipboard regex requires text/],
+    [() => session.waitClipboard("[", { regex: true }), /invalid regex/],
+  ];
+  for (const [call, message] of failures) {
+    await assert.rejects(call, (error) => {
+      const mapped = mapNativeError(error);
+      assert.ok(mapped instanceof UsageError, mapped.message);
+      assert.match(mapped.message, message);
+      return true;
+    });
+  }
+  await session.close(false);
+  await session.close(true);
+});
+
+test("owned session contexts validate each call without changing caller options", async () => {
+  const trace = { mode: "invalid", directory: "" };
+  const session = new NativeSession(`owned-context-${process.pid}`, undefined, undefined, trace);
+  for (const call of [() => session.state(), () => session.open(), () => session.close(false)]) {
+    await assert.rejects(call, (error) => {
+      const mapped = mapNativeError(error);
+      assert.ok(mapped instanceof UsageError);
+      assert.match(mapped.message, /unknown trace mode/);
+      return true;
+    });
+  }
+  assert.deepEqual(trace, { mode: "invalid", directory: "" });
+});
+
 test("locator expressions reject invalid fields and references", async () => {
   const session = new NativeSession(`invalid-expression-${process.pid}`);
   for (const node of [

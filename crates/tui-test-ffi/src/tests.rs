@@ -133,6 +133,70 @@ fn close_is_attempted_when_trace_finalization_fails() {
         || Ok(OperationResult::Unit),
     );
     assert!(matches!(result, Ok(OperationResult::Unit)));
+
+    let error = finish_trace_and_close(
+        || Err(TuiTestError::new(ErrorKind::NoSession, "trace missing")),
+        || Err(TuiTestError::internal("close failed")),
+    )
+    .unwrap_err();
+    assert_eq!(error.message, "close failed");
+}
+
+#[test]
+fn c_context_and_owned_context_share_validation() {
+    for (field, value) in [
+        ("artifact_mode", serde_json::json!("invalid")),
+        ("trace_mode", serde_json::json!("invalid")),
+        ("screen_history_limit", serde_json::json!(65535)),
+        ("trace_directory", serde_json::json!("")),
+    ] {
+        let mut context = serde_json::json!({"name": "ffi-context", "trace_mode": "on"});
+        context[field] = value;
+        let owned = serde_json::from_value::<session::SessionInput>(context.clone())
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        let encoded = context.to_string();
+        let result = unsafe { tui_state(text(&encoded)) };
+        assert_eq!(
+            unsafe { (*result).error_kind },
+            owned.kind.exit_code() as u32
+        );
+        assert_eq!(unsafe { message(result) }, owned.message);
+        unsafe { tui_result_free(result) };
+    }
+
+    let context = session::SessionInput {
+        name: "ffi-context".into(),
+        screen_history_limit: Some(0),
+        ..Default::default()
+    };
+    let (name, validated) = context.clone().validate().unwrap();
+    assert_eq!(validated.retention.screen_history_limit, 0);
+    let error = session::execute(name, validated, "state", Operation::State).unwrap_err();
+    assert_eq!(error.kind, ErrorKind::NoSession);
+    assert_eq!(context.screen_history_limit, Some(0));
+
+    let result = unsafe { tui_state(text(r#"{"name":"ffi-context","unknown":true}"#)) };
+    assert_eq!(unsafe { (*result).error_kind }, 2);
+    assert!(unsafe { message(result) }.contains("unknown field"));
+    unsafe { tui_result_free(result) };
+}
+
+#[test]
+fn shared_close_preserves_missing_session_behavior() {
+    for failed in [None, Some(false), Some(true)] {
+        let (name, context) = session::SessionInput {
+            name: "ffi-close-missing".into(),
+            ..Default::default()
+        }
+        .validate()
+        .unwrap();
+        assert!(matches!(
+            session::close(name, context, failed),
+            Ok(OperationResult::Unit)
+        ));
+    }
 }
 #[test]
 fn output_buffers_preserve_nuls_unicode_and_absence() {

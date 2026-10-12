@@ -1,12 +1,10 @@
+use crate::session::SessionInput;
 use crate::types::*;
 use tui_test::api::*;
 use tui_test::locator_query::LocatorExpression;
 use tui_test::profile::{Profile, Rgb};
 use tui_test::shell::Shell;
-use tui_test::{
-    DiagnosticRetentionOptions, ExecutionContext, FailureArtifactMode, FailureArtifactOptions,
-    TraceMode, TraceOptions,
-};
+use tui_test::ExecutionContext;
 
 type Result<T> = std::result::Result<T, TuiTestError>;
 
@@ -66,89 +64,11 @@ pub(crate) unsafe fn strings(data: *const TuiString, len: usize) -> Result<Vec<S
         .map(|s| unsafe { s.required() })
         .collect()
 }
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SessionInput {
-    name: String,
-    #[serde(default)]
-    artifact_directory: Option<String>,
-    #[serde(default)]
-    artifact_mode: Option<String>,
-    #[serde(default)]
-    artifact_include_recording: bool,
-    #[serde(default)]
-    trace_mode: Option<String>,
-    #[serde(default)]
-    trace_directory: Option<String>,
-    #[serde(default)]
-    screen_history_limit: Option<u16>,
-}
-
 pub(crate) unsafe fn session(value: TuiString) -> Result<(String, ExecutionContext)> {
     let json = unsafe { value.required()? };
     let value: SessionInput = serde_json::from_str(&json)
         .map_err(|error| TuiTestError::usage(format!("invalid native session context: {error}")))?;
-    let artifact = match value.artifact_mode {
-        None => None,
-        Some(mode) => {
-            let mode = match mode.as_str() {
-                "all" => FailureArtifactMode::All,
-                "html" => FailureArtifactMode::Html,
-                "text" => FailureArtifactMode::Text,
-                "none" => FailureArtifactMode::None,
-                other => {
-                    return Err(TuiTestError::usage(format!(
-                        "unknown failure artifact mode {other:?}; expected all, html, text, or none"
-                    )))
-                }
-            };
-            let options = FailureArtifactOptions {
-                directory: value.artifact_directory.unwrap_or_default().into(),
-                mode,
-                include_recording: value.artifact_include_recording,
-            };
-            options.validate().map_err(TuiTestError::usage)?;
-            Some(options)
-        }
-    };
-    let trace = match value.trace_mode {
-        None => None,
-        Some(mode) => {
-            let mode = match mode.as_str() {
-                "off" => TraceMode::Off,
-                "on-failure" => TraceMode::OnFailure,
-                "on" => TraceMode::On,
-                other => {
-                    return Err(TuiTestError::usage(format!(
-                        "unknown trace mode {other:?}; expected off, on-failure, or on"
-                    )))
-                }
-            };
-            let options = TraceOptions {
-                mode,
-                directory: value
-                    .trace_directory
-                    .map(Into::into)
-                    .unwrap_or_else(|| TraceOptions::default().directory),
-            };
-            options.validate().map_err(TuiTestError::usage)?;
-            Some(options)
-        }
-    };
-    let mut retention = DiagnosticRetentionOptions::default();
-    if let Some(limit) = value.screen_history_limit {
-        retention.screen_history_limit = limit;
-    }
-    retention.validate().map_err(TuiTestError::usage)?;
-    Ok((
-        value.name,
-        ExecutionContext {
-            artifact,
-            trace,
-            retention,
-            ..ExecutionContext::default()
-        },
-    ))
+    value.validate()
 }
 unsafe fn pairs(data: *const TuiPair, len: usize) -> Result<Vec<(String, String)>> {
     unsafe { slice(data, len)? }
@@ -259,18 +179,7 @@ pub(crate) unsafe fn capture_background(
     background: TuiString,
     transparent: bool,
 ) -> Result<Option<CaptureBackground>> {
-    let background = unsafe { background.optional()? };
-    if background.is_some() && transparent {
-        return Err(TuiTestError::usage(
-            "background and transparent options conflict",
-        ));
-    }
-    if transparent {
-        return Ok(Some(CaptureBackground::Transparent));
-    }
-    background
-        .map(|value| CaptureBackground::parse(&value))
-        .transpose()
+    crate::session::capture_background(unsafe { background.optional()? }, transparent)
 }
 pub(crate) unsafe fn recording(value: TuiRecordingOptions) -> Result<Operation> {
     let format = unsafe { value.format.optional()? }

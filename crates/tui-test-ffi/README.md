@@ -3,7 +3,9 @@
 `tui-test-ffi` exposes the Rust engine through a typed C ABI.
 Go uses `purego`, and Python uses `ctypes`, to load the default shared library.
 The optional `napi` feature adds the JavaScript adapter to this crate.
-That adapter calls the C ABI functions directly and produces one self-contained `.node` addon.
+That adapter constructs Rust `Operation` values and converts owned `OperationResult` values directly.
+Both adapters share safe Rust execution, context validation, and close logic.
+The JavaScript build produces one self-contained `.node` addon without C ABI calls or result pointers.
 The default build has no N-API dependencies.
 
 The library and language package must come from the same source revision.
@@ -41,8 +43,11 @@ node --input-type=module -e '
   import { TuiTest } from "./dist/index.js";
   const terminal = TuiTest.ephemeral();
   try {
-    await terminal.run(process.execPath, ["-e", "console.log(\"Ready\")"]);
-    await terminal.getByText("Ready").expect();
+    await terminal.run(process.execPath, ["-e", "console.log(\"Ready 界🙂\")"]);
+    await terminal.getByText("Ready 界🙂").expect();
+    await terminal.waitExit();
+    const state = await terminal.state();
+    console.log(`Terminal size: ${state.cols}x${state.rows}`);
     console.log(await terminal.text());
   } finally {
     await terminal.closeQuiet();
@@ -51,7 +56,7 @@ node --input-type=module -e '
 ```
 
 The build enables `--features napi` and writes the addon, loader, and declarations to `bindings/js/native/`.
-The example prints terminal text that contains `Ready`.
+The example prints the terminal size and text that contains `Ready 界🙂`.
 
 ## Generate declarations
 
@@ -65,13 +70,13 @@ cargo run --locked -p tui-test-bindgen -- --check
 
 The generator uses `cbindgen` for `include/tui_test.h`.
 It also generates the Go structs and function table, and Python `ctypes` declarations.
-The JavaScript adapter uses the canonical Rust ABI types without a generated function table.
+The JavaScript adapter uses Rust operations and its own JavaScript DTOs, not the C ABI declarations.
 Run the generator with Go and Rust formatters on `PATH`.
 
 The language adapters still own asynchronous execution, error presentation, input storage, and result conversion.
 They do not implement terminal behavior.
 
-## Ownership
+## C ABI ownership
 
 Input buffers must remain valid until a call returns. The engine copies inputs before it executes an operation.
 A null string pointer means absent. A non-null pointer with zero length means an explicit empty string.
@@ -83,3 +88,10 @@ Check `error_kind` before reading a successful result.
 
 Keep the library loaded while any call or allocation remains active.
 Increase `ABI_VERSION` when a change makes existing declarations incompatible.
+
+## JavaScript ownership
+
+The N-API adapter moves owned strings, arrays, and screen bytes from Rust results into JavaScript values.
+It does not allocate or free C ABI results.
+Blocking workers execute operations with a typed session context; they do not serialize that context for each call.
+The adapter retains JavaScript numeric validation and the structured error envelope.
