@@ -29,6 +29,8 @@ func TestTerminalProcess(t *testing.T) {
 			os.Exit(0)
 		case "events":
 			fmt.Print("\x1b]2;Go title\x07\x1b]52;c;Z28tY2xpcGJvYXJk\x07\x07\r\nevents-done\r\n")
+		case "raster":
+			fmt.Print("\x1b[2J\x1b[Hgo-raster-ready\r\n")
 		default:
 			fmt.Printf("received:%s\r\n", scanner.Text())
 		}
@@ -249,6 +251,9 @@ func TestScreenshotsAndSnapshots(t *testing.T) {
 	if _, statErr := os.Stat(path); statErr != nil {
 		t.Fatal(statErr)
 	}
+	// Raster tests use bundled font coverage rather than host CJK fonts.
+	requireNoError(t, terminal.Submit(tuitest.Ptr("raster")))
+	requireNoError(t, terminal.GetByText("go-raster-ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}))
 	transparent, err := terminal.Screenshot(filepath.Join(directory, "transparent.png"), tuitest.ScreenshotOptions{Transparent: true})
 	requireNoError(t, err)
 	if _, statErr := os.Stat(transparent); statErr != nil {
