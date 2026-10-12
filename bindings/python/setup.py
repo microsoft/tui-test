@@ -41,6 +41,9 @@ class SourceDistribution(sdist):
         if destination.is_dir():
             return
         destination.mkdir()
+        cargo_config = Path(base_dir) / ".cargo"
+        cargo_config.mkdir(exist_ok=True)
+        shutil.copy2(RUST_ROOT / ".cargo/config.toml", cargo_config / "config.toml")
         for filename in ("Cargo.lock", "LICENSE", "README.md"):
             shutil.copy2(RUST_ROOT / filename, destination / filename)
         manifest = (RUST_ROOT / "Cargo.toml").read_text(encoding="utf-8")
@@ -57,6 +60,8 @@ class SourceDistribution(sdist):
             target = destination / "crates" / crate
             target.mkdir(parents=True)
             shutil.copy2(source / "Cargo.toml", target / "Cargo.toml")
+            if (source / "build.rs").is_file():
+                shutil.copy2(source / "build.rs", target / "build.rs")
             for directory in ("src", "assets", "shell", "include"):
                 if (source / directory).is_dir():
                     shutil.copytree(source / directory, target / directory)

@@ -19,9 +19,6 @@
     "native/index.js",
     "native/index.d.ts",
     "native/*.node",
-    "native/*.dylib",
-    "native/*.so",
-    "native/*.dll",
     "README.md"
   ],
   "engines": {

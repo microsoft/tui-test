@@ -11,7 +11,15 @@ publish = false
 name = "tui_test_ffi"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+napi = ["dep:napi", "dep:napi-derive", "dep:napi-build"]
+
 [dependencies]
+napi = { version = "3", default-features = false, features = ["napi4", "dyn-symbols", "async"], optional = true }
+napi-derive = { version = "3", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 tui-test = { workspace = true, features = ["ghostty", "rio", "xtermjs", "recording-font-jetbrains-mono-styles"] }
+
+[build-dependencies]
+napi-build = { version = "2", optional = true }

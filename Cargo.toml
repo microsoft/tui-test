@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "bindings/js",
     "crates/tui-test",
     "crates/tui-test-cli",
     "crates/tui-test-ffi",

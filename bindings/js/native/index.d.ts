@@ -117,8 +117,6 @@ export declare function closeAllSync(): void
 export type Color =
   number | string
 
-export declare function configureLibrary(path: string): void
-
 export interface Cursor {
   x: number
   y: number

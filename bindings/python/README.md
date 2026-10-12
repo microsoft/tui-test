@@ -28,7 +28,8 @@ env -u CARGO_TARGET_DIR python -m build bindings/python
 
 The build uses `setuptools-rust` with `Binding.NoBinding`. Wheels use
 `py3-none-<platform>` tags. The source distribution includes the shared ABI,
-the Rust engine, and their assets. Source builds need Cargo dependency access.
+the Rust engine, their assets, and the Cargo configuration that separates backend symbols.
+Source builds need Cargo dependency access.
 
 For cross builds, set `CARGO_BUILD_TARGET` and pass
 `-C--build-option=--plat-name=<platform>` to `python -m build --wheel`.

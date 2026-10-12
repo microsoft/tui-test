@@ -1,4 +1,5 @@
-use super::{abi::*, internal, types::*, usage, MAX_SAFE_INTEGER};
+use super::{internal, types::*, usage, MAX_SAFE_INTEGER};
+use crate::types::*;
 use napi::bindgen_prelude::Either;
 use napi::Result;
 

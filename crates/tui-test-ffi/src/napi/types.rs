@@ -1,4 +1,4 @@
-use napi::bindgen_prelude::{
+use ::napi::bindgen_prelude::{
     Buffer, Either, FromNapiValue, JsObjectValue, Object, ValidateNapiValue,
 };
 use napi::{Error, Result, Status};

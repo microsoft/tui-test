@@ -101,16 +101,6 @@ fn main() -> Result<()> {
         &python(&structs, &functions, &version)?,
         check,
     )?;
-    emit(
-        &root,
-        "bindings/js/native/abi.rs",
-        &format_source(
-            "rustfmt",
-            &["--edition", "2021", "--emit", "stdout"],
-            &rust(&types_source, &functions, &version)?,
-        )?,
-        check,
-    )?;
     Ok(())
 }
 
@@ -375,33 +365,6 @@ fn python(structs: &[&ItemStruct], functions: &[&ItemFn], version: &str) -> Resu
             function.sig.ident, function.sig.ident
         )?;
     }
-    Ok(out)
-}
-
-fn rust(types: &str, functions: &[&ItemFn], version: &str) -> Result<String> {
-    let mut out = format!("// {NOTICE}\n#![allow(dead_code)]\n{types}\npub const ABI_VERSION: u32 = {version};\n\npub struct Functions {{\n");
-    for function in functions {
-        let args = arguments(function)?
-            .into_iter()
-            .map(|ty| ty.to_token_stream().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        writeln!(
-            out,
-            "pub {}: unsafe extern \"C\" fn({args}) {},",
-            function.sig.ident,
-            function.sig.output.to_token_stream()
-        )?;
-    }
-    out.push_str("}\nimpl Functions {\n/// # Safety\n/// The library must implement this ABI and outlive all calls through this table.\npub unsafe fn load(library: &libloading::Library) -> Result<Self, libloading::Error> {\nOk(Self {\n");
-    for function in functions {
-        writeln!(
-            out,
-            "{}: unsafe {{ *library.get(b\"{}\\0\")? }},",
-            function.sig.ident, function.sig.ident
-        )?;
-    }
-    out.push_str("})\n}\n}\n");
     Ok(out)
 }
 

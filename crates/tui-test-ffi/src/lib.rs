@@ -2,6 +2,8 @@
 //! remain valid for the call. Inputs are copied before entering the engine;
 //! output storage belongs to Rust until tui_result_free is called.
 mod input;
+#[cfg(all(feature = "napi", not(test)))]
+mod napi;
 mod output;
 mod types;
 use std::panic::{catch_unwind, AssertUnwindSafe};
