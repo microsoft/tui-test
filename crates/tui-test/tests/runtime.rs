@@ -2320,7 +2320,7 @@ fn recording_export_matches_the_session_backend_and_profile() {
             ),
             (
                 "existing-alternate-screen",
-                "\\033[?25lPRIMARY\\033[?47h\\033[H\\033[2JREADY",
+                "\\033[?25lPRIMARY\\033[?1049h\\033[H\\033[2JREADY",
                 "\\033[?1049l",
             ),
             ("resize-without-output", "\\033[?25lREADY", ""),
