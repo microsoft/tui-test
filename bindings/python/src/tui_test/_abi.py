@@ -28,27 +28,23 @@ class TuiPair(ctypes.Structure):
     pass
 
 
-class TuiTimeouts(ctypes.Structure):
-    pass
-
-
-class TuiOpenOptions(ctypes.Structure):
-    pass
-
-
 class TuiQuery(ctypes.Structure):
     pass
 
 
-class TuiWaitOptions(ctypes.Structure):
+class TuiMode(ctypes.Structure):
     pass
 
 
-class TuiMouseOptions(ctypes.Structure):
+class TuiColor(ctypes.Structure):
     pass
 
 
-class TuiRecordingOptions(ctypes.Structure):
+class TuiResult(ctypes.Structure):
+    pass
+
+
+class TuiOpenResult(ctypes.Structure):
     pass
 
 
@@ -60,7 +56,7 @@ class TuiSize(ctypes.Structure):
     pass
 
 
-class TuiOpenResult(ctypes.Structure):
+class TuiBellEvent(ctypes.Structure):
     pass
 
 
@@ -68,15 +64,7 @@ class TuiState(ctypes.Structure):
     pass
 
 
-class TuiMode(ctypes.Structure):
-    pass
-
-
 class TuiTerminalColors(ctypes.Structure):
-    pass
-
-
-class TuiColor(ctypes.Structure):
     pass
 
 
@@ -96,11 +84,23 @@ class TuiMatch(ctypes.Structure):
     pass
 
 
-class TuiBellEvent(ctypes.Structure):
+class TuiTimeouts(ctypes.Structure):
     pass
 
 
-class TuiResult(ctypes.Structure):
+class TuiOpenOptions(ctypes.Structure):
+    pass
+
+
+class TuiMouseOptions(ctypes.Structure):
+    pass
+
+
+class TuiWaitOptions(ctypes.Structure):
+    pass
+
+
+class TuiRecordingOptions(ctypes.Structure):
     pass
 
 
@@ -140,63 +140,31 @@ TuiPair._fields_ = [
 ]
 
 
-TuiTimeouts._fields_ = [
-    ("text", TuiOptionalU64),
-    ("idle", TuiOptionalU64),
-    ("command", TuiOptionalU64),
-    ("exit", TuiOptionalU64),
-    ("ready", TuiOptionalU64),
-]
-
-
-TuiOpenOptions._fields_ = [
-    ("backend", TuiString),
-    ("shell", TuiString),
-    ("cols", TuiOptionalU64),
-    ("rows", TuiOptionalU64),
-    ("cwd", TuiString),
-    ("env", ctypes.POINTER(TuiPair)),
-    ("env_len", ctypes.c_size_t),
-    ("wait_ready", TuiOptionalBool),
-    ("restart", ctypes.c_bool),
-    ("scrollback", TuiOptionalU64),
-    ("colors", ctypes.POINTER(TuiPair)),
-    ("colors_len", ctypes.c_size_t),
-    ("timeouts", TuiTimeouts),
-    ("recording_mode", TuiString),
-    ("recording_directory", TuiString),
-]
-
-
 TuiQuery._fields_ = [
     ("json", TuiString),
 ]
 
 
-TuiWaitOptions._fields_ = [
-    ("timeout_ms", TuiOptionalU64),
-    ("regex", ctypes.c_bool),
-    ("not", ctypes.c_bool),
+TuiMode._fields_ = [
+    ("name", TuiString),
+    ("enabled", ctypes.c_bool),
 ]
 
 
-TuiMouseOptions._fields_ = [
-    ("button", ctypes.c_uint32),
-    ("alt", ctypes.c_bool),
-    ("ctrl", ctypes.c_bool),
-    ("shift", ctypes.c_bool),
+TuiColor._fields_ = [
+    ("kind", ctypes.c_uint32),
+    ("index", ctypes.c_uint8),
+    ("red", ctypes.c_uint8),
+    ("green", ctypes.c_uint8),
+    ("blue", ctypes.c_uint8),
 ]
 
 
-TuiRecordingOptions._fields_ = [
-    ("path", TuiString),
-    ("format", TuiString),
-    ("fps", TuiOptionalU64),
-    ("speed", TuiOptionalF64),
-    ("idle_time_limit", TuiOptionalF64),
-    ("zoom", TuiOptionalF64),
-    ("background", TuiString),
-    ("transparent", ctypes.c_bool),
+TuiOpenResult._fields_ = [
+    ("shell_pid", TuiOptionalU64),
+    ("session", TuiString),
+    ("ready", ctypes.c_bool),
+    ("recording", TuiString),
 ]
 
 
@@ -215,17 +183,9 @@ TuiSize._fields_ = [
 ]
 
 
-TuiOpenResult._fields_ = [
-    ("shell_pid", TuiOptionalU64),
-    ("session", TuiString),
-    ("ready", ctypes.c_bool),
-    ("recording", TuiString),
-]
-
-
-TuiMode._fields_ = [
-    ("name", TuiString),
-    ("enabled", ctypes.c_bool),
+TuiBellEvent._fields_ = [
+    ("sequence", ctypes.c_uint64),
+    ("elapsed_ms", ctypes.c_uint64),
 ]
 
 
@@ -235,15 +195,6 @@ TuiTerminalColors._fields_ = [
     ("cursor", TuiString),
     ("palette", ctypes.POINTER(TuiPair)),
     ("palette_len", ctypes.c_size_t),
-]
-
-
-TuiColor._fields_ = [
-    ("kind", ctypes.c_uint32),
-    ("index", ctypes.c_uint8),
-    ("red", ctypes.c_uint8),
-    ("green", ctypes.c_uint8),
-    ("blue", ctypes.c_uint8),
 ]
 
 
@@ -290,9 +241,58 @@ TuiMatch._fields_ = [
 ]
 
 
-TuiBellEvent._fields_ = [
-    ("sequence", ctypes.c_uint64),
-    ("elapsed_ms", ctypes.c_uint64),
+TuiTimeouts._fields_ = [
+    ("text", TuiOptionalU64),
+    ("idle", TuiOptionalU64),
+    ("command", TuiOptionalU64),
+    ("exit", TuiOptionalU64),
+    ("ready", TuiOptionalU64),
+]
+
+
+TuiOpenOptions._fields_ = [
+    ("backend", TuiString),
+    ("shell", TuiString),
+    ("cols", TuiOptionalU64),
+    ("rows", TuiOptionalU64),
+    ("cwd", TuiString),
+    ("env", ctypes.POINTER(TuiPair)),
+    ("env_len", ctypes.c_size_t),
+    ("wait_ready", TuiOptionalBool),
+    ("restart", ctypes.c_bool),
+    ("scrollback", TuiOptionalU64),
+    ("colors", ctypes.POINTER(TuiPair)),
+    ("colors_len", ctypes.c_size_t),
+    ("timeouts", TuiTimeouts),
+    ("recording_mode", TuiString),
+    ("recording_directory", TuiString),
+]
+
+
+TuiMouseOptions._fields_ = [
+    ("button", ctypes.c_uint32),
+    ("alt", ctypes.c_bool),
+    ("ctrl", ctypes.c_bool),
+    ("shift", ctypes.c_bool),
+]
+
+
+TuiWaitOptions._fields_ = [
+    ("timeout_ms", TuiOptionalU64),
+    ("regex", ctypes.c_bool),
+    ("not", ctypes.c_bool),
+]
+
+
+TuiRecordingOptions._fields_ = [
+    ("path", TuiString),
+    ("format", TuiString),
+    ("fps", TuiOptionalU64),
+    ("speed", TuiOptionalF64),
+    ("idle_time_limit", TuiOptionalF64),
+    ("zoom", TuiOptionalF64),
+    ("background", TuiString),
+    ("transparent", ctypes.c_bool),
 ]
 
 

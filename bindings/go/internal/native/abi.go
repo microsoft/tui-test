@@ -38,59 +38,53 @@ type abiPair struct {
 	key   abiString
 	value abiString
 }
-type abiTimeouts struct {
-	_       structs.HostLayout
-	text    abiOptionalU64
-	idle    abiOptionalU64
-	command abiOptionalU64
-	exit    abiOptionalU64
-	ready   abiOptionalU64
-}
-type abiOpenOptions struct {
-	_                  structs.HostLayout
-	backend            abiString
-	shell              abiString
-	cols               abiOptionalU64
-	rows               abiOptionalU64
-	cwd                abiString
-	env                *abiPair
-	envLen             uintptr
-	waitReady          abiOptionalBool
-	restart            bool
-	scrollback         abiOptionalU64
-	colors             *abiPair
-	colorsLen          uintptr
-	timeouts           abiTimeouts
-	recordingMode      abiString
-	recordingDirectory abiString
-}
 type abiQuery struct {
 	_    structs.HostLayout
 	json abiString
 }
-type abiWaitOptions struct {
-	_         structs.HostLayout
-	timeoutMS abiOptionalU64
-	regex     bool
-	not       bool
+type abiMode struct {
+	_       structs.HostLayout
+	name    abiString
+	enabled bool
 }
-type abiMouseOptions struct {
-	_      structs.HostLayout
-	button uint32
-	alt    bool
-	ctrl   bool
-	shift  bool
+type abiColor struct {
+	_     structs.HostLayout
+	kind  uint32
+	index uint8
+	red   uint8
+	green uint8
+	blue  uint8
 }
-type abiRecordingOptions struct {
+type abiResult struct {
 	_             structs.HostLayout
-	path          abiString
-	format        abiString
-	fps           abiOptionalU64
-	speed         abiOptionalF64
-	idleTimeLimit abiOptionalF64
-	zoom          abiOptionalF64
-	background    abiString
-	transparent   bool
+	errorKind     uint32
+	errorMessage  abiString
+	errorDetails  abiString
+	errorArtifact abiString
+	text          abiString
+	number        uint64
+	exitCode      abiOptionalI32
+	open          abiOpenResult
+	state         abiState
+	cursor        abiCursor
+	size          abiSize
+	cells         *abiCell
+	cellsLen      uintptr
+	matches       *abiMatch
+	matchesLen    uintptr
+	bells         *abiBellEvent
+	bellsLen      uintptr
+	strings       *abiString
+	stringsLen    uintptr
+	snapshot      uint32
+	privateData   unsafe.Pointer
+}
+type abiOpenResult struct {
+	_         structs.HostLayout
+	shellPID  abiOptionalU64
+	session   abiString
+	ready     bool
+	recording abiString
 }
 type abiCursor struct {
 	_       structs.HostLayout
@@ -105,12 +99,10 @@ type abiSize struct {
 	cols uint16
 	rows uint16
 }
-type abiOpenResult struct {
+type abiBellEvent struct {
 	_         structs.HostLayout
-	shellPID  abiOptionalU64
-	session   abiString
-	ready     bool
-	recording abiString
+	sequence  uint64
+	elapsedMS uint64
 }
 type abiState struct {
 	_            structs.HostLayout
@@ -133,11 +125,6 @@ type abiState struct {
 	timeouts     abiTimeouts
 	text         abiString
 }
-type abiMode struct {
-	_       structs.HostLayout
-	name    abiString
-	enabled bool
-}
 type abiTerminalColors struct {
 	_          structs.HostLayout
 	foreground abiString
@@ -145,14 +132,6 @@ type abiTerminalColors struct {
 	cursor     abiString
 	palette    *abiPair
 	paletteLen uintptr
-}
-type abiColor struct {
-	_     structs.HostLayout
-	kind  uint32
-	index uint8
-	red   uint8
-	green uint8
-	blue  uint8
 }
 type abiCell struct {
 	_              structs.HostLayout
@@ -193,32 +172,53 @@ type abiMatch struct {
 	spans    *abiSpan
 	spansLen uintptr
 }
-type abiBellEvent struct {
-	_         structs.HostLayout
-	sequence  uint64
-	elapsedMS uint64
+type abiTimeouts struct {
+	_       structs.HostLayout
+	text    abiOptionalU64
+	idle    abiOptionalU64
+	command abiOptionalU64
+	exit    abiOptionalU64
+	ready   abiOptionalU64
 }
-type abiResult struct {
+type abiOpenOptions struct {
+	_                  structs.HostLayout
+	backend            abiString
+	shell              abiString
+	cols               abiOptionalU64
+	rows               abiOptionalU64
+	cwd                abiString
+	env                *abiPair
+	envLen             uintptr
+	waitReady          abiOptionalBool
+	restart            bool
+	scrollback         abiOptionalU64
+	colors             *abiPair
+	colorsLen          uintptr
+	timeouts           abiTimeouts
+	recordingMode      abiString
+	recordingDirectory abiString
+}
+type abiMouseOptions struct {
+	_      structs.HostLayout
+	button uint32
+	alt    bool
+	ctrl   bool
+	shift  bool
+}
+type abiWaitOptions struct {
+	_         structs.HostLayout
+	timeoutMS abiOptionalU64
+	regex     bool
+	not       bool
+}
+type abiRecordingOptions struct {
 	_             structs.HostLayout
-	errorKind     uint32
-	errorMessage  abiString
-	errorDetails  abiString
-	errorArtifact abiString
-	text          abiString
-	number        uint64
-	exitCode      abiOptionalI32
-	open          abiOpenResult
-	state         abiState
-	cursor        abiCursor
-	size          abiSize
-	cells         *abiCell
-	cellsLen      uintptr
-	matches       *abiMatch
-	matchesLen    uintptr
-	bells         *abiBellEvent
-	bellsLen      uintptr
-	strings       *abiString
-	stringsLen    uintptr
-	snapshot      uint32
-	privateData   unsafe.Pointer
+	path          abiString
+	format        abiString
+	fps           abiOptionalU64
+	speed         abiOptionalF64
+	idleTimeLimit abiOptionalF64
+	zoom          abiOptionalF64
+	background    abiString
+	transparent   bool
 }

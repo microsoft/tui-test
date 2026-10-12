@@ -20,6 +20,8 @@ The C ABI is an internal contract shared by Go and Python, not a stable public C
 Native allocations must be released by their matching Rust functions, and native code must not retain Go pointers.
 
 `internal/native/abi.go` and `internal/native/functions.go` are generated from the Rust ABI declarations.
+The generator first derives Rust boundary structs and conversions from the owned Rust models.
+See [the shared library guide](../../crates/tui-test-ffi/README.md#generate-boundaries) for authoritative sources and transport mappings.
 Do not edit these files directly. From the repository root, regenerate them with:
 
 ```sh

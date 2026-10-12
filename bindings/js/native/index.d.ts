@@ -96,11 +96,16 @@ export interface Cell {
   /**
    * The link's `id=` parameter, empty when the sequence carried none.
    *
-   * Identifies a link across a wrap rather than describing where it points:
-   * a program that wraps its own links tags each run with a shared `id=`.
+   * Separate from `link` because it identifies a link across a wrap rather
+   * than describing where the link points: a program that wraps its own
+   * links tags each run with a shared `id=` so a terminal can treat them as
+   * one.
    *
-   * Backend-dependent. Ghostty reports a link's URI and nothing else, so
-   * this is always empty there and no locator matches on it.
+   * Backend-dependent, unlike everything else on a cell. Ghostty's FFI
+   * exposes a link's URI and nothing else, so this is always empty there
+   * and "no `id=` was sent" cannot be told apart from "this backend cannot
+   * see it". An assertion built on it will not mean the same thing on every
+   * backend, which is why no locator matches on it.
    */
   link_id: string
 }
@@ -120,8 +125,11 @@ export type Color =
 export interface Cursor {
   x: number
   y: number
+  /** Whether the cursor is drawn (`DECTCEM`). */
   visible: boolean
+  /** `block`, `underline`, or `bar` (`DECSCUSR`). */
   shape: string
+  /** The cursor color as `#rrggbb`, after any `OSC 12` a program sent. */
   color: string
 }
 
@@ -146,21 +154,21 @@ export interface LocatorExpression {
 
 export interface LocatorNode {
   kind: LocatorNodeKind
-  direction?: LocatorStageDirection
   text?: string
   regex?: boolean
-  full?: boolean
   whitespace?: string
-  occurrence?: string
-  nth?: number
   style?: LocatorStyle
   link?: string
+  full?: boolean
+  direction?: LocatorStageDirection
   within?: number
   left?: number
   right?: number
   input?: number
   has?: number
   hasNot?: number
+  occurrence?: string
+  nth?: number
 }
 
 export declare const enum LocatorNodeKind {
@@ -222,19 +230,14 @@ export interface OpenResult {
   recording: string
 }
 
-/**
- * Private native-owned packed screen snapshot.
- *
- * `utf8` decodes to exactly `rows` newline-delimited logical rows. Trailing
- * spaces and blank rows are retained. UTF-8 byte offsets are not terminal cell
- * offsets when rows contain Unicode graphemes.
- */
 export interface PackedScreen {
-  /** Logical column count. */
+  /**
+   * Logical terminal dimensions for the newline-delimited UTF-8 snapshot.
+   * Rows retain trailing spaces and blank lines; byte offsets are not cell
+   * offsets because Unicode graphemes may occupy multiple bytes.
+   */
   readonly cols: number
-  /** Number of logical rows encoded in `utf8`. */
   readonly rows: number
-  /** Detached native-owned UTF-8 bytes. Treat this private snapshot as immutable. */
   readonly utf8: Uint8Array
 }
 
@@ -323,18 +326,49 @@ export interface State {
   cwd: string | null
   last_command: string | null
   last_exit: number | null
+  /** Signal reported when the process was terminated by one. */
   exit_signal: string | null
   exited: number | null
   ready: boolean
   bell_count: number
+  /**
+   * Terminal modes the child has turned on, by name.
+   *
+   * A map rather than a list, so a reader can tell "off" from "this build
+   * does not know that mode" and every key is always present.
+   */
   modes: Record<string, boolean>
+  /**
+   * Mouse tracking level: `none`, `click`, `drag`, or `motion`.
+   *
+   * Separate from `modes` because mouse tracking is not a set of
+   * independent switches: `CSI ?1002 h` replaces `CSI ?1000 h` rather than
+   * joining it, so reporting it as booleans would say two are on when the
+   * terminal only honors the last.
+   *
+   * Independent of how the child asked for the reports to be encoded.
+   * `CSI ?1000 h` on its own is `click`, whether or not `CSI ?1006 h`
+   * followed it to ask for SGR coordinates.
+   */
   mouse_mode: string
+  /**
+   * The terminal's colors, as `#rrggbb`: the three defaults and any
+   * palette entry a program overrode.
+   */
   colors: TerminalColors
   timeouts: EffectiveTimeouts
   text: string
 }
 
-/** The colors the terminal is painting with. */
+/**
+ * The colors the terminal paints with.
+ *
+ * Grouped because they are one concept — the colors a program chooses
+ * rather than the ones a cell names — set by sibling sequences and reset by
+ * `OSC 104` and `OSC 110/111/112`. A slot nothing has overridden reports the
+ * color the session's profile gives it, so every field always has an
+ * answer.
+ */
 export interface TerminalColors {
   /** The default foreground (`OSC 10`). */
   foreground: string
@@ -343,9 +377,11 @@ export interface TerminalColors {
   /** The cursor color (`OSC 12`). */
   cursor: string
   /**
-   * Palette entries a program overrode (`OSC 4`), keyed by index.
+   * Palette entries a program moved with `OSC 4`, keyed by index.
    *
-   * Only entries that differ from the profile are listed.
+   * Only the entries that differ from the profile are listed: a program
+   * that recolors slot 1 is interesting, and the 255 it left alone are
+   * not.
    */
   palette: Record<string, string>
 }
@@ -353,7 +389,9 @@ export interface TerminalColors {
 export interface TextMatch {
   text: string
   start: TextPosition
+  /** Exclusive end position. */
   end: TextPosition
+  /** Per-row column ranges with exclusive ends. */
   spans: Array<TextSpan>
 }
 
@@ -378,8 +416,8 @@ export interface Timeouts {
 
 export interface TitleOptions {
   regex?: boolean
-  not?: boolean
   timeoutMs?: number
+  not?: boolean
 }
 
 export interface TraceOptions {

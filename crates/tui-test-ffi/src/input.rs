@@ -8,6 +8,8 @@ use tui_test::ExecutionContext;
 
 type Result<T> = std::result::Result<T, TuiTestError>;
 
+include!("input_generated.rs");
+
 impl TuiOptionalU64 {
     pub(crate) fn option(self) -> Option<u64> {
         self.present.then_some(self.value)
@@ -92,17 +94,9 @@ pub(crate) unsafe fn open(value: TuiOpenOptions) -> Result<OpenOptions> {
         .map_err(TuiTestError::usage)?
         .unwrap_or_default();
     let shell = unsafe { value.shell.optional()? }
-        .map(|s| match s.as_str() {
-            "bash" => Ok(Shell::Bash),
-            "powershell" => Ok(Shell::Powershell),
-            "pwsh" => Ok(Shell::Pwsh),
-            "cmd" => Ok(Shell::Cmd),
-            "fish" => Ok(Shell::Fish),
-            "zsh" => Ok(Shell::Zsh),
-            "xonsh" => Ok(Shell::Xonsh),
-            "elvish" => Ok(Shell::Elvish),
-            "nushell" => Ok(Shell::Nushell),
-            _ => Err(TuiTestError::usage(format!("unknown shell {s:?}"))),
+        .map(|s| {
+            serde_json::from_value(s.clone().into())
+                .map_err(|_| TuiTestError::usage(format!("unknown shell {s:?}")))
         })
         .transpose()?;
     let mut profile = Profile::default();
@@ -118,41 +112,10 @@ pub(crate) unsafe fn open(value: TuiOpenOptions) -> Result<OpenOptions> {
             )));
         }
     }
-    let mode = match unsafe { value.recording_mode.optional()? }
-        .as_deref()
-        .unwrap_or("disabled")
-    {
-        "always" => AutomaticRecordingMode::Always,
-        "disabled" => AutomaticRecordingMode::Disabled,
-        "on-failure" => AutomaticRecordingMode::OnFailure,
-        other => {
-            return Err(TuiTestError::usage(format!(
-                "unknown automatic recording mode {other:?}"
-            )))
-        }
-    };
-    Ok(OpenOptions {
-        backend,
-        shell,
-        profile,
-        cols: u16_option(value.cols, "cols")?.unwrap_or(80),
-        rows: u16_option(value.rows, "rows")?.unwrap_or(30),
-        cwd: unsafe { value.cwd.optional()? },
-        env: unsafe { pairs(value.env, value.env_len)? },
-        wait_ready: value.wait_ready.option(),
-        restart: value.restart,
-        timeouts: Timeouts {
-            text: value.timeouts.text.option(),
-            idle: value.timeouts.idle.option(),
-            command: value.timeouts.command.option(),
-            exit: value.timeouts.exit.option(),
-            ready: value.timeouts.ready.option(),
-        },
-        recording: AutomaticRecording {
-            mode,
-            directory: unsafe { value.recording_directory.optional()? }.map(Into::into),
-        },
-    })
+    let mode = unsafe { value.recording_mode.optional()? }.unwrap_or_else(|| "disabled".into());
+    let mode = serde_json::from_value(mode.clone().into())
+        .map_err(|_| TuiTestError::usage(format!("unknown automatic recording mode {mode:?}")))?;
+    unsafe { open_input(value, backend, shell, profile, mode) }
 }
 pub(crate) fn mouse(value: TuiMouseOptions) -> Result<MouseOptions> {
     let button = match value.button {
@@ -161,12 +124,7 @@ pub(crate) fn mouse(value: TuiMouseOptions) -> Result<MouseOptions> {
         2 => MouseButton::Right,
         _ => return Err(TuiTestError::usage("unknown mouse button")),
     };
-    Ok(MouseOptions {
-        button,
-        alt: value.alt,
-        ctrl: value.ctrl,
-        shift: value.shift,
-    })
+    Ok(mouse_input(value, button))
 }
 pub(crate) unsafe fn query(value: TuiQuery) -> Result<LocatorQuery> {
     let json = unsafe { value.json.required()? };
@@ -183,12 +141,9 @@ pub(crate) unsafe fn capture_background(
 }
 pub(crate) unsafe fn recording(value: TuiRecordingOptions) -> Result<Operation> {
     let format = unsafe { value.format.optional()? }
-        .map(|s| match s.as_str() {
-            "apng" => Ok(RecordingFormat::Apng),
-            "gif" => Ok(RecordingFormat::Gif),
-            "mp4" => Ok(RecordingFormat::Mp4),
-            "cast" => Ok(RecordingFormat::Cast),
-            _ => Err(TuiTestError::usage("unknown recording format")),
+        .map(|s| {
+            serde_json::from_value(s.into())
+                .map_err(|_| TuiTestError::usage("unknown recording format"))
         })
         .transpose()?;
     let fps = value
@@ -196,13 +151,5 @@ pub(crate) unsafe fn recording(value: TuiRecordingOptions) -> Result<Operation> 
         .option()
         .map(|v| u8::try_from(v).map_err(|_| TuiTestError::usage("fps must be between 0 and 255")))
         .transpose()?;
-    Ok(Operation::StartRecording {
-        path: unsafe { value.path.required()? },
-        format,
-        fps,
-        speed: value.speed.option(),
-        idle_time_limit: value.idle_time_limit.option(),
-        zoom: value.zoom.option(),
-        background: unsafe { capture_background(value.background, value.transparent)? },
-    })
+    unsafe { recording_input(value, format, fps) }
 }

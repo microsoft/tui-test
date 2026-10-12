@@ -6,83 +6,21 @@ use tui_test::{
     TraceMode, TraceOptions,
 };
 
-#[derive(Clone, Default, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SessionInput {
-    pub name: String,
-    pub artifact_directory: Option<String>,
-    pub artifact_mode: Option<String>,
-    #[serde(default)]
-    pub artifact_include_recording: bool,
-    pub trace_mode: Option<String>,
-    pub trace_directory: Option<String>,
-    pub screen_history_limit: Option<u16>,
-}
+include!("session_generated.rs");
 
-impl SessionInput {
-    pub fn validate(self) -> Result<(String, ExecutionContext)> {
-        let artifact = match self.artifact_mode {
-            None => None,
-            Some(mode) => {
-                let mode = match mode.as_str() {
-                    "all" => FailureArtifactMode::All,
-                    "html" => FailureArtifactMode::Html,
-                    "text" => FailureArtifactMode::Text,
-                    "none" => FailureArtifactMode::None,
-                    other => {
-                        return Err(TuiTestError::usage(format!(
-                            "unknown failure artifact mode {other:?}; expected all, html, text, or none"
-                        )))
-                    }
-                };
-                let options = FailureArtifactOptions {
-                    directory: self.artifact_directory.unwrap_or_default().into(),
-                    mode,
-                    include_recording: self.artifact_include_recording,
-                };
-                options.validate().map_err(TuiTestError::usage)?;
-                Some(options)
-            }
-        };
-        let trace = match self.trace_mode {
-            None => None,
-            Some(mode) => {
-                let mode = match mode.as_str() {
-                    "off" => TraceMode::Off,
-                    "on-failure" => TraceMode::OnFailure,
-                    "on" => TraceMode::On,
-                    other => {
-                        return Err(TuiTestError::usage(format!(
-                            "unknown trace mode {other:?}; expected off, on-failure, or on"
-                        )))
-                    }
-                };
-                let options = TraceOptions {
-                    mode,
-                    directory: self
-                        .trace_directory
-                        .map(Into::into)
-                        .unwrap_or_else(|| TraceOptions::default().directory),
-                };
-                options.validate().map_err(TuiTestError::usage)?;
-                Some(options)
-            }
-        };
-        let mut retention = DiagnosticRetentionOptions::default();
-        if let Some(limit) = self.screen_history_limit {
-            retention.screen_history_limit = limit;
-        }
-        retention.validate().map_err(TuiTestError::usage)?;
-        Ok((
-            self.name,
-            ExecutionContext {
-                artifact,
-                trace,
-                retention,
-                ..ExecutionContext::default()
-            },
+fn artifact_mode(mode: &str) -> Result<FailureArtifactMode> {
+    serde_json::from_value(mode.into()).map_err(|_| {
+        TuiTestError::usage(format!(
+            "unknown failure artifact mode {mode:?}; expected all, html, text, or none"
         ))
-    }
+    })
+}
+fn trace_mode(mode: &str) -> Result<TraceMode> {
+    serde_json::from_value(mode.into()).map_err(|_| {
+        TuiTestError::usage(format!(
+            "unknown trace mode {mode:?}; expected off, on-failure, or on"
+        ))
+    })
 }
 
 pub(crate) fn execute(

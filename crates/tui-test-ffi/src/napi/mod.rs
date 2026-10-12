@@ -123,13 +123,10 @@ impl NativeSession {
             ..Default::default()
         };
         if let Some(options) = artifacts {
-            context.artifact_directory = Some(options.directory);
-            context.artifact_mode = Some(options.mode.unwrap_or_else(|| "all".into()));
-            context.artifact_include_recording = options.include_recording.unwrap_or(false);
+            apply_artifact(&mut context, options);
         }
         if let Some(options) = trace {
-            context.trace_mode = Some(options.mode.unwrap_or_else(|| "off".into()));
-            context.trace_directory = options.directory;
+            apply_trace(&mut context, options);
         }
         Ok(Self {
             name,
@@ -147,8 +144,7 @@ impl NativeSession {
     pub async fn open(&self, options: Option<OpenOptions>) -> Result<OpenResult> {
         let options = options.unwrap_or_default();
         let mut context = self.context.clone();
-        context.screen_history_limit =
-            optional_u16(options.screen_history_limit, "screenHistoryLimit")?;
+        open_options_context(&mut context, &options)?;
         let directory = self.recording_directory.clone();
         execute(
             context,
@@ -162,47 +158,12 @@ impl NativeSession {
     #[napi]
     pub async fn run(&self, options: RunOptions) -> Result<OpenResult> {
         let mut context = self.context.clone();
-        context.screen_history_limit =
-            optional_u16(options.screen_history_limit, "screenHistoryLimit")?;
+        run_options_context(&mut context, &options)?;
         let directory = self.recording_directory.clone();
         execute(
             context,
             "run",
-            move || {
-                let open = open_options(
-                    OpenOptions {
-                        backend: options.backend,
-                        cols: options.cols,
-                        rows: options.rows,
-                        cwd: options.cwd,
-                        env: options.env,
-                        wait_ready: options.wait_ready,
-                        restart: options.restart,
-                        profile_scrollback: options.profile_scrollback,
-                        profile_colors: options.profile_colors,
-                        timeouts: options.timeouts,
-                        ..Default::default()
-                    },
-                    directory,
-                )?;
-                if options.program.is_empty() {
-                    return Err(usage("program must not be empty"));
-                }
-                Ok(Operation::Run(api::RunOptions {
-                    program: options.program,
-                    args: options.args.unwrap_or_default(),
-                    backend: open.backend,
-                    profile: open.profile,
-                    cols: open.cols,
-                    rows: open.rows,
-                    cwd: open.cwd,
-                    env: open.env,
-                    wait_ready: open.wait_ready,
-                    restart: open.restart,
-                    timeouts: open.timeouts,
-                    recording: open.recording,
-                }))
-            },
+            move || Ok(Operation::Run(run_options(options, directory)?)),
             open_result,
         )
         .await
@@ -273,11 +234,7 @@ impl NativeSession {
                 })
             },
             |value| match value {
-                OperationResult::PackedScreen(value) => Ok(PackedScreen {
-                    cols: value.cols,
-                    rows: value.rows,
-                    utf8: value.utf8.into(),
-                }),
+                OperationResult::PackedScreen(value) => Ok(packed_screen(value)),
                 _ => Err(internal("native operation returned an unexpected result")),
             },
         )
@@ -490,10 +447,7 @@ impl NativeSession {
             "getSize",
             || Ok(Operation::GetSize),
             |value| match value {
-                OperationResult::Size(value) => Ok(Size {
-                    cols: value.cols,
-                    rows: value.rows,
-                }),
+                OperationResult::Size(value) => Ok(size(value)),
                 _ => Err(internal("native operation returned an unexpected result")),
             },
         )
@@ -517,13 +471,9 @@ impl NativeSession {
             "getBellEvents",
             || Ok(Operation::GetBellEvents),
             |value| match value {
-                OperationResult::BellEvents(value) => Ok(value
-                    .into_iter()
-                    .map(|value| BellEvent {
-                        sequence: value.sequence as f64,
-                        elapsed_ms: value.elapsed_ms as f64,
-                    })
-                    .collect()),
+                OperationResult::BellEvents(value) => {
+                    Ok(value.into_iter().map(bell_event).collect())
+                }
                 _ => Err(internal("native operation returned an unexpected result")),
             },
         )
@@ -739,14 +689,7 @@ impl NativeSession {
         let options = options.unwrap_or_default();
         self.call(
             "waitTitle",
-            move || {
-                Ok(Operation::WaitTitle {
-                    text,
-                    regex: options.regex.unwrap_or(false),
-                    not: options.not.unwrap_or(false),
-                    timeout_ms: optional_integer(options.timeout_ms, "timeoutMs", u64::MAX)?,
-                })
-            },
+            move || wait_title_operation(options, text),
             unit,
         )
         .await
@@ -756,14 +699,7 @@ impl NativeSession {
         let options = options.unwrap_or_default();
         self.call(
             "expectTitle",
-            move || {
-                Ok(Operation::ExpectTitle {
-                    text,
-                    regex: options.regex.unwrap_or(false),
-                    not: options.not.unwrap_or(false),
-                    timeout_ms: optional_integer(options.timeout_ms, "timeoutMs", u64::MAX)?,
-                })
-            },
+            move || expect_title_operation(options, text),
             unit,
         )
         .await
@@ -916,21 +852,9 @@ impl NativeSession {
         let options = options.unwrap_or_default();
         self.call(
             "expectSnapshot",
-            move || {
-                Ok(Operation::Snapshot {
-                    name,
-                    update: options.update.unwrap_or(false),
-                    include_style: options.include_style.unwrap_or(false),
-                    include_title: options.include_title.unwrap_or(false),
-                    cwd: options.cwd,
-                })
-            },
+            move || snapshot_operation(options, name),
             |value| match value {
-                OperationResult::Snapshot(value) => Ok(match value {
-                    api::SnapshotResult::Passed => SnapshotResult::Passed,
-                    api::SnapshotResult::Written => SnapshotResult::Written,
-                    api::SnapshotResult::Updated => SnapshotResult::Updated,
-                }),
+                OperationResult::Snapshot(value) => Ok(value.into()),
                 _ => Err(internal("native operation returned an unexpected result")),
             },
         )
@@ -941,18 +865,7 @@ impl NativeSession {
         let options = options.unwrap_or_default();
         self.call(
             "screenshot",
-            move || {
-                Ok(Operation::Screenshot {
-                    full: options.full.unwrap_or(false),
-                    path: options.path,
-                    zoom: options.zoom,
-                    background: session::capture_background(
-                        options.background,
-                        options.transparent.unwrap_or(false),
-                    )
-                    .map_err(native_error)?,
-                })
-            },
+            move || screenshot_operation(options),
             string_result,
         )
         .await
@@ -961,26 +874,7 @@ impl NativeSession {
     pub async fn start_recording(&self, options: RecordingOptions) -> Result<()> {
         self.call(
             "startRecording",
-            move || {
-                Ok(Operation::StartRecording {
-                    path: options.path,
-                    format: options.format.map(|format| match format {
-                        RecordingFormat::Apng => api::RecordingFormat::Apng,
-                        RecordingFormat::Gif => api::RecordingFormat::Gif,
-                        RecordingFormat::Mp4 => api::RecordingFormat::Mp4,
-                        RecordingFormat::Cast => api::RecordingFormat::Cast,
-                    }),
-                    fps: options.fps.map(|fps| u8_value(fps, "fps")).transpose()?,
-                    speed: options.speed,
-                    idle_time_limit: options.idle_time_limit,
-                    zoom: options.zoom,
-                    background: session::capture_background(
-                        options.background,
-                        options.transparent.unwrap_or(false),
-                    )
-                    .map_err(native_error)?,
-                })
-            },
+            move || start_recording_operation(options),
             unit,
         )
         .await
