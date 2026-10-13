@@ -5,6 +5,9 @@ use quote::ToTokens;
 use std::{collections::BTreeMap, fmt::Write, fs, path::Path};
 use syn::{Fields, Item};
 
+#[path = "napi.rs"]
+mod napi;
+
 #[derive(Clone)]
 struct Field {
     name: String,
@@ -87,21 +90,24 @@ impl Models {
                 }
                 Item::Enum(item) => {
                     let name = item.ident.to_string();
-                    if item
-                        .variants
-                        .iter()
-                        .all(|v| matches!(v.fields, Fields::Unit))
-                    {
-                        self.enums.insert(
-                            name.clone(),
-                            item.variants.iter().map(|v| v.ident.to_string()).collect(),
-                        );
-                    }
+                    self.enums.insert(
+                        name.clone(),
+                        item.variants.iter().map(|v| v.ident.to_string()).collect(),
+                    );
                     for v in item.variants {
-                        if matches!(v.fields, Fields::Named(_)) {
-                            self.fields
-                                .insert(format!("{name}::{}", v.ident), fields(&v.fields)?);
-                        }
+                        let values = match &v.fields {
+                            Fields::Unnamed(values) => values
+                                .unnamed
+                                .iter()
+                                .enumerate()
+                                .map(|(i, f)| Field {
+                                    name: i.to_string(),
+                                    ty: f.ty.to_token_stream().to_string().replace(' ', ""),
+                                })
+                                .collect(),
+                            other => fields(other)?,
+                        };
+                        self.fields.insert(format!("{name}::{}", v.ident), values);
                     }
                 }
                 _ => {}
@@ -911,12 +917,13 @@ fn input_conversions(models: &Models, jc: &mut String, ci: &mut String) -> Resul
 
 pub fn generate(root: &Path, check: bool) -> Result<()> {
     let models = Models::load(root)?;
+    napi::check_exports(root)?;
     let notice = format!("// {NOTICE}\n");
     let mut c = notice.clone();
     c.push_str(&fs::read_to_string(
         root.join("crates/tui-test-ffi/src/type_helpers.rs"),
     )?);
-    let mut js = format!("{notice}include!(\"type_helpers.rs\");\n");
+    let mut js = format!("{notice}use napi_derive::napi;\ninclude!(\"type_helpers.rs\");\n");
     let mut cc = notice.clone();
     let mut jc = notice.clone();
     let mut ci = notice;
@@ -924,6 +931,8 @@ pub fn generate(root: &Path, check: bool) -> Result<()> {
     enum_models(&models, &mut js, &mut jc)?;
     input_models(&models, &mut c, &mut js, &mut jc, &mut ci)?;
     input_conversions(&models, &mut jc, &mut ci)?;
+    napi::types(&models, &mut js)?;
+    napi::results(&models, &mut jc)?;
     for (path, content) in [
         ("types.rs", c),
         ("napi/types.rs", js),
@@ -931,6 +940,7 @@ pub fn generate(root: &Path, check: bool) -> Result<()> {
         ("napi/convert_generated.rs", jc),
         ("input_generated.rs", ci),
         ("session_generated.rs", session_input(&models)?),
+        ("napi/bindings_generated.rs", napi::bindings(&models, root)?),
     ] {
         emit(
             root,
@@ -1078,6 +1088,7 @@ pub(crate) mod tests {
             "crates/tui-test/src/terminal/backend.rs",
             "crates/tui-test/src/terminal/cell.rs",
             "crates/tui-test-ffi/src/type_helpers.rs",
+            "crates/tui-test-ffi/src/napi/mod.rs",
         ] {
             fs::create_dir_all(target.join(path).parent().unwrap()).unwrap();
             fs::copy(root().join(path), target.join(path)).unwrap();
@@ -1091,6 +1102,7 @@ pub(crate) mod tests {
             "napi/convert_generated.rs",
             "input_generated.rs",
             "session_generated.rs",
+            "napi/bindings_generated.rs",
         ] {
             let output = target.join("crates/tui-test-ffi/src").join(path);
             let original = fs::read_to_string(&output).unwrap();

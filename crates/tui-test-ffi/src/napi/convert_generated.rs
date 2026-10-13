@@ -403,3 +403,96 @@ pub fn query(value: LocatorExpression) -> Result<api::LocatorQuery> {
     .into_query()
     .map_err(native_error)
 }
+pub fn unit(value: OperationResult) -> Result<()> {
+    match value {
+        OperationResult::Unit => Ok(()),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn open_result(value: OperationResult) -> Result<OpenResult> {
+    match value {
+        OperationResult::Open(value) => Ok(open_value(value)),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn state_result(value: OperationResult) -> Result<State> {
+    match value {
+        OperationResult::State(value) => Ok(state(*value)),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn string_result(value: OperationResult) -> Result<String> {
+    match value {
+        OperationResult::Text(value) => Ok(value),
+        OperationResult::Clipboard(value) => Ok(value),
+        OperationResult::Recording(value) => Ok(value),
+        OperationResult::Screenshot(value) => match value {
+            api::ScreenshotResult::Path(value) => Ok(value),
+            api::ScreenshotResult::Text(value) => Ok(value),
+        },
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn packed_screen_result(value: OperationResult) -> Result<PackedScreen> {
+    match value {
+        OperationResult::PackedScreen(value) => Ok(packed_screen(value)),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn cells_result(value: OperationResult) -> Result<Vec<Cell>> {
+    match value {
+        OperationResult::Cells(value) => value.into_iter().map(cell).collect(),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn matches(value: OperationResult) -> Result<Vec<TextMatch>> {
+    match value {
+        OperationResult::Matches(value) => Ok(value.into_iter().map(text_match).collect()),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn optional_string_result(value: OperationResult) -> Result<Option<String>> {
+    match value {
+        OperationResult::Command(value) => Ok(value),
+        OperationResult::Output(value) => Ok(value),
+        OperationResult::Cwd(value) => Ok(value),
+        OperationResult::Title(value) => Ok(value),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn exit_code_result(value: OperationResult) -> Result<Option<i32>> {
+    match value {
+        OperationResult::ExitCode(value) => Ok(value),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn cursor_result(value: OperationResult) -> Result<Cursor> {
+    match value {
+        OperationResult::Cursor(value) => Ok(cursor(value)),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn size_result(value: OperationResult) -> Result<Size> {
+    match value {
+        OperationResult::Size(value) => Ok(size(value)),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn bell_count_result(value: OperationResult) -> Result<f64> {
+    match value {
+        OperationResult::BellCount(value) => Ok(value as f64),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn bell_events_result(value: OperationResult) -> Result<Vec<BellEvent>> {
+    match value {
+        OperationResult::BellEvents(value) => Ok(value.into_iter().map(bell_event).collect()),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}
+pub fn snapshot_result(value: OperationResult) -> Result<SnapshotResult> {
+    match value {
+        OperationResult::Snapshot(value) => Ok(value.into()),
+        _ => Err(internal("native operation returned an unexpected result")),
+    }
+}

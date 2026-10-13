@@ -105,42 +105,6 @@ fn occurrence(
         .map_err(|error| usage(format!("invalid locator expression: {error}")))
 }
 
-pub fn unit(value: OperationResult) -> Result<()> {
-    match value {
-        OperationResult::Unit => Ok(()),
-        _ => Err(internal("native operation returned an unexpected result")),
-    }
-}
-
-pub fn string_result(value: OperationResult) -> Result<String> {
-    match value {
-        OperationResult::Text(value)
-        | OperationResult::Clipboard(value)
-        | OperationResult::Recording(value)
-        | OperationResult::Screenshot(
-            api::ScreenshotResult::Path(value) | api::ScreenshotResult::Text(value),
-        ) => Ok(value),
-        _ => Err(internal("native operation returned an unexpected result")),
-    }
-}
-
-pub fn optional_string_result(value: OperationResult) -> Result<Option<String>> {
-    match value {
-        OperationResult::Command(value)
-        | OperationResult::Output(value)
-        | OperationResult::Cwd(value)
-        | OperationResult::Title(value) => Ok(value),
-        _ => Err(internal("native operation returned an unexpected result")),
-    }
-}
-
-pub fn open_result(value: OperationResult) -> Result<OpenResult> {
-    let OperationResult::Open(value) = value else {
-        return Err(internal("native operation returned an unexpected result"));
-    };
-    Ok(open_value(value))
-}
-
 pub fn color(value: api::CellColor) -> Color {
     match value {
         api::CellColor::Default => Either::B("default".into()),
@@ -149,11 +113,4 @@ pub fn color(value: api::CellColor) -> Color {
             Either::B(format!("#{red:02x}{green:02x}{blue:02x}"))
         }
     }
-}
-
-pub fn matches(value: OperationResult) -> Result<Vec<TextMatch>> {
-    let OperationResult::Matches(value) = value else {
-        return Err(internal("native operation returned an unexpected result"));
-    };
-    Ok(value.into_iter().map(text_match).collect())
 }

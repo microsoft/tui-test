@@ -2,22 +2,7 @@ use ::napi::bindgen_prelude::{
     Buffer, Either, FromNapiValue, JsObjectValue, Object, ValidateNapiValue,
 };
 use napi::{Error, Result, Status};
-use napi_derive::napi;
 use std::collections::HashMap;
-
-#[napi]
-pub type Color = Either<u32, String>;
-
-// This convenience operation selects either coordinates or text, unlike core MouseAction.
-#[derive(Default)]
-#[napi(object)]
-pub struct MouseClickOptions {
-    pub x: Option<f64>,
-    pub y: Option<f64>,
-    pub on_text: Option<String>,
-    pub button: Option<f64>,
-    pub clicks: Option<f64>,
-}
 
 // Reject unknown fields before conversion so misspelled predicates cannot
 // silently broaden a locator. The generator supplies the field names.
