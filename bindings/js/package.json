@@ -16,35 +16,28 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "native/index.js",
-    "native/index.d.ts",
-    "native/*.node",
+    "native/*.js",
+    "native/*.d.ts",
     "README.md"
   ],
   "engines": {
     "node": ">=20"
   },
   "sideEffects": false,
-  "napi": {
-    "binaryName": "tui-test",
-    "packageName": "@microsoft/tui-test",
-    "targets": [
-      "x86_64-pc-windows-msvc",
-      "x86_64-apple-darwin",
-      "aarch64-apple-darwin",
-      "x86_64-unknown-linux-gnu",
-      "aarch64-unknown-linux-gnu",
-      "x86_64-unknown-linux-musl",
-      "aarch64-unknown-linux-musl"
-    ]
+  "nativeTargets": {
+    "x86_64-pc-windows-msvc": "win32-x64-msvc",
+    "x86_64-apple-darwin": "darwin-x64",
+    "aarch64-apple-darwin": "darwin-arm64",
+    "x86_64-unknown-linux-gnu": "linux-x64-gnu",
+    "aarch64-unknown-linux-gnu": "linux-arm64-gnu",
+    "x86_64-unknown-linux-musl": "linux-x64-musl",
+    "aarch64-unknown-linux-musl": "linux-arm64-musl"
   },
   "scripts": {
     "build:native": "node scripts/build-native.mjs",
     "build:native:debug": "node scripts/build-native.mjs --debug",
     "build:ts": "npm run clean && tsc -p tsconfig.json",
     "build": "npm run build:native && npm run build:ts",
-    "create:npm-dirs": "napi create-npm-dirs",
-    "artifacts": "napi artifacts --output-dir artifacts --npm-dir npm",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "test": "npm run test:node",
     "test:node": "npm run build && node --test --test-concurrency=1 ./test/conformance.test.mjs ./test/integration.test.mjs ./test/options.test.mjs ./test/native.test.mjs ./test/helpers.test.mjs",
@@ -69,8 +62,10 @@
   "publishConfig": {
     "access": "public"
   },
+  "dependencies": {
+    "koffi": "^3.3.3"
+  },
   "devDependencies": {
-    "@napi-rs/cli": "^3.7.4",
     "@types/node": "^20.14.0",
     "typescript": "^5.5.0"
   }

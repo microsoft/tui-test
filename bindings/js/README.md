@@ -10,17 +10,18 @@ npm install @microsoft/tui-test
 
 Node 20+ is supported. The package is ESM only. Bun and Deno support is best effort. Deno 2 needs local `node_modules` and `--allow-ffi`.
 
-Each platform package contains one self-contained `.node` addon.
-The addon uses the optional `napi` feature in `tui-test-ffi` and calls Rust operations directly.
-It shares safe execution, context validation, and close logic with the C ABI adapter.
-It converts owned Rust results into JavaScript values without C result pointers.
-It needs no companion shared library or CLI.
-`TUI_TEST_NATIVE_LIBRARY` applies only to Go and Python; JavaScript ignores it.
+Each platform package contains the `tui-test-ffi` shared library.
+The JavaScript adapter uses Koffi to call the same typed C ABI as Go and Python.
+It copies native results before it frees their Rust allocations.
+Koffi supplies its own native addon; this package no longer builds a separate N-API adapter.
+Keep optional dependencies enabled during installation; they contain the platform binaries for both packages.
+The package needs no CLI.
+Set `TUI_TEST_NATIVE_LIBRARY` to an absolute path to select a library from the same source revision.
 
 For a local build, run `npm ci`, then `npm run build`.
 Use `npm run build:native:debug` for a debug build.
-These commands build `tui-test-ffi` with `--features napi` and put the addon in `native/`.
-They also regenerate the N-API loader and declarations.
+These commands build `tui-test-ffi` and put the shared library in `native/`.
+Run `cargo run --locked -p tui-test-bindgen` from the repository root to regenerate the native declarations.
 
 ## Quick start
 

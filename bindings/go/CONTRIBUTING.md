@@ -9,8 +9,8 @@ The public `tuitest` package at the module root owns clients, options, results, 
 The `internal/native` package owns the C ABI, purego calls, native memory lifetimes, and library loading. It copies results into Go-owned values before releasing Rust allocations. Dependencies run from the public package into `internal/native`; the native package does not import the public package.
 
 The shared Rust adapter lives in `../../crates/tui-test-ffi/` and delegates to the existing session registry and operations.
-Go and Python use the same library. JavaScript uses the crate's optional N-API build.
-Source builds select the Go/Python library path through `TUI_TEST_NATIVE_LIBRARY`.
+Go, Python, and JavaScript use the same library through purego, ctypes, and Koffi.
+Source builds select the library path through `TUI_TEST_NATIVE_LIBRARY`.
 The library stays loaded for the process lifetime.
 
 Go uses pointer entrypoints for open, run, and screenshot options.
@@ -19,7 +19,7 @@ The screenshot pointer avoids a PureGo aggregate-argument failure on Linux AMD64
 Terminal behavior, session synchronization, locator evaluation, assertions, diagnostics, traces, artifacts, and recording remain in the Rust engine. Go owns option ergonomics, query construction, error presentation, and test cleanup. The `tuitesttest` package reports the test result through failure-aware close so the engine can retain on-failure traces. Keep new terminal behavior in the engine so language bindings share it.
 
 The native library and Go module must come from the same source revision.
-The C ABI is an internal contract shared by Go and Python, not a stable public C SDK.
+The C ABI is an internal contract shared by all three bindings, not a stable public C SDK.
 Native allocations must be released by their matching Rust functions, and native code must not retain Go pointers.
 
 `internal/native/abi.go` and `internal/native/functions.go` are generated from the Rust ABI declarations.
@@ -31,7 +31,7 @@ Do not edit these files directly. From the repository root, regenerate them with
 cargo run --locked -p tui-test-bindgen
 ```
 
-The same command updates the C header and Python declarations.
+The same command updates the C header, Python declarations, and JavaScript declarations.
 Use `cargo run --locked -p tui-test-bindgen -- --check` to check for stale output.
 
 ## Build from source

@@ -111,10 +111,10 @@ jobs:
       - name: Test Node binding
         run: npm run test:node --prefix bindings/js
 
-      - name: Verify generated Node loader
+      - name: Verify generated Node declarations
         shell: bash
         run: |
-          git diff --exit-code -- bindings/js/native/index.js bindings/js/native/index.d.ts
+          cargo run --locked -p tui-test-bindgen -- --check
           ! grep -Eq 'JsonValue|Promise<unknown>|\brequest\(|\bBuffer\b' bindings/js/native/index.d.ts
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0

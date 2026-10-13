@@ -1,16 +1,19 @@
-//! Native language adapters with shared Rust execution and an optional N-API adapter.
+//! Typed C boundary shared by all language adapters.
 //! C ABI input buffers must remain valid for the call. The adapter copies inputs
 //! before execution; C output storage belongs to Rust until tui_result_free.
 mod input;
-#[cfg(all(feature = "napi", not(test)))]
-mod napi;
 mod output;
 mod session;
+mod tasks;
 mod types;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+pub use tasks::TuiTask;
 use tui_test::api::*;
 use tui_test::runtime::global_registry;
 pub use types::*;
+
+mod tasks_generated;
+pub use tasks_generated::*;
 
 pub const ABI_VERSION: u32 = 3;
 
@@ -27,10 +30,17 @@ unsafe fn execute(
     operation_name: &'static str,
     operation: impl FnOnce() -> Result<Operation>,
 ) -> *mut TuiResult {
-    boundary(|| {
+    let prepared = catch_unwind(AssertUnwindSafe(|| {
         let (session, context) = unsafe { input::session(session)? };
-        session::execute(session, context, operation_name, operation()?)
-    })
+        Ok((session, context, operation()?))
+    }));
+    match prepared {
+        Ok(Ok((session, context, operation))) => {
+            tasks::execute(move || session::execute(session, context, operation_name, operation))
+        }
+        Ok(Err(error)) => output::error(error),
+        Err(_) => output::error(TuiTestError::internal("native engine adapter panicked")),
+    }
 }
 
 fn finish_trace_and_close(
@@ -146,7 +156,7 @@ pub extern "C" fn tui_sessions() -> *mut TuiResult {
 }
 #[no_mangle]
 pub extern "C" fn tui_close_all() -> *mut TuiResult {
-    boundary(|| {
+    tasks::execute(|| {
         global_registry().close_all();
         Ok(OperationResult::Unit)
     })
@@ -156,20 +166,22 @@ pub extern "C" fn tui_close_all() -> *mut TuiResult {
 /// Borrowed input buffers must be valid and readable for their stated lengths
 /// throughout this call; see TuiString and the input structure contracts.
 pub unsafe extern "C" fn tui_recording(session: TuiString) -> *mut TuiResult {
-    boundary(|| {
-        let session = unsafe { session.required()? };
-        session::recording(&session)
-    })
+    match unsafe { session.required() } {
+        Ok(session) => tasks::execute(move || session::recording(&session)),
+        Err(error) => output::error(error),
+    }
 }
 #[no_mangle]
 /// # Safety
 /// Borrowed input buffers must be valid and readable for their stated lengths
 /// throughout this call; see TuiString and the input structure contracts.
 pub unsafe extern "C" fn tui_close(session: TuiString, failed: TuiOptionalBool) -> *mut TuiResult {
-    boundary(|| {
-        let (name, context) = unsafe { input::session(session)? };
-        session::close(name, context, failed.option())
-    })
+    match unsafe { input::session(session) } {
+        Ok((name, context)) => {
+            tasks::execute(move || session::close(name, context, failed.option()))
+        }
+        Err(error) => output::error(error),
+    }
 }
 #[no_mangle]
 /// # Safety

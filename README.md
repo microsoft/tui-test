@@ -53,8 +53,8 @@ You can also download a binary from [GitHub Releases](https://github.com/microso
 Add the Rust `recording-raster` feature for APNG, GIF, and MP4 output. It uses installed fonts; `recording-font-jetbrains-mono*` bundles a font.
 
 Go, Python, and JavaScript use one [native adapter crate](crates/tui-test-ffi/README.md).
-Go and Python use its generated C ABI declarations. JavaScript uses its optional N-API feature in a self-contained addon.
-Set `TUI_TEST_NATIVE_LIBRARY` to select a matching library explicitly for Go or Python.
+All three use its generated C ABI declarations through purego, ctypes, and Koffi, respectively.
+Set `TUI_TEST_NATIVE_LIBRARY` to select a matching library explicitly.
 
 ## Quick start
 

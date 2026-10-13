@@ -11,6 +11,12 @@
 #define ABI_VERSION 3
 
 /**
+ * An owned asynchronous call. Poll until a result arrives, then free the task.
+ * Freeing a pending task discards its eventual result without canceling the call.
+ */
+typedef struct TuiTask TuiTask;
+
+/**
  * A borrowed UTF-8 byte string. NULL denotes absence; a non-NULL pointer
  * with zero length denotes an explicitly empty string. Inputs live through
  * the call only. All output pointers live until tui_result_free.
@@ -711,6 +717,460 @@ struct TuiResult *tui_screenshot_ptr(struct TuiString session,
  * throughout this call; see TuiString and the input structure contracts.
  */
 struct TuiResult *tui_start_recording(struct TuiString session, struct TuiRecordingOptions options);
+
+/**
+ * Returns NULL while pending. Transfers ownership of a completed result once.
+ *
+ * # Safety
+ * task must be a live task returned by a start function, used by one thread.
+ */
+struct TuiResult *tui_task_poll(struct TuiTask *task);
+
+/**
+ * # Safety
+ * task must be NULL or a live task, freed exactly once.
+ */
+void tui_task_free(struct TuiTask *task);
+
+/**
+ * Exercise panic containment without terminating the host process.
+ */
+struct TuiTask *tui_panic_probe_start(void);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_open_start(struct TuiString session, struct TuiOpenOptions options);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_run_start(struct TuiString session,
+                              struct TuiOpenOptions options,
+                              struct TuiString program,
+                              const struct TuiString *args,
+                              uintptr_t args_len);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_sessions_start(void);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_close_all_start(void);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_recording_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_close_start(struct TuiString session, struct TuiOptionalBool failed);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_restart_start(struct TuiString session, uint64_t graceful_timeout_ms);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_state_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_command_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_output_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_exit_code_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_cwd_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_cursor_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_size_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_title_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_clipboard_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_bell_count_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_bell_events_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_stop_recording_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_text_start(struct TuiString session, bool full);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_packed_screen_start(struct TuiString session, bool full);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_cells_start(struct TuiString session,
+                                uint16_t x,
+                                uint16_t y,
+                                uint16_t w,
+                                uint16_t h);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_write_start(struct TuiString session, struct TuiString text);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_type_start(struct TuiString session, struct TuiString text);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_submit_start(struct TuiString session, struct TuiString text);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_signal_start(struct TuiString session, struct TuiString text);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_key_start(struct TuiString session,
+                              const struct TuiString *keys,
+                              uintptr_t len,
+                              uint32_t action);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_resize_start(struct TuiString session, uint16_t cols, uint16_t rows);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_mouse_click_start(struct TuiString session,
+                                      struct TuiOptionalU64 x,
+                                      struct TuiOptionalU64 y,
+                                      struct TuiString on_text,
+                                      struct TuiMouseOptions options,
+                                      uint8_t clicks);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_mouse_move_start(struct TuiString session, uint16_t x, uint16_t y);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_mouse_down_start(struct TuiString session,
+                                     uint16_t x,
+                                     uint16_t y,
+                                     struct TuiMouseOptions options);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_mouse_up_start(struct TuiString session,
+                                   uint16_t x,
+                                   uint16_t y,
+                                   struct TuiMouseOptions options);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_mouse_drag_start(struct TuiString session,
+                                     uint16_t x1,
+                                     uint16_t y1,
+                                     uint16_t x2,
+                                     uint16_t y2,
+                                     struct TuiMouseOptions options);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_mouse_scroll_start(struct TuiString session,
+                                       struct TuiString direction,
+                                       uint16_t amount);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_wait_title_start(struct TuiString session,
+                                     struct TuiString text,
+                                     struct TuiWaitOptions options);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_expect_title_start(struct TuiString session,
+                                       struct TuiString text,
+                                       struct TuiWaitOptions options);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_wait_clipboard_start(struct TuiString session,
+                                         struct TuiString text,
+                                         struct TuiWaitOptions options);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_wait_idle_start(struct TuiString session, struct TuiOptionalU64 timeout);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_wait_command_start(struct TuiString session, struct TuiOptionalU64 timeout);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_wait_exit_start(struct TuiString session, struct TuiOptionalU64 timeout);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_wait_ready_start(struct TuiString session, struct TuiOptionalU64 timeout);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_wait_bell_start(struct TuiString session, struct TuiOptionalU64 timeout);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_find_locator_start(struct TuiString session,
+                                       struct TuiQuery query,
+                                       bool require_one);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_wait_locator_start(struct TuiString session,
+                                       struct TuiQuery query,
+                                       struct TuiWaitOptions options);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_expect_locator_start(struct TuiString session,
+                                         struct TuiQuery query,
+                                         struct TuiWaitOptions options);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_click_locator_start(struct TuiString session,
+                                        struct TuiQuery query,
+                                        struct TuiMouseOptions options,
+                                        uint8_t clicks,
+                                        struct TuiOptionalU64 timeout);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_highlight_locator_start(struct TuiString session,
+                                            struct TuiQuery query,
+                                            struct TuiOptionalU64 timeout);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_expect_exit_code_start(struct TuiString session,
+                                           int32_t code,
+                                           struct TuiOptionalU64 timeout);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_expect_output_start(struct TuiString session,
+                                        struct TuiString text,
+                                        bool regex);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_expect_bell_count_start(struct TuiString session,
+                                            uint64_t count,
+                                            struct TuiOptionalU64 timeout);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_snapshot_start(struct TuiString session,
+                                   struct TuiString name,
+                                   bool update,
+                                   bool include_style,
+                                   bool include_title,
+                                   struct TuiString cwd);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_screenshot_start(struct TuiString session,
+                                     bool full,
+                                     struct TuiString path,
+                                     struct TuiOptionalF64 zoom,
+                                     struct TuiString background,
+                                     bool transparent);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_start_recording_start(struct TuiString session,
+                                          struct TuiRecordingOptions options);
 
 #ifdef __cplusplus
 }  // extern "C"

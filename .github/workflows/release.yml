@@ -55,7 +55,6 @@ jobs:
             bindings/js/src/version.ts
             bindings/python/pyproject.toml
             bindings/python/src/tui_test/_config.py
-            bindings/js/native/index.js
           )
           diff -u \
             <(printf '%s\n' "${version_files[@]}" | sort) \
@@ -144,8 +143,8 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            args: --target x86_64-unknown-linux-gnu --use-napi-cross
+            os: ubuntu-22.04
+            args: --target x86_64-unknown-linux-gnu
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             args: --target aarch64-unknown-linux-gnu -x
@@ -197,7 +196,7 @@ jobs:
       - run: npm ci
         working-directory: bindings/js
 
-      - name: Build Node addon
+      - name: Build Node shared library
         working-directory: bindings/js
         shell: bash
         run: npm run build:native -- ${{ matrix.args }}
@@ -205,7 +204,10 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: node-${{ matrix.target }}
-          path: bindings/js/native/*.node
+          path: |
+            bindings/js/native/*.so
+            bindings/js/native/*.dylib
+            bindings/js/native/*.dll
           if-no-files-found: error
 
   package-node:
@@ -225,9 +227,7 @@ jobs:
       - run: npm ci
         working-directory: bindings/js
 
-      - run: |
-          npm run build:ts
-          npm run create:npm-dirs
+      - run: npm run build:ts
         working-directory: bindings/js
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -235,9 +235,6 @@ jobs:
           pattern: node-*
           path: bindings/js/artifacts
           merge-multiple: true
-
-      - run: npm run artifacts
-        working-directory: bindings/js
 
       - name: Pack Node packages
         run: node .github/scripts/release/package-node.mjs
@@ -256,7 +253,7 @@ jobs:
           npm init -y >/dev/null
           npm install --ignore-scripts \
             "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-tui-test-linux-x64-gnu-${version}.tgz"
-          npm install --ignore-scripts --omit=optional \
+          npm install --ignore-scripts \
             "$GITHUB_WORKSPACE/package-artifacts/npm/microsoft-tui-test-${version}.tgz"
           cd "$GITHUB_WORKSPACE"
           PATH="/usr/bin:/bin" \

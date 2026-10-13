@@ -138,7 +138,11 @@ test("worker exit leaves terminals owned by the main thread open", {
         (async () => {
           const sdk = await import(workerData.url);
           assert.ok((await sdk.sessions()).includes(workerData.session));
+          const terminal = new sdk.TuiTest(workerData.session);
+          assert.deepEqual(await terminal.getSize(), { cols: 80, rows: 30 });
+          const reads = Array.from({ length: 300 }, () => terminal.getSize());
           if (workerData.explicitExit) process.exit(0);
+          await Promise.all(reads);
         })().catch((error) => { throw error; });
       `, {
         eval: true,
