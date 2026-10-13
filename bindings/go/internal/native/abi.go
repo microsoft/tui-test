@@ -6,7 +6,7 @@ import (
 	"unsafe"
 )
 
-const abiVersion = 3
+const abiVersion = 4
 
 type abiString struct {
 	_    structs.HostLayout

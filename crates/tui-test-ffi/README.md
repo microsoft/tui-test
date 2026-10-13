@@ -8,6 +8,8 @@ Koffi supplies its own native addon.
 The library and language package must come from the same source revision.
 This ABI is an internal contract, not a stable public C SDK.
 The language adapters preserve their public convenience APIs.
+ABI version 4 includes the shared pointer and asynchronous entrypoints.
+The existing `tui_screenshot` signature remains unchanged; `tui_screenshot_ptr` adds the pointer form.
 
 ## Build and use
 

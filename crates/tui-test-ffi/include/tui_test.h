@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ABI_VERSION 3
+#define ABI_VERSION 4
 
 /**
  * An owned asynchronous call. Poll until a result arrives, then free the task.

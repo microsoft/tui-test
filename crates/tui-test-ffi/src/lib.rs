@@ -15,7 +15,7 @@ pub use types::*;
 mod tasks_generated;
 pub use tasks_generated::*;
 
-pub const ABI_VERSION: u32 = 3;
+pub const ABI_VERSION: u32 = 4;
 
 type Result<T> = std::result::Result<T, TuiTestError>;
 fn boundary(f: impl FnOnce() -> Result<OperationResult>) -> *mut TuiResult {
