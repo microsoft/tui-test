@@ -26,9 +26,24 @@ function libraryPath() {
 }
 
 const library = koffi.load(libraryPath());
+let platformLibrary;
+if (process.platform === "win32") {
+  // Rust thread-local destructors can outlive the JavaScript environment.
+  platformLibrary = koffi.load("kernel32.dll");
+  const pin = platformLibrary.func("int32_t __stdcall GetModuleHandleExW(uint32_t flags, void *address, _Out_ void **module)");
+  const GET_MODULE_HANDLE_EX_FLAG_PIN = 1;
+  const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS = 4;
+  if (!pin(
+    GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+    library.symbol("tui_abi_version"),
+    [null],
+  )) {
+    throw new Error("Failed to retain the tui-test native library for process lifetime");
+  }
+}
 // Keep the library handle alive with its functions. Bun cannot safely finalize
 // Koffi's handle during garbage collection, even while native functions remain.
-const functions = { ...bind(library), library };
+const functions = { ...bind(library), library, platformLibrary };
 const version = functions.tui_abi_version();
 if (version !== abiVersion) {
   throw new Error(`tui-test native ABI mismatch: expected ${abiVersion}, got ${version}`);

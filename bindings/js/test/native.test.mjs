@@ -40,6 +40,37 @@ test("the native function table retains its library through garbage collection",
   `);
 });
 
+test("a worker-only native library survives worker and process teardown", {
+  skip: !!process.versions.bun || typeof globalThis.Deno !== "undefined",
+}, () => {
+  const worker = `
+    (async () => {
+      const { workerData } = await import("node:worker_threads");
+      const { TuiTest } = await import(workerData);
+      const terminal = TuiTest.ephemeral();
+      try {
+        await terminal.run(process.execPath, ["-e", "console.log('ready')"]);
+        await terminal.getSize();
+      } finally {
+        await terminal.close();
+      }
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  runWithGc(`
+    import assert from "node:assert/strict";
+    import { once } from "node:events";
+    import { Worker } from "node:worker_threads";
+    for (let i = 0; i < 3; i++) {
+      const worker = new Worker(${JSON.stringify(worker)}, {
+        eval: true,
+        workerData: ${JSON.stringify(new URL("../dist/index.js", import.meta.url).href)},
+      });
+      const [code] = await once(worker, "exit");
+      assert.equal(code, 0);
+    }
+  `);
+});
+
 test("nested input buffers remain live during native start and marshaling", () => {
   runWithGc(`
     import assert from "node:assert/strict";
