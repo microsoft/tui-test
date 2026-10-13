@@ -78,17 +78,19 @@ pub unsafe extern "C" fn tui_task_poll(task: *mut TuiTask) -> *mut TuiResult {
     let Some(receiver) = &task.receiver else {
         return std::ptr::null_mut();
     };
-    let completion = match receiver.try_recv() {
-        Ok(value) => value,
-        Err(TryRecvError::Empty) => return std::ptr::null_mut(),
-        Err(TryRecvError::Disconnected) => {
-            Err(TuiTestError::internal("native worker disconnected"))
+    match receiver.try_recv() {
+        Ok(completion) => {
+            task.receiver = None;
+            match completion {
+                Ok(value) => output::operation(value),
+                Err(error) => output::error(error),
+            }
         }
-    };
-    task.receiver = None;
-    match completion {
-        Ok(value) => output::operation(value),
-        Err(error) => output::error(error),
+        Err(TryRecvError::Empty) => std::ptr::null_mut(),
+        Err(TryRecvError::Disconnected) => {
+            task.receiver = None;
+            output::error(TuiTestError::internal("native worker disconnected"))
+        }
     }
 }
 

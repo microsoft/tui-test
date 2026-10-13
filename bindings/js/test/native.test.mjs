@@ -142,7 +142,7 @@ test("concurrent waits cannot starve input or close", async () => {
     assert.ok(sizes.every((size) => size.cols === 80 && size.rows === 30));
     assert.equal(completedWaits, 0, "short reads waited for long waits to complete");
     const start = performance.now();
-    await session.write("koffi-completed\n");
+    await session.submit("koffi-completed");
     await Promise.all(waits);
     assert.ok(performance.now() - start < 2000, "waits blocked the input call");
     const pending = Array.from({ length: 32 }, () => session.waitTitle("never-set", { timeoutMs: 5000 }).catch(mapNativeError));

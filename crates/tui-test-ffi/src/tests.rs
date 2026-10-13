@@ -71,6 +71,7 @@ unsafe fn message(result: *mut TuiResult) -> String {
 fn missing_sessions_retain_structured_errors_and_owned_messages() {
     for _ in 0..128 {
         let result = unsafe { tui_state(text(r#"{"name":"go-abi-missing-session"}"#)) };
+        assert!(!result.is_null());
         assert_eq!(unsafe { (*result).error_kind }, 3);
         assert!(unsafe { message(result) }.contains("no active session"));
         unsafe { tui_result_free(result) };
@@ -106,6 +107,7 @@ fn pointer_options_reject_null_and_preserve_validation() {
         ]
     };
     for result in results {
+        assert!(!result.is_null());
         assert_eq!(unsafe { (*result).error_kind }, 2);
         unsafe { tui_result_free(result) };
     }
@@ -122,6 +124,7 @@ fn panic_is_contained_and_next_call_succeeds() {
             TuiOptionalBool::default(),
         )
     };
+    assert!(!result.is_null());
     assert_eq!(unsafe { (*result).error_kind }, 0);
     unsafe { tui_result_free(result) };
 }
@@ -140,6 +143,7 @@ fn invalid_utf8_and_absent_required_inputs_report_usage() {
         },
     ] {
         let result = unsafe { tui_state(session) };
+        assert!(!result.is_null());
         assert_eq!(unsafe { (*result).error_kind }, 2);
         unsafe { tui_result_free(result) };
     }
@@ -224,6 +228,7 @@ fn c_context_and_owned_context_share_validation() {
             .unwrap_err();
         let encoded = context.to_string();
         let result = unsafe { tui_state(text(&encoded)) };
+        assert!(!result.is_null());
         assert_eq!(
             unsafe { (*result).error_kind },
             owned.kind.exit_code() as u32
@@ -244,6 +249,7 @@ fn c_context_and_owned_context_share_validation() {
     assert_eq!(context.screen_history_limit, Some(0));
 
     let result = unsafe { tui_state(text(r#"{"name":"ffi-context","unknown":true}"#)) };
+    assert!(!result.is_null());
     assert_eq!(unsafe { (*result).error_kind }, 2);
     assert!(unsafe { message(result) }.contains("unknown field"));
     unsafe { tui_result_free(result) };
