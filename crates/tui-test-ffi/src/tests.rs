@@ -25,12 +25,12 @@ fn typed_start_copies_inputs_and_transfers_result_once() {
         unsafe { tui_state_start(text(&context)) }
     };
     let result = unsafe { completed(task) };
-    assert_eq!(unsafe { (*result).error_kind }, 3);
+    assert_eq!(unsafe { error_kind(result) }, 3);
     assert!(unsafe { message(result) }.contains("no active session"));
     unsafe { tui_result_free(result) };
     let invalid = unsafe { tui_state_start(TuiString::default()) };
     let result = unsafe { completed(invalid) };
-    assert_eq!(unsafe { (*result).error_kind }, 2);
+    assert_eq!(unsafe { error_kind(result) }, 2);
     unsafe { tui_result_free(result) };
 }
 
@@ -38,7 +38,7 @@ fn typed_start_copies_inputs_and_transfers_result_once() {
 fn asynchronous_panics_are_contained() {
     let task = tasks::tui_panic_probe_start();
     let result = unsafe { completed(task) };
-    assert_eq!(unsafe { (*result).error_kind }, 5);
+    assert_eq!(unsafe { error_kind(result) }, 5);
     assert!(unsafe { message(result) }.contains("intentional native panic probe"));
     unsafe { tui_result_free(result) };
 }
@@ -64,15 +64,20 @@ fn text(value: &str) -> TuiString {
     }
 }
 unsafe fn message(result: *mut TuiResult) -> String {
-    unsafe { (*result).error_message.required().unwrap() }
+    let result = unsafe { result.as_ref() }.expect("native call returned a null result");
+    unsafe { result.error_message.required().unwrap() }
+}
+unsafe fn error_kind(result: *mut TuiResult) -> u32 {
+    unsafe { result.as_ref() }
+        .expect("native call returned a null result")
+        .error_kind
 }
 
 #[test]
 fn missing_sessions_retain_structured_errors_and_owned_messages() {
     for _ in 0..128 {
         let result = unsafe { tui_state(text(r#"{"name":"go-abi-missing-session"}"#)) };
-        assert!(!result.is_null());
-        assert_eq!(unsafe { (*result).error_kind }, 3);
+        assert_eq!(unsafe { error_kind(result) }, 3);
         assert!(unsafe { message(result) }.contains("no active session"));
         unsafe { tui_result_free(result) };
     }
@@ -107,15 +112,14 @@ fn pointer_options_reject_null_and_preserve_validation() {
         ]
     };
     for result in results {
-        assert!(!result.is_null());
-        assert_eq!(unsafe { (*result).error_kind }, 2);
+        assert_eq!(unsafe { error_kind(result) }, 2);
         unsafe { tui_result_free(result) };
     }
 }
 #[test]
 fn panic_is_contained_and_next_call_succeeds() {
     let result = boundary(|| panic!("intentional boundary test"));
-    assert_eq!(unsafe { (*result).error_kind }, 5);
+    assert_eq!(unsafe { error_kind(result) }, 5);
     assert!(unsafe { message(result) }.contains("panicked"));
     unsafe { tui_result_free(result) };
     let result = unsafe {
@@ -124,8 +128,7 @@ fn panic_is_contained_and_next_call_succeeds() {
             TuiOptionalBool::default(),
         )
     };
-    assert!(!result.is_null());
-    assert_eq!(unsafe { (*result).error_kind }, 0);
+    assert_eq!(unsafe { error_kind(result) }, 0);
     unsafe { tui_result_free(result) };
 }
 #[test]
@@ -143,8 +146,7 @@ fn invalid_utf8_and_absent_required_inputs_report_usage() {
         },
     ] {
         let result = unsafe { tui_state(session) };
-        assert!(!result.is_null());
-        assert_eq!(unsafe { (*result).error_kind }, 2);
+        assert_eq!(unsafe { error_kind(result) }, 2);
         unsafe { tui_result_free(result) };
     }
 }
@@ -228,11 +230,7 @@ fn c_context_and_owned_context_share_validation() {
             .unwrap_err();
         let encoded = context.to_string();
         let result = unsafe { tui_state(text(&encoded)) };
-        assert!(!result.is_null());
-        assert_eq!(
-            unsafe { (*result).error_kind },
-            owned.kind.exit_code() as u32
-        );
+        assert_eq!(unsafe { error_kind(result) }, owned.kind.exit_code() as u32);
         assert_eq!(unsafe { message(result) }, owned.message);
         unsafe { tui_result_free(result) };
     }
@@ -249,8 +247,7 @@ fn c_context_and_owned_context_share_validation() {
     assert_eq!(context.screen_history_limit, Some(0));
 
     let result = unsafe { tui_state(text(r#"{"name":"ffi-context","unknown":true}"#)) };
-    assert!(!result.is_null());
-    assert_eq!(unsafe { (*result).error_kind }, 2);
+    assert_eq!(unsafe { error_kind(result) }, 2);
     assert!(unsafe { message(result) }.contains("unknown field"));
     unsafe { tui_result_free(result) };
 }
