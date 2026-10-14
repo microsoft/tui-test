@@ -136,7 +136,7 @@ shift: "bool",
 types.TuiWaitOptions = koffi.struct("TuiWaitOptions", {
 timeout_ms: "TuiOptionalU64",
 regex: "bool",
-not: "bool",
+not_: "bool",
 });
 types.TuiRecordingOptions = koffi.struct("TuiRecordingOptions", {
 path: "TuiString",
@@ -333,7 +333,7 @@ shift: "bool",
 TuiWaitOptions: {
 timeout_ms: "TuiOptionalU64",
 regex: "bool",
-not: "bool",
+not_: "bool",
 },
 TuiRecordingOptions: {
 path: "TuiString",

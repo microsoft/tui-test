@@ -223,7 +223,7 @@ typedef struct TuiMouseOptions {
 typedef struct TuiWaitOptions {
   struct TuiOptionalU64 timeout_ms;
   bool regex;
-  bool not;
+  bool not_;
 } TuiWaitOptions;
 
 typedef struct TuiQuery {

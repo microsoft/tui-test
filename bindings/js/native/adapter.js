@@ -309,7 +309,7 @@ export function createAdapter(functions) {
       const input = new Inputs();
       const s = (v) => input.string(v);
       const u = (v) => input.struct("TuiOptionalU64", v);
-      const wait = (v) => input.struct("TuiWaitOptions", v);
+      const wait = (v) => input.struct("TuiWaitOptions", { ...v, not_: v.not });
       const options = values.options ?? {};
       const v = values;
       let name = `tui_${snake(method)}`;

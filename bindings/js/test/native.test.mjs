@@ -158,6 +158,20 @@ test("Koffi adapter loads the explicit shared library and honors invalid overrid
   assert.match(invalid.stderr, /Failed to load shared library/);
 });
 
+test("the C-compatible wait field preserves public negation options", async () => {
+  const session = new NativeSession(`negated-title-${process.pid}`);
+  try {
+    await session.run({
+      program: process.execPath,
+      args: [typeof globalThis.Deno === "undefined" ? "-e" : "eval", "setInterval(() => {}, 1000)"],
+    });
+    await session.waitTitle("never-matches", { not: true, timeoutMs: 0 });
+    await assert.rejects(session.waitTitle("never-matches", { timeoutMs: 0 }));
+  } finally {
+    await session.close();
+  }
+});
+
 test("concurrent waits cannot starve input or close", async () => {
   const session = new NativeSession(`koffi-concurrency-${process.pid}`);
   try {

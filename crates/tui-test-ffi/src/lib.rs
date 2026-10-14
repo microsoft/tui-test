@@ -540,7 +540,7 @@ pub unsafe extern "C" fn tui_wait_title(
             Ok(Operation::WaitTitle {
                 text: text.required()?,
                 regex: options.regex,
-                not: options.not,
+                not: options.not_,
                 timeout_ms: options.timeout_ms.option(),
             })
         })
@@ -560,7 +560,7 @@ pub unsafe extern "C" fn tui_expect_title(
             Ok(Operation::ExpectTitle {
                 text: text.required()?,
                 regex: options.regex,
-                not: options.not,
+                not: options.not_,
                 timeout_ms: options.timeout_ms.option(),
             })
         })
@@ -712,7 +712,7 @@ pub unsafe extern "C" fn tui_wait_locator(
         execute(session, "locator.wait", || {
             Ok(Operation::WaitLocator {
                 query: input::query(query)?,
-                not: options.not,
+                not: options.not_,
                 timeout_ms: options.timeout_ms.option(),
             })
         })
@@ -731,7 +731,7 @@ pub unsafe extern "C" fn tui_expect_locator(
         execute(session, "locator.expect", || {
             Ok(Operation::WaitLocator {
                 query: input::query(query)?,
-                not: options.not,
+                not: options.not_,
                 timeout_ms: options.timeout_ms.option(),
             })
         })

@@ -61,6 +61,11 @@ jobs:
       - run: cargo fmt --all -- --check
       - name: Verify generated native declarations
         run: cargo run --locked -p tui-test-bindgen -- --check
+      - name: Compile the native header as C and C++
+        if: runner.os != 'Windows'
+        run: |
+          cc -std=c11 -fsyntax-only -Icrates/tui-test-ffi/include .github/scripts/check-native-header.c
+          c++ -std=c++17 -x c++ -fsyntax-only -Icrates/tui-test-ffi/include .github/scripts/check-native-header.c
       - name: Test native package assembly
         if: runner.os == 'Linux'
         run: node --test .github/scripts/release/package-node.test.mjs

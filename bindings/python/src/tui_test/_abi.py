@@ -284,7 +284,7 @@ TuiMouseOptions._fields_ = [
 TuiWaitOptions._fields_ = [
     ("timeout_ms", TuiOptionalU64),
     ("regex", ctypes.c_bool),
-    ("not", ctypes.c_bool),
+    ("not_", ctypes.c_bool),
 ]
 
 

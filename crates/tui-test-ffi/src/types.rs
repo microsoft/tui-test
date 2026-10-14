@@ -234,7 +234,7 @@ pub struct TuiMouseOptions {
 pub struct TuiWaitOptions {
     pub timeout_ms: TuiOptionalU64,
     pub regex: bool,
-    pub not: bool,
+    pub not_: bool,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

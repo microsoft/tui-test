@@ -384,7 +384,12 @@ fn input_models(models: &Models, c: &mut String, ci: &mut String) -> Result<()> 
             "#[repr(C)] #[derive(Clone,Copy,Default)] pub struct Tui{target} {{"
         )?;
         for f in input_fields(models, model, false)? {
-            writeln!(c, "pub {}: {},", ident(&f.name), f.ty)?;
+            let field = if f.name == "not" {
+                "not_"
+            } else {
+                ident(&f.name)
+            };
+            writeln!(c, "pub {field}: {},", f.ty)?;
         }
         c.push_str("}\n");
     }
@@ -580,6 +585,8 @@ pub(crate) mod tests {
         models.parse("struct Timeouts { new_wait: Option<u64> } struct DiagnosticRetentionOptions { new_limit: u16 }").unwrap();
         let (mut c, mut ci) = Default::default();
         input_models(&models, &mut c, &mut ci).unwrap();
+        assert!(c.contains("pub not_: bool"));
+        assert!(!c.contains("pub not: bool"));
         assert!(c.contains("pub new_wait: TuiOptionalU64"));
         assert!(ci.contains("new_wait: value.new_wait.option()"));
         let context = session_input(&models).unwrap();
