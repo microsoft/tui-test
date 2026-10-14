@@ -2281,6 +2281,128 @@ fn session_records_and_exports_an_apng() {
     std::fs::remove_file(path).expect("remove apng");
 }
 
+#[cfg(all(unix, feature = "recording-raster"))]
+#[test]
+fn recording_export_matches_the_session_backend_and_profile() {
+    use tui_test::profile::{Profile, Rgb};
+
+    fn final_pixels(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
+        let mut reader = png::Decoder::new(std::fs::File::open(path).unwrap())
+            .read_info()
+            .unwrap();
+        let frames = reader
+            .info()
+            .animation_control
+            .map_or(1, |info| info.num_frames);
+        let mut pixels = vec![0; reader.output_buffer_size()];
+        let mut size = 0;
+        for _ in 0..frames {
+            size = reader.next_frame(&mut pixels).unwrap().buffer_size();
+        }
+        pixels.truncate(size);
+        (reader.info().width, reader.info().height, pixels)
+    }
+
+    let mut mismatches = Vec::new();
+    for &backend in tui_test::Backend::ALL {
+        for (scenario, initial, output) in [
+            (
+                "backend",
+                "READY",
+                "\\033[?25l\\033[H\\033[2JPRIMARY\\033[?47h\
+                 \\033[H\\033[2JALT\\033[?1049l",
+            ),
+            (
+                "profile",
+                "READY",
+                "\\033]11;#abcdef\\007\\033]111\\007\
+                 \\033[?25l\\033[H\\033[2JRESET",
+            ),
+            (
+                "existing-alternate-screen",
+                "\\033[?25lPRIMARY\\033[?1049h\\033[H\\033[2JREADY",
+                "\\033[?1049l",
+            ),
+            ("resize-without-output", "\\033[?25lREADY", ""),
+            ("no-new-output", "\\033[?25lREADY", ""),
+        ] {
+            let name = format!("recording-{backend:?}-{scenario}-{}", std::process::id());
+            let session = Session::new(&name);
+            let animation = std::env::temp_dir().join(format!("{name}.apng"));
+            let screenshot = std::env::temp_dir().join(format!("{name}.png"));
+            let script = format!(
+                "stty -echo; printf '{initial}'; read -r _; \
+                 printf '{output}\\033[2;1HDONE'; read -r _"
+            );
+            let mut options = run_options("sh", &["-c", &script]);
+            options.backend = backend;
+            options.cols = 16;
+            options.rows = 2;
+            if scenario == "profile" {
+                options.profile = Profile {
+                    colors: tui_test::profile::Colors {
+                        background: Rgb::new(12, 34, 56),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+            }
+            session.run(options).unwrap();
+            session
+                .get_by_text("READY")
+                .wait_with_timeout(Some(5_000))
+                .unwrap();
+            session
+                .execute(Operation::StartRecording {
+                    path: animation.to_string_lossy().into_owned(),
+                    format: None,
+                    fps: Some(30),
+                    speed: None,
+                    idle_time_limit: None,
+                    zoom: Some(0.5),
+                    background: None,
+                })
+                .unwrap();
+            if scenario == "resize-without-output" {
+                session
+                    .execute(Operation::Resize { cols: 20, rows: 4 })
+                    .unwrap();
+            } else if scenario != "no-new-output" {
+                session
+                    .execute(Operation::Write { data: "\n".into() })
+                    .unwrap();
+                session
+                    .get_by_text("DONE")
+                    .wait_with_timeout(Some(5_000))
+                    .unwrap();
+            }
+            session
+                .execute(Operation::Screenshot {
+                    full: false,
+                    path: Some(screenshot.to_string_lossy().into_owned()),
+                    zoom: Some(1.0),
+                    background: None,
+                })
+                .unwrap();
+            session.execute(Operation::StopRecording).unwrap();
+            session.close().unwrap();
+
+            let expected = final_pixels(&screenshot);
+            let actual = final_pixels(&animation);
+            std::fs::remove_file(screenshot).unwrap();
+            std::fs::remove_file(animation).unwrap();
+            assert_eq!((actual.0, actual.1), (expected.0, expected.1));
+            if actual.2 != expected.2 {
+                mismatches.push(format!("{backend:?} {scenario}"));
+            }
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "final recording frames differ from session screenshots: {mismatches:?}"
+    );
+}
+
 /// `expect colors` waits for a program to recolor the terminal, and matches
 /// every slot it was given as one state.
 #[cfg(unix)]
