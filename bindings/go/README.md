@@ -33,6 +33,12 @@ Use a host-native build. Cross-compilation also requires the destination Rust ta
    cargo build --locked -p tui-test-ffi
    ```
 
+   On musl Linux, use this command instead so Rust emits the shared library:
+
+   ```sh
+   RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static" cargo build --locked -p tui-test-ffi
+   ```
+
    The debug library is `target/debug/libtui_test_ffi.so` on Linux, `target/debug/libtui_test_ffi.dylib` on macOS, or `target/debug/tui_test_ffi.dll` on Windows. See [building and maintaining the Go binding](CONTRIBUTING.md#build-from-source) for release builds and platform-specific test commands.
 
 3. In the Go application module, point the module path at the same checkout, then add it:

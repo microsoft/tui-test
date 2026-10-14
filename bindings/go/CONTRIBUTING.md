@@ -44,6 +44,22 @@ From the repository root:
 cargo build --locked -p tui-test-ffi
 ```
 
+On musl Linux, disable static CRT linkage so Rust emits a `cdylib`:
+
+```sh
+RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static" cargo build --locked -p tui-test-ffi
+```
+
+Keep this flag for release builds and explicit musl targets.
+For a cross-build, install `cargo-zigbuild` and the Rust target, then run:
+
+```sh
+RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static" cargo zigbuild --locked -p tui-test-ffi --target x86_64-unknown-linux-musl
+```
+
+The cross-built library is `target/x86_64-unknown-linux-musl/debug/libtui_test_ffi.so`.
+It must run on a musl host with the C++ runtime installed, such as Alpine with `libstdc++`.
+
 The shared library enables all terminal backends and bundled recording font styles. Zig is required by the Ghostty dependency.
 
 Set `TUI_TEST_NATIVE_LIBRARY` to the built library before running a Go application or test. For Linux:
