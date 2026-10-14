@@ -1827,6 +1827,27 @@ mod tests {
     }
 
     #[test]
+    fn daemon_with_same_package_and_pre_style_protocol_is_incompatible() {
+        let status = Response::with(json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "protocol_version": 5,
+        }));
+        let identity = DaemonIdentity {
+            version: daemon_version(&status),
+            protocol_version: daemon_protocol_version(&status),
+        };
+        assert!(
+            !identity.compatible(),
+            "ensure_daemon must replace a daemon that cannot apply Open style"
+        );
+        assert!(DaemonIdentity {
+            protocol_version: protocol::PROTOCOL_VERSION,
+            ..identity
+        }
+        .compatible());
+    }
+
+    #[test]
     fn daemon_identity_uses_package_version() {
         assert_eq!(
             daemon_version(&Response::with(json!({
