@@ -71,6 +71,43 @@ test("a worker-only native library survives worker and process teardown", {
   `);
 });
 
+test("terminating a worker during a native wait preserves the loaded engine", {
+  skip: !!process.versions.bun || typeof globalThis.Deno !== "undefined",
+}, () => {
+  const worker = `
+    (async () => {
+      const { parentPort, workerData } = await import("node:worker_threads");
+      const binding = await import(workerData.url);
+      if (workerData.cleanup) {
+        const assert = (await import("node:assert/strict")).default;
+        assert.ok((await binding.sessions()).includes("pending-worker"));
+        await binding.closeAll();
+        return;
+      }
+      const session = new binding.NativeSession("pending-worker");
+      await session.run({ program: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] });
+      session.waitTitle("never-matches", { timeoutMs: 30000 }).catch(() => {});
+      parentPort.postMessage("waiting");
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  runWithGc(`
+    import assert from "node:assert/strict";
+    import { once } from "node:events";
+    import { Worker } from "node:worker_threads";
+    const options = {
+      eval: true,
+      workerData: { url: ${JSON.stringify(new URL("../native/index.js", import.meta.url).href)} },
+    };
+    const worker = new Worker(${JSON.stringify(worker)}, options);
+    assert.deepEqual(await once(worker, "message"), ["waiting"]);
+    assert.equal(await worker.terminate(), 1);
+    const cleanup = new Worker(${JSON.stringify(worker)}, {
+      ...options, workerData: { ...options.workerData, cleanup: true },
+    });
+    assert.deepEqual(await once(cleanup, "exit"), [0]);
+  `);
+});
+
 test("nested input buffers remain live during native start and marshaling", () => {
   runWithGc(`
     import assert from "node:assert/strict";

@@ -25,7 +25,8 @@ function libraryPath() {
   return createRequire(import.meta.url).resolve(`@microsoft/tui-test-${tag}`);
 }
 
-const library = koffi.load(libraryPath());
+const path = libraryPath();
+const library = koffi.load(path);
 let platformLibrary;
 if (process.platform === "win32") {
   // Rust thread-local destructors can outlive the JavaScript environment.
@@ -39,6 +40,21 @@ if (process.platform === "win32") {
     [null],
   )) {
     throw new Error("Failed to retain the tui-test native library for process lifetime");
+  }
+} else {
+  platformLibrary = koffi.load(null);
+  const open = platformLibrary.func("void *dlopen(const char *path, int flags)");
+  const close = platformLibrary.func("int dlclose(void *handle)");
+  const lastError = platformLibrary.func("const char *dlerror()");
+  const RTLD_NOW = 2;
+  const RTLD_NODELETE = process.platform === "darwin" ? 0x80 : 0x1000;
+  // Keep code mapped after the last environment exits, including detached tasks.
+  const retained = open(path, RTLD_NOW | RTLD_NODELETE);
+  if (retained === null) {
+    throw new Error(`Failed to retain the tui-test native library: ${lastError()}`);
+  }
+  if (close(retained) !== 0) {
+    throw new Error(`Failed to release the temporary native library handle: ${lastError()}`);
   }
 }
 // Keep the library handle alive with its functions. Bun cannot safely finalize
