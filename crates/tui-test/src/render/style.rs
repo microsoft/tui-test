@@ -31,8 +31,10 @@ pub struct FontFamilies {
     pub bold: Option<String>,
     pub italic: Option<String>,
     pub bold_italic: Option<String>,
-    /// Extra font files or directories, relative to the config file.
+    /// Extra font files, relative to the config file.
     /// Unavailable fonts fall back to bundled and system fonts.
+    /// Raster output loads each canonical path once, with a total 64 MiB limit.
+    /// Font data above this limit causes an error.
     pub files: Vec<PathBuf>,
 }
 

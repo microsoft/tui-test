@@ -274,6 +274,9 @@ recording has three backgrounds, and `canvas_background` is the outermost.
 
 Naming a font family that no installed or loaded face provides is not an error.
 It falls back, exactly as an unavailable system font does.
+Unavailable font files also use this fallback.
+Raster output loads each canonical file path once.
+Custom font files share a total 64 MiB data limit; exceeding this limit returns an error.
 
 Use a monospace font. Cell width is derived from `font_size` by a fixed ratio
 and glyphs are scaled horizontally to fit it, so a proportional face draws

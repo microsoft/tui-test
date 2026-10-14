@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use super::style::FontFamilies;
 
@@ -123,42 +123,71 @@ fn base_database() -> &'static fontdb::Database {
     })
 }
 
-pub(crate) fn catalog_for(font: &FontFamilies) -> Arc<Catalog> {
-    static CATALOGS: OnceLock<Mutex<HashMap<FontFamilies, Arc<Catalog>>>> = OnceLock::new();
+static CATALOGS: OnceLock<Mutex<HashMap<FontFamilies, Weak<Catalog>>>> = OnceLock::new();
+
+pub(crate) fn catalog_for(font: &FontFamilies) -> anyhow::Result<Arc<Catalog>> {
     let mut catalogs = CATALOGS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(existing) = catalogs.get(font) {
-        return Arc::clone(existing);
+    catalogs.retain(|_, catalog| catalog.strong_count() > 0);
+    if let Some(existing) = catalogs.get(font).and_then(Weak::upgrade) {
+        return Ok(existing);
     }
     // Hold the lock to avoid duplicate, expensive font ranking.
-    let catalog = Arc::new(build_catalog(font));
-    catalogs.insert(font.clone(), Arc::clone(&catalog));
-    catalog
+    let catalog = Arc::new(build_catalog(font)?);
+    catalogs.insert(font.clone(), Arc::downgrade(&catalog));
+    Ok(catalog)
 }
 
-/// Bound memory use for font paths from untrusted config files.
+/// Bound total custom font data from untrusted config files.
 const MAX_FONT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Unlike fontdb's path loader, read only regular files with a size limit.
 /// Unavailable files use the normal font fallback.
-fn load_named_font(database: &mut fontdb::Database, path: &Path) {
+fn load_named_font(
+    database: &mut fontdb::Database,
+    path: &Path,
+    remaining: &mut u64,
+) -> anyhow::Result<()> {
     if !path.metadata().is_ok_and(|meta| meta.is_file()) {
-        return;
+        return Ok(());
     }
+    let Ok(file) = File::open(path) else {
+        return Ok(());
+    };
+    let Ok(metadata) = file.metadata() else {
+        return Ok(());
+    };
+    if !metadata.is_file() {
+        return Ok(());
+    }
+    if metadata.len() > *remaining {
+        anyhow::bail!("custom font data exceeds the {MAX_FONT_FILE_BYTES} byte limit");
+    }
+    // Read one extra byte to detect growth after the metadata check.
     let mut data = Vec::new();
-    let read =
-        File::open(path).and_then(|file| file.take(MAX_FONT_FILE_BYTES).read_to_end(&mut data));
+    let read = file.take(*remaining + 1).read_to_end(&mut data);
+    if data.len() as u64 > *remaining {
+        anyhow::bail!("custom font data exceeds the {MAX_FONT_FILE_BYTES} byte limit");
+    }
     if read.is_ok() {
+        *remaining -= data.len() as u64;
         database.load_font_data(data);
     }
+    Ok(())
 }
 
-fn build_catalog(font: &FontFamilies) -> Catalog {
+fn build_catalog(font: &FontFamilies) -> anyhow::Result<Catalog> {
     let mut database = base_database().clone();
+    let mut seen = HashSet::new();
+    let mut remaining = MAX_FONT_FILE_BYTES;
     for path in &font.files {
-        load_named_font(&mut database, path);
+        if let Ok(path) = path.canonicalize() {
+            if seen.insert(path.clone()) {
+                load_named_font(&mut database, &path, &mut remaining)?;
+            }
+        }
     }
 
     let candidates = std::array::from_fn(|index| {
@@ -182,11 +211,11 @@ fn build_catalog(font: &FontFamilies) -> Catalog {
         })
         .map(|face| face.id)
         .collect();
-    Catalog {
+    Ok(Catalog {
         database: Arc::new(database),
         candidates,
         nerd_faces,
-    }
+    })
 }
 
 fn load_bundled_fonts(database: &mut fontdb::Database) {
@@ -363,9 +392,132 @@ fn is_exact_jetbrains_style(face: &fontdb::FaceInfo, bold: bool, italic: bool) -
 mod tests {
     use super::*;
 
+    struct FontFiles(std::path::PathBuf);
+
+    impl FontFiles {
+        fn new(name: &str) -> Self {
+            let path =
+                std::path::PathBuf::from(format!(".font-review-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn write(&self, name: &str, bytes: Option<u64>) -> std::path::PathBuf {
+            let path = self.0.join(name);
+            std::fs::write(&path, crate::render::nerd_font::FONT_DATA).unwrap();
+            if let Some(bytes) = bytes {
+                File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_len(bytes)
+                    .unwrap();
+            }
+            path
+        }
+    }
+
+    impl Drop for FontFiles {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn repeated_custom_font_paths_load_only_one_copy() {
+        let files = FontFiles::new("duplicates");
+        let path = files.write("font.ttf", None);
+        let font = FontFamilies {
+            files: vec![path.clone(), path.canonicalize().unwrap(), path],
+            ..FontFamilies::default()
+        };
+        let original = font.clone();
+        let catalog = catalog_for(&font).unwrap();
+        let mut expected = base_database().clone();
+        expected.load_font_data(crate::render::nerd_font::FONT_DATA.to_vec());
+        assert_eq!(catalog.database.len(), expected.len());
+        assert_eq!(font, original);
+    }
+
+    #[test]
+    fn custom_font_files_share_a_total_byte_budget() {
+        let files = FontFiles::new("budget");
+        let style = crate::render::style::Style {
+            font: FontFamilies {
+                files: vec![
+                    files.write("one.ttf", Some(MAX_FONT_FILE_BYTES / 2)),
+                    files.write("two.ttf", Some(MAX_FONT_FILE_BYTES / 2 + 1)),
+                ],
+                ..FontFamilies::default()
+            },
+            ..crate::render::style::Style::default()
+        };
+        let original = style.clone();
+        let error = crate::render::raster::GridRenderer::with_zoom(1, 1, 1.0, style.clone())
+            .err()
+            .expect("custom font files above the total byte limit must fail");
+        assert!(error.to_string().contains("custom font"));
+        assert!(error.to_string().contains(&MAX_FONT_FILE_BYTES.to_string()));
+        assert_eq!(style, original);
+        files.write("two.ttf", None);
+        assert!(
+            catalog_for(&style.font).is_ok(),
+            "a failed load is not cached"
+        );
+    }
+
+    #[test]
+    fn custom_fonts_at_the_byte_limit_load_and_duplicates_cost_nothing() {
+        let files = FontFiles::new("exact-budget");
+        let first = files.write("one.ttf", Some(MAX_FONT_FILE_BYTES / 2));
+        let second = files.write("two.ttf", Some(MAX_FONT_FILE_BYTES / 2));
+        let font = FontFamilies {
+            files: vec![first.clone(), second, first.canonicalize().unwrap()],
+            ..FontFamilies::default()
+        };
+        assert!(catalog_for(&font).is_ok());
+    }
+
+    #[test]
+    fn a_single_oversized_custom_font_reports_the_byte_limit() {
+        let files = FontFiles::new("oversized");
+        let font = FontFamilies {
+            files: vec![files.write("font.ttf", Some(MAX_FONT_FILE_BYTES + 1))],
+            ..FontFamilies::default()
+        };
+        let error = catalog_for(&font).err().expect("oversized font must fail");
+        assert!(error.to_string().contains(&MAX_FONT_FILE_BYTES.to_string()));
+    }
+
+    #[test]
+    fn unused_catalogs_are_released() {
+        let font = FontFamilies {
+            family: "unused catalog regression".into(),
+            ..FontFamilies::default()
+        };
+        let renderer = crate::render::raster::GridRenderer::with_zoom(
+            1,
+            1,
+            1.0,
+            crate::render::style::Style {
+                font: font.clone(),
+                ..crate::render::style::Style::default()
+            },
+        )
+        .unwrap();
+        let catalog = catalog_for(&font).unwrap();
+        let weak = Arc::downgrade(&catalog);
+        drop(catalog);
+        assert!(weak.upgrade().is_some(), "the renderer owns its catalog");
+        drop(renderer);
+        assert!(weak.upgrade().is_none());
+        let _next = catalog_for(&FontFamilies::default()).unwrap();
+        assert!(!CATALOGS.get().unwrap().lock().unwrap().contains_key(&font));
+    }
+
     #[test]
     fn catalog_contains_the_bundled_nerd_face() {
-        let catalog = catalog_for(&FontFamilies::default());
+        let catalog = catalog_for(&FontFamilies::default()).unwrap();
         assert!(!catalog.nerd_faces.is_empty());
     }
 
@@ -508,8 +660,8 @@ mod tests {
 
     #[test]
     fn catalogs_are_cached_per_style_and_differ_between_them() {
-        let one = catalog_for(&FontFamilies::default());
-        let again = catalog_for(&FontFamilies::default());
+        let one = catalog_for(&FontFamilies::default()).unwrap();
+        let again = catalog_for(&FontFamilies::default()).unwrap();
         assert!(
             Arc::ptr_eq(&one, &again),
             "the same fonts reuse the catalog rather than rescanning"
@@ -518,7 +670,8 @@ mod tests {
         let other = catalog_for(&FontFamilies {
             family: "Berkeley Mono".into(),
             ..FontFamilies::default()
-        });
+        })
+        .unwrap();
         assert!(
             !Arc::ptr_eq(&one, &other),
             "and different fonts get their own"
@@ -531,16 +684,22 @@ mod tests {
     fn a_font_file_that_is_not_a_regular_file_is_not_read() {
         let mut database = fontdb::Database::new();
         let before = database.len();
+        let mut remaining = MAX_FONT_FILE_BYTES;
 
         // Reading either of these to the end never terminates. fontdb would.
         for path in ["/dev/zero", "/dev/urandom"] {
             let path = Path::new(path);
             if path.exists() {
-                load_named_font(&mut database, path);
+                load_named_font(&mut database, path, &mut remaining).unwrap();
             }
         }
-        load_named_font(&mut database, Path::new("/definitely/not/here.ttf"));
-        load_named_font(&mut database, Path::new("/"));
+        load_named_font(
+            &mut database,
+            Path::new("/definitely/not/here.ttf"),
+            &mut remaining,
+        )
+        .unwrap();
+        load_named_font(&mut database, Path::new("/"), &mut remaining).unwrap();
 
         assert_eq!(
             database.len(),
@@ -559,7 +718,8 @@ mod tests {
         std::fs::write(&path, crate::render::nerd_font::FONT_DATA).unwrap();
 
         let mut database = fontdb::Database::new();
-        load_named_font(&mut database, &path);
+        let mut remaining = MAX_FONT_FILE_BYTES;
+        load_named_font(&mut database, &path, &mut remaining).unwrap();
         assert!(!database.is_empty(), "a regular font file still loads");
 
         std::fs::remove_dir_all(&dir).ok();

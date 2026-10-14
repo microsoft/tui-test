@@ -30,11 +30,11 @@ pub(super) struct FontSystem {
 impl FontSystem {
     /// Built from the style's fonts, so a recording draws with the family the
     /// config named rather than whatever the catalog ranked first.
-    pub fn new(font: &crate::render::style::FontFamilies) -> Self {
-        Self {
-            catalog: catalog::catalog_for(font),
+    pub fn new(font: &crate::render::style::FontFamilies) -> anyhow::Result<Self> {
+        Ok(Self {
+            catalog: catalog::catalog_for(font)?,
             glyphs: HashMap::new(),
-        }
+        })
     }
 
     pub fn resolve(&mut self, key: GlyphKey) -> Option<&GlyphOutline> {
