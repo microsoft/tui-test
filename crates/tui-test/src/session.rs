@@ -45,6 +45,8 @@ pub struct TermState {
     pub(crate) profile: Profile,
     /// How this session's screenshots and recordings are drawn.
     pub(crate) style: crate::render::style::Style,
+    #[cfg(feature = "recording-raster")]
+    recording_frames: Option<record::frames::FrameCapture>,
     /// Shell-integration state, derived from the raw PTY stream rather than
     /// the emulator, so it is identical across backends.
     pub tracker: CommandTracker,
@@ -142,6 +144,8 @@ impl Session {
             emu,
             profile,
             style,
+            #[cfg(feature = "recording-raster")]
+            recording_frames: None,
             tracker: CommandTracker::new(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,
@@ -245,6 +249,8 @@ impl Session {
                             st.mouse_mode.process(&buf[..n]);
                             st.highlight = None;
                             reader_recorder.on_data(&buf[..n]);
+                            #[cfg(feature = "recording-raster")]
+                            capture_recording_frame(&mut st);
                             let _ = try_capture_visual_state(&mut st, false);
                             st.emu.take_pending_writes()
                         };
@@ -449,7 +455,7 @@ impl Session {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (cols, rows) = state.emu.size();
         let initial_output = record::cast::snapshot_to_ansi(state.emu.as_ref());
-        let result = self.recorder.start(StartRecording {
+        let request = StartRecording {
             target_path,
             capture_path,
             format,
@@ -472,9 +478,27 @@ impl Session {
             },
             #[cfg(feature = "recording-raster")]
             ffmpeg_path,
-        });
-        drop(state);
-        result.map_err(capture_error)
+        };
+        #[cfg(feature = "recording-raster")]
+        let frames = if format == crate::api::RecordingFormat::Cast {
+            None
+        } else {
+            Some(
+                record::frames::FrameCapture::new(
+                    state.emu.as_ref(),
+                    request.timeline.clone(),
+                    Instant::now(),
+                )
+                .map_err(|error| crate::api::TuiTestError::internal(error.to_string()))?,
+            )
+        };
+        self.recorder.start(request).map_err(capture_error)?;
+        #[cfg(feature = "recording-raster")]
+        {
+            let mut state = state;
+            state.recording_frames = frames;
+        }
+        Ok(())
     }
 
     pub fn stop_recording(&self) -> Result<String, crate::api::TuiTestError> {
@@ -482,6 +506,10 @@ impl Session {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(feature = "recording-raster")]
+        let mut state = state;
+        #[cfg(feature = "recording-raster")]
+        let frames = state.recording_frames.take();
         let stopped = self.recorder.stop().map_err(capture_error)?;
         drop(state);
         if stopped.format == crate::api::RecordingFormat::Cast {
@@ -497,8 +525,9 @@ impl Session {
         {
             let temporary_path = temporary_output_path(&stopped.target_path);
             let result = (|| -> anyhow::Result<()> {
-                let cast = record::cast::read(&stopped.capture_path)?;
-                let frames = record::frames::from_cast(cast, &stopped.timeline)?;
+                let frames = frames
+                    .ok_or_else(|| anyhow::anyhow!("recording frames are unavailable"))?
+                    .finish()?;
                 let (max_cols, max_rows) = record::frames::max_dimensions(&frames)?;
                 let mut renderer = GridRenderer::with_zoom_and_background(
                     max_cols,
@@ -617,7 +646,16 @@ fn resize_emulator_and_record(state: &mut TermState, recorder: &Recorder, cols: 
     state.screen_dirty = true;
     state.last_change = Instant::now();
     state.highlight = None;
+    #[cfg(feature = "recording-raster")]
+    capture_recording_frame(state);
     let _ = try_capture_visual_state(state, true);
+}
+
+#[cfg(feature = "recording-raster")]
+fn capture_recording_frame(state: &mut TermState) {
+    if let Some(frames) = state.recording_frames.as_mut() {
+        frames.capture(state.emu.as_ref(), Instant::now());
+    }
 }
 
 pub(crate) fn capture_visual_state(state: &mut TermState, force: bool) -> u64 {
@@ -829,6 +867,8 @@ mod tests {
             emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
             profile: Profile::default(),
             style: crate::render::style::Style::default(),
+            #[cfg(feature = "recording-raster")]
+            recording_frames: None,
             tracker: CommandTracker::new(),
             mouse_mode: MouseModeTracker::new(),
             observed_clipboard_revision: 0,

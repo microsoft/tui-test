@@ -1,14 +1,8 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::profile::Profile;
 use crate::render::svg::RenderState;
-use crate::terminal::alacritty::AlacrittyEmu;
 use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::Emulator;
-
-use std::io::BufRead;
-
-use super::cast::{CastEventKind, CastReader};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
@@ -76,70 +70,62 @@ impl Default for TimelineOptions {
     }
 }
 
-pub(crate) fn from_cast<R: BufRead>(
-    mut cast: CastReader<R>,
-    options: &TimelineOptions,
-) -> anyhow::Result<Vec<Frame>> {
-    validate_options(options)?;
-    let mut cols = cast.header.width;
-    let mut rows = cast.header.height;
-    let mut emulator = AlacrittyEmu::new(cols, rows, &Profile::default());
-    let mut clock = TimelineClock::default();
-    let mut pending: Option<TimedGrid> = None;
-    let mut collector = FrameCollector::new(Duration::from_secs_f64(1.0 / f64::from(options.fps)));
+pub(crate) struct FrameCapture {
+    started: Instant,
+    options: TimelineOptions,
+    clock: TimelineClock,
+    pending: TimedGrid,
+    collector: FrameCollector,
+    error: Option<anyhow::Error>,
+}
 
-    for event in &mut cast {
-        let event = event?;
-        let at = clock.advance(event.time, options)?;
-        if let Some(snapshot) = pending.take() {
-            collector.push(Frame {
-                grid: snapshot.grid,
-                title: snapshot.title,
-                duration: at.saturating_sub(snapshot.at),
-                render_state: snapshot.render_state,
-                cursor: snapshot.cursor,
-            });
-        }
-        match event.kind {
-            CastEventKind::Output(output) => emulator.process(output.as_bytes()),
-            CastEventKind::Resize(width, height) => {
-                emulator.resize(width, height);
-                cols = width;
-                rows = height;
+impl FrameCapture {
+    pub(crate) fn new(
+        emulator: &dyn Emulator,
+        options: TimelineOptions,
+        started: Instant,
+    ) -> anyhow::Result<Self> {
+        validate_options(&options)?;
+        let mut clock = TimelineClock::default();
+        clock.advance(0.0, &options)?;
+        Ok(Self {
+            started,
+            collector: FrameCollector::new(Duration::from_secs_f64(1.0 / f64::from(options.fps))),
+            options,
+            clock,
+            pending: TimedGrid::capture(emulator, Duration::ZERO)?,
+            error: None,
+        })
+    }
+
+    pub(crate) fn capture(&mut self, emulator: &dyn Emulator, at: Instant) {
+        if self.error.is_none() {
+            if let Err(error) = self.push(emulator, at) {
+                self.error = Some(error);
             }
         }
-        pending = Some(TimedGrid {
-            at,
-            grid: normalize_grid(emulator.viewable_rows(), cols, rows),
-            title: emulator.title(),
-            render_state: RenderState::capture(&emulator),
-            cursor: emulator.cursor_visible().then(|| {
-                let (x, y) = emulator.cursor();
-                (x, usize::from(y))
-            }),
-        });
     }
 
-    match pending {
-        Some(snapshot) => collector.push(Frame {
-            grid: snapshot.grid,
-            title: snapshot.title,
-            duration: options.last_frame_duration,
-            render_state: snapshot.render_state,
-            cursor: snapshot.cursor,
-        }),
-        None => {
-            let (x, y) = emulator.cursor();
-            collector.push(Frame {
-                grid: vec![vec![EmuCell::blank(); usize::from(cols)]; usize::from(rows)],
-                title: emulator.title(),
-                duration: options.last_frame_duration,
-                render_state: RenderState::capture(&emulator),
-                cursor: emulator.cursor_visible().then_some((x, usize::from(y))),
-            });
-        }
+    fn push(&mut self, emulator: &dyn Emulator, at: Instant) -> anyhow::Result<()> {
+        let at = self.clock.advance(
+            at.saturating_duration_since(self.started).as_secs_f64(),
+            &self.options,
+        )?;
+        let next = TimedGrid::capture(emulator, at)?;
+        let previous = std::mem::replace(&mut self.pending, next);
+        let duration = at.saturating_sub(previous.at);
+        self.collector.push(previous.into_frame(duration));
+        Ok(())
     }
-    Ok(collector.finish())
+
+    pub(crate) fn finish(mut self) -> anyhow::Result<Vec<Frame>> {
+        if let Some(error) = self.error {
+            return Err(error);
+        }
+        self.collector
+            .push(self.pending.into_frame(self.options.last_frame_duration));
+        Ok(self.collector.finish())
+    }
 }
 
 fn validate_options(options: &TimelineOptions) -> anyhow::Result<()> {
@@ -186,10 +172,34 @@ fn normalize_grid(source: Vec<Vec<EmuCell>>, cols: u16, rows: u16) -> Vec<Vec<Em
 
 struct TimedGrid {
     at: Duration,
-    grid: Vec<Vec<EmuCell>>,
-    title: Option<String>,
-    render_state: RenderState,
-    cursor: Option<(u16, usize)>,
+    frame: Frame,
+}
+
+impl TimedGrid {
+    fn capture(emulator: &dyn Emulator, at: Duration) -> anyhow::Result<Self> {
+        let (cols, rows) = emulator.size();
+        let frame = Frame {
+            grid: normalize_grid(emulator.viewable_rows(), cols, rows),
+            title: emulator.title(),
+            duration: Duration::ZERO,
+            render_state: RenderState::capture(emulator),
+            cursor: emulator.cursor_visible().then(|| {
+                let (x, y) = emulator.cursor();
+                (x, usize::from(y))
+            }),
+        };
+        if let Some(error) = emulator.fault() {
+            anyhow::bail!("recording frame capture failed: {error}");
+        }
+        Ok(Self { at, frame })
+    }
+
+    fn into_frame(self, duration: Duration) -> Frame {
+        Frame {
+            duration,
+            ..self.frame
+        }
+    }
 }
 
 struct FrameCollector {
@@ -245,12 +255,13 @@ impl FrameCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profile::Profile;
+    use crate::terminal::alacritty::AlacrittyEmu;
+    use crate::terminal::backend::Backend;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[cfg(feature = "recording-raster")]
     use crate::api::RecordingFormat;
-    #[cfg(feature = "recording-raster")]
-    use crate::record::cast::CastWriter;
     #[cfg(feature = "recording-raster")]
     use crate::render::raster::{FrameRenderer, GridRenderer};
 
@@ -321,64 +332,42 @@ mod tests {
 
     #[test]
     #[cfg(feature = "recording-raster")]
-    fn replay_retains_only_fps_limited_frames() {
-        let cast_path = temp_path("cast");
-        let started = std::time::Instant::now();
-        let mut writer = CastWriter::create(&cast_path, 1, 1, &[], started).unwrap();
+    fn capture_retains_only_fps_limited_frames() {
+        let started = Instant::now();
+        let mut emulator = AlacrittyEmu::new(1, 1, &Profile::default());
+        let mut capture =
+            FrameCapture::new(&emulator, TimelineOptions::default(), started).unwrap();
         for index in 0..1_000 {
-            writer
-                .write_output(
-                    started + Duration::from_millis(index),
-                    if index % 2 == 0 { "\rA" } else { "\rB" },
-                )
-                .unwrap();
+            emulator.process(if index % 2 == 0 { b"\rA" } else { b"\rB" });
+            capture.capture(&emulator, started + Duration::from_millis(index));
         }
-        writer.flush().unwrap();
 
-        let frames = from_cast(
-            crate::record::cast::read(&cast_path).unwrap(),
-            &TimelineOptions::default(),
-        )
-        .unwrap();
+        let frames = capture.finish().unwrap();
         assert!(frames.len() <= 31, "retained {} frames", frames.len());
         assert_eq!(
             frames.iter().map(|frame| frame.duration).sum::<Duration>(),
             Duration::from_millis(3_999)
         );
-
-        std::fs::remove_file(cast_path).unwrap();
     }
 
     #[test]
     #[cfg(feature = "recording-raster")]
-    fn replay_preserves_title_palette_and_cursor_changes() {
+    fn capture_preserves_title_palette_and_cursor_changes() {
         use crate::profile::ColorSlot;
         use crate::render::svg::RenderColors;
         use crate::terminal::emu::CursorShape;
 
-        let cast_path = temp_path("cast");
-        let started = std::time::Instant::now();
-        let mut writer = CastWriter::create(&cast_path, 2, 1, &[], started).unwrap();
-        writer
-            .write_output(
-                started,
-                "\x1b]2;before\x07\x1b]11;#010203\x07\x1b]12;#040506\x07\
-                 \x1b[1;2H\x1b[6 q",
-            )
-            .unwrap();
-        writer
-            .write_output(
-                started + Duration::from_millis(100),
-                "\x1b]2;after\x07\x1b]11;#070809\x07\x1b[1;1H\x1b[?25l",
-            )
-            .unwrap();
-        writer.flush().unwrap();
-
-        let frames = from_cast(
-            crate::record::cast::read(&cast_path).unwrap(),
-            &TimelineOptions::default(),
-        )
-        .unwrap();
+        let started = Instant::now();
+        let mut emulator = AlacrittyEmu::new(2, 1, &Profile::default());
+        emulator.process(
+            b"\x1b]2;before\x07\x1b]11;#010203\x07\x1b]12;#040506\x07\
+              \x1b[1;2H\x1b[6 q",
+        );
+        let mut capture =
+            FrameCapture::new(&emulator, TimelineOptions::default(), started).unwrap();
+        emulator.process(b"\x1b]2;after\x07\x1b]11;#070809\x07\x1b[1;1H\x1b[?25l");
+        capture.capture(&emulator, started + Duration::from_millis(100));
+        let frames = capture.finish().unwrap();
 
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].title.as_deref(), Some("before"));
@@ -398,36 +387,25 @@ mod tests {
         assert_eq!(frames[0].render_state.cursor_shape(), CursorShape::Bar);
         assert_eq!(frames[0].cursor, Some((1, 0)));
         assert_eq!(frames[1].cursor, None);
-
-        std::fs::remove_file(cast_path).unwrap();
     }
 
     #[test]
     #[cfg(feature = "recording-raster")]
-    fn replay_preserves_resize_dimensions() {
-        let cast_path = temp_path("cast");
-        let started = std::time::Instant::now();
-        let mut writer = CastWriter::create(&cast_path, 2, 1, &[], started).unwrap();
-        writer.write_output(started, "A").unwrap();
-        writer
-            .write_resize(started + Duration::from_millis(100), 4, 2)
-            .unwrap();
-        writer
-            .write_output(started + Duration::from_millis(200), "\x1b[2J\x1b[HB")
-            .unwrap();
-        writer
-            .write_resize(started + Duration::from_millis(300), 1, 1)
-            .unwrap();
-        writer
-            .write_output(started + Duration::from_millis(400), "\x1b[2J\x1b[HC")
-            .unwrap();
-        writer.flush().unwrap();
-
-        let frames = from_cast(
-            crate::record::cast::read(&cast_path).unwrap(),
-            &TimelineOptions::default(),
-        )
-        .unwrap();
+    fn capture_preserves_resize_dimensions() {
+        let started = Instant::now();
+        let mut emulator = AlacrittyEmu::new(2, 1, &Profile::default());
+        emulator.process(b"A");
+        let mut capture =
+            FrameCapture::new(&emulator, TimelineOptions::default(), started).unwrap();
+        emulator.resize(4, 2);
+        capture.capture(&emulator, started + Duration::from_millis(100));
+        emulator.process(b"\x1b[2J\x1b[HB");
+        capture.capture(&emulator, started + Duration::from_millis(200));
+        emulator.resize(1, 1);
+        capture.capture(&emulator, started + Duration::from_millis(300));
+        emulator.process(b"\x1b[2J\x1b[HC");
+        capture.capture(&emulator, started + Duration::from_millis(400));
+        let frames = capture.finish().unwrap();
         let mut dimensions = frames
             .iter()
             .map(|frame| frame.dimensions().unwrap())
@@ -435,33 +413,76 @@ mod tests {
         dimensions.dedup();
         assert_eq!(dimensions, vec![(2, 1), (4, 2), (1, 1)]);
         assert_eq!(max_dimensions(&frames).unwrap(), (4, 2));
-
-        std::fs::remove_file(cast_path).unwrap();
     }
 
     #[test]
-    #[cfg(feature = "recording-raster")]
-    fn scripted_cast_round_trips_to_apng() {
-        let cast_path = temp_path("cast");
-        let apng_path = temp_path("png");
-        let started = std::time::Instant::now();
-        let mut writer = CastWriter::create(&cast_path, 2, 1, &[], started).unwrap();
-        writer
-            .write_output(started, "\x1b[2J\x1b[H\x1b[48;2;200;10;20mA")
-            .unwrap();
-        writer
-            .write_output(
-                started + Duration::from_millis(100),
-                "\x1b[48;2;10;20;200mB",
-            )
-            .unwrap();
-        writer.flush().unwrap();
+    fn capture_uses_the_live_backend_state_and_profile() {
+        let started = Instant::now();
+        let profile = Profile {
+            scrollback: 1,
+            colors: crate::profile::Colors {
+                background: crate::profile::Rgb::new(12, 34, 56),
+                ..Default::default()
+            },
+        };
+        for &backend in Backend::ALL {
+            let mut live = backend.build(16, 2, &profile).unwrap();
+            live.process(b"PRIMARY\x1b[?47h\x1b[H\x1b[2JALT");
+            let initial = live.viewable_rows();
+            let mut capture =
+                FrameCapture::new(live.as_ref(), TimelineOptions::default(), started).unwrap();
+            live.process(b"\x1b]11;#abcdef\x07\x1b]111\x07\x1b[?1049l");
+            capture.capture(live.as_ref(), started + Duration::from_millis(100));
+            let frames = capture.finish().unwrap();
+            assert_eq!(frames[0].grid, initial, "{backend:?}");
+            let last = frames.last().unwrap();
+            assert_eq!(last.grid, live.viewable_rows(), "{backend:?}");
+            assert_eq!(
+                last.render_state,
+                RenderState::capture(live.as_ref()),
+                "{backend:?}"
+            );
+        }
+    }
 
-        let frames = from_cast(
-            crate::record::cast::read(&cast_path).unwrap(),
-            &TimelineOptions::default(),
-        )
-        .unwrap();
+    #[test]
+    fn capture_reports_emulator_faults() {
+        let started = Instant::now();
+        for &backend in Backend::ALL {
+            let mut live = backend.build(2, 1, &Profile::default()).unwrap();
+            let mut capture =
+                FrameCapture::new(live.as_ref(), TimelineOptions::default(), started).unwrap();
+            live.process(b"\x1b]52;0;Y3V0IGJ1ZmZlcg==\x07");
+            capture.capture(live.as_ref(), started + Duration::from_millis(100));
+            let error = capture.finish().unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("frame capture failed"), "{message}");
+            assert!(message.contains("clipboard"), "{message}");
+        }
+    }
+
+    #[test]
+    fn capture_without_new_output_keeps_the_initial_frame_and_pending_replies() {
+        let mut live = AlacrittyEmu::new(16, 2, &Profile::default());
+        live.process(b"existing screen\x1b[6n");
+        let capture = FrameCapture::new(&live, TimelineOptions::default(), Instant::now()).unwrap();
+        let frames = capture.finish().unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].grid, live.viewable_rows());
+        assert_eq!(frames[0].duration, Duration::from_secs(3));
+        assert!(!live.take_pending_writes().is_empty());
+    }
+
+    #[test]
+    fn captured_frames_encode_to_apng() {
+        let apng_path = temp_path("png");
+        let started = Instant::now();
+        let mut live = AlacrittyEmu::new(2, 1, &Profile::default());
+        live.process(b"\x1b[2J\x1b[H\x1b[48;2;200;10;20mA");
+        let mut capture = FrameCapture::new(&live, TimelineOptions::default(), started).unwrap();
+        live.process(b"\x1b[48;2;10;20;200mB");
+        capture.capture(&live, started + Duration::from_millis(100));
+        let frames = capture.finish().unwrap();
         assert_eq!(frames.len(), 2);
         assert_eq!(
             frames.iter().map(|frame| frame.duration).sum::<Duration>(),
@@ -494,7 +515,6 @@ mod tests {
             )
         );
 
-        std::fs::remove_file(cast_path).unwrap();
         std::fs::remove_file(apng_path).unwrap();
     }
 
