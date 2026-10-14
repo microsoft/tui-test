@@ -841,6 +841,9 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
     };
     let mut options = run_options(program, &args);
     options.timeouts.text = Some(1234);
+    options.style.canvas_background = tui_test::profile::Rgb::new(1, 2, 3);
+    options.style.canvas_padding = tui_test::render::style::Padding::Uniform(43);
+    let style = options.style.clone();
     session.run(options).unwrap();
 
     session
@@ -937,6 +940,14 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
             .unwrap();
     assert_eq!(embedded["timeline"], timeline);
     assert_eq!(
+        timeline["geometry"]["grid_x"],
+        style.canvas_left() as f32 + style.content_left()
+    );
+    assert_eq!(
+        timeline["geometry"]["grid_y"],
+        style.canvas_top() as f32 + style.header_height() + style.content_top()
+    );
+    assert_eq!(
         timeline["failure_screen_sequence"],
         details.operation.failed_screen_sequence
     );
@@ -962,6 +973,10 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
         .iter()
         .find(|frame| frame["sequence"] == details.operation.failed_screen_sequence)
         .unwrap();
+    assert!(failure["svg"].as_str().unwrap().contains("#010203"));
+    for frame in frames {
+        assert!(frame["svg"].as_str().unwrap().contains("#010203"));
+    }
     assert_eq!(
         failure["svg"],
         std::fs::read_to_string(artifact.screen_svg.as_ref().unwrap()).unwrap()

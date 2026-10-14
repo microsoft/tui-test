@@ -403,6 +403,7 @@ foreground = "#d8d8e8"
 </p>
 
 Profiles override individual keys and inherit the rest from the file.
+Failure SVGs and HTML report SVGs use the session style.
 See the [style types and defaults](crates/tui-test/src/render/style.rs) for all options.
 The [CLI reference](references/cli.md#styling-screenshots-and-recordings) explains profile overrides.
 

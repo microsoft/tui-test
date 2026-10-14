@@ -120,10 +120,8 @@ fn timeline_with_limit(
     let mut timeline = Timeline {
         schema_version: 1,
         failure_screen_sequence: observation.screen_sequence,
-        // The trace viewer draws its own grid rather than the styled SVG, so
-        // it is placed with the default geometry.
         geometry: {
-            let style = crate::render::style::Style::default();
+            let style = &observation.style;
             Geometry {
                 grid_x: style.canvas_left() as f32 + style.content_left(),
                 grid_y: style.canvas_top() as f32 + style.header_height() + style.content_top(),
@@ -201,7 +199,7 @@ fn timeline_with_limit(
                         .visible
                         .then_some((cursor.column, usize::from(cursor.row))),
                     frame.screen.title.as_deref(),
-                    &crate::render::style::Style::default(),
+                    &observation.style,
                     1.0,
                     None,
                 ));

@@ -1818,6 +1818,7 @@ fn capture_failure_observation_locked(
         cursor_visible: state.emu.cursor_visible(),
         cursor_shape: state.emu.cursor_shape(),
         render_state: snapshot.render_state,
+        style: state.style.clone(),
         screen_sequence,
         output_revision: state.visual_revision,
         captured_ms,
