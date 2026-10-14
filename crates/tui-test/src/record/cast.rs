@@ -10,11 +10,6 @@ use crate::terminal::emu::{CursorShape, Emulator};
 
 const WIN32_INPUT_MODE: &[u8] = b"\x1b[?9001h";
 
-#[cfg(feature = "recording-raster")]
-mod reader;
-#[cfg(feature = "recording-raster")]
-pub(crate) use reader::{read, CastEventKind, CastReader};
-
 pub(crate) struct CastWriter {
     start: Instant,
     path: PathBuf,
