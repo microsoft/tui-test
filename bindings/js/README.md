@@ -10,6 +10,20 @@ npm install @microsoft/tui-test
 
 Node 20+ is supported. The package is ESM only. Bun and Deno support is best effort. Deno 2 needs local `node_modules` and `--allow-ffi`.
 
+Each platform package contains the `tui-test-ffi` shared library.
+The JavaScript adapter uses Koffi to call the same typed C ABI as Go and Python.
+It copies native results before it frees their Rust allocations.
+On all supported platforms, the library stays loaded until process exit so pending native tasks remain valid after JavaScript worker exit.
+Koffi supplies its own native addon; this package no longer builds a separate N-API adapter.
+Keep optional dependencies enabled during installation; they contain the platform binaries for both packages.
+The package needs no CLI.
+Set `TUI_TEST_NATIVE_LIBRARY` to an absolute path to select a library from the same source revision.
+
+For a local build, run `npm ci`, then `npm run build`.
+Use `npm run build:native:debug` for a debug build.
+These commands build `tui-test-ffi` and put the shared library in `native/`.
+Run `cargo run --locked -p tui-test-bindgen` from the repository root to regenerate the native declarations.
+
 ## Quick start
 
 ```js
@@ -18,10 +32,12 @@ import { TuiTest } from "@microsoft/tui-test";
 const terminal = TuiTest.ephemeral();
 
 try {
-  await terminal.run("my-app");
+  await terminal.run(process.execPath, [
+    "-e",
+    "console.log('Ready'); setInterval(() => {}, 1000)",
+  ]);
   await terminal.getByText("Ready").expect();
-  await terminal.getByText("Continue").click();
-  await terminal.getByText("Done").expect();
+  console.log(await terminal.text());
 } finally {
   await terminal.closeQuiet();
 }

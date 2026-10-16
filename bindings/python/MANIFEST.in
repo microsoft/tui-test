@@ -1,0 +1,8 @@
+include README.md
+include setup.py
+recursive-include src *.py *.pyi py.typed
+recursive-include tests *.py
+recursive-include examples *.py
+graft _rust
+graft .cargo
+global-exclude __pycache__ *.pyc
