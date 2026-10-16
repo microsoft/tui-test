@@ -101,6 +101,7 @@ fn options(mode: &str) -> RunOptions {
         .collect(),
         backend: defaults.backend,
         profile: defaults.profile,
+        style: defaults.style,
         cols: 80,
         rows: 24,
         cwd: None,
@@ -168,6 +169,29 @@ fn expect_marker(timeout_ms: u64) -> Operation {
         not: false,
         timeout_ms: Some(timeout_ms),
     }
+}
+
+#[test]
+fn invalid_capture_style_is_rejected_before_session_creation() {
+    let session = Session::new("invalid-capture-style");
+    let mut run = options("quiet");
+    run.style.font_size = f32::NAN;
+    let result = session.run(run);
+    session.close().unwrap();
+    let error = result.unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Usage);
+    assert!(error.message.contains("font_size"), "{error}");
+
+    let mut open = OpenOptions {
+        wait_ready: Some(false),
+        ..OpenOptions::default()
+    };
+    open.style.border.radius = -1.0;
+    let result = session.open(open);
+    session.close().unwrap();
+    let error = result.unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Usage);
+    assert!(error.message.contains("border.radius"), "{error}");
 }
 
 #[test]

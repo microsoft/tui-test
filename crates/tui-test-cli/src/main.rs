@@ -309,6 +309,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
                 recording: Box::new(settings.recording),
+                style: Box::new(settings.style.clone()),
                 trace: settings.trace,
                 diagnostics: tui_test::DiagnosticRetentionOptions {
                     screen_history_limit: diagnostics
@@ -348,6 +349,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 restart,
                 timeouts: settings.timeouts.with_overrides(timeouts.into()),
                 recording: Box::new(settings.recording),
+                style: Box::new(settings.style.clone()),
                 trace: settings.trace,
                 diagnostics: tui_test::DiagnosticRetentionOptions {
                     screen_history_limit: diagnostics
@@ -1822,6 +1824,27 @@ mod tests {
         assert_eq!(query.occurrence, MatchOccurrence::Any);
         assert_eq!(query.style.bold, Some(true));
         assert_eq!(query.style.underline_style.as_deref(), Some("curly"));
+    }
+
+    #[test]
+    fn daemon_with_same_package_and_pre_style_protocol_is_incompatible() {
+        let status = Response::with(json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "protocol_version": 5,
+        }));
+        let identity = DaemonIdentity {
+            version: daemon_version(&status),
+            protocol_version: daemon_protocol_version(&status),
+        };
+        assert!(
+            !identity.compatible(),
+            "ensure_daemon must replace a daemon that cannot apply Open style"
+        );
+        assert!(DaemonIdentity {
+            protocol_version: protocol::PROTOCOL_VERSION,
+            ..identity
+        }
+        .compatible());
     }
 
     #[test]

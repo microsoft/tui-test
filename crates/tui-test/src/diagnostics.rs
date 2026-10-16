@@ -843,6 +843,7 @@ pub(crate) struct FailureObservation {
     pub cursor_visible: bool,
     pub cursor_shape: CursorShape,
     pub render_state: RenderState,
+    pub style: crate::render::style::Style,
     pub screen_sequence: u64,
     pub output_revision: u64,
     pub captured_ms: u64,
@@ -858,12 +859,13 @@ impl FailureObservation {
     }
 
     pub(crate) fn svg(&self) -> String {
-        crate::render::svg::render_svg_with_zoom(
+        crate::render::svg::render_svg(
             &self.rows,
             self.cols,
             &self.render_state,
             self.cursor,
             self.title.as_deref(),
+            &self.style,
             1.0,
             None,
         )
@@ -2086,6 +2088,7 @@ mod tests {
             cursor_visible: false,
             cursor_shape: CursorShape::Block,
             render_state: RenderState::capture(&emu),
+            style: crate::render::style::Style::default(),
             screen_sequence: 1,
             output_revision: 1,
             captured_ms: 1,
