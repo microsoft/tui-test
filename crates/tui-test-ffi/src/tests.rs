@@ -174,6 +174,7 @@ fn input_conversion_preserves_explicit_zero_false_and_empty_values() {
     assert_eq!(absent.wait_ready, None);
     assert_eq!(absent.cwd, None);
     assert_eq!(absent.recording.mode, AutomaticRecordingMode::Disabled);
+    assert_eq!(absent.style, Default::default());
 
     let explicit = unsafe {
         input::open(TuiOpenOptions {

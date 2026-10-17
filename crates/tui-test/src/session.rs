@@ -43,6 +43,8 @@ pub struct TermState {
     /// The profile this session started with, kept so a palette entry a
     /// program overrode can be told apart from one it never touched.
     pub(crate) profile: Profile,
+    /// How this session's screenshots and recordings are drawn.
+    pub(crate) style: crate::render::style::Style,
     #[cfg(feature = "recording-raster")]
     recording_frames: Option<record::frames::FrameCapture>,
     /// Shell-integration state, derived from the raw PTY stream rather than
@@ -118,6 +120,7 @@ impl Session {
         program: Option<Vec<String>>,
         backend: Backend,
         profile: Profile,
+        style: crate::render::style::Style,
         cols: u16,
         rows: u16,
         cwd: Option<PathBuf>,
@@ -128,6 +131,7 @@ impl Session {
         recording_path: Option<PathBuf>,
         recording_required: bool,
     ) -> anyhow::Result<Self> {
+        style.validate().map_err(anyhow::Error::msg)?;
         validate_size(cols, rows)?;
         if let Some(cwd) = &cwd {
             validate_cwd(cwd)?;
@@ -139,6 +143,7 @@ impl Session {
         let mut initial_state = TermState {
             emu,
             profile,
+            style,
             #[cfg(feature = "recording-raster")]
             recording_frames: None,
             tracker: CommandTracker::new(),
@@ -461,6 +466,8 @@ impl Session {
             #[cfg(feature = "recording-raster")]
             zoom,
             #[cfg(feature = "recording-raster")]
+            style: state.style.clone(),
+            #[cfg(feature = "recording-raster")]
             background,
             #[cfg(feature = "recording-raster")]
             timeline: record::frames::TimelineOptions {
@@ -526,6 +533,7 @@ impl Session {
                     max_cols,
                     max_rows,
                     2.0 * stopped.zoom,
+                    stopped.style.clone(),
                     stopped.background,
                 )?;
                 crate::render::encode::encode(
@@ -858,6 +866,7 @@ mod tests {
         let state = Arc::new(Mutex::new(TermState {
             emu: Box::new(AlacrittyEmu::new(1, 1, &Profile::default())),
             profile: Profile::default(),
+            style: crate::render::style::Style::default(),
             #[cfg(feature = "recording-raster")]
             recording_frames: None,
             tracker: CommandTracker::new(),

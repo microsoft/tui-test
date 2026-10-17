@@ -39,6 +39,7 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
         program: program.to_string(),
         args: args.iter().map(|arg| (*arg).to_string()).collect(),
         profile: defaults.profile,
+        style: defaults.style,
         cols: defaults.cols,
         rows: defaults.rows,
         cwd: defaults.cwd,
@@ -840,6 +841,9 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
     };
     let mut options = run_options(program, &args);
     options.timeouts.text = Some(1234);
+    options.style.canvas_background = tui_test::profile::Rgb::new(1, 2, 3);
+    options.style.canvas_padding = tui_test::render::style::Padding::Uniform(43);
+    let style = options.style.clone();
     session.run(options).unwrap();
 
     session
@@ -936,6 +940,14 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
             .unwrap();
     assert_eq!(embedded["timeline"], timeline);
     assert_eq!(
+        timeline["geometry"]["grid_x"],
+        style.canvas_left() as f32 + style.content_left()
+    );
+    assert_eq!(
+        timeline["geometry"]["grid_y"],
+        style.canvas_top() as f32 + style.header_height() + style.content_top()
+    );
+    assert_eq!(
         timeline["failure_screen_sequence"],
         details.operation.failed_screen_sequence
     );
@@ -961,6 +973,10 @@ fn failed_locator_writes_an_actionable_artifact_bundle() {
         .iter()
         .find(|frame| frame["sequence"] == details.operation.failed_screen_sequence)
         .unwrap();
+    assert!(failure["svg"].as_str().unwrap().contains("#010203"));
+    for frame in frames {
+        assert!(frame["svg"].as_str().unwrap().contains("#010203"));
+    }
     assert_eq!(
         failure["svg"],
         std::fs::read_to_string(artifact.screen_svg.as_ref().unwrap()).unwrap()
@@ -2274,8 +2290,10 @@ fn session_records_and_exports_an_apng() {
     let bytes = std::fs::read(&path).expect("read apng");
     assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
     assert!(bytes.windows(4).any(|window| window == b"acTL"));
+    // The default style at zoom 0.5. Pinned rather than derived because
+    // pixel_size is crate-private; update deliberately if a default gap moves.
     assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 878);
-    assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 730);
+    assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 734);
 
     session.close().expect("close terminal");
     std::fs::remove_file(path).expect("remove apng");
@@ -2325,6 +2343,7 @@ fn recording_export_matches_the_session_backend_and_profile() {
             ),
             ("resize-without-output", "\\033[?25lREADY", ""),
             ("no-new-output", "\\033[?25lREADY", ""),
+            ("style", "\\033[?25lREADY", ""),
         ] {
             let name = format!("recording-{backend:?}-{scenario}-{}", std::process::id());
             let session = Session::new(&name);
@@ -2338,6 +2357,11 @@ fn recording_export_matches_the_session_backend_and_profile() {
             options.backend = backend;
             options.cols = 16;
             options.rows = 2;
+            if scenario == "style" {
+                options.style.font_size = 34.0;
+                options.style.window.title_bar = false;
+                options.style.canvas_background = Rgb::new(23, 45, 67);
+            }
             if scenario == "profile" {
                 options.profile = Profile {
                     colors: tui_test::profile::Colors {

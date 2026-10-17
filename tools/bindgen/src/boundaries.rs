@@ -238,7 +238,7 @@ fn input_fields(models: &Models, model: &str, js: bool) -> Result<Vec<Field>> {
     let mut fields = Vec::new();
     for mut f in models.fields(model)? {
         match (model, f.name.as_str()) {
-            ("OpenOptions" | "RunOptions", "profile") => continue,
+            ("OpenOptions" | "RunOptions", "profile" | "style") => continue,
             ("OpenOptions" | "RunOptions", "recording") if js => continue,
             ("OpenOptions" | "RunOptions", "recording") => {
                 for mut f in models.fields("AutomaticRecording")? {
@@ -472,6 +472,7 @@ fn input_conversions(models: &Models, ci: &mut String) -> Result<()> {
         let name = &f.name;
         let value = match name.as_str() {
             "backend" | "shell" | "profile" => name.clone(),
+            "style" => "Default::default()".into(),
             "cols" => "u16_option(value.cols, \"cols\")?.unwrap_or(80)".into(),
             "rows" => "u16_option(value.rows, \"rows\")?.unwrap_or(30)".into(),
             "env" => "unsafe { pairs(value.env, value.env_len)? }".into(),
@@ -589,6 +590,9 @@ pub(crate) mod tests {
         assert!(!c.contains("pub not: bool"));
         assert!(c.contains("pub new_wait: TuiOptionalU64"));
         assert!(ci.contains("new_wait: value.new_wait.option()"));
+        input_conversions(&models, &mut ci).unwrap();
+        assert!(ci.contains("style: Default::default()"));
+        assert!(!c.contains("pub style:"));
         let context = session_input(&models).unwrap();
         assert!(context.contains("pub new_limit: Option<u16>"));
         assert!(context.contains("new_limit: self.new_limit.unwrap_or(defaults.new_limit)"));

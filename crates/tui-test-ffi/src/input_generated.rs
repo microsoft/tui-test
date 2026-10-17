@@ -30,6 +30,7 @@ unsafe fn open_input(
             mode,
             directory: unsafe { value.recording_directory.optional()? }.map(Into::into),
         },
+        style: Default::default(),
     })
 }
 fn mouse_input(value: TuiMouseOptions, button: MouseButton) -> MouseOptions {

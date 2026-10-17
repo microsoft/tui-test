@@ -10,6 +10,7 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
         program: program.into(),
         args: args.iter().map(|arg| (*arg).into()).collect(),
         profile: defaults.profile,
+        style: defaults.style,
         cols: 80,
         rows: 30,
         cwd: None,
