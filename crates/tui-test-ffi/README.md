@@ -126,6 +126,8 @@ Other JavaScript operations use generated typed `tui_*_start` entrypoints.
 Each start call copies its inputs before it returns an owned `TuiTask`.
 A native worker executes the owned operation.
 JavaScript polls `tui_task_poll` until it receives the result, then frees the result and task.
+Start, poll, and free each task on the same thread.
+Native thread teardown frees unclaimed tasks and their results, including after forced JavaScript worker termination.
 The existing synchronous functions remain available to Go and Python.
 
 This avoids Koffi worker exhaustion: pending terminal waits cannot prevent input or close calls.

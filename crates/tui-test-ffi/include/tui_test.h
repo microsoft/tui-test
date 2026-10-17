@@ -11,7 +11,8 @@
 #define ABI_VERSION 4
 
 /**
- * An owned asynchronous call. Poll until a result arrives, then free the task.
+ * A thread-owned asynchronous call. Start, poll, and free it on the same thread.
+ * Thread exit frees any remaining tasks, including their unclaimed results.
  * Freeing a pending task discards its eventual result without canceling the call.
  */
 typedef struct TuiTask TuiTask;
@@ -722,13 +723,13 @@ struct TuiResult *tui_start_recording(struct TuiString session, struct TuiRecord
  * Returns NULL while pending. Transfers ownership of a completed result once.
  *
  * # Safety
- * task must be a live task returned by a start function, used by one thread.
+ * task must be a live task returned by a start function on the current thread.
  */
 struct TuiResult *tui_task_poll(struct TuiTask *task);
 
 /**
  * # Safety
- * task must be NULL or a live task, freed exactly once.
+ * task must be NULL or a live task from the current thread, freed exactly once.
  */
 void tui_task_free(struct TuiTask *task);
 

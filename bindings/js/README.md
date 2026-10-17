@@ -13,7 +13,9 @@ Node 20+ is supported. The package is ESM only. Bun and Deno support is best eff
 Each platform package contains the `tui-test-ffi` shared library.
 The JavaScript adapter uses Koffi to call the same typed C ABI as Go and Python.
 It copies native results before it frees their Rust allocations.
-On all supported platforms, the library stays loaded until process exit so pending native tasks remain valid after JavaScript worker exit.
+The library stays loaded until process exit on all supported platforms.
+Native operations can finish after JavaScript worker exit.
+Native thread teardown releases unclaimed task handles and results without canceling operations or closing shared sessions.
 Koffi supplies its own native addon; this package no longer builds a separate N-API adapter.
 Keep optional dependencies enabled during installation; they contain the platform binaries for both packages.
 The package needs no CLI.

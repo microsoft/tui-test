@@ -2,15 +2,29 @@
 //! operations reach worker threads, so waits cannot exhaust a foreign worker pool.
 use super::*;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 type Completion = Result<OperationResult>;
 
 thread_local! {
     static START: RefCell<Option<Option<Receiver<Completion>>>> = const { RefCell::new(None) };
+    static TASKS: RefCell<ThreadTasks> = RefCell::new(ThreadTasks::default());
 }
 
-/// An owned asynchronous call. Poll until a result arrives, then free the task.
+#[derive(Default)]
+struct ThreadTasks(HashSet<*mut TuiTask>);
+
+impl Drop for ThreadTasks {
+    fn drop(&mut self) {
+        for task in self.0.drain() {
+            drop(unsafe { Box::from_raw(task) });
+        }
+    }
+}
+
+/// A thread-owned asynchronous call. Start, poll, and free it on the same thread.
+/// Thread exit frees any remaining tasks, including their unclaimed results.
 /// Freeing a pending task discards its eventual result without canceling the call.
 pub struct TuiTask {
     receiver: Option<Receiver<Completion>>,
@@ -59,17 +73,21 @@ pub(super) fn start(call: impl FnOnce() -> *mut TuiResult) -> *mut TuiTask {
     START.with(|slot| *slot.borrow_mut() = Some(None));
     let immediate = call();
     let receiver = START.with(|slot| slot.borrow_mut().take().flatten());
-    Box::into_raw(Box::new(TuiTask {
+    let task = Box::into_raw(Box::new(TuiTask {
         receiver,
         immediate,
-    }))
+    }));
+    // Worker termination skips JavaScript cleanup. Native thread teardown still
+    // drops this registry, so an abandoned poll cannot retain a result forever.
+    TASKS.with(|tasks| tasks.borrow_mut().0.insert(task));
+    task
 }
 
 #[no_mangle]
 /// Returns NULL while pending. Transfers ownership of a completed result once.
 ///
 /// # Safety
-/// task must be a live task returned by a start function, used by one thread.
+/// task must be a live task returned by a start function on the current thread.
 pub unsafe extern "C" fn tui_task_poll(task: *mut TuiTask) -> *mut TuiResult {
     let task = unsafe { &mut *task };
     if !task.immediate.is_null() {
@@ -96,9 +114,10 @@ pub unsafe extern "C" fn tui_task_poll(task: *mut TuiTask) -> *mut TuiResult {
 
 #[no_mangle]
 /// # Safety
-/// task must be NULL or a live task, freed exactly once.
+/// task must be NULL or a live task from the current thread, freed exactly once.
 pub unsafe extern "C" fn tui_task_free(task: *mut TuiTask) {
     if !task.is_null() {
+        TASKS.with(|tasks| tasks.borrow_mut().0.remove(&task));
         drop(unsafe { Box::from_raw(task) });
     }
 }
@@ -107,4 +126,34 @@ pub unsafe extern "C" fn tui_task_free(task: *mut TuiTask) {
 /// Exercise panic containment without terminating the host process.
 pub extern "C" fn tui_panic_probe_start() -> *mut TuiTask {
     start(|| execute(|| panic!("intentional native panic probe")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thread_exit_releases_pending_and_completed_tasks() {
+        for completed in [false, true] {
+            let (sender, receiver) = mpsc::channel();
+            if completed {
+                sender
+                    .send(Ok(OperationResult::Text("unclaimed result".into())))
+                    .unwrap();
+            }
+            std::thread::spawn(move || {
+                let task = start(|| {
+                    START.with(|slot| *slot.borrow_mut() = Some(Some(receiver)));
+                    std::ptr::null_mut()
+                });
+                assert!(!task.is_null());
+            })
+            .join()
+            .unwrap();
+            assert!(
+                sender.send(Ok(OperationResult::Unit)).is_err(),
+                "thread exit left a task receiver alive (completed={completed})"
+            );
+        }
+    }
 }
