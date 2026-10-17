@@ -46,8 +46,8 @@ func checkNativeVersion() error {
 	if err := loadNativeEngine(); err != nil {
 		return &Error{Kind: InternalError, Message: err.Error()}
 	}
-	if version := nativeFunctions.AbiVersion(); version != 3 {
-		return &Error{Kind: InternalError, Message: fmt.Sprintf("native ABI version %d is incompatible with required version 3", version)}
+	if version := nativeFunctions.AbiVersion(); version != 4 {
+		return &Error{Kind: InternalError, Message: fmt.Sprintf("native ABI version %d is incompatible with required version 4", version)}
 	}
 	return nil
 }
@@ -423,7 +423,9 @@ func (runtime *Session) ExpectBellCount(count uint64, timeout *time.Duration) er
 
 func (runtime *Session) Screenshot(path string, options ScreenshotOptions) (string, error) {
 	return runtime.textResult(func(session abiString, memory *nativeMemory) *abiResult {
-		return nativeFunctions.Screenshot(session, options.Full, memory.nonemptyText(path), nativeFloat(options.Zoom), memory.nonemptyText(options.Background), options.Transparent)
+		converted := abiScreenshotOptions{full: options.Full, path: memory.nonemptyText(path), zoom: nativeFloat(options.Zoom), background: memory.nonemptyText(options.Background), transparent: options.Transparent}
+		memory.pinner.Pin(&converted)
+		return nativeFunctions.Screenshot(session, &converted)
 	})
 }
 

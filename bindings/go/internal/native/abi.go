@@ -220,3 +220,11 @@ type abiRecordingOptions struct {
 	background    abiString
 	transparent   bool
 }
+type abiScreenshotOptions struct {
+	_           structs.HostLayout
+	full        bool
+	path        abiString
+	zoom        abiOptionalF64
+	background  abiString
+	transparent bool
+}

@@ -102,6 +102,15 @@ pub struct TuiRecordingOptions {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+pub struct TuiScreenshotOptions {
+    pub full: bool,
+    pub path: TuiString,
+    pub zoom: TuiOptionalF64,
+    pub background: TuiString,
+    pub transparent: bool,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub struct TuiCursor {
     pub x: u16,
     pub y: u16,
