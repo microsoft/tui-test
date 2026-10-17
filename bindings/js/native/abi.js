@@ -2,78 +2,78 @@
 import koffi from 'koffi';
 export const abiVersion = 4;
 export const types = {};
-types.TuiString = koffi.struct("TuiString", {
+types.TuiString = koffi.struct({
 data: "void *",
 len: "size_t",
 });
-types.TuiOptionalU64 = koffi.struct("TuiOptionalU64", {
+types.TuiOptionalU64 = koffi.struct({
 present: "bool",
 value: "uint64_t",
 });
-types.TuiOptionalI32 = koffi.struct("TuiOptionalI32", {
+types.TuiOptionalI32 = koffi.struct({
 present: "bool",
 value: "int32_t",
 });
-types.TuiOptionalBool = koffi.struct("TuiOptionalBool", {
+types.TuiOptionalBool = koffi.struct({
 present: "bool",
 value: "bool",
 });
-types.TuiOptionalF64 = koffi.struct("TuiOptionalF64", {
+types.TuiOptionalF64 = koffi.struct({
 present: "bool",
 value: "double",
 });
-types.TuiPair = koffi.struct("TuiPair", {
-key: "TuiString",
-value: "TuiString",
+types.TuiPair = koffi.struct({
+key: types.TuiString,
+value: types.TuiString,
 });
-types.TuiQuery = koffi.struct("TuiQuery", {
-json: "TuiString",
+types.TuiQuery = koffi.struct({
+json: types.TuiString,
 });
-types.TuiMode = koffi.struct("TuiMode", {
-name: "TuiString",
+types.TuiMode = koffi.struct({
+name: types.TuiString,
 enabled: "bool",
 });
-types.TuiColor = koffi.struct("TuiColor", {
+types.TuiColor = koffi.struct({
 kind: "uint32_t",
 index: "uint8_t",
 red: "uint8_t",
 green: "uint8_t",
 blue: "uint8_t",
 });
-types.TuiOpenResult = koffi.struct("TuiOpenResult", {
-shell_pid: "TuiOptionalU64",
-session: "TuiString",
+types.TuiOpenResult = koffi.struct({
+shell_pid: types.TuiOptionalU64,
+session: types.TuiString,
 ready: "bool",
-recording: "TuiString",
+recording: types.TuiString,
 });
-types.TuiCursor = koffi.struct("TuiCursor", {
+types.TuiCursor = koffi.struct({
 x: "uint16_t",
 y: "uint16_t",
 visible: "bool",
-shape: "TuiString",
-color: "TuiString",
+shape: types.TuiString,
+color: types.TuiString,
 });
-types.TuiSize = koffi.struct("TuiSize", {
+types.TuiSize = koffi.struct({
 cols: "uint16_t",
 rows: "uint16_t",
 });
-types.TuiBellEvent = koffi.struct("TuiBellEvent", {
+types.TuiBellEvent = koffi.struct({
 sequence: "uint64_t",
 elapsed_ms: "uint64_t",
 });
-types.TuiTerminalColors = koffi.struct("TuiTerminalColors", {
-foreground: "TuiString",
-background: "TuiString",
-cursor: "TuiString",
+types.TuiTerminalColors = koffi.struct({
+foreground: types.TuiString,
+background: types.TuiString,
+cursor: types.TuiString,
 palette: "void *",
 palette_len: "size_t",
 });
-types.TuiCell = koffi.struct("TuiCell", {
+types.TuiCell = koffi.struct({
 x: "uint16_t",
 y: "uint16_t",
-character: "TuiString",
-fg: "TuiColor",
-bg: "TuiColor",
+character: types.TuiString,
+fg: types.TuiColor,
+bg: types.TuiColor,
 bold: "bool",
 dim: "bool",
 italic: "bool",
@@ -82,111 +82,111 @@ invisible: "bool",
 strike: "bool",
 blink: "bool",
 underline: "bool",
-underline_style: "TuiString",
-underline_color: "TuiColor",
-link: "TuiString",
-link_id: "TuiString",
+underline_style: types.TuiString,
+underline_color: types.TuiColor,
+link: types.TuiString,
+link_id: types.TuiString,
 });
-types.TuiPosition = koffi.struct("TuiPosition", {
+types.TuiPosition = koffi.struct({
 row: "uint32_t",
 column: "uint16_t",
 });
-types.TuiSpan = koffi.struct("TuiSpan", {
+types.TuiSpan = koffi.struct({
 row: "uint32_t",
 start: "uint16_t",
 end: "uint16_t",
 });
-types.TuiMatch = koffi.struct("TuiMatch", {
-text: "TuiString",
-start: "TuiPosition",
-end: "TuiPosition",
+types.TuiMatch = koffi.struct({
+text: types.TuiString,
+start: types.TuiPosition,
+end: types.TuiPosition,
 spans: "void *",
 spans_len: "size_t",
 });
-types.TuiTimeouts = koffi.struct("TuiTimeouts", {
-text: "TuiOptionalU64",
-idle: "TuiOptionalU64",
-command: "TuiOptionalU64",
-exit: "TuiOptionalU64",
-ready: "TuiOptionalU64",
+types.TuiTimeouts = koffi.struct({
+text: types.TuiOptionalU64,
+idle: types.TuiOptionalU64,
+command: types.TuiOptionalU64,
+exit: types.TuiOptionalU64,
+ready: types.TuiOptionalU64,
 });
-types.TuiOpenOptions = koffi.struct("TuiOpenOptions", {
-backend: "TuiString",
-shell: "TuiString",
-cols: "TuiOptionalU64",
-rows: "TuiOptionalU64",
-cwd: "TuiString",
+types.TuiOpenOptions = koffi.struct({
+backend: types.TuiString,
+shell: types.TuiString,
+cols: types.TuiOptionalU64,
+rows: types.TuiOptionalU64,
+cwd: types.TuiString,
 env: "void *",
 env_len: "size_t",
-wait_ready: "TuiOptionalBool",
+wait_ready: types.TuiOptionalBool,
 restart: "bool",
-scrollback: "TuiOptionalU64",
+scrollback: types.TuiOptionalU64,
 colors: "void *",
 colors_len: "size_t",
-timeouts: "TuiTimeouts",
-recording_mode: "TuiString",
-recording_directory: "TuiString",
+timeouts: types.TuiTimeouts,
+recording_mode: types.TuiString,
+recording_directory: types.TuiString,
 });
-types.TuiMouseOptions = koffi.struct("TuiMouseOptions", {
+types.TuiMouseOptions = koffi.struct({
 button: "uint32_t",
 alt: "bool",
 ctrl: "bool",
 shift: "bool",
 });
-types.TuiWaitOptions = koffi.struct("TuiWaitOptions", {
-timeout_ms: "TuiOptionalU64",
+types.TuiWaitOptions = koffi.struct({
+timeout_ms: types.TuiOptionalU64,
 regex: "bool",
 not_: "bool",
 });
-types.TuiRecordingOptions = koffi.struct("TuiRecordingOptions", {
-path: "TuiString",
-format: "TuiString",
-fps: "TuiOptionalU64",
-speed: "TuiOptionalF64",
-idle_time_limit: "TuiOptionalF64",
-zoom: "TuiOptionalF64",
-background: "TuiString",
+types.TuiRecordingOptions = koffi.struct({
+path: types.TuiString,
+format: types.TuiString,
+fps: types.TuiOptionalU64,
+speed: types.TuiOptionalF64,
+idle_time_limit: types.TuiOptionalF64,
+zoom: types.TuiOptionalF64,
+background: types.TuiString,
 transparent: "bool",
 });
-types.TuiScreenshotOptions = koffi.struct("TuiScreenshotOptions", {
+types.TuiScreenshotOptions = koffi.struct({
 full: "bool",
-path: "TuiString",
-zoom: "TuiOptionalF64",
-background: "TuiString",
+path: types.TuiString,
+zoom: types.TuiOptionalF64,
+background: types.TuiString,
 transparent: "bool",
 });
-types.TuiState = koffi.struct("TuiState", {
-session_shell: "TuiString",
+types.TuiState = koffi.struct({
+session_shell: types.TuiString,
 cols: "uint16_t",
 rows: "uint16_t",
-cursor: "TuiCursor",
-title: "TuiString",
-cwd: "TuiString",
-last_command: "TuiString",
-last_exit: "TuiOptionalI32",
-exit_signal: "TuiString",
-exited: "TuiOptionalI32",
+cursor: types.TuiCursor,
+title: types.TuiString,
+cwd: types.TuiString,
+last_command: types.TuiString,
+last_exit: types.TuiOptionalI32,
+exit_signal: types.TuiString,
+exited: types.TuiOptionalI32,
 ready: "bool",
 bell_count: "uint64_t",
 modes: "void *",
 modes_len: "size_t",
-mouse_mode: "TuiString",
-colors: "TuiTerminalColors",
-timeouts: "TuiTimeouts",
-text: "TuiString",
+mouse_mode: types.TuiString,
+colors: types.TuiTerminalColors,
+timeouts: types.TuiTimeouts,
+text: types.TuiString,
 });
-types.TuiResult = koffi.struct("TuiResult", {
+types.TuiResult = koffi.struct({
 error_kind: "uint32_t",
-error_message: "TuiString",
-error_details: "TuiString",
-error_artifact: "TuiString",
-text: "TuiString",
+error_message: types.TuiString,
+error_details: types.TuiString,
+error_artifact: types.TuiString,
+text: types.TuiString,
 number: "uint64_t",
-exit_code: "TuiOptionalI32",
-open: "TuiOpenResult",
-state: "TuiState",
-cursor: "TuiCursor",
-size: "TuiSize",
+exit_code: types.TuiOptionalI32,
+open: types.TuiOpenResult,
+state: types.TuiState,
+cursor: types.TuiCursor,
+size: types.TuiSize,
 cells: "void *",
 cells_len: "size_t",
 matches: "void *",
@@ -400,115 +400,115 @@ export function bind(library) {
 const functions = {};
 functions.tui_abi_version = library.func("tui_abi_version", "uint32_t", []);
 functions.tui_result_free = library.func("tui_result_free", "void", ["void *"]);
-functions.tui_open = library.func("tui_open", "void *", ["TuiString", "TuiOpenOptions"]);
-functions.tui_open_start = library.func("tui_open_start", 'void *', ["TuiString", "TuiOpenOptions"]);
-functions.tui_open_ptr = library.func("tui_open_ptr", "void *", ["TuiString", "void *"]);
-functions.tui_run = library.func("tui_run", "void *", ["TuiString", "TuiOpenOptions", "TuiString", "void *", "size_t"]);
-functions.tui_run_start = library.func("tui_run_start", 'void *', ["TuiString", "TuiOpenOptions", "TuiString", "void *", "size_t"]);
-functions.tui_run_ptr = library.func("tui_run_ptr", "void *", ["TuiString", "void *", "TuiString", "void *", "size_t"]);
+functions.tui_open = library.func("tui_open", "void *", [types.TuiString, types.TuiOpenOptions]);
+functions.tui_open_start = library.func("tui_open_start", 'void *', [types.TuiString, types.TuiOpenOptions]);
+functions.tui_open_ptr = library.func("tui_open_ptr", "void *", [types.TuiString, "void *"]);
+functions.tui_run = library.func("tui_run", "void *", [types.TuiString, types.TuiOpenOptions, types.TuiString, "void *", "size_t"]);
+functions.tui_run_start = library.func("tui_run_start", 'void *', [types.TuiString, types.TuiOpenOptions, types.TuiString, "void *", "size_t"]);
+functions.tui_run_ptr = library.func("tui_run_ptr", "void *", [types.TuiString, "void *", types.TuiString, "void *", "size_t"]);
 functions.tui_sessions = library.func("tui_sessions", "void *", []);
 functions.tui_sessions_start = library.func("tui_sessions_start", 'void *', []);
 functions.tui_close_all = library.func("tui_close_all", "void *", []);
 functions.tui_close_all_start = library.func("tui_close_all_start", 'void *', []);
-functions.tui_recording = library.func("tui_recording", "void *", ["TuiString"]);
-functions.tui_recording_start = library.func("tui_recording_start", 'void *', ["TuiString"]);
-functions.tui_close = library.func("tui_close", "void *", ["TuiString", "TuiOptionalBool"]);
-functions.tui_close_start = library.func("tui_close_start", 'void *', ["TuiString", "TuiOptionalBool"]);
-functions.tui_restart = library.func("tui_restart", "void *", ["TuiString", "uint64_t"]);
-functions.tui_restart_start = library.func("tui_restart_start", 'void *', ["TuiString", "uint64_t"]);
-functions.tui_state = library.func("tui_state", "void *", ["TuiString"]);
-functions.tui_state_start = library.func("tui_state_start", 'void *', ["TuiString"]);
-functions.tui_get_command = library.func("tui_get_command", "void *", ["TuiString"]);
-functions.tui_get_command_start = library.func("tui_get_command_start", 'void *', ["TuiString"]);
-functions.tui_get_output = library.func("tui_get_output", "void *", ["TuiString"]);
-functions.tui_get_output_start = library.func("tui_get_output_start", 'void *', ["TuiString"]);
-functions.tui_get_exit_code = library.func("tui_get_exit_code", "void *", ["TuiString"]);
-functions.tui_get_exit_code_start = library.func("tui_get_exit_code_start", 'void *', ["TuiString"]);
-functions.tui_get_cwd = library.func("tui_get_cwd", "void *", ["TuiString"]);
-functions.tui_get_cwd_start = library.func("tui_get_cwd_start", 'void *', ["TuiString"]);
-functions.tui_get_cursor = library.func("tui_get_cursor", "void *", ["TuiString"]);
-functions.tui_get_cursor_start = library.func("tui_get_cursor_start", 'void *', ["TuiString"]);
-functions.tui_get_size = library.func("tui_get_size", "void *", ["TuiString"]);
-functions.tui_get_size_start = library.func("tui_get_size_start", 'void *', ["TuiString"]);
-functions.tui_get_title = library.func("tui_get_title", "void *", ["TuiString"]);
-functions.tui_get_title_start = library.func("tui_get_title_start", 'void *', ["TuiString"]);
-functions.tui_get_clipboard = library.func("tui_get_clipboard", "void *", ["TuiString"]);
-functions.tui_get_clipboard_start = library.func("tui_get_clipboard_start", 'void *', ["TuiString"]);
-functions.tui_get_bell_count = library.func("tui_get_bell_count", "void *", ["TuiString"]);
-functions.tui_get_bell_count_start = library.func("tui_get_bell_count_start", 'void *', ["TuiString"]);
-functions.tui_get_bell_events = library.func("tui_get_bell_events", "void *", ["TuiString"]);
-functions.tui_get_bell_events_start = library.func("tui_get_bell_events_start", 'void *', ["TuiString"]);
-functions.tui_stop_recording = library.func("tui_stop_recording", "void *", ["TuiString"]);
-functions.tui_stop_recording_start = library.func("tui_stop_recording_start", 'void *', ["TuiString"]);
-functions.tui_text = library.func("tui_text", "void *", ["TuiString", "bool"]);
-functions.tui_text_start = library.func("tui_text_start", 'void *', ["TuiString", "bool"]);
-functions.tui_packed_screen = library.func("tui_packed_screen", "void *", ["TuiString", "bool"]);
-functions.tui_packed_screen_start = library.func("tui_packed_screen_start", 'void *', ["TuiString", "bool"]);
-functions.tui_cells = library.func("tui_cells", "void *", ["TuiString", "uint16_t", "uint16_t", "uint16_t", "uint16_t"]);
-functions.tui_cells_start = library.func("tui_cells_start", 'void *', ["TuiString", "uint16_t", "uint16_t", "uint16_t", "uint16_t"]);
-functions.tui_write = library.func("tui_write", "void *", ["TuiString", "TuiString"]);
-functions.tui_write_start = library.func("tui_write_start", 'void *', ["TuiString", "TuiString"]);
-functions.tui_type = library.func("tui_type", "void *", ["TuiString", "TuiString"]);
-functions.tui_type_start = library.func("tui_type_start", 'void *', ["TuiString", "TuiString"]);
-functions.tui_submit = library.func("tui_submit", "void *", ["TuiString", "TuiString"]);
-functions.tui_submit_start = library.func("tui_submit_start", 'void *', ["TuiString", "TuiString"]);
-functions.tui_signal = library.func("tui_signal", "void *", ["TuiString", "TuiString"]);
-functions.tui_signal_start = library.func("tui_signal_start", 'void *', ["TuiString", "TuiString"]);
-functions.tui_key = library.func("tui_key", "void *", ["TuiString", "void *", "size_t", "uint32_t"]);
-functions.tui_key_start = library.func("tui_key_start", 'void *', ["TuiString", "void *", "size_t", "uint32_t"]);
-functions.tui_resize = library.func("tui_resize", "void *", ["TuiString", "uint16_t", "uint16_t"]);
-functions.tui_resize_start = library.func("tui_resize_start", 'void *', ["TuiString", "uint16_t", "uint16_t"]);
-functions.tui_mouse_click = library.func("tui_mouse_click", "void *", ["TuiString", "TuiOptionalU64", "TuiOptionalU64", "TuiString", "TuiMouseOptions", "uint8_t"]);
-functions.tui_mouse_click_start = library.func("tui_mouse_click_start", 'void *', ["TuiString", "TuiOptionalU64", "TuiOptionalU64", "TuiString", "TuiMouseOptions", "uint8_t"]);
-functions.tui_mouse_move = library.func("tui_mouse_move", "void *", ["TuiString", "uint16_t", "uint16_t"]);
-functions.tui_mouse_move_start = library.func("tui_mouse_move_start", 'void *', ["TuiString", "uint16_t", "uint16_t"]);
-functions.tui_mouse_down = library.func("tui_mouse_down", "void *", ["TuiString", "uint16_t", "uint16_t", "TuiMouseOptions"]);
-functions.tui_mouse_down_start = library.func("tui_mouse_down_start", 'void *', ["TuiString", "uint16_t", "uint16_t", "TuiMouseOptions"]);
-functions.tui_mouse_up = library.func("tui_mouse_up", "void *", ["TuiString", "uint16_t", "uint16_t", "TuiMouseOptions"]);
-functions.tui_mouse_up_start = library.func("tui_mouse_up_start", 'void *', ["TuiString", "uint16_t", "uint16_t", "TuiMouseOptions"]);
-functions.tui_mouse_drag = library.func("tui_mouse_drag", "void *", ["TuiString", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "TuiMouseOptions"]);
-functions.tui_mouse_drag_start = library.func("tui_mouse_drag_start", 'void *', ["TuiString", "uint16_t", "uint16_t", "uint16_t", "uint16_t", "TuiMouseOptions"]);
-functions.tui_mouse_scroll = library.func("tui_mouse_scroll", "void *", ["TuiString", "TuiString", "uint16_t"]);
-functions.tui_mouse_scroll_start = library.func("tui_mouse_scroll_start", 'void *', ["TuiString", "TuiString", "uint16_t"]);
-functions.tui_wait_title = library.func("tui_wait_title", "void *", ["TuiString", "TuiString", "TuiWaitOptions"]);
-functions.tui_wait_title_start = library.func("tui_wait_title_start", 'void *', ["TuiString", "TuiString", "TuiWaitOptions"]);
-functions.tui_expect_title = library.func("tui_expect_title", "void *", ["TuiString", "TuiString", "TuiWaitOptions"]);
-functions.tui_expect_title_start = library.func("tui_expect_title_start", 'void *', ["TuiString", "TuiString", "TuiWaitOptions"]);
-functions.tui_wait_clipboard = library.func("tui_wait_clipboard", "void *", ["TuiString", "TuiString", "TuiWaitOptions"]);
-functions.tui_wait_clipboard_start = library.func("tui_wait_clipboard_start", 'void *', ["TuiString", "TuiString", "TuiWaitOptions"]);
-functions.tui_wait_idle = library.func("tui_wait_idle", "void *", ["TuiString", "TuiOptionalU64"]);
-functions.tui_wait_idle_start = library.func("tui_wait_idle_start", 'void *', ["TuiString", "TuiOptionalU64"]);
-functions.tui_wait_command = library.func("tui_wait_command", "void *", ["TuiString", "TuiOptionalU64"]);
-functions.tui_wait_command_start = library.func("tui_wait_command_start", 'void *', ["TuiString", "TuiOptionalU64"]);
-functions.tui_wait_exit = library.func("tui_wait_exit", "void *", ["TuiString", "TuiOptionalU64"]);
-functions.tui_wait_exit_start = library.func("tui_wait_exit_start", 'void *', ["TuiString", "TuiOptionalU64"]);
-functions.tui_wait_ready = library.func("tui_wait_ready", "void *", ["TuiString", "TuiOptionalU64"]);
-functions.tui_wait_ready_start = library.func("tui_wait_ready_start", 'void *', ["TuiString", "TuiOptionalU64"]);
-functions.tui_wait_bell = library.func("tui_wait_bell", "void *", ["TuiString", "TuiOptionalU64"]);
-functions.tui_wait_bell_start = library.func("tui_wait_bell_start", 'void *', ["TuiString", "TuiOptionalU64"]);
-functions.tui_find_locator = library.func("tui_find_locator", "void *", ["TuiString", "TuiQuery", "bool"]);
-functions.tui_find_locator_start = library.func("tui_find_locator_start", 'void *', ["TuiString", "TuiQuery", "bool"]);
-functions.tui_wait_locator = library.func("tui_wait_locator", "void *", ["TuiString", "TuiQuery", "TuiWaitOptions"]);
-functions.tui_wait_locator_start = library.func("tui_wait_locator_start", 'void *', ["TuiString", "TuiQuery", "TuiWaitOptions"]);
-functions.tui_expect_locator = library.func("tui_expect_locator", "void *", ["TuiString", "TuiQuery", "TuiWaitOptions"]);
-functions.tui_expect_locator_start = library.func("tui_expect_locator_start", 'void *', ["TuiString", "TuiQuery", "TuiWaitOptions"]);
-functions.tui_click_locator = library.func("tui_click_locator", "void *", ["TuiString", "TuiQuery", "TuiMouseOptions", "uint8_t", "TuiOptionalU64"]);
-functions.tui_click_locator_start = library.func("tui_click_locator_start", 'void *', ["TuiString", "TuiQuery", "TuiMouseOptions", "uint8_t", "TuiOptionalU64"]);
-functions.tui_highlight_locator = library.func("tui_highlight_locator", "void *", ["TuiString", "TuiQuery", "TuiOptionalU64"]);
-functions.tui_highlight_locator_start = library.func("tui_highlight_locator_start", 'void *', ["TuiString", "TuiQuery", "TuiOptionalU64"]);
-functions.tui_expect_exit_code = library.func("tui_expect_exit_code", "void *", ["TuiString", "int32_t", "TuiOptionalU64"]);
-functions.tui_expect_exit_code_start = library.func("tui_expect_exit_code_start", 'void *', ["TuiString", "int32_t", "TuiOptionalU64"]);
-functions.tui_expect_output = library.func("tui_expect_output", "void *", ["TuiString", "TuiString", "bool"]);
-functions.tui_expect_output_start = library.func("tui_expect_output_start", 'void *', ["TuiString", "TuiString", "bool"]);
-functions.tui_expect_bell_count = library.func("tui_expect_bell_count", "void *", ["TuiString", "uint64_t", "TuiOptionalU64"]);
-functions.tui_expect_bell_count_start = library.func("tui_expect_bell_count_start", 'void *', ["TuiString", "uint64_t", "TuiOptionalU64"]);
-functions.tui_snapshot = library.func("tui_snapshot", "void *", ["TuiString", "TuiString", "bool", "bool", "bool", "TuiString"]);
-functions.tui_snapshot_start = library.func("tui_snapshot_start", 'void *', ["TuiString", "TuiString", "bool", "bool", "bool", "TuiString"]);
-functions.tui_screenshot = library.func("tui_screenshot", "void *", ["TuiString", "bool", "TuiString", "TuiOptionalF64", "TuiString", "bool"]);
-functions.tui_screenshot_start = library.func("tui_screenshot_start", 'void *', ["TuiString", "bool", "TuiString", "TuiOptionalF64", "TuiString", "bool"]);
-functions.tui_screenshot_ptr = library.func("tui_screenshot_ptr", "void *", ["TuiString", "void *"]);
-functions.tui_start_recording = library.func("tui_start_recording", "void *", ["TuiString", "TuiRecordingOptions"]);
-functions.tui_start_recording_start = library.func("tui_start_recording_start", 'void *', ["TuiString", "TuiRecordingOptions"]);
+functions.tui_recording = library.func("tui_recording", "void *", [types.TuiString]);
+functions.tui_recording_start = library.func("tui_recording_start", 'void *', [types.TuiString]);
+functions.tui_close = library.func("tui_close", "void *", [types.TuiString, types.TuiOptionalBool]);
+functions.tui_close_start = library.func("tui_close_start", 'void *', [types.TuiString, types.TuiOptionalBool]);
+functions.tui_restart = library.func("tui_restart", "void *", [types.TuiString, "uint64_t"]);
+functions.tui_restart_start = library.func("tui_restart_start", 'void *', [types.TuiString, "uint64_t"]);
+functions.tui_state = library.func("tui_state", "void *", [types.TuiString]);
+functions.tui_state_start = library.func("tui_state_start", 'void *', [types.TuiString]);
+functions.tui_get_command = library.func("tui_get_command", "void *", [types.TuiString]);
+functions.tui_get_command_start = library.func("tui_get_command_start", 'void *', [types.TuiString]);
+functions.tui_get_output = library.func("tui_get_output", "void *", [types.TuiString]);
+functions.tui_get_output_start = library.func("tui_get_output_start", 'void *', [types.TuiString]);
+functions.tui_get_exit_code = library.func("tui_get_exit_code", "void *", [types.TuiString]);
+functions.tui_get_exit_code_start = library.func("tui_get_exit_code_start", 'void *', [types.TuiString]);
+functions.tui_get_cwd = library.func("tui_get_cwd", "void *", [types.TuiString]);
+functions.tui_get_cwd_start = library.func("tui_get_cwd_start", 'void *', [types.TuiString]);
+functions.tui_get_cursor = library.func("tui_get_cursor", "void *", [types.TuiString]);
+functions.tui_get_cursor_start = library.func("tui_get_cursor_start", 'void *', [types.TuiString]);
+functions.tui_get_size = library.func("tui_get_size", "void *", [types.TuiString]);
+functions.tui_get_size_start = library.func("tui_get_size_start", 'void *', [types.TuiString]);
+functions.tui_get_title = library.func("tui_get_title", "void *", [types.TuiString]);
+functions.tui_get_title_start = library.func("tui_get_title_start", 'void *', [types.TuiString]);
+functions.tui_get_clipboard = library.func("tui_get_clipboard", "void *", [types.TuiString]);
+functions.tui_get_clipboard_start = library.func("tui_get_clipboard_start", 'void *', [types.TuiString]);
+functions.tui_get_bell_count = library.func("tui_get_bell_count", "void *", [types.TuiString]);
+functions.tui_get_bell_count_start = library.func("tui_get_bell_count_start", 'void *', [types.TuiString]);
+functions.tui_get_bell_events = library.func("tui_get_bell_events", "void *", [types.TuiString]);
+functions.tui_get_bell_events_start = library.func("tui_get_bell_events_start", 'void *', [types.TuiString]);
+functions.tui_stop_recording = library.func("tui_stop_recording", "void *", [types.TuiString]);
+functions.tui_stop_recording_start = library.func("tui_stop_recording_start", 'void *', [types.TuiString]);
+functions.tui_text = library.func("tui_text", "void *", [types.TuiString, "bool"]);
+functions.tui_text_start = library.func("tui_text_start", 'void *', [types.TuiString, "bool"]);
+functions.tui_packed_screen = library.func("tui_packed_screen", "void *", [types.TuiString, "bool"]);
+functions.tui_packed_screen_start = library.func("tui_packed_screen_start", 'void *', [types.TuiString, "bool"]);
+functions.tui_cells = library.func("tui_cells", "void *", [types.TuiString, "uint16_t", "uint16_t", "uint16_t", "uint16_t"]);
+functions.tui_cells_start = library.func("tui_cells_start", 'void *', [types.TuiString, "uint16_t", "uint16_t", "uint16_t", "uint16_t"]);
+functions.tui_write = library.func("tui_write", "void *", [types.TuiString, types.TuiString]);
+functions.tui_write_start = library.func("tui_write_start", 'void *', [types.TuiString, types.TuiString]);
+functions.tui_type = library.func("tui_type", "void *", [types.TuiString, types.TuiString]);
+functions.tui_type_start = library.func("tui_type_start", 'void *', [types.TuiString, types.TuiString]);
+functions.tui_submit = library.func("tui_submit", "void *", [types.TuiString, types.TuiString]);
+functions.tui_submit_start = library.func("tui_submit_start", 'void *', [types.TuiString, types.TuiString]);
+functions.tui_signal = library.func("tui_signal", "void *", [types.TuiString, types.TuiString]);
+functions.tui_signal_start = library.func("tui_signal_start", 'void *', [types.TuiString, types.TuiString]);
+functions.tui_key = library.func("tui_key", "void *", [types.TuiString, "void *", "size_t", "uint32_t"]);
+functions.tui_key_start = library.func("tui_key_start", 'void *', [types.TuiString, "void *", "size_t", "uint32_t"]);
+functions.tui_resize = library.func("tui_resize", "void *", [types.TuiString, "uint16_t", "uint16_t"]);
+functions.tui_resize_start = library.func("tui_resize_start", 'void *', [types.TuiString, "uint16_t", "uint16_t"]);
+functions.tui_mouse_click = library.func("tui_mouse_click", "void *", [types.TuiString, types.TuiOptionalU64, types.TuiOptionalU64, types.TuiString, types.TuiMouseOptions, "uint8_t"]);
+functions.tui_mouse_click_start = library.func("tui_mouse_click_start", 'void *', [types.TuiString, types.TuiOptionalU64, types.TuiOptionalU64, types.TuiString, types.TuiMouseOptions, "uint8_t"]);
+functions.tui_mouse_move = library.func("tui_mouse_move", "void *", [types.TuiString, "uint16_t", "uint16_t"]);
+functions.tui_mouse_move_start = library.func("tui_mouse_move_start", 'void *', [types.TuiString, "uint16_t", "uint16_t"]);
+functions.tui_mouse_down = library.func("tui_mouse_down", "void *", [types.TuiString, "uint16_t", "uint16_t", types.TuiMouseOptions]);
+functions.tui_mouse_down_start = library.func("tui_mouse_down_start", 'void *', [types.TuiString, "uint16_t", "uint16_t", types.TuiMouseOptions]);
+functions.tui_mouse_up = library.func("tui_mouse_up", "void *", [types.TuiString, "uint16_t", "uint16_t", types.TuiMouseOptions]);
+functions.tui_mouse_up_start = library.func("tui_mouse_up_start", 'void *', [types.TuiString, "uint16_t", "uint16_t", types.TuiMouseOptions]);
+functions.tui_mouse_drag = library.func("tui_mouse_drag", "void *", [types.TuiString, "uint16_t", "uint16_t", "uint16_t", "uint16_t", types.TuiMouseOptions]);
+functions.tui_mouse_drag_start = library.func("tui_mouse_drag_start", 'void *', [types.TuiString, "uint16_t", "uint16_t", "uint16_t", "uint16_t", types.TuiMouseOptions]);
+functions.tui_mouse_scroll = library.func("tui_mouse_scroll", "void *", [types.TuiString, types.TuiString, "uint16_t"]);
+functions.tui_mouse_scroll_start = library.func("tui_mouse_scroll_start", 'void *', [types.TuiString, types.TuiString, "uint16_t"]);
+functions.tui_wait_title = library.func("tui_wait_title", "void *", [types.TuiString, types.TuiString, types.TuiWaitOptions]);
+functions.tui_wait_title_start = library.func("tui_wait_title_start", 'void *', [types.TuiString, types.TuiString, types.TuiWaitOptions]);
+functions.tui_expect_title = library.func("tui_expect_title", "void *", [types.TuiString, types.TuiString, types.TuiWaitOptions]);
+functions.tui_expect_title_start = library.func("tui_expect_title_start", 'void *', [types.TuiString, types.TuiString, types.TuiWaitOptions]);
+functions.tui_wait_clipboard = library.func("tui_wait_clipboard", "void *", [types.TuiString, types.TuiString, types.TuiWaitOptions]);
+functions.tui_wait_clipboard_start = library.func("tui_wait_clipboard_start", 'void *', [types.TuiString, types.TuiString, types.TuiWaitOptions]);
+functions.tui_wait_idle = library.func("tui_wait_idle", "void *", [types.TuiString, types.TuiOptionalU64]);
+functions.tui_wait_idle_start = library.func("tui_wait_idle_start", 'void *', [types.TuiString, types.TuiOptionalU64]);
+functions.tui_wait_command = library.func("tui_wait_command", "void *", [types.TuiString, types.TuiOptionalU64]);
+functions.tui_wait_command_start = library.func("tui_wait_command_start", 'void *', [types.TuiString, types.TuiOptionalU64]);
+functions.tui_wait_exit = library.func("tui_wait_exit", "void *", [types.TuiString, types.TuiOptionalU64]);
+functions.tui_wait_exit_start = library.func("tui_wait_exit_start", 'void *', [types.TuiString, types.TuiOptionalU64]);
+functions.tui_wait_ready = library.func("tui_wait_ready", "void *", [types.TuiString, types.TuiOptionalU64]);
+functions.tui_wait_ready_start = library.func("tui_wait_ready_start", 'void *', [types.TuiString, types.TuiOptionalU64]);
+functions.tui_wait_bell = library.func("tui_wait_bell", "void *", [types.TuiString, types.TuiOptionalU64]);
+functions.tui_wait_bell_start = library.func("tui_wait_bell_start", 'void *', [types.TuiString, types.TuiOptionalU64]);
+functions.tui_find_locator = library.func("tui_find_locator", "void *", [types.TuiString, types.TuiQuery, "bool"]);
+functions.tui_find_locator_start = library.func("tui_find_locator_start", 'void *', [types.TuiString, types.TuiQuery, "bool"]);
+functions.tui_wait_locator = library.func("tui_wait_locator", "void *", [types.TuiString, types.TuiQuery, types.TuiWaitOptions]);
+functions.tui_wait_locator_start = library.func("tui_wait_locator_start", 'void *', [types.TuiString, types.TuiQuery, types.TuiWaitOptions]);
+functions.tui_expect_locator = library.func("tui_expect_locator", "void *", [types.TuiString, types.TuiQuery, types.TuiWaitOptions]);
+functions.tui_expect_locator_start = library.func("tui_expect_locator_start", 'void *', [types.TuiString, types.TuiQuery, types.TuiWaitOptions]);
+functions.tui_click_locator = library.func("tui_click_locator", "void *", [types.TuiString, types.TuiQuery, types.TuiMouseOptions, "uint8_t", types.TuiOptionalU64]);
+functions.tui_click_locator_start = library.func("tui_click_locator_start", 'void *', [types.TuiString, types.TuiQuery, types.TuiMouseOptions, "uint8_t", types.TuiOptionalU64]);
+functions.tui_highlight_locator = library.func("tui_highlight_locator", "void *", [types.TuiString, types.TuiQuery, types.TuiOptionalU64]);
+functions.tui_highlight_locator_start = library.func("tui_highlight_locator_start", 'void *', [types.TuiString, types.TuiQuery, types.TuiOptionalU64]);
+functions.tui_expect_exit_code = library.func("tui_expect_exit_code", "void *", [types.TuiString, "int32_t", types.TuiOptionalU64]);
+functions.tui_expect_exit_code_start = library.func("tui_expect_exit_code_start", 'void *', [types.TuiString, "int32_t", types.TuiOptionalU64]);
+functions.tui_expect_output = library.func("tui_expect_output", "void *", [types.TuiString, types.TuiString, "bool"]);
+functions.tui_expect_output_start = library.func("tui_expect_output_start", 'void *', [types.TuiString, types.TuiString, "bool"]);
+functions.tui_expect_bell_count = library.func("tui_expect_bell_count", "void *", [types.TuiString, "uint64_t", types.TuiOptionalU64]);
+functions.tui_expect_bell_count_start = library.func("tui_expect_bell_count_start", 'void *', [types.TuiString, "uint64_t", types.TuiOptionalU64]);
+functions.tui_snapshot = library.func("tui_snapshot", "void *", [types.TuiString, types.TuiString, "bool", "bool", "bool", types.TuiString]);
+functions.tui_snapshot_start = library.func("tui_snapshot_start", 'void *', [types.TuiString, types.TuiString, "bool", "bool", "bool", types.TuiString]);
+functions.tui_screenshot = library.func("tui_screenshot", "void *", [types.TuiString, "bool", types.TuiString, types.TuiOptionalF64, types.TuiString, "bool"]);
+functions.tui_screenshot_start = library.func("tui_screenshot_start", 'void *', [types.TuiString, "bool", types.TuiString, types.TuiOptionalF64, types.TuiString, "bool"]);
+functions.tui_screenshot_ptr = library.func("tui_screenshot_ptr", "void *", [types.TuiString, "void *"]);
+functions.tui_start_recording = library.func("tui_start_recording", "void *", [types.TuiString, types.TuiRecordingOptions]);
+functions.tui_start_recording_start = library.func("tui_start_recording_start", 'void *', [types.TuiString, types.TuiRecordingOptions]);
 functions.tui_task_poll = library.func("tui_task_poll", "void *", ["void *"]);
 functions.tui_task_free = library.func("tui_task_free", "void", ["void *"]);
 functions.tui_panic_probe_start = library.func("tui_panic_probe_start", "void *", []);

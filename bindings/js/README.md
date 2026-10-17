@@ -16,6 +16,7 @@ It copies native results before it frees their Rust allocations.
 The library stays loaded until process exit on all supported platforms.
 Native operations can finish after JavaScript worker exit.
 Native thread teardown releases unclaimed task handles and results without canceling operations or closing shared sessions.
+Each binding copy uses its own anonymous Koffi layouts, so copies can share one Koffi module without type-name collisions.
 Koffi supplies its own native addon; this package no longer builds a separate N-API adapter.
 Keep optional dependencies enabled during installation; they contain the platform binaries for both packages.
 The package needs no CLI.

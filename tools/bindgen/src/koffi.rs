@@ -19,6 +19,14 @@ fn ffi_type(ty: &Type) -> Result<String> {
     }
     .into())
 }
+fn type_reference(ty: &Type) -> Result<String> {
+    let ty = ffi_type(ty)?;
+    Ok(if ty.starts_with("Tui") {
+        format!("types.{ty}")
+    } else {
+        format!("{ty:?}")
+    })
+}
 fn descriptor(ty: &Type) -> Result<String> {
     if let Type::Ptr(pointer) = ty {
         return Ok(format!("*{}", name(&pointer.elem)?));
@@ -54,11 +62,11 @@ pub fn generate(
             if !ready {
                 continue;
             }
-            writeln!(js, "types.{id} = koffi.struct({id:?}, {{")?;
+            writeln!(js, "types.{id} = koffi.struct({{")?;
             writeln!(layouts, "{id}: {{")?;
             for field in &item.fields {
                 let field_name = field.ident.as_ref().context("named C field")?.to_string();
-                writeln!(js, "{field_name}: {:?},", ffi_type(&field.ty)?)?;
+                writeln!(js, "{field_name}: {},", type_reference(&field.ty)?)?;
                 writeln!(layouts, "{field_name}: {:?},", descriptor(&field.ty)?)?;
             }
             js.push_str("});\n");
@@ -77,20 +85,16 @@ pub fn generate(
         let id = function.sig.ident.to_string();
         let args = arguments(function)?
             .into_iter()
-            .map(ffi_type)
-            .collect::<Result<Vec<_>>>()?;
-        let args = args
-            .iter()
-            .map(|s| format!("{s:?}"))
-            .collect::<Vec<_>>()
+            .map(type_reference)
+            .collect::<Result<Vec<_>>>()?
             .join(", ");
         let result = match &function.sig.output {
-            ReturnType::Default => "void".into(),
-            ReturnType::Type(_, ty) => ffi_type(ty)?,
+            ReturnType::Default => "\"void\"".into(),
+            ReturnType::Type(_, ty) => type_reference(ty)?,
         };
         writeln!(
             js,
-            "functions.{id} = library.func({id:?}, {result:?}, [{args}]);"
+            "functions.{id} = library.func({id:?}, {result}, [{args}]);"
         )?;
         if asynchronous(function) {
             writeln!(
@@ -132,20 +136,16 @@ pub fn generate(
             let id = function.sig.ident.to_string();
             let args = arguments(&function)?
                 .into_iter()
-                .map(ffi_type)
-                .collect::<Result<Vec<_>>>()?;
-            let args = args
-                .iter()
-                .map(|s| format!("{s:?}"))
-                .collect::<Vec<_>>()
+                .map(type_reference)
+                .collect::<Result<Vec<_>>>()?
                 .join(", ");
             let result = match &function.sig.output {
-                ReturnType::Default => "void".into(),
-                ReturnType::Type(_, ty) => ffi_type(ty)?,
+                ReturnType::Default => "\"void\"".into(),
+                ReturnType::Type(_, ty) => type_reference(ty)?,
             };
             writeln!(
                 js,
-                "functions.{id} = library.func({id:?}, {result:?}, [{args}]);"
+                "functions.{id} = library.func({id:?}, {result}, [{args}]);"
             )?;
         }
     }
@@ -174,5 +174,13 @@ mod tests {
             "*TuiCell"
         );
         assert!(ffi_type(&syn::parse_str("String").unwrap()).is_err());
+        assert_eq!(
+            type_reference(&syn::parse_str("TuiString").unwrap()).unwrap(),
+            "types.TuiString"
+        );
+        assert_eq!(
+            type_reference(&syn::parse_str("*mut TuiResult").unwrap()).unwrap(),
+            "\"void *\""
+        );
     }
 }

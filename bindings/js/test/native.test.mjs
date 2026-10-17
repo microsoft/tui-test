@@ -163,7 +163,9 @@ test("Koffi adapter loads the explicit shared library and honors invalid overrid
   const script = `
     (async () => {
       const assert = (await import("node:assert/strict")).default;
+      const original = await import(${JSON.stringify(new URL("../native/index.js", import.meta.url).href)});
       const binding = await import(${JSON.stringify(pathToFileURL(loader).href)});
+      assert.notEqual(binding.NativeSession, original.NativeSession);
       assert.equal(binding.configureLibrary, undefined);
       const session = new binding.NativeSession("standalone-" + process.pid);
       try {
@@ -173,6 +175,9 @@ test("Koffi adapter loads the explicit shared library and honors invalid overrid
         await session.run({ program: process.execPath, args });
         await session.waitExit(5000);
         assert.match(await session.text(), /standalone-addon/);
+        const originalSession = new original.NativeSession(session.name());
+        assert.deepEqual(await originalSession.getSize(), await session.getSize());
+        assert.match(await originalSession.text(), /standalone-addon/);
       } finally {
         await session.close();
       }
