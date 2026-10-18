@@ -89,6 +89,12 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `startRecording()`, `stopRecording()` | Record. |
 | `close()`, `closeQuiet()` | Close. |
 
+`write(data)` hands the bytes to the terminal, so on Windows they pass through ConPTY input
+translation before the app sees them: a written `\n` arrives as a Ctrl key down followed by
+`Ctrl+Enter`, and `\r\n` as Enter then `Ctrl+Enter`, while a written `\r` is the same as `press("Enter")`.
+To model a paste, send the line break the platform's terminal sends (`\r` on Windows, `\r\n`
+elsewhere).
+
 Capture options: `background` and `transparent` (SVG, APNG, and GIF).
 
 `restart({ gracefulTimeout: 5000 })` returns an `OpenResult`, preserving the last successful spawn's original working directory, options, and latest terminal size. The timeout is milliseconds after Ctrl-C before forced replacement; `0` skips the wait. Child exit preserves restart metadata; `close()` clears it. The terminal and automatic recording start fresh.
