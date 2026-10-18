@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 
 import { TuiTest } from "../dist/index.js";
@@ -12,6 +16,347 @@ import {
 import { NativeRuntime, mapNativeError } from "../dist/native.js";
 
 const ERROR_PREFIX = "__tui_test_native_error__:";
+
+function runWithGc(script) {
+  const args = typeof globalThis.Deno !== "undefined"
+    ? ["eval", "--v8-flags=--expose-gc", script]
+    : typeof globalThis.Bun !== "undefined"
+      ? ["-e", script]
+      : ["--expose-gc", "--input-type=module", "-e", script];
+  const child = spawnSync(process.execPath, args, { encoding: "utf8", env: process.env });
+  assert.equal(child.status, 0, child.stderr);
+}
+
+test("the native function table retains its library through garbage collection", () => {
+  runWithGc(`
+    import assert from "node:assert/strict";
+    const binding = await import(${JSON.stringify(new URL("../native/index.js", import.meta.url).href)});
+    for (let i = 0; i < 10; i++) {
+      if (typeof globalThis.Bun !== "undefined") globalThis.Bun.gc(true);
+      else globalThis.gc();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    assert.deepEqual(await binding.sessions(), []);
+  `);
+});
+
+test("a worker-only native library survives worker and process teardown", {
+  skip: !!process.versions.bun || typeof globalThis.Deno !== "undefined",
+}, () => {
+  const worker = `
+    (async () => {
+      const { workerData } = await import("node:worker_threads");
+      const { TuiTest } = await import(workerData);
+      const terminal = TuiTest.ephemeral();
+      try {
+        await terminal.run(process.execPath, ["-e", "console.log('ready')"]);
+        await terminal.getSize();
+      } finally {
+        await terminal.close();
+      }
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  runWithGc(`
+    import assert from "node:assert/strict";
+    import { once } from "node:events";
+    import { Worker } from "node:worker_threads";
+    for (let i = 0; i < 3; i++) {
+      const worker = new Worker(${JSON.stringify(worker)}, {
+        eval: true,
+        workerData: ${JSON.stringify(new URL("../dist/index.js", import.meta.url).href)},
+      });
+      const [code] = await once(worker, "exit");
+      assert.equal(code, 0);
+    }
+  `);
+});
+
+test("terminating a worker during a native wait preserves the loaded engine", {
+  skip: !!process.versions.bun || typeof globalThis.Deno !== "undefined",
+}, () => {
+  const worker = `
+    (async () => {
+      const { parentPort, workerData } = await import("node:worker_threads");
+      const binding = await import(workerData.url);
+      if (workerData.cleanup) {
+        const assert = (await import("node:assert/strict")).default;
+        assert.ok((await binding.sessions()).includes("pending-worker"));
+        await binding.closeAll();
+        return;
+      }
+      const session = new binding.NativeSession("pending-worker");
+      await session.run({ program: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"] });
+      session.waitTitle("never-matches", { timeoutMs: 30000 }).catch(() => {});
+      parentPort.postMessage("waiting");
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  runWithGc(`
+    import assert from "node:assert/strict";
+    import { once } from "node:events";
+    import { Worker } from "node:worker_threads";
+    const options = {
+      eval: true,
+      workerData: { url: ${JSON.stringify(new URL("../native/index.js", import.meta.url).href)} },
+    };
+    const worker = new Worker(${JSON.stringify(worker)}, options);
+    assert.deepEqual(await once(worker, "message"), ["waiting"]);
+    assert.equal(await worker.terminate(), 1);
+    const cleanup = new Worker(${JSON.stringify(worker)}, {
+      ...options, workerData: { ...options.workerData, cleanup: true },
+    });
+    assert.deepEqual(await once(cleanup, "exit"), [0]);
+  `);
+});
+
+test("nested input buffers remain live during native start and marshaling", () => {
+  runWithGc(`
+    import assert from "node:assert/strict";
+    import koffi from "koffi";
+    import { types } from ${JSON.stringify(new URL("../native/abi.js", import.meta.url).href)};
+    import { createAdapter } from ${JSON.stringify(new URL("../native/adapter.js", import.meta.url).href)};
+    const expected = "nested-owned-buffer-".repeat(16000);
+    const read = value => Buffer.from(koffi.decode(value.data, "uint8_t", value.len)).toString();
+    let calls = 0;
+    const { NativeSession: TestSession } = createAdapter({
+      tui_run_start(context, options, program, argv, argc) {
+        for (let i = 0; i < 4; i++) {
+          if (typeof globalThis.Bun !== "undefined") globalThis.Bun.gc(true);
+          else globalThis.gc();
+          Buffer.alloc(400000, 0x58);
+        }
+        const arg = koffi.decode(argv, types.TuiString, argc)[0];
+        const pair = koffi.decode(options.env, types.TuiPair, options.env_len)[0];
+        assert.ok(read(arg) === expected, "argument buffer changed during native start");
+        assert.ok(read(pair.value) === expected, "environment buffer changed during native start");
+        calls++;
+        return null;
+      },
+    });
+    const session = new TestSession("marshal-gc-regression");
+    for (let i = 0; i < 100; i++) {
+      await assert.rejects(
+        session.run({ program: "unused", args: [expected], env: [["TEST", expected]] }),
+        /native call returned a null task/,
+      );
+    }
+    assert.equal(calls, 100);
+  `);
+});
+
+test("Koffi adapter loads the explicit shared library and honors invalid overrides", (t) => {
+  const directory = mkdtempSync(fileURLToPath(new URL(".native-loader-", import.meta.url)));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const native = new URL("../native/", import.meta.url);
+  for (const file of readdirSync(native).filter((file) => file.endsWith(".js"))) {
+    copyFileSync(new URL(file, native), join(directory, file));
+  }
+  const extension = { darwin: "dylib", linux: "so", win32: "dll" }[process.platform];
+  const variant = process.platform === "linux"
+    ? (process.report.getReport().header.glibcVersionRuntime ? "gnu" : "musl")
+    : process.platform === "win32" ? "msvc" : undefined;
+  const tag = [process.platform, process.arch, variant].filter(Boolean).join("-");
+  const binary = process.env.TUI_TEST_NATIVE_LIBRARY
+    || new URL(`tui-test.${tag}.${extension}`, native);
+  const library = join(directory, `chosen.${extension}`);
+  copyFileSync(binary, library);
+  const loader = join(directory, "index.js");
+  const script = `
+    (async () => {
+      const assert = (await import("node:assert/strict")).default;
+      const original = await import(${JSON.stringify(new URL("../native/index.js", import.meta.url).href)});
+      const binding = await import(${JSON.stringify(pathToFileURL(loader).href)});
+      assert.notEqual(binding.NativeSession, original.NativeSession);
+      assert.equal(binding.configureLibrary, undefined);
+      const session = new binding.NativeSession("standalone-" + process.pid);
+      try {
+        const args = typeof globalThis.Deno === "undefined"
+          ? ["-e", "console.log('standalone-addon')"]
+          : ["eval", "console.log('standalone-addon')"];
+        await session.run({ program: process.execPath, args });
+        await session.waitExit(5000);
+        assert.match(await session.text(), /standalone-addon/);
+        const originalSession = new original.NativeSession(session.name());
+        assert.deepEqual(await originalSession.getSize(), await session.getSize());
+        assert.match(await originalSession.text(), /standalone-addon/);
+      } finally {
+        await session.close();
+      }
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  const args = typeof globalThis.Deno === "undefined" ? ["-e", script] : ["eval", script];
+  const child = spawnSync(process.execPath, args, {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      TUI_TEST_NATIVE_LIBRARY: library,
+    },
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const invalid = spawnSync(process.execPath, args, {
+    encoding: "utf8",
+    env: { ...process.env, TUI_TEST_NATIVE_LIBRARY: join(directory, "does-not-exist") },
+  });
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /Failed to load shared library/);
+});
+
+test("the C-compatible wait field preserves public negation options", async () => {
+  const session = new NativeSession(`negated-title-${process.pid}`);
+  try {
+    await session.run({
+      program: process.execPath,
+      args: [typeof globalThis.Deno === "undefined" ? "-e" : "eval", "setInterval(() => {}, 1000)"],
+    });
+    await session.waitTitle("never-matches", { not: true, timeoutMs: 0 });
+    await assert.rejects(session.waitTitle("never-matches", { timeoutMs: 0 }));
+  } finally {
+    await session.close();
+  }
+});
+
+test("concurrent waits cannot starve input or close", async () => {
+  const session = new NativeSession(`koffi-concurrency-${process.pid}`);
+  try {
+    await session.run({
+      program: process.execPath,
+      args: [typeof globalThis.Deno === "undefined" ? "-e" : "eval",
+        'process.stdin.once("data", () => process.stdout.write("\\x1b]0;koffi-completed\\x07")); setInterval(() => {}, 1000);'],
+    });
+    let completedWaits = 0;
+    const waits = Array.from({ length: 32 }, () => session.waitTitle("koffi-completed", { timeoutMs: 5000 })
+      .then(() => { completedWaits++; }));
+    const sizes = await Promise.all(Array.from({ length: 300 }, () => session.getSize()));
+    assert.ok(sizes.every((size) => size.cols === 80 && size.rows === 30));
+    assert.equal(completedWaits, 0, "short reads waited for long waits to complete");
+    const start = performance.now();
+    await session.submit("koffi-completed");
+    await Promise.all(waits);
+    assert.ok(performance.now() - start < 2000, "waits blocked the input call");
+    const pending = Array.from({ length: 32 }, () => session.waitTitle("never-set", { timeoutMs: 5000 }).catch(mapNativeError));
+    const closeStart = performance.now();
+    await session.close();
+    const failures = await Promise.all(pending);
+    assert.ok(performance.now() - closeStart < 2000, "waits blocked the close call");
+    assert.ok(failures.every((failure) => failure instanceof NoSessionError || failure instanceof ExpectationError));
+  } finally {
+    await session.close();
+  }
+});
+
+test("short reads use bounded asynchronous calls without task polling", async () => {
+  const { default: koffi } = await import("koffi");
+  const { types } = await import("../native/abi.js");
+  const { createAdapter } = await import("../native/adapter.js");
+  const result = Buffer.alloc(koffi.sizeof(types.TuiResult));
+  koffi.encode(result, koffi.offsetof(types.TuiResult, "size"), types.TuiSize, { cols: 80, rows: 30 });
+  let active = 0;
+  let maximum = 0;
+  let completed = 0;
+  let freed = 0;
+  const { NativeSession: TestSession } = createAdapter({
+    tui_get_size: {
+      async(context, callback) {
+        active++;
+        maximum = Math.max(maximum, active);
+        setImmediate(() => {
+          active--;
+          completed++;
+          callback(null, result);
+        });
+      },
+    },
+    tui_result_free() { freed++; },
+  });
+  const session = new TestSession("short-read-queue");
+  const sizes = await Promise.all(Array.from({ length: 300 }, () => session.getSize()));
+  assert.ok(sizes.every((size) => size.cols === 80 && size.rows === 30));
+  assert.equal(maximum, 4);
+  assert.equal(completed, 300);
+  assert.equal(freed, 300);
+});
+
+test("native output copies survive result release and later allocations", async () => {
+  const session = new NativeSession(`koffi-copy-${process.pid}`);
+  try {
+    await session.run({
+      program: process.execPath,
+      args: [typeof globalThis.Deno === "undefined" ? "-e" : "eval",
+        'process.stdout.write("copy-αβγ"); setInterval(() => {}, 1000);'],
+    });
+
+    await session.waitLocator({ nodes: [{ kind: "text", text: "copy-αβγ" }], root: 0 }, false, 5000);
+    const screen = await session.packedScreen();
+    const original = Buffer.from(screen.utf8);
+    const state = await session.state();
+    const cells = await session.cells(0, 0, 8, 1);
+    for (let i = 0; i < 30; i++) {
+      await session.packedScreen();
+      await session.state();
+      Buffer.alloc(64 * 1024, i);
+    }
+    assert.deepEqual(screen.utf8, original);
+    assert.match(state.text, /copy-αβγ/);
+    assert.equal(cells.map((cell) => cell.char).join(""), "copy-αβγ");
+  } finally {
+    await session.close();
+  }
+});
+
+test("typed input buffers survive garbage collection after start", () => {
+  const script = `
+    import assert from "node:assert/strict";
+    import { NativeSession } from ${JSON.stringify(new URL("../native/index.js", import.meta.url).href)};
+    const session = new NativeSession("koffi-gc-" + process.pid);
+    const expected = "input-copy-" + "αβγ".repeat(1500) + "-input-end";
+    const env = [["TUI_COPY_VALUE", expected]];
+    const code = 'process.stdout.write(process.env.TUI_COPY_VALUE); setInterval(() => {}, 1000);';
+    const args = [typeof globalThis.Deno === "undefined" ? "-e" : "eval", code];
+    try {
+      const started = session.run({ program: process.execPath, args, env, cols: 120, rows: 60 });
+      args[1] = "throw new Error('mutated')";
+      env[0][1] = "mutated";
+      for (let i = 0; i < 20; i++) {
+        Buffer.alloc(1024 * 1024, i);
+        if (typeof globalThis.gc === "function") globalThis.gc();
+        else globalThis.Bun.gc(true);
+      }
+      await started;
+      await session.waitLocator({ nodes: [{ kind: "text", text: "-input-end" }], root: 0 }, false, 5000);
+      const screen = await session.packedScreen();
+      assert.ok(Buffer.from(screen.utf8).toString("utf8").replace(/\\s/g, "").includes(expected));
+    } finally { await session.close(); }
+  `;
+  runWithGc(script);
+});
+
+test("error and conversion failures free native results and tasks exactly once", async () => {
+  const { default: koffi } = await import("koffi");
+  const { types } = await import("../native/abi.js");
+  const { createAdapter } = await import("../native/adapter.js");
+  for (const [method, malformed] of [
+    ["state", false], ["state", true], ["getSize", false], ["getSize", true],
+  ]) {
+    const result = Buffer.alloc(koffi.sizeof(types.TuiResult));
+    koffi.encode(result, koffi.offsetof(types.TuiResult, "error_kind"), "uint32_t", 2);
+    const message = Buffer.from("test native failure");
+    const details = Buffer.from(malformed ? "{invalid-json" : '{"reason":"test"}');
+    for (const [field, data] of [["error_message", message], ["error_details", details]]) {
+      koffi.encode(result, koffi.offsetof(types.TuiResult, field), types.TuiString, { data, len: data.length });
+    }
+    let resultsFreed = 0;
+    let tasksFreed = 0;
+    const { NativeSession: TestSession } = createAdapter({
+      tui_state_start: () => result,
+      tui_get_size: { async(context, callback) { callback(null, result); } },
+      tui_task_poll: () => result,
+      tui_task_free: () => { tasksFreed++; },
+      tui_result_free: () => { resultsFreed++; },
+    });
+    await assert.rejects(new TestSession("test")[method]());
+    assert.equal(resultsFreed, 1);
+    assert.equal(tasksFreed, method === "state" ? 1 : 0);
+  }
+});
 
 test("native JSON error envelopes expose structured diagnostics", () => {
   const details = {
@@ -121,6 +466,49 @@ test("native constructor validation errors use the public error taxonomy", async
 });
 
 import { NativeSession } from "../native/index.js";
+
+test("owned native inputs preserve numeric and operation validation", async () => {
+  const session = new NativeSession(`owned-validation-${process.pid}`);
+  const failures = [
+    [() => session.open({ cols: 65536 }), /cols must be an integer between 0 and 65535/],
+    [() => session.open({ timeouts: { text: Number.NaN } }), /timeouts.text must be an integer/],
+    [() => session.run({ program: "" }), /program must not be empty/],
+    [() => session.run({ program: "unused", screenHistoryLimit: 65535 }), /screen history limit/],
+    [() => session.resize(1.5, 20), /cols must be an integer/],
+    [() => session.waitIdle(Number.MAX_SAFE_INTEGER + 1), /timeoutMs must be an integer/],
+    [() => session.mouseDown(0, 0, 3), /invalid mouse button code 3/],
+    [() => session.mouseClick({ x: -1 }), /x must be an integer/],
+    [() => session.expectExitCode(2147483648), /code must be an integer/],
+    [() => session.startRecording({ path: "unused", fps: 256 }), /fps must be an integer/],
+    [() => session.screenshot({ background: "#000000", transparent: true }), /background and transparent options conflict/],
+    [() => session.waitClipboard(undefined, { regex: true }), /clipboard regex requires text/],
+    [() => session.waitClipboard("[", { regex: true }), /invalid regex/],
+  ];
+  for (const [call, message] of failures) {
+    await assert.rejects(call, (error) => {
+      const mapped = mapNativeError(error);
+      assert.ok(mapped instanceof UsageError, mapped.message);
+      assert.match(mapped.message, message);
+      return true;
+    });
+  }
+  await session.close(false);
+  await session.close(true);
+});
+
+test("owned session contexts validate each call without changing caller options", async () => {
+  const trace = { mode: "invalid", directory: "" };
+  const session = new NativeSession(`owned-context-${process.pid}`, undefined, undefined, trace);
+  for (const call of [() => session.state(), () => session.open(), () => session.close(false)]) {
+    await assert.rejects(call, (error) => {
+      const mapped = mapNativeError(error);
+      assert.ok(mapped instanceof UsageError);
+      assert.match(mapped.message, /unknown trace mode/);
+      return true;
+    });
+  }
+  assert.deepEqual(trace, { mode: "invalid", directory: "" });
+});
 
 test("locator expressions reject invalid fields and references", async () => {
   const session = new NativeSession(`invalid-expression-${process.pid}`);

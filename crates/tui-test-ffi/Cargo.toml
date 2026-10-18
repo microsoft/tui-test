@@ -1,5 +1,5 @@
 [package]
-name = "tui-test-go"
+name = "tui-test-ffi"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,7 @@ repository.workspace = true
 publish = false
 
 [lib]
-name = "tui_test_go"
+name = "tui_test_ffi"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

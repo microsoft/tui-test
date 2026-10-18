@@ -2,9 +2,11 @@ package tuitest_test
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,6 +29,8 @@ func TestTerminalProcess(t *testing.T) {
 			os.Exit(0)
 		case "events":
 			fmt.Print("\x1b]2;Go title\x07\x1b]52;c;Z28tY2xpcGJvYXJk\x07\x07\r\nevents-done\r\n")
+		case "raster":
+			fmt.Print("\x1b[2J\x1b[Hgo-raster-ready\r\n")
 		default:
 			fmt.Printf("received:%s\r\n", scanner.Text())
 		}
@@ -247,10 +251,31 @@ func TestScreenshotsAndSnapshots(t *testing.T) {
 	if _, statErr := os.Stat(path); statErr != nil {
 		t.Fatal(statErr)
 	}
+	// Raster tests use bundled font coverage rather than host CJK fonts.
+	requireNoError(t, terminal.Submit(tuitest.Ptr("raster")))
+	requireNoError(t, terminal.GetByText("go-raster-ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}))
 	transparent, err := terminal.Screenshot(filepath.Join(directory, "transparent.png"), tuitest.ScreenshotOptions{Transparent: true})
 	requireNoError(t, err)
 	if _, statErr := os.Stat(transparent); statErr != nil {
 		t.Fatal(statErr)
+	}
+	data, err := os.ReadFile(transparent)
+	requireNoError(t, err)
+	baseline, err := png.DecodeConfig(bytes.NewReader(data))
+	requireNoError(t, err)
+	for index, options := range []tuitest.ScreenshotOptions{
+		{Zoom: tuitest.Ptr(2.0), Transparent: true},
+		{Zoom: tuitest.Ptr(2.0), Background: "#123456"},
+	} {
+		path, err := terminal.Screenshot(filepath.Join(directory, fmt.Sprintf("scaled-%d.png", index)), options)
+		requireNoError(t, err)
+		data, err := os.ReadFile(path)
+		requireNoError(t, err)
+		scaled, err := png.DecodeConfig(bytes.NewReader(data))
+		requireNoError(t, err)
+		if scaled.Width != 2*baseline.Width || scaled.Height != 2*baseline.Height {
+			t.Fatalf("scaled screenshot=%dx%d, baseline=%dx%d", scaled.Width, scaled.Height, baseline.Width, baseline.Height)
+		}
 	}
 	_, err = terminal.Screenshot(filepath.Join(directory, "conflict.png"), tuitest.ScreenshotOptions{Background: "#000000", Transparent: true})
 	requireKind(t, err, tuitest.UsageError)

@@ -702,7 +702,7 @@ test("expectExitCode rejects unsafe JavaScript numbers as UsageError", async () 
   }
 });
 
-test("N-API argument conversion errors map to UsageError", async () => {
+test("native argument conversion errors map to UsageError", async () => {
   const runtime = new NativeRuntime(uniqueSession("native-argument-errors"));
   const invalidCalls = [
     () => runtime.run(null),

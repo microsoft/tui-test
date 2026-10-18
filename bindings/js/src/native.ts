@@ -88,7 +88,7 @@ async function importBinding(): Promise<NativeBinding> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
-      "failed to load the @microsoft/tui-test native addon: " +
+      "failed to load the @microsoft/tui-test native library: " +
         `${message}. Build it with \`npm run build:native\` (requires a Rust ` +
         "toolchain), or install a matching prebuilt platform package.",
       { cause: error },
