@@ -268,6 +268,11 @@ impl Pty {
         Self::spawn_with_cwd(&launch.target, &launch.args, &opts, cwd.as_deref())
     }
 
+    #[cfg(test)]
+    pub(crate) fn replace_test_writer(&self, writer: Box<dyn Write + Send>) {
+        *self.writer.lock().unwrap() = Some(writer);
+    }
+
     pub fn write(&self, mut data: &[u8]) -> std::io::Result<()> {
         let mut guard = self
             .writer

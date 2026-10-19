@@ -98,6 +98,8 @@ pub struct Session {
     pub timeouts: crate::api::Timeouts,
     pub pty: Arc<Pty>,
     pub state: Arc<Mutex<TermState>>,
+    /// Serialize viewport movement with input without blocking the output reader.
+    pub(crate) viewport_input: Arc<Mutex<()>>,
     pub cancelled: Arc<AtomicBool>,
     pub(crate) bells: BellTracker,
     recorder: Recorder,
@@ -321,6 +323,7 @@ impl Session {
             timeouts,
             pty,
             state,
+            viewport_input: Arc::new(Mutex::new(())),
             cancelled,
             bells,
             recorder,
@@ -366,6 +369,10 @@ impl Session {
     }
 
     pub fn scroll(&self, target: crate::api::ScrollTarget) -> Result<(), crate::api::TuiTestError> {
+        let _input = self
+            .viewport_input
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut state = self
             .state
             .lock()

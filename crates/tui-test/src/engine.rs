@@ -172,6 +172,7 @@ struct InterruptTarget {
 
 struct LiveTarget {
     state: Arc<Mutex<TermState>>,
+    viewport_input: Arc<Mutex<()>>,
     pty: Arc<crate::terminal::pty::Pty>,
     shell: Option<&'static str>,
 }
@@ -852,6 +853,7 @@ impl Engine {
         }
         let live = LiveTarget {
             state: session.state.clone(),
+            viewport_input: session.viewport_input.clone(),
             pty: session.pty.clone(),
             shell: session.shell.map(|value| value.as_str()),
         };
@@ -1520,13 +1522,18 @@ impl Engine {
     /// Write viewer keystrokes straight to the pty: untracked and unlogged, so
     /// a human watching cannot disturb what the agent is waiting on.
     pub fn write_monitor_input_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
-        let Some((state, pty)) = ({
+        let Some((state, pty, viewport_input)) = ({
             let live = self
                 .live
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            live.as_ref()
-                .map(|target| (Arc::clone(&target.state), Arc::clone(&target.pty)))
+            live.as_ref().map(|target| {
+                (
+                    Arc::clone(&target.state),
+                    Arc::clone(&target.pty),
+                    Arc::clone(&target.viewport_input),
+                )
+            })
         }) else {
             return Ok(());
         };
@@ -1540,6 +1547,9 @@ impl Engine {
         if exited() {
             return Ok(());
         }
+        let _input = viewport_input
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !data.is_empty() {
             let mut state = state
                 .lock()
@@ -2734,19 +2744,21 @@ fn write_input(
     input: &mut Option<InputDetails>,
     position: Option<(u16, u16)>,
 ) -> Result<(), TuiTestError> {
+    let _input = session
+        .viewport_input
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !bytes.is_empty() {
+        let mut state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if position.is_none() {
-            session.scroll(ScrollTarget::Bottom)?;
-        } else {
-            let state = session
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.emu.viewport().offset != 0 {
-                return Err(TuiTestError::usage(
-                    "mouse input cannot target scrollback; scroll to the bottom first",
-                ));
-            }
+            scroll_emulator_and_record(&mut state, ScrollTarget::Bottom)?;
+        } else if state.emu.viewport().offset != 0 {
+            return Err(TuiTestError::usage(
+                "mouse input cannot target scrollback; scroll to the bottom first",
+            ));
         }
     }
     act(session.write(bytes))?;
@@ -4686,6 +4698,107 @@ mod tests {
             assert_eq!((options.cols, options.rows), (80, 24));
         }
         engine.execute(Operation::Close).unwrap();
+    }
+
+    #[test]
+    fn scroll_waits_for_a_concurrent_locator_mouse_write() {
+        use std::sync::mpsc;
+
+        struct PausedWriter {
+            entered: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            state: Arc<Mutex<TermState>>,
+            observed: mpsc::Sender<usize>,
+        }
+
+        impl std::io::Write for PausedWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.entered.send(()).unwrap();
+                self.release.recv_timeout(Duration::from_secs(5)).unwrap();
+                self.observed
+                    .send(self.state.lock().unwrap().emu.viewport().offset)
+                    .unwrap();
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let engine = Arc::new(Engine::new(
+            "concurrent-click-scroll".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        ));
+        let mut options = sleeping_program(false);
+        options.cols = 12;
+        options.rows = 3;
+        engine.execute(Operation::Run(options)).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let state = {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            state
+                .emu
+                .process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nclick");
+            state.screen_dirty = true;
+            session.pty.replace_test_writer(Box::new(PausedWriter {
+                entered: entered_tx,
+                release: release_rx,
+                state: session.state.clone(),
+                observed: observed_tx,
+            }));
+            session.state.clone()
+        };
+        let click_engine = engine.clone();
+        let click = std::thread::spawn(move || {
+            click_engine.execute(Operation::ClickLocator {
+                query: LocatorQuery::text("click"),
+                options: crate::api::MouseOptions::default(),
+                clicks: 1,
+                timeout_ms: Some(1_000),
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let state_is_unlocked = state.try_lock().is_ok();
+        let (scroll_started_tx, scroll_started_rx) = mpsc::channel();
+        let (scrolled_tx, scrolled_rx) = mpsc::channel();
+        let scroll_engine = engine.clone();
+        let scroll = std::thread::spawn(move || {
+            scroll_started_tx.send(()).unwrap();
+            let result = scroll_engine.execute(Operation::Scroll {
+                target: ScrollTarget::Top,
+            });
+            scrolled_tx.send(()).unwrap();
+            result
+        });
+        scroll_started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        let scrolled_during_write = scrolled_rx.recv_timeout(Duration::from_millis(200)).is_ok();
+        release_tx.send(()).unwrap();
+        click.join().unwrap().unwrap();
+        scroll.join().unwrap().unwrap();
+        let offset_at_write = observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let final_viewport = state.lock().unwrap().emu.viewport();
+        engine.execute(Operation::Close).unwrap();
+        assert!(state_is_unlocked, "PTY input must not hold terminal state");
+        assert!(
+            !scrolled_during_write,
+            "scroll overtook a pending mouse write"
+        );
+        assert_eq!(
+            offset_at_write, 0,
+            "mouse input reached a historical viewport"
+        );
+        assert!(
+            final_viewport.offset > 0,
+            "scroll must complete after the write"
+        );
     }
 
     #[test]
