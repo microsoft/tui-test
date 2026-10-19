@@ -1,6 +1,8 @@
 use crate::types::*;
 use tui_test::api::*;
 
+include!("output_generated.rs");
+
 #[derive(Default)]
 struct Storage {
     bytes: Vec<Box<[u8]>>,
@@ -27,6 +29,37 @@ impl Storage {
     }
     fn optional(&mut self, value: Option<String>) -> TuiString {
         value.map(|s| self.string(s)).unwrap_or_default()
+    }
+    fn modes(
+        &mut self,
+        values: std::collections::BTreeMap<String, bool>,
+    ) -> (*const TuiMode, usize) {
+        for (name, enabled) in values {
+            let name = self.string(name);
+            self.modes.push(TuiMode { name, enabled });
+        }
+        (self.modes.as_ptr(), self.modes.len())
+    }
+    fn palette(
+        &mut self,
+        values: std::collections::BTreeMap<u8, String>,
+    ) -> (*const TuiPair, usize) {
+        for (index, color) in values {
+            let key = self.string(index.to_string());
+            let value = self.string(color);
+            self.pairs.push(TuiPair { key, value });
+        }
+        (self.pairs.as_ptr(), self.pairs.len())
+    }
+    fn spans(&mut self, values: Vec<TextSpan>) -> (*const TuiSpan, usize) {
+        let spans = values
+            .into_iter()
+            .map(|v| text_span(self, v))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let result = (spans.as_ptr(), spans.len());
+        self.spans.push(spans);
+        result
     }
 }
 fn integer(value: Option<i32>) -> TuiOptionalI32 {
@@ -103,70 +136,9 @@ pub(crate) fn operation(value: OperationResult) -> *mut TuiResult {
     let mut r = TuiResult::default();
     match value {
         OperationResult::Unit => {}
-        OperationResult::Viewport(value) => {
-            r.viewport_offset = value.offset;
-            r.viewport_history = value.history;
-        }
-        OperationResult::Open(v) => {
-            r.open = TuiOpenResult {
-                shell_pid: TuiOptionalU64 {
-                    present: v.shell_pid.is_some(),
-                    value: u64::from(v.shell_pid.unwrap_or_default()),
-                },
-                session: s.string(v.session),
-                ready: v.ready,
-                recording: s.string(v.recording),
-            }
-        }
-        OperationResult::State(v) => {
-            for (name, enabled) in v.modes {
-                let name = s.string(name);
-                s.modes.push(TuiMode { name, enabled });
-            }
-            for (index, color) in v.colors.palette {
-                let key = s.string(index.to_string());
-                let value = s.string(color);
-                s.pairs.push(TuiPair { key, value });
-            }
-            r.state = TuiState {
-                session_shell: s.optional(v.session_shell),
-                cols: v.cols,
-                rows: v.rows,
-                cursor: TuiCursor {
-                    x: v.cursor.x,
-                    y: v.cursor.y,
-                    visible: v.cursor.visible,
-                    shape: s.string(v.cursor.shape),
-                    color: s.string(v.cursor.color),
-                },
-                title: s.optional(v.title),
-                cwd: s.optional(v.cwd),
-                last_command: s.optional(v.last_command),
-                last_exit: integer(v.last_exit),
-                exit_signal: s.optional(v.exit_signal),
-                exited: integer(v.exited),
-                ready: v.ready,
-                bell_count: v.bell_count,
-                modes: s.modes.as_ptr(),
-                modes_len: s.modes.len(),
-                mouse_mode: s.string(v.mouse_mode),
-                colors: TuiTerminalColors {
-                    foreground: s.string(v.colors.foreground),
-                    background: s.string(v.colors.background),
-                    cursor: s.string(v.colors.cursor),
-                    palette: s.pairs.as_ptr(),
-                    palette_len: s.pairs.len(),
-                },
-                timeouts: TuiTimeouts {
-                    text: unsigned(v.timeouts.text),
-                    idle: unsigned(v.timeouts.idle),
-                    command: unsigned(v.timeouts.command),
-                    exit: unsigned(v.timeouts.exit),
-                    ready: unsigned(v.timeouts.ready),
-                },
-                text: s.string(v.text),
-            }
-        }
+        OperationResult::Viewport(v) => r.viewport = viewport(&mut s, v),
+        OperationResult::Open(v) => r.open = open_value(&mut s, v),
+        OperationResult::State(v) => r.state = state(&mut s, *v),
         OperationResult::Text(v)
         | OperationResult::Clipboard(v)
         | OperationResult::Recording(v) => r.text = s.string(v),
@@ -175,15 +147,7 @@ pub(crate) fn operation(value: OperationResult) -> *mut TuiResult {
         | OperationResult::Cwd(v)
         | OperationResult::Title(v) => r.text = s.optional(v),
         OperationResult::ExitCode(v) => r.exit_code = integer(v),
-        OperationResult::Cursor(v) => {
-            r.cursor = TuiCursor {
-                x: v.x,
-                y: v.y,
-                visible: v.visible,
-                shape: s.string(v.shape),
-                color: s.string(v.color),
-            }
-        }
+        OperationResult::Cursor(v) => r.cursor = cursor(&mut s, v),
         OperationResult::Modes(v) => {
             for (name, enabled) in v {
                 let name = s.string(name);
@@ -197,12 +161,7 @@ pub(crate) fn operation(value: OperationResult) -> *mut TuiResult {
                 s.pairs.push(TuiPair { key, value });
             }
         }
-        OperationResult::Size(v) => {
-            r.size = TuiSize {
-                cols: v.cols,
-                rows: v.rows,
-            }
-        }
+        OperationResult::Size(v) => r.size = size(&mut s, v),
         OperationResult::BellCount(v) => r.number = v,
         OperationResult::PackedScreen(v) => {
             r.size = TuiSize {
@@ -213,25 +172,7 @@ pub(crate) fn operation(value: OperationResult) -> *mut TuiResult {
         }
         OperationResult::Cells(v) => {
             for c in v {
-                let cell = TuiCell {
-                    x: c.x,
-                    y: c.y,
-                    character: s.string(c.char),
-                    fg: color(c.fg),
-                    bg: color(c.bg),
-                    bold: c.bold,
-                    dim: c.dim,
-                    italic: c.italic,
-                    inverse: c.inverse,
-                    invisible: c.invisible,
-                    strike: c.strike,
-                    blink: c.blink,
-                    underline: c.underline,
-                    underline_style: s.string(c.underline_style),
-                    underline_color: color(c.underline_color),
-                    link: s.string(c.link),
-                    link_id: s.string(c.link_id),
-                };
+                let cell = cell(&mut s, c);
                 s.cells.push(cell);
             }
             r.cells = s.cells.as_ptr();
@@ -239,43 +180,14 @@ pub(crate) fn operation(value: OperationResult) -> *mut TuiResult {
         }
         OperationResult::Matches(v) => {
             for m in v {
-                let spans = m
-                    .spans
-                    .into_iter()
-                    .map(|v| TuiSpan {
-                        row: v.row,
-                        start: v.start,
-                        end: v.end,
-                    })
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice();
-                let value = TuiMatch {
-                    text: s.string(m.text),
-                    start: TuiPosition {
-                        row: m.start.row,
-                        column: m.start.column,
-                    },
-                    end: TuiPosition {
-                        row: m.end.row,
-                        column: m.end.column,
-                    },
-                    spans: spans.as_ptr(),
-                    spans_len: spans.len(),
-                };
-                s.spans.push(spans);
+                let value = text_match(&mut s, m);
                 s.matches.push(value);
             }
             r.matches = s.matches.as_ptr();
             r.matches_len = s.matches.len();
         }
         OperationResult::BellEvents(v) => {
-            s.bells = v
-                .into_iter()
-                .map(|v| TuiBellEvent {
-                    sequence: v.sequence,
-                    elapsed_ms: v.elapsed_ms,
-                })
-                .collect();
+            s.bells = v.into_iter().map(|v| bell_event(&mut s, v)).collect();
             r.bells = s.bells.as_ptr();
             r.bells_len = s.bells.len();
         }

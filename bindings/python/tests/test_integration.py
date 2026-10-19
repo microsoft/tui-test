@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import tui_test
 from tui_test import (
@@ -28,9 +29,9 @@ from tui_test import (
     testing,
     unique_session,
 )
-from tui_test.client import _panic_probe
+from tui_test import _native
 
-SHELL = "pwsh" if sys.platform == "win32" else None
+SHELL = "pwsh" if sys.platform == "win32" else "bash"
 TWO_BELLS_COMMAND = (
     "[Console]::Out.Write([char]7); [Console]::Out.Write([char]7)"
     if sys.platform == "win32"
@@ -1080,11 +1081,12 @@ class IntegrationTests(unittest.TestCase):
 
         run(scenario())
 
-    def test_panic_probe_maps_to_internal_error_and_process_survives(self):
+    def test_worker_internal_error_preserves_later_operations(self):
         async def scenario():
-            with self.assertRaises(InternalError) as raised:
-                await _panic_probe()
-            self.assertIn("panic probe", str(raised.exception))
+            with patch.object(_native, "_invoke", side_effect=_native._error(5, "worker failure")):
+                with self.assertRaises(InternalError) as raised:
+                    await self._client().state()
+            self.assertIn("worker failure", str(raised.exception))
             async with self._client() as su:
                 await su.open(shell=SHELL)
                 self.assertGreater((await su.state()).cols, 0)

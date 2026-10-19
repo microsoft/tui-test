@@ -1,20 +1,28 @@
-//! Private typed C ABI for the Go binding. All borrowed input buffers must
-//! remain valid for the call. Inputs are copied before entering the engine;
-//! output storage belongs to Rust until tui_result_free is called.
+//! Typed C boundary shared by all language adapters.
+//! C ABI input buffers must remain valid for the call. The adapter copies inputs
+//! before execution; C output storage belongs to Rust until tui_result_free.
 mod input;
 mod output;
+mod session;
+mod tasks;
 mod types;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+pub use tasks::TuiTask;
 use tui_test::api::*;
 use tui_test::runtime::global_registry;
 pub use types::*;
+
+mod tasks_generated;
+pub use tasks_generated::*;
+
+pub const ABI_VERSION: u32 = 5;
 
 type Result<T> = std::result::Result<T, TuiTestError>;
 fn boundary(f: impl FnOnce() -> Result<OperationResult>) -> *mut TuiResult {
     match catch_unwind(AssertUnwindSafe(|| f().map(output::operation))) {
         Ok(Ok(value)) => value,
         Ok(Err(error)) => output::error(error),
-        Err(_) => output::error(TuiTestError::internal("native Go adapter panicked")),
+        Err(_) => output::error(TuiTestError::internal("native engine adapter panicked")),
     }
 }
 unsafe fn execute(
@@ -22,12 +30,17 @@ unsafe fn execute(
     operation_name: &'static str,
     operation: impl FnOnce() -> Result<Operation>,
 ) -> *mut TuiResult {
-    boundary(|| {
+    let prepared = catch_unwind(AssertUnwindSafe(|| {
         let (session, context) = unsafe { input::session(session)? };
-        global_registry()
-            .session(session)
-            .execute_with_context(operation()?, context.with_operation(operation_name))
-    })
+        Ok((session, context, operation()?))
+    }));
+    match prepared {
+        Ok(Ok((session, context, operation))) => {
+            tasks::execute(move || session::execute(session, context, operation_name, operation))
+        }
+        Ok(Err(error)) => output::error(error),
+        Err(_) => output::error(TuiTestError::internal("native engine adapter panicked")),
+    }
 }
 
 fn finish_trace_and_close(
@@ -45,9 +58,8 @@ fn finish_trace_and_close(
 }
 #[no_mangle]
 pub extern "C" fn tui_abi_version() -> u32 {
-    4
+    ABI_VERSION
 }
-
 #[no_mangle]
 /// # Safety
 /// The session buffer must remain readable throughout this call.
@@ -185,12 +197,12 @@ pub extern "C" fn tui_sessions() -> *mut TuiResult {
         output::sessions(global_registry().sessions())
     })) {
         Ok(value) => value,
-        Err(_) => output::error(TuiTestError::internal("native Go adapter panicked")),
+        Err(_) => output::error(TuiTestError::internal("native engine adapter panicked")),
     }
 }
 #[no_mangle]
 pub extern "C" fn tui_close_all() -> *mut TuiResult {
-    boundary(|| {
+    tasks::execute(|| {
         global_registry().close_all();
         Ok(OperationResult::Unit)
     })
@@ -200,51 +212,22 @@ pub extern "C" fn tui_close_all() -> *mut TuiResult {
 /// Borrowed input buffers must be valid and readable for their stated lengths
 /// throughout this call; see TuiString and the input structure contracts.
 pub unsafe extern "C" fn tui_recording(session: TuiString) -> *mut TuiResult {
-    boundary(|| {
-        let session = unsafe { session.required()? };
-        global_registry()
-            .recording(&session)
-            .map(OperationResult::Recording)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    TuiTestError::new(
-                        ErrorKind::NoSession,
-                        format!("no recording for session '{session}'"),
-                    )
-                } else {
-                    TuiTestError::internal(format!(
-                        "failed to read recording for session '{session}': {e}"
-                    ))
-                }
-            })
-    })
+    match unsafe { session.required() } {
+        Ok(session) => tasks::execute(move || session::recording(&session)),
+        Err(error) => output::error(error),
+    }
 }
 #[no_mangle]
 /// # Safety
 /// Borrowed input buffers must be valid and readable for their stated lengths
 /// throughout this call; see TuiString and the input structure contracts.
 pub unsafe extern "C" fn tui_close(session: TuiString, failed: TuiOptionalBool) -> *mut TuiResult {
-    boundary(|| {
-        let (name, context) = unsafe { input::session(session)? };
-        let handle = global_registry().session(name);
-        if let Some(failed) = failed.option() {
-            return finish_trace_and_close(
-                || {
-                    handle.execute_with_context(
-                        Operation::FinishTrace { failed },
-                        context.clone().with_operation("trace.finish"),
-                    )
-                },
-                || {
-                    handle.execute_with_context(
-                        Operation::Close,
-                        context.clone().with_operation("close"),
-                    )
-                },
-            );
+    match unsafe { input::session(session) } {
+        Ok((name, context)) => {
+            tasks::execute(move || session::close(name, context, failed.option()))
         }
-        handle.execute_with_context(Operation::Close, context.with_operation("close"))
-    })
+        Err(error) => output::error(error),
+    }
 }
 #[no_mangle]
 /// # Safety
@@ -603,7 +586,7 @@ pub unsafe extern "C" fn tui_wait_title(
             Ok(Operation::WaitTitle {
                 text: text.required()?,
                 regex: options.regex,
-                not: options.not,
+                not: options.not_,
                 timeout_ms: options.timeout_ms.option(),
             })
         })
@@ -623,7 +606,7 @@ pub unsafe extern "C" fn tui_expect_title(
             Ok(Operation::ExpectTitle {
                 text: text.required()?,
                 regex: options.regex,
-                not: options.not,
+                not: options.not_,
                 timeout_ms: options.timeout_ms.option(),
             })
         })
@@ -775,7 +758,7 @@ pub unsafe extern "C" fn tui_wait_locator(
         execute(session, "locator.wait", || {
             Ok(Operation::WaitLocator {
                 query: input::query(query)?,
-                not: options.not,
+                not: options.not_,
                 timeout_ms: options.timeout_ms.option(),
             })
         })
@@ -794,7 +777,7 @@ pub unsafe extern "C" fn tui_expect_locator(
         execute(session, "locator.expect", || {
             Ok(Operation::WaitLocator {
                 query: input::query(query)?,
-                not: options.not,
+                not: options.not_,
                 timeout_ms: options.timeout_ms.option(),
             })
         })
@@ -939,6 +922,31 @@ pub unsafe extern "C" fn tui_screenshot(
                 background: input::capture_background(background, transparent)?,
             })
         })
+    }
+}
+#[no_mangle]
+/// Pointer form for foreign callers with limited aggregate argument support.
+///
+/// # Safety
+/// options must point to a valid TuiScreenshotOptions for this call.
+/// Its borrowed buffers follow the same contract as tui_screenshot.
+pub unsafe extern "C" fn tui_screenshot_ptr(
+    session: TuiString,
+    options: *const TuiScreenshotOptions,
+) -> *mut TuiResult {
+    if options.is_null() {
+        return boundary(|| Err(TuiTestError::usage("screenshot options pointer is null")));
+    }
+    let options = unsafe { *options };
+    unsafe {
+        tui_screenshot(
+            session,
+            options.full,
+            options.path,
+            options.zoom,
+            options.background,
+            options.transparent,
+        )
     }
 }
 #[no_mangle]

@@ -19,13 +19,13 @@ var nativeFunctions nativeFunctionTable
 var loadNativeEngine = sync.OnceValue(initializeNativeEngine)
 
 func initializeNativeEngine() error {
-	path := os.Getenv("TUI_TEST_GO_NATIVE_LIBRARY")
+	path := os.Getenv("TUI_TEST_NATIVE_LIBRARY")
 	if path == "" {
-		return errors.New("TUI_TEST_GO_NATIVE_LIBRARY must name the native engine library")
+		return errors.New("TUI_TEST_NATIVE_LIBRARY must name the native engine library")
 	}
 	table, err := loadNativeFunctions(path)
 	if err != nil {
-		return fmt.Errorf("load native engine from TUI_TEST_GO_NATIVE_LIBRARY: %w", err)
+		return fmt.Errorf("load native engine from TUI_TEST_NATIVE_LIBRARY: %w", err)
 	}
 	nativeFunctions = table
 	return nil
@@ -42,8 +42,8 @@ func loadNativeFunctions(path string) (nativeFunctionTable, error) {
 			return nativeFunctionTable{}, errors.Join(registerErr, library.close())
 		}
 	}
-	if version := table.AbiVersion(); version != 4 {
-		return nativeFunctionTable{}, errors.Join(fmt.Errorf("native ABI version %d is incompatible with required version 4", version), library.close())
+	if version := table.AbiVersion(); version != abiVersion {
+		return nativeFunctionTable{}, errors.Join(fmt.Errorf("native ABI version %d is incompatible with required version %d", version, abiVersion), library.close())
 	}
 	return table, nil
 }

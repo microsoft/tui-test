@@ -5,7 +5,6 @@ dist/
 *.egg-info/
 .pytest_cache/
 .venv/
-src/tui_test/_native*.pyd
-src/tui_test/_native*.pdb
-src/tui_test/_native*.so
-src/tui_test/_native*.dylib
+src/tui_test/tui_test_ffi.dll
+src/tui_test/libtui_test_ffi.so
+src/tui_test/libtui_test_ffi.dylib

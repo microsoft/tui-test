@@ -46,8 +46,8 @@ func checkNativeVersion() error {
 	if err := loadNativeEngine(); err != nil {
 		return &Error{Kind: InternalError, Message: err.Error()}
 	}
-	if version := nativeFunctions.AbiVersion(); version != 4 {
-		return &Error{Kind: InternalError, Message: fmt.Sprintf("native ABI version %d is incompatible with required version 4", version)}
+	if version := nativeFunctions.AbiVersion(); version != abiVersion {
+		return &Error{Kind: InternalError, Message: fmt.Sprintf("native ABI version %d is incompatible with required version %d", version, abiVersion)}
 	}
 	return nil
 }
@@ -191,7 +191,7 @@ func (runtime *Session) GetViewport() (Viewport, error) {
 	if err := nativeError(result); err != nil {
 		return Viewport{}, err
 	}
-	return Viewport{Offset: uint64(result.viewportOffset), History: uint64(result.viewportHistory)}, nil
+	return Viewport{Offset: uint64(result.viewport.offset), History: uint64(result.viewport.history)}, nil
 }
 
 func (runtime *Session) Scroll(lines int32) error {
@@ -457,7 +457,11 @@ func (runtime *Session) ExpectBellCount(count uint64, timeout *time.Duration) er
 
 func (runtime *Session) Screenshot(path string, options ScreenshotOptions) (string, error) {
 	return runtime.textResult(func(session abiString, memory *nativeMemory) *abiResult {
-		return nativeFunctions.Screenshot(session, options.Full, memory.nonemptyText(path), nativeFloat(options.Zoom), memory.nonemptyText(options.Background), options.Transparent)
+		return nativeFunctions.Screenshot(session, &abiScreenshotOptions{
+			full: options.Full, path: memory.nonemptyText(path),
+			zoom: nativeFloat(options.Zoom), background: memory.nonemptyText(options.Background),
+			transparent: options.Transparent,
+		})
 	})
 }
 
