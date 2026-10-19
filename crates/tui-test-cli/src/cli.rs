@@ -378,6 +378,11 @@ pub enum Command {
         #[command(subcommand)]
         action: MouseCmd,
     },
+    /// Move the native history viewport without sending mouse input.
+    Scroll {
+        #[command(subcommand)]
+        target: ScrollCmd,
+    },
     /// Resize the PTY and emulator.
     Resize {
         /// New width in columns.
@@ -1114,6 +1119,8 @@ pub enum DaemonCmd {
 #[derive(Clone, Copy, clap::ValueEnum)]
 #[clap(rename_all = "kebab-case")]
 pub enum GetArg {
+    /// Scrollback offset and available history, in rows.
+    Viewport,
     /// Last command line.
     Command,
     /// Output of the last command.
@@ -1139,6 +1146,24 @@ pub enum GetArg {
     Bells,
     /// Recorded terminal bell events (sequence + elapsed time).
     BellEvents,
+}
+
+#[derive(Subcommand)]
+pub enum ScrollCmd {
+    /// Show older output.
+    Up {
+        #[arg(default_value_t = 1, value_parser = clap::value_parser!(i32).range(0..))]
+        lines: i32,
+    },
+    /// Show newer output.
+    Down {
+        #[arg(default_value_t = 1, value_parser = clap::value_parser!(i32).range(0..))]
+        lines: i32,
+    },
+    /// Show the oldest available output.
+    Top,
+    /// Return to the live screen.
+    Bottom,
 }
 
 #[derive(Subcommand)]
@@ -1649,4 +1674,40 @@ pub struct ExpectCursorArgs {
     /// Timeout in milliseconds.
     #[arg(long, value_name = "MS")]
     pub timeout: Option<u64>,
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn native_scroll_arguments_are_typed() {
+        for direction in ["up", "down"] {
+            let cli = Cli::try_parse_from(["tui-test", "scroll", direction]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Some(Command::Scroll {
+                    target: ScrollCmd::Up { lines: 1 } | ScrollCmd::Down { lines: 1 }
+                })
+            ));
+            for lines in ["0", "12", "2147483647"] {
+                assert!(Cli::try_parse_from(["tui-test", "scroll", direction, lines]).is_ok());
+            }
+            for lines in ["-1", "1.5", "2147483648", "NaN"] {
+                assert!(Cli::try_parse_from(["tui-test", "scroll", direction, lines]).is_err());
+            }
+        }
+        for target in ["top", "bottom"] {
+            assert!(Cli::try_parse_from(["tui-test", "scroll", target]).is_ok());
+            assert!(Cli::try_parse_from(["tui-test", "scroll", target, "1"]).is_err());
+        }
+        assert!(matches!(
+            Cli::try_parse_from(["tui-test", "get", "viewport"])
+                .unwrap()
+                .command,
+            Some(Command::Get {
+                field: GetArg::Viewport
+            })
+        ));
+    }
 }

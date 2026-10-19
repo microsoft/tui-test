@@ -2,6 +2,7 @@ import type {
   BellEvent as NativeBellEvent,
   Cell as NativeCell,
   Cursor as NativeCursor,
+  Viewport as NativeViewport,
   EffectiveTimeouts as NativeEffectiveTimeouts,
   OpenResult as NativeOpenResult,
   Size as NativeSize,
@@ -34,6 +35,7 @@ export type Shell =
   | "nushell";
 
 export type Cursor = NativeCursor;
+export type Viewport = NativeViewport;
 
 export type Size = NativeSize;
 

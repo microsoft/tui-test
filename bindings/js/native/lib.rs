@@ -237,6 +237,30 @@ impl From<CoreEffectiveTimeouts> for EffectiveTimeouts {
 }
 
 #[napi(object)]
+pub struct Viewport {
+    pub offset: f64,
+    pub history: f64,
+}
+
+impl TryFrom<tui_test::Viewport> for Viewport {
+    type Error = TuiTestError;
+
+    fn try_from(value: tui_test::Viewport) -> std::result::Result<Self, Self::Error> {
+        if value.offset as u128 > MAX_SAFE_INTEGER as u128
+            || value.history as u128 > MAX_SAFE_INTEGER as u128
+        {
+            return Err(TuiTestError::internal(
+                "viewport exceeds JavaScript's safe integer range",
+            ));
+        }
+        Ok(Self {
+            offset: value.offset as f64,
+            history: value.history as f64,
+        })
+    }
+}
+
+#[napi(object)]
 pub struct BellEvent {
     pub sequence: f64,
     #[napi(js_name = "elapsed_ms")]
@@ -1517,6 +1541,72 @@ impl NativeSession {
             |result| match result {
                 OperationResult::Cursor(value) => Ok(value.into()),
                 _ => Err(unexpected("getCursor")),
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn get_viewport(&self) -> Result<Viewport> {
+        execute(
+            self.handle.clone(),
+            self.context.clone(),
+            "getViewport",
+            Operation::GetViewport,
+            |result| match result {
+                OperationResult::Viewport(value) => value.try_into(),
+                _ => Err(unexpected("getViewport")),
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn scroll(&self, lines: f64) -> Result<()> {
+        let handle = self.handle.clone();
+        let context = self.context.clone();
+        blocking("scroll", move || {
+            if !lines.is_finite()
+                || lines.fract() != 0.0
+                || lines < i32::MIN as f64
+                || lines > i32::MAX as f64
+            {
+                return Err(TuiTestError::usage(
+                    "lines must be an integer between -2147483648 and 2147483647",
+                ));
+            }
+            match execute_core(
+                &handle,
+                &context,
+                "scroll",
+                Operation::Scroll {
+                    target: tui_test::ScrollTarget::Lines(lines as i32),
+                },
+            )? {
+                OperationResult::Unit => Ok(()),
+                _ => Err(unexpected("scroll")),
+            }
+        })
+        .await
+    }
+
+    #[napi]
+    pub async fn scroll_to_top(&self) -> Result<()> {
+        self.unit(
+            "scrollToTop",
+            Operation::Scroll {
+                target: tui_test::ScrollTarget::Top,
+            },
+        )
+        .await
+    }
+
+    #[napi]
+    pub async fn scroll_to_bottom(&self) -> Result<()> {
+        self.unit(
+            "scrollToBottom",
+            Operation::Scroll {
+                target: tui_test::ScrollTarget::Bottom,
             },
         )
         .await

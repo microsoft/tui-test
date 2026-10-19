@@ -68,11 +68,33 @@ than native binding stage arrays.
 | `mouse move X Y` | Move the pointer. |
 | `mouse down\|up X Y [options]` | Press or release a button. |
 | `mouse drag X1 Y1 X2 Y2 [options]` | Drag. |
-| `mouse scroll up\|down [--amount N]` | Scroll. |
+| `mouse scroll up\|down [--amount N]` | Send mouse wheel input to the application. |
+| `scroll up\|down [LINES]` | Move through native history; default: one row. |
+| `scroll top\|bottom` | Show the oldest output or the live screen. |
 | `resize COLS ROWS` | Resize. |
 | `signal NAME` | Send a signal. |
 
 Mouse button options are `--button left|middle|right`, `--alt`, `--ctrl`, and `--shift`.
+
+## Native history
+
+`get viewport --json` returns `{"value":{"offset":0,"history":N}}` within the response data.
+The offset counts rows above the live screen. Zero means the live screen.
+`history` counts the available history rows.
+Scroll amounts must be integers from 0 through 2147483647.
+
+`text`, locators, screenshots, and the monitor use the selected viewport.
+`text --full` returns history plus the live screen, independent of that viewport.
+New output preserves the selected historical view until retained history expires.
+Keyboard input returns to the live screen.
+Mouse input and historical locator clicks fail while the viewport shows history.
+Use `scroll bottom` before mouse input. Mouse behavior at the live screen does not change.
+`get cursor` and `state` retain the application cursor coordinates.
+Captures project that cursor into the viewport and hide it outside the view.
+Raster recordings capture viewport changes. Asciicast records only the PTY stream.
+
+See the runnable [JavaScript example](../bindings/js/examples/scrollback.mjs)
+or the [Rust example](../crates/tui-test/examples/scrollback.rs).
 
 ## Wait
 

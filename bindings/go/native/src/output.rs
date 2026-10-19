@@ -103,6 +103,10 @@ pub(crate) fn operation(value: OperationResult) -> *mut TuiResult {
     let mut r = TuiResult::default();
     match value {
         OperationResult::Unit => {}
+        OperationResult::Viewport(value) => {
+            r.viewport_offset = value.offset;
+            r.viewport_history = value.history;
+        }
         OperationResult::Open(v) => {
             r.open = TuiOpenResult {
                 shell_pid: TuiOptionalU64 {

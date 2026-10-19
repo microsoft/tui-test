@@ -174,6 +174,23 @@ func (runtime *nativeRuntime) getCursor() (Cursor, error) {
 	value, err := runtime.session.GetCursor()
 	return Cursor(value), engineError(err)
 }
+
+func (runtime *nativeRuntime) getViewport() (Viewport, error) {
+	value, err := runtime.session.GetViewport()
+	return Viewport(value), engineError(err)
+}
+
+func (runtime *nativeRuntime) scroll(lines int32) error {
+	return engineError(runtime.session.Scroll(lines))
+}
+
+func (runtime *nativeRuntime) scrollToTop() error {
+	return engineError(runtime.session.ScrollToTop())
+}
+
+func (runtime *nativeRuntime) scrollToBottom() error {
+	return engineError(runtime.session.ScrollToBottom())
+}
 func (runtime *nativeRuntime) getSize() (Size, error) {
 	value, err := runtime.session.GetSize()
 	return Size(value), engineError(err)

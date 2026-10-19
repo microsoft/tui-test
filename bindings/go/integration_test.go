@@ -27,11 +27,59 @@ func TestTerminalProcess(t *testing.T) {
 			os.Exit(0)
 		case "events":
 			fmt.Print("\x1b]2;Go title\x07\x1b]52;c;Z28tY2xpcGJvYXJk\x07\x07\r\nevents-done\r\n")
+		case "history":
+			for i := 0; i < 100; i++ {
+				fmt.Printf("history-%d\r\n", i)
+			}
 		default:
 			fmt.Printf("received:%s\r\n", scanner.Text())
 		}
 	}
 	os.Exit(0)
+}
+
+func TestNativeScrollback(t *testing.T) {
+	terminal := newTerminal(t, tuitest.ClientOptions{Backend: tuitest.Alacritty})
+	requireNoError(t, terminal.Submit(tuitest.Ptr("history")))
+	requireNoError(t, terminal.GetByText("history-99", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}))
+	full, err := terminal.Text(tuitest.TextOptions{Full: true})
+	requireNoError(t, err)
+	bottom, err := terminal.GetViewport()
+	requireNoError(t, err)
+	if bottom.Offset != 0 || bottom.History == 0 {
+		t.Fatalf("unexpected bottom viewport: %+v", bottom)
+	}
+	requireNoError(t, terminal.Scroll(2))
+	requireNoError(t, terminal.Scroll(-1))
+	view, err := terminal.GetViewport()
+	requireNoError(t, err)
+	if view.Offset != 1 {
+		t.Fatalf("negative scroll did not move down: %+v", view)
+	}
+	requireNoError(t, terminal.ScrollToTop())
+	view, err = terminal.GetViewport()
+	requireNoError(t, err)
+	if view.Offset != view.History {
+		t.Fatalf("unexpected top viewport: %+v", view)
+	}
+	stillFull, err := terminal.Text(tuitest.TextOptions{Full: true})
+	requireNoError(t, err)
+	if stillFull != full {
+		t.Fatal("native scroll changed full text")
+	}
+	requireNoError(t, terminal.ScrollToBottom())
+	view, err = terminal.GetViewport()
+	requireNoError(t, err)
+	if view.Offset != 0 {
+		t.Fatalf("bottom did not restore live screen: %+v", view)
+	}
+	requireNoError(t, terminal.Scroll(2147483647))
+	requireNoError(t, terminal.Scroll(-2147483648))
+	view, err = terminal.GetViewport()
+	requireNoError(t, err)
+	if view.Offset != 0 {
+		t.Fatalf("signed scroll limits did not clamp: %+v", view)
+	}
 }
 
 func newTerminal(t *testing.T, options tuitest.ClientOptions) *tuitest.Client {

@@ -126,6 +126,100 @@ macro_rules! emulator_conformance_tests {
                 .contains(&$crate::terminal::conformance::Divergence::ClipboardUnsupported)
         }
 
+        #[test]
+        fn conformance_viewport_scrolls_without_input_or_history_changes() {
+            use $crate::api::ScrollTarget;
+            let mut e = conformance_emu(12, 3, 20);
+            e.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            let full = e.full_rows();
+            let cursor = e.cursor();
+            assert_eq!(e.viewport(), $crate::api::Viewport { offset: 0, history: 3 });
+            assert!(e.take_pending_writes().is_empty());
+            for (target, offset) in [
+                (ScrollTarget::Lines(1), 1),
+                (ScrollTarget::Lines(1), 2),
+                (ScrollTarget::Lines(-1), 1),
+                (ScrollTarget::Lines(i32::MAX), 3),
+                (ScrollTarget::Lines(i32::MAX), 3),
+                (ScrollTarget::Lines(i32::MIN), 0),
+                (ScrollTarget::Top, 3),
+                (ScrollTarget::Lines(0), 3),
+                (ScrollTarget::Bottom, 0),
+            ] {
+                e.scroll(target);
+                assert_eq!(e.fault(), None);
+                assert_eq!(e.viewport().offset, offset, "{target:?}");
+                assert_eq!(e.viewable_rows(), full[3 - offset..6 - offset], "{target:?}");
+                assert_eq!(e.full_rows(), full);
+                assert_eq!(e.cursor(), cursor);
+                assert!(e.cursor_visible());
+                assert_eq!(e.viewport_cursor().is_some(), offset == 0);
+                assert!(e.take_pending_writes().is_empty(), "scroll generated PTY input");
+            }
+        }
+
+        #[test]
+        fn conformance_viewport_preserves_output_anchor_and_clamps_eviction() {
+            use $crate::api::ScrollTarget;
+            let mut e = conformance_emu(12, 3, 8);
+            e.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            e.scroll(ScrollTarget::Lines(2));
+            let selected = e.viewable_rows();
+            e.process(b"\r\nrow6");
+            assert_eq!(e.viewable_rows(), selected);
+            assert_eq!(e.viewport().offset, 3);
+            for row in 7..20 {
+                e.process(format!("\r\nrow{row}").as_bytes());
+            }
+            let viewport = e.viewport();
+            assert_eq!(viewport.offset, viewport.history);
+            assert_eq!(viewport.history, 8);
+            assert_eq!(e.viewable_rows(), e.full_rows()[..3]);
+            e.scroll(ScrollTarget::Bottom);
+            e.process(b"\r\nnewest");
+            assert_eq!(e.viewport().offset, 0);
+            assert_eq!(conformance_text(&e.viewable_rows())[2], "newest");
+            assert_eq!(e.fault(), None);
+        }
+
+        #[test]
+        fn conformance_viewport_survives_resize_and_alternate_screen() {
+            use $crate::api::ScrollTarget;
+            let mut e = conformance_emu(12, 3, 20);
+            e.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            e.scroll(ScrollTarget::Top);
+            let selected = e.viewable_rows();
+            e.process(b"\x1b[?1049h");
+            for target in [ScrollTarget::Top, ScrollTarget::Lines(5), ScrollTarget::Bottom] {
+                e.scroll(target);
+                assert_eq!(e.viewport(), $crate::api::Viewport::default());
+            }
+            e.process(b"alternate\x1b[?1049l");
+            assert_eq!(e.viewable_rows(), selected);
+            for (cols, rows) in [(12, 4), (8, 2), (16, 3)] {
+                e.resize(cols, rows);
+                let viewport = e.viewport();
+                assert!(viewport.offset <= viewport.history);
+                let full = e.full_rows();
+                assert_eq!(e.viewable_rows(), full[viewport.origin()..viewport.origin() + rows as usize]);
+            }
+            assert_eq!(e.fault(), None);
+        }
+
+        #[test]
+        fn conformance_viewport_without_history_is_unchanged() {
+            use $crate::api::ScrollTarget;
+            let mut e = conformance_emu(12, 3, 0);
+            e.process(b"row0\r\nrow1\r\nrow2\r\nrow3");
+            let live = e.viewable_rows();
+            for target in [ScrollTarget::Top, ScrollTarget::Lines(i32::MAX), ScrollTarget::Lines(i32::MIN), ScrollTarget::Bottom] {
+                e.scroll(target);
+                assert_eq!(e.viewport(), $crate::api::Viewport::default());
+                assert_eq!(e.viewable_rows(), live);
+            }
+            assert_eq!(e.fault(), None);
+        }
+
         /// A mode sequence still lands when a PTY read splits it, which is
         /// where an emulator that scanned for whole sequences would fail.
         /// Split one byte before the final letter, the last place the parser

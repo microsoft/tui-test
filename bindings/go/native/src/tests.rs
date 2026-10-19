@@ -1,5 +1,19 @@
 use super::*;
 
+#[test]
+fn viewport_result_preserves_native_count_width() {
+    let result = output::operation(OperationResult::Viewport(Viewport {
+        offset: usize::MAX - 1,
+        history: usize::MAX,
+    }));
+    unsafe {
+        assert_eq!((*result).viewport_offset, usize::MAX - 1);
+        assert_eq!((*result).viewport_history, usize::MAX);
+        tui_result_free(result);
+    }
+    assert_eq!(tui_abi_version(), 4);
+}
+
 fn text(value: &str) -> TuiString {
     TuiString {
         data: value.as_ptr(),

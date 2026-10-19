@@ -21,6 +21,10 @@ export declare class NativeSession {
   getExitCode(): Promise<number | null>
   getCwd(): Promise<string | null>
   getCursor(): Promise<Cursor>
+  getViewport(): Promise<Viewport>
+  scroll(lines: number): Promise<void>
+  scrollToTop(): Promise<void>
+  scrollToBottom(): Promise<void>
   getSize(): Promise<Size>
   getBellCount(): Promise<number>
   getBellEvents(): Promise<Array<BellEvent>>
@@ -299,6 +303,11 @@ export declare const enum Shell {
 export interface Size {
   cols: number
   rows: number
+}
+
+export interface Viewport {
+  offset: number
+  history: number
 }
 
 export interface SnapshotOptions {

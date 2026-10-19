@@ -125,7 +125,7 @@ fn header(out: &mut String, frame: Option<&Frame>, session: &str, inner_w: usize
 
 fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize) {
     let (cx, cy) = f.cursor;
-    let show_cursor = f.exited.is_none();
+    let show_cursor = f.exited.is_none() && f.cursor_visible;
     for y in 0..inner_h {
         out.push_str(ansi::BORDER);
         out.push('│');
@@ -908,6 +908,7 @@ mod tests {
         let frame = Frame {
             grid: vec![vec![cell("h"), cell("i")]],
             cursor: (0, 0),
+            cursor_visible: true,
             size: (40, 1),
             keyboard_mode: KeyboardMode::empty(),
             cursor_key_application: false,
@@ -940,9 +941,10 @@ mod tests {
 
     #[test]
     fn cursor_cell_is_inverted() {
-        let frame = Frame {
+        let mut frame = Frame {
             grid: vec![vec![cell("x")]],
             cursor: (0, 0),
+            cursor_visible: true,
             size: (1, 1),
             keyboard_mode: KeyboardMode::empty(),
             cursor_key_application: false,
@@ -960,6 +962,16 @@ mod tests {
         ))
         .unwrap();
         assert!(text.contains(";7") || text.contains("[7"));
+        frame.cursor_visible = false;
+        let hidden = String::from_utf8(render_frame(
+            Some(&frame),
+            (10, 5),
+            "s",
+            false,
+            &mut ModeMirror::default(),
+        ))
+        .unwrap();
+        assert!(!hidden.contains(";7") && !hidden.contains("[7"));
     }
 
     /// The viewer's terminal mirrors target input modes only when they change.
@@ -968,6 +980,7 @@ mod tests {
         let mut frame = Frame {
             grid: vec![vec![cell("x")]],
             cursor: (0, 0),
+            cursor_visible: true,
             size: (1, 1),
             keyboard_mode: KeyboardMode::empty(),
             cursor_key_application: false,
@@ -1019,6 +1032,7 @@ mod tests {
             let mut frame = Frame {
                 grid: Vec::new(),
                 cursor: (0, 0),
+                cursor_visible: true,
                 size: (10, 2),
                 keyboard_mode: KeyboardMode::empty(),
                 cursor_key_application: false,

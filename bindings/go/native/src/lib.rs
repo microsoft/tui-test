@@ -45,7 +45,53 @@ fn finish_trace_and_close(
 }
 #[no_mangle]
 pub extern "C" fn tui_abi_version() -> u32 {
-    3
+    4
+}
+
+#[no_mangle]
+/// # Safety
+/// The session buffer must remain readable throughout this call.
+pub unsafe extern "C" fn tui_get_viewport(session: TuiString) -> *mut TuiResult {
+    unsafe { execute(session, "getViewport", || Ok(Operation::GetViewport)) }
+}
+
+#[no_mangle]
+/// # Safety
+/// The session buffer must remain readable throughout this call.
+pub unsafe extern "C" fn tui_scroll(session: TuiString, lines: i32) -> *mut TuiResult {
+    unsafe {
+        execute(session, "scroll", || {
+            Ok(Operation::Scroll {
+                target: ScrollTarget::Lines(lines),
+            })
+        })
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// The session buffer must remain readable throughout this call.
+pub unsafe extern "C" fn tui_scroll_to_top(session: TuiString) -> *mut TuiResult {
+    unsafe {
+        execute(session, "scrollToTop", || {
+            Ok(Operation::Scroll {
+                target: ScrollTarget::Top,
+            })
+        })
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// The session buffer must remain readable throughout this call.
+pub unsafe extern "C" fn tui_scroll_to_bottom(session: TuiString) -> *mut TuiResult {
+    unsafe {
+        execute(session, "scrollToBottom", || {
+            Ok(Operation::Scroll {
+                target: ScrollTarget::Bottom,
+            })
+        })
+    }
 }
 #[no_mangle]
 /// # Safety

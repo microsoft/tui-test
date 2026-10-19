@@ -656,6 +656,7 @@ pub enum Operation {
     GetModes,
     GetColors,
     GetSize,
+    GetViewport,
     GetTitle,
     GetClipboard,
     GetBellCount,
@@ -676,6 +677,10 @@ pub enum Operation {
     Resize {
         cols: u16,
         rows: u16,
+    },
+    /// Move the terminal viewport without sending input to the child.
+    Scroll {
+        target: ScrollTarget,
     },
     Signal {
         name: String,
@@ -854,6 +859,7 @@ pub enum OperationResult {
     Modes(BTreeMap<String, bool>),
     Colors(TerminalColors),
     Size(Size),
+    Viewport(Viewport),
     BellCount(u64),
     BellEvents(Vec<BellEvent>),
     Snapshot(SnapshotResult),
@@ -1011,6 +1017,41 @@ pub struct Cursor {
 pub struct Size {
     pub cols: u16,
     pub rows: u16,
+}
+
+/// Native viewport movement. Positive line counts move toward older output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollTarget {
+    Lines(i32),
+    Top,
+    Bottom,
+}
+
+impl ScrollTarget {
+    pub(crate) fn clamped(self, viewport: Viewport) -> Self {
+        match self {
+            Self::Lines(lines) if lines > 0 && lines as usize >= viewport.origin() => Self::Top,
+            Self::Lines(lines) if lines < 0 && lines.unsigned_abs() as usize >= viewport.offset => {
+                Self::Bottom
+            }
+            target => target,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Viewport {
+    /// Distance in rows above the live screen. Zero follows new output.
+    pub offset: usize,
+    /// Number of available history rows.
+    pub history: usize,
+}
+
+impl Viewport {
+    /// Index of the first visible row in the full grid.
+    pub fn origin(self) -> usize {
+        self.history.saturating_sub(self.offset)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

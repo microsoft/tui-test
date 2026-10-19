@@ -558,6 +558,21 @@ impl Emulator for XtermJsEmu {
         self.rows_in_range(false)
     }
 
+    fn scroll(&mut self, target: crate::api::ScrollTarget) {
+        match target {
+            crate::api::ScrollTarget::Lines(lines) => self.call_with::<()>("scroll", lines),
+            crate::api::ScrollTarget::Top => self.call::<()>("scrollTop"),
+            crate::api::ScrollTarget::Bottom => self.call::<()>("scrollBottom"),
+        }
+    }
+
+    fn viewport(&self) -> crate::api::Viewport {
+        crate::api::Viewport {
+            offset: self.call::<u32>("offset") as usize,
+            history: self.call::<u32>("history") as usize,
+        }
+    }
+
     fn full_rows(&self) -> Vec<Vec<EmuCell>> {
         self.rows_in_range(true)
     }

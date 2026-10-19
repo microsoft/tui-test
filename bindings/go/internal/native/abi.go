@@ -136,28 +136,30 @@ type abiBellEvent struct {
 	elapsedMS uint64
 }
 type abiResult struct {
-	_             structs.HostLayout
-	errorKind     uint32
-	errorMessage  abiString
-	errorDetails  abiString
-	errorArtifact abiString
-	text          abiString
-	number        uint64
-	exitCode      abiOptionalI32
-	open          abiOpenResult
-	state         abiState
-	cursor        abiCursor
-	size          abiSize
-	cells         *abiCell
-	cellsLen      uintptr
-	matches       *abiMatch
-	matchesLen    uintptr
-	bells         *abiBellEvent
-	bellsLen      uintptr
-	strings       *abiString
-	stringsLen    uintptr
-	snapshot      uint32
-	privateData   unsafe.Pointer
+	_               structs.HostLayout
+	viewportOffset  uintptr
+	viewportHistory uintptr
+	errorKind       uint32
+	errorMessage    abiString
+	errorDetails    abiString
+	errorArtifact   abiString
+	text            abiString
+	number          uint64
+	exitCode        abiOptionalI32
+	open            abiOpenResult
+	state           abiState
+	cursor          abiCursor
+	size            abiSize
+	cells           *abiCell
+	cellsLen        uintptr
+	matches         *abiMatch
+	matchesLen      uintptr
+	bells           *abiBellEvent
+	bellsLen        uintptr
+	strings         *abiString
+	stringsLen      uintptr
+	snapshot        uint32
+	privateData     unsafe.Pointer
 }
 type abiPair struct {
 	_     structs.HostLayout

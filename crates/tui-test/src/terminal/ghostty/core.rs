@@ -18,7 +18,8 @@ use ghostty_vt::screen::{Cell as GhosttyCell, CellContentTag, CellWide, GridRef,
 use ghostty_vt::style::{Palette, PaletteIndex, RgbColor, Style, StyleColor, Underline};
 use ghostty_vt::terminal::{
     ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType, Mode, Point,
-    PointCoordinate, PrimaryDeviceAttributes, SecondaryDeviceAttributes, TertiaryDeviceAttributes,
+    PointCoordinate, PointSpace, PrimaryDeviceAttributes, ScrollViewport,
+    SecondaryDeviceAttributes, TertiaryDeviceAttributes,
 };
 use ghostty_vt::{RenderState, Terminal};
 
@@ -267,9 +268,10 @@ impl GhosttyCore {
         })
     }
 
-    pub(super) fn process(&mut self, bytes: &[u8]) {
+    pub(super) fn process(&mut self, bytes: &[u8]) -> Result<()> {
         self.terminal.vt_write(bytes);
         self.frame = None;
+        self.clamp_viewport()
     }
 
     pub(super) fn mode(&self, mode: TerminalMode) -> Result<bool> {
@@ -479,6 +481,48 @@ impl GhosttyCore {
             .resize(cols.max(1), rows.max(1), 1, 1)
             .context("resizing terminal")?;
         self.frame = None;
+        self.clamp_viewport()
+    }
+
+    pub(super) fn viewport(&self) -> Result<crate::api::Viewport> {
+        let available = self.terminal.scrollback_rows()?;
+        let grid = self
+            .terminal
+            .grid_ref(Point::Viewport(PointCoordinate { x: 0, y: 0 }))?;
+        let origin = self
+            .terminal
+            .point_from_grid_ref(&grid, PointSpace::Screen)?
+            .context("viewport origin is outside the terminal screen")?;
+        Ok(crate::api::Viewport {
+            offset: available.saturating_sub(origin.y as usize),
+            history: available.min(self.profile.scrollback),
+        })
+    }
+
+    fn clamp_viewport(&mut self) -> Result<()> {
+        if self.viewport()?.offset > self.profile.scrollback {
+            self.scroll(crate::api::ScrollTarget::Top)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn scroll(&mut self, target: crate::api::ScrollTarget) -> Result<()> {
+        let viewport = self.viewport()?;
+        let offset = match target {
+            crate::api::ScrollTarget::Lines(lines) => viewport
+                .offset
+                .saturating_add_signed(lines as isize)
+                .min(viewport.history),
+            crate::api::ScrollTarget::Top => viewport.history,
+            crate::api::ScrollTarget::Bottom => 0,
+        };
+        let target = if offset == 0 {
+            ScrollViewport::Bottom
+        } else {
+            ScrollViewport::Row(self.terminal.scrollback_rows()? - offset)
+        };
+        self.terminal.scroll_viewport(target);
+        self.frame = None;
         Ok(())
     }
 
@@ -612,7 +656,21 @@ impl GhosttyCore {
             }
             output.push(row);
         }
-        output.extend(self.frame()?.rows.clone());
+        if self.viewport()?.offset == 0 {
+            output.extend(self.frame()?.rows.clone());
+        } else {
+            for y in 0..u32::from(self.terminal.rows()?) {
+                let mut row = Vec::with_capacity(cols as usize);
+                for x in 0..cols {
+                    let grid = self
+                        .terminal
+                        .grid_ref(Point::Active(PointCoordinate { x, y }))
+                        .context("reading active screen cell")?;
+                    row.push(cell_from_grid(&grid, &mut links)?);
+                }
+                output.push(row);
+            }
+        }
         Ok(output)
     }
 
@@ -766,7 +824,7 @@ mod tests {
     #[test]
     fn renders_wide_cells_into_the_neutral_grid() {
         let mut core = GhosttyCore::new(5, 3, Profile::default(), BellTracker::default()).unwrap();
-        core.process("abcd你".as_bytes());
+        core.process("abcd你".as_bytes()).unwrap();
         let rows = &core.frame().unwrap().rows;
         assert_eq!(rows[0][4].ch, " ");
         assert_eq!(rows[1][0].ch, "你");
@@ -776,7 +834,7 @@ mod tests {
     #[test]
     fn queues_terminal_replies_synchronously() {
         let mut core = GhosttyCore::new(10, 4, Profile::default(), BellTracker::default()).unwrap();
-        core.process(b"\x1b[3;5H\x1b[6n");
+        core.process(b"\x1b[3;5H\x1b[6n").unwrap();
         assert_eq!(core.take_pending_writes(), b"\x1b[3;5R");
     }
 }

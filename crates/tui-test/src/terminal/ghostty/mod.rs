@@ -231,8 +231,8 @@ impl Emulator for GhosttyEmu {
             }
 
             let owned = bytes[start..=index].to_vec();
-            self.call("processing output", move |core| {
-                core.process(&owned);
+            self.call_result("processing output", move |core| {
+                core.process(&owned)?;
                 for operation in operations {
                     match operation {
                         ClipboardOperation::Store { clipboard, text } => {
@@ -247,13 +247,14 @@ impl Emulator for GhosttyEmu {
                         }
                     }
                 }
+                Ok(())
             });
             start = index + 1;
         }
 
         if start < bytes.len() {
             let owned = bytes[start..].to_vec();
-            self.call("processing output", move |core| core.process(&owned));
+            self.call_result("processing output", move |core| core.process(&owned));
         }
     }
 
@@ -298,6 +299,14 @@ impl Emulator for GhosttyEmu {
 
     fn size(&self) -> (u16, u16) {
         self.call_result("reading size", |core| core.size())
+    }
+
+    fn scroll(&mut self, target: crate::api::ScrollTarget) {
+        self.call_result("scrolling viewport", move |core| core.scroll(target));
+    }
+
+    fn viewport(&self) -> crate::api::Viewport {
+        self.call_result("reading viewport position", |core| core.viewport())
     }
 
     fn cursor(&self) -> (u16, u16) {

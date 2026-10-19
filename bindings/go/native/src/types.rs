@@ -225,6 +225,8 @@ pub struct TuiBellEvent {
 #[repr(C)]
 #[derive(Default)]
 pub struct TuiResult {
+    pub viewport_offset: usize,
+    pub viewport_history: usize,
     pub error_kind: u32,
     pub error_message: TuiString,
     pub error_details: TuiString,

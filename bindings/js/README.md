@@ -83,8 +83,34 @@ The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, 
 | `write(data)` | Write raw bytes. |
 | `press(...keys)` | Alias for `keyboard.press()`. |
 | `resize(cols, rows)` | Resize the terminal. |
+| `scroll(lines)` | Move through native history; positive values show older output. |
+| `scrollToTop()` / `scrollToBottom()` | Show the oldest output or the live screen. |
+| `getViewport()` | Return `{ offset, history }`, in rows. |
 | `signal(name)` | Send `INT`, `TERM`, `KILL`, or `QUIT`. |
 | `kill()` | Kill the child process. |
+
+#### Native history
+
+`scroll(lines)` accepts integers from -2147483648 through 2147483647.
+Positive values show older output. Negative values move toward the live screen.
+Zero leaves the viewport unchanged. Movement stops at the available history boundaries.
+`getViewport()` returns a typed `Viewport` with numeric `offset` and `history` fields.
+Both fields count rows. An offset of zero means the live screen.
+Counts outside JavaScript's safe integer range produce an error instead of lost precision.
+
+Visible text, locators, and captures use this viewport.
+`text({ full: true })` remains independent: it returns history plus the live screen.
+New output preserves the historical view until retained history expires.
+Keyboard input returns to the live screen.
+Mouse input and historical locator clicks fail while the viewport shows history.
+Call `scrollToBottom()` before mouse input. This API is separate from `mouse.scroll()`.
+
+`getCursor()` and `State.cursor` retain the application cursor coordinates.
+Captures project that cursor into the viewport and hide it outside the view.
+Raster recordings capture viewport changes. Asciicast remains a PTY stream.
+
+After a source build, run `node examples/scrollback.mjs` from this directory.
+The [example](examples/scrollback.mjs) prints the live screen, history view, and unchanged full text.
 
 #### State
 

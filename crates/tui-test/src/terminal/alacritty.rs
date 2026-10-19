@@ -487,6 +487,25 @@ impl Emulator for AlacrittyEmu {
         (self.cols, self.rows)
     }
 
+    fn scroll(&mut self, target: crate::api::ScrollTarget) {
+        use crate::api::ScrollTarget;
+        use alacritty_terminal::grid::Scroll;
+        self.term
+            .scroll_display(match target.clamped(self.viewport()) {
+                ScrollTarget::Lines(lines) => Scroll::Delta(lines),
+                ScrollTarget::Top => Scroll::Top,
+                ScrollTarget::Bottom => Scroll::Bottom,
+            });
+    }
+
+    fn viewport(&self) -> crate::api::Viewport {
+        let grid = self.term.grid();
+        crate::api::Viewport {
+            offset: grid.display_offset(),
+            history: grid.total_lines() - grid.screen_lines(),
+        }
+    }
+
     /// alacritty stores only what a program set, leaving every other slot
     /// empty, so an empty slot falls through to the profile, and then to the
     /// xterm table for an index the profile does not name.
@@ -540,7 +559,8 @@ impl Emulator for AlacrittyEmu {
     }
 
     fn viewable_rows(&self) -> Vec<Vec<EmuCell>> {
-        self.rows_in_range(0, self.rows as i32)
+        let start = -(self.term.grid().display_offset() as i32);
+        self.rows_in_range(start, start + self.rows as i32)
     }
 
     fn full_rows(&self) -> Vec<Vec<EmuCell>> {

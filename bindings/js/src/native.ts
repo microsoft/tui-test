@@ -9,6 +9,7 @@ import type {
   Cell,
   ClipboardWaitOptions,
   Cursor,
+  Viewport,
   EffectiveTimeouts,
   FailureArtifactOptions,
   LocatorExpression,
@@ -341,6 +342,22 @@ export class NativeRuntime {
 
   getCursor(): Promise<Cursor> {
     return this.#call((session) => session.getCursor());
+  }
+
+  getViewport(): Promise<Viewport> {
+    return this.#call((session) => session.getViewport());
+  }
+
+  scroll(lines: number): Promise<void> {
+    return this.#call((session) => session.scroll(lines));
+  }
+
+  scrollToTop(): Promise<void> {
+    return this.#call((session) => session.scrollToTop());
+  }
+
+  scrollToBottom(): Promise<void> {
+    return this.#call((session) => session.scrollToBottom());
   }
 
   getSize(): Promise<Size> {

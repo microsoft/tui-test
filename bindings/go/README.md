@@ -143,6 +143,7 @@ Use `go doc github.com/microsoft/tui-test/bindings/go` for exported type fields 
 | Input | `Type`, `Write`, `Submit`, `Press`, `Resize`, `Signal`, `Kill` |
 | Keyboard | `Keyboard.Press`, `Down`, `Repeat`, `Up` |
 | Mouse | `Mouse.Click`, `Move`, `Down`, `Up`, `Drag`, `Scroll` |
+| Native history | `Scroll(int32)`, `ScrollToTop`, `ScrollToBottom`, `GetViewport` |
 | Screen | `State`, `Text`, `Cells` |
 | Command state | `GetCommand`, `GetOutput`, `GetExitCode`, `GetCwd` |
 | Terminal state | `GetCursor`, `GetSize`, `GetTitle`, `GetClipboard`, `GetBellCount`, `GetBellEvents` |
@@ -153,6 +154,24 @@ Use `go doc github.com/microsoft/tui-test/bindings/go` for exported type fields 
 Use `WaitCommand` after submitting a shell command, and `WaitExit` after running a program directly. `WaitIdle` only establishes that the screen stopped changing.
 
 `State` returns the visible text and terminal dimensions together with command, process-exit, cursor, mode, mouse-mode, color, timeout, readiness, and bell state. `Cells` returns styles and OSC 8 link metadata through `Cell.Link` and `Cell.LinkID`.
+
+### Native history
+
+`Scroll(lines int32)` shows older output for positive values and newer output for negative values.
+Zero leaves the viewport unchanged. Movement stops at the available history boundaries.
+`GetViewport()` returns `Viewport{Offset, History}` with full-width `uint64` row counts.
+An offset of zero means the live screen.
+
+Visible text, locators, and captures use this viewport.
+`Text(TextOptions{Full: true})` remains independent: it returns history plus the live screen.
+New output preserves the historical view until retained history expires.
+Keyboard input returns to the live screen.
+Mouse input and historical locator clicks fail while the viewport shows history.
+Call `ScrollToBottom()` before mouse input. This API is separate from `Mouse.Scroll`.
+
+`GetCursor()` and `State.Cursor` retain the application cursor coordinates.
+Captures project that cursor into the viewport and hide it outside the view.
+Raster recordings capture viewport changes. Asciicast remains a PTY stream.
 
 ### Locators
 

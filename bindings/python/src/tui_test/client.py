@@ -42,6 +42,7 @@ from .types import (
     BellEvent,
     Cell,
     Cursor,
+    Viewport,
     LocatorDirection,
     MouseButton,
     OpenResult,
@@ -999,6 +1000,20 @@ class TuiTest:
 
     async def get_size(self) -> Dict[str, int]:
         return await self._await(self._native.get_size())
+
+    async def get_viewport(self) -> Viewport:
+        """Return the native history offset and available rows."""
+        return await self._await(self._native.get_viewport())
+
+    async def scroll(self, lines: int) -> None:
+        """Move through native history. Positive lines show older output."""
+        await self._await(self._native.scroll(lines))
+
+    async def scroll_to_top(self) -> None:
+        await self._await(self._native.scroll_to_top())
+
+    async def scroll_to_bottom(self) -> None:
+        await self._await(self._native.scroll_to_bottom())
 
     async def get_bell_count(self) -> int:
         return await self._await(self._native.get_bell_count())

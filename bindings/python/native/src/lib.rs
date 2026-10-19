@@ -638,6 +638,76 @@ impl NativeSession {
         )
     }
 
+    fn get_viewport<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.clone();
+        future_blocking(
+            py,
+            move || match session.execute(Operation::GetViewport)? {
+                OperationResult::Viewport(value) => Ok(value),
+                _ => Err(unexpected_result("the viewport")),
+            },
+            |py, viewport| {
+                let value = PyDict::new(py);
+                value.set_item("offset", viewport.offset)?;
+                value.set_item("history", viewport.history)?;
+                Ok(value.into_any().unbind())
+            },
+        )
+    }
+
+    fn scroll<'py>(
+        &self,
+        py: Python<'py>,
+        lines: Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let lines = capture_integer(&lines);
+        let session = self.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &session,
+                    Operation::Scroll {
+                        target: tui_test::ScrollTarget::Lines(integer_i32(&lines, "lines")?),
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    fn scroll_to_top<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &session,
+                    Operation::Scroll {
+                        target: tui_test::ScrollTarget::Top,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
+    fn scroll_to_bottom<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.clone();
+        future_blocking(
+            py,
+            move || {
+                execute_unit(
+                    &session,
+                    Operation::Scroll {
+                        target: tui_test::ScrollTarget::Bottom,
+                    },
+                )
+            },
+            unit_to_py,
+        )
+    }
+
     fn get_size<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let session = self.clone();
         future_blocking(

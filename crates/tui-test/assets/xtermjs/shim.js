@@ -377,11 +377,17 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
       return out;
     },
 
-    // Row span of the visible screen; `full` prepends the scrollback.
-    start: function (full) { return full ? 0 : term.buffer.active.baseY; },
+    scroll: function (lines) { term.scrollLines(-lines); },
+    scrollTop: function () { term.scrollToTop(); },
+    scrollBottom: function () { term.scrollToBottom(); },
+    history: function () { return term.buffer.active.baseY; },
+    offset: function () { return term.buffer.active.baseY - term.buffer.active.viewportY; },
+
+    // Full reads remain independent of the selected viewport.
+    start: function (full) { return full ? 0 : term.buffer.active.viewportY; },
     end: function (full) {
       var b = term.buffer.active;
-      return full ? b.length : b.baseY + term.rows;
+      return full ? b.length : b.viewportY + term.rows;
     },
 
     // The grid crosses the boundary as exactly two values: every cell's text

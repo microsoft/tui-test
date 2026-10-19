@@ -46,8 +46,8 @@ func checkNativeVersion() error {
 	if err := loadNativeEngine(); err != nil {
 		return &Error{Kind: InternalError, Message: err.Error()}
 	}
-	if version := nativeFunctions.AbiVersion(); version != 3 {
-		return &Error{Kind: InternalError, Message: fmt.Sprintf("native ABI version %d is incompatible with required version 3", version)}
+	if version := nativeFunctions.AbiVersion(); version != 4 {
+		return &Error{Kind: InternalError, Message: fmt.Sprintf("native ABI version %d is incompatible with required version 4", version)}
 	}
 	return nil
 }
@@ -183,6 +183,40 @@ func (runtime *Session) GetCursor() (Cursor, error) {
 	return nativeCursor(result.cursor), nil
 }
 
+func (runtime *Session) GetViewport() (Viewport, error) {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.GetViewport(memory.text(runtime.name))
+	defer nativeFunctions.ResultFree(result)
+	if err := nativeError(result); err != nil {
+		return Viewport{}, err
+	}
+	return Viewport{Offset: uint64(result.viewportOffset), History: uint64(result.viewportHistory)}, nil
+}
+
+func (runtime *Session) Scroll(lines int32) error {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.Scroll(memory.text(runtime.name), lines)
+	defer nativeFunctions.ResultFree(result)
+	return nativeError(result)
+}
+
+func (runtime *Session) ScrollToTop() error {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.ScrollToTop(memory.text(runtime.name))
+	defer nativeFunctions.ResultFree(result)
+	return nativeError(result)
+}
+
+func (runtime *Session) ScrollToBottom() error {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.ScrollToBottom(memory.text(runtime.name))
+	defer nativeFunctions.ResultFree(result)
+	return nativeError(result)
+}
 func (runtime *Session) GetSize() (Size, error) {
 	memory := nativeMemory{}
 	defer memory.release()

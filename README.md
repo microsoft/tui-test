@@ -255,7 +255,9 @@ per-row runs; filters preserve whole matches. See the
 | `mouse down X Y [options]` | Press a mouse button. |
 | `mouse up X Y [options]` | Release a mouse button. |
 | `mouse drag X1 Y1 X2 Y2 [options]` | Drag between cells. |
-| `mouse scroll up\|down [--amount N]` | Scroll. |
+| `mouse scroll up\|down [--amount N]` | Send mouse wheel input to the application. |
+| `scroll up\|down [LINES]` | Move the native history viewport; default: one row. |
+| `scroll top\|bottom` | Show the oldest output or return to the live screen. |
 | `resize COLS ROWS` | Resize the terminal. |
 | `signal INT\|TERM\|KILL\|QUIT` | Send a signal. |
 | `kill` | Kill the child process. |
@@ -276,11 +278,20 @@ Named keys include arrows, Home, End, PageUp, PageDown, Insert, Delete, Backspac
 | `get exit-code` | Return the last exit code. |
 | `get cwd` | Return the working directory. |
 | `get cursor` | Return the cursor position. |
+| `get viewport` | Return the history offset and available rows. |
 | `get size` | Return the terminal size. |
 | `get title` | Return the window title. |
 | `get clipboard` | Return the session clipboard. |
 | `get bells` | Return the bell count. |
 | `get bell-events` | Return bell events. |
+
+Native scrolling changes the visible viewport without mouse input to the application.
+New output preserves the historical view. Keyboard input returns to the live screen.
+Mouse input and historical locator clicks fail until you return to the live screen.
+Full-text reads remain independent of the viewport.
+See the [history reference](references/cli.md#native-history),
+[JavaScript example](bindings/js/examples/scrollback.mjs), and
+[Rust example](crates/tui-test/examples/scrollback.rs).
 
 ### Wait and assert
 

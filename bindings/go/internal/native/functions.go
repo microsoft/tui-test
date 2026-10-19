@@ -18,6 +18,10 @@ type nativeFunctionTable struct {
 	GetExitCode      func(abiString) *abiResult
 	GetCwd           func(abiString) *abiResult
 	GetCursor        func(abiString) *abiResult
+	GetViewport      func(abiString) *abiResult
+	Scroll           func(abiString, int32) *abiResult
+	ScrollToTop      func(abiString) *abiResult
+	ScrollToBottom   func(abiString) *abiResult
 	GetSize          func(abiString) *abiResult
 	GetTitle         func(abiString) *abiResult
 	GetClipboard     func(abiString) *abiResult
@@ -100,6 +104,10 @@ func nativeInspectionRegistrations(table *nativeFunctionTable) []nativeRegistrat
 		{symbol: "tui_get_exit_code", target: &table.GetExitCode},
 		{symbol: "tui_get_cwd", target: &table.GetCwd},
 		{symbol: "tui_get_cursor", target: &table.GetCursor},
+		{symbol: "tui_get_viewport", target: &table.GetViewport},
+		{symbol: "tui_scroll", target: &table.Scroll},
+		{symbol: "tui_scroll_to_top", target: &table.ScrollToTop},
+		{symbol: "tui_scroll_to_bottom", target: &table.ScrollToBottom},
 		{symbol: "tui_get_size", target: &table.GetSize},
 		{symbol: "tui_get_title", target: &table.GetTitle},
 		{symbol: "tui_get_clipboard", target: &table.GetClipboard},
