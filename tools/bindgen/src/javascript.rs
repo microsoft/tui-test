@@ -313,15 +313,16 @@ fn coverage(models: &Models) -> Result<()> {
     if declared != owned {
         bail!("Operation JavaScript coverage mismatch");
     }
-    for (kind, model) in [("Mouse", "MouseAction"), ("Key", "KeyAction"), ("Scroll", "ScrollTarget")] {
+    for (kind, model) in [
+        ("Mouse", "MouseAction"),
+        ("Key", "KeyAction"),
+        ("Scroll", "ScrollTarget"),
+    ] {
         let declared: BTreeSet<_> = METHODS
             .iter()
             .filter_map(|(_, op, _)| op.strip_prefix(&format!("{kind}.")))
             .collect();
-        let owned: BTreeSet<_> = models.enums[model]
-            .iter()
-            .map(String::as_str)
-            .collect();
+        let owned: BTreeSet<_> = models.enums[model].iter().map(String::as_str).collect();
         if declared != owned {
             bail!("{model} JavaScript coverage mismatch");
         }
@@ -444,7 +445,13 @@ mod tests {
     #[test]
     fn new_operations_require_an_export_decision() {
         let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
-        for name in ["Operation", "OperationResult", "MouseAction", "KeyAction", "ScrollTarget"] {
+        for name in [
+            "Operation",
+            "OperationResult",
+            "MouseAction",
+            "KeyAction",
+            "ScrollTarget",
+        ] {
             let mut models = Models::load(root).unwrap();
             models.enums.get_mut(name).unwrap().push("Future".into());
             assert!(coverage(&models).is_err());
