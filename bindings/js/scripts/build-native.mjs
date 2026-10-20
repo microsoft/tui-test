@@ -29,17 +29,18 @@ const tag = tags[target];
 if (!tag) throw new Error(`Unsupported native target: ${target}`);
 const env = { ...process.env };
 delete env.CARGO_TARGET_DIR;
+const buildTarget = zigbuild && target.endsWith("-gnu") ? `${target}.2.28` : target;
 if (target.endsWith("-musl")) {
   env.RUSTFLAGS = `${env.RUSTFLAGS ?? ""} -C target-feature=-crt-static`.trim();
 }
 execFileSync("cargo", [
   zigbuild ? "zigbuild" : "build", "--locked", "-p", "tui-test-ffi",
   ...(debug ? [] : ["--release"]),
-  ...(explicitTarget ? ["--target", target] : []),
+  ...(explicitTarget || zigbuild ? ["--target", buildTarget] : []),
 ], { cwd: root, env, stdio: "inherit" });
 
 const extension = target.includes("windows") ? "dll" : target.includes("apple") ? "dylib" : "so";
 const library = extension === "dll" ? "tui_test_ffi.dll" : `libtui_test_ffi.${extension}`;
-const output = join(root, "target", ...(explicitTarget ? [target] : []), debug ? "debug" : "release", library);
+const output = join(root, "target", ...(explicitTarget || zigbuild ? [target] : []), debug ? "debug" : "release", library);
 mkdirSync(join(directory, "native"), { recursive: true });
 copyFileSync(output, join(directory, "native", `tui-test.${tag}.${extension}`));

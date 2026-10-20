@@ -3,7 +3,6 @@ package native
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/ebitengine/purego"
@@ -19,13 +18,13 @@ var nativeFunctions nativeFunctionTable
 var loadNativeEngine = sync.OnceValue(initializeNativeEngine)
 
 func initializeNativeEngine() error {
-	path := os.Getenv("TUI_TEST_NATIVE_LIBRARY")
-	if path == "" {
-		return errors.New("TUI_TEST_NATIVE_LIBRARY must name the native engine library")
+	path, err := nativeLibraryPath(bundledLibraries)
+	if err != nil {
+		return err
 	}
 	table, err := loadNativeFunctions(path)
 	if err != nil {
-		return fmt.Errorf("load native engine from TUI_TEST_NATIVE_LIBRARY: %w", err)
+		return fmt.Errorf("load native engine from %q: %w", path, err)
 	}
 	nativeFunctions = table
 	return nil

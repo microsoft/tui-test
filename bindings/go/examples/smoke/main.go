@@ -26,7 +26,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Println("Go binding smoke passed")
+	source := "bundled"
+	if os.Getenv("TUI_TEST_NATIVE_LIBRARY") != "" {
+		source = "override"
+	}
+	fmt.Printf("Go binding smoke passed (%s engine)\n", source)
 }
 
 func smoke() error {
@@ -61,6 +65,16 @@ func exerciseTerminal(terminal *tuitest.Client) error {
 	}
 	if err := terminal.WaitExit(tuitest.WaitOptions{Timeout: &timeout}); err != nil {
 		return fmt.Errorf("wait for child exit: %w", err)
+	}
+	state, err := terminal.State()
+	if err != nil {
+		return fmt.Errorf("read child exit status: %w", err)
+	}
+	if state.Exited == nil {
+		return fmt.Errorf("child exit status is unavailable")
+	}
+	if *state.Exited != 0 {
+		return fmt.Errorf("child exited with status %d", *state.Exited)
 	}
 	return nil
 }
