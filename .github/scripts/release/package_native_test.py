@@ -1,3 +1,4 @@
+import gzip
 import importlib.util
 import io
 import json
@@ -235,6 +236,34 @@ class PackageTests(unittest.TestCase):
                 self.run_script("go", "--artifacts", self.artifacts,
                                 "--output", self.output, succeeds=False)
                 self.assertFalse(self.output.exists())
+
+    def test_invalid_gzip_trailers_rejected(self):
+        target = "aarch64-unknown-linux-gnu"
+        path = self.write_native(target)
+        original = path.read_bytes()
+        self.run_script("go", "--artifacts", self.artifacts, "--output", self.output)
+        damaged = {
+            "truncated": original[:-1],
+            "crc": original[:-8] + bytes([original[-8] ^ 1]) + original[-7:],
+            "size": original[:-4] + bytes([original[-4] ^ 1]) + original[-3:],
+        }
+        for damage, data in damaged.items():
+            with self.subTest(damage=damage, stage="reader"):
+                with self.assertRaises((EOFError, gzip.BadGzipFile)):
+                    packages.read_native(data, "1.2.3", REVISION, target)
+            with self.subTest(damage=damage, stage="assembly"):
+                path.write_bytes(data)
+                path.with_name(path.name + ".sha256").write_text(
+                    f"{packages.sha256(data)}  {path.name}\n",
+                )
+                output = self.root / f"invalid-module-{damage}"
+                self.run_script("go", "--artifacts", self.artifacts,
+                                "--output", output, succeeds=False)
+                self.assertFalse(output.exists())
+            with self.subTest(damage=damage, stage="verification"):
+                (self.output / f"internal/native/bundled/{target}.tar.gz").write_bytes(data)
+                with self.assertRaises((EOFError, gzip.BadGzipFile)):
+                    packages.verify_module(self.root, self.output)
 
     def test_size_limit_and_source_output_rejected(self):
         archives = packages.native_archives(self.root, self.artifacts)

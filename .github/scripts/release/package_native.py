@@ -90,7 +90,8 @@ def native_filename(version, target):
 
 def read_native(data, version, revision, target):
     library = library_name(target)
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+    with gzip.GzipFile(fileobj=io.BytesIO(data), mode="rb") as compressed, \
+            tarfile.open(fileobj=compressed, mode="r:") as archive:
         members = archive.getmembers()
         if (
             len(members) != 3
@@ -99,6 +100,9 @@ def read_native(data, version, revision, target):
         ):
             raise ValueError(f"Unsafe or unexpected archive members for {target}")
         contents = {member.name: archive.extractfile(member).read() for member in members}
+        # Tar EOF can precede the gzip trailer that checks CRC and stream length.
+        while compressed.read(64 * 1024):
+            pass
     manifest = json.loads(contents["manifest.json"])
     expected = {
         "version": version,
