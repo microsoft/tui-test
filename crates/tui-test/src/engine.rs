@@ -1522,6 +1522,15 @@ impl Engine {
     /// Write viewer keystrokes straight to the pty: untracked and unlogged, so
     /// a human watching cannot disturb what the agent is waiting on.
     pub fn write_monitor_input_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        self.write_monitor_input(data, false)
+    }
+
+    /// Forward a remapped mouse report only while the live screen accepts mouse input.
+    pub fn write_monitor_mouse_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        self.write_monitor_input(data, true)
+    }
+
+    fn write_monitor_input(&self, data: &[u8], mouse: bool) -> Result<(), TuiTestError> {
         let Some((state, pty, viewport_input)) = ({
             let live = self
                 .live
@@ -1554,7 +1563,17 @@ impl Engine {
             let mut state = state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            scroll_emulator_and_record(&mut state, ScrollTarget::Bottom)?;
+            if mouse {
+                if state.emu.viewport().offset != 0
+                    || state.mouse_mode.relayable() == MouseMode::None
+                {
+                    return Err(TuiTestError::usage(
+                        "monitor mouse input requires a live viewport with mouse tracking enabled",
+                    ));
+                }
+            } else {
+                scroll_emulator_and_record(&mut state, ScrollTarget::Bottom)?;
+            }
         }
         // A child that exits mid-write is a normal race, not a failure.
         let written = pty.write(data);
@@ -4698,6 +4717,82 @@ mod tests {
             assert_eq!((options.cols, options.rows), (80, 24));
         }
         engine.execute(Operation::Close).unwrap();
+    }
+
+    #[test]
+    fn monitor_mouse_write_rechecks_viewport_after_remapping() {
+        struct RecordingWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for RecordingWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let engine = Engine::new(
+            "monitor-mouse-scroll".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let mut options = sleeping_program(false);
+        options.cols = 12;
+        options.rows = 3;
+        engine.execute(Operation::Run(options)).unwrap();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            state
+                .emu
+                .process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            state.mouse_mode.process(b"\x1b[?1000h\x1b[?1006h");
+            state.screen_dirty = true;
+            session
+                .pty
+                .replace_test_writer(Box::new(RecordingWriter(written.clone())));
+        }
+        assert_eq!(engine.monitor_mouse_size(), Some((12, 3)));
+        let remapped = b"\x1b[<0;1;1M";
+        engine
+            .execute(Operation::Scroll {
+                target: ScrollTarget::Top,
+            })
+            .unwrap();
+        let result = engine.write_monitor_mouse_raw(remapped);
+        let viewport = engine.execute(Operation::GetViewport).unwrap();
+        let mouse_bytes = written.lock().unwrap().clone();
+        engine.write_monitor_input_raw(b"hello").unwrap();
+        let after_keyboard = engine.execute(Operation::GetViewport).unwrap();
+        engine.write_monitor_mouse_raw(remapped).unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            session
+                .state
+                .lock()
+                .unwrap()
+                .mouse_mode
+                .process(b"\x1b[?1000l");
+        }
+        let disabled = engine.write_monitor_mouse_raw(remapped);
+        engine.execute(Operation::Close).unwrap();
+        assert!(result.is_err(), "stale monitor mouse report was forwarded");
+        assert!(
+            disabled.is_err(),
+            "mouse report reached a mouse-disabled application"
+        );
+        assert!(mouse_bytes.is_empty());
+        assert!(matches!(viewport, OperationResult::Viewport(viewport) if viewport.offset > 0));
+        assert!(
+            matches!(after_keyboard, OperationResult::Viewport(viewport) if viewport.offset == 0)
+        );
+        assert_eq!(&*written.lock().unwrap(), b"hello\x1b[<0;1;1M");
     }
 
     #[test]

@@ -482,7 +482,7 @@ fn spawn_monitor_input(
             let input = match receiver.recv_timeout(Duration::from_millis(50)) {
                 Ok(Ok(crate::protocol::MonitorInput::Write { data })) => {
                     *last_activity.lock().unwrap() = Instant::now();
-                    mouse.push(&data, engine.monitor_mouse_size())
+                    mouse.push_input(&data, engine.monitor_mouse_size())
                 }
                 Ok(Ok(crate::protocol::MonitorInput::Resize { cols, rows })) => {
                     mouse.resize((cols, rows));
@@ -494,12 +494,21 @@ fn spawn_monitor_input(
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     mouse.observe(engine.monitor_mouse_size());
-                    mouse.on_idle()
+                    vec![monitor::ForwardedInput::Keyboard(mouse.on_idle())]
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
-            if !input.is_empty() {
-                if let Err(error) = engine.write_monitor_input_raw(&input) {
+            for input in input {
+                let result = match input {
+                    monitor::ForwardedInput::Keyboard(bytes) => {
+                        if bytes.is_empty() {
+                            continue;
+                        }
+                        engine.write_monitor_input_raw(&bytes)
+                    }
+                    monitor::ForwardedInput::Mouse(bytes) => engine.write_monitor_mouse_raw(&bytes),
+                };
+                if let Err(error) = result {
                     engine.log_event(&format!("monitor input write failed: {}", error.message));
                 }
             }
