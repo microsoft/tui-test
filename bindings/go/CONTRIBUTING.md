@@ -168,13 +168,17 @@ To use the local bundle in another project, replace the module with
 
 ### Linux compatibility
 
-Build GNU release libraries against glibc 2.28 with cargo-zigbuild:
+Build GNU release libraries in a manylinux 2.28 container:
 
 ```sh
-cargo zigbuild --release --locked -p tui-test-ffi \
-  --target aarch64-unknown-linux-gnu.2.28
+node bindings/js/scripts/build-native.mjs --zig --target aarch64-unknown-linux-gnu
 ```
 
+This command requires Docker and Node.js.
+It runs cargo-zigbuild inside the container and shares the Linux tool setup with Python wheel builds.
+Cargo's glibc target alone does not constrain Ghostty's separate native Zig build.
+The container also constrains that build to the supported libc.
+Container builds use `target/manylinux` to avoid artifacts from a newer host libc.
 The output remains under `target/aarch64-unknown-linux-gnu/release`.
 Build musl separately with `-C target-feature=-crt-static`.
 The release pipeline checks native dependencies before packaging.

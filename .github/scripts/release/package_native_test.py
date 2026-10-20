@@ -276,6 +276,19 @@ class PackageTests(unittest.TestCase):
 
 
 class ElfChecks(unittest.TestCase):
+    def test_unversioned_required_symbols_rejected(self):
+        elf = load_script("check-native-elf")
+        elf.check_symbols("\n".join([
+            "0: 0000000000000000 0 NOTYPE LOCAL DEFAULT UND",
+            "1: 0000000000000000 0 FUNC GLOBAL DEFAULT UND memcpy@GLIBC_2.14 (2)",
+            "2: 0000000000000000 0 NOTYPE WEAK DEFAULT UND _ITM_registerTMCloneTable",
+            "3: 0000000000000010 8 FUNC GLOBAL DEFAULT 12 tui_open",
+        ]))
+        for kind in ("FUNC", "NOTYPE"):
+            with self.subTest(kind=kind):
+                with self.assertRaisesRegex(ValueError, "arc4random_buf"):
+                    elf.check_symbols(f"1: 0000000000000000 0 {kind} GLOBAL DEFAULT UND arc4random_buf")
+
     def test_optimized_gnu_dependencies(self):
         elf = load_script("check-native-elf")
         output = "\n".join(

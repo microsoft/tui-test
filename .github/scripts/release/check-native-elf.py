@@ -32,6 +32,14 @@ def check_dependencies(output, target):
         raise ValueError("Native release library must not contain RPATH or RUNPATH")
 
 
+def check_symbols(output):
+    for line in output.splitlines():
+        fields = line.split()
+        if (len(fields) >= 8 and fields[4] == "GLOBAL" and fields[6] == "UND"
+                and "@" not in fields[7]):
+            raise ValueError(f"Unversioned required symbol bypasses the glibc baseline: {fields[7]}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--library", type=Path, required=True)
@@ -45,6 +53,8 @@ def main():
     if args.target.endswith("-gnu"):
         versions = subprocess.check_output(["readelf", "--version-info", str(args.library)], text=True)
         check_versions(versions)
+        symbols = subprocess.check_output(["readelf", "--dyn-syms", "--wide", str(args.library)], text=True)
+        check_symbols(symbols)
     print(f"Native dependencies and ABI checks passed: {args.target}")
 
 

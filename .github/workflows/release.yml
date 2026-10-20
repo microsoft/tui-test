@@ -179,23 +179,30 @@ jobs:
           cache: npm
           cache-dependency-path: bindings/js/package-lock.json
 
-      - run: |
+      - if: "!endsWith(matrix.target, '-gnu')"
+        run: |
           rustup toolchain install stable --profile default
           rustup default stable
           rustup target add ${{ matrix.target }}
 
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        if: "!endsWith(matrix.target, '-gnu')"
         with:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
 
       - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
-        if: matrix.zigbuild
+        if: matrix.zigbuild && !endsWith(matrix.target, '-gnu')
         with:
           tool: cargo-zigbuild
 
       - run: npm ci
         working-directory: bindings/js
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        with:
+          platforms: arm64
 
       - name: Build shared native engine
         working-directory: bindings/js
@@ -406,7 +413,7 @@ jobs:
           CARGO_BUILD_TARGET: ${{ matrix.target }}
           CIBW_ENVIRONMENT_PASS_LINUX: CARGO_BUILD_TARGET
           CIBW_ENVIRONMENT_LINUX: PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-          CIBW_BEFORE_ALL_LINUX: bash {project}/.github/scripts/release/prepare-python-linux.sh
+          CIBW_BEFORE_ALL_LINUX: bash {project}/.github/scripts/release/prepare-linux.sh
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
           CIBW_MUSLLINUX_X86_64_IMAGE: musllinux_1_2

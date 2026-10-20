@@ -27,6 +27,17 @@ Use `npm run build:native:debug` for a debug build.
 These commands build `tui-test-ffi` and put the shared library in `native/`.
 Run `cargo run --locked -p tui-test-bindgen` from the repository root to regenerate the native declarations.
 
+For a distributable GNU Linux build, use:
+
+```sh
+npm run build:native -- --zig --target x86_64-unknown-linux-gnu
+```
+
+This requires Docker and builds the shared engine inside manylinux 2.28.
+The container constrains both Cargo and Ghostty to the supported libc.
+Use `aarch64-unknown-linux-gnu` for ARM64, with Docker emulation on an x86_64 host.
+Musl builds with `--zig` still use the local Rust and Zig toolchains.
+
 ## Quick start
 
 ```js
