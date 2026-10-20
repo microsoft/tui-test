@@ -12,5 +12,7 @@ CXXFLAGS_aarch64_apple_darwin = "-Dsimdutf=tui_test_rio_simdutf"
 CXXFLAGS_x86_64_apple_darwin = "-Dsimdutf=tui_test_rio_simdutf"
 CXXFLAGS_aarch64_unknown_linux_gnu = "-Dsimdutf=tui_test_rio_simdutf -DSIMDUTF_IMPLEMENTATION_ARM64=0"
 CXXFLAGS_aarch64_unknown_linux_musl = "-Dsimdutf=tui_test_rio_simdutf"
-CXXFLAGS_x86_64_unknown_linux_gnu = "-Dsimdutf=tui_test_rio_simdutf"
+# Zig 0.16 rejects simdutf's Ice Lake target attributes; keep the other SIMD paths.
+# Remove the Ice Lake flags when simdutf supports Zig's Clang.
+CXXFLAGS_x86_64_unknown_linux_gnu = "-Dsimdutf=tui_test_rio_simdutf -DSIMDUTF_IMPLEMENTATION_ICELAKE=0"
 CXXFLAGS_x86_64_unknown_linux_musl = "-Dsimdutf=tui_test_rio_simdutf -DSIMDUTF_IMPLEMENTATION_ICELAKE=0"
