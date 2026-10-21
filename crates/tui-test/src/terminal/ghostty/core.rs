@@ -500,7 +500,10 @@ impl GhosttyCore {
     }
 
     fn clamp_viewport(&mut self) -> Result<()> {
-        if self.viewport()?.offset > self.profile.scrollback {
+        let viewport = self.viewport()?;
+        if viewport.offset == 0 {
+            self.scroll(crate::api::ScrollTarget::Bottom)?;
+        } else if viewport.offset > self.profile.scrollback {
             self.scroll(crate::api::ScrollTarget::Top)?;
         }
         Ok(())

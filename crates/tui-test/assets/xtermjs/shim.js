@@ -86,6 +86,17 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     return result;
   };
 
+  function followLiveViewport() {
+    var buffer = term.buffer.active;
+    if (buffer.type === 'normal' && buffer.viewportY === buffer.baseY) {
+      term.scrollToBottom();
+    }
+  }
+
+  // History clearing moves the viewport but leaves xterm.js's scroll flag set.
+  // Reset it before the parser processes more output in the same write.
+  term._core._inputHandler.onScroll(followLiveViewport);
+
   // xterm.js resolves a cell's `urlId` through this service; there is no
   // public getter for a link on `IBufferCell`.
   var oscLinks = term._core._oscLinkService;
@@ -316,7 +327,11 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     // boundary beats one call per pending reply.
     takeReplies: function () { var s = replies.join(''); replies.length = 0; return s; },
 
-    resize: function (cols, rows) { term.resize(cols, rows); drain(); },
+    resize: function (cols, rows) {
+      term.resize(cols, rows);
+      drain();
+      followLiveViewport();
+    },
     cols: function () { return term.cols; },
     rows: function () { return term.rows; },
     cursorX: function () { return term.buffer.active.cursorX; },

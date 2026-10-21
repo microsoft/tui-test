@@ -207,6 +207,56 @@ macro_rules! emulator_conformance_tests {
         }
 
         #[test]
+        fn conformance_viewport_follows_output_after_history_clear() {
+            use $crate::api::ScrollTarget;
+            for chunks in [
+                vec![b"\x1b[3J\r\nrow6\r\nrow7".as_slice()],
+                vec![b"\x1b[3".as_slice(), b"J", b"\r\nrow6\r\nrow7"],
+            ] {
+                let mut e = conformance_emu(12, 3, 20);
+                e.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+                e.scroll(ScrollTarget::Top);
+                for chunk in chunks {
+                    e.process(chunk);
+                }
+                assert_eq!(e.viewport().offset, 0);
+                assert_eq!(conformance_text(&e.viewable_rows())[2], "row7");
+                assert!(e.take_pending_writes().is_empty());
+                assert_eq!(e.fault(), None);
+            }
+        }
+
+        #[test]
+        fn conformance_viewport_follows_output_after_resize_consumes_history() {
+            use $crate::api::ScrollTarget;
+            let mut e = conformance_emu(12, 3, 20);
+            e.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            e.scroll(ScrollTarget::Top);
+            e.resize(12, 6);
+            assert_eq!(e.viewport(), $crate::api::Viewport::default());
+            e.process(b"\r\nrow6\r\nrow7");
+            assert_eq!(e.viewport().offset, 0);
+            assert_eq!(conformance_text(&e.viewable_rows())[5], "row7");
+            assert!(e.take_pending_writes().is_empty());
+            assert_eq!(e.fault(), None);
+        }
+
+        #[test]
+        fn conformance_viewport_preserves_history_after_partial_resize() {
+            use $crate::api::ScrollTarget;
+            let mut e = conformance_emu(12, 3, 20);
+            e.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            e.scroll(ScrollTarget::Top);
+            e.resize(12, 4);
+            assert!(e.viewport().offset > 0);
+            let selected = e.viewable_rows();
+            e.process(b"\r\nrow6\r\nrow7");
+            assert_eq!(e.viewable_rows(), selected);
+            assert!(e.viewport().offset > 0);
+            assert_eq!(e.fault(), None);
+        }
+
+        #[test]
         fn conformance_viewport_without_history_is_unchanged() {
             use $crate::api::ScrollTarget;
             let mut e = conformance_emu(12, 3, 0);
