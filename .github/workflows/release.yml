@@ -529,12 +529,11 @@ jobs:
           gh release create "$RELEASE_TAG" "${release_args[@]}" artifacts/*
 
   update-homebrew:
-    name: Open Homebrew formula update
+    name: Prepare Homebrew formula update
     needs: release
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -543,13 +542,26 @@ jobs:
         with:
           ref: main
 
+      - name: Prepare Homebrew update branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="homebrew-update/$RELEASE_TAG"
+          remote_branch="$(git ls-remote --heads origin "refs/heads/$branch")"
+          if [[ -n "$remote_branch" ]]; then
+            git fetch origin "refs/heads/$branch"
+            git checkout -b "$branch" FETCH_HEAD
+          else
+            git checkout -b "$branch"
+          fi
+
       - name: Update Homebrew formula
         shell: bash
         run: |
           gh release view "$RELEASE_TAG" --json assets |
             node .github/scripts/release/update-homebrew-formula.mjs "$RELEASE_TAG"
 
-      - name: Open a pull request
+      - name: Push Homebrew update branch
         shell: bash
         run: |
           set -euo pipefail
@@ -558,8 +570,15 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$branch"
           git add Formula/tui-test.rb
-          git commit -s -m "$title"
+          if ! git diff --cached --quiet; then
+            git commit -s -m "$title"
+          fi
           git push origin "$branch"
-          gh pr create --head "$branch" --base main --title "$title" --body ""
+          {
+            echo "### Homebrew formula update"
+            echo ""
+            echo "Update branch: [$branch]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/$branch)"
+            echo ""
+            echo "[Create a pull request to main]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...$branch?expand=1)"
+          } >> "$GITHUB_STEP_SUMMARY"
