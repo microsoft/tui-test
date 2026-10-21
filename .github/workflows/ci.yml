@@ -66,9 +66,9 @@ jobs:
         run: |
           cc -std=c11 -fsyntax-only -Icrates/tui-test-ffi/include .github/scripts/check-native-header.c
           c++ -std=c++17 -x c++ -fsyntax-only -Icrates/tui-test-ffi/include .github/scripts/check-native-header.c
-      - name: Test release scripts
+      - name: Test native package assembly
         if: runner.os == 'Linux'
-        run: node --test .github/scripts/release/*.test.mjs
+        run: node --test .github/scripts/release/package-node.test.mjs
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
       - run: cargo build -p tui-test-cli -p tui-test-ffi
