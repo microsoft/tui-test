@@ -142,6 +142,13 @@ function resultValue(result, selector) {
     case "State": return decode("TuiState", result.state);
     case "Cursor": return decode("TuiCursor", result.cursor);
     case "Size": return decode("TuiSize", result.size);
+    case "Viewport": {
+      const viewport = decode("TuiViewport", result.viewport);
+      if (!Number.isSafeInteger(viewport.offset) || !Number.isSafeInteger(viewport.history)) {
+        throw error("internal", "viewport exceeds JavaScript's safe integer range");
+      }
+      return viewport;
+    }
     case "Cells": return array("TuiCell", result.cells, result.cells_len);
     case "Matches": return array("TuiMatch", result.matches, result.matches_len);
     case "BellEvents": return array("TuiBellEvent", result.bells, result.bells_len);

@@ -29,6 +29,13 @@ fn size(s: &mut Storage, v: tui_test::api::Size) -> TuiSize {
     }
 }
 #[allow(unused_variables)]
+fn viewport(s: &mut Storage, v: tui_test::api::Viewport) -> TuiViewport {
+    TuiViewport {
+        offset: v.offset,
+        history: v.history,
+    }
+}
+#[allow(unused_variables)]
 fn effective_timeouts(s: &mut Storage, v: tui_test::api::EffectiveTimeouts) -> TuiTimeouts {
     TuiTimeouts {
         text: unsigned(v.text),

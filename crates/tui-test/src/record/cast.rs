@@ -125,11 +125,11 @@ impl CastWriter {
     }
 }
 
-/// Paint the visible state; the worker appends `seed::State` so subsequent
+/// Paint the active screen; the worker appends `seed::State` so subsequent
 /// output also retains the live rendition, modes and parser boundary.
 pub(crate) fn snapshot_to_ansi(emulator: &dyn Emulator) -> String {
-    let rows = emulator.viewable_rows();
     let (cols, _) = emulator.size();
+    let rows = emulator.active_rows();
     let cursor = emulator.cursor();
     let blank = EmuCell::blank();
     // ED 2 can push even an empty viewport into history, which changes later
@@ -337,6 +337,38 @@ fn json_error(error: serde_json::Error) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrollback_cast_seed_preserves_the_live_screen() {
+        use crate::api::ScrollTarget;
+        use crate::profile::Profile;
+        for &backend in crate::Backend::ALL {
+            let mut source = backend.build(12, 3, &Profile::default()).unwrap();
+            source.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            let live = source.viewable_rows();
+            source.scroll(ScrollTarget::Top);
+            let selected = source.viewable_rows();
+            let mut replay = backend.build(12, 3, &Profile::default()).unwrap();
+            replay.process(snapshot_to_ansi(source.as_ref()).as_bytes());
+            assert_eq!(replay.viewable_rows(), live, "{backend:?}");
+            assert_eq!(
+                source.viewable_rows(),
+                selected,
+                "capture moved the viewport"
+            );
+            let update = b"\x1b[2;1Hupdated";
+            source.process(update);
+            replay.process(update);
+            source.scroll(ScrollTarget::Bottom);
+            assert_eq!(
+                replay.viewable_rows(),
+                source.viewable_rows(),
+                "{backend:?}"
+            );
+            assert_eq!(source.fault(), None);
+            assert_eq!(replay.fault(), None);
+        }
+    }
 
     #[test]
     fn incremental_decode_handles_split_multibyte() {

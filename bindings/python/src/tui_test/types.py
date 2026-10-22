@@ -20,6 +20,11 @@ class OpenResult(TypedDict):
     recording: str
 
 
+class Viewport(TypedDict):
+    offset: int
+    history: int
+
+
 class Cursor(TypedDict):
     x: int
     y: int

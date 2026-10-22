@@ -10,11 +10,23 @@ use tui_test::{
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "tui_test::ScrollTarget")]
+enum ScrollTarget {
+    Lines(i32),
+    Top,
+    Bottom,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Request {
+    Scroll {
+        #[serde(with = "ScrollTarget")]
+        target: tui_test::ScrollTarget,
+    },
     WithContext {
         request: Box<Request>,
         context: ExecutionContext,
@@ -346,6 +358,7 @@ impl Request {
                 GetField::ExitCode => "get.exit_code",
                 GetField::Cwd => "get.cwd",
                 GetField::Cursor => "get.cursor",
+                GetField::Viewport => "get.viewport",
                 GetField::Modes => "get.modes",
                 GetField::Colors => "get.colors",
                 GetField::Size => "get.size",
@@ -359,6 +372,7 @@ impl Request {
             Self::Key { .. } | Self::Press { .. } => "key",
             Self::Mouse { .. } => "mouse",
             Self::Resize { .. } => "resize",
+            Self::Scroll { .. } => "scroll",
             Self::Signal { .. } => "signal",
             Self::WaitTitle { .. } => "wait.title",
             Self::WaitClipboard { text: Some(_), .. } => "wait.clipboard_match",
@@ -506,6 +520,7 @@ impl Request {
                 GetField::ExitCode => Operation::GetExitCode,
                 GetField::Cwd => Operation::GetCwd,
                 GetField::Cursor => Operation::GetCursor,
+                GetField::Viewport => Operation::GetViewport,
                 GetField::Modes => Operation::GetModes,
                 GetField::Colors => Operation::GetColors,
                 GetField::Size => Operation::GetSize,
@@ -523,6 +538,7 @@ impl Request {
             }),
             Request::Mouse { action } => Ok(Operation::Mouse { action }),
             Request::Resize { cols, rows } => Ok(Operation::Resize { cols, rows }),
+            Request::Scroll { target } => Ok(Operation::Scroll { target }),
             Request::Signal { name } => Ok(Operation::Signal { name }),
             Request::WaitTitle {
                 text,
@@ -697,6 +713,7 @@ impl Request {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GetField {
+    Viewport,
     Command,
     Output,
     ExitCode,
@@ -804,6 +821,7 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
         OperationResult::Title(value) => Ok(json!({ "value": value })),
         OperationResult::Clipboard(value) => Ok(json!({ "value": value })),
         OperationResult::Cursor(value) => Ok(json!({ "value": value })),
+        OperationResult::Viewport(value) => Ok(json!({ "value": value })),
         OperationResult::Modes(value) => Ok(json!({ "modes": value })),
         OperationResult::Colors(value) => Ok(json!({ "colors": value })),
         OperationResult::Size(value) => Ok(json!({ "value": value })),
@@ -822,6 +840,39 @@ fn operation_data(result: OperationResult) -> Result<Option<serde_json::Value>, 
 mod tests {
     use super::*;
     use tui_test::FailureReason;
+
+    #[test]
+    fn native_scroll_protocol_preserves_signed_targets_and_viewport_counts() {
+        for target in [
+            tui_test::ScrollTarget::Lines(i32::MIN),
+            tui_test::ScrollTarget::Lines(0),
+            tui_test::ScrollTarget::Lines(i32::MAX),
+            tui_test::ScrollTarget::Top,
+            tui_test::ScrollTarget::Bottom,
+        ] {
+            let encoded = serde_json::to_string(&Request::Scroll { target }).unwrap();
+            let decoded: Request = serde_json::from_str(&encoded).unwrap();
+            assert!(
+                matches!(decoded.into_operation().unwrap(), Operation::Scroll { target: actual } if actual == target)
+            );
+        }
+        assert!(matches!(
+            Request::Get {
+                field: GetField::Viewport
+            }
+            .into_operation()
+            .unwrap(),
+            Operation::GetViewport
+        ));
+        let value = operation_data(OperationResult::Viewport(tui_test::Viewport {
+            offset: usize::MAX - 1,
+            history: usize::MAX,
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(value["value"]["offset"], json!(usize::MAX - 1));
+        assert_eq!(value["value"]["history"], json!(usize::MAX));
+    }
 
     #[test]
     fn locator_expression_requests_round_trip() {

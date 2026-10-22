@@ -3,6 +3,10 @@ package native
 
 type nativeFunctionTable struct {
 	AbiVersion       func() uint32
+	GetViewport      func(abiString) *abiResult
+	Scroll           func(abiString, int32) *abiResult
+	ScrollToTop      func(abiString) *abiResult
+	ScrollToBottom   func(abiString) *abiResult
 	ResultFree       func(*abiResult)
 	Open             func(abiString, *abiOpenOptions) *abiResult
 	Run              func(abiString, *abiOpenOptions, abiString, *abiString, uintptr) *abiResult
@@ -62,6 +66,10 @@ type nativeFunctionTable struct {
 func nativeRegistrations(table *nativeFunctionTable) []nativeRegistration {
 	return []nativeRegistration{
 		{symbol: "tui_abi_version", target: &table.AbiVersion},
+		{symbol: "tui_get_viewport", target: &table.GetViewport},
+		{symbol: "tui_scroll", target: &table.Scroll},
+		{symbol: "tui_scroll_to_top", target: &table.ScrollToTop},
+		{symbol: "tui_scroll_to_bottom", target: &table.ScrollToBottom},
 		{symbol: "tui_result_free", target: &table.ResultFree},
 		{symbol: "tui_open_ptr", target: &table.Open},
 		{symbol: "tui_run_ptr", target: &table.Run},

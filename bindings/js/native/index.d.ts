@@ -21,6 +21,11 @@ export interface Size {
   rows: number
 }
 
+export interface Viewport {
+  offset: number
+  history: number
+}
+
 export interface EffectiveTimeouts {
   text: number
   idle: number
@@ -323,6 +328,10 @@ export declare class NativeSession {
   getClipboard(): Promise<string>
   getCursor(): Promise<Cursor>
   getSize(): Promise<Size>
+  getViewport(): Promise<Viewport>
+  scroll(lines: number): Promise<void>
+  scrollToTop(): Promise<void>
+  scrollToBottom(): Promise<void>
   getBellCount(): Promise<number>
   getBellEvents(): Promise<Array<BellEvent>>
   write(data: string): Promise<void>

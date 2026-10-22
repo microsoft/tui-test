@@ -43,6 +43,7 @@ struct SequenceState {
     current: Option<String>,
     stack: Vec<Option<String>>,
     clipboard_operations: Vec<ClipboardOperation>,
+    screen_exit: bool,
 }
 
 impl Perform for SequenceState {
@@ -87,6 +88,11 @@ impl Perform for SequenceState {
     }
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        if !ignore && intermediates == b"?" && action == 'l' {
+            self.screen_exit |= params
+                .iter()
+                .any(|param| matches!(param, [47 | 1047 | 1049]));
+        }
         if ignore || action != 't' || !intermediates.is_empty() {
             return;
         }
@@ -226,13 +232,15 @@ impl Emulator for GhosttyEmu {
         for index in 0..bytes.len() {
             self.sequences.feed(&bytes[index..=index]);
             let operations = self.sequences.take_clipboard_operations();
-            if operations.is_empty() {
+            // Normalize the restored viewport before later bytes add output.
+            let screen_exit = std::mem::take(&mut self.sequences.state.screen_exit);
+            if operations.is_empty() && !screen_exit {
                 continue;
             }
 
             let owned = bytes[start..=index].to_vec();
-            self.call("processing output", move |core| {
-                core.process(&owned);
+            self.call_result("processing output", move |core| {
+                core.process(&owned)?;
                 for operation in operations {
                     match operation {
                         ClipboardOperation::Store { clipboard, text } => {
@@ -247,13 +255,14 @@ impl Emulator for GhosttyEmu {
                         }
                     }
                 }
+                Ok(())
             });
             start = index + 1;
         }
 
         if start < bytes.len() {
             let owned = bytes[start..].to_vec();
-            self.call("processing output", move |core| core.process(&owned));
+            self.call_result("processing output", move |core| core.process(&owned));
         }
     }
 
@@ -300,6 +309,14 @@ impl Emulator for GhosttyEmu {
         self.call_result("reading size", |core| core.size())
     }
 
+    fn scroll(&mut self, target: crate::api::ScrollTarget) {
+        self.call_result("scrolling viewport", move |core| core.scroll(target));
+    }
+
+    fn viewport(&self) -> crate::api::Viewport {
+        self.call_result("reading viewport position", |core| core.viewport())
+    }
+
     fn cursor(&self) -> (u16, u16) {
         self.call_result("reading cursor", |core| Ok(core.frame()?.cursor))
     }
@@ -324,6 +341,10 @@ impl Emulator for GhosttyEmu {
 
     fn full_rows(&self) -> Vec<Vec<EmuCell>> {
         self.call_result("reading scrollback", GhosttyCore::full_rows)
+    }
+
+    fn active_rows(&self) -> Vec<Vec<EmuCell>> {
+        self.call_result("reading active screen", GhosttyCore::active_rows)
     }
 
     fn color(&self, slot: ColorSlot) -> Rgb {

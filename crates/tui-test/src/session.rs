@@ -98,6 +98,8 @@ pub struct Session {
     pub timeouts: crate::api::Timeouts,
     pub pty: Arc<Pty>,
     pub state: Arc<Mutex<TermState>>,
+    /// Serialize viewport movement with input without blocking the output reader.
+    pub(crate) viewport_input: Arc<Mutex<()>>,
     pub cancelled: Arc<AtomicBool>,
     pub(crate) bells: BellTracker,
     recorder: Recorder,
@@ -321,6 +323,7 @@ impl Session {
             timeouts,
             pty,
             state,
+            viewport_input: Arc::new(Mutex::new(())),
             cancelled,
             bells,
             recorder,
@@ -363,6 +366,18 @@ impl Session {
         })?;
         resize_emulator_and_record(&mut state, &self.recorder, cols, rows);
         Ok(())
+    }
+
+    pub fn scroll(&self, target: crate::api::ScrollTarget) -> Result<(), crate::api::TuiTestError> {
+        let _input = self
+            .viewport_input
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        scroll_emulator_and_record(&mut state, target)
     }
 
     pub fn start_recording(
@@ -642,13 +657,34 @@ impl Session {
 fn resize_emulator_and_record(state: &mut TermState, recorder: &Recorder, cols: u16, rows: u16) {
     recorder.on_resize(cols, rows);
     state.emu.resize(cols, rows);
+    invalidate_emulator_view(state);
+    let _ = try_capture_visual_state(state, true);
+}
+
+pub(crate) fn scroll_emulator_and_record(
+    state: &mut TermState,
+    target: crate::api::ScrollTarget,
+) -> Result<(), crate::api::TuiTestError> {
+    let before = state.emu.viewport();
+    state.emu.scroll(target);
+    let after = state.emu.viewport();
+    if let Some(error) = state.emu.fault() {
+        return Err(crate::api::TuiTestError::internal(error));
+    }
+    if before != after {
+        invalidate_emulator_view(state);
+        try_capture_visual_state(state, true).map_err(crate::api::TuiTestError::internal)?;
+    }
+    Ok(())
+}
+
+fn invalidate_emulator_view(state: &mut TermState) {
     state.visual_revision = state.visual_revision.wrapping_add(1);
     state.screen_dirty = true;
     state.last_change = Instant::now();
     state.highlight = None;
     #[cfg(feature = "recording-raster")]
     capture_recording_frame(state);
-    let _ = try_capture_visual_state(state, true);
 }
 
 #[cfg(feature = "recording-raster")]
@@ -672,8 +708,9 @@ pub(crate) fn capture_visual_state(state: &mut TermState, force: bool) -> u64 {
     let rows = state.emu.viewable_rows();
     let (cols, _) = state.emu.size();
     let title = state.emu.title();
-    let cursor = state.emu.cursor();
-    let cursor_visible = state.emu.cursor_visible();
+    let viewport_cursor = state.emu.viewport_cursor();
+    let cursor = viewport_cursor.unwrap_or_else(|| state.emu.cursor());
+    let cursor_visible = viewport_cursor.is_some();
     let cursor_shape = state.emu.cursor_shape();
     let previous_sequence = state.screen_history.current_sequence();
     let elapsed = elapsed_ms(state.started_at);

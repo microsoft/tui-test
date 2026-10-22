@@ -220,6 +220,7 @@ type TerminalColors struct {
 }
 
 type Size struct{ Cols, Rows uint16 }
+type Viewport struct{ Offset, History uint64 }
 
 type Color string
 

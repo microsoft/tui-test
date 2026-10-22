@@ -4,6 +4,34 @@ use super::*;
 /// Start a typed call after copying all borrowed inputs.
 /// # Safety
 /// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_get_viewport_start(session: TuiString) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_get_viewport(session) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_scroll_start(session: TuiString, lines: i32) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_scroll(session, lines) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_scroll_to_top_start(session: TuiString) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_scroll_to_top(session) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_scroll_to_bottom_start(session: TuiString) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_scroll_to_bottom(session) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
 pub unsafe extern "C" fn tui_open_start(
     session: TuiString,
     options: TuiOpenOptions,

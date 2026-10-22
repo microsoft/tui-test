@@ -75,6 +75,9 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `submit(text?)` | Type and press Enter. |
 | `type(text)`, `write(data)` | Send text or bytes. |
 | `resize(cols, rows)` | Resize. |
+| `scroll(lines)` | Move through native history; positive values show older output. |
+| `scrollToTop()` / `scrollToBottom()` | Show the oldest output or the live screen. |
+| `getViewport()` | Return `{ offset, history }`, in rows. |
 | `signal(name)`, `kill()` | Stop the child. |
 | `state()`, `text()`, `cells()` | Read terminal state. |
 | `getCommand()`, `getOutput()`, `getExitCode()` | Read command state. |

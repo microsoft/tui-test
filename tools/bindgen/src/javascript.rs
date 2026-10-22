@@ -22,6 +22,10 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("getClipboard", "GetClipboard", "Clipboard"),
     ("getCursor", "GetCursor", "Cursor"),
     ("getSize", "GetSize", "Size"),
+    ("getViewport", "GetViewport", "Viewport"),
+    ("scroll", "Scroll.Lines", "Unit"),
+    ("scrollToTop", "Scroll.Top", "Unit"),
+    ("scrollToBottom", "Scroll.Bottom", "Unit"),
     ("getBellCount", "GetBellCount", "BellCount"),
     ("getBellEvents", "GetBellEvents", "BellEvents"),
     ("write", "Write", "Unit"),
@@ -84,6 +88,7 @@ const SHORT_READS: &[&str] = &[
     "GetClipboard",
     "GetCursor",
     "GetSize",
+    "GetViewport",
     "GetBellCount",
     "GetBellEvents",
 ];
@@ -154,6 +159,13 @@ fn parameters(models: &Models, method: &str, variant: &str) -> Result<Vec<Field>
         ty: ty.into(),
     };
     Ok(match method {
+        "scroll" => {
+            let mut fields = models.fields("ScrollTarget::Lines")?;
+            fields[0].name = "lines".into();
+            fields
+        }
+        "scrollToTop" => models.fields("ScrollTarget::Top")?,
+        "scrollToBottom" => models.fields("ScrollTarget::Bottom")?,
         "mouseClick" => vec![field("options", "Option<MouseClickOptions>")],
         "waitTitle" | "expectTitle" => vec![
             field("text", "String"),
@@ -301,17 +313,18 @@ fn coverage(models: &Models) -> Result<()> {
     if declared != owned {
         bail!("Operation JavaScript coverage mismatch");
     }
-    for kind in ["Mouse", "Key"] {
+    for (kind, model) in [
+        ("Mouse", "MouseAction"),
+        ("Key", "KeyAction"),
+        ("Scroll", "ScrollTarget"),
+    ] {
         let declared: BTreeSet<_> = METHODS
             .iter()
             .filter_map(|(_, op, _)| op.strip_prefix(&format!("{kind}.")))
             .collect();
-        let owned: BTreeSet<_> = models.enums[&format!("{kind}Action")]
-            .iter()
-            .map(String::as_str)
-            .collect();
+        let owned: BTreeSet<_> = models.enums[model].iter().map(String::as_str).collect();
         if declared != owned {
-            bail!("{kind}Action JavaScript coverage mismatch");
+            bail!("{model} JavaScript coverage mismatch");
         }
     }
     Ok(())
@@ -432,7 +445,13 @@ mod tests {
     #[test]
     fn new_operations_require_an_export_decision() {
         let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
-        for name in ["Operation", "OperationResult", "MouseAction", "KeyAction"] {
+        for name in [
+            "Operation",
+            "OperationResult",
+            "MouseAction",
+            "KeyAction",
+            "ScrollTarget",
+        ] {
             let mut models = Models::load(root).unwrap();
             models.enums.get_mut(name).unwrap().push("Future".into());
             assert!(coverage(&models).is_err());
@@ -457,9 +476,15 @@ mod tests {
         assert!(dts.contains("newPredicate?: boolean"));
         assert!(dts.contains("Future = \"future\""));
         assert!(dts.contains("getExitCode(): Promise<string | null>"));
+        assert!(dts.contains("getViewport(): Promise<Viewport>"));
+        assert!(dts.contains("scroll(lines: number): Promise<void>"));
+        assert!(dts.contains("scrollToTop(): Promise<void>"));
+        assert!(dts.contains("scrollToBottom(): Promise<void>"));
         assert!(schema.contains("[\"new_wait\", \"Option<u64>\"]"));
         assert!(schema.contains("[\"new_predicate\", \"Option<bool>\"]"));
         assert!(schema.contains("getSize: { result: \"Size\", short: true,"));
+        assert!(schema.contains("getViewport: { result: \"Viewport\", short: true,"));
+        assert!(schema.contains("scroll: { result: \"Unit\", args: [[\"lines\", \"i32\"]"));
         assert!(schema.contains("waitIdle: { result: \"Unit\", args:"));
         assert!(schema.contains("write: { result: \"Unit\", args:"));
     }

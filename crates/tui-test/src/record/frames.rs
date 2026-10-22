@@ -183,10 +183,7 @@ impl TimedGrid {
             title: emulator.title(),
             duration: Duration::ZERO,
             render_state: RenderState::capture(emulator),
-            cursor: emulator.cursor_visible().then(|| {
-                let (x, y) = emulator.cursor();
-                (x, usize::from(y))
-            }),
+            cursor: emulator.viewport_cursor().map(|(x, y)| (x, usize::from(y))),
         };
         if let Some(error) = emulator.fault() {
             anyhow::bail!("recording frame capture failed: {error}");
@@ -280,6 +277,31 @@ mod tests {
             duration,
             render_state: RenderState::capture(&emulator),
             cursor: Some((0, 0)),
+        }
+    }
+
+    #[test]
+    fn viewport_movements_capture_frames_without_pty_output() {
+        use crate::api::ScrollTarget;
+        for &backend in Backend::ALL {
+            let mut emu = backend.build(12, 3, &Profile::default()).unwrap();
+            emu.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            let live = emu.viewable_rows();
+            let started = Instant::now();
+            let mut capture =
+                FrameCapture::new(emu.as_ref(), TimelineOptions::default(), started).unwrap();
+            emu.scroll(ScrollTarget::Top);
+            let history = emu.viewable_rows();
+            capture.capture(emu.as_ref(), started + Duration::from_secs(1));
+            emu.scroll(ScrollTarget::Bottom);
+            capture.capture(emu.as_ref(), started + Duration::from_secs(2));
+            let frames = capture.finish().unwrap();
+            assert_eq!(frames.len(), 3, "{backend:?}");
+            assert_eq!(frames[0].grid, live);
+            assert_eq!(frames[1].grid, history);
+            assert_eq!(frames[1].cursor, None);
+            assert_eq!(frames[2].grid, live);
+            assert!(frames[2].cursor.is_some());
         }
     }
 

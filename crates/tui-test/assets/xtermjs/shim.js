@@ -86,6 +86,18 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     return result;
   };
 
+  function followLiveViewport() {
+    var buffer = term.buffer.active;
+    if (buffer.type === 'normal' && buffer.viewportY === buffer.baseY) {
+      term.scrollToBottom();
+    }
+  }
+
+  // History clearing moves the viewport but leaves xterm.js's scroll flag set.
+  // Reset it before the parser processes more output in the same write.
+  term._core._inputHandler.onScroll(followLiveViewport);
+  term.buffer.onBufferChange(followLiveViewport);
+
   // xterm.js resolves a cell's `urlId` through this service; there is no
   // public getter for a link on `IBufferCell`.
   var oscLinks = term._core._oscLinkService;
@@ -316,7 +328,11 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     // boundary beats one call per pending reply.
     takeReplies: function () { var s = replies.join(''); replies.length = 0; return s; },
 
-    resize: function (cols, rows) { term.resize(cols, rows); drain(); },
+    resize: function (cols, rows) {
+      term.resize(cols, rows);
+      drain();
+      followLiveViewport();
+    },
     cols: function () { return term.cols; },
     rows: function () { return term.rows; },
     cursorX: function () { return term.buffer.active.cursorX; },
@@ -377,11 +393,17 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
       return out;
     },
 
-    // Row span of the visible screen; `full` prepends the scrollback.
-    start: function (full) { return full ? 0 : term.buffer.active.baseY; },
+    scroll: function (lines) { term.scrollLines(-lines); },
+    scrollTop: function () { term.scrollToTop(); },
+    scrollBottom: function () { term.scrollToBottom(); },
+    history: function () { return term.buffer.active.baseY; },
+    offset: function () { return term.buffer.active.baseY - term.buffer.active.viewportY; },
+
+    // Full reads remain independent of the selected viewport.
+    start: function (full) { return full ? 0 : term.buffer.active.viewportY; },
     end: function (full) {
       var b = term.buffer.active;
-      return full ? b.length : b.baseY + term.rows;
+      return full ? b.length : b.viewportY + term.rows;
     },
 
     // The grid crosses the boundary as exactly two values: every cell's text

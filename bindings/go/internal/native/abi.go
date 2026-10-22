@@ -6,7 +6,7 @@ import (
 	"unsafe"
 )
 
-const abiVersion = 4
+const abiVersion = 5
 
 type abiString struct {
 	_    structs.HostLayout
@@ -68,6 +68,7 @@ type abiResult struct {
 	state         abiState
 	cursor        abiCursor
 	size          abiSize
+	viewport      abiViewport
 	cells         *abiCell
 	cellsLen      uintptr
 	matches       *abiMatch
@@ -98,6 +99,11 @@ type abiSize struct {
 	_    structs.HostLayout
 	cols uint16
 	rows uint16
+}
+type abiViewport struct {
+	_       structs.HostLayout
+	offset  uintptr
+	history uintptr
 }
 type abiBellEvent struct {
 	_         structs.HostLayout

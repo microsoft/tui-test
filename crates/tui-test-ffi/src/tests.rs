@@ -57,6 +57,20 @@ fn pending_tasks_can_be_abandoned_without_borrowing_foreign_storage() {
     unsafe { tasks::tui_task_free(std::ptr::null_mut()) };
 }
 
+#[test]
+fn viewport_result_preserves_native_count_width() {
+    let result = output::operation(OperationResult::Viewport(Viewport {
+        offset: usize::MAX - 1,
+        history: usize::MAX,
+    }));
+    unsafe {
+        assert_eq!((*result).viewport.offset, usize::MAX - 1);
+        assert_eq!((*result).viewport.history, usize::MAX);
+        tui_result_free(result);
+    }
+    assert_eq!(tui_abi_version(), 5);
+}
+
 fn text(value: &str) -> TuiString {
     TuiString {
         data: value.as_ptr(),
