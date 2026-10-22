@@ -73,6 +73,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           npm test --prefix .github/scripts
+          node .github/scripts/release/verify-go-version.mjs
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
       - run: cargo build -p tui-test-cli -p tui-test-ffi

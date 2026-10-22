@@ -7,7 +7,7 @@ Control, inspect, test, and record terminal apps from Go. The binding runs the R
 Use Go 1.26 or newer and select a published Go module release:
 
 ```sh
-go get github.com/microsoft/tui-test/bindings/go@v<version>
+go get github.com/microsoft/tui-test/bindings/go@v0.1.0
 ```
 
 The repository tag is `bindings/go/v<version>`.

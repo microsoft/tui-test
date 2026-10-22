@@ -48,7 +48,7 @@ You can also download a binary from [GitHub Releases](https://github.com/microso
 | Rust 1.90+ | `cargo add tui-test-rs@0.1.0` | [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/) |
 | Python 3.8+ | `pip install tui-test` | [Python API](bindings/python/README.md) |
 | Node 20+ | `npm install @microsoft/tui-test` | [JavaScript API](bindings/js/README.md) |
-| Go 1.26+ | `go get github.com/microsoft/tui-test/bindings/go@v<version>` | [Go API](bindings/go/README.md) |
+| Go 1.26+ | `go get github.com/microsoft/tui-test/bindings/go@v0.1.0` | [Go API](bindings/go/README.md) |
 
 Add the Rust `recording-raster` feature for APNG, GIF, and MP4 output. It uses installed fonts; `recording-font-jetbrains-mono*` bundles a font.
 

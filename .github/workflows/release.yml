@@ -64,6 +64,7 @@ jobs:
             <(printf '%s\n' "${version_files[@]}" | sort) \
             <(rg -l --path-separator / --fixed-strings "$version" \
               "${version_files[@]}" | sort)
+          node .github/scripts/release/verify-go-version.mjs "$version"
 
       - name: Verify tui-test-rs crate package
         run: cargo publish --locked --package tui-test-rs --dry-run
