@@ -43,6 +43,7 @@ struct SequenceState {
     current: Option<String>,
     stack: Vec<Option<String>>,
     clipboard_operations: Vec<ClipboardOperation>,
+    screen_exit: bool,
 }
 
 impl Perform for SequenceState {
@@ -87,6 +88,11 @@ impl Perform for SequenceState {
     }
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        if !ignore && intermediates == b"?" && action == 'l' {
+            self.screen_exit |= params
+                .iter()
+                .any(|param| matches!(param, [47 | 1047 | 1049]));
+        }
         if ignore || action != 't' || !intermediates.is_empty() {
             return;
         }
@@ -226,7 +232,9 @@ impl Emulator for GhosttyEmu {
         for index in 0..bytes.len() {
             self.sequences.feed(&bytes[index..=index]);
             let operations = self.sequences.take_clipboard_operations();
-            if operations.is_empty() {
+            // Normalize the restored viewport before later bytes add output.
+            let screen_exit = std::mem::take(&mut self.sequences.state.screen_exit);
+            if operations.is_empty() && !screen_exit {
                 continue;
             }
 

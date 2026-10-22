@@ -242,6 +242,48 @@ macro_rules! emulator_conformance_tests {
         }
 
         #[test]
+        fn conformance_viewport_follows_output_after_alternate_screen_resize() {
+            use $crate::api::ScrollTarget;
+            for mode in ["47", "1047", "1049", "25;1049"] {
+                if matches!(mode, "47" | "1047") && CONFORMANCE_DIVERGENCES.contains(
+                    &$crate::terminal::conformance::Divergence::NoLegacyAlternateScreen,
+                ) {
+                    continue;
+                }
+                let output = format!("\x1b[?{mode}l\x1b[6;1H\r\nrow6\r\nrow7");
+                let output = output.as_bytes();
+                for split in 0..=output.len() {
+                    let mut e = conformance_emu(12, 3, 20);
+                    e.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+                    e.scroll(ScrollTarget::Top);
+                    e.process(format!("\x1b[?{mode}h").as_bytes());
+                    e.resize(12, 6);
+                    e.process(&output[..split]);
+                    e.process(&output[split..]);
+                    assert_eq!(e.viewport().offset, 0, "mode {mode}, split at {split}");
+                    assert_eq!(conformance_text(&e.viewable_rows())[5], "row7");
+                    assert!(e.take_pending_writes().is_empty());
+                    assert_eq!(e.fault(), None);
+                }
+            }
+        }
+
+        #[test]
+        fn conformance_viewport_preserves_history_after_alternate_screen_resize() {
+            use $crate::api::ScrollTarget;
+            let mut e = conformance_emu(12, 3, 20);
+            e.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            e.scroll(ScrollTarget::Top);
+            let selected = e.viewable_rows();
+            e.process(b"\x1b[?1049h");
+            e.resize(12, 4);
+            e.process(b"\x1b[?1049l\x1b[4;1H\r\nrow6\r\nrow7");
+            assert!(e.viewport().offset > 0);
+            assert_eq!(&e.viewable_rows()[..3], selected);
+            assert_eq!(e.fault(), None);
+        }
+
+        #[test]
         fn conformance_viewport_preserves_history_after_partial_resize() {
             use $crate::api::ScrollTarget;
             let mut e = conformance_emu(12, 3, 20);

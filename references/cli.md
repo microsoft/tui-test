@@ -87,6 +87,7 @@ Scroll amounts must be integers from 0 through 2147483647.
 `text --full` returns history plus the live screen, independent of that viewport.
 New output preserves the selected historical view until retained history expires.
 Live output follows automatically when history clears or a resize brings the viewport back to the live screen.
+This also applies when resize changes the normal buffer while the alternate buffer is active.
 Keyboard input returns to the live screen.
 Mouse input and historical locator clicks fail while the viewport shows history.
 Use `scroll bottom` before mouse input. Mouse behavior at the live screen does not change.

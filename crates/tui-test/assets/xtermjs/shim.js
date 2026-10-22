@@ -96,6 +96,7 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
   // History clearing moves the viewport but leaves xterm.js's scroll flag set.
   // Reset it before the parser processes more output in the same write.
   term._core._inputHandler.onScroll(followLiveViewport);
+  term.buffer.onBufferChange(followLiveViewport);
 
   // xterm.js resolves a cell's `urlId` through this service; there is no
   // public getter for a link on `IBufferCell`.
