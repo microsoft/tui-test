@@ -382,6 +382,18 @@ class NativeSession:
     async def get_size(self):
         return await self._call("get_size", kind="size")
 
+    async def get_viewport(self):
+        return await self._call("get_viewport", kind="viewport")
+
+    async def scroll(self, lines):
+        return await self._call("scroll", _integer(lines, "lines", 32, signed=True))
+
+    async def scroll_to_top(self):
+        return await self._call("scroll_to_top")
+
+    async def scroll_to_bottom(self):
+        return await self._call("scroll_to_bottom")
+
     async def get_bell_count(self):
         return await self._call("get_bell_count", kind="number")
 

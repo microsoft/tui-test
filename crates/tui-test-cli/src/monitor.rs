@@ -125,7 +125,7 @@ fn header(out: &mut String, frame: Option<&Frame>, session: &str, inner_w: usize
 
 fn content(out: &mut String, f: &Frame, inner_w: usize, inner_h: usize) {
     let (cx, cy) = f.cursor;
-    let show_cursor = f.exited.is_none();
+    let show_cursor = f.exited.is_none() && f.cursor_visible;
     for y in 0..inner_h {
         out.push_str(ansi::BORDER);
         out.push('│');
@@ -626,6 +626,27 @@ fn read_only_input() -> Option<ViewerAction> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ForwardedInput {
+    Keyboard(Vec<u8>),
+    Mouse(Vec<u8>),
+}
+
+impl ForwardedInput {
+    fn append(output: &mut Vec<Self>, bytes: Vec<u8>, mouse: bool) {
+        if bytes.is_empty() {
+            return;
+        }
+        match (output.last_mut(), mouse) {
+            (Some(Self::Mouse(previous)), true) | (Some(Self::Keyboard(previous)), false) => {
+                previous.extend(bytes);
+            }
+            (_, true) => output.push(Self::Mouse(bytes)),
+            (_, false) => output.push(Self::Keyboard(bytes)),
+        }
+    }
+}
+
 pub(crate) struct MouseRemapper {
     parser: InputParser,
     viewer: (u16, u16),
@@ -661,7 +682,11 @@ impl MouseRemapper {
         self.viewer = viewer;
     }
 
-    pub(crate) fn push(&mut self, bytes: &[u8], size: Option<(u16, u16)>) -> Vec<u8> {
+    pub(crate) fn push_input(
+        &mut self,
+        bytes: &[u8],
+        size: Option<(u16, u16)>,
+    ) -> Vec<ForwardedInput> {
         self.observe(size);
         let size = size.map(|target| {
             (
@@ -669,22 +694,51 @@ impl MouseRemapper {
                 target.1.min(self.viewer.1.saturating_sub(2)),
             )
         });
-        self.parser
-            .push(bytes, |event| match event {
-                InputEvent::Mouse {
-                    button,
-                    x,
-                    y,
-                    release,
-                } if self.mouse_seen => {
-                    match remap_sgr_mouse(button, x, y, release, size, &mut self.pressed) {
-                        Some(remapped) => InputAction::Replace(remapped),
-                        None => InputAction::Forward,
-                    }
-                }
-                _ => InputAction::Forward,
+        let mut output = Vec::new();
+        // Keep each completed report separate from adjacent keyboard bytes.
+        for byte in bytes {
+            let mut mouse = false;
+            let (forwarded, _) =
+                self.parser
+                    .push(std::slice::from_ref(byte), |event| match event {
+                        InputEvent::Mouse {
+                            button,
+                            x,
+                            y,
+                            release,
+                        } => {
+                            mouse = true;
+                            if self.mouse_seen {
+                                match remap_sgr_mouse(
+                                    button,
+                                    x,
+                                    y,
+                                    release,
+                                    size,
+                                    &mut self.pressed,
+                                ) {
+                                    Some(remapped) => InputAction::Replace(remapped),
+                                    None => InputAction::Forward,
+                                }
+                            } else {
+                                InputAction::Forward
+                            }
+                        }
+                        _ => InputAction::Forward,
+                    });
+            ForwardedInput::append(&mut output, forwarded, mouse);
+        }
+        output
+    }
+
+    #[cfg(test)]
+    fn push(&mut self, bytes: &[u8], size: Option<(u16, u16)>) -> Vec<u8> {
+        self.push_input(bytes, size)
+            .into_iter()
+            .flat_map(|input| match input {
+                ForwardedInput::Keyboard(bytes) | ForwardedInput::Mouse(bytes) => bytes,
             })
-            .0
+            .collect()
     }
 
     pub(crate) fn on_idle(&mut self) -> Vec<u8> {
@@ -908,6 +962,7 @@ mod tests {
         let frame = Frame {
             grid: vec![vec![cell("h"), cell("i")]],
             cursor: (0, 0),
+            cursor_visible: true,
             size: (40, 1),
             keyboard_mode: KeyboardMode::empty(),
             cursor_key_application: false,
@@ -940,9 +995,10 @@ mod tests {
 
     #[test]
     fn cursor_cell_is_inverted() {
-        let frame = Frame {
+        let mut frame = Frame {
             grid: vec![vec![cell("x")]],
             cursor: (0, 0),
+            cursor_visible: true,
             size: (1, 1),
             keyboard_mode: KeyboardMode::empty(),
             cursor_key_application: false,
@@ -960,6 +1016,16 @@ mod tests {
         ))
         .unwrap();
         assert!(text.contains(";7") || text.contains("[7"));
+        frame.cursor_visible = false;
+        let hidden = String::from_utf8(render_frame(
+            Some(&frame),
+            (10, 5),
+            "s",
+            false,
+            &mut ModeMirror::default(),
+        ))
+        .unwrap();
+        assert!(!hidden.contains(";7") && !hidden.contains("[7"));
     }
 
     /// The viewer's terminal mirrors target input modes only when they change.
@@ -968,6 +1034,7 @@ mod tests {
         let mut frame = Frame {
             grid: vec![vec![cell("x")]],
             cursor: (0, 0),
+            cursor_visible: true,
             size: (1, 1),
             keyboard_mode: KeyboardMode::empty(),
             cursor_key_application: false,
@@ -1019,6 +1086,7 @@ mod tests {
             let mut frame = Frame {
                 grid: Vec::new(),
                 cursor: (0, 0),
+                cursor_visible: true,
                 size: (10, 2),
                 keyboard_mode: KeyboardMode::empty(),
                 cursor_key_application: false,
@@ -1168,6 +1236,35 @@ mod tests {
         emu.process(&output);
         assert_eq!(emu.keyboard_mode().bits(), 3);
         assert!(!emu.cursor_key_application());
+    }
+
+    #[test]
+    fn monitor_preserves_mouse_and_keyboard_boundaries() {
+        use ForwardedInput::{Keyboard, Mouse};
+        let mut mouse = MouseRemapper::new((12, 7));
+        assert_eq!(
+            mouse.push_input(b"key\x1b[<0;2", Some((10, 5))),
+            vec![Keyboard(b"key".to_vec())]
+        );
+        assert!(mouse.on_idle().is_empty());
+        assert_eq!(
+            mouse.push_input(b";2Mtail\x1b[<0;2;2m", Some((10, 5))),
+            vec![
+                Mouse(b"\x1b[<0;1;1M".to_vec()),
+                Keyboard(b"tail".to_vec()),
+                Mouse(b"\x1b[<0;1;1m".to_vec()),
+            ]
+        );
+        let paste = b"\x1b[200~\x1b[<0;2;2M\x1b[201~";
+        assert_eq!(
+            mouse.push_input(paste, Some((10, 5))),
+            vec![Keyboard(paste.to_vec())]
+        );
+        let mut unobserved = MouseRemapper::new((12, 7));
+        assert_eq!(
+            unobserved.push_input(b"\x1b[<0;2;2M", None),
+            vec![Mouse(b"\x1b[<0;2;2M".to_vec())]
+        );
     }
 
     #[test]

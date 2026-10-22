@@ -247,7 +247,7 @@ impl XtermJsEmu {
     }
 
     /// Call a one-argument method on the shim's emulator object.
-    fn call_with<R>(&self, method: &str, arg: i32) -> R
+    fn call_with<R>(&self, method: &str, arg: impl for<'js> rquickjs::IntoJs<'js>) -> R
     where
         R: for<'js> rquickjs::FromJs<'js> + Default,
     {
@@ -303,23 +303,12 @@ impl XtermJsEmu {
     /// calling `full_rows` grew the daemon by tens of megabytes per call.
     /// Batching keeps each allocation small enough to be collected between
     /// calls.
-    fn rows_in_range(&self, full: bool) -> Vec<Vec<EmuCell>> {
+    fn rows_in_range(&self, start: i32, end: i32) -> Vec<Vec<EmuCell>> {
         let (cols, _) = self.size();
         let cols = cols as usize;
         if cols == 0 {
             return Vec::new();
         }
-
-        let span = self.ctx.with(|ctx| -> rquickjs::Result<(i32, i32)> {
-            let emu: Object = ctx.globals().get("__emu")?;
-            let start: i32 = emu.get::<_, Function>("start")?.call((full,))?;
-            let end: i32 = emu.get::<_, Function>("end")?.call((full,))?;
-            Ok((start, end))
-        });
-        let (start, end) = match span {
-            Ok(span) => span,
-            Err(_) => return Vec::new(),
-        };
 
         let mut out = Vec::with_capacity((end - start).max(0) as usize);
         for batch in (start..end).step_by(PACK_BATCH_ROWS) {
@@ -555,17 +544,70 @@ impl Emulator for XtermJsEmu {
     }
 
     fn viewable_rows(&self) -> Vec<Vec<EmuCell>> {
-        self.rows_in_range(false)
+        self.rows_in_range(self.call_with("start", false), self.call_with("end", false))
+    }
+
+    fn active_rows(&self) -> Vec<Vec<EmuCell>> {
+        let start: i32 = self.call("history");
+        self.rows_in_range(start, start + i32::from(self.size().1))
+    }
+
+    fn scroll(&mut self, target: crate::api::ScrollTarget) {
+        match target {
+            crate::api::ScrollTarget::Lines(lines) => self.call_with::<()>("scroll", lines),
+            crate::api::ScrollTarget::Top => self.call::<()>("scrollTop"),
+            crate::api::ScrollTarget::Bottom => self.call::<()>("scrollBottom"),
+        }
+    }
+
+    fn viewport(&self) -> crate::api::Viewport {
+        crate::api::Viewport {
+            offset: self.call::<u32>("offset") as usize,
+            history: self.call::<u32>("history") as usize,
+        }
     }
 
     fn full_rows(&self) -> Vec<Vec<EmuCell>> {
-        self.rows_in_range(true)
+        self.rows_in_range(0, self.call_with("end", true))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recording_seed_decodes_only_the_active_screen() {
+        let mut emulator = XtermJsEmu::new(80, 3, &Profile::default()).unwrap();
+        emulator.process(&b"row\r\n".repeat(10_003));
+        assert_eq!(emulator.viewport().history, 10_000);
+        let active = emulator.viewable_rows();
+        emulator.scroll(crate::api::ScrollTarget::Top);
+        let viewport = emulator.viewport();
+        emulator
+            .ctx
+            .with(|ctx| {
+                ctx.eval::<(), _>(
+                    "globalThis.__packedRows = 0;
+                     var pack = __emu.pack;
+                     __emu.pack = function(start, end) {
+                         __packedRows += end - start;
+                         return pack(start, end);
+                     };",
+                )
+            })
+            .unwrap();
+        let seed = crate::record::cast::snapshot_to_ansi(&emulator);
+        let decoded = emulator
+            .ctx
+            .with(|ctx| ctx.eval::<u32, _>("__packedRows"))
+            .unwrap();
+        assert_eq!(decoded, 3, "recording seed decoded retained history");
+        assert_eq!(emulator.viewport(), viewport);
+        let mut replay = XtermJsEmu::new(80, 3, &Profile::default()).unwrap();
+        replay.process(seed.as_bytes());
+        assert_eq!(replay.viewable_rows(), active);
+    }
 
     /// A JS exception has to reach the caller, not read back as an empty grid.
     ///

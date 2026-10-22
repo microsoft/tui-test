@@ -26,6 +26,7 @@ import type {
   Cell,
   ClientOptions,
   Cursor,
+  Viewport,
   OpenResult,
   Shell,
   Size,
@@ -966,6 +967,24 @@ export class TuiTest {
 
   async getCursor(): Promise<Cursor> {
     return this.#runtime.getCursor();
+  }
+
+  /** Return the native history offset and available rows. */
+  async getViewport(): Promise<Viewport> {
+    return this.#runtime.getViewport();
+  }
+
+  /** Move through native history. Positive lines show older output. */
+  async scroll(lines: number): Promise<void> {
+    return this.#runtime.scroll(lines);
+  }
+
+  async scrollToTop(): Promise<void> {
+    return this.#runtime.scrollToTop();
+  }
+
+  async scrollToBottom(): Promise<void> {
+    return this.#runtime.scrollToBottom();
   }
 
   async getSize(): Promise<Size> {

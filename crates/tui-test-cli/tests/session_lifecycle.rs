@@ -17,6 +17,54 @@ mod cli_config;
 
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
+#[cfg(unix)]
+#[test]
+fn native_scrollback_moves_the_view_without_changing_full_text() {
+    let sandbox = Sandbox::new("native-scrollback");
+    sandbox.ok(&[
+        "run", "--backend", "alacritty", "--rows", "5", "--cols", "40", "--",
+        "sh", "-c",
+        "i=0; while [ \"$i\" -lt 40 ]; do printf 'history-%s\\n' \"$i\"; i=$((i+1)); done; read line",
+    ]);
+    sandbox.wait_for_text("history-39", "5000");
+    let full = sandbox.ok(&["text", "--full"]);
+    let live = sandbox.ok(&["text"]);
+    let viewport = || -> serde_json::Value {
+        let output = sandbox.ok(&["get", "viewport", "--json"]);
+        serde_json::from_str::<serde_json::Value>(&output).unwrap()["data"]["value"].clone()
+    };
+    assert_eq!(viewport()["offset"], 0);
+    assert!(viewport()["history"].as_u64().unwrap() > 0);
+    sandbox.ok(&["scroll", "up", "2"]);
+    assert_eq!(viewport()["offset"], 2);
+    sandbox.ok(&["scroll", "down"]);
+    assert_eq!(viewport()["offset"], 1);
+    sandbox.ok(&["scroll", "top"]);
+    let top = viewport();
+    assert_eq!(top["offset"], top["history"]);
+    assert!(sandbox.ok(&["text"]).contains("history-0"));
+    assert_eq!(sandbox.ok(&["text", "--full"]), full);
+    assert_eq!(
+        sandbox.run(&["mouse", "click", "0", "0"]).status.code(),
+        Some(2)
+    );
+    assert_eq!(
+        sandbox.run(&["click", "text", "history-0"]).status.code(),
+        Some(1)
+    );
+    sandbox.ok(&["scroll", "bottom"]);
+    assert_eq!(sandbox.ok(&["text"]), live);
+    sandbox.ok(&["scroll", "top"]);
+    sandbox.ok(&["type", "a"]);
+    assert_eq!(viewport()["offset"], 0);
+    for invalid in ["-1", "1.5", "2147483648"] {
+        assert_eq!(
+            sandbox.run(&["scroll", "up", invalid]).status.code(),
+            Some(2)
+        );
+    }
+}
+
 #[test]
 fn invalid_capture_backgrounds_fail_before_starting_a_session() {
     let sandbox = Sandbox::new("invalid-capture-background");

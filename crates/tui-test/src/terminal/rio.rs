@@ -380,10 +380,9 @@ impl Emulator for RioEmu {
     }
 
     fn mode(&self, mode: TerminalMode) -> bool {
-        // rio reports a hidden cursor as a cursor *shape* rather than through
-        // `SHOW_CURSOR`, so this one does not come from the mode bitflags.
         if mode == TerminalMode::CursorVisible {
-            return !matches!(self.term.cursor().content, RioCursorShape::Hidden);
+            return self.term.mode().contains(Mode::SHOW_CURSOR)
+                && self.term.cursor_shape != RioCursorShape::Hidden;
         }
         let flag = match mode {
             TerminalMode::ApplicationCursorKeys => Mode::APP_CURSOR,
@@ -410,11 +409,34 @@ impl Emulator for RioEmu {
         (self.cols, self.rows)
     }
 
+    fn scroll(&mut self, target: crate::api::ScrollTarget) {
+        use crate::api::ScrollTarget;
+        use rio_vt::crosswords::grid::Scroll;
+        self.term
+            .scroll_display(match target.clamped(self.viewport()) {
+                ScrollTarget::Lines(lines) => Scroll::Delta(lines),
+                ScrollTarget::Top => Scroll::Top,
+                ScrollTarget::Bottom => Scroll::Bottom,
+            });
+    }
+
+    fn viewport(&self) -> crate::api::Viewport {
+        crate::api::Viewport {
+            offset: self.term.display_offset(),
+            history: self.term.history_size(),
+        }
+    }
+
     fn cursor(&self) -> (u16, u16) {
         let position = self.term.cursor().pos;
         let x = (position.col.0 as u16).min(self.cols.saturating_sub(1));
         let y = position.row.0.max(0).min(self.rows as i32 - 1) as u16;
         (x, y)
+    }
+
+    fn viewport_cursor(&self) -> Option<(u16, u16)> {
+        // Rio hides the non-vi cursor whenever its viewport leaves the bottom.
+        (self.term.cursor().content != RioCursorShape::Hidden).then(|| self.cursor())
     }
 
     fn title(&self) -> Option<String> {
@@ -423,10 +445,8 @@ impl Emulator for RioEmu {
 
     fn cursor_shape(&self) -> CursorShape {
         // `Term::cursor()` masks the shape to `Hidden` whenever the cursor is
-        // not drawn — hidden by `DECTCEM`, or scrolled out of view — which
-        // loses the shape the child actually asked for. `cursor_shape` is the
-        // unmasked field it derives that from, and whether the cursor is drawn
-        // is already reported by `TerminalMode::CursorVisible`.
+        // not drawn, including when scrolled out of view. Read the unmasked
+        // shape so viewport movement does not change application cursor state.
         match self.term.cursor_shape {
             RioCursorShape::Underline => CursorShape::Underline,
             RioCursorShape::Beam => CursorShape::Bar,
@@ -435,11 +455,16 @@ impl Emulator for RioEmu {
     }
 
     fn viewable_rows(&self) -> Vec<Vec<EmuCell>> {
-        self.rows_in_range(0, self.rows as i32)
+        let start = -(self.term.display_offset() as i32);
+        self.rows_in_range(start, start + self.rows as i32)
     }
 
     fn full_rows(&self) -> Vec<Vec<EmuCell>> {
         self.rows_in_range(-(self.term.history_size() as i32), self.rows as i32)
+    }
+
+    fn active_rows(&self) -> Vec<Vec<EmuCell>> {
+        self.rows_in_range(0, self.rows as i32)
     }
 
     fn color(&self, slot: ColorSlot) -> Rgb {
@@ -450,6 +475,21 @@ impl Emulator for RioEmu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrollback_cursor_matches_native_rio_visibility() {
+        use crate::api::ScrollTarget;
+        let mut emu = RioEmu::new(12, 3, &Profile::default());
+        emu.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5\x1b[1;1H");
+        assert_eq!(emu.viewport_cursor(), Some((0, 0)));
+        emu.scroll(ScrollTarget::Lines(1));
+        assert_eq!(emu.cursor(), (0, 0));
+        assert!(emu.cursor_visible());
+        assert_eq!(emu.term.cursor().content, RioCursorShape::Hidden);
+        assert_eq!(emu.viewport_cursor(), None);
+        emu.scroll(ScrollTarget::Bottom);
+        assert_eq!(emu.viewport_cursor(), Some((0, 0)));
+    }
 
     crate::emulator_conformance_tests!(
         |cols, rows, profile| { Box::new(RioEmu::new(cols, rows, profile)) },

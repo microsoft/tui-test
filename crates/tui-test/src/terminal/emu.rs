@@ -483,14 +483,28 @@ pub trait Emulator: Send {
 
     fn resize(&mut self, cols: u16, rows: u16);
 
+    /// Move the native viewport without generating PTY input.
+    fn scroll(&mut self, target: crate::api::ScrollTarget);
+
+    fn viewport(&self) -> crate::api::Viewport;
+
     /// Current grid size as `(cols, rows)`.
     fn size(&self) -> (u16, u16);
 
     /// Cursor position as `(x, y)` (column, row), 0-based, clamped to screen.
     ///
-    /// Always relative to the visible screen, never to the scrollback, so a
-    /// caller drawing over `full_rows` has to offset it by the history above.
+    /// Relative to the active screen, independent of viewport scrolling.
     fn cursor(&self) -> (u16, u16);
+
+    /// Cursor position in the selected viewport, clipped to its visible rows.
+    fn viewport_cursor(&self) -> Option<(u16, u16)> {
+        if !self.cursor_visible() {
+            return None;
+        }
+        let (x, y) = self.cursor();
+        let y = self.viewport().offset.checked_add(usize::from(y))?;
+        (y < usize::from(self.size().1)).then_some((x, y as u16))
+    }
 
     /// The window title a program set with `OSC 0` or `OSC 2`, or `None` when
     /// none is set.
@@ -525,7 +539,11 @@ pub trait Emulator: Send {
     /// Visible screen as rows of cells. Always `rows` entries of `cols` cells.
     fn viewable_rows(&self) -> Vec<Vec<EmuCell>>;
 
-    /// Scrollback history followed by the visible screen.
+    /// Active screen, independent of the selected viewport.
+    /// Read only the screen's rows and columns, without decoding retained history.
+    fn active_rows(&self) -> Vec<Vec<EmuCell>>;
+
+    /// Scrollback history followed by the active screen, independent of the viewport.
     fn full_rows(&self) -> Vec<Vec<EmuCell>>;
 
     /// The color a slot is currently showing.

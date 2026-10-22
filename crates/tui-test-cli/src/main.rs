@@ -19,8 +19,8 @@ use clap::{CommandFactory, Parser};
 
 use cli::{
     Cli, ClickCmd, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, HighlightCmd, KeyCmd, MatchArg,
-    MouseCmd, RecordCmd, ScreenshotArgs, TextQueryArgs, TextSelectorArgs, TextStyleArgs, WaitCmd,
-    WhitespaceArg,
+    MouseCmd, RecordCmd, ScreenshotArgs, ScrollCmd, TextQueryArgs, TextSelectorArgs, TextStyleArgs,
+    WaitCmd, WhitespaceArg,
 };
 use protocol::{GetField, MouseAction, Request, Response};
 use tui_test::{
@@ -430,6 +430,14 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             action: map_mouse(action),
         },
         Command::Resize { cols, rows } => Request::Resize { cols, rows },
+        Command::Scroll { target } => Request::Scroll {
+            target: match target {
+                ScrollCmd::Up { lines } => tui_test::ScrollTarget::Lines(lines),
+                ScrollCmd::Down { lines } => tui_test::ScrollTarget::Lines(-lines),
+                ScrollCmd::Top => tui_test::ScrollTarget::Top,
+                ScrollCmd::Bottom => tui_test::ScrollTarget::Bottom,
+            },
+        },
         Command::Write { data } => Request::Write { data },
         Command::Signal { name } => Request::Signal {
             name: name.as_str().to_string(),
@@ -485,6 +493,7 @@ fn map_field(field: GetArg) -> GetField {
         GetArg::ExitCode => GetField::ExitCode,
         GetArg::Cwd => GetField::Cwd,
         GetArg::Cursor => GetField::Cursor,
+        GetArg::Viewport => GetField::Viewport,
         GetArg::Modes => GetField::Modes,
         GetArg::Colors => GetField::Colors,
         GetArg::Size => GetField::Size,
@@ -1456,7 +1465,8 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg|file.png] [--full] [--zoom N]\n\
           [--background COLOR | --transparent]\n\
           find text \"T\" [selector/style options] | cells X Y [W H]\n\
-          get command|output|exit-code|cwd|cursor|size|title|clipboard|bells|bell-events\n\
+          get command|output|exit-code|cwd|cursor|viewport|size|title|clipboard|bells|bell-events\n\
+HISTORY   scroll up|down [LINES] | scroll top|bottom\n\
 INPUT     type \"text\" | submit [\"text\"]\n\
           key press|down|repeat|up <Key...>\n\
           click text \"T\" [selector/style options] [--button left|middle|right] [--alt --ctrl --shift]\n\

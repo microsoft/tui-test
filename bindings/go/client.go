@@ -254,9 +254,19 @@ func (client *Client) GetCwd() (*string, error)            { return client.runti
 func (client *Client) GetTitle() (*string, error)          { return client.runtime.getTitle() }
 func (client *Client) GetClipboard() (string, error)       { return client.runtime.getClipboard() }
 func (client *Client) GetCursor() (Cursor, error)          { return client.runtime.getCursor() }
+func (client *Client) GetViewport() (Viewport, error)      { return client.runtime.getViewport() }
 func (client *Client) GetSize() (Size, error)              { return client.runtime.getSize() }
 func (client *Client) GetBellCount() (uint64, error)       { return client.runtime.getBellCount() }
 func (client *Client) GetBellEvents() ([]BellEvent, error) { return client.runtime.getBellEvents() }
+
+// Scroll moves through native history. Positive lines show older output.
+func (client *Client) Scroll(lines int32) error { return client.runtime.scroll(lines) }
+
+// ScrollToTop shows the oldest available output.
+func (client *Client) ScrollToTop() error { return client.runtime.scrollToTop() }
+
+// ScrollToBottom returns to the live screen.
+func (client *Client) ScrollToBottom() error { return client.runtime.scrollToBottom() }
 
 // Screenshot returns terminal text when path is empty, otherwise the written path.
 func (client *Client) Screenshot(path string, options ScreenshotOptions) (string, error) {

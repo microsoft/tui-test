@@ -136,6 +136,7 @@ pub(crate) fn operation(value: OperationResult) -> *mut TuiResult {
     let mut r = TuiResult::default();
     match value {
         OperationResult::Unit => {}
+        OperationResult::Viewport(v) => r.viewport = viewport(&mut s, v),
         OperationResult::Open(v) => r.open = open_value(&mut s, v),
         OperationResult::State(v) => r.state = state(&mut s, *v),
         OperationResult::Text(v)

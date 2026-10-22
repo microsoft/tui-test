@@ -78,6 +78,7 @@ pub struct TuiResult {
     pub state: TuiState,
     pub cursor: TuiCursor,
     pub size: TuiSize,
+    pub viewport: TuiViewport,
     pub cells: *const TuiCell,
     pub cells_len: usize,
     pub matches: *const TuiMatch,
@@ -111,6 +112,12 @@ pub struct TuiCursor {
 pub struct TuiSize {
     pub cols: u16,
     pub rows: u16,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiViewport {
+    pub offset: usize,
+    pub history: usize,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ABI_VERSION 4
+#define ABI_VERSION 5
 
 /**
  * A thread-owned asynchronous call. Start, poll, and free it on the same thread.
@@ -104,6 +104,11 @@ typedef struct TuiSize {
   uint16_t rows;
 } TuiSize;
 
+typedef struct TuiViewport {
+  uintptr_t offset;
+  uintptr_t history;
+} TuiViewport;
+
 /**
  * kind: 0 default, 1 indexed (index), 2 RGB (red/green/blue).
  */
@@ -176,6 +181,7 @@ typedef struct TuiResult {
   struct TuiState state;
   struct TuiCursor cursor;
   struct TuiSize size;
+  struct TuiViewport viewport;
   const struct TuiCell *cells;
   uintptr_t cells_len;
   const struct TuiMatch *matches;
@@ -260,6 +266,30 @@ extern "C" {
 #endif // __cplusplus
 
 uint32_t tui_abi_version(void);
+
+/**
+ * # Safety
+ * The session buffer must remain readable throughout this call.
+ */
+struct TuiResult *tui_get_viewport(struct TuiString session);
+
+/**
+ * # Safety
+ * The session buffer must remain readable throughout this call.
+ */
+struct TuiResult *tui_scroll(struct TuiString session, int32_t lines);
+
+/**
+ * # Safety
+ * The session buffer must remain readable throughout this call.
+ */
+struct TuiResult *tui_scroll_to_top(struct TuiString session);
+
+/**
+ * # Safety
+ * The session buffer must remain readable throughout this call.
+ */
+struct TuiResult *tui_scroll_to_bottom(struct TuiString session);
 
 /**
  * # Safety
@@ -737,6 +767,34 @@ void tui_task_free(struct TuiTask *task);
  * Exercise panic containment without terminating the host process.
  */
 struct TuiTask *tui_panic_probe_start(void);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_viewport_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_scroll_start(struct TuiString session, int32_t lines);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_scroll_to_top_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_scroll_to_bottom_start(struct TuiString session);
 
 /**
  * Start a typed call after copying all borrowed inputs.

@@ -183,6 +183,40 @@ func (runtime *Session) GetCursor() (Cursor, error) {
 	return nativeCursor(result.cursor), nil
 }
 
+func (runtime *Session) GetViewport() (Viewport, error) {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.GetViewport(memory.text(runtime.name))
+	defer nativeFunctions.ResultFree(result)
+	if err := nativeError(result); err != nil {
+		return Viewport{}, err
+	}
+	return Viewport{Offset: uint64(result.viewport.offset), History: uint64(result.viewport.history)}, nil
+}
+
+func (runtime *Session) Scroll(lines int32) error {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.Scroll(memory.text(runtime.name), lines)
+	defer nativeFunctions.ResultFree(result)
+	return nativeError(result)
+}
+
+func (runtime *Session) ScrollToTop() error {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.ScrollToTop(memory.text(runtime.name))
+	defer nativeFunctions.ResultFree(result)
+	return nativeError(result)
+}
+
+func (runtime *Session) ScrollToBottom() error {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.ScrollToBottom(memory.text(runtime.name))
+	defer nativeFunctions.ResultFree(result)
+	return nativeError(result)
+}
 func (runtime *Session) GetSize() (Size, error) {
 	memory := nativeMemory{}
 	defer memory.release()

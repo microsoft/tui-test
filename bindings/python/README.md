@@ -127,8 +127,39 @@ The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, 
 | `await write(data)` | Write raw bytes. |
 | `await press(*keys)` | Alias for `keyboard.press()`. |
 | `await resize(cols, rows)` | Resize the terminal. |
+| `await scroll(lines)` | Move through native history; positive values show older output. |
+| `await scroll_to_top()` / `await scroll_to_bottom()` | Show the oldest output or the live screen. |
+| `await get_viewport()` | Return a `Viewport` dictionary with `offset` and `history`, in rows. |
 | `await signal(name)` | Send `INT`, `TERM`, `KILL`, or `QUIT`. |
 | `await kill()` | Kill the child process. |
+
+#### Native history
+
+`scroll(lines)` accepts integers from -2147483648 through 2147483647.
+Positive values show older output. Negative values move toward the live screen.
+Zero leaves the viewport unchanged. Movement stops at the available history boundaries.
+`get_viewport()` returns a `Viewport` dictionary with `offset` and `history` integer fields.
+Both fields count rows. An offset of zero means the live screen.
+
+Visible text, locators, and captures use this viewport.
+`text(full=True)` remains independent: it returns history plus the live screen.
+New output preserves the historical view until retained history expires.
+Keyboard input returns to the live screen.
+Mouse input and historical locator clicks fail while the viewport shows history.
+Call `scroll_to_bottom()` before mouse input. This API is separate from `mouse.scroll()`.
+
+`get_cursor()` and `State.cursor` retain the application cursor coordinates.
+Captures project that cursor into the viewport and hide it outside the view.
+Raster recordings capture viewport changes. Asciicast remains a PTY stream.
+
+```python
+await terminal.scroll_to_top()
+print(await terminal.get_viewport())
+print(await terminal.text())
+print(await terminal.text(full=True))
+await terminal.scroll(-2)
+await terminal.scroll_to_bottom()
+```
 
 #### State
 

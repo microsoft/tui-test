@@ -244,6 +244,9 @@ type Cursor struct {
 	Color   string
 }
 type Size struct{ Cols, Rows uint16 }
+
+// Viewport reports the rows above the live screen and the available history.
+type Viewport struct{ Offset, History uint64 }
 type TerminalColors struct {
 	Foreground, Background, Cursor string
 	Palette                        map[uint8]string

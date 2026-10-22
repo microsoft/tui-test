@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 use crate::api::{
     AutomaticRecording, AutomaticRecordingMode, Cell, CellColor, ClipboardPattern, Cursor,
     EffectiveTimeouts, ErrorKind, LocatorQuery, LocatorSelector, OpenOptions, OpenResult,
-    Operation, OperationResult, PackedScreen, RunOptions, RuntimeStatus, ScreenshotResult, Size,
-    SnapshotResult, TextAnchor, TextMatch, TextSelector, TextStyle, TuiTestError,
+    Operation, OperationResult, PackedScreen, RunOptions, RuntimeStatus, ScreenshotResult,
+    ScrollTarget, Size, SnapshotResult, TextAnchor, TextMatch, TextSelector, TextStyle,
+    TuiTestError,
 };
 use crate::assert::color::{self, Expected};
 use crate::assert::snapshot::{self, SnapshotStatus};
@@ -31,8 +32,8 @@ use crate::diagnostics::{comparison_failure, merge_failure_details};
 use crate::input::{keys, mouse};
 use crate::logger::Logger;
 use crate::session::{
-    capture_visual_state, try_capture_visual_state, Session as TerminalSession, TermState,
-    TextHighlight,
+    capture_visual_state, scroll_emulator_and_record, try_capture_visual_state,
+    Session as TerminalSession, TermState, TextHighlight,
 };
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::emu::{
@@ -171,6 +172,7 @@ struct InterruptTarget {
 
 struct LiveTarget {
     state: Arc<Mutex<TermState>>,
+    viewport_input: Arc<Mutex<()>>,
     pty: Arc<crate::terminal::pty::Pty>,
     shell: Option<&'static str>,
 }
@@ -211,6 +213,7 @@ impl OperationMetadata {
 pub struct LiveFrame {
     pub grid: Vec<Vec<EmuCell>>,
     pub cursor: (u16, u16),
+    pub cursor_visible: bool,
     pub size: (u16, u16),
     pub keyboard_mode: KeyboardMode,
     pub cursor_key_application: bool,
@@ -850,6 +853,7 @@ impl Engine {
         }
         let live = LiveTarget {
             state: session.state.clone(),
+            viewport_input: session.viewport_input.clone(),
             pty: session.pty.clone(),
             shell: session.shell.map(|value| value.as_str()),
         };
@@ -1480,12 +1484,20 @@ impl Engine {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             LiveFrame {
                 grid: highlighted_rows(&state, false),
-                cursor: state.emu.cursor(),
+                cursor: state
+                    .emu
+                    .viewport_cursor()
+                    .unwrap_or_else(|| state.emu.cursor()),
+                cursor_visible: state.emu.viewport_cursor().is_some(),
                 size: state.emu.size(),
                 keyboard_mode: state.emu.keyboard_mode(),
                 cursor_key_application: state.emu.cursor_key_application(),
                 bracketed_paste: state.emu.mode(TerminalMode::BracketedPaste),
-                mouse_mode: state.mouse_mode.relayable(),
+                mouse_mode: if state.emu.viewport().offset == 0 {
+                    state.mouse_mode.relayable()
+                } else {
+                    MouseMode::None
+                },
                 exited: state.exited,
                 shell: target.shell,
             }
@@ -1502,20 +1514,35 @@ impl Engine {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            (state.mouse_mode.relayable() != MouseMode::None).then(|| state.emu.size())
+            (state.mouse_mode.relayable() != MouseMode::None && state.emu.viewport().offset == 0)
+                .then(|| state.emu.size())
         })
     }
 
     /// Write viewer keystrokes straight to the pty: untracked and unlogged, so
     /// a human watching cannot disturb what the agent is waiting on.
     pub fn write_monitor_input_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
-        let Some((state, pty)) = ({
+        self.write_monitor_input(data, false)
+    }
+
+    /// Forward a remapped mouse report only while the live screen accepts mouse input.
+    pub fn write_monitor_mouse_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        self.write_monitor_input(data, true)
+    }
+
+    fn write_monitor_input(&self, data: &[u8], mouse: bool) -> Result<(), TuiTestError> {
+        let Some((state, pty, viewport_input)) = ({
             let live = self
                 .live
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            live.as_ref()
-                .map(|target| (Arc::clone(&target.state), Arc::clone(&target.pty)))
+            live.as_ref().map(|target| {
+                (
+                    Arc::clone(&target.state),
+                    Arc::clone(&target.pty),
+                    Arc::clone(&target.viewport_input),
+                )
+            })
         }) else {
             return Ok(());
         };
@@ -1528,6 +1555,25 @@ impl Engine {
         };
         if exited() {
             return Ok(());
+        }
+        let _input = viewport_input
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !data.is_empty() {
+            let mut state = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if mouse {
+                if state.emu.viewport().offset != 0
+                    || state.mouse_mode.relayable() == MouseMode::None
+                {
+                    return Err(TuiTestError::usage(
+                        "monitor mouse input requires a live viewport with mouse tracking enabled",
+                    ));
+                }
+            } else {
+                scroll_emulator_and_record(&mut state, ScrollTarget::Bottom)?;
+            }
         }
         // A child that exits mid-write is a normal race, not a failure.
         let written = pty.write(data);
@@ -1814,8 +1860,11 @@ fn capture_failure_observation_locked(
         cols: snapshot.cols,
         title: snapshot.title,
         cursor: snapshot.cursor,
-        cursor_position: state.emu.cursor(),
-        cursor_visible: state.emu.cursor_visible(),
+        cursor_position: state
+            .emu
+            .viewport_cursor()
+            .unwrap_or_else(|| state.emu.cursor()),
+        cursor_visible: state.emu.viewport_cursor().is_some(),
         cursor_shape: state.emu.cursor_shape(),
         render_state: snapshot.render_state,
         style: state.style.clone(),
@@ -2069,6 +2118,17 @@ fn dispatch(
                 .emu
                 .size();
             Ok(OperationResult::Size(Size { cols, rows }))
+        }
+        Operation::GetViewport => {
+            let state = session
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(OperationResult::Viewport(state.emu.viewport()))
+        }
+        Operation::Scroll { target } => {
+            session.scroll(target)?;
+            Ok(OperationResult::Unit)
         }
         Operation::GetBellCount => Ok(OperationResult::BellCount(session.bells.count())),
         Operation::GetBellEvents => {
@@ -2703,6 +2763,23 @@ fn write_input(
     input: &mut Option<InputDetails>,
     position: Option<(u16, u16)>,
 ) -> Result<(), TuiTestError> {
+    let _input = session
+        .viewport_input
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !bytes.is_empty() {
+        let mut state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if position.is_none() {
+            scroll_emulator_and_record(&mut state, ScrollTarget::Bottom)?;
+        } else if state.emu.viewport().offset != 0 {
+            return Err(TuiTestError::usage(
+                "mouse input cannot target scrollback; scroll to the bottom first",
+            ));
+        }
+    }
     act(session.write(bytes))?;
     if let Some(input) = input {
         input.record_sent(bytes, position);
@@ -3323,6 +3400,7 @@ struct EvaluatedLocator {
     evaluation: locator::LocatorEvaluation,
     screen_sequence: u64,
     visible_rows: usize,
+    scrolled: bool,
 }
 
 fn evaluate_locator_in_state_with_requirement(
@@ -3348,15 +3426,14 @@ fn evaluate_locator_in_state_with_requirement(
         },
     )?;
     if full {
-        evaluation.diagnostics.viewport_origin_y = rows
-            .len()
-            .saturating_sub(visible_len)
-            .min(u32::MAX as usize) as u32;
+        evaluation.diagnostics.viewport_origin_y =
+            state.emu.viewport().origin().min(u32::MAX as usize) as u32;
     }
     Ok(EvaluatedLocator {
         evaluation,
         screen_sequence,
         visible_rows: visible_len,
+        scrolled: state.emu.viewport().offset != 0,
     })
 }
 
@@ -3636,6 +3713,7 @@ fn resolve_locator_click_point(
                 full,
                 viewport_offset,
                 visible_len,
+                evaluated.scrolled,
             );
             (evaluated, outcome)
         };
@@ -3667,6 +3745,7 @@ fn resolve_locator_click_point(
                 full,
                 viewport_offset,
                 final_evaluated.visible_rows,
+                final_evaluated.scrolled,
             );
             let actionability_error = match actionability {
                 Ok(Some(point)) => return Ok(point),
@@ -3744,6 +3823,7 @@ fn click_point_from_candidates(
     full: bool,
     viewport_offset: usize,
     visible_rows: usize,
+    scrolled: bool,
 ) -> Result<Option<(u16, u16)>, TuiTestError> {
     if candidates.len() > 1 {
         return Err(TuiTestError::assertion(format!(
@@ -3754,6 +3834,11 @@ fn click_point_from_candidates(
     let Some(matched) = candidates.pop() else {
         return Ok(None);
     };
+    if scrolled {
+        return Err(TuiTestError::assertion(format!(
+            "'{description}' matched while the viewport is in scrollback and cannot be clicked; scroll to the bottom first"
+        )));
+    }
     let (x, absolute_y) = matched_center(&matched).ok_or_else(|| {
         TuiTestError::assertion(format!("'{description}' matched no terminal cells"))
     })?;
@@ -3803,7 +3888,7 @@ fn highlight_locator(
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let full_rows = state.emu.full_rows();
                 let visible_rows = state.emu.viewable_rows();
-                let viewport_offset = full_rows.len().saturating_sub(visible_rows.len());
+                let viewport_offset = state.emu.viewport().origin();
                 let full = query.uses_full_grid();
                 let rows = if full { &full_rows } else { &visible_rows };
                 match locator::locate_query(rows, query, &mut |cell, style| {
@@ -3858,9 +3943,7 @@ fn highlight_locator(
                 ) {
                 None
             } else {
-                let full_rows = state.emu.full_rows();
-                let visible_rows = state.emu.viewable_rows();
-                let viewport_offset = full_rows.len().saturating_sub(visible_rows.len());
+                let viewport_offset = state.emu.viewport().origin();
                 let row_offset = if query.uses_full_grid() {
                     0
                 } else {
@@ -4257,21 +4340,19 @@ fn do_snapshot(
 /// Where to draw the cursor within `rows`, or `None` when the terminal is not
 /// showing one.
 ///
-/// `Emulator::cursor` is relative to the visible screen, so a full screenshot
-/// has to push it down past the scrollback that precedes it.
-fn cursor_in(
-    rows: &[Vec<EmuCell>],
-    emu: &dyn crate::terminal::emu::Emulator,
-) -> Option<(u16, usize)> {
+/// Full screenshots use the active cursor; viewport captures project and clip it.
+fn cursor_in(emu: &dyn crate::terminal::emu::Emulator, full: bool) -> Option<(u16, usize)> {
+    if !full {
+        return emu.viewport_cursor().map(|(x, y)| (x, usize::from(y)));
+    }
     if !emu.cursor_visible() {
         return None;
     }
     let (x, y) = emu.cursor();
-    let (_, screen) = emu.size();
     // Counted in `usize`: a full render is as long as the scrollback, which a
     // profile can set past what a `u16` row would hold, and a wrapped offset
     // draws the cursor on a plausible but wrong line.
-    let history = rows.len().saturating_sub(screen as usize);
+    let history = emu.viewport().history;
     Some((x, history + y as usize))
 }
 
@@ -4292,7 +4373,7 @@ fn svg_snapshot_from(emu: &dyn Emulator, full: bool) -> SvgSnapshot {
     SvgSnapshot {
         cols: emu.size().0,
         title: emu.title(),
-        cursor: cursor_in(&rows, emu),
+        cursor: cursor_in(emu, full),
         render_state: crate::render::svg::RenderState::capture(emu),
         rows,
     }
@@ -4463,6 +4544,143 @@ mod tests {
     }
 
     #[test]
+    fn viewport_snapshots_preserve_full_cells_and_application_cursor() {
+        for &backend in crate::Backend::ALL {
+            let mut emu = backend.build(12, 3, &Profile::default()).unwrap();
+            emu.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\n");
+            emu.process("\x1b[1;31m\u{4f60}e\u{301}\x1b[0m\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\".as_bytes());
+            let full = svg_snapshot_from(emu.as_ref(), true);
+            let application = cursor_model(emu.as_ref());
+            emu.scroll(ScrollTarget::Top);
+            let viewport = svg_snapshot_from(emu.as_ref(), false);
+            let scrolled_full = svg_snapshot_from(emu.as_ref(), true);
+            assert_eq!(viewport.rows, full.rows[..3], "{backend:?}");
+            assert_eq!(viewport.cursor, None);
+            assert_eq!(scrolled_full.rows, full.rows);
+            assert_eq!(scrolled_full.cursor, full.cursor);
+            assert_eq!(cursor_model(emu.as_ref()).x, application.x);
+            assert_eq!(cursor_model(emu.as_ref()).y, application.y);
+            assert_eq!(cursor_model(emu.as_ref()).visible, application.visible);
+            assert_eq!(emu.fault(), None);
+        }
+    }
+
+    #[test]
+    fn viewport_operations_refresh_observation_and_keyboard_returns_to_bottom() {
+        let engine = Engine::new(
+            "viewport-operations".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let mut options = sleeping_program(false);
+        options.cols = 12;
+        options.rows = 3;
+        engine.execute(Operation::Run(options)).unwrap();
+        let sequence = {
+            let guard = engine.lock_session();
+            let mut state = guard.as_ref().unwrap().state.lock().unwrap();
+            state
+                .emu
+                .process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            state.screen_dirty = true;
+            state.last_change = Instant::now() - Duration::from_secs(1);
+            capture_visual_state(&mut state, true)
+        };
+        let before_scroll = Instant::now();
+        engine
+            .execute(Operation::Scroll {
+                target: ScrollTarget::Lines(2),
+            })
+            .unwrap();
+        let OperationResult::Viewport(viewport) = engine.execute(Operation::GetViewport).unwrap()
+        else {
+            panic!("expected viewport");
+        };
+        assert_eq!(
+            viewport,
+            crate::api::Viewport {
+                offset: 2,
+                history: 3
+            }
+        );
+        let query = LocatorQuery::text("row1");
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            assert!(state.screen_history.current_sequence() > sequence);
+            assert!(state.last_change >= before_scroll);
+            assert_eq!(
+                state.awaiting_start, None,
+                "scroll must not act as child input"
+            );
+            let evaluated =
+                evaluate_locator_in_state_with_requirement(&mut state, &query, true).unwrap();
+            assert_eq!(evaluated.evaluation.matches[0].value.start.row, 0);
+            let mut full_query = query.clone();
+            full_query.selector = LocatorSelector::Text(TextSelector {
+                text: "row1".into(),
+                full: true,
+                ..Default::default()
+            });
+            let evaluated =
+                evaluate_locator_in_state_with_requirement(&mut state, &full_query, true).unwrap();
+            assert_eq!(evaluated.evaluation.diagnostics.viewport_origin_y, 1);
+            assert_eq!(evaluated.evaluation.matches[0].value.start.row, 1);
+            assert!(!capture_failure_observation_locked(session, &mut state).cursor_visible);
+        }
+        engine
+            .execute(Operation::HighlightLocator {
+                query: query.clone(),
+                timeout_ms: Some(0),
+            })
+            .unwrap();
+        {
+            let guard = engine.lock_session();
+            let state = guard.as_ref().unwrap().state.lock().unwrap();
+            assert!(highlighted_rows(&state, false)[0][0].has(Attrs::INVERSE));
+            assert!(highlighted_rows(&state, true)[1][0].has(Attrs::INVERSE));
+        }
+        let error = engine
+            .execute(Operation::ClickLocator {
+                query,
+                options: crate::api::MouseOptions::default(),
+                clicks: 1,
+                timeout_ms: Some(0),
+            })
+            .unwrap_err();
+        assert!(error.message.contains("scrollback"), "{error:?}");
+        let error = engine
+            .execute(Operation::Mouse {
+                action: crate::api::MouseAction::Move { x: 1, y: 1 },
+            })
+            .unwrap_err();
+        assert!(error.message.contains("scrollback"), "{error:?}");
+        for operation in [
+            Operation::Write { data: "x".into() },
+            Operation::Key {
+                keys: vec!["a".into()],
+                action: crate::api::KeyAction::Down,
+            },
+            Operation::Submit { data: None },
+        ] {
+            engine
+                .execute(Operation::Scroll {
+                    target: ScrollTarget::Top,
+                })
+                .unwrap();
+            engine.execute(operation).unwrap();
+            let OperationResult::Viewport(viewport) =
+                engine.execute(Operation::GetViewport).unwrap()
+            else {
+                panic!("expected viewport");
+            };
+            assert_eq!(viewport.offset, 0);
+        }
+        engine.execute(Operation::Close).unwrap();
+    }
+
+    #[test]
     fn failed_pty_resize_preserves_emulator_and_restart_dimensions() {
         let engine = Engine::new(
             "failed-resize".into(),
@@ -4499,6 +4717,183 @@ mod tests {
             assert_eq!((options.cols, options.rows), (80, 24));
         }
         engine.execute(Operation::Close).unwrap();
+    }
+
+    #[test]
+    fn monitor_mouse_write_rechecks_viewport_after_remapping() {
+        struct RecordingWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for RecordingWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let engine = Engine::new(
+            "monitor-mouse-scroll".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let mut options = sleeping_program(false);
+        options.cols = 12;
+        options.rows = 3;
+        engine.execute(Operation::Run(options)).unwrap();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            state
+                .emu
+                .process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            state.mouse_mode.process(b"\x1b[?1000h\x1b[?1006h");
+            state.screen_dirty = true;
+            session
+                .pty
+                .replace_test_writer(Box::new(RecordingWriter(written.clone())));
+        }
+        assert_eq!(engine.monitor_mouse_size(), Some((12, 3)));
+        let remapped = b"\x1b[<0;1;1M";
+        engine
+            .execute(Operation::Scroll {
+                target: ScrollTarget::Top,
+            })
+            .unwrap();
+        let result = engine.write_monitor_mouse_raw(remapped);
+        let viewport = engine.execute(Operation::GetViewport).unwrap();
+        let mouse_bytes = written.lock().unwrap().clone();
+        engine.write_monitor_input_raw(b"hello").unwrap();
+        let after_keyboard = engine.execute(Operation::GetViewport).unwrap();
+        engine.write_monitor_mouse_raw(remapped).unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            session
+                .state
+                .lock()
+                .unwrap()
+                .mouse_mode
+                .process(b"\x1b[?1000l");
+        }
+        let disabled = engine.write_monitor_mouse_raw(remapped);
+        engine.execute(Operation::Close).unwrap();
+        assert!(result.is_err(), "stale monitor mouse report was forwarded");
+        assert!(
+            disabled.is_err(),
+            "mouse report reached a mouse-disabled application"
+        );
+        assert!(mouse_bytes.is_empty());
+        assert!(matches!(viewport, OperationResult::Viewport(viewport) if viewport.offset > 0));
+        assert!(
+            matches!(after_keyboard, OperationResult::Viewport(viewport) if viewport.offset == 0)
+        );
+        assert_eq!(&*written.lock().unwrap(), b"hello\x1b[<0;1;1M");
+    }
+
+    #[test]
+    fn scroll_waits_for_a_concurrent_locator_mouse_write() {
+        use std::sync::mpsc;
+
+        struct PausedWriter {
+            entered: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            state: Arc<Mutex<TermState>>,
+            observed: mpsc::Sender<usize>,
+        }
+
+        impl std::io::Write for PausedWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.entered.send(()).unwrap();
+                self.release.recv_timeout(Duration::from_secs(5)).unwrap();
+                self.observed
+                    .send(self.state.lock().unwrap().emu.viewport().offset)
+                    .unwrap();
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let engine = Arc::new(Engine::new(
+            "concurrent-click-scroll".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        ));
+        let mut options = sleeping_program(false);
+        options.cols = 12;
+        options.rows = 3;
+        engine.execute(Operation::Run(options)).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let state = {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            state
+                .emu
+                .process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nclick");
+            state.screen_dirty = true;
+            session.pty.replace_test_writer(Box::new(PausedWriter {
+                entered: entered_tx,
+                release: release_rx,
+                state: session.state.clone(),
+                observed: observed_tx,
+            }));
+            session.state.clone()
+        };
+        let click_engine = engine.clone();
+        let click = std::thread::spawn(move || {
+            click_engine.execute(Operation::ClickLocator {
+                query: LocatorQuery::text("click"),
+                options: crate::api::MouseOptions::default(),
+                clicks: 1,
+                timeout_ms: Some(1_000),
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let state_is_unlocked = state.try_lock().is_ok();
+        let (scroll_started_tx, scroll_started_rx) = mpsc::channel();
+        let (scrolled_tx, scrolled_rx) = mpsc::channel();
+        let scroll_engine = engine.clone();
+        let scroll = std::thread::spawn(move || {
+            scroll_started_tx.send(()).unwrap();
+            let result = scroll_engine.execute(Operation::Scroll {
+                target: ScrollTarget::Top,
+            });
+            scrolled_tx.send(()).unwrap();
+            result
+        });
+        scroll_started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        let scrolled_during_write = scrolled_rx.recv_timeout(Duration::from_millis(200)).is_ok();
+        release_tx.send(()).unwrap();
+        click.join().unwrap().unwrap();
+        scroll.join().unwrap().unwrap();
+        let offset_at_write = observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let final_viewport = state.lock().unwrap().emu.viewport();
+        engine.execute(Operation::Close).unwrap();
+        assert!(state_is_unlocked, "PTY input must not hold terminal state");
+        assert!(
+            !scrolled_during_write,
+            "scroll overtook a pending mouse write"
+        );
+        assert_eq!(
+            offset_at_write, 0,
+            "mouse input reached a historical viewport"
+        );
+        assert!(
+            final_viewport.offset > 0,
+            "scroll must complete after the write"
+        );
     }
 
     #[test]
@@ -4623,6 +5018,12 @@ mod tests {
         fn size(&self) -> (u16, u16) {
             self.0.size()
         }
+        fn scroll(&mut self, target: ScrollTarget) {
+            self.0.scroll(target);
+        }
+        fn viewport(&self) -> crate::api::Viewport {
+            self.0.viewport()
+        }
         fn cursor(&self) -> (u16, u16) {
             self.0.cursor()
         }
@@ -4636,6 +5037,9 @@ mod tests {
             panic!("injected trace capture failure")
         }
         fn full_rows(&self) -> Vec<Vec<EmuCell>> {
+            self.viewable_rows()
+        }
+        fn active_rows(&self) -> Vec<Vec<EmuCell>> {
             self.viewable_rows()
         }
         fn color(&self, slot: crate::profile::ColorSlot) -> crate::profile::Rgb {
@@ -5674,6 +6078,7 @@ mod tests {
                         evaluation,
                         screen_sequence: 1,
                         visible_rows: 2,
+                        scrolled: false,
                     },
                     Vec::new(),
                     false,
@@ -5885,7 +6290,7 @@ mod tests {
         };
         let candidates = locator::locate_query(&rows, &query, &mut |_, _| false).unwrap();
         assert_eq!(
-            click_point_from_candidates(candidates, "save", true, 3, 2).unwrap(),
+            click_point_from_candidates(candidates, "save", true, 3, 2, false).unwrap(),
             Some((6, 1))
         );
     }
@@ -5908,7 +6313,7 @@ mod tests {
         let mut query = LocatorQuery::text(selector);
         query.occurrence = crate::api::MatchOccurrence::Unique;
         let candidates = locator::locate_query(&rows, &query, &mut |_, _| false).unwrap();
-        let error = click_point_from_candidates(candidates, "save", true, 1, 2).unwrap_err();
+        let error = click_point_from_candidates(candidates, "save", true, 1, 2, false).unwrap_err();
         assert!(error.message.contains("outside the visible viewport"));
     }
 
