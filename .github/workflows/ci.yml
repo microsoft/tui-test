@@ -53,7 +53,7 @@ jobs:
           cache: npm
           cache-dependency-path: bindings/js/package-lock.json
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: bindings/go/go.mod
           cache-dependency-path: bindings/go/go.sum
@@ -92,7 +92,7 @@ jobs:
           go test ./...
           go run ./examples/smoke
 
-      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         if: runner.os == 'Linux'
         with:
           tool: cargo-zigbuild
