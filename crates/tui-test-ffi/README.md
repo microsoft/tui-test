@@ -20,6 +20,25 @@ env -u CARGO_TARGET_DIR cargo build --locked -p tui-test-ffi
 ```
 
 The output is `target/debug/libtui_test_ffi.so` on Linux, `libtui_test_ffi.dylib` on macOS, or `tui_test_ffi.dll` on Windows.
+
+On musl Linux, disable static CRT linkage so Rust can produce the shared library:
+
+```sh
+RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static" \
+  env -u CARGO_TARGET_DIR cargo build --locked -p tui-test-ffi
+```
+
+Keep this flag for release builds and explicit musl targets.
+For example, after you install `cargo-zigbuild` and the Rust target:
+
+```sh
+RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static" \
+  env -u CARGO_TARGET_DIR cargo zigbuild --locked -p tui-test-ffi --target x86_64-unknown-linux-musl
+```
+
+The cross-built library is `target/x86_64-unknown-linux-musl/debug/libtui_test_ffi.so`.
+It requires a musl process.
+
 All three bindings accept `TUI_TEST_NATIVE_LIBRARY` as an explicit library path.
 Python wheels and JavaScript platform packages include the library.
 
