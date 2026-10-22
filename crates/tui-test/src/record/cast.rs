@@ -128,13 +128,8 @@ impl CastWriter {
 /// Paint the active screen; the worker appends `seed::State` so subsequent
 /// output also retains the live rendition, modes and parser boundary.
 pub(crate) fn snapshot_to_ansi(emulator: &dyn Emulator) -> String {
-    let (cols, height) = emulator.size();
-    let rows = if emulator.viewport().offset == 0 {
-        emulator.viewable_rows()
-    } else {
-        let mut full = emulator.full_rows();
-        full.split_off(full.len().saturating_sub(usize::from(height)))
-    };
+    let (cols, _) = emulator.size();
+    let rows = emulator.active_rows();
     let cursor = emulator.cursor();
     let blank = EmuCell::blank();
     // ED 2 can push even an empty viewport into history, which changes later

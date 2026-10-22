@@ -539,6 +539,10 @@ pub trait Emulator: Send {
     /// Visible screen as rows of cells. Always `rows` entries of `cols` cells.
     fn viewable_rows(&self) -> Vec<Vec<EmuCell>>;
 
+    /// Active screen, independent of the selected viewport.
+    /// Read only the screen's rows and columns, without decoding retained history.
+    fn active_rows(&self) -> Vec<Vec<EmuCell>>;
+
     /// Scrollback history followed by the active screen, independent of the viewport.
     fn full_rows(&self) -> Vec<Vec<EmuCell>>;
 

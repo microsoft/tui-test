@@ -130,7 +130,10 @@ macro_rules! emulator_conformance_tests {
         fn conformance_viewport_scrolls_without_input_or_history_changes() {
             use $crate::api::ScrollTarget;
             let mut e = conformance_emu(12, 3, 20);
-            e.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            e.process(
+                b"row0\r\nrow1\r\nrow2\r\n\x1b[1;31mrow3\x1b[0m\r\n\
+                  \x1b]8;id=live;https://example.com\x1b\\row4\x1b]8;;\x1b\\\r\nrow5",
+            );
             let full = e.full_rows();
             let cursor = e.cursor();
             assert_eq!(e.viewport(), $crate::api::Viewport { offset: 0, history: 3 });
@@ -150,6 +153,8 @@ macro_rules! emulator_conformance_tests {
                 assert_eq!(e.fault(), None);
                 assert_eq!(e.viewport().offset, offset, "{target:?}");
                 assert_eq!(e.viewable_rows(), full[3 - offset..6 - offset], "{target:?}");
+                assert_eq!(e.active_rows(), full[3..], "{target:?}");
+                assert_eq!(e.viewport().offset, offset, "active read moved the viewport");
                 assert_eq!(e.full_rows(), full);
                 assert_eq!(e.cursor(), cursor);
                 assert!(e.cursor_visible());
@@ -189,12 +194,13 @@ macro_rules! emulator_conformance_tests {
             e.process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
             e.scroll(ScrollTarget::Top);
             let selected = e.viewable_rows();
-            e.process(b"\x1b[?1049h");
+            e.process(b"\x1b[?1049halternate");
             for target in [ScrollTarget::Top, ScrollTarget::Lines(5), ScrollTarget::Bottom] {
                 e.scroll(target);
                 assert_eq!(e.viewport(), $crate::api::Viewport::default());
+                assert_eq!(e.active_rows(), e.viewable_rows());
             }
-            e.process(b"alternate\x1b[?1049l");
+            e.process(b"\x1b[?1049l");
             assert_eq!(e.viewable_rows(), selected);
             for (cols, rows) in [(12, 4), (8, 2), (16, 3)] {
                 e.resize(cols, rows);

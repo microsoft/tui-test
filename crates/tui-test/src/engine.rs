@@ -5039,6 +5039,9 @@ mod tests {
         fn full_rows(&self) -> Vec<Vec<EmuCell>> {
             self.viewable_rows()
         }
+        fn active_rows(&self) -> Vec<Vec<EmuCell>> {
+            self.viewable_rows()
+        }
         fn color(&self, slot: crate::profile::ColorSlot) -> crate::profile::Rgb {
             self.0.color(slot)
         }

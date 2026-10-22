@@ -463,6 +463,10 @@ impl Emulator for RioEmu {
         self.rows_in_range(-(self.term.history_size() as i32), self.rows as i32)
     }
 
+    fn active_rows(&self) -> Vec<Vec<EmuCell>> {
+        self.rows_in_range(0, self.rows as i32)
+    }
+
     fn color(&self, slot: ColorSlot) -> Rgb {
         self.colors.get(ColorState::slot_index(slot))
     }

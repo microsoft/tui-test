@@ -659,20 +659,27 @@ impl GhosttyCore {
             }
             output.push(row);
         }
+        output.extend(self.active_rows()?);
+        Ok(output)
+    }
+
+    pub(super) fn active_rows(&mut self) -> Result<Vec<Vec<EmuCell>>> {
         if self.viewport()?.offset == 0 {
-            output.extend(self.frame()?.rows.clone());
-        } else {
-            for y in 0..u32::from(self.terminal.rows()?) {
-                let mut row = Vec::with_capacity(cols as usize);
-                for x in 0..cols {
-                    let grid = self
-                        .terminal
-                        .grid_ref(Point::Active(PointCoordinate { x, y }))
-                        .context("reading active screen cell")?;
-                    row.push(cell_from_grid(&grid, &mut links)?);
-                }
-                output.push(row);
+            return Ok(self.frame()?.rows.clone());
+        }
+        let (cols, rows) = self.size()?;
+        let mut output = Vec::with_capacity(rows as usize);
+        let mut links = LinkCache::default();
+        for y in 0..u32::from(rows) {
+            let mut row = Vec::with_capacity(cols as usize);
+            for x in 0..cols {
+                let grid = self
+                    .terminal
+                    .grid_ref(Point::Active(PointCoordinate { x, y }))
+                    .context("reading active screen cell")?;
+                row.push(cell_from_grid(&grid, &mut links)?);
             }
+            output.push(row);
         }
         Ok(output)
     }

@@ -570,6 +570,10 @@ impl Emulator for AlacrittyEmu {
         let history = (total - screen).max(0);
         self.rows_in_range(-history, screen)
     }
+
+    fn active_rows(&self) -> Vec<Vec<EmuCell>> {
+        self.rows_in_range(0, self.rows as i32)
+    }
 }
 
 #[cfg(test)]

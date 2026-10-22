@@ -343,6 +343,10 @@ impl Emulator for GhosttyEmu {
         self.call_result("reading scrollback", GhosttyCore::full_rows)
     }
 
+    fn active_rows(&self) -> Vec<Vec<EmuCell>> {
+        self.call_result("reading active screen", GhosttyCore::active_rows)
+    }
+
     fn color(&self, slot: ColorSlot) -> Rgb {
         self.call_result("reading color", move |core| core.color(slot))
     }
