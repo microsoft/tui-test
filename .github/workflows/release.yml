@@ -44,6 +44,10 @@ jobs:
             exit 1
           fi
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
       - name: Verify release versions
         shell: bash
         run: |
@@ -199,6 +203,9 @@ jobs:
       - run: npm ci
         working-directory: bindings/js
 
+      - name: Install maintenance script dependencies
+        run: npm ci --prefix .github/scripts --ignore-scripts
+
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         with:
@@ -212,7 +219,7 @@ jobs:
       - name: Check Linux dependencies and glibc baseline
         if: runner.os == 'Linux'
         run: >-
-          python .github/scripts/release/check-native-elf.py
+          node .github/scripts/release/check-native-elf.mjs
           --library target/${{ matrix.target }}/release/libtui_test_ffi.so
           --target ${{ matrix.target }}
 
@@ -224,7 +231,7 @@ jobs:
             *apple*) library=libtui_test_ffi.dylib ;;
             *) library=libtui_test_ffi.so ;;
           esac
-          python .github/scripts/release/package_native.py native \
+          node .github/scripts/release/package-native.mjs native \
             --library "target/${{ matrix.target }}/release/$library" \
             --target "${{ matrix.target }}"
 
@@ -316,6 +323,13 @@ jobs:
           go-version-file: bindings/go/go.mod
           cache-dependency-path: bindings/go/go.sum
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install maintenance script dependencies
+        run: npm ci --prefix .github/scripts --ignore-scripts
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: native-*
@@ -323,10 +337,10 @@ jobs:
           merge-multiple: true
 
       - name: Test release scripts
-        run: python -m unittest discover -s .github/scripts/release -p '*_test.py'
+        run: npm test --prefix .github/scripts
 
       - name: Assemble Go module
-        run: python .github/scripts/release/package_native.py go --artifacts target/native-packages
+        run: node .github/scripts/release/package-native.mjs go --artifacts target/native-packages
 
       - name: Test assembled Go module
         working-directory: target/go-package
@@ -337,7 +351,7 @@ jobs:
           go test ./...
 
       - name: Test external Go consumer and README example
-        run: python .github/scripts/test-go-embedded.py target/go-package
+        run: node .github/scripts/test-go-embedded.mjs target/go-package
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -595,6 +609,13 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install maintenance script dependencies
+        run: npm ci --prefix .github/scripts --ignore-scripts
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: go-package
@@ -615,7 +636,7 @@ jobs:
           source="$(git rev-parse "${RELEASE_TAG}^{commit}")"
           test "$(git rev-parse HEAD)" = "$source"
           test -z "$(git status --porcelain --untracked-files=all -- bindings/go bindings/js/package.json LICENSE)"
-          python3 .github/scripts/release/package_native.py verify --version "$RELEASE_TAG" --package target/go-package
+          node .github/scripts/release/package-native.mjs verify --version "$RELEASE_TAG" --package target/go-package
           cp -a target/go-package/. bindings/go/
           git add --force -- bindings/go
           expected="$(git write-tree)"

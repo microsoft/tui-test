@@ -58,6 +58,9 @@ jobs:
           go-version-file: bindings/go/go.mod
           cache-dependency-path: bindings/go/go.sum
 
+      - name: Install maintenance script dependencies
+        run: npm ci --prefix .github/scripts --ignore-scripts
+
       - run: cargo fmt --all -- --check
       - name: Verify generated native declarations
         run: cargo run --locked -p tui-test-bindgen -- --check
@@ -69,8 +72,7 @@ jobs:
       - name: Test native package assembly
         if: runner.os == 'Linux'
         run: |
-          node --test .github/scripts/release/package-node.test.mjs .github/scripts/release/build-native.test.mjs
-          python -m unittest discover -s .github/scripts/release -p '*_test.py'
+          npm test --prefix .github/scripts
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
       - run: cargo build -p tui-test-cli -p tui-test-ffi
@@ -111,13 +113,13 @@ jobs:
             *) echo "Unsupported runner: $RUNNER_OS" >&2; exit 1 ;;
           esac
           target="$(rustc -vV | sed -n 's/^host: //p')"
-          python .github/scripts/release/package_native.py native \
+          node .github/scripts/release/package-native.mjs native \
             --library "target/debug/$library" --target "$target" \
             --output target/native-packages
-          python .github/scripts/release/package_native.py go \
+          node .github/scripts/release/package-native.mjs go \
             --artifacts target/native-packages --target "$target" \
             --output "$RUNNER_TEMP/go-package"
-          python .github/scripts/test-go-embedded.py "$RUNNER_TEMP/go-package"
+          node .github/scripts/test-go-embedded.mjs "$RUNNER_TEMP/go-package"
           cd "$RUNNER_TEMP/go-package"
           unset TUI_TEST_NATIVE_LIBRARY
           CGO_ENABLED=0 go test ./...
@@ -135,13 +137,13 @@ jobs:
           node bindings/js/scripts/build-native.mjs --debug --target x86_64-unknown-linux-gnu --zig
           RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static" cargo zigbuild --locked -p tui-test-ffi --target x86_64-unknown-linux-musl
           for target in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl; do
-            python .github/scripts/release/check-native-elf.py \
+            node .github/scripts/release/check-native-elf.mjs \
               --library "target/$target/debug/libtui_test_ffi.so" --target "$target"
-            python .github/scripts/release/package_native.py native \
+            node .github/scripts/release/package-native.mjs native \
               --library "target/$target/debug/libtui_test_ffi.so" --target "$target" \
               --output target/native-packages
           done
-          python .github/scripts/release/package_native.py go \
+          node .github/scripts/release/package-native.mjs go \
             --artifacts target/native-packages --output "$RUNNER_TEMP/go-linux-package" \
             --target x86_64-unknown-linux-gnu --target x86_64-unknown-linux-musl
           (
