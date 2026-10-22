@@ -58,6 +58,9 @@ jobs:
           go-version-file: bindings/go/go.mod
           cache-dependency-path: bindings/go/go.sum
 
+      - name: Install maintenance script dependencies
+        run: npm ci --prefix .github/scripts --ignore-scripts
+
       - run: cargo fmt --all -- --check
       - name: Verify generated native declarations
         run: cargo run --locked -p tui-test-bindgen -- --check
@@ -68,7 +71,9 @@ jobs:
           c++ -std=c++17 -x c++ -fsyntax-only -Icrates/tui-test-ffi/include .github/scripts/check-native-header.c
       - name: Test native package assembly
         if: runner.os == 'Linux'
-        run: node --test .github/scripts/release/package-node.test.mjs
+        run: |
+          npm test --prefix .github/scripts
+          node .github/scripts/release/verify-go-version.mjs
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
       - run: cargo build -p tui-test-cli -p tui-test-ffi
@@ -89,27 +94,77 @@ jobs:
           export TUI_TEST_NATIVE_LIBRARY="$GITHUB_WORKSPACE/target/debug/$library"
           export CGO_ENABLED=0
           cd bindings/go
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            printf 'Go files need formatting:\n%s\n' "$unformatted" >&2
+            exit 1
+          fi
+          go vet ./...
           go test ./...
           go run ./examples/smoke
+          CGO_ENABLED=1 go test -tags=tuitest_abi_check -run '^TestNativeLayoutMatchesCompiler$' -count=1 ./internal/native
+
+      - name: Test embedded Go consumer
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) library=libtui_test_ffi.so ;;
+            macOS) library=libtui_test_ffi.dylib ;;
+            Windows) library=tui_test_ffi.dll ;;
+            *) echo "Unsupported runner: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          target="$(rustc -vV | sed -n 's/^host: //p')"
+          node .github/scripts/release/package-native.mjs native \
+            --library "target/debug/$library" --target "$target" \
+            --output target/native-packages
+          node .github/scripts/release/package-native.mjs go \
+            --artifacts target/native-packages --target "$target" \
+            --output "$RUNNER_TEMP/go-package"
+          node .github/scripts/test-go-embedded.mjs "$RUNNER_TEMP/go-package"
+          cd "$RUNNER_TEMP/go-package"
+          unset TUI_TEST_NATIVE_LIBRARY
+          CGO_ENABLED=0 go test ./...
+          CGO_ENABLED=1 go test -race ./...
 
       - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         if: runner.os == 'Linux'
         with:
           tool: cargo-zigbuild
 
-      - name: Test Go binding on musl
+      - name: Test embedded Go compatibility on Linux
         if: runner.os == 'Linux'
         run: |
-          rustup target add x86_64-unknown-linux-musl
+          rustup target add x86_64-unknown-linux-gnu x86_64-unknown-linux-musl
+          node bindings/js/scripts/build-native.mjs --debug --target x86_64-unknown-linux-gnu --zig
           RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static" cargo zigbuild --locked -p tui-test-ffi --target x86_64-unknown-linux-musl
-          test -f target/x86_64-unknown-linux-musl/debug/libtui_test_ffi.so
-          cd bindings/go
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags '-I /lib/ld-musl-x86_64.so.1' -o ../../target/go-musl-smoke ./examples/smoke
-          cd ../..
+          for target in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl; do
+            node .github/scripts/release/check-native-elf.mjs \
+              --library "target/$target/debug/libtui_test_ffi.so" --target "$target"
+            node .github/scripts/release/package-native.mjs native \
+              --library "target/$target/debug/libtui_test_ffi.so" --target "$target" \
+              --output target/native-packages
+          done
+          node .github/scripts/release/package-native.mjs go \
+            --artifacts target/native-packages --output "$RUNNER_TEMP/go-linux-package" \
+            --target x86_64-unknown-linux-gnu --target x86_64-unknown-linux-musl
+          (
+            cd "$RUNNER_TEMP/go-linux-package"
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+              -o "$GITHUB_WORKSPACE/target/go-gnu-smoke" ./examples/smoke
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+              -ldflags '-I /lib/ld-musl-x86_64.so.1' \
+              -o "$GITHUB_WORKSPACE/target/go-musl-smoke" ./examples/smoke
+          )
+          for image in almalinux:8 rockylinux:9 ubuntu:24.04; do
+            docker run --rm --network none --platform linux/amd64 \
+              -v "$PWD/target/go-gnu-smoke:/smoke:ro" "$image" /smoke
+          done
+          docker run --rm --network none --platform linux/amd64 \
+            -v "$PWD/target/go-musl-smoke:/smoke:ro" alpine:3.23 /smoke
           docker run --rm --platform linux/amd64 \
-            -v "$PWD/target:/work:ro" \
-            -e TUI_TEST_NATIVE_LIBRARY=/work/x86_64-unknown-linux-musl/debug/libtui_test_ffi.so \
-            alpine:3.23 sh -c 'apk add --no-cache libstdc++ && /work/go-musl-smoke'
+            -v "$RUNNER_TEMP/go-linux-package:/work:ro" \
+            -w /work golang:1.26-alpine \
+            sh -c 'go build -o /tmp/smoke ./examples/smoke && /tmp/smoke'
 
       - name: Install Python binding
         run: python -m pip install --disable-pip-version-check -e ./bindings/python

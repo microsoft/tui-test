@@ -4,67 +4,75 @@ Control, inspect, test, and record terminal apps from Go. The binding runs the R
 
 ## Install
 
-Install the Go binding from source. Keep the Go module and native library on one exact repository revision by using a local module replacement.
+Use Go 1.26 or newer and select a published Go module release:
 
-Supported host builds are:
+```sh
+go get github.com/microsoft/tui-test/bindings/go@v0.1.0
+```
 
-| OS | Go architecture | Rust native target | Build prerequisites |
-| --- | --- | --- | --- |
-| Linux | `amd64` | `x86_64-unknown-linux-gnu` or `x86_64-unknown-linux-musl` | Go 1.26+, Rust 1.90+, Zig 0.16.0, and a native C/C++ compiler and linker |
-| Linux | `arm64` | `aarch64-unknown-linux-gnu` or `aarch64-unknown-linux-musl` | Go 1.26+, Rust 1.90+, Zig 0.16.0, and a native C/C++ compiler and linker |
-| macOS | `amd64` | `x86_64-apple-darwin` | Go 1.26+, Rust 1.90+, Zig 0.16.0, and Apple command-line build tools |
-| macOS | `arm64` | `aarch64-apple-darwin` | Go 1.26+, Rust 1.90+, Zig 0.16.0, and Apple command-line build tools |
-| Windows | `amd64` | `x86_64-pc-windows-msvc` | Go 1.26+, Rust 1.90+, Zig 0.16.0, and MSVC Build Tools |
+The repository tag is `bindings/go/v<version>`.
+Released modules contain prebuilt native engines. Users need no Rust compiler,
+Zig, C compiler, CLI, or separate installer.
+Source checkouts do not contain these binaries; see [Build and use](../../crates/tui-test-ffi/README.md#build-and-use).
 
-Use a host-native build. Cross-compilation also requires the destination Rust target and its linker or toolchain, and is not the recommended source-install path.
+| OS | Go architectures | Native runtime |
+| --- | --- | --- |
+| Linux | `amd64`, `arm64` | glibc 2.28+ or musl 1.2+ |
+| macOS | `amd64`, `arm64` | macOS system libraries |
+| Windows | `amd64` | Windows system libraries |
 
-1. Clone the repository, select an exact commit or tag that contains the Go binding, and record the resolved commit:
+Go downloads all platform archives with the module.
+Each executable embeds compressed archives for its target OS and architecture.
+Linux executables contain both libc variants and select the one that matches the running process.
+Other platforms contain one variant.
 
-   ```sh
-   git clone https://github.com/microsoft/tui-test.git
-   cd tui-test
-   git checkout --detach <commit-or-tag>
-   git rev-parse HEAD
-   ```
+On first use, the binding extracts the selected engine into the user cache:
+`tui-test/native/<sha256>/`.
+Later processes verify and reuse the same file.
+The engine stays loaded for the process lifetime.
+There are no runtime downloads.
 
-2. From that checkout's repository root, build the native library:
+The cache must permit file creation, hard links, and native library loading.
+For a read-only or restricted environment, use an existing installation as described below.
 
-   ```sh
-   cargo build --locked -p tui-test-ffi
-   ```
+### Linux and cross-compilation
 
-   On musl Linux, use this command instead so Rust emits the shared library:
+PureGo avoids cgo, but it still uses the system dynamic loader and libc.
+Embedding a library does not make the executable statically linked.
+Native glibc builds select the GNU engine. Normal native Alpine builds select the musl engine.
+Neither needs a custom Go build tag.
+Cgo-enabled applications can require a newer libc than the bundled engine.
 
-   ```sh
-   RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static" cargo build --locked -p tui-test-ffi
-   ```
+Cross-compile for glibc Linux with:
 
-   The debug library is `target/debug/libtui_test_ffi.so` on Linux, `target/debug/libtui_test_ffi.dylib` on macOS, or `target/debug/tui_test_ffi.dll` on Windows. See [building and maintaining the Go binding](CONTRIBUTING.md#build-from-source) for release builds and platform-specific test commands.
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build .
+```
 
-3. In the Go application module, point the module path at the same checkout, then add it:
+For musl, also select the destination interpreter:
 
-   ```sh
-   go mod edit -replace github.com/microsoft/tui-test/bindings/go=/absolute/path/to/tui-test/bindings/go
-   go get github.com/microsoft/tui-test/bindings/go
-   ```
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  go build -ldflags '-I /lib/ld-musl-x86_64.so.1' .
+```
 
-   The replacement makes the selected checkout—not a separately resolved remote version—the source of the Go module. When changing revisions, check out the new revision, rebuild the library, and keep the replacement pointed at that checkout.
+For ARM64 musl, use `GOARCH=arm64` and `/lib/ld-musl-aarch64.so.1`.
+The interpreter must exist on the destination machine.
+A missing interpreter prevents startup before the binding can select an engine.
 
-4. Set `TUI_TEST_NATIVE_LIBRARY` to the absolute path of the library before running the application. On Linux or macOS:
+### Existing native installation
 
-   ```sh
-   export TUI_TEST_NATIVE_LIBRARY=/absolute/path/to/tui-test/target/debug/libtui_test_ffi.so
-   go run .
-   ```
+Set `TUI_TEST_NATIVE_LIBRARY` to override the bundled engine:
 
-   Use the `.dylib` path shown above on macOS. On Windows PowerShell:
+```sh
+export TUI_TEST_NATIVE_LIBRARY=/absolute/path/to/libtui_test_ffi.so
+```
 
-   ```powershell
-   $env:TUI_TEST_NATIVE_LIBRARY = (Resolve-Path C:\path\to\tui-test\target\debug\tui_test_ffi.dll)
-   go run .
-   ```
-
-The binding loads the configured engine on first use and keeps it loaded for the process lifetime. It does not download anything at runtime. Running the quick start below succeeds when its output contains `hello`. An empty `TUI_TEST_NATIVE_LIBRARY`, an unloadable library, or a library from an incompatible revision returns an initialization error before the terminal opens.
+Use `libtui_test_ffi.dylib` on macOS or `tui_test_ffi.dll` on Windows.
+Use the native archive from the same release and the correct platform.
+This mode needs no extraction cache.
+An invalid override returns an error; it never falls back to the bundled engine.
+The loader checks the ABI version, but that check does not prove an exact source-revision match.
 
 ## Quick start
 
@@ -109,6 +117,14 @@ func main() {
 ```
 
 Use `Run(program, args, SpawnOptions{})` to launch an application directly. Use `Open(OpenOptions{})` when you need a shell and its command tracking.
+
+The [smoke example](examples/smoke/main.go) runs its own child process and needs no external shell:
+
+```sh
+go run github.com/microsoft/tui-test/bindings/go/examples/smoke
+```
+
+Without an override, it prints `Go binding smoke passed (bundled engine)`.
 
 ## Sessions and options
 
@@ -257,7 +273,3 @@ func TestTerminal(t *testing.T) {
 ```
 
 Import `testing`, `github.com/microsoft/tui-test/bindings/go`, and `github.com/microsoft/tui-test/bindings/go/tuitesttest` in your test file. `tuitesttest.New` accepts client, spawn, shell, program, argument, and session-prefix settings through `tuitesttest.Options`. `ClientOptions.Artifacts` exports evidence when a tui-test assertion fails. `ClientOptions.Trace` with `TraceOnFailure` retains a trace when test cleanup reports that the test failed. `tuitesttest.TerminalSnapshot` removes trailing whitespace and blank lines for text comparisons. Each call has its own options, so parallel tests do not share mutable defaults.
-
-## Contributing
-
-See [building and testing the Go binding](CONTRIBUTING.md).

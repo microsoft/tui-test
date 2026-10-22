@@ -44,6 +44,10 @@ jobs:
             exit 1
           fi
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
       - name: Verify release versions
         shell: bash
         run: |
@@ -60,6 +64,7 @@ jobs:
             <(printf '%s\n' "${version_files[@]}" | sort) \
             <(rg -l --path-separator / --fixed-strings "$version" \
               "${version_files[@]}" | sort)
+          node .github/scripts/release/verify-go-version.mjs "$version"
 
       - name: Verify tui-test-rs crate package
         run: cargo publish --locked --package tui-test-rs --dry-run
@@ -136,7 +141,7 @@ jobs:
             tui-test-*.tar.gz
             tui-test-*.zip
 
-  build-node:
+  build-native:
     needs: verify
     strategy:
       fail-fast: false
@@ -144,7 +149,8 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
-            args: --target x86_64-unknown-linux-gnu
+            args: --target x86_64-unknown-linux-gnu -x
+            zigbuild: true
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             args: --target aarch64-unknown-linux-gnu -x
@@ -178,28 +184,63 @@ jobs:
           cache: npm
           cache-dependency-path: bindings/js/package-lock.json
 
-      - run: |
+      - if: "!endsWith(matrix.target, '-gnu')"
+        run: |
           rustup toolchain install stable --profile default
           rustup default stable
           rustup target add ${{ matrix.target }}
 
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        if: "!endsWith(matrix.target, '-gnu')"
         with:
           version: "0.16.0"
           cache-key: ${{ matrix.target }}
 
       - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
-        if: matrix.zigbuild
+        if: matrix.zigbuild && !endsWith(matrix.target, '-gnu')
         with:
           tool: cargo-zigbuild
 
       - run: npm ci
         working-directory: bindings/js
 
-      - name: Build Node shared library
+      - name: Install maintenance script dependencies
+        run: npm ci --prefix .github/scripts --ignore-scripts
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        with:
+          platforms: arm64
+
+      - name: Build shared native engine
         working-directory: bindings/js
         shell: bash
         run: npm run build:native -- ${{ matrix.args }}
+
+      - name: Check Linux dependencies and glibc baseline
+        if: runner.os == 'Linux'
+        run: >-
+          node .github/scripts/release/check-native-elf.mjs
+          --library target/${{ matrix.target }}/release/libtui_test_ffi.so
+          --target ${{ matrix.target }}
+
+      - name: Pack shared native engine
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            *windows*) library=tui_test_ffi.dll ;;
+            *apple*) library=libtui_test_ffi.dylib ;;
+            *) library=libtui_test_ffi.so ;;
+          esac
+          node .github/scripts/release/package-native.mjs native \
+            --library "target/${{ matrix.target }}/release/$library" \
+            --target "${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-${{ matrix.target }}
+          path: target/native-packages/*
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -211,7 +252,7 @@ jobs:
           if-no-files-found: error
 
   package-node:
-    needs: build-node
+    needs: build-native
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -239,6 +280,9 @@ jobs:
       - name: Pack Node packages
         run: node .github/scripts/release/package-node.mjs
 
+      - name: Test native build options and Node packaging
+        run: node --test .github/scripts/release/build-native.test.mjs .github/scripts/release/package-node.test.mjs
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
@@ -265,6 +309,57 @@ jobs:
         with:
           name: npm-packages
           path: package-artifacts/npm/*.tgz
+          if-no-files-found: error
+
+  package-go:
+    needs: build-native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: bindings/go/go.mod
+          cache-dependency-path: bindings/go/go.sum
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install maintenance script dependencies
+        run: npm ci --prefix .github/scripts --ignore-scripts
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: native-*
+          path: target/native-packages
+          merge-multiple: true
+
+      - name: Test release scripts
+        run: npm test --prefix .github/scripts
+
+      - name: Assemble Go module
+        run: node .github/scripts/release/package-native.mjs go --artifacts target/native-packages
+
+      - name: Test assembled Go module
+        working-directory: target/go-package
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go build ./...
+          go test ./...
+
+      - name: Test external Go consumer and README example
+        run: node .github/scripts/test-go-embedded.mjs target/go-package
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: go-package
+          path: |
+            target/tui-test-go-*.tar.gz
+            target/tui-test-go-*.tar.gz.sha256
           if-no-files-found: error
 
   build-python:
@@ -333,7 +428,7 @@ jobs:
           CARGO_BUILD_TARGET: ${{ matrix.target }}
           CIBW_ENVIRONMENT_PASS_LINUX: CARGO_BUILD_TARGET
           CIBW_ENVIRONMENT_LINUX: PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-          CIBW_BEFORE_ALL_LINUX: bash {project}/.github/scripts/release/prepare-python-linux.sh
+          CIBW_BEFORE_ALL_LINUX: bash {project}/.github/scripts/release/prepare-linux.sh
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
           CIBW_MUSLLINUX_X86_64_IMAGE: musllinux_1_2
@@ -502,10 +597,73 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
+  publish-go:
+    needs:
+      - package-go
+      - release
+    if: always() && needs.package-go.result == 'success' && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install maintenance script dependencies
+        run: npm ci --prefix .github/scripts --ignore-scripts
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: go-package
+          path: target
+
+      - name: Restore assembled Go module
+        shell: bash
+        run: |
+          cd target
+          sha256sum --check "tui-test-go-${RELEASE_TAG}.tar.gz.sha256"
+          mkdir go-package
+          tar -xzf "tui-test-go-${RELEASE_TAG}.tar.gz" -C go-package
+
+      - name: Publish immutable Go module tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source"
+          test -z "$(git status --porcelain --untracked-files=all -- bindings/go bindings/js/package.json LICENSE)"
+          node .github/scripts/release/package-native.mjs verify --version "$RELEASE_TAG" --package target/go-package
+          cp -a target/go-package/. bindings/go/
+          git add --force -- bindings/go
+          expected="$(git write-tree)"
+          tag="bindings/go/v$RELEASE_TAG"
+          existing="$(git ls-remote --tags origin "refs/tags/$tag")"
+          if [[ -n "$existing" ]]; then
+            git fetch --no-tags origin "refs/tags/$tag"
+            if [[ "$(git show -s --format=%P 'FETCH_HEAD^{commit}')" != "$source" ]] ||
+               [[ "$(git rev-parse 'FETCH_HEAD^{tree}')" != "$expected" ]]; then
+              echo "$tag already exists with different content or source; refusing to replace it" >&2
+              exit 1
+            fi
+            echo "$tag already contains the expected Go module"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -s -m "build(go): bundle native libraries for $RELEASE_TAG"
+          git tag "$tag"
+          git push origin "refs/tags/$tag:refs/tags/$tag"
+
   release:
     needs:
       - build-cli
       - package-node
+      - package-go
       - build-python
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -517,6 +675,17 @@ jobs:
           path: artifacts
           pattern: tui-test-*
           merge-multiple: true
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          pattern: native-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          name: go-package
 
       - env:
           GH_TOKEN: ${{ github.token }}
