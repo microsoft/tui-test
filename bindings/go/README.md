@@ -13,7 +13,7 @@ go get github.com/microsoft/tui-test/bindings/go@v<version>
 The repository tag is `bindings/go/v<version>`.
 Released modules contain prebuilt native engines. Users need no Rust compiler,
 Zig, C compiler, CLI, or separate installer.
-Source checkouts do not contain these binaries; see [Build from source](CONTRIBUTING.md#build-from-source).
+Source checkouts do not contain these binaries; see [Build and use](../../crates/tui-test-ffi/README.md#build-and-use).
 
 | OS | Go architectures | Native runtime |
 | --- | --- | --- |
@@ -254,7 +254,3 @@ func TestTerminal(t *testing.T) {
 ```
 
 Import `testing`, `github.com/microsoft/tui-test/bindings/go`, and `github.com/microsoft/tui-test/bindings/go/tuitesttest` in your test file. `tuitesttest.New` accepts client, spawn, shell, program, argument, and session-prefix settings through `tuitesttest.Options`. `ClientOptions.Artifacts` exports evidence when a tui-test assertion fails. `ClientOptions.Trace` with `TraceOnFailure` retains a trace when test cleanup reports that the test failed. `tuitesttest.TerminalSnapshot` removes trailing whitespace and blank lines for text comparisons. Each call has its own options, so parallel tests do not share mutable defaults.
-
-## Contributing
-
-See [building and testing the Go binding](CONTRIBUTING.md).
