@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
@@ -16,7 +16,7 @@ function build(t, args, host = "x86_64-unknown-linux-gnu") {
   for (const name of ["package.json", "scripts/build-native.mjs"]) {
     fs.copyFileSync(path.join(root, "bindings/js", name), path.join(bindings, name));
   }
-  const mock = path.join(directory, "mock.mjs");
+  const mock = path.join(directory, "mock #%.mjs");
   fs.writeFileSync(mock, `
 import childProcess from "node:child_process";
 import fs from "node:fs";
@@ -39,7 +39,7 @@ childProcess.execFileSync = (command, args, options) => {
 };
 syncBuiltinESMExports();
 `);
-  execFileSync(process.execPath, ["--import", mock, path.join(bindings, "scripts/build-native.mjs"), ...args], {
+  execFileSync(process.execPath, ["--import", pathToFileURL(mock).href, path.join(bindings, "scripts/build-native.mjs"), ...args], {
     cwd: directory,
     env: { ...process.env, RUSTFLAGS: "-C debuginfo=1", CARGO_TARGET_DIR: "caller-target" },
     stdio: "pipe",
