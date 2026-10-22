@@ -31,6 +31,7 @@ func nativeLayoutPairs() []nativeLayoutPair {
 		{reflect.TypeFor[abiTimeouts](), reflect.TypeFor[C.TuiTimeouts]()},
 		{reflect.TypeFor[abiState](), reflect.TypeFor[C.TuiState]()},
 		{reflect.TypeFor[abiSize](), reflect.TypeFor[C.TuiSize]()},
+		{reflect.TypeFor[abiViewport](), reflect.TypeFor[C.TuiViewport]()},
 		{reflect.TypeFor[abiColor](), reflect.TypeFor[C.TuiColor]()},
 		{reflect.TypeFor[abiCell](), reflect.TypeFor[C.TuiCell]()},
 		{reflect.TypeFor[abiPosition](), reflect.TypeFor[C.TuiPosition]()},
