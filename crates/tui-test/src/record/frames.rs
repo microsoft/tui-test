@@ -55,8 +55,7 @@ pub(crate) fn max_dimensions(frames: &[Frame]) -> anyhow::Result<(u16, usize)> {
 pub(crate) struct TimelineOptions {
     pub fps: u8,
     pub speed: f64,
-    pub idle_time_limit: Duration,
-    pub last_frame_duration: Duration,
+    pub idle_time_limit: Option<Duration>,
 }
 
 impl Default for TimelineOptions {
@@ -64,67 +63,110 @@ impl Default for TimelineOptions {
         Self {
             fps: 30,
             speed: 1.0,
-            idle_time_limit: Duration::from_secs(5),
-            last_frame_duration: Duration::from_secs(3),
+            idle_time_limit: None,
         }
     }
 }
 
 pub(crate) struct FrameCapture {
-    started: Instant,
     options: TimelineOptions,
-    clock: TimelineClock,
+    revision: u64,
+    sampled_at: Instant,
     pending: TimedGrid,
-    collector: FrameCollector,
+    output: Vec<Frame>,
+    duration: Duration,
     error: Option<anyhow::Error>,
 }
 
 impl FrameCapture {
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub(crate) fn fail(&mut self, error: anyhow::Error) {
+        self.error.get_or_insert(error);
+    }
+
     pub(crate) fn new(
         emulator: &dyn Emulator,
         options: TimelineOptions,
         started: Instant,
+        revision: u64,
     ) -> anyhow::Result<Self> {
         validate_options(&options)?;
-        let mut clock = TimelineClock::default();
-        clock.advance(0.0, &options)?;
         Ok(Self {
-            started,
-            collector: FrameCollector::new(Duration::from_secs_f64(1.0 / f64::from(options.fps))),
             options,
-            clock,
-            pending: TimedGrid::capture(emulator, Duration::ZERO)?,
+            revision,
+            sampled_at: started,
+            pending: TimedGrid::capture(emulator, started)?,
+            output: Vec::new(),
+            duration: Duration::ZERO,
             error: None,
         })
     }
 
-    pub(crate) fn capture(&mut self, emulator: &dyn Emulator, at: Instant) {
+    pub(crate) fn capture(&mut self, emulator: &dyn Emulator, at: Instant, revision: u64) {
         if self.error.is_none() {
-            if let Err(error) = self.push(emulator, at) {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.push(emulator, at, revision)
+            }))
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("recording frame capture panicked")));
+            if let Err(error) = result {
                 self.error = Some(error);
             }
         }
     }
 
-    fn push(&mut self, emulator: &dyn Emulator, at: Instant) -> anyhow::Result<()> {
-        let at = self.clock.advance(
-            at.saturating_duration_since(self.started).as_secs_f64(),
-            &self.options,
-        )?;
+    fn push(&mut self, emulator: &dyn Emulator, at: Instant, revision: u64) -> anyhow::Result<()> {
+        self.check_time(at)?;
+        if let Some(error) = emulator.fault() {
+            anyhow::bail!("recording frame capture failed: {error}");
+        }
+        if self.revision == revision {
+            return Ok(());
+        }
+        self.revision = revision;
         let next = TimedGrid::capture(emulator, at)?;
+        if self.pending.frame.same_visual_state(&next.frame) {
+            return Ok(());
+        }
+        let duration = self.frame_duration(at)?;
         let previous = std::mem::replace(&mut self.pending, next);
-        let duration = at.saturating_sub(previous.at);
-        self.collector.push(previous.into_frame(duration));
+        self.output.push(previous.into_frame(duration));
         Ok(())
     }
 
-    pub(crate) fn finish(mut self) -> anyhow::Result<Vec<Frame>> {
+    fn check_time(&mut self, at: Instant) -> anyhow::Result<()> {
+        if at < self.sampled_at {
+            anyhow::bail!("recording timestamps must be monotonic");
+        }
+        self.sampled_at = at;
+        Ok(())
+    }
+
+    fn frame_duration(&mut self, at: Instant) -> anyhow::Result<Duration> {
+        let elapsed = at.duration_since(self.pending.at);
+        let elapsed = self
+            .options
+            .idle_time_limit
+            .map_or(elapsed, |limit| elapsed.min(limit));
+        let duration = Duration::try_from_secs_f64(elapsed.as_secs_f64() / self.options.speed)
+            .map_err(|_| anyhow::anyhow!("recording timeline duration is too large"))?;
+        self.duration = self
+            .duration
+            .checked_add(duration)
+            .ok_or_else(|| anyhow::anyhow!("recording timeline duration is too large"))?;
+        Ok(duration)
+    }
+
+    pub(crate) fn finish(mut self, at: Instant) -> anyhow::Result<Vec<Frame>> {
         if let Some(error) = self.error {
             return Err(error);
         }
-        self.collector
-            .push(self.pending.into_frame(self.options.last_frame_duration));
-        Ok(self.collector.finish())
+        self.check_time(at)?;
+        let duration = self.frame_duration(at)?;
+        self.output.push(self.pending.into_frame(duration));
+        Ok(self.output)
     }
 }
 
@@ -138,28 +180,6 @@ fn validate_options(options: &TimelineOptions) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Default)]
-struct TimelineClock {
-    previous: Option<f64>,
-    adjusted: Duration,
-}
-
-impl TimelineClock {
-    fn advance(&mut self, current: f64, options: &TimelineOptions) -> anyhow::Result<Duration> {
-        let Some(previous) = self.previous.replace(current) else {
-            return Ok(Duration::ZERO);
-        };
-        let gap = (current - previous)
-            .max(0.0)
-            .min(options.idle_time_limit.as_secs_f64())
-            / options.speed;
-        let gap = Duration::try_from_secs_f64(gap)
-            .map_err(|_| anyhow::anyhow!("recording timeline duration is too large"))?;
-        self.adjusted = self.adjusted.saturating_add(gap);
-        Ok(self.adjusted)
-    }
-}
-
 fn normalize_grid(source: Vec<Vec<EmuCell>>, cols: u16, rows: u16) -> Vec<Vec<EmuCell>> {
     let mut output = vec![vec![EmuCell::blank(); usize::from(cols)]; usize::from(rows)];
     for (target, source) in output.iter_mut().zip(source) {
@@ -171,12 +191,12 @@ fn normalize_grid(source: Vec<Vec<EmuCell>>, cols: u16, rows: u16) -> Vec<Vec<Em
 }
 
 struct TimedGrid {
-    at: Duration,
+    at: Instant,
     frame: Frame,
 }
 
 impl TimedGrid {
-    fn capture(emulator: &dyn Emulator, at: Duration) -> anyhow::Result<Self> {
+    fn capture(emulator: &dyn Emulator, at: Instant) -> anyhow::Result<Self> {
         let (cols, rows) = emulator.size();
         let frame = Frame {
             grid: normalize_grid(emulator.viewable_rows(), cols, rows),
@@ -199,56 +219,6 @@ impl TimedGrid {
     }
 }
 
-struct FrameCollector {
-    minimum: Duration,
-    merged: Option<Frame>,
-    output: Vec<Frame>,
-}
-
-impl FrameCollector {
-    fn new(minimum: Duration) -> Self {
-        Self {
-            minimum,
-            merged: None,
-            output: Vec::new(),
-        }
-    }
-
-    fn push(&mut self, frame: Frame) {
-        if let Some(previous) = self
-            .merged
-            .as_mut()
-            .filter(|previous| previous.same_visual_state(&frame))
-        {
-            previous.duration = previous.duration.saturating_add(frame.duration);
-        } else {
-            if let Some(previous) = self.merged.replace(frame) {
-                self.push_capped(previous);
-            }
-        }
-    }
-
-    fn push_capped(&mut self, frame: Frame) {
-        if let Some(previous) = self
-            .output
-            .last_mut()
-            .filter(|previous| previous.duration < self.minimum)
-        {
-            let duration = previous.duration.saturating_add(frame.duration);
-            *previous = Frame { duration, ..frame };
-        } else {
-            self.output.push(frame);
-        }
-    }
-
-    fn finish(mut self) -> Vec<Frame> {
-        if let Some(frame) = self.merged.take() {
-            self.push_capped(frame);
-        }
-        self.output
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,24 +232,6 @@ mod tests {
     #[cfg(feature = "recording-raster")]
     use crate::render::raster::{FrameRenderer, GridRenderer};
 
-    fn grid(ch: &str) -> Vec<Vec<EmuCell>> {
-        vec![vec![EmuCell {
-            ch: ch.into(),
-            ..EmuCell::blank()
-        }]]
-    }
-
-    fn frame(ch: &str, duration: Duration) -> Frame {
-        let emulator = AlacrittyEmu::new(1, 1, &Profile::default());
-        Frame {
-            grid: grid(ch),
-            title: None,
-            duration,
-            render_state: RenderState::capture(&emulator),
-            cursor: Some((0, 0)),
-        }
-    }
-
     #[test]
     fn viewport_movements_capture_frames_without_pty_output() {
         use crate::api::ScrollTarget;
@@ -289,13 +241,13 @@ mod tests {
             let live = emu.viewable_rows();
             let started = Instant::now();
             let mut capture =
-                FrameCapture::new(emu.as_ref(), TimelineOptions::default(), started).unwrap();
+                FrameCapture::new(emu.as_ref(), TimelineOptions::default(), started, 0).unwrap();
             emu.scroll(ScrollTarget::Top);
             let history = emu.viewable_rows();
-            capture.capture(emu.as_ref(), started + Duration::from_secs(1));
+            capture.capture(emu.as_ref(), started + Duration::from_secs(1), 1);
             emu.scroll(ScrollTarget::Bottom);
-            capture.capture(emu.as_ref(), started + Duration::from_secs(2));
-            let frames = capture.finish().unwrap();
+            capture.capture(emu.as_ref(), started + Duration::from_secs(2), 2);
+            let frames = capture.finish(started + Duration::from_secs(3)).unwrap();
             assert_eq!(frames.len(), 3, "{backend:?}");
             assert_eq!(frames[0].grid, live);
             assert_eq!(frames[1].grid, history);
@@ -306,70 +258,100 @@ mod tests {
     }
 
     #[test]
-    fn idle_gaps_are_clamped_before_speed_scaling() {
-        let options = TimelineOptions {
-            speed: 2.0,
-            idle_time_limit: Duration::from_secs(5),
-            ..TimelineOptions::default()
-        };
-        let mut clock = TimelineClock::default();
-        assert_eq!(clock.advance(0.0, &options).unwrap(), Duration::ZERO);
-        assert_eq!(
-            clock.advance(10.0, &options).unwrap(),
-            Duration::from_millis(2500)
-        );
-    }
-
-    #[test]
-    fn identical_frames_extend_the_previous_duration() {
-        let frames = vec![
-            frame("a", Duration::from_millis(20)),
-            frame("a", Duration::from_millis(30)),
-        ];
-        let mut collector = FrameCollector::new(Duration::ZERO);
-        for frame in frames {
-            collector.push(frame);
+    fn unchanged_samples_share_one_idle_limit_before_speed_scaling() {
+        for limit in [None, Some(Duration::from_secs(5)), Some(Duration::ZERO)] {
+            let started = Instant::now();
+            let mut emulator = AlacrittyEmu::new(1, 1, &Profile::default());
+            let options = TimelineOptions {
+                speed: 2.0,
+                idle_time_limit: limit,
+                ..Default::default()
+            };
+            let mut capture = FrameCapture::new(&emulator, options, started, 0).unwrap();
+            for index in 1..10 {
+                // A revision can change without a visible change.
+                capture.capture(&emulator, started + Duration::from_secs(index), index);
+            }
+            emulator.process(b"A");
+            capture.capture(&emulator, started + Duration::from_secs(10), 10);
+            for index in 11..20 {
+                capture.capture(&emulator, started + Duration::from_secs(index), 10);
+            }
+            let frames = capture.finish(started + Duration::from_secs(20)).unwrap();
+            assert_eq!(frames.len(), 2);
+            let expected = limit.unwrap_or(Duration::from_secs(10)).div_f64(2.0);
+            assert_eq!(frames[0].duration, expected);
+            assert_eq!(frames[1].duration, expected);
         }
-        let merged = collector.finish();
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].duration, Duration::from_millis(50));
     }
 
     #[test]
-    fn fps_cap_coalesces_short_frames_into_the_latest_grid() {
-        let frames = vec![
-            frame("a", Duration::from_millis(10)),
-            frame("b", Duration::from_millis(10)),
-            frame("c", Duration::from_millis(100)),
-        ];
-        let mut collector = FrameCollector::new(Duration::from_millis(34));
-        for frame in frames {
-            collector.push(frame);
-        }
-        let capped = collector.finish();
-        assert_eq!(capped.len(), 1);
-        assert_eq!(capped[0].grid, grid("c"));
-        assert_eq!(capped[0].duration, Duration::from_millis(120));
-    }
-
-    #[test]
-    #[cfg(feature = "recording-raster")]
-    fn capture_retains_only_fps_limited_frames() {
+    fn delayed_samples_preserve_real_durations_without_historical_frames() {
         let started = Instant::now();
         let mut emulator = AlacrittyEmu::new(1, 1, &Profile::default());
         let mut capture =
-            FrameCapture::new(&emulator, TimelineOptions::default(), started).unwrap();
-        for index in 0..1_000 {
-            emulator.process(if index % 2 == 0 { b"\rA" } else { b"\rB" });
-            capture.capture(&emulator, started + Duration::from_millis(index));
-        }
-
-        let frames = capture.finish().unwrap();
-        assert!(frames.len() <= 31, "retained {} frames", frames.len());
+            FrameCapture::new(&emulator, TimelineOptions::default(), started, 0).unwrap();
+        emulator.process(b"\rA");
+        emulator.process(b"\rB");
+        capture.capture(&emulator, started + Duration::from_secs(8), 2);
+        let frames = capture
+            .finish(started + Duration::from_millis(8123))
+            .unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].duration, Duration::from_secs(8));
+        assert_eq!(frames[1].duration, Duration::from_millis(123));
+        assert_eq!(frames[1].grid[0][0].ch, "B");
         assert_eq!(
             frames.iter().map(|frame| frame.duration).sum::<Duration>(),
-            Duration::from_millis(3_999)
+            Duration::from_millis(8123)
         );
+    }
+
+    #[test]
+    fn unchanged_revision_skips_the_grid_copy_but_keeps_elapsed_time() {
+        let started = Instant::now();
+        let mut emulator = AlacrittyEmu::new(1, 1, &Profile::default());
+        let initial = emulator.viewable_rows();
+        let mut capture =
+            FrameCapture::new(&emulator, TimelineOptions::default(), started, 0).unwrap();
+        emulator.process(b"A");
+        capture.capture(&emulator, started + Duration::from_secs(1), 0);
+        let frames = capture.finish(started + Duration::from_secs(2)).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].grid, initial);
+        assert_eq!(frames[0].duration, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn invalid_timestamps_and_duration_overflow_are_errors() {
+        let started = Instant::now();
+        let emulator = AlacrittyEmu::new(1, 1, &Profile::default());
+        let options = TimelineOptions {
+            speed: f64::MIN_POSITIVE,
+            ..Default::default()
+        };
+        let capture = FrameCapture::new(&emulator, options, started, 0).unwrap();
+        assert!(capture.finish(started + Duration::from_secs(1)).is_err());
+        let mut capture =
+            FrameCapture::new(&emulator, TimelineOptions::default(), started, 0).unwrap();
+        capture.capture(&emulator, started + Duration::from_secs(2), 0);
+        assert!(capture.finish(started + Duration::from_secs(1)).is_err());
+        for options in [
+            TimelineOptions {
+                fps: 0,
+                ..Default::default()
+            },
+            TimelineOptions {
+                speed: f64::NAN,
+                ..Default::default()
+            },
+            TimelineOptions {
+                speed: 0.0,
+                ..Default::default()
+            },
+        ] {
+            assert!(FrameCapture::new(&emulator, options, started, 0).is_err());
+        }
     }
 
     #[test]
@@ -386,10 +368,12 @@ mod tests {
               \x1b[1;2H\x1b[6 q",
         );
         let mut capture =
-            FrameCapture::new(&emulator, TimelineOptions::default(), started).unwrap();
+            FrameCapture::new(&emulator, TimelineOptions::default(), started, 0).unwrap();
         emulator.process(b"\x1b]2;after\x07\x1b]11;#070809\x07\x1b[1;1H\x1b[?25l");
-        capture.capture(&emulator, started + Duration::from_millis(100));
-        let frames = capture.finish().unwrap();
+        capture.capture(&emulator, started + Duration::from_millis(100), 1);
+        let frames = capture
+            .finish(started + Duration::from_millis(200))
+            .unwrap();
 
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].title.as_deref(), Some("before"));
@@ -418,16 +402,18 @@ mod tests {
         let mut emulator = AlacrittyEmu::new(2, 1, &Profile::default());
         emulator.process(b"A");
         let mut capture =
-            FrameCapture::new(&emulator, TimelineOptions::default(), started).unwrap();
+            FrameCapture::new(&emulator, TimelineOptions::default(), started, 0).unwrap();
         emulator.resize(4, 2);
-        capture.capture(&emulator, started + Duration::from_millis(100));
+        capture.capture(&emulator, started + Duration::from_millis(100), 1);
         emulator.process(b"\x1b[2J\x1b[HB");
-        capture.capture(&emulator, started + Duration::from_millis(200));
+        capture.capture(&emulator, started + Duration::from_millis(200), 2);
         emulator.resize(1, 1);
-        capture.capture(&emulator, started + Duration::from_millis(300));
+        capture.capture(&emulator, started + Duration::from_millis(300), 3);
         emulator.process(b"\x1b[2J\x1b[HC");
-        capture.capture(&emulator, started + Duration::from_millis(400));
-        let frames = capture.finish().unwrap();
+        capture.capture(&emulator, started + Duration::from_millis(400), 4);
+        let frames = capture
+            .finish(started + Duration::from_millis(500))
+            .unwrap();
         let mut dimensions = frames
             .iter()
             .map(|frame| frame.dimensions().unwrap())
@@ -452,10 +438,12 @@ mod tests {
             live.process(b"PRIMARY\x1b[?47h\x1b[H\x1b[2JALT");
             let initial = live.viewable_rows();
             let mut capture =
-                FrameCapture::new(live.as_ref(), TimelineOptions::default(), started).unwrap();
+                FrameCapture::new(live.as_ref(), TimelineOptions::default(), started, 0).unwrap();
             live.process(b"\x1b]11;#abcdef\x07\x1b]111\x07\x1b[?1049l");
-            capture.capture(live.as_ref(), started + Duration::from_millis(100));
-            let frames = capture.finish().unwrap();
+            capture.capture(live.as_ref(), started + Duration::from_millis(100), 1);
+            let frames = capture
+                .finish(started + Duration::from_millis(200))
+                .unwrap();
             assert_eq!(frames[0].grid, initial, "{backend:?}");
             let last = frames.last().unwrap();
             assert_eq!(last.grid, live.viewable_rows(), "{backend:?}");
@@ -473,10 +461,12 @@ mod tests {
         for &backend in Backend::ALL {
             let mut live = backend.build(2, 1, &Profile::default()).unwrap();
             let mut capture =
-                FrameCapture::new(live.as_ref(), TimelineOptions::default(), started).unwrap();
+                FrameCapture::new(live.as_ref(), TimelineOptions::default(), started, 0).unwrap();
             live.process(b"\x1b]52;0;Y3V0IGJ1ZmZlcg==\x07");
-            capture.capture(live.as_ref(), started + Duration::from_millis(100));
-            let error = capture.finish().unwrap_err();
+            capture.capture(live.as_ref(), started + Duration::from_millis(100), 0);
+            let error = capture
+                .finish(started + Duration::from_millis(200))
+                .unwrap_err();
             let message = error.to_string();
             assert!(message.contains("frame capture failed"), "{message}");
             assert!(message.contains("clipboard"), "{message}");
@@ -487,11 +477,14 @@ mod tests {
     fn capture_without_new_output_keeps_the_initial_frame_and_pending_replies() {
         let mut live = AlacrittyEmu::new(16, 2, &Profile::default());
         live.process(b"existing screen\x1b[6n");
-        let capture = FrameCapture::new(&live, TimelineOptions::default(), Instant::now()).unwrap();
-        let frames = capture.finish().unwrap();
+        let started = Instant::now();
+        let capture = FrameCapture::new(&live, TimelineOptions::default(), started, 0).unwrap();
+        let frames = capture
+            .finish(started + Duration::from_millis(7123))
+            .unwrap();
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].grid, live.viewable_rows());
-        assert_eq!(frames[0].duration, Duration::from_secs(3));
+        assert_eq!(frames[0].duration, Duration::from_millis(7123));
         assert!(!live.take_pending_writes().is_empty());
     }
 
@@ -501,14 +494,16 @@ mod tests {
         let started = Instant::now();
         let mut live = AlacrittyEmu::new(2, 1, &Profile::default());
         live.process(b"\x1b[2J\x1b[H\x1b[48;2;200;10;20mA");
-        let mut capture = FrameCapture::new(&live, TimelineOptions::default(), started).unwrap();
+        let mut capture = FrameCapture::new(&live, TimelineOptions::default(), started, 0).unwrap();
         live.process(b"\x1b[48;2;10;20;200mB");
-        capture.capture(&live, started + Duration::from_millis(100));
-        let frames = capture.finish().unwrap();
+        capture.capture(&live, started + Duration::from_millis(100), 1);
+        let frames = capture
+            .finish(started + Duration::from_millis(200))
+            .unwrap();
         assert_eq!(frames.len(), 2);
         assert_eq!(
             frames.iter().map(|frame| frame.duration).sum::<Duration>(),
-            Duration::from_millis(3100)
+            Duration::from_millis(200)
         );
 
         let mut renderer = GridRenderer::with_scale(2, 1, 2);

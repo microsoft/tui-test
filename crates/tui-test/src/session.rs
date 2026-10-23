@@ -103,9 +103,77 @@ pub struct Session {
     pub cancelled: Arc<AtomicBool>,
     pub(crate) bells: BellTracker,
     recorder: Recorder,
+    #[cfg(feature = "recording-raster")]
+    recording_sampler: Mutex<Option<RecordingSampler>>,
     logger: Arc<Logger>,
     reader: Option<JoinHandle<()>>,
     _process_watcher: JoinHandle<()>,
+}
+
+#[cfg(feature = "recording-raster")]
+struct RecordingSampler {
+    stop: std::sync::mpsc::Sender<()>,
+    worker: JoinHandle<()>,
+}
+
+#[cfg(feature = "recording-raster")]
+impl RecordingSampler {
+    fn start(state: &Arc<Mutex<TermState>>, started: Instant, fps: u8) -> std::io::Result<Self> {
+        let state = Arc::downgrade(state);
+        let (stop, receiver) = std::sync::mpsc::channel();
+        let interval = Duration::from_secs_f64(1.0 / f64::from(fps));
+        let worker = std::thread::Builder::new()
+            .name("tui-test-recording".into())
+            .spawn(move || loop {
+                let deadline = next_recording_deadline(started, Instant::now(), interval);
+                if let Ok(deadline) = deadline.as_ref() {
+                    match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                    {
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        _ => break,
+                    }
+                }
+                let Some(state) = state.upgrade() else { break };
+                let mut state = state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let TermState {
+                    emu,
+                    recording_frames,
+                    visual_revision,
+                    ..
+                } = &mut *state;
+                let Some(frames) = recording_frames.as_mut() else {
+                    break;
+                };
+                match deadline {
+                    Ok(_) => frames.capture(emu.as_ref(), Instant::now(), *visual_revision),
+                    Err(error) => {
+                        frames.fail(error);
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self { stop, worker })
+    }
+
+    fn stop(self) {
+        let _ = self.stop.send(());
+        // Capture panics are retained in FrameCapture and reported during export.
+        self.worker.join().expect("recording sampler panicked");
+    }
+}
+
+#[cfg(feature = "recording-raster")]
+fn next_recording_deadline(
+    started: Instant,
+    now: Instant,
+    interval: Duration,
+) -> anyhow::Result<Instant> {
+    let elapsed = now.duration_since(started);
+    let remainder = Duration::from_nanos((elapsed.as_nanos() % interval.as_nanos()) as u64);
+    now.checked_add(interval - remainder)
+        .ok_or_else(|| anyhow::anyhow!("recording sample deadline is too large"))
 }
 
 impl Session {
@@ -251,8 +319,6 @@ impl Session {
                             st.mouse_mode.process(&buf[..n]);
                             st.highlight = None;
                             reader_recorder.on_data(&buf[..n]);
-                            #[cfg(feature = "recording-raster")]
-                            capture_recording_frame(&mut st);
                             let _ = try_capture_visual_state(&mut st, false);
                             st.emu.take_pending_writes()
                         };
@@ -327,6 +393,8 @@ impl Session {
             cancelled,
             bells,
             recorder,
+            #[cfg(feature = "recording-raster")]
+            recording_sampler: Mutex::new(None),
             logger,
             reader: Some(reader_handle),
             _process_watcher: process_watcher,
@@ -443,16 +511,22 @@ impl Session {
                 "recording speed must be finite and greater than zero",
             ));
         }
-        let idle_time_limit = idle_time_limit.unwrap_or(5.0);
-        if !idle_time_limit.is_finite() || idle_time_limit < 0.0 {
+        if idle_time_limit.is_some_and(|limit| !limit.is_finite() || limit < 0.0) {
             return Err(crate::api::TuiTestError::usage(
                 "idle time limit must be a finite, non-negative number of seconds",
             ));
         }
-        let idle_time_limit = std::time::Duration::try_from_secs_f64(idle_time_limit)
+        let idle_time_limit = idle_time_limit
+            .map(Duration::try_from_secs_f64)
+            .transpose()
             .map_err(|_| crate::api::TuiTestError::usage("idle time limit is too large"))?;
-        std::time::Duration::try_from_secs_f64(idle_time_limit.as_secs_f64() / speed)
-            .map_err(|_| crate::api::TuiTestError::usage("recording speed is too small"))?;
+        std::time::Duration::try_from_secs_f64(
+            idle_time_limit
+                .unwrap_or(Duration::from_secs(1))
+                .as_secs_f64()
+                / speed,
+        )
+        .map_err(|_| crate::api::TuiTestError::usage("recording speed is too small"))?;
 
         let target_path = PathBuf::from(path);
         let capture_path = if format == crate::api::RecordingFormat::Cast {
@@ -464,10 +538,18 @@ impl Session {
         if let Some(shell) = self.shell {
             env.push(("SHELL".to_string(), shell.as_str().to_string()));
         }
+        #[cfg(feature = "recording-raster")]
+        let mut sampler = self
+            .recording_sampler
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(crate::api::TuiTestError::internal("session is closed"));
+        }
         let (cols, rows) = state.emu.size();
         let initial_output = record::cast::snapshot_to_ansi(state.emu.as_ref());
         let request = StartRecording {
@@ -489,11 +571,11 @@ impl Session {
                 fps,
                 speed,
                 idle_time_limit,
-                ..record::frames::TimelineOptions::default()
             },
             #[cfg(feature = "recording-raster")]
             ffmpeg_path,
         };
+        let started = Instant::now();
         #[cfg(feature = "recording-raster")]
         let frames = if format == crate::api::RecordingFormat::Cast {
             None
@@ -502,21 +584,41 @@ impl Session {
                 record::frames::FrameCapture::new(
                     state.emu.as_ref(),
                     request.timeline.clone(),
-                    Instant::now(),
+                    started,
+                    state.visual_revision,
                 )
                 .map_err(|error| crate::api::TuiTestError::internal(error.to_string()))?,
             )
         };
-        self.recorder.start(request).map_err(capture_error)?;
+        self.recorder
+            .start_at(request, started)
+            .map_err(capture_error)?;
         #[cfg(feature = "recording-raster")]
         {
             let mut state = state;
             state.recording_frames = frames;
+            if state.recording_frames.is_some() {
+                match RecordingSampler::start(&self.state, started, fps) {
+                    Ok(worker) => *sampler = Some(worker),
+                    Err(error) => {
+                        state.recording_frames = None;
+                        let _ = self.recorder.stop();
+                        return Err(crate::api::TuiTestError::internal(format!(
+                            "failed to start recording sampler: {error}"
+                        )));
+                    }
+                }
+            }
         }
         Ok(())
     }
 
     pub fn stop_recording(&self) -> Result<String, crate::api::TuiTestError> {
+        #[cfg(feature = "recording-raster")]
+        let mut sampler = self
+            .recording_sampler
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = self
             .state
             .lock()
@@ -524,9 +626,22 @@ impl Session {
         #[cfg(feature = "recording-raster")]
         let mut state = state;
         #[cfg(feature = "recording-raster")]
-        let frames = state.recording_frames.take();
-        let stopped = self.recorder.stop().map_err(capture_error)?;
+        let frames = state.recording_frames.take().map(|mut frames| {
+            let stopped = Instant::now();
+            // Check faults without sampling a new visual state at the stop boundary.
+            frames.capture(state.emu.as_ref(), stopped, frames.revision());
+            frames.finish(stopped)
+        });
+        let stopped = self.recorder.stop();
         drop(state);
+        #[cfg(feature = "recording-raster")]
+        {
+            if let Some(worker) = sampler.take() {
+                worker.stop();
+            }
+            drop(sampler);
+        }
+        let stopped = stopped.map_err(capture_error)?;
         if stopped.format == crate::api::RecordingFormat::Cast {
             return Ok(stopped.target_path.to_string_lossy().into_owned());
         }
@@ -540,9 +655,8 @@ impl Session {
         {
             let temporary_path = temporary_output_path(&stopped.target_path);
             let result = (|| -> anyhow::Result<()> {
-                let frames = frames
-                    .ok_or_else(|| anyhow::anyhow!("recording frames are unavailable"))?
-                    .finish()?;
+                let frames =
+                    frames.ok_or_else(|| anyhow::anyhow!("recording frames are unavailable"))??;
                 let (max_cols, max_rows) = record::frames::max_dimensions(&frames)?;
                 let mut renderer = GridRenderer::with_zoom_and_background(
                     max_cols,
@@ -579,7 +693,24 @@ impl Session {
 
     pub fn kill(&self) {
         self.cancelled.store(true, Ordering::Release);
+        #[cfg(feature = "recording-raster")]
+        self.stop_recording_sampler();
         self.pty.close();
+    }
+
+    #[cfg(feature = "recording-raster")]
+    fn stop_recording_sampler(&self) {
+        let mut sampler = self
+            .recording_sampler
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .recording_frames = None;
+        if let Some(worker) = sampler.take() {
+            worker.stop();
+        }
     }
 
     pub fn pid(&self) -> Option<u32> {
@@ -683,15 +814,6 @@ fn invalidate_emulator_view(state: &mut TermState) {
     state.screen_dirty = true;
     state.last_change = Instant::now();
     state.highlight = None;
-    #[cfg(feature = "recording-raster")]
-    capture_recording_frame(state);
-}
-
-#[cfg(feature = "recording-raster")]
-fn capture_recording_frame(state: &mut TermState) {
-    if let Some(frames) = state.recording_frames.as_mut() {
-        frames.capture(state.emu.as_ref(), Instant::now());
-    }
 }
 
 pub(crate) fn capture_visual_state(state: &mut TermState, force: bool) -> u64 {
@@ -771,6 +893,8 @@ fn drain_reader_and_recorder(reader: &mut Option<JoinHandle<()>>, recorder: &mut
 impl Drop for Session {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
+        #[cfg(feature = "recording-raster")]
+        self.stop_recording_sampler();
         self.pty.close();
         drain_reader_and_recorder(&mut self.reader, &mut self.recorder);
     }
@@ -886,6 +1010,251 @@ mod tests {
     use crate::terminal::alacritty::AlacrittyEmu;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
+
+    #[cfg(feature = "recording-raster")]
+    #[test]
+    fn recording_sampler_skips_late_deadlines_without_drift() {
+        let started = Instant::now();
+        let interval = Duration::from_millis(100);
+        for (now, next) in [(0, 100), (100, 200), (145, 200), (399, 400), (701, 800)] {
+            assert_eq!(
+                next_recording_deadline(started, started + Duration::from_millis(now), interval)
+                    .unwrap(),
+                started + Duration::from_millis(next)
+            );
+        }
+    }
+
+    #[cfg(all(unix, feature = "recording-raster"))]
+    fn recording_session() -> Session {
+        Session::open(
+            None,
+            Some(vec![
+                "sh".into(),
+                "-c".into(),
+                "stty -echo; printf READY; while read -r line; do printf '%s' \"$line\"; done"
+                    .into(),
+            ]),
+            Backend::Alacritty,
+            Profile::default(),
+            crate::render::style::Style::default(),
+            8,
+            2,
+            None,
+            vec![],
+            crate::api::Timeouts::default(),
+            DiagnosticRetentionOptions::default(),
+            Arc::new(Logger::disabled()),
+            None,
+            false,
+        )
+        .unwrap()
+    }
+
+    #[cfg(all(unix, feature = "recording-raster"))]
+    fn recording_options(path: &std::path::Path, fps: u8) -> ManualRecordingOptions {
+        ManualRecordingOptions {
+            path: path.to_string_lossy().into_owned(),
+            format: Some(crate::api::RecordingFormat::Apng),
+            fps: Some(fps),
+            speed: None,
+            idle_time_limit: None,
+            zoom: Some(0.5),
+            background: None,
+        }
+    }
+
+    #[cfg(all(unix, feature = "recording-raster"))]
+    #[test]
+    fn recording_state_changes_wait_for_a_sample_and_casts_have_no_timer_events() {
+        let session = recording_session();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let ready = session
+                .state
+                .lock()
+                .unwrap()
+                .emu
+                .viewable_rows()
+                .iter()
+                .flatten()
+                .map(|cell| cell.ch.as_str())
+                .collect::<String>()
+                .contains("READY");
+            if ready {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let path = test_path("sampler-state").with_extension("apng");
+        session
+            .start_recording(recording_options(&path, 1))
+            .unwrap();
+        {
+            let mut state = session.state.lock().unwrap();
+            let revision = state.recording_frames.as_ref().unwrap().revision();
+            state.emu.process(b"0\r\n1\r\n2\r\n3\r\n4");
+            invalidate_emulator_view(&mut state);
+            scroll_emulator_and_record(&mut state, crate::api::ScrollTarget::Top).unwrap();
+            resize_emulator_and_record(&mut state, &session.recorder, 10, 3);
+            assert_eq!(
+                state.recording_frames.as_ref().unwrap().revision(),
+                revision
+            );
+            assert_ne!(state.visual_revision, revision);
+        }
+        session.stop_recording().unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        let path = path.with_extension("cast");
+        let mut options = recording_options(&path, 255);
+        options.format = Some(crate::api::RecordingFormat::Cast);
+        options.zoom = None;
+        session.start_recording(options).unwrap();
+        assert!(session.recording_sampler.lock().unwrap().is_none());
+        std::thread::sleep(Duration::from_millis(50));
+        session.stop_recording().unwrap();
+        let cast = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            cast.lines().count(),
+            2,
+            "only the header and initial seed should exist: {cast}"
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(all(unix, feature = "recording-raster"))]
+    #[test]
+    fn recording_stop_uses_elapsed_time_before_the_first_tick() {
+        let session = recording_session();
+        let path = test_path("sampler-duration").with_extension("apng");
+        let mut options = recording_options(&path, 1);
+        options.speed = Some(2.0);
+        let before_start = Instant::now();
+        session.start_recording(options).unwrap();
+        let after_start = Instant::now();
+        std::thread::sleep(Duration::from_millis(100));
+        let before_stop = Instant::now();
+        session.stop_recording().unwrap();
+        let reader = png::Decoder::new(std::fs::File::open(&path).unwrap())
+            .read_info()
+            .unwrap();
+        assert_eq!(reader.info().animation_control.unwrap().num_frames, 1);
+        let frame = reader.info().frame_control.unwrap();
+        let duration =
+            Duration::from_secs_f64(f64::from(frame.delay_num) / f64::from(frame.delay_den));
+        let tolerance = Duration::from_millis(10);
+        assert!(duration + tolerance >= before_stop.duration_since(after_start).div_f64(2.0));
+        assert!(duration <= before_stop.duration_since(before_start).div_f64(2.0) + tolerance);
+        assert!(session.recording_sampler.lock().unwrap().is_none());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(all(unix, feature = "recording-raster"))]
+    #[test]
+    fn recording_sampler_cleans_up_failed_starts_exports_and_close() {
+        let session = recording_session();
+        let path = test_path("sampler-lifecycle").with_extension("apng");
+        let blocked = test_path("sampler-parent");
+        std::fs::write(&blocked, b"not a directory").unwrap();
+        assert!(session
+            .start_recording(recording_options(&blocked.join("out.apng"), 1))
+            .is_err());
+        assert!(session.recording_sampler.lock().unwrap().is_none());
+        assert!(session.state.lock().unwrap().recording_frames.is_none());
+        std::fs::remove_file(blocked).unwrap();
+
+        session
+            .start_recording(recording_options(&path, 1))
+            .unwrap();
+        assert!(session
+            .start_recording(recording_options(&path, 1))
+            .is_err());
+        assert!(session.recording_sampler.lock().unwrap().is_some());
+        assert!(session.state.lock().unwrap().recording_frames.is_some());
+        session.stop_recording().unwrap();
+        assert!(session.recording_sampler.lock().unwrap().is_none());
+        assert!(session.state.lock().unwrap().recording_frames.is_none());
+        assert!(session.stop_recording().is_err());
+        std::fs::remove_file(&path).unwrap();
+
+        std::fs::create_dir(&path).unwrap();
+        session
+            .start_recording(recording_options(&path, 1))
+            .unwrap();
+        assert!(session
+            .stop_recording()
+            .unwrap_err()
+            .message
+            .contains("captured cast retained"));
+        assert!(session.recording_sampler.lock().unwrap().is_none());
+        assert!(session.state.lock().unwrap().recording_frames.is_none());
+        assert!(record::sidecar_path(&path).exists());
+        std::fs::remove_file(record::sidecar_path(&path)).unwrap();
+        std::fs::remove_dir(&path).unwrap();
+
+        session
+            .start_recording(recording_options(&path, 1))
+            .unwrap();
+        let started = Instant::now();
+        session.kill();
+        assert!(
+            started.elapsed() < Duration::from_millis(750),
+            "close waited for a one-second tick"
+        );
+        assert!(session.recording_sampler.lock().unwrap().is_none());
+        assert!(session.state.lock().unwrap().recording_frames.is_none());
+        assert!(session
+            .start_recording(recording_options(&path, 1))
+            .is_err());
+        drop(session);
+        std::fs::remove_file(record::sidecar_path(&path)).unwrap();
+    }
+
+    #[cfg(all(unix, feature = "recording-raster"))]
+    #[test]
+    fn recording_stop_races_with_output_and_leaves_no_sampler() {
+        let session = recording_session();
+        let path = test_path("sampler-stop-race").with_extension("apng");
+        session
+            .start_recording(recording_options(&path, 255))
+            .unwrap();
+        std::thread::scope(|scope| {
+            let writer = scope.spawn(|| {
+                for _ in 0..100 {
+                    session.write(b"output\n").unwrap();
+                }
+            });
+            session.stop_recording().unwrap();
+            writer.join().unwrap();
+        });
+        assert!(session.recording_sampler.lock().unwrap().is_none());
+        assert!(session.state.lock().unwrap().recording_frames.is_none());
+        drop(session);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(all(unix, feature = "recording-raster"))]
+    #[test]
+    fn recording_drop_wakes_sampler_without_waiting_for_tick() {
+        let session = recording_session();
+        let path = test_path("sampler-drop").with_extension("apng");
+        session
+            .start_recording(recording_options(&path, 1))
+            .unwrap();
+        let state = Arc::downgrade(&session.state);
+        let started = Instant::now();
+        drop(session);
+        while state.upgrade().is_some() && started.elapsed() < Duration::from_millis(750) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            state.upgrade().is_none(),
+            "a worker retained the terminal after drop"
+        );
+        std::fs::remove_file(record::sidecar_path(&path)).unwrap();
+    }
 
     #[test]
     fn resize_is_queued_after_old_output_and_starts_a_new_idle_period() {
