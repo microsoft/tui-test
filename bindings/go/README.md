@@ -258,6 +258,31 @@ Trace and failure-artifact directories can contain terminal output, titles, loca
 These controls apply to all manual formats. Automatic diagnostic recordings remain continuous.
 `StopRecording` also works during a pause. Repeated pause or resume calls return usage errors.
 
+### Rendering settings and native assertions
+
+Set `Style` in `ClientOptions` or `SpawnOptions`. `RenderStyle` supports fonts, colors, padding, window controls, borders, shadows, and cursor animation.
+A per-call style replaces the constructor style. Nil fields use Rust defaults. Use `Ptr(false)` and `Ptr(0)` for explicit values.
+Restart preserves the resolved style. These settings affect screenshots and raster recordings, not terminal colors or locator assertions.
+
+```go
+style := &tuitest.RenderStyle{
+    FontSize: tuitest.Ptr(24.0),
+    Window: tuitest.WindowStyle{TitleBar: tuitest.Ptr(false)},
+    Cursor: tuitest.RecordingCursorStyle{
+        Blink: tuitest.Ptr(false),
+        BlinkIntervalMS: tuitest.Ptr(uint64(250)),
+    },
+}
+terminal, err := tuitest.Ephemeral("styled", tuitest.ClientOptions{Style: style})
+```
+
+`Blink` permits application-requested animation. Its default is true. `BlinkIntervalMS` sets each phase before playback speed scaling; its default is 500.
+`Padding` accepts either `Uniform` or individual sides, not both. Screenshots always use the visible cursor phase.
+Run `go run ./examples/rendering` for a complete example.
+
+`GetModes` and `GetColors` read native state. `ExpectCursor`, `ExpectMode`, and `ExpectColors` poll in Rust and use the text timeout by default.
+Use `CursorExpectation` and `ColorExpectation` for optional properties. Palette expectations use `map[uint8]string`.
+
 Raster recording samples the live terminal at `FPS` (default: 30) and preserves elapsed time until stop.
 There is no default idle cap or extra final hold.
 Set `IdleTimeLimit` to cap unchanged visual intervals before `Speed` scales playback time.

@@ -21,6 +21,8 @@ from tui_test import (
     InternalError,
     NoSessionError,
     Profile,
+    RenderStyle,
+    RecordingCursorStyle,
     TuiTest,
     TextStyle,
     Timeouts,
@@ -129,6 +131,37 @@ class IntegrationTests(unittest.TestCase):
                 self.assertIn('"version":2', cast)
                 self.assertIn("sdk-recording", cast)
 
+        run(scenario())
+
+    def test_rendering_settings_and_native_assertions(self):
+        async def scenario():
+            style = RenderStyle(font_size=24, cursor=RecordingCursorStyle(blink=False, blink_interval_ms=250))
+            with tempfile.TemporaryDirectory() as root:
+                async with TuiTest.ephemeral("parity", style=style) as su:
+                    await su.run(sys.executable, "-u", "-c",
+                                 "import time; print('ready', flush=True); time.sleep(0.5); "
+                                 "print('\\x1b[?25l\\x1b]10;#abcdef\\x07\\x1b]4;2;#123456\\x07', end='', flush=True); input()")
+                    await su.get_by_text("ready").expect()
+                    await asyncio.gather(
+                        su.expect_cursor(visible=False, timeout=2000),
+                        su.expect_mode("cursor_visible", False, timeout=2000),
+                        su.expect_colors(foreground="#abcdef", palette={2: "#123456"}, timeout=2000),
+                    )
+                    self.assertEqual(await su.get_modes(), (await su.state()).modes)
+                    self.assertEqual(await su.get_colors(), (await su.state()).colors)
+                    with self.assertRaises(ExpectationError):
+                        await su.expect_cursor(visible=True, timeout=0)
+                    path = Path(root) / "custom.svg"
+                    await su.screenshot(str(path))
+                    self.assertIn('font-size="24px"', path.read_text())
+                    self.assertFalse(style.cursor.blink)
+                    self.assertEqual(style.cursor.blink_interval_ms, 250)
+                    await su.close()
+                    with self.assertRaisesRegex(UsageError, "blink_interval_ms"):
+                        await su.open(style=RenderStyle(cursor=RecordingCursorStyle(blink_interval_ms=0)))
+                    await su.open(shell=SHELL, style=RenderStyle(font_size=20))
+                    await su.screenshot(str(path))
+                    self.assertIn('font-size="20px"', path.read_text())
         run(scenario())
 
     def test_trace_retention_and_recording_directory(self):

@@ -174,6 +174,23 @@ func (runtime *nativeRuntime) getCursor() (Cursor, error) {
 	value, err := runtime.session.GetCursor()
 	return Cursor(value), engineError(err)
 }
+func (runtime *nativeRuntime) getModes() (map[string]bool, error) {
+	value, err := runtime.session.GetModes()
+	return value, engineError(err)
+}
+func (runtime *nativeRuntime) getColors() (TerminalColors, error) {
+	value, err := runtime.session.GetColors()
+	return TerminalColors(value), engineError(err)
+}
+func (runtime *nativeRuntime) expectMode(mode string, enabled bool, timeout *time.Duration) error {
+	return engineError(runtime.session.ExpectMode(mode, enabled, timeout))
+}
+func (runtime *nativeRuntime) expectCursor(options CursorExpectation) error {
+	return engineError(runtime.session.ExpectCursor(options))
+}
+func (runtime *nativeRuntime) expectColors(options ColorExpectation) error {
+	return engineError(runtime.session.ExpectColors(options))
+}
 
 func (runtime *nativeRuntime) getViewport() (Viewport, error) {
 	value, err := runtime.session.GetViewport()
@@ -255,7 +272,7 @@ func engineSpawnOptions(options SpawnOptions) native.SpawnOptions {
 	if options.Profile != nil {
 		profile = &native.Profile{Scrollback: options.Profile.Scrollback, Colors: native.Colors(options.Profile.Colors)}
 	}
-	return native.SpawnOptions{Backend: native.Backend(options.Backend), Cols: options.Cols, Rows: options.Rows, Cwd: options.Cwd, Env: options.Env, WaitReady: options.WaitReady, Restart: options.Restart, Profile: profile, Timeouts: native.Timeouts(options.Timeouts)}
+	return native.SpawnOptions{Backend: native.Backend(options.Backend), Cols: options.Cols, Rows: options.Rows, Cwd: options.Cwd, Env: options.Env, WaitReady: options.WaitReady, Restart: options.Restart, Profile: profile, Style: options.Style, Timeouts: native.Timeouts(options.Timeouts)}
 }
 func engineOpenOptions(options OpenOptions) native.OpenOptions {
 	return native.OpenOptions{SpawnOptions: engineSpawnOptions(options.SpawnOptions), Shell: native.Shell(options.Shell)}
