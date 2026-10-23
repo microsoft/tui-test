@@ -142,6 +142,8 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 | --- | --- |
 | `record start PATH [--background COLOR \| --transparent]` | Start a recording. |
 | `record stop` | Finish it. |
+| `record pause` | Pause manual capture while the terminal continues. |
+| `record resume` | Resume from the current screen without paused time. |
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
 | `monitor` | Watch a session live. |
 | `monitor --interactive` | Forward keyboard, paste, and supported SGR mouse input; Ctrl+] detaches. |
@@ -153,7 +155,11 @@ Output, resize, and viewport changes appear in the next sample.
 A state shorter than one sample interval can be missed.
 Exports encode these samples without replay through another emulator.
 
-Raster recordings preserve elapsed time until `record stop`, including quiet periods.
+Raster recordings preserve active elapsed time until `record stop`, including quiet periods.
+Pause and resume work with all manual formats, including asciicast.
+The terminal continues during a pause. Resume restores its current screen, not the intermediate output.
+Stop also works during a pause. Automatic diagnostic recordings remain continuous.
+Pause requires an active recording. Resume requires a paused recording.
 There is no default idle cap or extra final hold.
 `--speed` scales playback time; `--idle-time-limit` explicitly caps each unchanged visual interval before speed scaling.
 Cursor blink phases share that interval's idle limit; they do not count as terminal activity.

@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ABI_VERSION 5
+#define ABI_VERSION 6
 
 /**
  * A thread-owned asynchronous call. Start, poll, and free it on the same thread.
@@ -444,6 +444,18 @@ struct TuiResult *tui_get_bell_events(struct TuiString session);
  * throughout this call; see TuiString and the input structure contracts.
  */
 struct TuiResult *tui_stop_recording(struct TuiString session);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_pause_recording(struct TuiString session);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_resume_recording(struct TuiString session);
 
 /**
  * # Safety
@@ -932,6 +944,20 @@ struct TuiTask *tui_get_bell_events_start(struct TuiString session);
  * Inputs follow the synchronous function contract through this call only.
  */
 struct TuiTask *tui_stop_recording_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_pause_recording_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_resume_recording_start(struct TuiString session);
 
 /**
  * Start a typed call after copying all borrowed inputs.

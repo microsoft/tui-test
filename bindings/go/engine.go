@@ -231,6 +231,12 @@ func (runtime *nativeRuntime) stopRecording() (string, error) {
 	value, err := runtime.session.StopRecording()
 	return value, engineError(err)
 }
+func (runtime *nativeRuntime) pauseRecording() error {
+	return engineError(runtime.session.PauseRecording())
+}
+func (runtime *nativeRuntime) resumeRecording() error {
+	return engineError(runtime.session.ResumeRecording())
+}
 func (runtime *nativeRuntime) screenshot(path string, options ScreenshotOptions) (string, error) {
 	value, err := runtime.session.Screenshot(path, native.ScreenshotOptions{Full: options.Full, Zoom: options.Zoom, Background: options.Background, Transparent: options.Transparent})
 	return value, engineError(err)
