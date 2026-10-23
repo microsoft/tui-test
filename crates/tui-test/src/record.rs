@@ -134,11 +134,16 @@ impl Recorder {
         }
     }
 
+    #[cfg(test)]
     pub fn start(&self, request: StartRecording) -> Result<(), CaptureError> {
+        self.start_at(request, Instant::now())
+    }
+
+    pub fn start_at(&self, request: StartRecording, at: Instant) -> Result<(), CaptureError> {
         let (reply, response) = mpsc::sync_channel(0);
         self.sender
             .send(Message::Start {
-                at: Instant::now(),
+                at,
                 request: Box::new(request),
                 reply,
             })
