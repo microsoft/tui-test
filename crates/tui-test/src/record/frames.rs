@@ -229,8 +229,7 @@ impl FrameCapture {
             .paused_at
             .ok_or_else(|| anyhow::anyhow!("recording is not paused"))?;
         let mut source = TimedGrid::capture(emulator, at)?;
-        if self.source.cursor == source.cursor && self.source.frame.same_visual_state(&source.frame)
-        {
+        if self.source.frame.same_visual_state(&source.frame) {
             source.at = self.source.at + at.duration_since(paused_at);
         }
         self.pending = source.frame.clone();
@@ -371,6 +370,26 @@ mod tests {
         assert_eq!(frames[2].dimensions().unwrap(), (8, 3));
         assert_eq!(frames[2].grid[0][0].ch, "B");
         assert!(frames.iter().all(|f| f.grid[0][0].ch != "h"));
+    }
+
+    #[test]
+    fn hidden_cursor_moves_during_pause_preserve_the_idle_budget() {
+        let started = Instant::now();
+        let mut emu = AlacrittyEmu::new(8, 2, &Profile::default());
+        emu.process(b"\x1b[?25l");
+        let options = TimelineOptions {
+            idle_time_limit: Some(Duration::from_secs(2)),
+            ..Default::default()
+        };
+        let mut capture = FrameCapture::new(&emu, options, started, 0).unwrap();
+        capture.pause(started + Duration::from_secs(1)).unwrap();
+        emu.process(b"\x1b[C");
+        capture
+            .resume(&emu, started + Duration::from_secs(10), 1)
+            .unwrap();
+        let frames = capture.finish(started + Duration::from_secs(12)).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].duration, Duration::from_secs(2));
     }
 
     #[test]

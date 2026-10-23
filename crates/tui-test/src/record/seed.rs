@@ -33,15 +33,20 @@ impl State {
                 VoidListener,
             ),
             parser: ansi::Processor::new(),
-            controls: Controls::new(usize::from(rows)),
+            controls: Controls::new(usize::from(cols), usize::from(rows)),
             control_parser: ansi::Processor::new(),
             boundary: SequenceBoundary::default(),
         }
     }
 
     pub fn process(&mut self, bytes: &[u8]) {
-        self.parser.advance(&mut self.term, bytes);
-        self.control_parser.advance(&mut self.controls, bytes);
+        // Tab-stop commands need the cursor position at their parser boundary.
+        for byte in bytes {
+            let byte = std::slice::from_ref(byte);
+            self.parser.advance(&mut self.term, byte);
+            self.controls.column = self.term.grid().cursor.point.column.0;
+            self.control_parser.advance(&mut self.controls, byte);
+        }
         self.boundary.process(bytes);
     }
 
@@ -51,6 +56,7 @@ impl State {
             self.term.resize(size);
             self.controls.rows = usize::from(rows);
             self.controls.margins = (1, usize::from(rows));
+            self.controls.resize_tabs(usize::from(cols));
         }
     }
 
@@ -70,6 +76,12 @@ impl State {
         }
         output.push_str(viewport);
         restore_wraps(&mut output, self.term.grid());
+        output.push_str("\x1b[3g");
+        for (column, &enabled) in self.controls.tabs.iter().enumerate() {
+            if enabled {
+                let _ = write!(output, "\x1b[1;{}H\x1bH", column + 1);
+            }
+        }
         let (top, bottom) = self.controls.margins;
         let _ = write!(output, "\x1b[{top};{bottom}r");
         let grid = self.term.grid();
@@ -124,6 +136,7 @@ impl State {
             CharsetIndex::G2 => "\x1bn",
             CharsetIndex::G3 => "\x1bo",
         });
+        self.controls.restore_cursor_style(&mut output);
         output.push_str(&String::from_utf8_lossy(&self.boundary.pending));
         output
     }
@@ -135,16 +148,48 @@ struct Controls {
     charset: CharsetIndex,
     blink: bool,
     saved_blink: bool,
+    column: usize,
+    tabs: Vec<bool>,
+    cursor_style: u8,
+    cursor_blink: Option<bool>,
+    cursor_blink_after_style: bool,
 }
 
 impl Controls {
-    fn new(rows: usize) -> Self {
+    fn new(cols: usize, rows: usize) -> Self {
         Self {
             rows,
             margins: (1, rows),
             charset: CharsetIndex::G0,
             blink: false,
             saved_blink: false,
+            column: 0,
+            tabs: (0..cols).map(|column| column.is_multiple_of(8)).collect(),
+            cursor_style: 0,
+            cursor_blink: None,
+            cursor_blink_after_style: true,
+        }
+    }
+
+    fn resize_tabs(&mut self, cols: usize) {
+        let mut column = self.tabs.len();
+        self.tabs.resize_with(cols, || {
+            let enabled = column.is_multiple_of(8);
+            column += 1;
+            enabled
+        });
+    }
+
+    fn restore_cursor_style(&self, output: &mut String) {
+        let style = format!("\x1b[{} q", self.cursor_style);
+        if self.cursor_blink_after_style {
+            output.push_str(&style);
+        }
+        if let Some(blink) = self.cursor_blink {
+            let _ = write!(output, "\x1b[?12{}", if blink { "h" } else { "l" });
+        }
+        if !self.cursor_blink_after_style {
+            output.push_str(&style);
         }
     }
 }
@@ -158,7 +203,44 @@ impl Handler for Controls {
     }
 
     fn reset_state(&mut self) {
-        *self = Self::new(self.rows);
+        *self = Self::new(self.tabs.len(), self.rows);
+    }
+
+    fn set_horizontal_tabstop(&mut self) {
+        self.tabs[self.column] = true;
+    }
+
+    fn clear_tabs(&mut self, mode: ansi::TabulationClearMode) {
+        match mode {
+            ansi::TabulationClearMode::Current => self.tabs[self.column] = false,
+            ansi::TabulationClearMode::All => self.tabs.fill(false),
+        }
+    }
+
+    fn set_cursor_style(&mut self, style: Option<ansi::CursorStyle>) {
+        self.cursor_style = style.map_or(0, |style| {
+            let steady = match style.shape {
+                ansi::CursorShape::Underline => 4,
+                ansi::CursorShape::Beam => 6,
+                _ => 2,
+            };
+            steady - u8::from(style.blinking)
+        });
+        self.cursor_blink_after_style = false;
+    }
+
+    fn set_private_mode(&mut self, mode: ansi::PrivateMode) {
+        if mode == ansi::PrivateMode::Named(ansi::NamedPrivateMode::BlinkingCursor) {
+            self.cursor_blink = Some(true);
+            self.cursor_blink_after_style = true;
+        }
+    }
+
+    fn unset_private_mode(&mut self, mode: ansi::PrivateMode) {
+        if mode == ansi::PrivateMode::Named(ansi::NamedPrivateMode::BlinkingCursor) {
+            self.cursor_blink = Some(false);
+            self.cursor_blink_after_style = true;
+        }
     }
 
     fn set_active_charset(&mut self, charset: CharsetIndex) {
@@ -384,6 +466,75 @@ mod tests {
     use crate::record::cast::snapshot_to_ansi;
     use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::emu::{Emulator, TerminalMode};
+
+    #[test]
+    fn seeds_restore_tab_stops_before_pending_sequences() {
+        for &backend in crate::terminal::backend::Backend::ALL {
+            for prefix in [
+                "\x1b[3g\x1b[5G\x1bH",
+                "\x1b[3g\x1b[5G\x1bH\x1b[9G\x1bH\x1b[5G\x1b[0g",
+                "\x1b[3g\x1b[16G\x1bH",
+                "\x1b[3g\x1b[5G\x1bH\x1b[0",
+            ] {
+                let mut state = State::new(16, 3);
+                let mut live = backend.build(16, 3, &Profile::default()).unwrap();
+                for bytes in prefix.as_bytes().chunks(3) {
+                    state.process(bytes);
+                    live.process(bytes);
+                }
+                let mut replay = backend.build(16, 3, &Profile::default()).unwrap();
+                replay.process(state.snapshot(&snapshot_to_ansi(live.as_ref())).as_bytes());
+                if prefix.ends_with("\x1b[0") {
+                    live.process(b"g");
+                    replay.process(b"g");
+                }
+                for size in [16, 20] {
+                    live.resize(size, 3);
+                    replay.resize(size, 3);
+                    live.process(b"\r\tX");
+                    replay.process(b"\r\tX");
+                    assert_eq!(
+                        replay.viewable_rows(),
+                        live.viewable_rows(),
+                        "{backend:?}: {prefix:?}, {size}"
+                    );
+                    assert_eq!(
+                        replay.cursor(),
+                        live.cursor(),
+                        "{backend:?}: {prefix:?}, {size}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn seeds_preserve_cursor_mode_and_style_precedence() {
+        for &backend in crate::terminal::backend::Backend::ALL {
+            for prefix in [
+                "\x1b[0 q\x1b[?12l",
+                "\x1b[?12h\x1b[0 q",
+                "\x1b[?12l\x1b[5 q",
+                "\x1b[5 q\x1b[?12l",
+            ] {
+                let mut state = State::new(16, 3);
+                let mut live = backend.build(16, 3, &Profile::default()).unwrap();
+                state.process(prefix.as_bytes());
+                live.process(prefix.as_bytes());
+                let mut replay = backend.build(16, 3, &Profile::default()).unwrap();
+                replay.process(state.snapshot(&snapshot_to_ansi(live.as_ref())).as_bytes());
+                for suffix in ["", "\x1b[?12h", "\x1b[?12l", "\x1b[0 q"] {
+                    live.process(suffix.as_bytes());
+                    replay.process(suffix.as_bytes());
+                    assert_eq!(
+                        replay.cursor_style(),
+                        live.cursor_style(),
+                        "{backend:?}: {prefix:?} -> {suffix:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn seeds_preserve_the_behavior_of_subsequent_output() {
