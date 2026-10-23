@@ -17,6 +17,13 @@ from .errors import (
     UsageError,
 )
 from .types import (
+    RenderStyle,
+    FontFamilies,
+    WindowStyle,
+    BorderStyle,
+    ShadowStyle,
+    RecordingCursorStyle,
+    PaddingSides,
     AutomaticRecording,
     TraceMode,
     TraceOptions,
@@ -40,6 +47,13 @@ from .types import (
 )
 
 __all__ = [
+    "RenderStyle",
+    "FontFamilies",
+    "WindowStyle",
+    "BorderStyle",
+    "ShadowStyle",
+    "RecordingCursorStyle",
+    "PaddingSides",
     "TuiTest",
     "Locator",
     "sessions",

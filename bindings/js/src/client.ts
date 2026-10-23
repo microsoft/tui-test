@@ -45,6 +45,22 @@ export interface ClipboardWaitOptions {
   timeout?: number;
 }
 
+export interface CursorExpectation {
+  x?: number;
+  y?: number;
+  visible?: boolean;
+  shape?: string;
+  timeout?: number;
+}
+
+export interface ColorExpectation {
+  foreground?: string;
+  background?: string;
+  cursor?: string;
+  palette?: Array<[number, string]>;
+  timeout?: number;
+}
+
 function isRegExp(value: unknown): value is RegExp {
   return Object.prototype.toString.call(value) === "[object RegExp]";
 }
@@ -858,6 +874,7 @@ export class TuiTest {
       restart: opts.restart,
       profileScrollback: profile?.scrollback,
       profileColors: profile?.colors,
+      style: opts.style ?? this.#options.style,
       timeouts: timeoutsPayload(opts.timeouts),
       screenHistoryLimit: this.#options.screenHistoryLimit,
     };
@@ -881,6 +898,7 @@ export class TuiTest {
       restart: opts.restart,
       profileScrollback: profile?.scrollback,
       profileColors: profile?.colors,
+      style: opts.style ?? this.#options.style,
       timeouts: timeoutsPayload(opts.timeouts),
       screenHistoryLimit: this.#options.screenHistoryLimit,
     };
@@ -967,6 +985,26 @@ export class TuiTest {
 
   async getCursor(): Promise<Cursor> {
     return this.#runtime.getCursor();
+  }
+  async getModes(): Promise<Record<string, boolean>> {
+    return this.#runtime.getModes();
+  }
+  async getColors(): Promise<State["colors"]> {
+    return this.#runtime.getColors();
+  }
+  async expectCursor(options: CursorExpectation): Promise<void> {
+    const { timeout, ...properties } = options;
+    await this.#guard("expectCursor", () =>
+      this.#runtime.expectCursor({ ...properties, timeoutMs: this.#timeout("text", timeout) }));
+  }
+  async expectColors(options: ColorExpectation): Promise<void> {
+    const { timeout, ...properties } = options;
+    await this.#guard("expectColors", () =>
+      this.#runtime.expectColors({ ...properties, timeoutMs: this.#timeout("text", timeout) }));
+  }
+  async expectMode(mode: string, enabled: boolean, options: { timeout?: number } = {}): Promise<void> {
+    await this.#guard("expectMode", () =>
+      this.#runtime.expectMode(mode, enabled, this.#timeout("text", options.timeout)));
   }
 
   /** Return the native history offset and available rows. */

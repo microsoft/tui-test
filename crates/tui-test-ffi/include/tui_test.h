@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define ABI_VERSION 6
+#define ABI_VERSION 7
 
 /**
  * A thread-owned asynchronous call. Start, poll, and free it on the same thread.
@@ -26,6 +26,24 @@ typedef struct TuiString {
   const uint8_t *data;
   uintptr_t len;
 } TuiString;
+
+typedef struct TuiMode {
+  struct TuiString name;
+  bool enabled;
+} TuiMode;
+
+typedef struct TuiPair {
+  struct TuiString key;
+  struct TuiString value;
+} TuiPair;
+
+typedef struct TuiTerminalColors {
+  struct TuiString foreground;
+  struct TuiString background;
+  struct TuiString cursor;
+  const struct TuiPair *palette;
+  uintptr_t palette_len;
+} TuiTerminalColors;
 
 typedef struct TuiOptionalI32 {
   bool present;
@@ -51,24 +69,6 @@ typedef struct TuiCursor {
   struct TuiString shape;
   struct TuiString color;
 } TuiCursor;
-
-typedef struct TuiMode {
-  struct TuiString name;
-  bool enabled;
-} TuiMode;
-
-typedef struct TuiPair {
-  struct TuiString key;
-  struct TuiString value;
-} TuiPair;
-
-typedef struct TuiTerminalColors {
-  struct TuiString foreground;
-  struct TuiString background;
-  struct TuiString cursor;
-  const struct TuiPair *palette;
-  uintptr_t palette_len;
-} TuiTerminalColors;
 
 typedef struct TuiTimeouts {
   struct TuiOptionalU64 text;
@@ -170,6 +170,9 @@ typedef struct TuiBellEvent {
  * snapshot: 0 passed, 1 written, 2 updated. Free exactly once.
  */
 typedef struct TuiResult {
+  const struct TuiMode *modes;
+  uintptr_t modes_len;
+  struct TuiTerminalColors colors;
   uint32_t error_kind;
   struct TuiString error_message;
   struct TuiString error_details;
@@ -199,6 +202,71 @@ typedef struct TuiOptionalBool {
   bool value;
 } TuiOptionalBool;
 
+typedef struct TuiFontFamilies {
+  struct TuiString family;
+  struct TuiString bold;
+  struct TuiString italic;
+  struct TuiString bold_italic;
+  const struct TuiString *files;
+  uintptr_t files_len;
+} TuiFontFamilies;
+
+typedef struct TuiOptionalF64 {
+  bool present;
+  double value;
+} TuiOptionalF64;
+
+typedef struct TuiPaddingSides {
+  struct TuiOptionalU64 top;
+  struct TuiOptionalU64 right;
+  struct TuiOptionalU64 bottom;
+  struct TuiOptionalU64 left;
+} TuiPaddingSides;
+
+typedef struct TuiPadding {
+  struct TuiOptionalU64 uniform;
+  struct TuiPaddingSides sides;
+} TuiPadding;
+
+typedef struct TuiWindowStyle {
+  struct TuiOptionalBool title_bar;
+  struct TuiOptionalBool traffic_lights;
+  struct TuiString background;
+  struct TuiString foreground;
+  struct TuiString divider;
+} TuiWindowStyle;
+
+typedef struct TuiBorderStyle {
+  struct TuiOptionalF64 width;
+  struct TuiString color;
+  struct TuiOptionalF64 radius;
+} TuiBorderStyle;
+
+typedef struct TuiShadowStyle {
+  struct TuiOptionalBool enabled;
+  struct TuiString color;
+  struct TuiOptionalF64 offset;
+  struct TuiOptionalF64 spread;
+} TuiShadowStyle;
+
+typedef struct TuiCursorStyle {
+  struct TuiOptionalBool blink;
+  struct TuiOptionalU64 blink_interval_ms;
+} TuiCursorStyle;
+
+typedef struct TuiStyle {
+  struct TuiFontFamilies font;
+  struct TuiOptionalF64 font_size;
+  struct TuiOptionalF64 title_font_size;
+  struct TuiString canvas_background;
+  struct TuiPadding canvas_padding;
+  struct TuiPadding content_padding;
+  struct TuiWindowStyle window;
+  struct TuiBorderStyle border;
+  struct TuiShadowStyle shadow;
+  struct TuiCursorStyle cursor;
+} TuiStyle;
+
 typedef struct TuiOpenOptions {
   struct TuiString backend;
   struct TuiString shell;
@@ -215,7 +283,25 @@ typedef struct TuiOpenOptions {
   struct TuiTimeouts timeouts;
   struct TuiString recording_mode;
   struct TuiString recording_directory;
+  struct TuiStyle style;
 } TuiOpenOptions;
+
+typedef struct TuiCursorExpectation {
+  struct TuiOptionalBool visible;
+  struct TuiString shape;
+  struct TuiOptionalU64 x;
+  struct TuiOptionalU64 y;
+  struct TuiOptionalU64 timeout_ms;
+} TuiCursorExpectation;
+
+typedef struct TuiColorExpectation {
+  struct TuiString foreground;
+  struct TuiString background;
+  struct TuiString cursor;
+  const struct TuiPair *palette;
+  uintptr_t palette_len;
+  struct TuiOptionalU64 timeout_ms;
+} TuiColorExpectation;
 
 /**
  * button: 0 left, 1 middle, 2 right.
@@ -236,11 +322,6 @@ typedef struct TuiWaitOptions {
 typedef struct TuiQuery {
   struct TuiString json;
 } TuiQuery;
-
-typedef struct TuiOptionalF64 {
-  bool present;
-  double value;
-} TuiOptionalF64;
 
 typedef struct TuiScreenshotOptions {
   bool full;
@@ -402,6 +483,39 @@ struct TuiResult *tui_get_cwd(struct TuiString session);
  * throughout this call; see TuiString and the input structure contracts.
  */
 struct TuiResult *tui_get_cursor(struct TuiString session);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_get_modes(struct TuiString session);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_get_colors(struct TuiString session);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_expect_mode(struct TuiString session,
+                                  struct TuiString mode,
+                                  bool enabled,
+                                  struct TuiOptionalU64 timeout_ms);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_expect_cursor(struct TuiString session, struct TuiCursorExpectation options);
+
+/**
+ * # Safety
+ * Borrowed input buffers must remain valid throughout this call.
+ */
+struct TuiResult *tui_expect_colors(struct TuiString session, struct TuiColorExpectation options);
 
 /**
  * # Safety
@@ -902,6 +1016,46 @@ struct TuiTask *tui_get_cwd_start(struct TuiString session);
  * Inputs follow the synchronous function contract through this call only.
  */
 struct TuiTask *tui_get_cursor_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_modes_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_get_colors_start(struct TuiString session);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_expect_mode_start(struct TuiString session,
+                                      struct TuiString mode,
+                                      bool enabled,
+                                      struct TuiOptionalU64 timeout_ms);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_expect_cursor_start(struct TuiString session,
+                                        struct TuiCursorExpectation options);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_expect_colors_start(struct TuiString session,
+                                        struct TuiColorExpectation options);
 
 /**
  * Start a typed call after copying all borrowed inputs.

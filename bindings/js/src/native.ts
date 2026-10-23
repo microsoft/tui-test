@@ -9,6 +9,9 @@ import type {
   Cell,
   ClipboardWaitOptions,
   Cursor,
+  CursorExpectation,
+  ColorExpectation,
+  TerminalColors,
   Viewport,
   EffectiveTimeouts,
   FailureArtifactOptions,
@@ -342,6 +345,21 @@ export class NativeRuntime {
 
   getCursor(): Promise<Cursor> {
     return this.#call((session) => session.getCursor());
+  }
+  getModes(): Promise<Record<string, boolean>> {
+    return this.#call((session) => session.getModes());
+  }
+  getColors(): Promise<TerminalColors> {
+    return this.#call((session) => session.getColors());
+  }
+  expectCursor(options: CursorExpectation): Promise<void> {
+    return this.#call((session) => session.expectCursor(options));
+  }
+  expectColors(options: ColorExpectation): Promise<void> {
+    return this.#call((session) => session.expectColors(options));
+  }
+  expectMode(mode: string, enabled: boolean, timeoutMs?: number): Promise<void> {
+    return this.#call((session) => session.expectMode(mode, enabled, timeoutMs));
   }
 
   getViewport(): Promise<Viewport> {

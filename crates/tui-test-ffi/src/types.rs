@@ -67,6 +67,9 @@ pub struct TuiColor {
 #[repr(C)]
 #[derive(Default)]
 pub struct TuiResult {
+    pub modes: *const TuiMode,
+    pub modes_len: usize,
+    pub colors: TuiTerminalColors,
     pub error_kind: u32,
     pub error_message: TuiString,
     pub error_details: TuiString,
@@ -201,6 +204,74 @@ pub struct TuiMatch {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
+pub struct TuiPaddingSides {
+    pub top: TuiOptionalU64,
+    pub right: TuiOptionalU64,
+    pub bottom: TuiOptionalU64,
+    pub left: TuiOptionalU64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiPadding {
+    pub uniform: TuiOptionalU64,
+    pub sides: TuiPaddingSides,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiFontFamilies {
+    pub family: TuiString,
+    pub bold: TuiString,
+    pub italic: TuiString,
+    pub bold_italic: TuiString,
+    pub files: *const TuiString,
+    pub files_len: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiWindowStyle {
+    pub title_bar: TuiOptionalBool,
+    pub traffic_lights: TuiOptionalBool,
+    pub background: TuiString,
+    pub foreground: TuiString,
+    pub divider: TuiString,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiBorderStyle {
+    pub width: TuiOptionalF64,
+    pub color: TuiString,
+    pub radius: TuiOptionalF64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiShadowStyle {
+    pub enabled: TuiOptionalBool,
+    pub color: TuiString,
+    pub offset: TuiOptionalF64,
+    pub spread: TuiOptionalF64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiCursorStyle {
+    pub blink: TuiOptionalBool,
+    pub blink_interval_ms: TuiOptionalU64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiStyle {
+    pub font: TuiFontFamilies,
+    pub font_size: TuiOptionalF64,
+    pub title_font_size: TuiOptionalF64,
+    pub canvas_background: TuiString,
+    pub canvas_padding: TuiPadding,
+    pub content_padding: TuiPadding,
+    pub window: TuiWindowStyle,
+    pub border: TuiBorderStyle,
+    pub shadow: TuiShadowStyle,
+    pub cursor: TuiCursorStyle,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub struct TuiTimeouts {
     pub text: TuiOptionalU64,
     pub idle: TuiOptionalU64,
@@ -226,6 +297,7 @@ pub struct TuiOpenOptions {
     pub timeouts: TuiTimeouts,
     pub recording_mode: TuiString,
     pub recording_directory: TuiString,
+    pub style: TuiStyle,
 }
 /// button: 0 left, 1 middle, 2 right.
 #[repr(C)]
@@ -263,4 +335,23 @@ pub struct TuiScreenshotOptions {
     pub zoom: TuiOptionalF64,
     pub background: TuiString,
     pub transparent: bool,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiCursorExpectation {
+    pub visible: TuiOptionalBool,
+    pub shape: TuiString,
+    pub x: TuiOptionalU64,
+    pub y: TuiOptionalU64,
+    pub timeout_ms: TuiOptionalU64,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct TuiColorExpectation {
+    pub foreground: TuiString,
+    pub background: TuiString,
+    pub cursor: TuiString,
+    pub palette: *const TuiPair,
+    pub palette_len: usize,
+    pub timeout_ms: TuiOptionalU64,
 }

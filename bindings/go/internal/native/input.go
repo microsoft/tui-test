@@ -53,6 +53,7 @@ func (memory *nativeMemory) openOptions(options OpenOptions, recording *Automati
 		result.restart = *options.Restart
 	}
 	result.env, result.envLen = memory.pairs(options.Env)
+	result.style = memory.style(options.Style)
 	if options.Profile != nil {
 		result.scrollback = nativeUint(options.Profile.Scrollback)
 		result.colors, result.colorsLen = memory.colors(options.Profile.Colors)
@@ -62,6 +63,33 @@ func (memory *nativeMemory) openOptions(options OpenOptions, recording *Automati
 		result.recordingDirectory = memory.nonemptyText(recording.Directory)
 	}
 	return result, nil
+}
+
+func nativePadding(value Padding) abiPadding {
+	return abiPadding{uniform: nativeUint(value.Uniform), sides: abiPaddingSides{
+		top: nativeUint(value.Top), right: nativeUint(value.Right),
+		bottom: nativeUint(value.Bottom), left: nativeUint(value.Left),
+	}}
+}
+
+func (memory *nativeMemory) style(value *RenderStyle) abiStyle {
+	if value == nil {
+		return abiStyle{}
+	}
+	files, length := memory.strings(value.Font.Files)
+	return abiStyle{
+		font: abiFontFamilies{family: memory.optionalText(value.Font.Family),
+			bold: memory.optionalText(value.Font.Bold), italic: memory.optionalText(value.Font.Italic),
+			boldItalic: memory.optionalText(value.Font.BoldItalic), files: files, filesLen: length},
+		fontSize: nativeFloat(value.FontSize), titleFontSize: nativeFloat(value.TitleFontSize),
+		canvasBackground: memory.optionalText(value.CanvasBackground),
+		canvasPadding:    nativePadding(value.CanvasPadding), contentPadding: nativePadding(value.ContentPadding),
+		window: abiWindowStyle{titleBar: nativeBool(value.Window.TitleBar), trafficLights: nativeBool(value.Window.TrafficLights),
+			background: memory.optionalText(value.Window.Background), foreground: memory.optionalText(value.Window.Foreground), divider: memory.optionalText(value.Window.Divider)},
+		border: abiBorderStyle{width: nativeFloat(value.Border.Width), radius: nativeFloat(value.Border.Radius), color: memory.optionalText(value.Border.Color)},
+		shadow: abiShadowStyle{enabled: nativeBool(value.Shadow.Enabled), color: memory.optionalText(value.Shadow.Color), offset: nativeFloat(value.Shadow.Offset), spread: nativeFloat(value.Shadow.Spread)},
+		cursor: abiCursorStyle{blink: nativeBool(value.Cursor.Blink), blinkIntervalMS: nativeUint(value.Cursor.BlinkIntervalMS)},
+	}
 }
 
 func nativeBool(value *bool) abiOptionalBool {

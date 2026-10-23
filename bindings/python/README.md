@@ -114,7 +114,7 @@ Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Use
 | `await close_quiet()` | Close without raising. |
 | `async with TuiTest()` | Close on exit. |
 
-`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
+`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, `style`, and `timeouts`. `run()` accepts the same options except `shell`.
 
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
 
@@ -173,6 +173,8 @@ await terminal.scroll_to_bottom()
 | `await get_exit_code()` | `int \| None` |
 | `await get_cwd()` | `str \| None` |
 | `await get_cursor()` | `Cursor` |
+| `await get_modes()` | `dict[str, bool]` |
+| `await get_colors()` | `dict` |
 | `await get_size()` | `dict` |
 | `await get_title()` | `str \| None` |
 | `await get_clipboard()` | `str` |
@@ -195,6 +197,11 @@ await terminal.scroll_to_bottom()
 | `await expect_output(text, regex=False)` | Assert command output. |
 | `await expect_bell_count(count, timeout=None)` | Wait until the cumulative bell count reaches `count`. |
 | `await expect_snapshot(name, **options)` | Assert or update a snapshot. |
+| `await expect_cursor(**options)` | Wait for cursor position, visibility, or shape. |
+| `await expect_mode(mode, enabled, timeout=...)` | Wait for a native terminal mode. |
+| `await expect_colors(**options)` | Wait for foreground, background, cursor, or palette colors. |
+
+Native assertions accept `timeout` in milliseconds and use the text timeout by default. Palette expectations use a dictionary of indices and colors.
 
 `wait_clipboard()` waits for the next change. A string matches text. A compiled text `re.Pattern` uses Python's `search()` semantics; bytes patterns are rejected.
 
@@ -212,12 +219,34 @@ Snapshot options are `update`, `include_style`, and `include_title`.
 
 Recording options: `format`, `fps`, `speed`, `idle_time_limit`, `zoom`, `background`, and `transparent`. MP4 requires `ffmpeg` and does not support transparency.
 
-Raster recording samples the live terminal at `fps` (default: 30) and preserves elapsed time until stop.
+Raster recording samples the live terminal at `fps` (default: 30) and preserves active elapsed time until stop.
 There is no default idle cap or extra final hold.
 Set `idle_time_limit` to cap unchanged visual intervals before `speed` scales playback time.
 Asciicast remains a timestamped output stream; FPS sampling does not change it.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
+
+### Rendering settings
+
+Pass a `RenderStyle` to the client constructor, `open()`, or `run()`. It supports fonts, colors, padding, window controls, borders, shadows, and cursor animation.
+A per-call style replaces the constructor style. Omitted nested fields use Rust defaults. Explicit `False` and zero remain unchanged.
+Restart preserves the resolved style. These settings affect screenshots and raster recordings, not terminal colors or locator assertions.
+
+```python
+from tui_test import TuiTest, RenderStyle, WindowStyle, RecordingCursorStyle
+
+terminal = TuiTest.ephemeral(
+    style=RenderStyle(
+        font_size=24,
+        window=WindowStyle(title_bar=False),
+        cursor=RecordingCursorStyle(blink=False, blink_interval_ms=250),
+    )
+)
+```
+
+`blink` permits application-requested animation; it does not make a steady cursor blink. Each phase uses `blink_interval_ms` before playback speed scaling.
+The default values are `True` and `500`. Screenshots always use the visible phase.
+Run `examples/rendering.py` for a complete example.
 
 ### `Locator`
 
