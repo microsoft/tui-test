@@ -348,7 +348,11 @@ globalThis.__boot = function (cols, rows, scrollback, base) {
     // terminal that has not been told otherwise draws a block.
     cursorShape: function () {
       var s = term._core.coreService.decPrivateModes.cursorStyle;
-      return s === undefined ? 'block' : String(s);
+      return s === undefined ? term.options.cursorStyle : String(s);
+    },
+    cursorBlink: function () {
+      var b = term._core.coreService.decPrivateModes.cursorBlink;
+      return b === undefined ? term.options.cursorBlink : b;
     },
     // Terminal modes, keyed by the neutral names the Rust side uses.
     //

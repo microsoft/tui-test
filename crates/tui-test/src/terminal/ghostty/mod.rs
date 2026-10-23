@@ -17,7 +17,7 @@ use crate::input::keys::KeyPress;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::EmuCell;
 use crate::terminal::emu::{
-    ClipboardType, ClipboardValidator, ColorTable, CursorShape, Emulator, KeyboardMode,
+    ClipboardType, ClipboardValidator, ColorTable, CursorStyle, Emulator, KeyboardMode,
     TerminalMode,
 };
 
@@ -329,9 +329,9 @@ impl Emulator for GhosttyEmu {
         self.call_result("reading terminal mode", move |core| core.mode(mode))
     }
 
-    fn cursor_shape(&self) -> CursorShape {
-        self.call_result("reading cursor shape", |core| {
-            Ok(core.frame()?.cursor_shape)
+    fn cursor_style(&self) -> CursorStyle {
+        self.call_result("reading cursor style", |core| {
+            Ok(core.frame()?.cursor_style)
         })
     }
 
