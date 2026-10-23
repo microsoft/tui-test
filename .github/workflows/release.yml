@@ -152,7 +152,7 @@ jobs:
             args: --target x86_64-unknown-linux-gnu -x
             zigbuild: true
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             args: --target aarch64-unknown-linux-gnu -x
             zigbuild: true
           - target: x86_64-unknown-linux-musl
@@ -206,11 +206,6 @@ jobs:
 
       - name: Install maintenance script dependencies
         run: npm ci --prefix .github/scripts --ignore-scripts
-
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        with:
-          platforms: arm64
 
       - name: Build shared native engine
         working-directory: bindings/js
