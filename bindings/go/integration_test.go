@@ -506,6 +506,15 @@ func TestRecordingAndCloseAll(t *testing.T) {
 	requireNoError(t, terminal.StartRecording(filepath.Join(directory, "explicit.cast"), tuitest.RecordingOptions{Format: tuitest.Cast}))
 	requireNoError(t, terminal.Submit(tuitest.Ptr("recorded")))
 	requireNoError(t, terminal.GetByText("received:recorded", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}))
+	requireNoError(t, terminal.PauseRecording())
+	if err := terminal.PauseRecording(); err == nil || !strings.Contains(err.Error(), "already paused") {
+		t.Fatalf("repeated pause: %v", err)
+	}
+	requireNoError(t, terminal.ResumeRecording())
+	if err := terminal.ResumeRecording(); err == nil || !strings.Contains(err.Error(), "not paused") {
+		t.Fatalf("repeated resume: %v", err)
+	}
+	requireNoError(t, terminal.PauseRecording())
 	explicit, err := terminal.StopRecording()
 	requireNoError(t, err)
 	if _, statErr := os.Stat(explicit); statErr != nil {

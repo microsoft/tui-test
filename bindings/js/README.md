@@ -187,6 +187,8 @@ Snapshot options are `update`, `includeStyle`, and `includeTitle`.
 | --- | --- |
 | `screenshot(path?, { full?, zoom?, background?, transparent? })` | Return text or save SVG or PNG. |
 | `startRecording(path, options?)` | Start APNG, GIF, MP4, or asciinema recording. |
+| `pauseRecording()` | Pause manual capture while the terminal continues. |
+| `resumeRecording()` | Resume from the current screen without paused time. |
 | `stopRecording()` | Finish the recording and return its path. |
 
 Recording options: `format`, `fps`, `speed`, `idleTimeLimit`, `zoom`, `background`, and `transparent`. MP4 requires `ffmpeg` and does not support transparency.
