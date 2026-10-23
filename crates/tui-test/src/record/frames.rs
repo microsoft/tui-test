@@ -140,9 +140,12 @@ impl FrameCapture {
         let mut next_source = None;
         if self.revision != revision {
             self.revision = revision;
-            let next = TimedGrid::capture(emulator, at)?;
+            let mut next = TimedGrid::capture(emulator, at)?;
             if self.source.cursor != next.cursor || self.source.frame.cursor != next.frame.cursor {
                 self.blink_started = at;
+            }
+            if self.source.frame.same_visual_state(&next.frame) {
+                next.at = self.source.at;
             }
             if self.source.cursor != next.cursor
                 || !self.source.frame.same_visual_state(&next.frame)
@@ -254,6 +257,9 @@ impl FrameCapture {
 }
 
 fn append_frame(output: &mut Vec<Frame>, frame: Frame) -> anyhow::Result<()> {
+    if output.last().is_some_and(|last| last.duration.is_zero()) {
+        output.pop();
+    }
     if let Some(previous) = output
         .last_mut()
         .filter(|last| last.same_visual_state(&frame))
@@ -504,6 +510,53 @@ mod tests {
     }
 
     #[test]
+    fn hidden_cursor_moves_preserve_the_idle_budget() {
+        let started = Instant::now();
+        let mut emu = AlacrittyEmu::new(8, 2, &Profile::default());
+        emu.process(b"\x1b[?25l");
+        let options = TimelineOptions {
+            idle_time_limit: Some(Duration::from_secs(2)),
+            ..Default::default()
+        };
+        let mut capture = FrameCapture::new(&emu, options, started, 0).unwrap();
+        for second in 1..6 {
+            emu.process(b"\x1b[C");
+            capture.capture(&emu, started + Duration::from_secs(second), second);
+            assert_eq!(capture.source.cursor.position, emu.cursor());
+            assert_eq!(capture.blink_started, started + Duration::from_secs(second));
+        }
+        let frames = capture.finish(started + Duration::from_secs(6)).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].duration, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn idle_compression_bounds_zero_duration_blink_frames() {
+        for seconds in [0, 2] {
+            let started = Instant::now();
+            let mut emu = AlacrittyEmu::new(4, 2, &Profile::default());
+            emu.process(b"\x1b[1 q");
+            let options = TimelineOptions {
+                idle_time_limit: Some(Duration::from_secs(seconds)),
+                ..Default::default()
+            };
+            let mut capture = FrameCapture::new(&emu, options, started, 0).unwrap();
+            for phase in 1..7200 {
+                capture.capture(&emu, started + Duration::from_millis(phase * 500), 0);
+                assert!(capture.output.len() <= seconds as usize * 2 + 1);
+            }
+            let latest = capture.pending.clone();
+            let frames = capture.finish(started + Duration::from_secs(3600)).unwrap();
+            assert!(frames.len() <= seconds as usize * 2 + 1);
+            assert!(frames.last().unwrap().same_visual_state(&latest));
+            assert_eq!(
+                frames.iter().map(|frame| frame.duration).sum::<Duration>(),
+                Duration::from_secs(seconds)
+            );
+        }
+    }
+
+    #[test]
     fn blinking_does_not_restart_idle_compression() {
         for limit in [None, Some(Duration::from_secs(2)), Some(Duration::ZERO)] {
             let mut emu = AlacrittyEmu::new(4, 2, &Profile::default());
@@ -629,10 +682,13 @@ mod tests {
                 capture.capture(&emulator, started + Duration::from_secs(index), 10);
             }
             let frames = capture.finish(started + Duration::from_secs(20)).unwrap();
-            assert_eq!(frames.len(), 2);
+            assert_eq!(
+                frames.len(),
+                if limit == Some(Duration::ZERO) { 1 } else { 2 }
+            );
             let expected = limit.unwrap_or(Duration::from_secs(10)).div_f64(2.0);
-            assert_eq!(frames[0].duration, expected);
-            assert_eq!(frames[1].duration, expected);
+            assert!(frames.iter().all(|frame| frame.duration == expected));
+            assert_eq!(frames.last().unwrap().grid, emulator.viewable_rows());
         }
     }
 
