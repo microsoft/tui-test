@@ -148,13 +148,22 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 
 Interactive monitors mirror the session's keyboard, paste, and mouse modes.
 
-APNG, GIF, and MP4 recordings capture frames from the session's live emulator.
-Exports encode these frames without replay through another emulator. Cast files
-retain terminal output and resize events; the external player selects its own
-emulator.
+APNG, GIF, and MP4 recordings sample the session's live emulator at `--fps` (default: 30).
+Output, resize, and viewport changes appear in the next sample.
+A state shorter than one sample interval can be missed.
+Exports encode these samples without replay through another emulator.
 
-Recordings retain frames in memory until export. They merge identical states and
-apply the configured frame rate.
+Raster recordings preserve elapsed time until `record stop`, including quiet periods.
+There is no default idle cap or extra final hold.
+`--speed` scales playback time; `--idle-time-limit` explicitly caps each unchanged visual interval before speed scaling.
+An idle limit of zero removes those intervals.
+Media formats round durations to their supported precision.
+Recordings retain frames in memory until export and merge identical samples.
+
+Cast files retain timestamped terminal output and resize events.
+FPS sampling does not change this stream or add viewport movements.
+The external player selects its own emulator.
+The cast does not explicitly represent quiet time after its last event.
 
 This Unix example starts recording inside an alternate screen. The exported
 animation preserves the primary screen when the program returns to it.

@@ -191,6 +191,11 @@ Snapshot options are `update`, `includeStyle`, and `includeTitle`.
 
 Recording options: `format`, `fps`, `speed`, `idleTimeLimit`, `zoom`, `background`, and `transparent`. MP4 requires `ffmpeg` and does not support transparency.
 
+Raster recording samples the live terminal at `fps` (default: 30) and preserves elapsed time until stop.
+There is no default idle cap or extra final hold.
+Set `idleTimeLimit` to cap unchanged visual intervals before `speed` scales playback time.
+Asciicast remains a timestamped output stream; FPS sampling does not change it.
+
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
 
 ### `Locator`
