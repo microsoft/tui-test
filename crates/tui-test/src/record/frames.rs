@@ -84,7 +84,7 @@ pub(crate) struct FrameCapture {
 }
 
 impl FrameCapture {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
