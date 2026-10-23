@@ -257,6 +257,34 @@ const CONTENT_SIDES: Sides = Sides {
     left: 15,
 };
 
+/// Cursor animation in raster recordings. Screenshots use the visible phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CursorStyle {
+    /// Allow the application's blinking cursor to animate.
+    pub blink: bool,
+    /// Duration of each visible or hidden phase, before playback speed scaling.
+    pub blink_interval_ms: u64,
+}
+
+impl Default for CursorStyle {
+    fn default() -> Self {
+        Self {
+            blink: true,
+            blink_interval_ms: 500,
+        }
+    }
+}
+
+impl CursorStyle {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.blink_interval_ms == 0 {
+            return Err("cursor.blink_interval_ms must be greater than zero".into());
+        }
+        Ok(())
+    }
+}
+
 /// Everything about how output is drawn.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -275,6 +303,7 @@ pub struct Style {
     pub window: WindowStyle,
     pub border: BorderStyle,
     pub shadow: ShadowStyle,
+    pub cursor: CursorStyle,
 }
 
 impl Default for Style {
@@ -289,6 +318,7 @@ impl Default for Style {
             window: WindowStyle::default(),
             border: BorderStyle::default(),
             shadow: ShadowStyle::default(),
+            cursor: CursorStyle::default(),
         }
     }
 }
@@ -296,6 +326,7 @@ impl Default for Style {
 impl Style {
     /// Reject non-finite values, invalid sizes, and excessive dimensions.
     pub fn validate(&self) -> Result<(), String> {
+        self.cursor.validate()?;
         for (name, value) in [
             ("font_size", self.font_size),
             ("title_font_size", self.title_font_size),
@@ -639,6 +670,10 @@ mod tests {
             ("[shadow]\nspread = -3", "shadow.spread"),
             ("[font]\nfamily = \"\"", "font.family"),
             ("[font]\nbold = \"  \"", "font.bold"),
+            (
+                "[cursor]\nblink_interval_ms = 0",
+                "cursor.blink_interval_ms",
+            ),
         ];
         for (source, expected) in bad {
             let style: Style = toml::from_str(source).expect("parses as TOML");

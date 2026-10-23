@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use crate::render::svg::RenderState;
 use crate::terminal::cell::EmuCell;
-use crate::terminal::emu::Emulator;
+use crate::terminal::emu::{CursorStyle, Emulator};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
@@ -56,6 +56,7 @@ pub(crate) struct TimelineOptions {
     pub fps: u8,
     pub speed: f64,
     pub idle_time_limit: Option<Duration>,
+    pub cursor: crate::render::style::CursorStyle,
 }
 
 impl Default for TimelineOptions {
@@ -64,6 +65,7 @@ impl Default for TimelineOptions {
             fps: 30,
             speed: 1.0,
             idle_time_limit: None,
+            cursor: Default::default(),
         }
     }
 }
@@ -72,13 +74,17 @@ pub(crate) struct FrameCapture {
     options: TimelineOptions,
     revision: u64,
     sampled_at: Instant,
-    pending: TimedGrid,
+    source: TimedGrid,
+    pending: Frame,
+    pending_at: Instant,
+    blink_started: Instant,
     output: Vec<Frame>,
     duration: Duration,
     error: Option<anyhow::Error>,
 }
 
 impl FrameCapture {
+    #[cfg(test)]
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
@@ -94,11 +100,15 @@ impl FrameCapture {
         revision: u64,
     ) -> anyhow::Result<Self> {
         validate_options(&options)?;
+        let source = TimedGrid::capture(emulator, started)?;
         Ok(Self {
             options,
             revision,
             sampled_at: started,
-            pending: TimedGrid::capture(emulator, started)?,
+            pending: source.frame.clone(),
+            source,
+            pending_at: started,
+            blink_started: started,
             output: Vec::new(),
             duration: Duration::ZERO,
             error: None,
@@ -122,17 +132,40 @@ impl FrameCapture {
         if let Some(error) = emulator.fault() {
             anyhow::bail!("recording frame capture failed: {error}");
         }
-        if self.revision == revision {
-            return Ok(());
+        let mut next_source = None;
+        if self.revision != revision {
+            self.revision = revision;
+            let next = TimedGrid::capture(emulator, at)?;
+            if self.source.cursor != next.cursor || self.source.frame.cursor != next.frame.cursor {
+                self.blink_started = at;
+            }
+            if self.source.cursor != next.cursor
+                || !self.source.frame.same_visual_state(&next.frame)
+            {
+                next_source = Some(next);
+            }
         }
-        self.revision = revision;
-        let next = TimedGrid::capture(emulator, at)?;
-        if self.pending.frame.same_visual_state(&next.frame) {
-            return Ok(());
+        let source = next_source.as_ref().unwrap_or(&self.source);
+        let blinking = self.options.cursor.blink && source.cursor.style.blinking;
+        let phase = at.duration_since(self.blink_started).as_millis()
+            / u128::from(self.options.cursor.blink_interval_ms);
+        let cursor = if blinking && phase % 2 == 1 {
+            None
+        } else {
+            source.frame.cursor
+        };
+        if next_source.is_some() || self.pending.cursor != cursor {
+            let mut next = source.frame.clone();
+            next.cursor = cursor;
+            let duration = self.frame_duration(at)?;
+            let mut previous = std::mem::replace(&mut self.pending, next);
+            previous.duration = duration;
+            append_frame(&mut self.output, previous)?;
+            self.pending_at = at;
         }
-        let duration = self.frame_duration(at)?;
-        let previous = std::mem::replace(&mut self.pending, next);
-        self.output.push(previous.into_frame(duration));
+        if let Some(next) = next_source {
+            self.source = next;
+        }
         Ok(())
     }
 
@@ -145,13 +178,18 @@ impl FrameCapture {
     }
 
     fn frame_duration(&mut self, at: Instant) -> anyhow::Result<Duration> {
-        let elapsed = at.duration_since(self.pending.at);
-        let elapsed = self
-            .options
-            .idle_time_limit
-            .map_or(elapsed, |limit| elapsed.min(limit));
-        let duration = Duration::try_from_secs_f64(elapsed.as_secs_f64() / self.options.speed)
-            .map_err(|_| anyhow::anyhow!("recording timeline duration is too large"))?;
+        // Blink phases share the idle budget of the unchanged source screen.
+        // Scale cumulative boundaries to avoid rounding each short phase.
+        let boundary = |time: Instant| -> anyhow::Result<Duration> {
+            let elapsed = time.duration_since(self.source.at);
+            let elapsed = self
+                .options
+                .idle_time_limit
+                .map_or(elapsed, |limit| elapsed.min(limit));
+            Duration::try_from_secs_f64(elapsed.as_secs_f64() / self.options.speed)
+                .map_err(|_| anyhow::anyhow!("recording timeline duration is too large"))
+        };
+        let duration = boundary(at)? - boundary(self.pending_at)?;
         self.duration = self
             .duration
             .checked_add(duration)
@@ -165,12 +203,29 @@ impl FrameCapture {
         }
         self.check_time(at)?;
         let duration = self.frame_duration(at)?;
-        self.output.push(self.pending.into_frame(duration));
+        self.pending.duration = duration;
+        append_frame(&mut self.output, self.pending)?;
         Ok(self.output)
     }
 }
 
+fn append_frame(output: &mut Vec<Frame>, frame: Frame) -> anyhow::Result<()> {
+    if let Some(previous) = output
+        .last_mut()
+        .filter(|last| last.same_visual_state(&frame))
+    {
+        previous.duration = previous
+            .duration
+            .checked_add(frame.duration)
+            .ok_or_else(|| anyhow::anyhow!("recording timeline duration is too large"))?;
+    } else {
+        output.push(frame);
+    }
+    Ok(())
+}
+
 fn validate_options(options: &TimelineOptions) -> anyhow::Result<()> {
+    options.cursor.validate().map_err(anyhow::Error::msg)?;
     if options.fps == 0 {
         anyhow::bail!("recording fps must be greater than zero");
     }
@@ -193,6 +248,14 @@ fn normalize_grid(source: Vec<Vec<EmuCell>>, cols: u16, rows: u16) -> Vec<Vec<Em
 struct TimedGrid {
     at: Instant,
     frame: Frame,
+    cursor: SourceCursor,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SourceCursor {
+    position: (u16, u16),
+    visible: bool,
+    style: CursorStyle,
 }
 
 impl TimedGrid {
@@ -205,17 +268,15 @@ impl TimedGrid {
             render_state: RenderState::capture(emulator),
             cursor: emulator.viewport_cursor().map(|(x, y)| (x, usize::from(y))),
         };
+        let cursor = SourceCursor {
+            position: emulator.cursor(),
+            visible: emulator.cursor_visible(),
+            style: emulator.cursor_style(),
+        };
         if let Some(error) = emulator.fault() {
             anyhow::bail!("recording frame capture failed: {error}");
         }
-        Ok(Self { at, frame })
-    }
-
-    fn into_frame(self, duration: Duration) -> Frame {
-        Frame {
-            duration,
-            ..self.frame
-        }
+        Ok(Self { at, frame, cursor })
     }
 }
 
@@ -231,6 +292,194 @@ mod tests {
     use crate::api::RecordingFormat;
     #[cfg(feature = "recording-raster")]
     use crate::render::raster::{FrameRenderer, GridRenderer};
+
+    #[test]
+    fn cursor_phases_follow_native_style_and_recording_settings() {
+        for &backend in Backend::ALL {
+            for code in 1..=6 {
+                for allowed in [false, true] {
+                    for interval in [250, 500] {
+                        let mut emu = backend.build(4, 2, &Profile::default()).unwrap();
+                        emu.process(format!("\x1b[{code} q").as_bytes());
+                        let native = emu.cursor_style();
+                        let started = Instant::now();
+                        let options = TimelineOptions {
+                            cursor: crate::render::style::CursorStyle {
+                                blink: allowed,
+                                blink_interval_ms: interval,
+                            },
+                            ..Default::default()
+                        };
+                        let mut capture =
+                            FrameCapture::new(emu.as_ref(), options, started, 0).unwrap();
+                        for ms in (125..1000).step_by(125) {
+                            capture.capture(emu.as_ref(), started + Duration::from_millis(ms), 0);
+                        }
+                        let frames = capture.finish(started + Duration::from_secs(1)).unwrap();
+                        let animates = allowed && code % 2 == 1;
+                        let count = if animates { 1000 / interval } else { 1 };
+                        assert_eq!(frames.len() as u64, count, "{backend:?}, {code}, {allowed}");
+                        for (index, frame) in frames.iter().enumerate() {
+                            assert_eq!(frame.cursor.is_some(), !animates || index % 2 == 0);
+                            assert_eq!(frame.duration, Duration::from_millis(1000 / count));
+                        }
+                        assert_eq!(emu.cursor_style(), native);
+                        assert!(emu.cursor_visible());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_only_phases_use_the_cached_screen_and_actual_sample_times() {
+        let mut emu = AlacrittyEmu::new(4, 2, &Profile::default());
+        emu.process(b"\x1b[1 q");
+        let started = Instant::now();
+        let mut capture = FrameCapture::new(&emu, TimelineOptions::default(), started, 0).unwrap();
+        let grid = emu.viewable_rows();
+        // Deliberately withhold the revision to detect an unwanted backend read.
+        emu.process(b"NEW");
+        capture.capture(&emu, started + Duration::from_millis(1750), 0);
+        capture.capture(&emu, started + Duration::from_millis(2000), 0);
+        let frames = capture
+            .finish(started + Duration::from_millis(2250))
+            .unwrap();
+        assert_eq!(frames.len(), 3);
+        for (frame, (ms, visible)) in frames.iter().zip([(1750, true), (250, false), (250, true)]) {
+            assert_eq!(frame.duration, Duration::from_millis(ms));
+            assert_eq!(frame.cursor.is_some(), visible);
+            assert_eq!(frame.grid, grid);
+        }
+    }
+
+    #[test]
+    fn sampled_cursor_changes_restart_the_visible_phase() {
+        for sequence in [&b"\x1b[1;2H"[..], b"\x1b[3 q", b"\x1b[2 q", b"\x1b[?25l"] {
+            let mut emu = AlacrittyEmu::new(4, 2, &Profile::default());
+            emu.process(b"\x1b[1 q");
+            let started = Instant::now();
+            let mut capture =
+                FrameCapture::new(&emu, TimelineOptions::default(), started, 0).unwrap();
+            capture.capture(&emu, started + Duration::from_millis(500), 0);
+            emu.process(sequence);
+            capture.capture(&emu, started + Duration::from_millis(600), 1);
+            let visible = emu.cursor_visible();
+            assert_eq!(capture.pending.cursor.is_some(), visible);
+            capture.capture(&emu, started + Duration::from_millis(1099), 1);
+            assert_eq!(capture.pending.cursor.is_some(), visible);
+            capture.capture(&emu, started + Duration::from_millis(1100), 1);
+            assert_eq!(
+                capture.pending.cursor.is_some(),
+                visible && !emu.cursor_style().blinking
+            );
+            emu.process(b"\x1b[?25h\x1b[5 q");
+            capture.capture(&emu, started + Duration::from_millis(1200), 2);
+            assert!(capture.pending.cursor.is_some());
+            capture
+                .finish(started + Duration::from_millis(1300))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn unrelated_screen_changes_do_not_restart_the_cursor_phase() {
+        let mut emu = AlacrittyEmu::new(4, 2, &Profile::default());
+        emu.process(b"\x1b[1 q");
+        let started = Instant::now();
+        let mut capture = FrameCapture::new(&emu, TimelineOptions::default(), started, 0).unwrap();
+        capture.capture(&emu, started + Duration::from_millis(500), 0);
+        emu.process(b"\x1b]2;new title\x07");
+        capture.capture(&emu, started + Duration::from_millis(750), 1);
+        assert_eq!(capture.pending.cursor, None);
+        capture.capture(&emu, started + Duration::from_millis(1000), 1);
+        assert!(capture.pending.cursor.is_some());
+        let frames = capture
+            .finish(started + Duration::from_millis(1250))
+            .unwrap();
+        assert_eq!(frames.len(), 4);
+        assert_eq!(frames[2].title.as_deref(), Some("new title"));
+    }
+
+    #[test]
+    fn blinking_does_not_restart_idle_compression() {
+        for limit in [None, Some(Duration::from_secs(2)), Some(Duration::ZERO)] {
+            let mut emu = AlacrittyEmu::new(4, 2, &Profile::default());
+            emu.process(b"\x1b[1 q");
+            let started = Instant::now();
+            let options = TimelineOptions {
+                speed: 2.0,
+                idle_time_limit: limit,
+                ..Default::default()
+            };
+            let mut capture = FrameCapture::new(&emu, options, started, 0).unwrap();
+            for ms in (250..6000).step_by(250) {
+                // Revisions without a source change do not reset the budget.
+                capture.capture(&emu, started + Duration::from_millis(ms), ms);
+            }
+            emu.process(b"A");
+            capture.capture(&emu, started + Duration::from_secs(6), 6000);
+            capture.capture(&emu, started + Duration::from_millis(6500), 6000);
+            let frames = capture.finish(started + Duration::from_secs(7)).unwrap();
+            let first = limit.unwrap_or(Duration::from_secs(6));
+            let second = limit
+                .unwrap_or(Duration::from_secs(1))
+                .min(Duration::from_secs(1));
+            assert_eq!(
+                frames.iter().map(|frame| frame.duration).sum::<Duration>(),
+                (first + second).div_f64(2.0)
+            );
+            for frame in frames.iter().filter(|frame| !frame.duration.is_zero()) {
+                assert_eq!(frame.duration, Duration::from_millis(250));
+            }
+        }
+    }
+
+    #[test]
+    fn blink_phases_never_reveal_hidden_or_clipped_cursors() {
+        for &backend in Backend::ALL {
+            for hidden in [false, true] {
+                let mut emu = backend.build(4, 2, &Profile::default()).unwrap();
+                emu.process(b"0\r\n1\r\n2\r\n3\r\n4\x1b[1 q");
+                if hidden {
+                    emu.process(b"\x1b[?25l");
+                } else {
+                    emu.scroll(crate::api::ScrollTarget::Top);
+                }
+                assert_eq!(emu.viewport_cursor(), None);
+                let started = Instant::now();
+                let mut capture =
+                    FrameCapture::new(emu.as_ref(), TimelineOptions::default(), started, 0)
+                        .unwrap();
+                for ms in [500, 1000, 1500] {
+                    capture.capture(emu.as_ref(), started + Duration::from_millis(ms), 0);
+                }
+                let frames = capture.finish(started + Duration::from_secs(2)).unwrap();
+                assert_eq!(frames.len(), 1, "{backend:?}");
+                assert_eq!(frames[0].cursor, None);
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_phases_change_pixels_but_not_the_source_screen() {
+        for code in [1, 3, 5] {
+            let mut emu = AlacrittyEmu::new(4, 2, &Profile::default());
+            emu.process(format!("\x1b[{code} q").as_bytes());
+            let started = Instant::now();
+            let original = TimedGrid::capture(&emu, started).unwrap().frame;
+            let mut capture =
+                FrameCapture::new(&emu, TimelineOptions::default(), started, 0).unwrap();
+            capture.capture(&emu, started + Duration::from_millis(500), 0);
+            let frames = capture.finish(started + Duration::from_secs(1)).unwrap();
+            let mut renderer = GridRenderer::new(4, 2);
+            let visible = renderer.render(&frames[0]).unwrap().into_raw();
+            let hidden = renderer.render(&frames[1]).unwrap().into_raw();
+            assert_ne!(visible, hidden, "cursor shape {code}");
+            assert_eq!(renderer.render(&original).unwrap().into_raw(), visible);
+            assert_eq!(TimedGrid::capture(&emu, started).unwrap().frame, original);
+        }
+    }
 
     #[test]
     fn viewport_movements_capture_frames_without_pty_output() {
@@ -347,6 +596,13 @@ mod tests {
             },
             TimelineOptions {
                 speed: 0.0,
+                ..Default::default()
+            },
+            TimelineOptions {
+                cursor: crate::render::style::CursorStyle {
+                    blink_interval_ms: 0,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         ] {
