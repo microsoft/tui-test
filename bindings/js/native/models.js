@@ -332,4 +332,6 @@ snapshot: { result: "Snapshot", args: [["name", "String"],["options", "Option<Sn
 screenshot: { result: "Screenshot", args: [["options", "Option<ScreenshotOptions>"],] },
 startRecording: { result: "Unit", args: [["options", "RecordingOptions"],] },
 stopRecording: { result: "Recording", args: [] },
+pauseRecording: { result: "Unit", args: [] },
+resumeRecording: { result: "Unit", args: [] },
 };

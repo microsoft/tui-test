@@ -166,11 +166,11 @@ pub(crate) fn snapshot_to_ansi(emulator: &dyn Emulator) -> String {
         "\x1b[0m\x1b[{};{}H\x1b[{} q\x1b[?7h{}",
         u32::from(cursor.1) + 1,
         u32::from(cursor.0) + 1,
-        match emulator.cursor_shape() {
+        match emulator.cursor_style().shape {
             CursorShape::Block => 2,
             CursorShape::Underline => 4,
             CursorShape::Bar => 6,
-        },
+        } - u8::from(emulator.cursor_style().blinking),
         if emulator.cursor_visible() {
             "\x1b[?25h"
         } else {
