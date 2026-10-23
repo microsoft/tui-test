@@ -44,7 +44,12 @@ Raster output uses installed fonts. Add a `recording-font-jetbrains-mono*` featu
 ### Recording timing
 
 `Operation::StartRecording` samples the live terminal at the configured `fps`, which defaults to 30.
-Raster recordings preserve elapsed time through `Operation::StopRecording`, including quiet periods.
+Raster recordings preserve active elapsed time through `Operation::StopRecording`, including quiet periods.
+Use `Operation::PauseRecording` and `Operation::ResumeRecording` to exclude time while the terminal continues.
+These controls apply to every manual format, including asciicast. Resume captures the current screen and restarts the visible cursor phase.
+Stop during a pause excludes that pause. Automatic diagnostic recordings remain continuous.
+Repeated pause or resume calls return usage errors.
+Run `cargo run -p tui-test-rs --features recording-font-jetbrains-mono --example pause_resume_recording` for GIF and cast examples.
 There is no default idle cap or extra final hold.
 Set `idle_time_limit` to cap unchanged visual intervals before `speed` scales their durations.
 Cursor blink phases share the source screen's idle limit.

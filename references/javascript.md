@@ -89,7 +89,7 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `expectTitle()`, `expectOutput()`, `expectExitCode()` | Assert state. |
 | `expectBellCount()`, `expectSnapshot()` | Assert bells or snapshots. |
 | `screenshot()` | Read text or save SVG or PNG. |
-| `startRecording()`, `stopRecording()` | Record. |
+| `startRecording()`, `pauseRecording()`, `resumeRecording()`, `stopRecording()` | Record without paused time. |
 | `close()`, `closeQuiet()` | Close. |
 
 `write(data)` hands the bytes to the terminal, so on Windows they pass through ConPTY input

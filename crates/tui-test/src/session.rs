@@ -614,6 +614,70 @@ impl Session {
         Ok(())
     }
 
+    pub fn pause_recording(&self) -> Result<(), crate::api::TuiTestError> {
+        #[cfg(feature = "recording-raster")]
+        let _sampler = self
+            .recording_sampler
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let at = Instant::now();
+        self.recorder.pause_at(at).map_err(capture_error)?;
+        #[cfg(feature = "recording-raster")]
+        {
+            let mut state = state;
+            if let Some(frames) = state.recording_frames.as_mut() {
+                if let Err(error) = frames.pause(at) {
+                    let message = error.to_string();
+                    frames.fail(error);
+                    return Err(crate::api::TuiTestError::internal(message));
+                }
+            }
+        }
+        #[cfg(not(feature = "recording-raster"))]
+        drop(state);
+        Ok(())
+    }
+
+    pub fn resume_recording(&self) -> Result<(), crate::api::TuiTestError> {
+        #[cfg(feature = "recording-raster")]
+        let _sampler = self
+            .recording_sampler
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let screen = record::cast::snapshot_to_ansi(state.emu.as_ref());
+        let (cols, rows) = state.emu.size();
+        let at = Instant::now();
+        self.recorder
+            .resume_at(at, cols, rows, screen)
+            .map_err(capture_error)?;
+        #[cfg(feature = "recording-raster")]
+        {
+            let mut state = state;
+            let TermState {
+                emu,
+                recording_frames,
+                visual_revision,
+                ..
+            } = &mut *state;
+            if let Some(frames) = recording_frames.as_mut() {
+                if let Err(error) = frames.resume(emu.as_ref(), at, *visual_revision) {
+                    let message = error.to_string();
+                    frames.fail(error);
+                    return Err(crate::api::TuiTestError::internal(message));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn stop_recording(&self) -> Result<String, crate::api::TuiTestError> {
         #[cfg(feature = "recording-raster")]
         let mut sampler = self
@@ -934,6 +998,10 @@ fn capture_error(error: CaptureError) -> crate::api::TuiTestError {
             crate::api::TuiTestError::usage("a recording is already active")
         }
         CaptureError::NotActive => crate::api::TuiTestError::usage("no recording is active"),
+        CaptureError::AlreadyPaused => {
+            crate::api::TuiTestError::usage("recording is already paused")
+        }
+        CaptureError::NotPaused => crate::api::TuiTestError::usage("recording is not paused"),
         CaptureError::WorkerStopped => {
             crate::api::TuiTestError::internal("recording worker stopped unexpectedly")
         }

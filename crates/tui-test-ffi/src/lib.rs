@@ -15,7 +15,7 @@ pub use types::*;
 mod tasks_generated;
 pub use tasks_generated::*;
 
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 type Result<T> = std::result::Result<T, TuiTestError>;
 fn boundary(f: impl FnOnce() -> Result<OperationResult>) -> *mut TuiResult {
@@ -327,6 +327,22 @@ pub unsafe extern "C" fn tui_get_bell_events(session: TuiString) -> *mut TuiResu
 /// throughout this call; see TuiString and the input structure contracts.
 pub unsafe extern "C" fn tui_stop_recording(session: TuiString) -> *mut TuiResult {
     unsafe { execute(session, "stopRecording", || Ok(Operation::StopRecording)) }
+}
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_pause_recording(session: TuiString) -> *mut TuiResult {
+    unsafe { execute(session, "pauseRecording", || Ok(Operation::PauseRecording)) }
+}
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_resume_recording(session: TuiString) -> *mut TuiResult {
+    unsafe {
+        execute(session, "resumeRecording", || {
+            Ok(Operation::ResumeRecording)
+        })
+    }
 }
 #[no_mangle]
 /// # Safety

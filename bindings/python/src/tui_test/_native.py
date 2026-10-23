@@ -510,6 +510,12 @@ class NativeSession:
     async def stop_recording(self):
         return await self._call("stop_recording", kind="text")
 
+    async def pause_recording(self):
+        return await self._call("pause_recording")
+
+    async def resume_recording(self):
+        return await self._call("resume_recording")
+
     async def recording(self):
         return await recording(self.name)
 

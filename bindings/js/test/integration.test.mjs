@@ -309,7 +309,13 @@ test("recording API writes an asciicast file", async () => {
       });
       await su.submit("echo sdk-recording");
       await su.waitCommand();
+      await su.pauseRecording();
+      await assert.rejects(su.pauseRecording(), /already paused/);
+      await su.resumeRecording();
+      await assert.rejects(su.resumeRecording(), /not paused/);
+      await su.pauseRecording();
       assert.equal(await su.stopRecording(), path);
+      await assert.rejects(su.resumeRecording(), /no recording is active/);
     });
     const cast = await readFile(path, "utf8");
     assert.match(cast, /"version":2/);
