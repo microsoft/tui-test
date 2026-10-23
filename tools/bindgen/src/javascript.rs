@@ -21,6 +21,8 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("getTitle", "GetTitle", "Title"),
     ("getClipboard", "GetClipboard", "Clipboard"),
     ("getCursor", "GetCursor", "Cursor"),
+    ("getModes", "GetModes", "Modes"),
+    ("getColors", "GetColors", "Colors"),
     ("getSize", "GetSize", "Size"),
     ("getViewport", "GetViewport", "Viewport"),
     ("scroll", "Scroll.Lines", "Unit"),
@@ -53,6 +55,9 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("waitBell", "WaitBell", "Unit"),
     ("expectExitCode", "ExpectExitCode", "Unit"),
     ("expectOutput", "ExpectOutput", "Unit"),
+    ("expectMode", "ExpectMode", "Unit"),
+    ("expectCursor", "ExpectCursor", "Unit"),
+    ("expectColors", "ExpectColors", "Unit"),
     ("expectBellCount", "ExpectBellCount", "Unit"),
     ("snapshot", "Snapshot", "Snapshot"),
     ("screenshot", "Screenshot", "Screenshot"),
@@ -63,6 +68,13 @@ const METHODS: &[(&str, &str, &str)] = &[
 ];
 
 const INPUTS: &[(&str, &str)] = &[
+    ("Style", "RenderStyle"),
+    ("FontFamilies", "FontFamilies"),
+    ("WindowStyle", "WindowStyle"),
+    ("BorderStyle", "BorderStyle"),
+    ("ShadowStyle", "ShadowStyle"),
+    ("CursorStyle", "RecordingCursorStyle"),
+    ("PaddingSides", "PaddingSides"),
     ("Timeouts", "Timeouts"),
     ("AutomaticRecording", "AutomaticRecordingOptions"),
     ("TraceOptions", "TraceOptions"),
@@ -77,6 +89,8 @@ const INPUTS: &[(&str, &str)] = &[
     ("Operation::Snapshot", "SnapshotOptions"),
     ("Operation::Screenshot", "ScreenshotOptions"),
     ("Operation::StartRecording", "RecordingOptions"),
+    ("Operation::ExpectCursor", "CursorExpectation"),
+    ("Operation::ExpectColors", "ColorExpectation"),
 ];
 
 // These getters read current values without an intentional wait. Other operations
@@ -89,6 +103,8 @@ const SHORT_READS: &[&str] = &[
     "GetTitle",
     "GetClipboard",
     "GetCursor",
+    "GetModes",
+    "GetColors",
     "GetSize",
     "GetViewport",
     "GetBellCount",
@@ -115,7 +131,13 @@ fn ts_type(ty: &str) -> Result<String> {
         return Ok(format!("Array<{}>", ts_type(inner)?));
     }
     Ok(match ty {
-        "u8" | "u16" | "u32" | "u64" | "usize" | "i32" | "f64" | "MouseOptions" => "number".into(),
+        "u8" | "u16" | "u32" | "u64" | "usize" | "i32" | "f32" | "f64" | "MouseOptions" => {
+            "number".into()
+        }
+        "Rgb" => "string".into(),
+        "Style" => "RenderStyle".into(),
+        "CursorStyle" => "RecordingCursorStyle".into(),
+        "Padding" => "number | PaddingSides".into(),
         "String"
         | "PathBuf"
         | "WhitespaceMode"
@@ -125,6 +147,7 @@ fn ts_type(ty: &str) -> Result<String> {
         "bool" => "boolean".into(),
         "()" => "void".into(),
         "(String,String)" => "[string, string]".into(),
+        "(u8,String)" => "[number, string]".into(),
         "BTreeMap<String,bool>" => "Record<string, boolean>".into(),
         "std::collections::BTreeMap<u8,String>" => "Record<string, string>".into(),
         "CellColor" => "Color".into(),
@@ -183,6 +206,8 @@ fn parameters(models: &Models, method: &str, variant: &str) -> Result<Vec<Field>
         ],
         "screenshot" => vec![field("options", "Option<ScreenshotOptions>")],
         "startRecording" => vec![field("options", "RecordingOptions")],
+        "expectCursor" => vec![field("options", "CursorExpectation")],
+        "expectColors" => vec![field("options", "ColorExpectation")],
         _ => {
             let mut fields = if variant.starts_with("Key.") {
                 models
@@ -282,7 +307,7 @@ fn coverage(models: &Models) -> Result<()> {
     let results: BTreeSet<_> = METHODS
         .iter()
         .map(|(_, _, result)| *result)
-        .chain(["Open", "Modes", "Colors"])
+        .chain(["Open"])
         .collect();
     let owned_results: BTreeSet<_> = models.enums["OperationResult"]
         .iter()
@@ -301,11 +326,6 @@ fn coverage(models: &Models) -> Result<()> {
             "FinishTrace",
             "ResolveLocator",
             "WaitClipboardMatch",
-            "GetModes",
-            "GetColors",
-            "ExpectMode",
-            "ExpectColors",
-            "ExpectCursor",
         ])
         .collect();
     let owned: BTreeSet<_> = models.enums["Operation"]

@@ -58,6 +58,83 @@ fn pending_tasks_can_be_abandoned_without_borrowing_foreign_storage() {
 }
 
 #[test]
+fn rendering_style_inputs_preserve_defaults_and_explicit_values() {
+    use tui_test::render::style::{Padding, Style};
+    let mut value = TuiOpenOptions::default();
+    assert_eq!(
+        unsafe { input::open(value) }.unwrap().style,
+        Style::default()
+    );
+    value.style.font.family = text("monospace");
+    value.style.font.bold_italic = text("bold italic");
+    value.style.font_size = TuiOptionalF64 {
+        present: true,
+        value: 24.0,
+    };
+    value.style.title_font_size = TuiOptionalF64 {
+        present: true,
+        value: 21.0,
+    };
+    value.style.canvas_background = text("#123456");
+    value.style.canvas_padding.uniform = TuiOptionalU64 {
+        present: true,
+        value: 0,
+    };
+    value.style.content_padding.sides.left = TuiOptionalU64 {
+        present: true,
+        value: 2,
+    };
+    value.style.window.title_bar = TuiOptionalBool {
+        present: true,
+        value: false,
+    };
+    value.style.window.traffic_lights = TuiOptionalBool {
+        present: true,
+        value: false,
+    };
+    value.style.border.radius = TuiOptionalF64 {
+        present: true,
+        value: 0.0,
+    };
+    value.style.shadow.enabled = TuiOptionalBool {
+        present: true,
+        value: false,
+    };
+    value.style.cursor.blink = TuiOptionalBool {
+        present: true,
+        value: false,
+    };
+    value.style.cursor.blink_interval_ms = TuiOptionalU64 {
+        present: true,
+        value: 250,
+    };
+    let style = unsafe { input::open(value) }.unwrap().style;
+    assert_eq!(style.font.family, "monospace");
+    assert_eq!(style.font.bold_italic.as_deref(), Some("bold italic"));
+    assert_eq!(style.font_size, 24.0);
+    assert_eq!(style.title_font_size, 21.0);
+    assert_eq!(style.canvas_background.to_hex(), "#123456");
+    assert_eq!(style.canvas_padding, Padding::Uniform(0));
+    assert!(
+        matches!(style.content_padding, Padding::Sides(s) if s.left == Some(2) && s.top.is_none())
+    );
+    assert!(!style.window.title_bar);
+    assert!(!style.window.traffic_lights);
+    assert_eq!(style.border.radius, 0.0);
+    assert!(!style.shadow.enabled);
+    assert!(!style.cursor.blink);
+    assert_eq!(style.cursor.blink_interval_ms, 250);
+    value.style.cursor.blink_interval_ms.value = 0;
+    assert!(unsafe { input::open(value) }
+        .unwrap_err()
+        .message
+        .contains("blink_interval_ms"));
+    value.style.cursor.blink_interval_ms.value = 500;
+    value.style.font_size.value = f64::NAN;
+    assert!(unsafe { input::open(value) }.is_err());
+}
+
+#[test]
 fn viewport_result_preserves_native_count_width() {
     let result = output::operation(OperationResult::Viewport(Viewport {
         offset: usize::MAX - 1,
@@ -68,7 +145,7 @@ fn viewport_result_preserves_native_count_width() {
         assert_eq!((*result).viewport.history, usize::MAX);
         tui_result_free(result);
     }
-    assert_eq!(tui_abi_version(), 6);
+    assert_eq!(tui_abi_version(), 7);
 }
 
 fn text(value: &str) -> TuiString {

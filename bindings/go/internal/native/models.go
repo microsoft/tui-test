@@ -98,6 +98,39 @@ type Profile struct {
 	Colors     Colors
 }
 
+type FontFamilies struct {
+	Family, Bold, Italic, BoldItalic *string
+	Files                            []string
+}
+type WindowStyle struct {
+	TitleBar, TrafficLights         *bool
+	Background, Foreground, Divider *string
+}
+type BorderStyle struct {
+	Width, Radius *float64
+	Color         *string
+}
+type ShadowStyle struct {
+	Enabled        *bool
+	Color          *string
+	Offset, Spread *float64
+}
+type RecordingCursorStyle struct {
+	Blink           *bool
+	BlinkIntervalMS *uint64
+}
+type Padding struct{ Uniform, Top, Right, Bottom, Left *uint32 }
+type RenderStyle struct {
+	Font                          FontFamilies
+	FontSize, TitleFontSize       *float64
+	CanvasBackground              *string
+	CanvasPadding, ContentPadding Padding
+	Window                        WindowStyle
+	Border                        BorderStyle
+	Shadow                        ShadowStyle
+	Cursor                        RecordingCursorStyle
+}
+
 type AutomaticRecording struct {
 	Mode      RecordingMode
 	Directory string
@@ -112,6 +145,7 @@ type TraceOptions struct {
 }
 
 type SpawnOptions struct {
+	Style              *RenderStyle
 	Backend            Backend
 	Cols, Rows         *uint16
 	Cwd                string
@@ -135,6 +169,17 @@ type OpenOptions struct {
 type TitleOptions struct {
 	Regex, Not bool
 	Timeout    *time.Duration
+}
+type CursorExpectation struct {
+	X, Y    *uint16
+	Visible *bool
+	Shape   *string
+	Timeout *time.Duration
+}
+type ColorExpectation struct {
+	Foreground, Background, Cursor *string
+	Palette                        map[uint8]string
+	Timeout                        *time.Duration
 }
 
 type ClipboardWaitOptions struct {

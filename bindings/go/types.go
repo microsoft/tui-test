@@ -1,7 +1,21 @@
 // Package tuitest drives terminal programs through the in-process tui-test engine.
 package tuitest
 
-import "time"
+import (
+	"time"
+
+	"github.com/microsoft/tui-test/bindings/go/internal/native"
+)
+
+type RenderStyle = native.RenderStyle
+type FontFamilies = native.FontFamilies
+type WindowStyle = native.WindowStyle
+type BorderStyle = native.BorderStyle
+type ShadowStyle = native.ShadowStyle
+type RecordingCursorStyle = native.RecordingCursorStyle
+type Padding = native.Padding
+type CursorExpectation = native.CursorExpectation
+type ColorExpectation = native.ColorExpectation
 
 // Ptr marks an option as explicitly supplied, including false and zero.
 func Ptr[Value any](value Value) *Value { return &value }
@@ -137,6 +151,7 @@ type TraceOptions struct {
 	Directory string
 }
 type ClientOptions struct {
+	Style              *RenderStyle
 	Backend            Backend
 	Profile            *Profile
 	Timeouts           Timeouts
@@ -146,6 +161,7 @@ type ClientOptions struct {
 	Trace              *TraceOptions
 }
 type SpawnOptions struct {
+	Style              *RenderStyle
 	Backend            Backend
 	Cols, Rows         *uint16
 	Cwd                string
