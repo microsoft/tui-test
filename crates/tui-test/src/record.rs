@@ -838,6 +838,88 @@ mod tests {
         }
     }
 
+    #[test]
+    fn pause_resume_cast_preserves_future_cursor_modes_and_tabs() {
+        use crate::profile::Profile;
+        use crate::terminal::backend::Backend;
+        use std::time::Duration;
+
+        for (prefix, suffix) in [
+            ("\x1b[3g\x1b[5G\x1bH", "\r\tX"),
+            ("\x1b[0 q\x1b[?12l", "\x1b[?12h"),
+            ("\x1b[?12h\x1b[0 q", "\x1b[?12l"),
+            ("\x1b[?12l\x1b[5 q", "\x1b[?12h"),
+            ("\x1b[5 q\x1b[?12l", "\x1b[?12h"),
+        ] {
+            for &backend in Backend::ALL {
+                let path = temp_path("resume-controls");
+                let started = Instant::now();
+                let recorder = Recorder::create_at(
+                    None,
+                    16,
+                    3,
+                    &[],
+                    false,
+                    Arc::new(crate::logger::Logger::disabled()),
+                    started,
+                )
+                .unwrap();
+                let mut request = manual_request(&path);
+                request.cols = 16;
+                request.rows = 3;
+                recorder.start_at(request, started).unwrap();
+                let mut live = backend.build(16, 3, &Profile::default()).unwrap();
+                live.process(prefix.as_bytes());
+                recorder
+                    .sender
+                    .send(Message::Data {
+                        at: started + Duration::from_secs(1),
+                        bytes: prefix.as_bytes().to_vec(),
+                    })
+                    .unwrap();
+                recorder.pause_at(started + Duration::from_secs(2)).unwrap();
+                recorder
+                    .resume_at(
+                        started + Duration::from_secs(3),
+                        16,
+                        3,
+                        cast::snapshot_to_ansi(live.as_ref()),
+                    )
+                    .unwrap();
+                live.process(suffix.as_bytes());
+                recorder
+                    .sender
+                    .send(Message::Data {
+                        at: started + Duration::from_secs(4),
+                        bytes: suffix.as_bytes().to_vec(),
+                    })
+                    .unwrap();
+                recorder.stop().unwrap();
+                drop(recorder);
+                let cast = std::fs::read_to_string(&path).unwrap();
+                std::fs::remove_file(path).unwrap();
+                let mut replay = backend.build(16, 3, &Profile::default()).unwrap();
+                for line in cast.lines().skip(1) {
+                    let event: serde_json::Value = serde_json::from_str(line).unwrap();
+                    if event[1] == "o" {
+                        replay.process(event[2].as_str().unwrap().as_bytes());
+                    }
+                }
+                assert_eq!(
+                    replay.viewable_rows(),
+                    live.viewable_rows(),
+                    "{backend:?}: {prefix:?}"
+                );
+                assert_eq!(replay.cursor(), live.cursor(), "{backend:?}: {prefix:?}");
+                assert_eq!(
+                    replay.cursor_style(),
+                    live.cursor_style(),
+                    "{backend:?}: {prefix:?}"
+                );
+            }
+        }
+    }
+
     fn temp_path(label: &str) -> PathBuf {
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         std::env::temp_dir().join(format!(
