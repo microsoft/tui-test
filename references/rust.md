@@ -41,6 +41,24 @@ Add `recording-raster` for APNG, GIF, and MP4. Add `ghostty`, `rio`, or `xtermjs
 
 Raster output uses installed fonts. Add a `recording-font-jetbrains-mono*` feature to bundle one.
 
+### Recording timing
+
+`Operation::StartRecording` samples the live terminal at the configured `fps`, which defaults to 30.
+Raster recordings preserve elapsed time through `Operation::StopRecording`, including quiet periods.
+There is no default idle cap or extra final hold.
+Set `idle_time_limit` to cap unchanged visual intervals before `speed` scales their durations.
+Asciicast remains a timestamped output stream, independent of raster sampling.
+
+Run the [time-based recording example](../crates/tui-test/examples/time_based_recording.rs) from a source checkout:
+
+```sh
+cargo run -p tui-test-rs --features recording-font-jetbrains-mono --example time_based_recording
+```
+
+The example records a six-second quiet screen and a second state for one second.
+It writes `target/time-based-recording.gif`, reads the encoded duration, and checks it against elapsed time.
+An optional first argument selects another output path.
+
 Use `ExecutionContext` with `FailureArtifactOptions` to write failure artifacts. `TuiTestError` exposes the structured details and artifact reference.
 
 Full API: [docs.rs](https://docs.rs/tui-test-rs/latest/tui_test/)

@@ -475,13 +475,13 @@ pub enum RecordCmd {
         /// Override the format inferred from the output extension.
         #[arg(long, value_enum)]
         format: Option<RecordingFormatArg>,
-        /// Maximum animation frame rate.
+        /// Sample the live terminal at this many frames per second (default: 30).
         #[arg(long)]
         fps: Option<u8>,
         /// Playback speed multiplier.
         #[arg(long)]
         speed: Option<f64>,
-        /// Clamp idle gaps to this many seconds.
+        /// Cap unchanged visual intervals in seconds (uncapped by default).
         #[arg(long)]
         idle_time_limit: Option<f64>,
         /// Scale image/video dimensions while keeping the same terminal cells.
