@@ -57,6 +57,67 @@ class Colors:
 
 
 @dataclass
+class FontFamilies:
+    family: Optional[str] = None
+    bold: Optional[str] = None
+    italic: Optional[str] = None
+    bold_italic: Optional[str] = None
+    files: Optional[List[str]] = None
+
+
+@dataclass
+class WindowStyle:
+    title_bar: Optional[bool] = None
+    traffic_lights: Optional[bool] = None
+    background: Optional[str] = None
+    foreground: Optional[str] = None
+    divider: Optional[str] = None
+
+
+@dataclass
+class BorderStyle:
+    width: Optional[float] = None
+    color: Optional[str] = None
+    radius: Optional[float] = None
+
+
+@dataclass
+class ShadowStyle:
+    enabled: Optional[bool] = None
+    color: Optional[str] = None
+    offset: Optional[float] = None
+    spread: Optional[float] = None
+
+
+@dataclass
+class RecordingCursorStyle:
+    blink: Optional[bool] = None
+    blink_interval_ms: Optional[int] = None
+
+
+@dataclass
+class PaddingSides:
+    top: Optional[int] = None
+    right: Optional[int] = None
+    bottom: Optional[int] = None
+    left: Optional[int] = None
+
+
+@dataclass
+class RenderStyle:
+    font: Optional[FontFamilies] = None
+    font_size: Optional[float] = None
+    title_font_size: Optional[float] = None
+    canvas_background: Optional[str] = None
+    canvas_padding: Optional[Union[int, PaddingSides]] = None
+    content_padding: Optional[Union[int, PaddingSides]] = None
+    window: Optional[WindowStyle] = None
+    border: Optional[BorderStyle] = None
+    shadow: Optional[ShadowStyle] = None
+    cursor: Optional[RecordingCursorStyle] = None
+
+
+@dataclass
 class Profile:
     scrollback: Optional[int] = None
     colors: Optional[Colors] = None

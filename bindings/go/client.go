@@ -180,6 +180,9 @@ func (client *Client) spawnOptions(options SpawnOptions) (SpawnOptions, error) {
 	if options.Profile == nil {
 		options.Profile = client.options.Profile
 	}
+	if options.Style == nil {
+		options.Style = client.options.Style
+	}
 	options.Timeouts = withTimeoutDefaults(options.Timeouts, client.options.Timeouts)
 	if options.Cols == nil {
 		options.Cols = Ptr(uint16(80))
@@ -254,6 +257,8 @@ func (client *Client) GetCwd() (*string, error)            { return client.runti
 func (client *Client) GetTitle() (*string, error)          { return client.runtime.getTitle() }
 func (client *Client) GetClipboard() (string, error)       { return client.runtime.getClipboard() }
 func (client *Client) GetCursor() (Cursor, error)          { return client.runtime.getCursor() }
+func (client *Client) GetModes() (map[string]bool, error)  { return client.runtime.getModes() }
+func (client *Client) GetColors() (TerminalColors, error)  { return client.runtime.getColors() }
 func (client *Client) GetViewport() (Viewport, error)      { return client.runtime.getViewport() }
 func (client *Client) GetSize() (Size, error)              { return client.runtime.getSize() }
 func (client *Client) GetBellCount() (uint64, error)       { return client.runtime.getBellCount() }
@@ -344,6 +349,23 @@ func (client *Client) ExpectTitle(text string, options TitleOptions) error {
 	return client.wait("expectTitle", options.Timeout, client.options.Timeouts.Text, func(timeout *time.Duration) error {
 		options.Timeout = timeout
 		return client.runtime.expectTitle(text, options)
+	})
+}
+func (client *Client) ExpectMode(mode string, enabled bool, options WaitOptions) error {
+	return client.wait("expectMode", options.Timeout, client.options.Timeouts.Text, func(timeout *time.Duration) error {
+		return client.runtime.expectMode(mode, enabled, timeout)
+	})
+}
+func (client *Client) ExpectCursor(options CursorExpectation) error {
+	return client.wait("expectCursor", options.Timeout, client.options.Timeouts.Text, func(timeout *time.Duration) error {
+		options.Timeout = timeout
+		return client.runtime.expectCursor(options)
+	})
+}
+func (client *Client) ExpectColors(options ColorExpectation) error {
+	return client.wait("expectColors", options.Timeout, client.options.Timeouts.Text, func(timeout *time.Duration) error {
+		options.Timeout = timeout
+		return client.runtime.expectColors(options)
 	})
 }
 func (client *Client) ExpectExitCode(code int32, options WaitOptions) error {

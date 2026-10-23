@@ -138,6 +138,52 @@ pub unsafe extern "C" fn tui_get_cursor_start(session: TuiString) -> *mut TuiTas
 /// Start a typed call after copying all borrowed inputs.
 /// # Safety
 /// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_get_modes_start(session: TuiString) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_get_modes(session) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_get_colors_start(session: TuiString) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_get_colors(session) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_expect_mode_start(
+    session: TuiString,
+    mode: TuiString,
+    enabled: bool,
+    timeout_ms: TuiOptionalU64,
+) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_expect_mode(session, mode, enabled, timeout_ms) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_expect_cursor_start(
+    session: TuiString,
+    options: TuiCursorExpectation,
+) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_expect_cursor(session, options) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_expect_colors_start(
+    session: TuiString,
+    options: TuiColorExpectation,
+) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_expect_colors(session, options) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
 pub unsafe extern "C" fn tui_get_size_start(session: TuiString) -> *mut TuiTask {
     tasks::start(|| unsafe { tui_get_size(session) })
 }

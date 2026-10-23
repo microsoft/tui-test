@@ -100,7 +100,7 @@ Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Use
 | `closeQuiet()` | Close without throwing. |
 | `[Symbol.asyncDispose]()` | Close from `await using`. |
 
-`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, `timeouts`, and `screenHistoryLimit`. `run()` accepts the same options except `shell`.
+`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `waitReady`, `restart`, `retries`, `profile`, `style`, `timeouts`, and `screenHistoryLimit`. `run()` accepts the same options except `shell`.
 
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
 
@@ -154,6 +154,8 @@ The [example](examples/scrollback.mjs) prints the live screen, history view, and
 | `getExitCode()` | `number \| null` |
 | `getCwd()` | `string \| null` |
 | `getCursor()` | `Cursor` |
+| `getModes()` | `Record<string, boolean>` |
+| `getColors()` | `State["colors"]` |
 | `getSize()` | `Size` |
 | `getTitle()` | `string \| null` |
 | `getClipboard()` | `string` |
@@ -176,6 +178,11 @@ The [example](examples/scrollback.mjs) prints the live screen, history view, and
 | `expectOutput(text, { regex? })` | Assert command output. |
 | `expectBellCount(count, { timeout? })` | Wait until the cumulative bell count reaches `count`. |
 | `expectSnapshot(name, options?)` | Assert or update a snapshot. |
+| `expectCursor(options)` | Wait for cursor position, visibility, or shape. |
+| `expectMode(mode, enabled, options?)` | Wait for a native terminal mode. |
+| `expectColors(options)` | Wait for foreground, background, cursor, or palette colors. |
+
+Native assertions accept `timeout` in milliseconds and use the text timeout by default. Palette expectations use `[index, color]` pairs.
 
 `waitClipboard()` waits for the next change. A string matches text. A `RegExp` keeps its JavaScript flags.
 
@@ -193,12 +200,32 @@ Snapshot options are `update`, `includeStyle`, and `includeTitle`.
 
 Recording options: `format`, `fps`, `speed`, `idleTimeLimit`, `zoom`, `background`, and `transparent`. MP4 requires `ffmpeg` and does not support transparency.
 
-Raster recording samples the live terminal at `fps` (default: 30) and preserves elapsed time until stop.
+Raster recording samples the live terminal at `fps` (default: 30) and preserves active elapsed time until stop.
 There is no default idle cap or extra final hold.
 Set `idleTimeLimit` to cap unchanged visual intervals before `speed` scales playback time.
 Asciicast remains a timestamped output stream; FPS sampling does not change it.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
+
+### Rendering settings
+
+Set `style` in the client constructor, `open()`, or `run()`. The typed `RenderStyle` supports fonts, colors, padding, window controls, borders, shadows, and cursor animation.
+A per-call style replaces the constructor style. Omitted nested fields use Rust defaults. Explicit `false` and zero remain unchanged.
+Restart preserves the resolved style. These settings affect screenshots and raster recordings, not terminal colors or locator assertions.
+
+```js
+const terminal = TuiTest.ephemeral("styled", {
+  style: {
+    fontSize: 24,
+    window: { titleBar: false },
+    cursor: { blink: false, blinkIntervalMs: 250 },
+  },
+});
+```
+
+`blink` permits application-requested animation; it does not make a steady cursor blink. Each phase uses `blinkIntervalMs` before playback speed scaling.
+The default values are `true` and `500`. Screenshots always use the visible phase.
+Run `node examples/rendering.mjs` from this package for a complete example.
 
 ### `Locator`
 

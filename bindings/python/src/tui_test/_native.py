@@ -2,6 +2,7 @@
 
 import asyncio
 import ctypes as C
+from dataclasses import asdict, is_dataclass
 import json
 import os
 from pathlib import Path
@@ -166,9 +167,10 @@ def _result(result, kind):
     if kind == "packed":
         return (memoryview(C.string_at(result.text.data, result.text.len)),
                 result.size.cols, result.size.rows)
-    if kind in ("cells", "matches", "bells", "strings"):
+    if kind in ("cells", "matches", "bells", "strings", "modes"):
         values = getattr(result, kind)
-        return [_copy(values[index]) for index in range(getattr(result, kind + "_len"))]
+        copied = [_copy(values[index]) for index in range(getattr(result, kind + "_len"))]
+        return {entry["name"]: entry["enabled"] for entry in copied} if kind == "modes" else copied
     if kind == "snapshot":
         return ("passed", "written", "updated")[result.snapshot]
     value = getattr(result, kind)
@@ -248,6 +250,48 @@ def _query(expression):
     expression["nodes"] = nodes
     return abi.TuiQuery(_string(json.dumps(expression)))
 
+def _style(value, cls=abi.TuiStyle):
+    if value is None:
+        return cls()
+    if is_dataclass(value):
+        value = asdict(value)
+    if cls is abi.TuiPadding:
+        if isinstance(value, int):
+            return cls(uniform=_optional(value, "padding", 32))
+        return cls(sides=_style(value, abi.TuiPaddingSides))
+    if not isinstance(value, dict):
+        raise TypeError("rendering style must be a dataclass or dictionary")
+    fields = dict(cls._fields_)
+    for key in value:
+        if key not in fields or key.endswith("_len"):
+            raise TypeError("unknown rendering style field: " + key)
+    result = cls()
+    for key, item in value.items():
+        if item is None:
+            continue
+        field = fields[key]
+        if field is abi.TuiString:
+            converted = _string(item)
+        elif field is abi.TuiOptionalU64:
+            converted = _optional(item, key)
+        elif field is abi.TuiOptionalBool:
+            if not isinstance(item, bool):
+                raise TypeError(key + " must be a boolean")
+            converted = _boolean(item)
+        elif field is abi.TuiOptionalF64:
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                raise TypeError(key + " must be a number")
+            converted = _float(item)
+        elif key == "files":
+            if not isinstance(item, (list, tuple)):
+                raise TypeError("font files must be a sequence")
+            converted = _strings(item)
+            result.files_len = len(item)
+        else:
+            converted = _style(item, field)
+        setattr(result, key, converted)
+    return result
+
 
 class NativeSession:
     def __init__(self, name, recording_directory=None, artifact_directory=None,
@@ -276,27 +320,27 @@ class NativeSession:
 
     def _open_options(self, shell, backend, cols, rows, cwd, env, wait_ready,
                       restart, profile_scrollback, profile_colors, text_timeout,
-                      idle_timeout, command_timeout, exit_timeout, ready_timeout):
+                      idle_timeout, command_timeout, exit_timeout, ready_timeout, style=None):
         return abi.TuiOpenOptions(
-            _string(backend), _string(shell),
-            _optional(_integer(cols, "cols", 16)), _optional(_integer(rows, "rows", 16)),
-            _string(cwd), _pairs(env), len(env), _boolean(wait_ready), restart,
-            _optional(profile_scrollback, "scrollback"), _pairs(profile_colors),
-            len(profile_colors), abi.TuiTimeouts(*(
+            backend=_string(backend), shell=_string(shell),
+            cols=_optional(_integer(cols, "cols", 16)), rows=_optional(_integer(rows, "rows", 16)),
+            cwd=_string(cwd), env=_pairs(env), env_len=len(env), wait_ready=_boolean(wait_ready), restart=restart,
+            scrollback=_optional(profile_scrollback, "scrollback"), colors=_pairs(profile_colors),
+            colors_len=len(profile_colors), timeouts=abi.TuiTimeouts(*(
                 _optional(value, name + "_timeout") for name, value in zip(
                     ("text", "idle", "command", "exit", "ready"),
                     (text_timeout, idle_timeout, command_timeout, exit_timeout, ready_timeout)
                 )
-            )), _string(None), _string(self._recording_directory),
+            )), recording_directory=_string(self._recording_directory), style=_style(style),
         )
 
     async def open(self, shell, backend, cols, rows, cwd, env, wait_ready, restart,
                    profile_scrollback, profile_colors, text_timeout, idle_timeout,
-                   command_timeout, exit_timeout, ready_timeout, screen_history_limit):
+                   command_timeout, exit_timeout, ready_timeout, screen_history_limit, style=None):
         options = self._open_options(
             shell, backend, cols, rows, cwd, env, wait_ready, restart,
             profile_scrollback, profile_colors, text_timeout, idle_timeout,
-            command_timeout, exit_timeout, ready_timeout,
+            command_timeout, exit_timeout, ready_timeout, style,
         )
         session = self._session(screen_history_limit)
         return await _background(
@@ -305,11 +349,11 @@ class NativeSession:
 
     async def run(self, program, args, backend, cols, rows, cwd, env, wait_ready, restart,
                   profile_scrollback, profile_colors, text_timeout, idle_timeout,
-                  command_timeout, exit_timeout, ready_timeout, screen_history_limit):
+                  command_timeout, exit_timeout, ready_timeout, screen_history_limit, style=None):
         options = self._open_options(
             None, backend, cols, rows, cwd, env, wait_ready, restart,
             profile_scrollback, profile_colors, text_timeout, idle_timeout,
-            command_timeout, exit_timeout, ready_timeout,
+            command_timeout, exit_timeout, ready_timeout, style,
         )
         session = self._session(screen_history_limit)
         arguments = (session, C.byref(options), _string(program), _strings(args), len(args))
@@ -329,6 +373,34 @@ class NativeSession:
 
     async def state(self):
         return await self._call("state", kind="state")
+
+    async def get_modes(self):
+        return await self._call("get_modes", kind="modes")
+
+    async def get_colors(self):
+        return await self._call("get_colors", kind="colors")
+
+    async def expect_mode(self, mode, enabled, timeout):
+        if not isinstance(enabled, bool):
+            raise TypeError("enabled must be a boolean")
+        return await self._call("expect_mode", _string(mode), enabled, _optional(timeout))
+
+    async def expect_cursor(self, x, y, visible, shape, timeout):
+        if visible is not None and not isinstance(visible, bool):
+            raise TypeError("visible must be a boolean")
+        options = abi.TuiCursorExpectation(
+            x=_optional(x, "x", 16), y=_optional(y, "y", 16), visible=_boolean(visible),
+            shape=_string(shape), timeout_ms=_optional(timeout),
+        )
+        return await self._call("expect_cursor", options)
+
+    async def expect_colors(self, foreground, background, cursor, palette, timeout):
+        pairs = [(str(_integer(index, "palette index", 8)), color) for index, color in palette.items()]
+        options = abi.TuiColorExpectation(
+            foreground=_string(foreground), background=_string(background), cursor=_string(cursor),
+            palette=_pairs(pairs), palette_len=len(pairs), timeout_ms=_optional(timeout),
+        )
+        return await self._call("expect_colors", options)
 
     async def text(self, full):
         return await self._call("text", full, kind="text")

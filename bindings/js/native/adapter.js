@@ -3,7 +3,7 @@ import { layouts, types } from "./abi.js";
 import { enums, methods, models } from "./models.js";
 
 const PREFIX = "__tui_test_native_error__:";
-const aliases = { TextStyle: "LocatorStyle", LocatorQuery: "LocatorExpression", LocatorDirection: "LocatorStageDirection" };
+const aliases = { TextStyle: "LocatorStyle", LocatorQuery: "LocatorExpression", LocatorDirection: "LocatorStageDirection", Style: "RenderStyle", CursorStyle: "RecordingCursorStyle" };
 const snake = (name) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 const optional = (type) => type.startsWith("Option<") ? type.slice(7, -1) : undefined;
 const absent = (value) => value === undefined || value === null;
@@ -19,6 +19,11 @@ function integer(value, label, max = Number.MAX_SAFE_INTEGER, min = 0) {
 function validate(type, value, label) {
   const inner = optional(type);
   if (inner) return absent(value) ? undefined : validate(inner, value, label);
+  if (type === "Padding") {
+    return typeof value === "number"
+      ? { uniform: validate("u32", value, label) }
+      : { sides: validate("PaddingSides", value, label) };
+  }
   if (type.startsWith("Vec<")) {
     if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`);
     return value.map((item, i) => validate(type.slice(4, -1), item, `${label}[${i}]`));
@@ -26,6 +31,10 @@ function validate(type, value, label) {
   if (type === "(String,String)") {
     if (!Array.isArray(value) || value.length !== 2) throw new TypeError(`${label} must be a string pair`);
     return value.map((item, i) => validate("String", item, `${label}[${i}]`));
+  }
+  if (type === "(u8,String)") {
+    if (!Array.isArray(value) || value.length !== 2) throw new TypeError(`${label} must be an index and color pair`);
+    return [validate("u8", value[0], label), validate("String", value[1], label)];
   }
   if (/^(u8|u16|u32|u64|usize|i32)$/.test(type)) {
     const max = { u8: 255, u16: 65535, u32: 4294967295, i32: 2147483647 }[type];
@@ -36,7 +45,7 @@ function validate(type, value, label) {
     if ((code & ~31) !== 0 || (code & 3) === 3) throw error("usage", `invalid mouse button code ${code}`);
     return { button: code & 3, shift: !!(code & 4), alt: !!(code & 8), ctrl: !!(code & 16) };
   }
-  const primitive = { String: "string", PathBuf: "string", WhitespaceMode: "string", TraceMode: "string", FailureArtifactMode: "string", bool: "boolean", f64: "number" }[type];
+  const primitive = { String: "string", PathBuf: "string", Rgb: "string", WhitespaceMode: "string", TraceMode: "string", FailureArtifactMode: "string", bool: "boolean", f32: "number", f64: "number" }[type];
   if (primitive) {
     if (typeof value !== primitive) throw new TypeError(`${label} must be a ${primitive}`);
     return value;
@@ -49,9 +58,9 @@ function validate(type, value, label) {
   const fields = models[type];
   if (!fields) throw error("internal", `unknown native model ${type}`);
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
-  if (type.startsWith("Locator")) {
+  if (type.startsWith("Locator") || ["RenderStyle", "FontFamilies", "WindowStyle", "BorderStyle", "ShadowStyle", "RecordingCursorStyle", "PaddingSides"].includes(type)) {
     for (const key of Object.keys(value)) {
-      if (!Object.hasOwn(fields, key)) throw new TypeError(`unknown locator field ${JSON.stringify(key)}`);
+      if (!Object.hasOwn(fields, key)) throw new TypeError(`unknown ${type.startsWith("Locator") ? "locator" : "rendering style"} field ${JSON.stringify(key)}`);
     }
   }
   return Object.fromEntries(Object.entries(fields).map(([key, [field, fieldType]]) => [
@@ -141,6 +150,8 @@ function resultValue(result, selector) {
     case "Open": return decode("TuiOpenResult", result.open);
     case "State": return decode("TuiState", result.state);
     case "Cursor": return decode("TuiCursor", result.cursor);
+    case "Modes": return Object.fromEntries(array("TuiMode", result.modes, result.modes_len).map((mode) => [mode.name, mode.enabled]));
+    case "Colors": return decode("TuiTerminalColors", result.colors);
     case "Size": return decode("TuiSize", result.size);
     case "Viewport": {
       const viewport = decode("TuiViewport", result.viewport);
@@ -342,6 +353,9 @@ export function createAdapter(functions) {
         case "clickLocator": native = [input.struct("TuiQuery", locator(v.expression)), v.button ?? mouseDefault(), v.clicks ?? 1, u(v.timeoutMs)]; break;
         case "highlightLocator": native = [input.struct("TuiQuery", locator(v.expression)), u(v.timeoutMs)]; break;
         case "expectExitCode": native = [v.code, u(v.timeoutMs)]; break;
+        case "expectMode": native = [s(v.mode), v.enabled ?? false, u(v.timeoutMs)]; break;
+        case "expectCursor": native = [input.struct("TuiCursorExpectation", options)]; break;
+        case "expectColors": native = [input.struct("TuiColorExpectation", { ...options, palette: (options.palette ?? []).map(([key, value]) => ({ key: String(key), value })) })]; break;
         case "expectBellCount": native = [v.count, u(v.timeoutMs)]; break;
         case "expectOutput": native = [s(v.text), v.regex ?? false]; break;
         case "snapshot": native = [s(v.name), options.update ?? false, options.include_style ?? false, options.include_title ?? false, s(options.cwd)]; break;
