@@ -797,6 +797,8 @@ pub enum Operation {
         zoom: Option<f64>,
         background: Option<CaptureBackground>,
     },
+    PauseRecording,
+    ResumeRecording,
     StopRecording,
 }
 

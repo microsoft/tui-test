@@ -10,7 +10,7 @@ use tui_test::{
 
 pub use tui_test::{ErrorKind, MouseAction, Timeouts};
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "tui_test::ScrollTarget")]
@@ -232,6 +232,8 @@ pub enum Request {
         background: Option<tui_test::CaptureBackground>,
     },
     StopRecording,
+    PauseRecording,
+    ResumeRecording,
     FlushRecording,
     Monitor {
         cols: u16,
@@ -397,6 +399,8 @@ impl Request {
             Self::Screenshot { .. } => "screenshot",
             Self::StartRecording { .. } => "record.start",
             Self::StopRecording => "record.stop",
+            Self::PauseRecording => "record.pause",
+            Self::ResumeRecording => "record.resume",
             Self::Ping => "ping",
             Self::FlushRecording => "record.flush",
             Self::Monitor { .. } => "monitor",
@@ -698,6 +702,8 @@ impl Request {
                 background,
             }),
             Request::StopRecording => Ok(Operation::StopRecording),
+            Request::PauseRecording => Ok(Operation::PauseRecording),
+            Request::ResumeRecording => Ok(Operation::ResumeRecording),
             Request::Ping
             | Request::Status
             | Request::FlushRecording

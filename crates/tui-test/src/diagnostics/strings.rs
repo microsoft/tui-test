@@ -120,6 +120,8 @@ pub(crate) fn diagnostic_operation_name(operation: &Operation) -> &'static str {
         Operation::Screenshot { .. } => "screenshot",
         Operation::StartRecording { .. } => "record.start",
         Operation::StopRecording => "record.stop",
+        Operation::PauseRecording => "record.pause",
+        Operation::ResumeRecording => "record.resume",
     }
 }
 
@@ -297,6 +299,8 @@ pub(crate) fn capture_error_message(error: &crate::record::CaptureError) -> Stri
             "a selected recording is already active".to_string()
         }
         crate::record::CaptureError::NotActive => "no selected recording is active".to_string(),
+        crate::record::CaptureError::AlreadyPaused => "recording is already paused".to_string(),
+        crate::record::CaptureError::NotPaused => "recording is not paused".to_string(),
         crate::record::CaptureError::WorkerStopped => "recording worker stopped".to_string(),
         crate::record::CaptureError::Io(message) => message.clone(),
     }

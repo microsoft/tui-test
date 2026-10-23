@@ -68,7 +68,7 @@ fn viewport_result_preserves_native_count_width() {
         assert_eq!((*result).viewport.history, usize::MAX);
         tui_result_free(result);
     }
-    assert_eq!(tui_abi_version(), 5);
+    assert_eq!(tui_abi_version(), 6);
 }
 
 fn text(value: &str) -> TuiString {
