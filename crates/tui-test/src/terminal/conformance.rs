@@ -1353,22 +1353,20 @@ macro_rules! emulator_conformance_tests {
 
         /// The cursor takes the shape a program asks for with `DECSCUSR`.
         ///
-        /// Each shape has a blinking and a steady form, and both report the
-        /// same shape: a screenshot is one moment, so the blink is not part of
-        /// what a backend has to agree on.
+        /// Both variants retain their shape and their native blink setting.
         #[test]
         fn conformance_the_cursor_takes_the_shape_it_is_given() {
             use $crate::terminal::emu::CursorShape;
             let mut e = conformance_emu(10, 3, 100);
             assert_eq!(e.cursor_shape(), CursorShape::Block, "block is the default");
 
-            for (sequence, expected) in [
-                (&b"\x1b[3 q"[..], CursorShape::Underline),
-                (b"\x1b[4 q", CursorShape::Underline),
-                (b"\x1b[5 q", CursorShape::Bar),
-                (b"\x1b[6 q", CursorShape::Bar),
-                (b"\x1b[1 q", CursorShape::Block),
-                (b"\x1b[2 q", CursorShape::Block),
+            for (sequence, expected, blinking) in [
+                (&b"\x1b[3 q"[..], CursorShape::Underline, true),
+                (b"\x1b[4 q", CursorShape::Underline, false),
+                (b"\x1b[5 q", CursorShape::Bar, true),
+                (b"\x1b[6 q", CursorShape::Bar, false),
+                (b"\x1b[1 q", CursorShape::Block, true),
+                (b"\x1b[2 q", CursorShape::Block, false),
             ] {
                 e.process(sequence);
                 assert_eq!(
@@ -1377,7 +1375,24 @@ macro_rules! emulator_conformance_tests {
                     "{:?} selects {expected:?}",
                     String::from_utf8_lossy(sequence)
                 );
+                assert_eq!(e.cursor_style().blinking, blinking);
             }
+        }
+
+        #[test]
+        fn conformance_cursor_blink_mode_and_default_reset() {
+            let mut e = conformance_emu(10, 3, 100);
+            e.process(b"\x1b[?12h");
+            assert!(e.cursor_style().blinking);
+            e.process(b"\x1b[?12l");
+            assert!(!e.cursor_style().blinking);
+
+            // Ps=0 follows the backend's effective default, which need not
+            // match the style selected at terminal construction.
+            e.process(b"\x1b[0 q");
+            let default = e.cursor_style();
+            e.process(b"\x1b[5 q\x1b[0 q");
+            assert_eq!(e.cursor_style(), default);
         }
 
         /// Hiding the cursor does not change its shape.
@@ -1392,9 +1407,11 @@ macro_rules! emulator_conformance_tests {
             let mut e = conformance_emu(10, 3, 100);
             e.process(b"\x1b[5 q");
             assert_eq!(e.cursor_shape(), CursorShape::Bar);
+            assert!(e.cursor_style().blinking);
 
             e.process(b"\x1b[?25l");
             assert!(!e.mode($crate::terminal::emu::TerminalMode::CursorVisible));
+            assert!(e.cursor_style().blinking);
             assert_eq!(
                 e.cursor_shape(),
                 CursorShape::Bar,
