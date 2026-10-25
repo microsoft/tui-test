@@ -20,6 +20,28 @@ fn resolved_palette() -> [Rgb; 256] {
     std::array::from_fn(|index| profile.colors.rgb(index as u8))
 }
 
+/// Environment switch that turns this test binary into the U11-D child:
+/// it writes exact ANSI bytes plus a completion marker, then sleeps so the
+/// session can capture and screenshot. Byte-exact output must not depend on
+/// which `/bin/sh` a machine links (POSIX `printf` has no `\x` escapes, so
+/// `sh -c "printf '\x1b...'"` prints backslash-x literally under `dash`).
+const FIXTURE: &str = "TUI_TEST_UNDERLINE_COLOR_FIXTURE";
+
+/// The controlled child behind [`raster_tests::live_and_offline_share_the_underline_color_rule`].
+#[test]
+fn child_fixture() {
+    if std::env::var(FIXTURE).as_deref() != Ok("u11d") {
+        return;
+    }
+    let mut stdout = std::io::stdout().lock();
+    use std::io::Write as _;
+    stdout
+        .write_all(b"\x1b[?25l\x1b[4m\x1b[58;2;255;0;0mU11D\x1b[0m done")
+        .expect("fixture writes its bytes");
+    stdout.flush().expect("fixture flushes its bytes");
+    std::thread::sleep(std::time::Duration::from_secs(30));
+}
+
 fn hidden_cursor() -> SnapshotCursor {
     SnapshotCursor::new(
         0,
@@ -82,11 +104,71 @@ fn undecorated() -> SnapshotRenderOptions {
         .with_border_width(0.0)
 }
 
+/// Split every `<text ...>` and `<tspan ...>` start tag into its
+/// `(name, value)` attributes, honoring double quotes, so a CSS `style`
+/// property is told apart from a presentation attribute structurally
+/// instead of by substring.
+fn start_tags(svg: &str, name: &str) -> Vec<Vec<(String, String)>> {
+    let mut tags = Vec::new();
+    let mut rest = svg;
+    let open = format!("<{name} ");
+    while let Some(begin) = rest.find(open.as_str()) {
+        let mut attributes = Vec::new();
+        let mut cursor = begin + open.len();
+        let bytes = rest.as_bytes();
+        loop {
+            while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            if cursor >= bytes.len() || bytes[cursor] == b'>' {
+                break;
+            }
+            let end = rest[cursor..]
+                .find('=')
+                .map(|offset| cursor + offset)
+                .expect("an attribute has a value");
+            let key = rest[cursor..end].trim().to_string();
+            assert!(
+                rest.as_bytes().get(end + 1) == Some(&b'"'),
+                "attribute {key} is double-quoted: {}",
+                &rest[begin..]
+            );
+            let close = rest[end + 2..]
+                .find('"')
+                .map(|offset| end + 2 + offset)
+                .expect("a quoted value terminates");
+            attributes.push((key, rest[end + 2..close].to_string()));
+            cursor = close + 1;
+        }
+        tags.push(attributes);
+        rest = &rest[cursor..];
+    }
+    tags
+}
+
+/// Split a CSS `style` value into `(property, value)` declarations.
+fn style_declarations(style: &str) -> Vec<(String, String)> {
+    style
+        .split(';')
+        .filter_map(|declaration| {
+            let (property, value) = declaration.split_once(':')?;
+            Some((property.trim().to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+fn attribute<'a>(tag: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    tag.iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.as_str())
+}
+
 /// U11-C (SVG half): a missing underline color keeps the previous
 /// foreground-color behavior, with no extra decoration property.
 ///
-/// An explicit color rides on `text-decoration-color`; without one the
-/// document keeps the bare `text-decoration` output bytes.
+/// An explicit color rides in CSS `style`, because `text-decoration-color`
+/// is not an SVG presentation attribute (SVG 2); without one the document
+/// keeps the bare `text-decoration` output bytes.
 #[test]
 fn missing_underline_color_keeps_svg_without_decoration_color() {
     let plain = snapshot_of(
@@ -99,10 +181,25 @@ fn missing_underline_color_keeps_svg_without_decoration_color() {
     );
     let rendered = tui_test::render_snapshot_svg(&plain, &SnapshotRenderOptions::default())
         .expect("offline SVG renders");
-    assert!(rendered.svg().contains(r#"text-decoration="underline""#));
+    let tags: Vec<_> = start_tags(rendered.svg(), "text")
+        .into_iter()
+        .filter(|tag| attribute(tag, "text-decoration").is_some())
+        .collect();
+    assert_eq!(tags.len(), 1, "one text run: {}", rendered.svg());
+    assert_eq!(
+        attribute(&tags[0], "text-decoration"),
+        Some("underline"),
+        "the bare decoration stays: {}",
+        rendered.svg()
+    );
     assert!(
-        !rendered.svg().contains("text-decoration-color"),
-        "no explicit color means no color property: {}",
+        attribute(&tags[0], "text-decoration-color").is_none(),
+        "no explicit color means no color attribute: {}",
+        rendered.svg()
+    );
+    assert!(
+        attribute(&tags[0], "style").is_none(),
+        "no explicit color means no style either: {}",
         rendered.svg()
     );
 
@@ -116,12 +213,90 @@ fn missing_underline_color_keeps_svg_without_decoration_color() {
     );
     let rendered = tui_test::render_snapshot_svg(&colored, &SnapshotRenderOptions::default())
         .expect("offline SVG renders");
-    let expected = Rgb::new(255, 0, 0).to_hex();
+    let tags: Vec<_> = start_tags(rendered.svg(), "text")
+        .into_iter()
+        .filter(|tag| attribute(tag, "text-decoration").is_some())
+        .collect();
+    assert_eq!(tags.len(), 1, "one text run: {}", rendered.svg());
     assert!(
-        rendered
-            .svg()
-            .contains(&format!("text-decoration-color=\"{expected}\"")),
-        "an explicit underline color is named in the SVG: {}",
+        attribute(&tags[0], "text-decoration-color").is_none(),
+        "`text-decoration-color` is CSS, not a presentation attribute: {}",
+        rendered.svg()
+    );
+    let style = attribute(&tags[0], "style").expect("an explicit color rides in style");
+    let declarations = style_declarations(style);
+    assert_eq!(
+        declarations,
+        vec![(
+            "text-decoration-color".to_string(),
+            Rgb::new(255, 0, 0).to_hex()
+        )],
+        "the style names exactly the explicit color: {}",
+        rendered.svg()
+    );
+}
+
+/// U11-C (SVG half, differing decorations): an explicit underline color on
+/// a struck-through run does not tint the strike-through.
+///
+/// One `text-decoration-color` would color both lines, but the strike keeps
+/// the foreground color, so each decoration gets its own element.
+#[test]
+fn differing_decoration_colors_get_their_own_elements() {
+    let struck = SnapshotCell::new(
+        "u".to_string(),
+        1,
+        SnapshotColor::Default,
+        SnapshotColor::Default,
+        Attrs::STRIKE,
+        SnapshotUnderline::Single,
+        SnapshotColor::Rgb(255, 0, 0),
+        None,
+        None,
+    )
+    .expect("test cell is valid");
+    let snapshot = snapshot_of(vec![struck], resolved_palette());
+    let rendered = tui_test::render_snapshot_svg(&snapshot, &SnapshotRenderOptions::default())
+        .expect("offline SVG renders");
+
+    let texts: Vec<_> = start_tags(rendered.svg(), "text")
+        .into_iter()
+        .filter(|tag| attribute(tag, "text-decoration").is_some())
+        .collect();
+    assert_eq!(texts.len(), 1, "one text run: {}", rendered.svg());
+    assert_eq!(
+        attribute(&texts[0], "text-decoration"),
+        Some("underline"),
+        "the outer run keeps only the underline: {}",
+        rendered.svg()
+    );
+    let outer = style_declarations(attribute(&texts[0], "style").expect("underline has a color"));
+    assert_eq!(
+        outer,
+        vec![(
+            "text-decoration-color".to_string(),
+            Rgb::new(255, 0, 0).to_hex()
+        )],
+        "the outer color is the explicit underline color: {}",
+        rendered.svg()
+    );
+
+    let spans = start_tags(rendered.svg(), "tspan");
+    assert_eq!(spans.len(), 1, "one nested strike run: {}", rendered.svg());
+    assert_eq!(
+        attribute(&spans[0], "text-decoration"),
+        Some("line-through"),
+        "the nested run keeps only the strike: {}",
+        rendered.svg()
+    );
+    let inner = style_declarations(attribute(&spans[0], "style").expect("strike has a color"));
+    assert_eq!(
+        inner,
+        vec![(
+            "text-decoration-color".to_string(),
+            Rgb::new(192, 192, 192).to_hex()
+        )],
+        "the strike keeps the foreground color: {}",
         rendered.svg()
     );
 }
@@ -269,7 +444,8 @@ mod raster_tests {
     ///
     /// The offline PNG of a live Viewport capture must decode to the same
     /// pixels as the live screenshot PNG: same frame conversion, same
-    /// `GridRenderer` path at the same size.
+    /// `GridRenderer` path at the same size. The live content comes from the
+    /// controlled Rust child above, never from a shell `printf`.
     #[cfg(unix)]
     #[test]
     fn live_and_offline_share_the_underline_color_rule() {
@@ -280,18 +456,25 @@ mod raster_tests {
         session
             .run(RunOptions {
                 backend: defaults.backend,
-                program: "sh".to_string(),
-                args: vec![
-                    "-c".to_string(),
-                    "printf '\\x1b[?25l\\x1b[4m\\x1b[58;2;255;0;0mU11D\\x1b[0m done'; sleep 30"
-                        .to_string(),
-                ],
+                program: std::env::current_exe()
+                    .expect("test binary path resolves")
+                    .to_string_lossy()
+                    .into_owned(),
+                args: [
+                    "--exact",
+                    "child_fixture",
+                    "--nocapture",
+                    "--test-threads=1",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
                 profile: defaults.profile,
                 style: defaults.style,
                 cols: 16,
                 rows: 2,
                 cwd: defaults.cwd,
-                env: defaults.env,
+                env: vec![(super::FIXTURE.to_string(), "u11d".to_string())],
                 wait_ready: Some(false),
                 restart: defaults.restart,
                 timeouts: defaults.timeouts,
@@ -316,6 +499,36 @@ mod raster_tests {
         let snapshot = session
             .capture_snapshot(SnapshotScope::Viewport)
             .expect("live capture works");
+        // The harness preamble shares the child's stdout, so the marker is
+        // found by content, not by column: the four cells must sit together
+        // on one row, underlined in the exact SGR 58 color.
+        let mut found = false;
+        for row in 0..snapshot.rows() {
+            let line = snapshot.row(row).expect("captured row exists");
+            for window in line.windows(4) {
+                let texts: Vec<&str> = window.iter().map(|cell| cell.text()).collect();
+                if texts == ["U", "1", "1", "D"] {
+                    for cell in window {
+                        assert_eq!(
+                            cell.underline(),
+                            SnapshotUnderline::Single,
+                            "the marker stays underlined"
+                        );
+                        assert_eq!(
+                            cell.underline_color(),
+                            SnapshotColor::Rgb(255, 0, 0),
+                            "the marker underline color is the exact SGR 58 color"
+                        );
+                    }
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "the marker lands underlined in the capture");
+        assert!(
+            !snapshot.cursor().visible(),
+            "the child hides the cursor, so only underline bars move pixels"
+        );
         let rendered = render_snapshot_png(&snapshot, &SnapshotRenderOptions::default())
             .expect("offline PNG renders");
 

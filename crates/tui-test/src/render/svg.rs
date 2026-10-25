@@ -441,18 +441,35 @@ fn write_text_run(
         } else {
             ""
         };
+        let explicit = paint.underline && paint.underline_color != paint.fg;
         let deco = match (paint.underline, paint.strike) {
+            (true, true) if explicit => r#" text-decoration="underline""#,
             (true, true) => r#" text-decoration="underline line-through""#,
             (true, false) => r#" text-decoration="underline""#,
             (false, true) => r#" text-decoration="line-through""#,
             (false, false) => "",
         };
-        // An explicit underline color rides on its own property, so cells
-        // without one keep the previous bare `text-decoration` output bytes.
-        let underline_color = if paint.underline && paint.underline_color != paint.fg {
-            format!(r#" text-decoration-color="{}""#, hex(paint.underline_color))
+        // `text-decoration-color` is not an SVG presentation attribute (SVG 2
+        // keeps it in CSS), so an explicit underline color rides in `style`.
+        // Cells without one keep the previous bare `text-decoration` bytes.
+        let underline_color = if explicit {
+            format!(
+                r#" style="text-decoration-color: {}""#,
+                hex(paint.underline_color)
+            )
         } else {
             String::new()
+        };
+        // One `text-decoration-color` would tint both lines, but the
+        // strike-through keeps the foreground color: when the colors differ,
+        // each decoration gets its own element and its own CSS color.
+        let content = if paint.underline && paint.strike && explicit {
+            format!(
+                r#"<tspan text-decoration="line-through" style="text-decoration-color: {fg}">{esc}</tspan>"#,
+                esc = escape(&text)
+            )
+        } else {
+            escape(&text)
         };
         let resolved = layout.font.resolve(paint.bold, paint.italic);
         let family = if resolved == layout.font.family {
@@ -462,8 +479,8 @@ fn write_text_run(
         };
         let _ = write!(
             out,
-            r#"<text x="{tx:.2}" y="{baseline:.2}" fill="{fg}"{family}{weight}{italic}{deco}{underline_color} textLength="{width:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{esc}</text>"#,
-            esc = escape(&text)
+            r#"<text x="{tx:.2}" y="{baseline:.2}" fill="{fg}"{family}{weight}{italic}{deco}{underline_color} textLength="{width:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{content}</text>"#,
+            content = content
         );
     }
     for i in start..end {
@@ -610,6 +627,12 @@ fn write_cursor(
     }
     let mut paint = cell_paint(cell, colors);
     paint.fg = bg_of(cell, colors);
+    if cell.underline_color.is_none() {
+        // A missing underline color follows the foreground: the redrawn
+        // glyph uses the cell background as its fill, so the decorations
+        // follow it and the redraw keeps the grid pass markup.
+        paint.underline_color = paint.fg;
+    }
     write_text_run(
         out,
         row,
