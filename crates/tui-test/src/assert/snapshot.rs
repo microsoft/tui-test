@@ -345,7 +345,12 @@ fn create_new(path: &Path, base: &Path, body: &str) -> std::io::Result<()> {
         .write(true)
         .create_new(true)
         .open(&temp)?;
-    std::io::Write::write_all(&mut file, body.as_bytes())?;
+    // The temporary file is exclusively owned from here, so a partial write
+    // must not leave it behind for a later writer to trip over.
+    if let Err(error) = std::io::Write::write_all(&mut file, body.as_bytes()) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
+    }
     drop(file);
     let link = std::fs::hard_link(&temp, path);
     // The temporary file is only a vehicle; the linked baseline (or the
@@ -371,12 +376,32 @@ fn atomic_replace(base: &Path, path: &Path, trimmed: &str) -> std::io::Result<()
         sanitize(&path_lossless_name(path)),
         std::process::id()
     ));
-    let write =
-        std::fs::write(&temp, format!("{trimmed}\n")).and_then(|()| std::fs::rename(&temp, path));
+    // Exclusively create the temporary file: when the path already exists (a
+    // stale file, a planted symlink, or a concurrent writer's temp), the open
+    // fails and the preexisting path is left alone — it is not ours to write
+    // through or remove. Writing through the exclusively owned handle (never
+    // `std::fs::write`, which follows symlinks) keeps a preexisting symlink
+    // from redirecting bytes into the baseline.
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+    {
+        Ok(file) => file,
+        Err(error) => return Err(error),
+    };
+    // From here the temporary file is exclusively owned: only a completed
+    // rename installs new bytes, and any failure below removes the temp file.
+    let write = (|| -> std::io::Result<()> {
+        std::io::Write::write_all(&mut file, format!("{trimmed}\n").as_bytes())?;
+        std::io::Write::flush(&mut file)?;
+        drop(file);
+        std::fs::rename(&temp, path)
+    })();
     if write.is_err() {
         // A failed replacement must not leave a partial baseline behind.
         // The previous baseline is already intact because only a completed
-        // rename installs new bytes; drop the temporary file when possible.
+        // rename installs new bytes; drop the owned temporary file.
         let _ = std::fs::remove_file(&temp);
     }
     write
