@@ -1296,12 +1296,11 @@ pub(crate) fn capture_live(
             .ok_or(SnapshotError::CountOverflow {
                 field: "cursor row",
             })?;
-    let cursor_row32: u32 =
-        cursor_row
-            .try_into()
-            .map_err(|_| SnapshotError::CountOverflow {
-                field: "cursor row",
-            })?;
+    let cursor_row32: u32 = cursor_row
+        .try_into()
+        .map_err(|_| SnapshotError::CountOverflow {
+            field: "cursor row",
+        })?;
     let cursor_col = u32::from(cursor_x);
     let in_capture = match options.scope() {
         SnapshotScope::Viewport => {
@@ -1365,4 +1364,594 @@ pub(crate) fn capture_time_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis().try_into().unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profile::{Profile, Rgb};
+    use crate::terminal::alacritty::AlacrittyEmu;
+    use std::collections::hash_map::DefaultHasher;
+    use std::sync::{Arc, Barrier, Mutex};
+
+    const COLS: u16 = 10;
+    const ROWS: u16 = 6;
+
+    fn profile() -> Profile {
+        Profile::default()
+    }
+
+    fn resolved_palette(profile: &Profile) -> [Rgb; 256] {
+        std::array::from_fn(|index| profile.colors.rgb(index as u8))
+    }
+
+    fn blank_parts(profile: &Profile, cols: u32, rows: u32) -> SnapshotParts {
+        let palette = resolved_palette(profile);
+        SnapshotParts {
+            cols,
+            rows,
+            scope: SnapshotScope::Viewport,
+            viewport_origin: 0,
+            cells: (0..cols * rows)
+                .map(|_| {
+                    SnapshotCell::new(
+                        " ".to_string(),
+                        1,
+                        SnapshotColor::Default,
+                        SnapshotColor::Default,
+                        Attrs::empty(),
+                        SnapshotUnderline::None,
+                        SnapshotColor::Default,
+                        None,
+                        None,
+                    )
+                    .expect("blank cell is valid")
+                })
+                .collect(),
+            palette,
+            default_foreground: palette[0],
+            default_background: palette[0],
+            default_cursor: palette[0],
+            cursor: SnapshotCursor::new(
+                0,
+                0,
+                true,
+                true,
+                SnapshotCursorShape::Block,
+                palette[0],
+                None,
+            ),
+            title: None,
+            metadata: SnapshotMetadata::default(),
+        }
+    }
+
+    fn canonical_hash(snapshot: &TerminalSnapshot) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        snapshot.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Feed the Unicode corpus: combining marks, wide char with continuation,
+    /// bold/italic/bold-italic, and a wide character at the last column.
+    fn feed_corpus(emu: &mut AlacrittyEmu) {
+        emu.process(b"\x1b[2J\x1b[H");
+        // e + combining acute, a + combining diaeresis, wide char, styles.
+        emu.process("é ä 東 \x1b[1mbold\x1b[0m".as_bytes());
+        emu.process(b"\r\n\x1b[3mitalic\x1b[0m \x1b[1;3mbi\x1b[0m");
+        // Wide character exactly filling the last two columns. The earlier
+        // wrap consumed an extra row, so the grid is one row deeper here.
+        emu.process("\r\n        東".as_bytes());
+        // Park the cursor over the wide character.
+        emu.process(b"\x1b[4;9H");
+    }
+
+    #[test]
+    fn corpus_cells_keep_recorded_geometry() {
+        let mut emu = AlacrittyEmu::new(COLS, ROWS, &profile());
+        feed_corpus(&mut emu);
+        let snapshot = capture_live(
+            &emu,
+            None,
+            &SnapshotOptions::new(SnapshotScope::Viewport),
+            SnapshotMetadata::default(),
+        )
+        .expect("corpus capture succeeds");
+        assert_eq!(
+            (snapshot.cols(), snapshot.rows()),
+            (u32::from(COLS), u32::from(ROWS))
+        );
+
+        let first = snapshot.row(0).expect("first row exists");
+        assert_eq!(first[0].text(), "é");
+        assert_eq!(first[0].width(), 1);
+        assert_eq!(first[2].text(), "ä");
+        assert_eq!(first[4].text(), "東");
+        assert_eq!(first[4].width(), 2);
+        assert!(first[5].is_continuation());
+        assert_eq!(first[5].width(), 0);
+
+        let bold = first
+            .iter()
+            .find(|cell| cell.text() == "b")
+            .expect("bold text");
+        assert!(bold.has(Attrs::BOLD));
+        assert!(!bold.has(Attrs::ITALIC));
+
+        // Style runs may wrap onto later rows; find them grid-wide.
+        let styled: Vec<&SnapshotCell> = snapshot.cells().iter().collect();
+        let bold_only = styled
+            .iter()
+            .find(|cell| cell.text() == "o" && cell.has(Attrs::BOLD) && !cell.has(Attrs::ITALIC))
+            .expect("bold-only text");
+        let _ = bold_only;
+        let italic_only = styled
+            .iter()
+            .find(|cell| cell.text() == "t" && cell.has(Attrs::ITALIC) && !cell.has(Attrs::BOLD))
+            .expect("italic-only text");
+        let _ = italic_only;
+        let both = styled
+            .iter()
+            .find(|cell| cell.text() == "i" && cell.has(Attrs::BOLD | Attrs::ITALIC))
+            .expect("bold-italic text");
+        let _ = both;
+
+        // Wide character at the last column boundary plus cursor over it.
+        let wide_row = snapshot.row(3).expect("wide row exists");
+        assert_eq!(wide_row[8].text(), "東");
+        assert_eq!(wide_row[8].width(), 2);
+        assert!(wide_row[9].is_continuation());
+        assert_eq!(snapshot.cursor_local(), Some((8, 3)));
+        // Blink is unknown at this backend: recorded as unknown, not false.
+        assert_eq!(snapshot.cursor().blink(), None);
+    }
+
+    #[test]
+    fn sgr_index_normalization_is_recorded() {
+        let mut emu = AlacrittyEmu::new(COLS, ROWS, &profile());
+        emu.process(b"\x1b[31mA\x1b[38;5;1mB\x1b[38;2;10;20;30mC\x1b[0mD");
+        let snapshot = capture_live(
+            &emu,
+            None,
+            &SnapshotOptions::new(SnapshotScope::Viewport),
+            SnapshotMetadata::default(),
+        )
+        .expect("sgr capture succeeds");
+        let row = snapshot.row(0).expect("first row exists");
+        // Both SGR spellings of slot 1 land on the same recorded reference.
+        assert_eq!(row[0].fg(), SnapshotColor::Indexed(1));
+        assert_eq!(row[1].fg(), SnapshotColor::Indexed(1));
+        assert_eq!(row[2].fg(), SnapshotColor::Rgb(10, 20, 30));
+        assert_eq!(row[3].fg(), SnapshotColor::Default);
+    }
+
+    #[test]
+    fn default_capture_ignores_highlighting() {
+        let mut emu = AlacrittyEmu::new(COLS, ROWS, &profile());
+        emu.process(b"highlight me");
+        let selected = [(0usize, 0usize), (1, 0)];
+        let highlight = LiveHighlight { cells: &selected };
+        let metadata = SnapshotMetadata::default();
+        let raw = capture_live(
+            &emu,
+            Some(highlight),
+            &SnapshotOptions::new(SnapshotScope::Viewport),
+            metadata.clone(),
+        )
+        .expect("raw capture succeeds");
+        let marked = capture_live(
+            &emu,
+            Some(highlight),
+            &SnapshotOptions::new(SnapshotScope::Viewport).with_highlight(true),
+            metadata,
+        )
+        .expect("highlighted capture succeeds");
+        assert!(!raw.cell_at(0, 0).expect("cell").has(Attrs::INVERSE));
+        assert!(marked.cell_at(0, 0).expect("cell").has(Attrs::INVERSE));
+        assert!(marked.cell_at(1, 0).expect("cell").has(Attrs::INVERSE));
+        assert!(!marked.cell_at(2, 0).expect("cell").has(Attrs::INVERSE));
+        assert_ne!(raw, marked);
+    }
+
+    /// U02-A: transitions change grid, cursor, dimensions, and palette while
+    /// the terminal-state lock is held; barriers pin each capture between two
+    /// locked changes, so every capture must equal one permitted state.
+    #[test]
+    fn atomic_capture_matches_one_permitted_state() {
+        struct Transition {
+            apply: Box<dyn Fn(&mut AlacrittyEmu) + Send + Sync + 'static>,
+            scope: SnapshotScope,
+        }
+
+        let profile = profile();
+        let emu = Arc::new(Mutex::new(AlacrittyEmu::new(COLS, ROWS, &profile)));
+        let barrier = Arc::new(Barrier::new(2));
+
+        let transitions = Arc::new(vec![
+            Transition {
+                apply: Box::new(|emu| {
+                    feed_corpus(emu);
+                    emu.process(b"\x1b[1;1H\x1b[7mR\x1b[0m");
+                    emu.process(b"\x1b]4;1;#112233\x1b\\");
+                    emu.process(b"\x1b]10;#010203\x1b\\\x1b]11;#040506\x1b\\\x1b]12;#070809\x1b\\");
+                    emu.process(b"\x1b]0;snap-title\x1b\\");
+                    emu.process(b"\x1b]8;id=u02a;https://example.com\x1b\\L\x1b]8;;\x1b\\");
+                }),
+                scope: SnapshotScope::Viewport,
+            },
+            Transition {
+                apply: Box::new(|emu| {
+                    emu.process(b"\x1b]4;1;#445566\x1b\\\x1b]4;200;#aabbcc\x1b\\");
+                    emu.process(b"\x1b]10;#0a0b0c\x1b\\");
+                    emu.process(b"\x1b[5;5H\x1b[?25l");
+                    emu.process(b"\x1b]0;snap-title-2\x1b\\");
+                }),
+                scope: SnapshotScope::Viewport,
+            },
+            Transition {
+                apply: Box::new(|emu| {
+                    emu.resize(20, 8);
+                    for line in 0..12 {
+                        emu.process(format!("line {line:02}\r\n").as_bytes());
+                    }
+                    emu.scroll(crate::api::ScrollTarget::Lines(2));
+                }),
+                scope: SnapshotScope::Viewport,
+            },
+        ]);
+
+        let writer_emu = Arc::clone(&emu);
+        let writer_barrier = Arc::clone(&barrier);
+        let writer_transitions = Arc::clone(&transitions);
+        let writer = std::thread::spawn(move || {
+            for transition in writer_transitions.iter() {
+                {
+                    let mut guard = writer_emu.lock().expect("writer locks the emulator");
+                    (transition.apply)(&mut guard);
+                }
+                writer_barrier.wait();
+                writer_barrier.wait();
+            }
+        });
+
+        let mut permitted: Vec<TerminalSnapshot> = Vec::new();
+        for transition in transitions.iter() {
+            barrier.wait();
+            let options = SnapshotOptions::new(transition.scope);
+            let first = {
+                let guard = emu.lock().expect("reader locks the emulator");
+                capture_live(
+                    &*guard,
+                    None,
+                    &options,
+                    SnapshotMetadata {
+                        captured_at_ms: 1,
+                        revision: permitted.len() as u64,
+                        backend: "alacritty".to_string(),
+                        session: "u02-a".to_string(),
+                        source: SnapshotSource::Live,
+                    },
+                )
+                .expect("capture under lock succeeds")
+            };
+            let second = {
+                let guard = emu.lock().expect("reader locks the emulator");
+                capture_live(
+                    &*guard,
+                    None,
+                    &options,
+                    SnapshotMetadata {
+                        captured_at_ms: 2,
+                        revision: 100 + permitted.len() as u64,
+                        backend: "other".to_string(),
+                        session: "u02-a".to_string(),
+                        source: SnapshotSource::Live,
+                    },
+                )
+                .expect("recapture under lock succeeds")
+            };
+            // Same locked state, observation-only metadata differs: canonical
+            // equality and hashing ignore it (C07).
+            assert_eq!(first, second, "metadata-only change passes");
+            assert_eq!(canonical_hash(&first), canonical_hash(&second));
+            // The capture is stable: no tearing between the two locked reads.
+            assert!(permitted
+                .iter()
+                .all(|known: &TerminalSnapshot| *known != first));
+            assert!(permitted
+                .iter()
+                .all(|known: &TerminalSnapshot| *known != second));
+            permitted.push(first);
+            barrier.wait();
+        }
+        writer.join().expect("writer finishes");
+
+        assert_eq!(permitted.len(), 3);
+
+        // C04: corpus text, continuation, styles, and cursor survived T0.
+        let base = &permitted[0];
+        assert_eq!((base.cols(), base.rows()), (10, 6));
+        assert_eq!(base.title(), Some("snap-title"));
+        assert_eq!(base.palette()[1], Rgb::new(0x11, 0x22, 0x33));
+        assert_eq!(base.default_foreground(), Rgb::new(0x01, 0x02, 0x03));
+        assert_eq!(base.default_background(), Rgb::new(0x04, 0x05, 0x06));
+        assert_eq!(base.default_cursor(), Rgb::new(0x07, 0x08, 0x09));
+        let reversed = base.cell_at(0, 0).expect("reversed cell");
+        assert_eq!(reversed.text(), "R");
+        assert!(reversed.has(Attrs::INVERSE));
+        // Full-history coordinates use u32, never u16.
+        let full = {
+            let guard = emu.lock().expect("reader locks the emulator");
+            capture_live(
+                &*guard,
+                None,
+                &SnapshotOptions::new(SnapshotScope::FullHistory),
+                SnapshotMetadata::default(),
+            )
+            .expect("full-history capture succeeds")
+        };
+        assert_eq!(full.scope(), SnapshotScope::FullHistory);
+        assert_eq!(full.viewport_origin(), 0);
+        assert!(full.rows() >= base.rows());
+
+        // C05: T1 changed palette, defaults, cursor visibility, and title.
+        let changed = &permitted[1];
+        assert_eq!(changed.palette()[1], Rgb::new(0x44, 0x55, 0x66));
+        assert_eq!(changed.palette()[200], Rgb::new(0xaa, 0xbb, 0xcc));
+        assert_eq!(changed.default_foreground(), Rgb::new(0x0a, 0x0b, 0x0c));
+        assert!(!changed.cursor().visible());
+        assert_eq!(changed.title(), Some("snap-title-2"));
+
+        // T2 resized, grew history, and scrolled: the cursor is recorded
+        // outside the viewport capture, unclamped, with no local coords.
+        let scrolled = &permitted[2];
+        assert_eq!((scrolled.cols(), scrolled.rows()), (20, 8));
+        assert!(!scrolled.cursor().in_capture());
+        assert_eq!(scrolled.cursor_local(), None);
+        // The position is explicit, not clamped into the 20x8 grid.
+        assert!(
+            u64::from(scrolled.cursor().row())
+                >= scrolled.viewport_origin() + u64::from(scrolled.rows())
+        );
+        assert_eq!(scrolled.viewport_origin(), {
+            let guard = emu.lock().expect("reader locks the emulator");
+            guard.viewport().origin() as u64
+        });
+        for row in 0..scrolled.rows() {
+            assert_eq!(
+                scrolled.row(row).expect("row exists").len() as u32,
+                scrolled.cols(),
+                "rectangular geometry after resize and scroll"
+            );
+        }
+    }
+
+    #[test]
+    fn constructor_and_json_reject_identical_invalid_geometry() {
+        let profile = profile();
+        // Row-major length does not match cols * rows.
+        let mut mismatch = blank_parts(&profile, 2, 2);
+        mismatch.cells.pop();
+        assert_eq!(
+            TerminalSnapshot::try_new(mismatch.clone()),
+            Err(SnapshotError::CellCountMismatch {
+                expected: 4,
+                actual: 3
+            })
+        );
+
+        // Continuation cell at column zero.
+        let mut bad_continuation = blank_parts(&profile, 2, 1);
+        bad_continuation.cells[0] = SnapshotCell::new(
+            String::new(),
+            0,
+            SnapshotColor::Default,
+            SnapshotColor::Default,
+            Attrs::empty(),
+            SnapshotUnderline::None,
+            SnapshotColor::Default,
+            None,
+            None,
+        )
+        .expect("coordinate-free construction succeeds");
+        assert_eq!(
+            TerminalSnapshot::try_new(bad_continuation),
+            Err(SnapshotError::BadContinuation { col: 0, row: 0 })
+        );
+
+        // In-capture cursor outside the grid.
+        let mut bad_cursor = blank_parts(&profile, 2, 2);
+        bad_cursor.cursor = SnapshotCursor::new(
+            7,
+            0,
+            true,
+            true,
+            SnapshotCursorShape::Block,
+            Rgb::new(0, 0, 0),
+            None,
+        );
+        assert_eq!(
+            TerminalSnapshot::try_new(bad_cursor),
+            Err(SnapshotError::CursorOutOfBounds {
+                col: 7,
+                row: 0,
+                cols: 2,
+                rows: 2
+            })
+        );
+
+        // Full-history snapshots start at origin zero.
+        let mut bad_origin = blank_parts(&profile, 2, 2);
+        bad_origin.scope = SnapshotScope::FullHistory;
+        bad_origin.viewport_origin = 3;
+        assert_eq!(
+            TerminalSnapshot::try_new(bad_origin),
+            Err(SnapshotError::BadViewportOrigin {
+                scope: SnapshotScope::FullHistory,
+                origin: 3
+            })
+        );
+
+        // The same malformed grids fail through JSON deserialization (U02-F).
+        let valid = TerminalSnapshot::try_new(blank_parts(&profile, 2, 2)).expect("valid");
+        let mut wire = serde_json::to_value(&valid).expect("serializes");
+        wire["cells"].as_array_mut().expect("cells array").pop();
+        assert!(serde_json::from_value::<TerminalSnapshot>(wire).is_err());
+
+        let mut wire = serde_json::to_value(&valid).expect("serializes");
+        wire["schema"] = serde_json::json!(999);
+        assert_eq!(
+            serde_json::from_value::<TerminalSnapshot>(wire)
+                .expect_err("unsupported schema fails")
+                .to_string()
+                .contains("unsupported snapshot schema"),
+            true
+        );
+    }
+
+    #[test]
+    fn oversize_input_is_rejected() {
+        let profile = profile();
+        assert_eq!(
+            TerminalSnapshot::try_new(SnapshotParts {
+                cols: MAX_SNAPSHOT_DIM + 1,
+                ..blank_parts(&profile, 2, 2)
+            }),
+            Err(SnapshotError::DimensionTooLarge {
+                cols: u64::from(MAX_SNAPSHOT_DIM + 1),
+                rows: 2,
+                limit: MAX_SNAPSHOT_DIM
+            })
+        );
+        assert_eq!(
+            TerminalSnapshot::try_new(SnapshotParts {
+                cols: 0,
+                ..blank_parts(&profile, 2, 2)
+            }),
+            Err(SnapshotError::EmptyDimensions)
+        );
+        // 32768 x 32768 exceeds the cell budget without exceeding a dimension.
+        assert_eq!(
+            TerminalSnapshot::try_new(SnapshotParts {
+                cols: MAX_SNAPSHOT_DIM,
+                rows: MAX_SNAPSHOT_DIM,
+                ..blank_parts(&profile, 2, 2)
+            }),
+            Err(SnapshotError::TooManyCells {
+                cells: u64::from(MAX_SNAPSHOT_DIM) * u64::from(MAX_SNAPSHOT_DIM),
+                limit: MAX_SNAPSHOT_CELLS
+            })
+        );
+        assert!(SnapshotCell::new(
+            "x".repeat(MAX_CELL_TEXT_BYTES + 1),
+            1,
+            SnapshotColor::Default,
+            SnapshotColor::Default,
+            Attrs::empty(),
+            SnapshotUnderline::None,
+            SnapshotColor::Default,
+            None,
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn default_and_explicit_rgb_stay_distinct() {
+        let profile = profile();
+        let palette = resolved_palette(&profile);
+        let mut defaulted = blank_parts(&profile, 1, 1);
+        defaulted.default_foreground = palette[3];
+        defaulted.cells[0] = SnapshotCell::new(
+            "x".to_string(),
+            1,
+            SnapshotColor::Default,
+            SnapshotColor::Default,
+            Attrs::empty(),
+            SnapshotUnderline::None,
+            SnapshotColor::Default,
+            None,
+            None,
+        )
+        .expect("cell is valid");
+        let mut explicit = defaulted.clone();
+        explicit.cells[0] = SnapshotCell::new(
+            "x".to_string(),
+            1,
+            SnapshotColor::Rgb(palette[3].r, palette[3].g, palette[3].b),
+            SnapshotColor::Default,
+            Attrs::empty(),
+            SnapshotUnderline::None,
+            SnapshotColor::Default,
+            None,
+            None,
+        )
+        .expect("cell is valid");
+        let a = TerminalSnapshot::try_new(defaulted).expect("valid");
+        let b = TerminalSnapshot::try_new(explicit).expect("valid");
+        // Equal resolved colors do not erase different color-reference kinds.
+        assert_ne!(a, b);
+        assert_eq!(a.cells()[0].fg(), SnapshotColor::Default);
+    }
+
+    #[test]
+    fn unreferenced_palette_entry_changes_canonical_state() {
+        let profile = profile();
+        let left = TerminalSnapshot::try_new(blank_parts(&profile, 1, 1)).expect("valid");
+        let mut parts = blank_parts(&profile, 1, 1);
+        parts.palette[77] = Rgb::new(1, 2, 3);
+        let right = TerminalSnapshot::try_new(parts).expect("valid");
+        assert_ne!(left, right);
+        assert_ne!(canonical_hash(&left), canonical_hash(&right));
+    }
+
+    #[test]
+    fn round_trip_preserves_palette_and_links() {
+        let profile = profile();
+        let mut parts = blank_parts(&profile, 3, 1);
+        parts.palette[1] = Rgb::new(0x11, 0x22, 0x33);
+        parts.palette[200] = Rgb::new(0xaa, 0xbb, 0xcc);
+        parts.title = Some("round-trip".to_string());
+        parts.cursor = SnapshotCursor::new(
+            2,
+            0,
+            true,
+            true,
+            SnapshotCursorShape::Underline,
+            Rgb::new(9, 9, 9),
+            Some(true),
+        );
+        parts.cells[0] = SnapshotCell::new(
+            "L".to_string(),
+            1,
+            SnapshotColor::Indexed(200),
+            SnapshotColor::Rgb(1, 2, 3),
+            Attrs::BOLD | Attrs::INVERSE,
+            SnapshotUnderline::Curly,
+            SnapshotColor::Indexed(1),
+            Some("https://example.com/x".to_string()),
+            Some("wrap-id".to_string()),
+        )
+        .expect("cell is valid");
+        let snapshot = TerminalSnapshot::try_new(parts).expect("valid");
+        let json = serde_json::to_string(&snapshot).expect("serializes");
+        let back: TerminalSnapshot = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(snapshot, back);
+        assert_eq!(canonical_hash(&snapshot), canonical_hash(&back));
+        assert_eq!(back.palette()[200], Rgb::new(0xaa, 0xbb, 0xcc));
+        assert_eq!(
+            back.cell_at(0, 0).expect("cell").link_uri(),
+            Some("https://example.com/x")
+        );
+        assert_eq!(back.cell_at(0, 0).expect("cell").link_id(), Some("wrap-id"));
+        assert_eq!(back.cursor().blink(), Some(true));
+        assert!(back
+            .cell_at(0, 0)
+            .expect("cell")
+            .has(Attrs::BOLD | Attrs::INVERSE));
+        assert_eq!(
+            back.cell_at(0, 0).expect("cell").underline(),
+            SnapshotUnderline::Curly
+        );
+    }
 }
