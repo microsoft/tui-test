@@ -685,8 +685,9 @@ impl RenderedPng {
     }
 
     /// The versioned render contract: renderer and raster policy versions,
-    /// fonts, geometry, scale, palette digest, and cursor phase with the
-    /// blink intent kept from the snapshot state.
+    /// fonts, synthetic-style selection, geometry, scale, every normalized
+    /// output setting, palette digest, and cursor phase with the blink
+    /// intent kept from the snapshot state.
     pub fn contract(&self) -> &RenderContract {
         &self.contract
     }
@@ -741,18 +742,11 @@ pub fn render_snapshot_png(
         transparent_background: matches!(options.background, Some(CaptureBackground::Transparent)),
         title: shown_title(snapshot.title(), cols, rows, &layout),
     };
+    // One shared renderer: the path entry point below builds the same one,
+    // so pinned bytes, system fonts, and their typed failures agree.
+    let mut renderer = snapshot_renderer(cols, rows, layout.clone(), options)?;
     match options.pinned_fonts.as_ref() {
         None => {
-            let mut renderer = super::raster::GridRenderer::with_layout(
-                cols,
-                rows,
-                layout.clone(),
-                options.background,
-                true,
-            )
-            .map_err(|error| RenderError::RasterFailed {
-                message: error.to_string(),
-            })?;
             let png = super::encode::encode_png_bytes(&frame, &mut renderer).map_err(|error| {
                 RenderError::RasterFailed {
                     message: error.to_string(),
@@ -765,19 +759,17 @@ pub fn render_snapshot_png(
             Ok(RenderedPng {
                 png,
                 evidence: rendered_evidence,
-                contract: RenderContract::system(&layout, options.scale, snapshot, cursor_drawn),
+                contract: RenderContract::system(
+                    &layout,
+                    options.scale,
+                    snapshot,
+                    cursor_drawn,
+                    options.background,
+                    true,
+                ),
             })
         }
         Some(set) => {
-            let mut renderer = super::raster::GridRenderer::with_pinned_layout(
-                cols,
-                rows,
-                layout.clone(),
-                set,
-                options.background,
-                true,
-            )
-            .map_err(map_pinned_error)?;
             let key = super::raster::GridRenderer::pinned_cache_key(
                 &layout,
                 set,
@@ -817,11 +809,45 @@ fn map_pinned_error(error: anyhow::Error) -> RenderError {
     }
 }
 
+/// Build the frame renderer both PNG entry points share.
+///
+/// Without pinned fonts this is the recorded system-font renderer; with
+/// pinned fonts it loads only the specified bytes. A missing style face or
+/// glyph keeps its typed [`PinnedFontError`], so construction failures
+/// agree between [`render_snapshot_png`] and [`write_snapshot_png`].
+#[cfg(feature = "recording-raster")]
+fn snapshot_renderer(
+    cols: u16,
+    rows: usize,
+    layout: ResolvedLayout,
+    options: &SnapshotRenderOptions,
+) -> Result<super::raster::GridRenderer, RenderError> {
+    match options.pinned_fonts.as_ref() {
+        None => {
+            super::raster::GridRenderer::with_layout(cols, rows, layout, options.background, true)
+                .map_err(|error| RenderError::RasterFailed {
+                    message: error.to_string(),
+                })
+        }
+        Some(set) => super::raster::GridRenderer::with_pinned_layout(
+            cols,
+            rows,
+            layout,
+            set,
+            options.background,
+            true,
+        )
+        .map_err(map_pinned_error),
+    }
+}
+
 /// Draw a snapshot as PNG and save it to `path`, without a live session.
 ///
 /// Shares the staged file writer the live screenshots use, so bytes and path
 /// wrappers decode to equal pixels. Returns the same evidence
-/// [`render_snapshot_png`] returns for the same inputs.
+/// [`render_snapshot_png`] returns for the same inputs, with the same typed
+/// pinned-font failures: the renderer is the shared [`snapshot_renderer`],
+/// not an unconditional system-font renderer.
 #[cfg(feature = "recording-raster")]
 pub fn write_snapshot_png(
     path: &Path,
@@ -832,20 +858,16 @@ pub fn write_snapshot_png(
     // Checked before the renderer allocates its pixmap.
     let _ = checked_output_size(&layout, snapshot.cols(), snapshot.rows())?;
     let (cols, rows) = snapshot_grid_size(snapshot)?;
-    let mut renderer = super::raster::GridRenderer::with_layout(
-        cols,
-        rows,
-        layout.clone(),
-        options.background,
-        true,
-    )
-    .map_err(|error| RenderError::RasterFailed {
-        message: error.to_string(),
-    })?;
+    let pinned = options.pinned_fonts.is_some();
+    let mut renderer = snapshot_renderer(cols, rows, layout.clone(), options)?;
     let frame = snapshot_frame(snapshot);
     super::encode::encode_png(path, &frame, &mut renderer).map_err(|error| {
-        RenderError::RasterFailed {
-            message: error.to_string(),
+        if pinned {
+            map_pinned_error(error)
+        } else {
+            RenderError::RasterFailed {
+                message: error.to_string(),
+            }
         }
     })?;
     let (width, height) = renderer.pixel_size();
