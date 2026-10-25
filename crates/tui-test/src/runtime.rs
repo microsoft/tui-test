@@ -441,6 +441,14 @@ impl Session {
         }
     }
 
+    /// Write raw bytes to the child without UTF-8 conversion.
+    ///
+    /// Every byte is preserved, including NUL bytes, escape bytes, and
+    /// sequences that are not valid UTF-8.
+    pub fn write_bytes(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        self.engine.write_bytes(data)
+    }
+
     /// Cancel pending operations, terminate the child, and release the terminal.
     pub fn close(&self) -> Result<(), TuiTestError> {
         self.execute(Operation::Close).map(|_| ())

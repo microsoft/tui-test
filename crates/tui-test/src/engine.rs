@@ -1530,6 +1530,17 @@ impl Engine {
         self.write_monitor_input(data, true)
     }
 
+    /// Write raw bytes to the live session without UTF-8 conversion.
+    ///
+    /// Every byte is preserved, including NUL bytes, escape bytes, and
+    /// sequences that are not valid UTF-8. Short writes are retried until
+    /// the full slice reaches the PTY, and interrupted writes are retried.
+    pub fn write_bytes(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        let guard = self.lock_session();
+        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
+        session.write_bytes(data)
+    }
+
     fn write_monitor_input(&self, data: &[u8], mouse: bool) -> Result<(), TuiTestError> {
         let Some((state, pty, viewport_input)) = ({
             let live = self
