@@ -800,6 +800,47 @@ impl TerminalSnapshot {
     /// continuations, out-of-bounds in-capture cursors, misplaced origins,
     /// and oversize titles and links, using checked arithmetic throughout.
     /// Cell geometry is recorded, never recomputed from UTF-8 byte length.
+    ///
+    /// ```
+    /// use tui_test::profile::Rgb;
+    /// use tui_test::terminal::cell::Attrs;
+    /// use tui_test::{
+    ///     SnapshotCell, SnapshotColor, SnapshotCursor, SnapshotCursorShape,
+    ///     SnapshotMetadata, SnapshotParts, SnapshotScope, TerminalSnapshot,
+    /// };
+    ///
+    /// let palette = [Rgb::new(0, 0, 0); 256];
+    /// let cell = SnapshotCell::new(
+    ///     "x".to_string(),
+    ///     1,
+    ///     SnapshotColor::Default,
+    ///     SnapshotColor::Indexed(1),
+    ///     Attrs::BOLD,
+    ///     tui_test::SnapshotUnderline::None,
+    ///     SnapshotColor::Default,
+    ///     None,
+    ///     None,
+    /// )?;
+    /// let snapshot = TerminalSnapshot::try_new(SnapshotParts {
+    ///     cols: 1,
+    ///     rows: 1,
+    ///     scope: SnapshotScope::Viewport,
+    ///     viewport_origin: 0,
+    ///     cells: vec![cell],
+    ///     palette,
+    ///     default_foreground: Rgb::new(255, 255, 255),
+    ///     default_background: Rgb::new(0, 0, 0),
+    ///     default_cursor: Rgb::new(255, 255, 255),
+    ///     cursor: SnapshotCursor::new(
+    ///         0, 0, true, true, SnapshotCursorShape::Block,
+    ///         Rgb::new(255, 255, 255), None,
+    ///     ),
+    ///     title: None,
+    ///     metadata: SnapshotMetadata::default(),
+    /// })?;
+    /// assert_eq!(snapshot.cell_at(0, 0).unwrap().text(), "x");
+    /// # Ok::<(), tui_test::SnapshotError>(())
+    /// ```
     pub fn try_new(parts: SnapshotParts) -> Result<Self, SnapshotError> {
         assemble(parts)
     }
@@ -1800,12 +1841,10 @@ mod tests {
 
         let mut wire = serde_json::to_value(&valid).expect("serializes");
         wire["schema"] = serde_json::json!(999);
-        assert_eq!(
-            serde_json::from_value::<TerminalSnapshot>(wire)
-                .expect_err("unsupported schema fails")
-                .to_string()
-                .contains("unsupported snapshot schema"),
-            true
+        let error = serde_json::from_value::<TerminalSnapshot>(wire).expect_err("schema 999 fails");
+        assert!(
+            error.to_string().contains("unsupported snapshot schema"),
+            "unexpected error: {error}"
         );
     }
 
