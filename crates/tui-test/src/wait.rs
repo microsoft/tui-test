@@ -175,7 +175,7 @@ fn timeout_error(options: &WaitQuietOptions) -> TuiTestError {
 /// byte mode only. `cancelled` mirrors
 /// [`Engine::execute_with_context_cancellable`](crate::Engine::execute_with_context_cancellable).
 ///
-/// The loop sleeps end at the first of the next poll, the quiet deadline, or
+/// The loop sleep ends at the first of the next poll, the quiet deadline, or
 /// the overall deadline. When the quiet and overall deadlines coincide, the
 /// overall deadline wins and the request reports timeout.
 pub(crate) fn run_quiet_wait(
@@ -197,24 +197,38 @@ pub(crate) fn run_quiet_wait(
         None
     };
     let mut last_change = start;
+    if options.mode == WaitQuietMode::Visual {
+        // The start capture seeds `previous` once; the first re-sample
+        // happens one interval later so captures stay on the 50ms grid
+        // instead of sampling twice back-to-back.
+        let quiet_deadline = last_change
+            .checked_add(options.quiet)
+            .ok_or_else(|| TuiTestError::internal("wait quiet: quiet deadline is out of range"))?;
+        let first_sleep = [SAMPLE_INTERVAL]
+            .into_iter()
+            .chain(quiet_deadline.checked_duration_since(start))
+            .chain(overall_deadline.checked_duration_since(start))
+            .min()
+            .unwrap_or(SAMPLE_INTERVAL);
+        if !first_sleep.is_zero() {
+            std::thread::sleep(first_sleep);
+        }
+    }
     loop {
         if cancelled() {
             return Err(cancelled_error());
         }
-        let now = Instant::now();
-        if now >= overall_deadline {
+        if Instant::now() >= overall_deadline {
             return Err(timeout_error(options));
         }
-        match options.mode {
+        let changed = match options.mode {
             WaitQuietMode::Visual => {
                 let sample = capture_visual()?;
                 let changed = previous
                     .as_ref()
                     .is_none_or(|before| !canonical_visual_eq(before, &sample));
                 previous = Some(sample);
-                if changed {
-                    last_change = Instant::now();
-                }
+                changed
             }
             WaitQuietMode::Bytes => {
                 if let Some(read_at) = last_output() {
@@ -222,15 +236,26 @@ pub(crate) fn run_quiet_wait(
                         last_change = read_at;
                     }
                 }
+                false
             }
+        };
+        // ONE timestamp after the observation covers both modes: a blocking
+        // capture may straddle the overall deadline, so the overall timeout
+        // is checked before quiet success and both use this same instant.
+        let observed = Instant::now();
+        if changed {
+            last_change = observed;
         }
         let quiet_deadline = last_change
             .checked_add(options.quiet)
             .ok_or_else(|| TuiTestError::internal("wait quiet: quiet deadline is out of range"))?;
-        if Instant::now() >= quiet_deadline {
-            // The visual sample above is the required last sample: it was
-            // captured before this success check, so a change observed here
-            // restarts the timer instead of reporting success.
+        if observed >= overall_deadline {
+            return Err(timeout_error(options));
+        }
+        if observed >= quiet_deadline {
+            // The sample above is the required last sample: it was captured
+            // before this success check, so a change observed here restarts
+            // the timer instead of reporting success.
             if cancelled() {
                 return Err(cancelled_error());
             }
@@ -238,8 +263,8 @@ pub(crate) fn run_quiet_wait(
         }
         let sleep = [SAMPLE_INTERVAL]
             .into_iter()
-            .chain(quiet_deadline.checked_duration_since(Instant::now()))
-            .chain(overall_deadline.checked_duration_since(Instant::now()))
+            .chain(quiet_deadline.checked_duration_since(observed))
+            .chain(overall_deadline.checked_duration_since(observed))
             .min()
             .unwrap_or(SAMPLE_INTERVAL);
         if !sleep.is_zero() {

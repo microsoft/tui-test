@@ -500,6 +500,12 @@ impl Session {
     /// [`Session::interrupt`], and it adds no second cancellation framework.
     /// The wait holds no operation resources across polls, so every outcome
     /// leaves the session ready for subsequent operations.
+    ///
+    /// Pending lifecycle requests (Close/Restart announced through the
+    /// engine's `pending_lifecycle` counter) preempt the wait: the
+    /// composition below reports cancellation instead of letting the quiet
+    /// wait run past a lifecycle request that cannot itself proceed until
+    /// waits yield.
     pub fn wait_quiet_cancellable(
         &self,
         options: &WaitQuietOptions,
@@ -507,7 +513,7 @@ impl Session {
     ) -> Result<(), TuiTestError> {
         crate::wait::run_quiet_wait(
             options,
-            cancelled,
+            &|| cancelled() || self.engine.has_pending_lifecycle(),
             &|| self.engine.capture_snapshot(SnapshotScope::ActiveScreen),
             &|| self.engine.last_output_time(),
         )
