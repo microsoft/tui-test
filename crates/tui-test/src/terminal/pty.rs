@@ -481,6 +481,156 @@ mod tests {
         pty.close();
     }
 
+    /// One scripted `Write` step for the writer-injection tests below.
+    #[derive(Debug, Clone, Copy)]
+    enum ScriptStep {
+        /// Fail once with `Interrupted`; `Pty::write` must retry.
+        Interrupted,
+        /// Accept at most `n` bytes (`n > 0`); `Pty::write` must loop until
+        /// the full slice is accepted.
+        Short(usize),
+        /// Fail once with `WouldBlock`; `Pty::write` must wait and retry.
+        WouldBlock,
+        /// Report `Ok(0)`; `Pty::write` must surface `WriteZero`.
+        WriteZero,
+        /// Fail with a fatal error; `Pty::write` must propagate it.
+        Fatal,
+    }
+
+    #[derive(Debug, Default)]
+    struct ScriptLog {
+        accepted: Vec<u8>,
+        calls: usize,
+        interrupted: usize,
+        short: usize,
+        would_block: usize,
+        write_zero: usize,
+        fatal: usize,
+    }
+
+    struct ScriptWriter {
+        steps: std::collections::VecDeque<ScriptStep>,
+        log: Arc<Mutex<ScriptLog>>,
+    }
+
+    impl Write for ScriptWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let mut log = self.log.lock().unwrap();
+            log.calls += 1;
+            match self.steps.pop_front() {
+                None => {
+                    log.accepted.extend_from_slice(bytes);
+                    Ok(bytes.len())
+                }
+                Some(ScriptStep::Interrupted) => {
+                    log.interrupted += 1;
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "scripted interrupt",
+                    ))
+                }
+                Some(ScriptStep::Short(n)) => {
+                    assert!(n > 0, "scripted short writes must be positive");
+                    log.short += 1;
+                    let take = n.min(bytes.len());
+                    log.accepted.extend_from_slice(&bytes[..take]);
+                    Ok(take)
+                }
+                Some(ScriptStep::WouldBlock) => {
+                    log.would_block += 1;
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        "scripted would-block",
+                    ))
+                }
+                Some(ScriptStep::WriteZero) => {
+                    log.write_zero += 1;
+                    Ok(0)
+                }
+                Some(ScriptStep::Fatal) => {
+                    log.fatal += 1;
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "scripted fatal write error",
+                    ))
+                }
+            }
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Build a `Pty` whose writer comes from the test writer-injection
+    /// facility, returning the shared script log for post-call assertions.
+    fn scripted_pty(steps: &[ScriptStep]) -> (Pty, Arc<Mutex<ScriptLog>>) {
+        let log = Arc::new(Mutex::new(ScriptLog::default()));
+        let pty = Pty {
+            master: Mutex::new(None),
+            writer: Mutex::new(None),
+            child: Mutex::new(Box::new(TestChild(Arc::new(AtomicBool::new(false))))),
+            closed: Arc::new(AtomicBool::new(false)),
+        };
+        pty.replace_test_writer(Box::new(ScriptWriter {
+            steps: steps.iter().copied().collect(),
+            log: log.clone(),
+        }));
+        (pty, log)
+    }
+
+    #[test]
+    fn pty_write_retries_interrupted_writes() {
+        let (pty, log) = scripted_pty(&[ScriptStep::Interrupted, ScriptStep::Interrupted]);
+        pty.write(b"interrupted").unwrap();
+        let log = log.lock().unwrap();
+        assert_eq!(log.interrupted, 2, "both interrupts must be retried");
+        assert_eq!(log.calls, 3);
+        assert_eq!(log.accepted, b"interrupted");
+    }
+
+    #[test]
+    fn pty_write_loops_over_short_writes() {
+        let input = b"short writes loop";
+        let (pty, log) = scripted_pty(&[ScriptStep::Short(2), ScriptStep::Short(1)]);
+        pty.write(input).unwrap();
+        let log = log.lock().unwrap();
+        assert_eq!(log.short, 2, "both short writes must be looped over");
+        assert_eq!(log.calls, 3);
+        assert_eq!(log.accepted, input);
+    }
+
+    #[test]
+    fn pty_write_waits_out_would_block() {
+        let (pty, log) = scripted_pty(&[ScriptStep::WouldBlock, ScriptStep::WouldBlock]);
+        pty.write(b"would block").unwrap();
+        let log = log.lock().unwrap();
+        assert_eq!(log.would_block, 2, "both would-blocks must be waited out");
+        assert_eq!(log.calls, 3);
+        assert_eq!(log.accepted, b"would block");
+    }
+
+    #[test]
+    fn pty_write_zero_reports_an_error() {
+        let (pty, log) = scripted_pty(&[ScriptStep::Short(2), ScriptStep::WriteZero]);
+        let error = pty.write(b"write zero").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::WriteZero);
+        let log = log.lock().unwrap();
+        assert_eq!(log.write_zero, 1, "the zero write must run");
+        assert_eq!(log.accepted, b"wr");
+    }
+
+    #[test]
+    fn pty_write_propagates_fatal_errors() {
+        let (pty, log) = scripted_pty(&[ScriptStep::Short(2), ScriptStep::Fatal]);
+        let error = pty.write(b"fatal error").unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+        assert_eq!(error.to_string(), "scripted fatal write error");
+        let log = log.lock().unwrap();
+        assert_eq!(log.fatal, 1, "the fatal error must run");
+        assert_eq!(log.accepted, b"fa");
+    }
+
     #[test]
     fn unread_input_fixture() {
         if std::env::var_os("TUI_TEST_UNREAD_PTY_FIXTURE").is_none() {

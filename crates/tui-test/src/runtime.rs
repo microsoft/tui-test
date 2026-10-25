@@ -445,6 +445,12 @@ impl Session {
     ///
     /// Every byte is preserved, including NUL bytes, escape bytes, and
     /// sequences that are not valid UTF-8.
+    ///
+    /// An empty payload is a no-op that succeeds while the session is open,
+    /// even after the child has exited. A non-empty payload fails with an
+    /// internal error once the child has exited or the process status query
+    /// has failed. With no open session (after [`Session::close`]) every
+    /// payload reports a no-session error.
     pub fn write_bytes(&self, data: &[u8]) -> Result<(), TuiTestError> {
         self.engine.write_bytes(data)
     }

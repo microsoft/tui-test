@@ -357,9 +357,32 @@ impl Session {
     /// Every byte is preserved, including NUL bytes, escape bytes, and
     /// sequences that are not valid UTF-8. Short writes are retried until
     /// the full slice reaches the PTY, and interrupted writes are retried.
+    ///
+    /// An empty payload is a no-op that always succeeds while the session is
+    /// open, even after the child has exited. A non-empty payload fails with
+    /// an internal error when the child has already exited or the process
+    /// status query has failed: the kernel may still accept PTY bytes for a
+    /// dead child, so the recorded exit state is checked before logging or
+    /// writing anything.
     pub fn write_bytes(&self, data: &[u8]) -> Result<(), crate::api::TuiTestError> {
         if data.is_empty() {
             return Ok(());
+        }
+        {
+            let st = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(error) = st.exit_error.clone() {
+                return Err(crate::api::TuiTestError::internal(format!(
+                    "failed to write raw bytes: {error}"
+                )));
+            }
+            if let Some(code) = st.exited {
+                return Err(crate::api::TuiTestError::internal(format!(
+                    "failed to write raw bytes: child process has exited (code {code})"
+                )));
+            }
         }
         self.logger.write(data);
         {

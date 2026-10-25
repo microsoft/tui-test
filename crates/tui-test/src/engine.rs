@@ -1535,6 +1535,12 @@ impl Engine {
     /// Every byte is preserved, including NUL bytes, escape bytes, and
     /// sequences that are not valid UTF-8. Short writes are retried until
     /// the full slice reaches the PTY, and interrupted writes are retried.
+    ///
+    /// An empty payload is a no-op that succeeds while the session is open,
+    /// even after the child has exited. A non-empty payload fails with an
+    /// internal error once the child has exited or the process status query
+    /// has failed. With no open session (after [`Operation::Close`]) every
+    /// payload, including an empty one, reports [`ErrorKind::NoSession`].
     pub fn write_bytes(&self, data: &[u8]) -> Result<(), TuiTestError> {
         let guard = self.lock_session();
         let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
@@ -6635,5 +6641,100 @@ mod tests {
             engine.execute(Operation::Close).unwrap();
         }
         reporter.join().unwrap();
+    }
+
+    #[test]
+    fn write_bytes_after_recorded_exit_returns_typed_error() {
+        struct AcceptingWriter {
+            accepted: Arc<Mutex<Vec<u8>>>,
+        }
+
+        impl std::io::Write for AcceptingWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.accepted.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let engine = Engine::new(
+            "write-bytes-after-exit".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let accepted = Arc::new(Mutex::new(Vec::new()));
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            // The kernel still accepts PTY bytes after the child dies, so
+            // inject a writer that always accepts: a post-exit write must be
+            // rejected from the recorded exit state, not from the write call.
+            session.pty.replace_test_writer(Box::new(AcceptingWriter {
+                accepted: accepted.clone(),
+            }));
+            // Record what the process watcher publishes when the child exits.
+            session.state.lock().unwrap().exited = Some(0);
+        }
+        // An empty payload stays a no-op while the session is open, even
+        // after the child has exited.
+        engine.write_bytes(b"").unwrap();
+        assert!(accepted.lock().unwrap().is_empty());
+        let error = engine.write_bytes(b"after exit").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Internal);
+        assert!(!error.message.is_empty());
+        assert!(
+            accepted.lock().unwrap().is_empty(),
+            "no bytes may reach the PTY after a recorded exit"
+        );
+        engine.execute(Operation::Close).unwrap();
+        let error = engine.write_bytes(b"after close").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::NoSession);
+        assert!(!error.message.is_empty());
+    }
+
+    #[test]
+    fn write_bytes_after_recorded_wait_failure_returns_typed_error() {
+        struct AcceptingWriter;
+
+        impl std::io::Write for AcceptingWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let engine = Engine::new(
+            "write-bytes-after-wait-failure".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            session.pty.replace_test_writer(Box::new(AcceptingWriter));
+            // Record what the process watcher publishes when the status
+            // query itself fails.
+            session.state.lock().unwrap().exit_error = Some("wait failed: boom".into());
+        }
+        let error = engine.write_bytes(b"ping").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Internal);
+        assert!(
+            error.message.contains("wait failed: boom"),
+            "unexpected message: {}",
+            error.message
+        );
+        engine.execute(Operation::Close).unwrap();
     }
 }
