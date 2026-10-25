@@ -166,13 +166,34 @@ fn timeout_error(options: &WaitQuietOptions) -> TuiTestError {
     ))
 }
 
+/// Monotonic clock driving a quiet wait. Production uses real time;
+/// deterministic tests inject a scripted clock instead of sleeping.
+pub(crate) trait QuietClock {
+    fn now(&self) -> Instant;
+    fn sleep(&self, duration: Duration);
+}
+
+struct SystemClock;
+
+impl QuietClock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+}
+
 /// Run a quiet wait against caller-supplied observation closures.
 ///
 /// `capture_visual` must capture a raw active-screen snapshot; it is called
 /// at request start and then at most every 50 milliseconds in visual mode,
 /// and never in byte mode. `last_output` must report the monotonic time of
 /// the most recent nonempty successful PTY output read; it is consulted in
-/// byte mode only. `cancelled` mirrors
+/// byte mode only and returns an error when no session is open or the
+/// emulator faulted. `Ok(None)` is reserved for a live session with no
+/// output yet. `cancelled` mirrors
 /// [`Engine::execute_with_context_cancellable`](crate::Engine::execute_with_context_cancellable).
 ///
 /// The loop sleep ends at the first of the next poll, the quiet deadline, or
@@ -182,9 +203,26 @@ pub(crate) fn run_quiet_wait(
     options: &WaitQuietOptions,
     cancelled: &dyn Fn() -> bool,
     capture_visual: &dyn Fn() -> Result<TerminalSnapshot, TuiTestError>,
-    last_output: &dyn Fn() -> Option<Instant>,
+    last_output: &dyn Fn() -> Result<Option<Instant>, TuiTestError>,
 ) -> Result<(), TuiTestError> {
-    let start = Instant::now();
+    run_quiet_wait_with_clock(
+        options,
+        cancelled,
+        capture_visual,
+        last_output,
+        &SystemClock,
+    )
+}
+
+/// [`run_quiet_wait`] with an injected clock for deterministic tests.
+pub(crate) fn run_quiet_wait_with_clock(
+    options: &WaitQuietOptions,
+    cancelled: &dyn Fn() -> bool,
+    capture_visual: &dyn Fn() -> Result<TerminalSnapshot, TuiTestError>,
+    last_output: &dyn Fn() -> Result<Option<Instant>, TuiTestError>,
+    clock: &dyn QuietClock,
+) -> Result<(), TuiTestError> {
+    let start = clock.now();
     let overall_deadline = start
         .checked_add(options.timeout)
         .ok_or_else(|| TuiTestError::internal("wait quiet: overall deadline is out of range"))?;
@@ -211,14 +249,14 @@ pub(crate) fn run_quiet_wait(
             .min()
             .unwrap_or(SAMPLE_INTERVAL);
         if !first_sleep.is_zero() {
-            std::thread::sleep(first_sleep);
+            clock.sleep(first_sleep);
         }
     }
     loop {
         if cancelled() {
             return Err(cancelled_error());
         }
-        if Instant::now() >= overall_deadline {
+        if clock.now() >= overall_deadline {
             return Err(timeout_error(options));
         }
         let changed = match options.mode {
@@ -231,7 +269,10 @@ pub(crate) fn run_quiet_wait(
                 changed
             }
             WaitQuietMode::Bytes => {
-                if let Some(read_at) = last_output() {
+                // A missing session or emulator fault is an error, never
+                // quiet: only a live session with no output yet observes
+                // `Ok(None)` here.
+                if let Some(read_at) = last_output()? {
                     if read_at > last_change {
                         last_change = read_at;
                     }
@@ -242,7 +283,7 @@ pub(crate) fn run_quiet_wait(
         // ONE timestamp after the observation covers both modes: a blocking
         // capture may straddle the overall deadline, so the overall timeout
         // is checked before quiet success and both use this same instant.
-        let observed = Instant::now();
+        let observed = clock.now();
         if changed {
             last_change = observed;
         }
@@ -268,7 +309,7 @@ pub(crate) fn run_quiet_wait(
             .min()
             .unwrap_or(SAMPLE_INTERVAL);
         if !sleep.is_zero() {
-            std::thread::sleep(sleep);
+            clock.sleep(sleep);
         }
     }
 }
@@ -423,8 +464,304 @@ mod tests {
         let options = WaitQuietOptions::new(Duration::from_secs(5), Duration::from_millis(100))
             .expect("test options are valid");
         let started = Instant::now();
-        run_quiet_wait(&options, &|| false, &capture, &|| None)
+        run_quiet_wait(&options, &|| false, &capture, &|| Ok(None))
             .expect("unseen transient must not delay success");
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    /// Scripted monotonic clock: sleeps advance virtual time instantly, so
+    /// quiet-wait tests assert exact polls, samples, and deadlines with no
+    /// wall-clock timing.
+    struct FakeClock {
+        now: std::sync::Mutex<Instant>,
+        sleeps: std::sync::Mutex<Vec<Duration>>,
+    }
+
+    impl FakeClock {
+        fn new() -> Self {
+            Self {
+                now: std::sync::Mutex::new(Instant::now()),
+                sleeps: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn slept(&self) -> Duration {
+            self.sleeps
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .sum()
+        }
+    }
+
+    impl QuietClock for FakeClock {
+        fn now(&self) -> Instant {
+            *self
+                .now
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        }
+
+        fn sleep(&self, duration: Duration) {
+            self.sleeps
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(duration);
+            *self
+                .now
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) += duration;
+        }
+    }
+
+    fn snapshot_with_title(title: &str) -> TerminalSnapshot {
+        let mut parts = test_parts();
+        parts.title = Some(title.to_string());
+        TerminalSnapshot::try_new(parts).expect("test snapshot is valid")
+    }
+
+    fn byte_options(timeout_ms: u64, quiet_ms: u64) -> WaitQuietOptions {
+        WaitQuietOptions::new(
+            Duration::from_millis(timeout_ms),
+            Duration::from_millis(quiet_ms),
+        )
+        .expect("test options are valid")
+        .with_mode(WaitQuietMode::Bytes)
+    }
+
+    // R25-part: byte quiet with no output observes exactly one poll per 50ms
+    // grid step and succeeds after one quiet interval of virtual time.
+    #[test]
+    fn byte_quiet_without_output_uses_exact_poll_grid() {
+        let clock = FakeClock::new();
+        let options = byte_options(10_000, 200);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let started = clock.now();
+        run_quiet_wait_with_clock(
+            &options,
+            &|| false,
+            &|| panic!("byte mode never captures the screen"),
+            &|| {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(None)
+            },
+            &clock,
+        )
+        .expect("idle byte wait succeeds");
+        // Polls at t=0,50,100,150,200: the final observation at the quiet
+        // deadline is the success sample, then the wait returns.
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 5);
+        assert_eq!(
+            clock.now().duration_since(started),
+            Duration::from_millis(200)
+        );
+        assert_eq!(clock.slept(), Duration::from_millis(200));
+    }
+
+    // R25-part: a single output read restarts the byte timer from the read
+    // instant, so success follows the last read by one quiet interval.
+    #[test]
+    fn byte_output_restarts_timer_from_read_instant() {
+        let clock = FakeClock::new();
+        let options = byte_options(10_000, 200);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let started = clock.now();
+        run_quiet_wait_with_clock(
+            &options,
+            &|| false,
+            &|| panic!("byte mode never captures the screen"),
+            &|| {
+                let call = calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // Third poll (t=100) observes a read stamped at that instant.
+                Ok(if call == 2 { Some(clock.now()) } else { None })
+            },
+            &clock,
+        )
+        .expect("byte wait follows the last read");
+        // Quiet restarts at t=100, so polls run to t=300 for 7 observations.
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 7);
+        assert_eq!(
+            clock.now().duration_since(started),
+            Duration::from_millis(300)
+        );
+    }
+
+    // R25-part: every visual sample is asserted, including the transient:
+    // the change is observed exactly once, restarts the timer, and the
+    // final observation at the new quiet deadline is the success sample.
+    #[test]
+    fn visual_change_records_every_transient_sample() {
+        let clock = FakeClock::new();
+        let options = WaitQuietOptions::new(Duration::from_secs(10), Duration::from_millis(200))
+            .expect("test options are valid");
+        let seen = std::sync::Mutex::new(Vec::new());
+        let started = clock.now();
+        run_quiet_wait_with_clock(
+            &options,
+            &|| false,
+            &|| {
+                let captures = seen
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .len();
+                // First three captures (t=0,50,100) see screen A; every later
+                // capture sees the changed screen B.
+                let sample = snapshot_with_title(if captures < 3 { "A" } else { "B" });
+                seen.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(sample.title().map(str::to_string));
+                Ok(sample)
+            },
+            &|| panic!("visual mode never consults output time"),
+            &clock,
+        )
+        .expect("changed screen settles");
+        let seen = seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        // Initial capture plus polls at t=50..=350: the change lands at
+        // t=150 and the new quiet deadline is t=350.
+        let expected = ["A", "A", "A", "B", "B", "B", "B", "B"];
+        assert_eq!(seen.len(), expected.len(), "unexpected samples: {seen:?}");
+        for (sample, want) in seen.iter().zip(expected) {
+            assert_eq!(
+                sample.as_deref(),
+                Some(want),
+                "unexpected samples: {seen:?}"
+            );
+        }
+        assert_eq!(
+            clock.now().duration_since(started),
+            Duration::from_millis(350)
+        );
+    }
+
+    // R25-part: deadline priority. Equal quiet and overall deadlines report
+    // timeout: the final observation meets both deadlines and the overall
+    // deadline wins.
+    #[test]
+    fn equal_deadlines_report_timeout_on_final_observation() {
+        let clock = FakeClock::new();
+        let options = byte_options(400, 400);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let error = run_quiet_wait_with_clock(
+            &options,
+            &|| false,
+            &|| panic!("byte mode never captures the screen"),
+            &|| {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(None)
+            },
+            &clock,
+        )
+        .expect_err("coincident deadlines must time out");
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error}"
+        );
+        // Polls at t=0..=350, then the loop-top check at t=400 reports the
+        // overall timeout instead of quiet success.
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 8);
+        assert_eq!(clock.slept(), Duration::from_millis(400));
+    }
+
+    // R25-part: a blocking capture that straddles the overall deadline
+    // reports timeout even when the captured screen is stable: the timeout
+    // check uses the post-observation timestamp.
+    #[test]
+    fn blocking_capture_straddling_deadline_reports_timeout() {
+        let clock = FakeClock::new();
+        let options = WaitQuietOptions::new(Duration::from_millis(400), Duration::from_millis(200))
+            .expect("test options are valid");
+        let stable = snapshot();
+        let captures = std::sync::atomic::AtomicUsize::new(0);
+        let error = run_quiet_wait_with_clock(
+            &options,
+            &|| false,
+            &|| {
+                let capture = captures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if capture == 1 {
+                    // Simulate a capture blocked past the overall deadline.
+                    clock.sleep(Duration::from_millis(500));
+                }
+                Ok(stable.clone())
+            },
+            &|| panic!("visual mode never consults output time"),
+            &clock,
+        )
+        .expect_err("straddled deadline must time out");
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(captures.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    // R25-part: cancellation before the first observation performs no
+    // observation at all, and cancellation mid-wait aborts at the next
+    // loop-top check.
+    #[test]
+    fn cancellation_skips_observations_and_aborts_mid_wait() {
+        let clock = FakeClock::new();
+        let options = WaitQuietOptions::new(Duration::from_secs(10), Duration::from_millis(200))
+            .expect("test options are valid");
+        let captures = std::sync::atomic::AtomicUsize::new(0);
+        let error = run_quiet_wait_with_clock(
+            &options,
+            &|| true,
+            &|| {
+                captures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(snapshot())
+            },
+            &|| panic!("visual mode never consults output time"),
+            &clock,
+        )
+        .expect_err("pre-cancelled wait must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(captures.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        let captures = std::sync::atomic::AtomicUsize::new(0);
+        let error = run_quiet_wait_with_clock(
+            &options,
+            &|| flag.load(std::sync::atomic::Ordering::Acquire),
+            &|| {
+                let capture = captures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if capture == 1 {
+                    flag.store(true, std::sync::atomic::Ordering::Release);
+                }
+                Ok(snapshot())
+            },
+            &|| panic!("visual mode never consults output time"),
+            &clock,
+        )
+        .expect_err("mid-wait cancellation must abort");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        // Initial capture plus one poll; the next loop-top check aborts.
+        assert_eq!(captures.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    // R7 at the wait level: a missing session surfaces as an error and never
+    // as quiet, even in byte mode.
+    #[test]
+    fn byte_wait_propagates_missing_session_error() {
+        let clock = FakeClock::new();
+        let options = byte_options(10_000, 200);
+        let error = run_quiet_wait_with_clock(
+            &options,
+            &|| false,
+            &|| panic!("byte mode never captures the screen"),
+            &|| Err(crate::api::TuiTestError::no_session()),
+            &clock,
+        )
+        .expect_err("missing session must error");
+        assert_eq!(error.kind, crate::api::ErrorKind::NoSession);
     }
 }

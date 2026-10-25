@@ -44,6 +44,7 @@ use crate::terminal::emu::{
     ClipboardType, CursorShape, Emulator, KeyboardMode, MouseMode, TerminalMode,
 };
 use crate::terminal::locator::{self, Pattern};
+use crate::wait::WaitQuietOptions;
 
 pub struct Engine {
     name: String,
@@ -51,6 +52,14 @@ pub struct Engine {
     lifecycle: RwLock<()>,
     pending_lifecycle: AtomicUsize,
     session: RwLock<Option<TerminalSession>>,
+    /// Stable generation of the installed session slot, bumped on every
+    /// install or removal. Quiet waits capture it at request start and
+    /// re-check it before reporting success, so a Close/Restart that
+    /// completes mid-wait can never surface as quiet success (R8). The
+    /// pending-lifecycle counter alone is insufficient: it returns to zero
+    /// once the lifecycle operation acquires the exclusive lock, while the
+    /// teardown still runs.
+    session_generation: AtomicU64,
     spawn_spec: Mutex<Option<SpawnSpec>>,
     live: Arc<Mutex<Option<LiveTarget>>>,
     interrupt: Mutex<Option<InterruptTarget>>,
@@ -270,6 +279,7 @@ impl Engine {
             lifecycle: RwLock::new(()),
             pending_lifecycle: AtomicUsize::new(0),
             session: RwLock::new(None),
+            session_generation: AtomicU64::new(0),
             spawn_spec: Mutex::new(None),
             live: Arc::new(Mutex::new(None)),
             interrupt: Mutex::new(None),
@@ -520,6 +530,7 @@ impl Engine {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 if let Some(session) = self.write_session().take() {
+                    self.bump_session_generation();
                     session.kill();
                     drop(session);
                 }
@@ -748,6 +759,7 @@ impl Engine {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         if let Some(previous) = current.take() {
+            self.bump_session_generation();
             self.finish_trace_with_session(&previous, context, None)?;
             previous.kill();
             drop(previous);
@@ -862,6 +874,7 @@ impl Engine {
             shell: session.shell.map(|value| value.as_str()),
         };
         *self.write_session() = Some(session);
+        self.bump_session_generation();
         *self
             .live
             .lock()
@@ -1824,13 +1837,82 @@ impl Engine {
     }
 
     /// Monotonic time of the most recent nonempty successful PTY output read,
-    /// if any. Served to byte-quiet waits; `None` when no session is open or
-    /// no output has arrived yet.
-    pub(crate) fn last_output_time(&self) -> Option<Instant> {
+    /// if any. Served to byte-quiet waits; `Ok(None)` only when a session is
+    /// open and no output has arrived yet. A missing session or an emulator
+    /// fault is an error, matching [`Engine::capture_snapshot_with`], so a
+    /// byte-quiet wait can never conflate no-session with no-output (R7).
+    pub(crate) fn last_output_time(&self) -> Result<Option<Instant>, TuiTestError> {
         let guard = self.lock_session();
-        guard
-            .as_ref()
-            .and_then(|session| session.last_output_time())
+        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
+        if let Some(fault) = session.fault() {
+            return Err(
+                TuiTestError::internal(fault.clone()).with_report(FailureReport::new(
+                    "terminal.operation",
+                    None,
+                    FailureReason::EmulatorFault,
+                    fault,
+                )),
+            );
+        }
+        Ok(session.last_output_time())
+    }
+
+    /// Stable generation of the installed session slot, for quiet waits.
+    pub(crate) fn session_generation(&self) -> u64 {
+        self.session_generation.load(Ordering::Acquire)
+    }
+
+    fn bump_session_generation(&self) {
+        self.session_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Run a request-scoped quiet wait coordinated with the lifecycle guard.
+    ///
+    /// Holds the shared lifecycle lock for the wait (like waits dispatched
+    /// through [`Engine::execute_with_context_cancellable`]) so a concurrent
+    /// Close/Restart announces itself through `pending_lifecycle` and blocks
+    /// on the exclusive lock instead of completing underneath the wait. The
+    /// wait aborts on that announcement; the session generation captured at
+    /// request start is re-checked before any success return, so a lifecycle
+    /// transition that completes mid-wait can never surface as quiet
+    /// success (R8). Cancellation never terminates the session and never
+    /// cancels another caller.
+    pub(crate) fn run_quiet_wait_cancellable(
+        &self,
+        options: &WaitQuietOptions,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), TuiTestError> {
+        // The shared lock is acquired before any caller-supplied closure
+        // runs: parking inside `cancelled` (or a slow observer) must already
+        // block lifecycle writers, never let them complete underneath us.
+        let _shared = self
+            .lifecycle
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A lifecycle request announced while acquiring the lock, or a
+        // caller that was already cancelled, preempts the wait before its
+        // first observation.
+        if cancelled() || self.has_pending_lifecycle() {
+            return Err(crate::wait::cancelled_error());
+        }
+        let generation = self.session_generation();
+        let outcome = crate::wait::run_quiet_wait(
+            options,
+            &|| cancelled() || self.has_pending_lifecycle(),
+            &|| self.capture_snapshot(SnapshotScope::ActiveScreen),
+            &|| self.last_output_time(),
+        );
+        // A lifecycle transition announced while polling, or a generation
+        // change from a transition that completed mid-wait, preempts success:
+        // the request did not observe quiet on a stable live session.
+        if outcome.is_ok()
+            && (cancelled()
+                || self.has_pending_lifecycle()
+                || self.session_generation() != generation)
+        {
+            return Err(crate::wait::cancelled_error());
+        }
+        outcome
     }
 
     fn write_session(&self) -> RwLockWriteGuard<'_, Option<TerminalSession>> {
@@ -4580,6 +4662,45 @@ mod tests {
     use crate::terminal::alacritty::AlacrittyEmu;
     use crate::terminal::cell::{NamedColor, UnderlineStyle};
     use crate::terminal::emu::Emulator;
+
+    // R7: the private byte-quiet output accessor reports a missing session
+    // as an error, never as quiet. `Ok(None)` is reserved for a live
+    // session with no output yet.
+    #[test]
+    fn last_output_time_without_session_reports_no_session() {
+        let engine = Engine::new(
+            "quiet-no-session".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let error = engine
+            .last_output_time()
+            .expect_err("no session must error");
+        assert_eq!(error.kind, ErrorKind::NoSession);
+    }
+
+    // R8: installing and removing the session advances the stable generation
+    // that quiet waits bind to; unrelated operations leave it unchanged.
+    #[test]
+    fn session_generation_advances_on_install_and_removal() {
+        let engine = Engine::new(
+            "quiet-generation".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let idle = engine.session_generation();
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let installed = engine.session_generation();
+        assert_ne!(installed, idle, "install must advance the generation");
+        engine.execute(Operation::Close).unwrap();
+        assert_ne!(
+            engine.session_generation(),
+            installed,
+            "removal must advance the generation"
+        );
+    }
 
     fn sleeping_program(wait_ready: bool) -> RunOptions {
         let (program, args) = if cfg!(windows) {
