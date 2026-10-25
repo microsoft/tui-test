@@ -147,6 +147,64 @@ fn hidden_and_clipped_cursors_stay_hidden() {
     }
 }
 
+/// R14 (SVG half): the drawn cursor uses the captured cursor color.
+///
+/// A snapshot whose captured cursor (red) differs from its default cursor
+/// (green) must draw the captured color; the default must not leak into the
+/// document.
+#[test]
+fn drawn_cursor_uses_captured_cursor_color() {
+    let mut parts = snapshot_parts(2, 1, &["a", " "]);
+    parts.default_cursor = Rgb::new(0, 255, 0);
+    parts.cursor = SnapshotCursor::new(
+        0,
+        0,
+        true,
+        true,
+        SnapshotCursorShape::Block,
+        Rgb::new(255, 0, 0),
+        None,
+    );
+    let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+    let rendered = tui_test::render_snapshot_svg(&snapshot, &SnapshotRenderOptions::default())
+        .expect("offline SVG renders");
+    assert!(rendered.evidence().cursor_drawn());
+    assert!(
+        rendered.svg().contains("#ff0000"),
+        "captured cursor color must be drawn: {}",
+        rendered.svg()
+    );
+    assert!(
+        !rendered.svg().contains("#00ff00"),
+        "default cursor color must not leak: {}",
+        rendered.svg()
+    );
+}
+
+/// R15 (SVG half): subpixel logical cells fail, at any scale.
+///
+/// Quarter-pixel cells at 40x scale used to render a zero viewBox against
+/// nonzero pixels. Like the live style, offline options reject cells under
+/// one logical pixel before any allocation or rendering.
+#[test]
+fn subpixel_cells_fail_without_rendering() {
+    let snapshot = snapshot_of(1, 1, &[" "]);
+    for scale in [1.0, 40.0] {
+        let options = SnapshotRenderOptions::default()
+            .with_cell_width(0.25)
+            .with_cell_height(0.25)
+            .with_font_size(0.2)
+            .with_baseline(0.2)
+            .with_scale(scale);
+        let error = tui_test::render_snapshot_svg(&snapshot, &options)
+            .expect_err("subpixel cells must fail");
+        assert!(
+            matches!(error, tui_test::RenderError::CellTooSmall { .. }),
+            "scale {scale}: unexpected error {error}"
+        );
+    }
+}
+
 /// U03-G (SVG half): a 3-column, 2-row grid with 10-by-20 cells and no
 /// decoration reports a 30-by-40 image.
 #[test]
@@ -395,6 +453,66 @@ mod raster_tests {
             decode_png(clipped_render.png()),
             "hidden and clipped cursors both draw nothing"
         );
+    }
+
+    /// R14 (PNG half): the drawn cursor uses the captured cursor color.
+    ///
+    /// A block cursor over a blank cell fills it with the captured color
+    /// (red); the differing default (green) must not appear anywhere.
+    #[test]
+    fn drawn_cursor_uses_captured_cursor_color_in_png() {
+        let mut parts = snapshot_parts(2, 1, &[" ", " "]);
+        parts.default_cursor = Rgb::new(0, 255, 0);
+        parts.cursor = SnapshotCursor::new(
+            0,
+            0,
+            true,
+            true,
+            SnapshotCursorShape::Block,
+            Rgb::new(255, 0, 0),
+            None,
+        );
+        let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+        let options = undecorated().with_cell_width(10.0).with_cell_height(20.0);
+        let rendered = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+        assert!(rendered.evidence().cursor_drawn());
+        let (width, height, pixels) = decode_png(rendered.png());
+        assert_eq!((width, height), (20, 20));
+        let center = (10 * width + 5) as usize * 4;
+        assert_eq!(
+            &pixels[center..center + 4],
+            &[255, 0, 0, 255],
+            "cursor cell must be the captured red"
+        );
+        assert!(
+            !pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel == &[0, 255, 0, 255]),
+            "default cursor green must not leak into any pixel"
+        );
+    }
+
+    /// R15 (PNG half): subpixel logical cells fail before allocation, at any
+    /// scale, so no backend can disagree about the output size.
+    #[test]
+    fn subpixel_cells_fail_without_rendering_in_png() {
+        let snapshot = snapshot_of(1, 1, &[" "]);
+        for scale in [1.0, 40.0] {
+            let options = SnapshotRenderOptions::default()
+                .with_cell_width(0.25)
+                .with_cell_height(0.25)
+                .with_font_size(0.2)
+                .with_baseline(0.2)
+                .with_scale(scale);
+            let error =
+                render_snapshot_png(&snapshot, &options).expect_err("subpixel cells must fail");
+            assert!(
+                matches!(error, tui_test::RenderError::CellTooSmall { .. }),
+                "scale {scale}: unexpected error {error}"
+            );
+        }
     }
 
     /// U03-G: a 3-column, 2-row grid with 10-by-20 cells gives a 30-by-40
