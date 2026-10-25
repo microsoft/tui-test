@@ -168,7 +168,12 @@ impl GridRenderer {
 
     /// The pinned cache identity for a layout and set, without allocating
     /// the renderer. The offline layer records it in the render contract.
-    pub(crate) fn pinned_cache_key(layout: &ResolvedLayout, set: &PinnedFontSet) -> PinnedCacheKey {
+    pub(crate) fn pinned_cache_key(
+        layout: &ResolvedLayout,
+        set: &PinnedFontSet,
+        background: Option<CaptureBackground>,
+        exact_size: bool,
+    ) -> PinnedCacheKey {
         PinnedCacheKey::new(
             set,
             layout.zoom,
@@ -176,6 +181,32 @@ impl GridRenderer {
             layout.cell_w,
             layout.cell_h,
             layout.baseline,
+            layout.title_font_size,
+            layout.header_h,
+            layout.divider_h,
+            layout.content_left,
+            layout.content_top,
+            layout.content_right,
+            layout.content_bottom,
+            layout.canvas_left,
+            layout.canvas_right,
+            layout.canvas_top,
+            layout.canvas_bottom,
+            layout.canvas_background,
+            background,
+            layout.title_bar,
+            layout.title_controls,
+            layout.window_background,
+            layout.window_foreground,
+            layout.window_divider,
+            layout.border_width,
+            layout.border_color,
+            layout.border_radius,
+            layout.shadow_enabled,
+            layout.shadow_color,
+            layout.shadow_offset,
+            layout.shadow_spread,
+            exact_size,
         )
     }
 

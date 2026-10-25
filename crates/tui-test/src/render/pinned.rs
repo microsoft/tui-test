@@ -35,6 +35,9 @@
 
 use sha2::{Digest, Sha256};
 
+use crate::api::CaptureBackground;
+use crate::profile::Rgb;
+
 /// Schema version of [`RenderContract`].
 pub const RENDER_CONTRACT_VERSION: u32 = 1;
 
@@ -280,12 +283,17 @@ fn style_name(bold: bool, italic: bool) -> &'static str {
 /// The identity a pinned-font cache entry is stored under.
 ///
 /// The policy tag, every face digest with its face index and style slot in
-/// fallback order, the synthetic-style selection, the output scale, and the
-/// raster geometry (font size, cell metrics, baseline) all join the key, so
-/// a system-font entry — keyed by family and path — can never serve a
-/// pinned request and one raster configuration can never serve another.
-/// Each pinned render builds its fonts from the specified bytes only; the
-/// key is recorded in the render contract as the evidence of what was used.
+/// fallback order, the synthetic-style selection, the output scale, and
+/// every raster setting that changes output pixels all join the key: grid
+/// geometry (font size, cell metrics, baseline), title chrome (bar, controls,
+/// title size, header and divider heights), content and canvas padding,
+/// backgrounds (canvas fill and capture override), window and border
+/// chrome, the shadow, and the exact-size switch. A system-font entry —
+/// keyed by family and path — can never serve a pinned request and one
+/// raster configuration can never serve another. Each pinned render builds
+/// its fonts from the specified bytes only; the key is recorded in the
+/// render contract as the evidence of what was used. The key is a pure
+/// identity value: no shared cache is stored behind it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PinnedCacheKey {
     policy: &'static str,
@@ -296,6 +304,32 @@ pub struct PinnedCacheKey {
     cell_width_bits: u32,
     cell_height_bits: u32,
     baseline_bits: u32,
+    title_font_size_bits: u32,
+    header_height_bits: u32,
+    divider_height_bits: u32,
+    content_left_bits: u32,
+    content_top_bits: u32,
+    content_right_bits: u32,
+    content_bottom_bits: u32,
+    canvas_left: u32,
+    canvas_right: u32,
+    canvas_top: u32,
+    canvas_bottom: u32,
+    canvas_background: Rgb,
+    background: Option<CaptureBackground>,
+    title_bar: bool,
+    title_controls: bool,
+    window_background: Rgb,
+    window_foreground: Rgb,
+    window_divider: Rgb,
+    border_width_bits: u32,
+    border_color: Rgb,
+    border_radius_bits: u32,
+    shadow_enabled: bool,
+    shadow_color: Rgb,
+    shadow_offset_bits: u32,
+    shadow_spread_bits: u32,
+    exact_size: bool,
 }
 
 /// One face inside a [`PinnedCacheKey`], in fallback order.
@@ -332,6 +366,7 @@ impl PinnedCachedFace {
 impl PinnedCacheKey {
     /// Build the cache identity for one render from the pinned set and the
     /// raster settings the render actually uses.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         set: &PinnedFontSet,
         scale: f64,
@@ -339,6 +374,32 @@ impl PinnedCacheKey {
         cell_width: f32,
         cell_height: f32,
         baseline: f32,
+        title_font_size: f32,
+        header_height: f32,
+        divider_height: f32,
+        content_left: f32,
+        content_top: f32,
+        content_right: f32,
+        content_bottom: f32,
+        canvas_left: u32,
+        canvas_right: u32,
+        canvas_top: u32,
+        canvas_bottom: u32,
+        canvas_background: Rgb,
+        background: Option<CaptureBackground>,
+        title_bar: bool,
+        title_controls: bool,
+        window_background: Rgb,
+        window_foreground: Rgb,
+        window_divider: Rgb,
+        border_width: f32,
+        border_color: Rgb,
+        border_radius: f32,
+        shadow_enabled: bool,
+        shadow_color: Rgb,
+        shadow_offset: f32,
+        shadow_spread: f32,
+        exact_size: bool,
     ) -> Self {
         Self {
             policy: RASTER_POLICY_PINNED_V1,
@@ -358,6 +419,32 @@ impl PinnedCacheKey {
             cell_width_bits: cell_width.to_bits(),
             cell_height_bits: cell_height.to_bits(),
             baseline_bits: baseline.to_bits(),
+            title_font_size_bits: title_font_size.to_bits(),
+            header_height_bits: header_height.to_bits(),
+            divider_height_bits: divider_height.to_bits(),
+            content_left_bits: content_left.to_bits(),
+            content_top_bits: content_top.to_bits(),
+            content_right_bits: content_right.to_bits(),
+            content_bottom_bits: content_bottom.to_bits(),
+            canvas_left,
+            canvas_right,
+            canvas_top,
+            canvas_bottom,
+            canvas_background,
+            background,
+            title_bar,
+            title_controls,
+            window_background,
+            window_foreground,
+            window_divider,
+            border_width_bits: border_width.to_bits(),
+            border_color,
+            border_radius_bits: border_radius.to_bits(),
+            shadow_enabled,
+            shadow_color,
+            shadow_offset_bits: shadow_offset.to_bits(),
+            shadow_spread_bits: shadow_spread.to_bits(),
+            exact_size,
         }
     }
 
@@ -401,10 +488,140 @@ impl PinnedCacheKey {
         f32::from_bits(self.baseline_bits)
     }
 
+    /// The title font size the key pins.
+    pub fn title_font_size(&self) -> f32 {
+        f32::from_bits(self.title_font_size_bits)
+    }
+
+    /// The title header height the key pins.
+    pub fn header_height(&self) -> f32 {
+        f32::from_bits(self.header_height_bits)
+    }
+
+    /// The title divider height the key pins.
+    pub fn divider_height(&self) -> f32 {
+        f32::from_bits(self.divider_height_bits)
+    }
+
+    /// The left content gap the key pins.
+    pub fn content_left(&self) -> f32 {
+        f32::from_bits(self.content_left_bits)
+    }
+
+    /// The top content gap the key pins.
+    pub fn content_top(&self) -> f32 {
+        f32::from_bits(self.content_top_bits)
+    }
+
+    /// The right content gap the key pins.
+    pub fn content_right(&self) -> f32 {
+        f32::from_bits(self.content_right_bits)
+    }
+
+    /// The bottom content gap the key pins.
+    pub fn content_bottom(&self) -> f32 {
+        f32::from_bits(self.content_bottom_bits)
+    }
+
+    /// The left canvas padding the key pins.
+    pub fn canvas_left(&self) -> u32 {
+        self.canvas_left
+    }
+
+    /// The right canvas padding the key pins.
+    pub fn canvas_right(&self) -> u32 {
+        self.canvas_right
+    }
+
+    /// The top canvas padding the key pins.
+    pub fn canvas_top(&self) -> u32 {
+        self.canvas_top
+    }
+
+    /// The bottom canvas padding the key pins.
+    pub fn canvas_bottom(&self) -> u32 {
+        self.canvas_bottom
+    }
+
+    /// The canvas fill the key pins, used without a capture override.
+    pub fn canvas_background(&self) -> Rgb {
+        self.canvas_background
+    }
+
+    /// The capture background override the key pins, if any.
+    pub fn background(&self) -> Option<CaptureBackground> {
+        self.background
+    }
+
+    /// Whether the title bar the key pins is drawn.
+    pub fn title_bar(&self) -> bool {
+        self.title_bar
+    }
+
+    /// Whether the window controls the key pins are drawn.
+    pub fn title_controls(&self) -> bool {
+        self.title_controls
+    }
+
+    /// The title bar fill the key pins.
+    pub fn window_background(&self) -> Rgb {
+        self.window_background
+    }
+
+    /// The title text color the key pins.
+    pub fn window_foreground(&self) -> Rgb {
+        self.window_foreground
+    }
+
+    /// The title divider color the key pins.
+    pub fn window_divider(&self) -> Rgb {
+        self.window_divider
+    }
+
+    /// The panel border width the key pins.
+    pub fn border_width(&self) -> f32 {
+        f32::from_bits(self.border_width_bits)
+    }
+
+    /// The panel border color the key pins.
+    pub fn border_color(&self) -> Rgb {
+        self.border_color
+    }
+
+    /// The panel corner radius the key pins.
+    pub fn border_radius(&self) -> f32 {
+        f32::from_bits(self.border_radius_bits)
+    }
+
+    /// Whether the drop shadow the key pins is drawn.
+    pub fn shadow_enabled(&self) -> bool {
+        self.shadow_enabled
+    }
+
+    /// The drop shadow color the key pins.
+    pub fn shadow_color(&self) -> Rgb {
+        self.shadow_color
+    }
+
+    /// The drop shadow offset the key pins.
+    pub fn shadow_offset(&self) -> f32 {
+        f32::from_bits(self.shadow_offset_bits)
+    }
+
+    /// The drop shadow spread the key pins.
+    pub fn shadow_spread(&self) -> f32 {
+        f32::from_bits(self.shadow_spread_bits)
+    }
+
+    /// Whether exact (unpadded) output size the key pins is used.
+    pub fn exact_size(&self) -> bool {
+        self.exact_size
+    }
+
     /// SHA-256 over every key component, for contracts and comparisons.
     pub fn digest(&self) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(b"pinned-cache-key-v1");
+        hasher.update(b"pinned-cache-key-v2");
         hasher.update(self.policy.as_bytes());
         hasher.update([u8::from(self.synthetic)]);
         for face in &self.faces {
@@ -417,6 +634,44 @@ impl PinnedCacheKey {
         hasher.update(self.cell_width_bits.to_le_bytes());
         hasher.update(self.cell_height_bits.to_le_bytes());
         hasher.update(self.baseline_bits.to_le_bytes());
+        hasher.update(self.title_font_size_bits.to_le_bytes());
+        hasher.update(self.header_height_bits.to_le_bytes());
+        hasher.update(self.divider_height_bits.to_le_bytes());
+        hasher.update(self.content_left_bits.to_le_bytes());
+        hasher.update(self.content_top_bits.to_le_bytes());
+        hasher.update(self.content_right_bits.to_le_bytes());
+        hasher.update(self.content_bottom_bits.to_le_bytes());
+        hasher.update(self.canvas_left.to_le_bytes());
+        hasher.update(self.canvas_right.to_le_bytes());
+        hasher.update(self.canvas_top.to_le_bytes());
+        hasher.update(self.canvas_bottom.to_le_bytes());
+        for color in [
+            self.canvas_background,
+            self.window_background,
+            self.window_foreground,
+            self.window_divider,
+            self.border_color,
+            self.shadow_color,
+        ] {
+            hasher.update([color.r, color.g, color.b]);
+        }
+        match self.background {
+            None => hasher.update([0]),
+            Some(CaptureBackground::Transparent) => hasher.update([1]),
+            Some(CaptureBackground::Color(color)) => {
+                hasher.update([2, color.r, color.g, color.b]);
+            }
+        }
+        hasher.update([
+            u8::from(self.title_bar),
+            u8::from(self.title_controls),
+            u8::from(self.shadow_enabled),
+            u8::from(self.exact_size),
+        ]);
+        hasher.update(self.border_width_bits.to_le_bytes());
+        hasher.update(self.border_radius_bits.to_le_bytes());
+        hasher.update(self.shadow_offset_bits.to_le_bytes());
+        hasher.update(self.shadow_spread_bits.to_le_bytes());
         format!("{:x}", hasher.finalize())
     }
 }
@@ -700,17 +955,73 @@ mod tests {
         assert_ne!(regular.digest(), bolded.digest());
     }
 
+    fn test_key(
+        set: &PinnedFontSet,
+        scale: f64,
+        title_bar: bool,
+        background: Option<CaptureBackground>,
+        canvas_left: u32,
+    ) -> PinnedCacheKey {
+        PinnedCacheKey::new(
+            set,
+            scale,
+            17.0,
+            10.0,
+            21.0,
+            14.0,
+            13.0,
+            28.0,
+            1.0,
+            15.0,
+            8.0,
+            15.0,
+            14.0,
+            canvas_left,
+            24,
+            24,
+            24,
+            Rgb::new(30, 30, 30),
+            background,
+            title_bar,
+            false,
+            Rgb::new(40, 40, 40),
+            Rgb::new(200, 200, 200),
+            Rgb::new(60, 60, 60),
+            0.0,
+            Rgb::new(70, 70, 70),
+            8.0,
+            false,
+            Rgb::new(0, 0, 0),
+            4.0,
+            6.0,
+            true,
+        )
+    }
+
     #[test]
     fn cache_keys_pin_policy_faces_and_raster_settings() {
         let face = PinnedFace::new(regular_bytes(), 0, false, false).unwrap();
         let set = PinnedFontSet::new(vec![face]).unwrap();
-        let key = PinnedCacheKey::new(&set, 1.0, 17.0, 10.0, 21.0, 14.0);
+        let key = test_key(&set, 1.0, false, None, 24);
         assert_eq!(key.policy(), RASTER_POLICY_PINNED_V1);
         assert_eq!(key.faces().len(), 1);
         assert_eq!(key.scale(), 1.0);
         assert_eq!(key.cell_width(), 10.0);
-        let scaled = PinnedCacheKey::new(&set, 2.0, 17.0, 10.0, 21.0, 14.0);
+        assert!(!key.title_bar());
+        assert_eq!(key.background(), None);
+        assert_eq!(key.canvas_left(), 24);
+        assert!(key.exact_size());
+        let scaled = test_key(&set, 2.0, false, None, 24);
         assert_ne!(key, scaled, "scale joins the cache key");
         assert_ne!(key.digest(), scaled.digest());
+        let titled = test_key(&set, 1.0, true, None, 24);
+        assert_ne!(key, titled, "title bar joins the cache key");
+        assert_ne!(key.digest(), titled.digest());
+        let tinted = test_key(&set, 1.0, false, Some(CaptureBackground::Transparent), 24);
+        assert_ne!(key, tinted, "background joins the cache key");
+        assert_ne!(key.digest(), tinted.digest());
+        let padded = test_key(&set, 1.0, false, None, 32);
+        assert_ne!(key, padded, "canvas padding joins the cache key");
+        assert_ne!(key.digest(), padded.digest());
     }
 }

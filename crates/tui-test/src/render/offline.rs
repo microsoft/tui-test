@@ -778,7 +778,12 @@ pub fn render_snapshot_png(
                 true,
             )
             .map_err(map_pinned_error)?;
-            let key = super::raster::GridRenderer::pinned_cache_key(&layout, set);
+            let key = super::raster::GridRenderer::pinned_cache_key(
+                &layout,
+                set,
+                options.background,
+                true,
+            );
             let png =
                 super::encode::encode_png_bytes(&frame, &mut renderer).map_err(map_pinned_error)?;
             let (width, height) = renderer.pixel_size();
@@ -800,8 +805,8 @@ pub fn render_snapshot_png(
     }
 }
 
-/// Keep a typed [`PinnedFontError`] typed: downcast the renderer failure
-/// back to it, and only stringify what was never pinned.
+/// Preserve the typed [`PinnedFontError`]: downcast a pinned failure back
+/// to its type, and report anything else as a raster failure.
 #[cfg(feature = "recording-raster")]
 fn map_pinned_error(error: anyhow::Error) -> RenderError {
     match error.downcast::<PinnedFontError>() {
