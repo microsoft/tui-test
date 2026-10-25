@@ -11,6 +11,7 @@ pub mod record;
 pub mod render;
 pub mod runtime;
 pub mod shell;
+pub mod snapshot;
 pub mod terminal;
 pub mod trace;
 
@@ -23,5 +24,11 @@ pub use engine::Engine;
 pub use runtime::{
     global_registry, Locator, LocatorClickOptions, LocatorExpectOptions, LocatorFilterOptions,
     Session, SessionHandle, SessionRegistry,
+};
+pub use snapshot::{
+    SnapshotCell, SnapshotColor, SnapshotCursor, SnapshotCursorShape, SnapshotError,
+    SnapshotMetadata, SnapshotOptions, SnapshotParts, SnapshotScope, SnapshotSource,
+    SnapshotUnderline, TerminalSnapshot, MAX_CELL_TEXT_BYTES, MAX_LINK_BYTES, MAX_SNAPSHOT_CELLS,
+    MAX_SNAPSHOT_DIM, MAX_TITLE_BYTES, SNAPSHOT_SCHEMA_VERSION,
 };
 pub use terminal::backend::Backend;
