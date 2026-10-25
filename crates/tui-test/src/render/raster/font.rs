@@ -98,8 +98,14 @@ impl FontBackend {
         Ok(Self::Pinned(PinnedFontSystem::new(set)?))
     }
 
-    pub fn is_pinned(&self) -> bool {
-        matches!(self, Self::Pinned(_))
+    /// The pinned backend for the shaping path, or `None` for system
+    /// fonts. Lets cell, cursor, and title rendering share one shaping
+    /// path without holding a match borrow across the draw calls.
+    pub fn pinned_mut(&mut self) -> Option<&mut PinnedFontSystem> {
+        match self {
+            Self::Pinned(pinned) => Some(pinned),
+            Self::System(_) => None,
+        }
     }
 
     /// Resolve one glyph. The system side keeps its recorded fallback: a
@@ -175,13 +181,7 @@ impl PinnedFontSystem {
     /// when the set selected it.
     pub fn resolve(&mut self, key: GlyphKey) -> Result<&GlyphOutline, pinned::PinnedFontError> {
         if !self.glyphs.contains_key(&key) {
-            let positions: Vec<usize> = self
-                .faces
-                .iter()
-                .enumerate()
-                .filter(|(_, face)| face.bold == key.bold && face.italic == key.italic)
-                .map(|(position, _)| position)
-                .collect();
+            let positions = self.style_positions(key.bold, key.italic);
             if positions.is_empty() {
                 return Err(pinned::PinnedFontError::MissingFace {
                     bold: key.bold,
@@ -224,14 +224,86 @@ impl PinnedFontSystem {
         let face = self.faces.get(position)?;
         let parsed = ttf_parser::Face::parse(&face.bytes, face.index).ok()?;
         let glyph_id = parsed.glyph_index(key.character)?;
+        if glyph_id.0 == 0 {
+            // A `.notdef` mapping is a missing glyph, not a drawable one:
+            // the renderer falls back or fails instead of drawing tofu.
+            return None;
+        }
+        self.build_outline(&parsed, glyph_id, key.bold, key.italic, true, key.character)
+    }
+
+    /// Face positions serving one style slot, in fallback order. The shaper
+    /// selects one of these per grapheme; an empty result is a missing-face
+    /// error at the call site.
+    pub fn style_positions(&self, bold: bool, italic: bool) -> Vec<usize> {
+        self.faces
+            .iter()
+            .enumerate()
+            .filter(|(_, face)| face.bold == bold && face.italic == italic)
+            .map(|(position, _)| position)
+            .collect()
+    }
+
+    /// Whether the face at `position` maps `character` to a real glyph. A
+    /// missing mapping or a `.notdef` mapping counts as absent.
+    pub fn has_glyph(&self, position: usize, character: char) -> bool {
+        let Some(face) = self.faces.get(position) else {
+            return false;
+        };
+        let Ok(parsed) = ttf_parser::Face::parse(&face.bytes, face.index) else {
+            return false;
+        };
+        parsed
+            .glyph_index(character)
+            .is_some_and(|glyph_id| glyph_id.0 != 0)
+    }
+
+    /// The raw bytes and collection index of the face at `position`, for the
+    /// shaper to parse. The bytes are the pinned caller-supplied bytes.
+    pub fn face_bytes(&self, position: usize) -> Option<(&[u8], u32)> {
+        self.faces
+            .get(position)
+            .map(|face| (face.bytes.as_slice(), face.index))
+    }
+
+    /// The outline for a glyph id the shaper already placed. The synthetic
+    /// style decisions match [`PinnedFontSystem::load`]; a `.notdef` id or
+    /// an empty outline is `None` so the caller falls back or fails.
+    pub fn outline_for_glyph(
+        &self,
+        position: usize,
+        glyph_id: ttf_parser::GlyphId,
+        bold: bool,
+        italic: bool,
+    ) -> Option<GlyphOutline> {
+        if glyph_id.0 == 0 {
+            return None;
+        }
+        let face = self.faces.get(position)?;
+        let parsed = ttf_parser::Face::parse(&face.bytes, face.index).ok()?;
+        self.build_outline(&parsed, glyph_id, bold, italic, false, '\0')
+    }
+
+    /// Build an outline with the style-slot decisions shared by the
+    /// single-scalar and shaped paths. `powerline` stretch applies only to
+    /// single-scalar lookups of a separator character; shaped runs keep
+    /// their shaper positions instead.
+    fn build_outline(
+        &self,
+        parsed: &ttf_parser::Face<'_>,
+        glyph_id: ttf_parser::GlyphId,
+        bold: bool,
+        italic: bool,
+        powerline: bool,
+        character: char,
+    ) -> Option<GlyphOutline> {
         let mut builder = TinyPathBuilder::default();
         let bounds = parsed.outline_glyph(glyph_id, &mut builder)?;
         let path = builder.finish()?;
         // Style slots are caller-selected, so only an explicit synthetic
         // selection emboldens or slants; otherwise the bytes draw verbatim.
-        let synthetic_bold =
-            self.synthetic && key.bold && !is_bold_weight(parsed.weight().to_number());
-        let synthetic_italic = self.synthetic && key.italic && !is_italic_style(&parsed);
+        let synthetic_bold = self.synthetic && bold && !is_bold_weight(parsed.weight().to_number());
+        let synthetic_italic = self.synthetic && italic && !is_italic_style(parsed);
         Some(GlyphOutline {
             path,
             bounds,
@@ -241,7 +313,7 @@ impl PinnedFontSystem {
             units_per_em: parsed.units_per_em(),
             synthetic_bold,
             synthetic_italic,
-            powerline: nerd_font::is_powerline_separator(key.character),
+            powerline: powerline && nerd_font::is_powerline_separator(character),
         })
     }
 }

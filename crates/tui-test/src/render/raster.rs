@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use tiny_skia::Pixmap;
 
 use crate::api::CaptureBackground;
-use crate::profile::ColorSlot;
+use crate::profile::{ColorSlot, Rgb};
 use crate::record::frames::Frame;
 use crate::terminal::cell::{EmuCell, CONTINUATION};
 use crate::terminal::emu::CursorShape;
@@ -13,15 +13,16 @@ use super::svg::{RenderColors, ResolvedLayout};
 
 mod draw;
 mod font;
+mod shaping;
 
 use draw::{
-    draw_glyph, fill_antialiased_rect, fill_circle, fill_pixel_rect, fill_rounded_rect,
-    fill_rounded_rect_alpha, fill_top_rounded_rect, format_glyph_sequence, is_default_ignorable,
-    stroke_rounded_rect, unpremultiply, unsupported_grapheme,
+    cell_clip, draw_glyph, draw_shaped_run, fill_antialiased_rect, fill_circle, fill_pixel_rect,
+    fill_rounded_rect, fill_rounded_rect_alpha, fill_top_rounded_rect, format_glyph_sequence,
+    is_default_ignorable, stroke_rounded_rect, unpremultiply, unsupported_grapheme,
 };
 use font::{FontBackend, GlyphKey};
 
-use super::pinned::{PinnedCacheKey, PinnedFontError, PinnedFontSet};
+use super::pinned::{PinnedCacheKey, PinnedFontSet};
 
 use crate::render::style::Style;
 
@@ -66,6 +67,11 @@ pub struct GridRenderer {
     layout: ResolvedLayout,
     /// Overrides the layout's canvas background for one capture.
     background: Option<CaptureBackground>,
+    /// Multi-scalar graphemes the pinned shaper placed, in row-major cell
+    /// order. Only the pinned backend records; the system backend and live
+    /// recording never push here. The offline layer drains this for glyph
+    /// evidence.
+    shaped: Vec<String>,
 }
 
 impl GridRenderer {
@@ -269,7 +275,15 @@ impl GridRenderer {
             fonts,
             layout,
             background,
+            shaped: Vec::new(),
         })
+    }
+
+    /// Drain the shaped-grapheme evidence this renderer recorded. The
+    /// offline pinned layer calls this once per render for glyph evidence;
+    /// live recording never calls it and never grows the list.
+    pub(crate) fn take_shaped_graphemes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.shaped)
     }
 }
 
@@ -414,7 +428,7 @@ impl FrameRenderer for GridRenderer {
             }
         }
 
-        let (pixmap, fonts) = (&mut self.pixmap, &mut self.fonts);
+        let (pixmap, fonts, shaped) = (&mut self.pixmap, &mut self.fonts, &mut self.shaped);
         for (y, row) in grid.iter().enumerate() {
             for x in 0..usize::from(cols) {
                 let cell = row.get(x).unwrap_or(&blank);
@@ -446,40 +460,30 @@ impl FrameRenderer for GridRenderer {
                         + layout.baseline)
                         * scale;
 
-                if unsupported_grapheme(cell.ch.as_str()) {
-                    if fonts.is_pinned() {
-                        return Err(reject_sequence(cell.ch.as_str()).into());
-                    }
-                    missing.insert(format_glyph_sequence(cell.ch.as_str()));
-                    continue;
-                }
-                for character in cell.ch.chars() {
-                    if character.is_whitespace() || is_default_ignorable(character) {
-                        continue;
-                    }
-                    let key = GlyphKey {
-                        character,
-                        bold: paint.bold,
-                        italic: paint.italic,
-                    };
-                    match fonts.resolve_strict(key)? {
-                        Some(glyph) => draw_glyph(
-                            pixmap,
-                            glyph,
-                            cell_origin_x,
-                            cell_origin_y,
-                            cell_width,
-                            cell_height,
-                            baseline,
-                            paint.fg,
-                            layout.font_size,
-                            scale,
-                        ),
-                        None => {
-                            missing.insert(format!("{character:?} (U+{:04X})", character as u32));
-                        }
-                    }
-                }
+                draw_cell_text(
+                    pixmap,
+                    fonts,
+                    cell.ch.as_str(),
+                    paint.bold,
+                    paint.italic,
+                    paint.fg,
+                    cell_origin_x,
+                    cell_origin_y,
+                    cell_width,
+                    cell_height,
+                    baseline,
+                    layout.font_size,
+                    scale,
+                    span,
+                    (
+                        grid_x(origin_x, x, scale, layout),
+                        grid_y(origin_y, y, scale, layout),
+                        grid_x(origin_x, x + span, scale, layout),
+                        grid_y(origin_y, y + 1, scale, layout),
+                    ),
+                    &mut missing,
+                    Some(&mut *shaped),
+                )?;
 
                 if paint.underline {
                     fill_antialiased_rect(
@@ -566,13 +570,97 @@ fn grid_y(origin_y: f32, row: usize, scale: f32, layout: &ResolvedLayout) -> u32
         as u32
 }
 
+/// The one shaping path for cell rendering and cursor repaint.
+///
+/// The system backend keeps its recorded behavior: one scalar-count check
+/// and per-character fallback with missing-glyph collection. The pinned
+/// backend shapes the grapheme with one face selected for the full
+/// sequence and draws the run: verbatim for a single scalar (recorded
+/// pixels), positioned and clipped to `clip_rect` for a shaped run or a
+/// wide scalar at the grid edge. A shaped cell is pushed to `shaped` for
+/// glyph evidence when the caller passes the sink; cursor repaint passes
+/// `None` because the cell already recorded.
 #[allow(clippy::too_many_arguments)]
-/// A multi-scalar sequence the pinned renderer stops on: shaping arrives
-/// in a later task, so no face is split across the sequence.
-fn reject_sequence(sequence: &str) -> PinnedFontError {
-    PinnedFontError::UnsupportedSequence {
-        sequence: sequence.to_string(),
+fn draw_cell_text(
+    pixmap: &mut Pixmap,
+    fonts: &mut FontBackend,
+    text: &str,
+    bold: bool,
+    italic: bool,
+    color: Rgb,
+    origin_x: f32,
+    origin_y: f32,
+    cell_width: f32,
+    cell_height: f32,
+    baseline: f32,
+    font_size: f32,
+    scale: f32,
+    span: usize,
+    clip_rect: (u32, u32, u32, u32),
+    missing: &mut BTreeSet<String>,
+    shaped: Option<&mut Vec<String>>,
+) -> anyhow::Result<()> {
+    if let Some(pinned) = fonts.pinned_mut() {
+        let run = shaping::shape_pinned_text(pinned, text, bold, italic)?;
+        let wide_edge = crate::terminal::cell::display_width(text) == 2 && span < 2;
+        if run.is_shaped() {
+            if let Some(shaped) = shaped {
+                shaped.push(text.to_string());
+            }
+        }
+        let clip = if run.is_shaped() || wide_edge {
+            let (left, top, right, bottom) = clip_rect;
+            cell_clip(pixmap.width(), pixmap.height(), left, top, right, bottom)
+        } else {
+            None
+        };
+        draw_shaped_run(
+            pixmap,
+            &run,
+            origin_x,
+            origin_y,
+            cell_width,
+            cell_height,
+            baseline,
+            color,
+            font_size,
+            scale,
+            clip.as_ref(),
+        );
+        return Ok(());
     }
+    if unsupported_grapheme(text) {
+        missing.insert(format_glyph_sequence(text));
+        return Ok(());
+    }
+    for character in text.chars() {
+        if character.is_whitespace() || is_default_ignorable(character) {
+            continue;
+        }
+        let key = GlyphKey {
+            character,
+            bold,
+            italic,
+        };
+        match fonts.resolve_strict(key)? {
+            Some(glyph) => draw_glyph(
+                pixmap,
+                glyph,
+                origin_x,
+                origin_y,
+                cell_width,
+                cell_height,
+                baseline,
+                color,
+                font_size,
+                scale,
+            ),
+            None => {
+                missing.insert(format!("{character:?} (U+{:04X})", character as u32));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -649,44 +737,31 @@ fn draw_cursor(
     if paint.invisible {
         return Ok(());
     }
-    if unsupported_grapheme(cell.ch.as_str()) {
-        if fonts.is_pinned() {
-            return Err(reject_sequence(cell.ch.as_str()).into());
-        }
-        missing.insert(format_glyph_sequence(cell.ch.as_str()));
-        return Ok(());
-    }
     let baseline = panel_origin_y
         + (layout.header_h + layout.content_top + cy as f32 * layout.cell_h + layout.baseline)
             * scale;
-    for character in cell.ch.chars() {
-        if is_default_ignorable(character) {
-            continue;
-        }
-        let key = GlyphKey {
-            character,
-            bold: paint.bold,
-            italic: paint.italic,
-        };
-        match fonts.resolve_strict(key)? {
-            Some(glyph) => draw_glyph(
-                pixmap,
-                glyph,
-                origin_x,
-                origin_y,
-                cell_width,
-                cell_height,
-                baseline,
-                svg::bg_of(cell, colors),
-                layout.font_size,
-                scale,
-            ),
-            None => {
-                missing.insert(format!("{character:?} (U+{:04X})", character as u32));
-            }
-        }
-    }
-    Ok(())
+    // The same shaping path as cell rendering: the repainted glyph keeps
+    // the shaper positions, only the colors change to the cursor scheme.
+    // Cursor repaint never records evidence; the cell already did.
+    draw_cell_text(
+        pixmap,
+        fonts,
+        cell.ch.as_str(),
+        paint.bold,
+        paint.italic,
+        svg::bg_of(cell, colors),
+        origin_x,
+        origin_y,
+        cell_width,
+        cell_height,
+        baseline,
+        layout.font_size,
+        scale,
+        span,
+        (left, top, right, bottom),
+        missing,
+        None,
+    )
 }
 
 fn draw_shadow(
@@ -735,6 +810,32 @@ fn draw_title(
     let mut x = origin_x + (panel_width * scale - title_width) / 2.0;
     let baseline = origin_y + (layout.header_h / 2.0 + layout.title_font_size * 0.35) * scale;
 
+    if let Some(pinned) = fonts.pinned_mut() {
+        // Titles draw through the same per-grapheme selection as cells:
+        // clusters from the shaper's own indices, each shaped with one
+        // face, keeping its columns so the title width never changes.
+        // Ligatures stay off so clusters keep their own columns.
+        let clusters = shaping::title_clusters(pinned, &title)?;
+        for cluster in &clusters {
+            let width = cluster.columns as f32 * advance * scale;
+            let run = shaping::shape_title_cluster(pinned, cluster.text)?;
+            draw_shaped_run(
+                pixmap,
+                &run,
+                x,
+                origin_y,
+                width,
+                layout.header_h * scale,
+                baseline,
+                layout.window_foreground,
+                layout.title_font_size,
+                scale,
+                None,
+            );
+            x += width;
+        }
+        return Ok(());
+    }
     for character in title.chars() {
         let columns = crate::terminal::cell::display_width(&character.to_string()).max(1);
         let width = columns as f32 * advance * scale;

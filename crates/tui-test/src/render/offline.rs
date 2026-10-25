@@ -543,7 +543,8 @@ fn check_padding(field: &'static str, padding: &Padding) -> Result<(), RenderErr
 ///
 /// Dimensions plus the behaviors the spec calls out: whether the cursor was
 /// drawn (hidden and clipped cursors stay hidden), whether the canvas is
-/// transparent, and which title the bar showed.
+/// transparent, which title the bar showed, and which multi-scalar
+/// graphemes the pinned shaper placed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderEvidence {
     width: u32,
@@ -551,6 +552,7 @@ pub struct RenderEvidence {
     cursor_drawn: bool,
     transparent_background: bool,
     title: Option<String>,
+    shaped_graphemes: Vec<String>,
 }
 
 impl RenderEvidence {
@@ -578,6 +580,14 @@ impl RenderEvidence {
     /// The title the bar showed, or `None` with the bar off or nothing fitting.
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
+    }
+
+    /// The multi-scalar cell graphemes the pinned shaper placed, in
+    /// row-major cell order with one entry per shaped cell. Empty for SVG
+    /// renders, system-font renders, and renders with no shaped cells:
+    /// single-scalar cells draw verbatim and are not listed.
+    pub fn shaped_graphemes(&self) -> &[String] {
+        &self.shaped_graphemes
     }
 }
 
@@ -650,6 +660,7 @@ pub fn render_snapshot_svg(
                 Some(CaptureBackground::Transparent)
             ),
             title: shown_title(snapshot.title(), cols, rows, &layout),
+            shaped_graphemes: Vec::new(),
         },
     })
 }
@@ -740,6 +751,7 @@ pub fn render_snapshot_png(
         cursor_drawn,
         transparent_background: matches!(options.background, Some(CaptureBackground::Transparent)),
         title: shown_title(snapshot.title(), cols, rows, &layout),
+        shaped_graphemes: Vec::new(),
     };
     match options.pinned_fonts.as_ref() {
         None => {
@@ -790,6 +802,7 @@ pub fn render_snapshot_png(
             let mut rendered_evidence = evidence();
             rendered_evidence.width = width;
             rendered_evidence.height = height;
+            rendered_evidence.shaped_graphemes = renderer.take_shaped_graphemes();
             Ok(RenderedPng {
                 png,
                 evidence: rendered_evidence,
@@ -855,6 +868,7 @@ pub fn write_snapshot_png(
         cursor_drawn: frame.cursor.is_some(),
         transparent_background: matches!(options.background, Some(CaptureBackground::Transparent)),
         title: shown_title(snapshot.title(), cols, rows, &layout),
+        shaped_graphemes: renderer.take_shaped_graphemes(),
     })
 }
 

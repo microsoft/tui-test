@@ -1,6 +1,7 @@
-use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, Transform};
+use tiny_skia::{FillRule, Mask, Paint, Path, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use super::font::GlyphOutline;
+use super::shaping::ShapedRun;
 use crate::profile::Rgb;
 
 #[allow(clippy::too_many_arguments)]
@@ -273,6 +274,143 @@ pub(super) fn is_default_ignorable(character: char) -> bool {
 
 pub(super) fn unsupported_grapheme(grapheme: &str) -> bool {
     grapheme.chars().count() > 1
+}
+
+/// Draw one shaped cell run. A verbatim run draws exactly like a legacy
+/// single scalar. A shaped run maps its total advance onto the cell width
+/// (mirroring the legacy advance stretch) and places each glyph at its
+/// shaper offset, clipped to `clip` so ink stays in the permitted region.
+/// A missing clip mask draws unclipped.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_shaped_run(
+    pixmap: &mut Pixmap,
+    run: &ShapedRun,
+    origin_x: f32,
+    origin_y: f32,
+    cell_width: f32,
+    cell_height: f32,
+    baseline: f32,
+    color: Rgb,
+    font_size: f32,
+    output_scale: f32,
+    clip: Option<&Mask>,
+) {
+    match run {
+        ShapedRun::Empty => {}
+        ShapedRun::Verbatim(outline) => {
+            // A clipped single (a wide scalar at the grid edge) draws
+            // through the shaped math with zero offsets: its transform
+            // matches the legacy advance branch exactly, and the mask
+            // keeps the ink in the permitted region. Zero-advance and
+            // powerline outlines keep the legacy branches verbatim.
+            if clip.is_some() && outline.advance != 0 && !outline.powerline {
+                let single = ShapedRun::Shaped {
+                    glyphs: vec![super::shaping::ShapedGlyph {
+                        outline: outline.clone(),
+                        dx: 0.0,
+                        dy: 0.0,
+                        advance: f32::from(outline.advance),
+                    }],
+                    advance: f32::from(outline.advance),
+                };
+                draw_shaped_run(
+                    pixmap,
+                    &single,
+                    origin_x,
+                    origin_y,
+                    cell_width,
+                    cell_height,
+                    baseline,
+                    color,
+                    font_size,
+                    output_scale,
+                    clip,
+                );
+                return;
+            }
+            draw_glyph(
+                pixmap,
+                outline,
+                origin_x,
+                origin_y,
+                cell_width,
+                cell_height,
+                baseline,
+                color,
+                font_size,
+                output_scale,
+            );
+        }
+        ShapedRun::Shaped { glyphs, advance } => {
+            let Some(first) = glyphs.first() else {
+                return;
+            };
+            let units = f32::from(first.outline.units_per_em).max(1.0);
+            let scale_y = font_size * output_scale / units;
+            // Mirror the legacy advance stretch: the whole run fills the
+            // cell width. A zero total advance (only zero-width glyphs)
+            // draws at natural size from the cell origin instead.
+            let scale_x = if *advance > 0.0 {
+                cell_width / *advance
+            } else {
+                scale_y
+            };
+            let mut pen = 0.0f32;
+            for glyph in glyphs {
+                let outline = &glyph.outline;
+                let shear = if outline.synthetic_italic {
+                    0.2 * scale_y
+                } else {
+                    0.0
+                };
+                let transform = Transform::from_row(
+                    scale_x,
+                    0.0,
+                    shear,
+                    -scale_y,
+                    origin_x + pen + glyph.dx * scale_x,
+                    baseline - glyph.dy * scale_y,
+                );
+                let mut paint = Paint::default();
+                paint.set_color_rgba8(color.r, color.g, color.b, 255);
+                pixmap.fill_path(&outline.path, &paint, FillRule::Winding, transform, clip);
+                if outline.synthetic_bold {
+                    let mut bold = transform;
+                    bold.tx += 0.65 * output_scale;
+                    pixmap.fill_path(&outline.path, &paint, FillRule::Winding, bold, clip);
+                }
+                pen += glyph.advance * scale_x;
+            }
+        }
+    }
+}
+
+/// A clip mask covering one pixel rectangle of a pixmap with the given
+/// dimensions. Shaped runs paint through it so ink stays in the permitted
+/// region (their cell, or the surviving column of a wide cell at the grid
+/// edge). Returns `None` for an empty rectangle or when no mask can be
+/// built; the caller then draws unclipped.
+pub(super) fn cell_clip(
+    pixmap_width: u32,
+    pixmap_height: u32,
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+) -> Option<Mask> {
+    if left >= right || top >= bottom {
+        return None;
+    }
+    let mut mask = Mask::new(pixmap_width, pixmap_height)?;
+    let mut builder = PathBuilder::new();
+    builder.move_to(left as f32, top as f32);
+    builder.line_to(right as f32, top as f32);
+    builder.line_to(right as f32, bottom as f32);
+    builder.line_to(left as f32, bottom as f32);
+    builder.close();
+    let path = builder.finish()?;
+    mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
+    Some(mask)
 }
 
 pub(super) fn format_glyph_sequence(grapheme: &str) -> String {
