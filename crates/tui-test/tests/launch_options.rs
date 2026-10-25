@@ -26,27 +26,57 @@ const CHECK_HEX: &str = "TUI_TEST_U08_CHECK_HEX";
 const CHECK_NAME: &str = "TUI_TEST_U08_CHECK_NAME";
 
 /// The probe binary has no test harness, so non-UTF8 and shell-looking
-/// arguments reach it unchanged. A bare `cargo test --test` selection never
-/// builds examples, so the first test needing the probe builds it on demand
-/// into an isolated target directory (a separate lock from the running test
-/// session, and no network use).
+/// arguments reach it unchanged. It is a `[[test]]` target with
+/// `harness = false` sourced at `tests/fixtures/launch_probe.rs`, not an
+/// example. A bare `cargo test --test` selection never builds it, so the
+/// first test needing the probe builds it on demand into an isolated target
+/// directory (a separate lock from the running test session, and no network
+/// use).
 fn probe_program() -> std::path::PathBuf {
     let current = std::env::current_exe().expect("test binary path");
     let profile = current
         .parent()
         .and_then(|path| path.parent())
         .expect("test binary under target/<profile>/deps");
-    let probe = profile
-        .join("examples")
-        .join(format!("launch_probe{}", std::env::consts::EXE_SUFFIX));
-    if probe.is_file() {
+    let target_dir = profile.join("launch-probe-target");
+    if let Some(probe) = find_probe_binary(&target_dir.join("debug").join("deps")) {
         return probe;
     }
-    build_probe(profile)
+    build_probe(&target_dir)
 }
 
-fn build_probe(profile: &std::path::Path) -> std::path::PathBuf {
-    let target_dir = profile.join("launch-probe-target");
+/// Test targets carry a metadata hash in the file name
+/// (`launch_probe-<hash>[.exe]`), so locate the freshest build output.
+fn find_probe_binary(deps: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for entry in std::fs::read_dir(deps).ok()? {
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_str()?;
+        let Some(stem) = name.strip_prefix("launch_probe-") else {
+            continue;
+        };
+        let stem = stem
+            .strip_suffix(std::env::consts::EXE_SUFFIX)
+            .unwrap_or(stem);
+        if stem.is_empty()
+            || !stem.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || (std::env::consts::EXE_SUFFIX.is_empty() && name.ends_with(".d"))
+        {
+            continue;
+        }
+        let modified = entry.metadata().ok()?.modified().ok()?;
+        if newest.as_ref().is_none_or(|(known, _)| modified >= *known) {
+            newest = Some((modified, entry.path()));
+        }
+    }
+    newest.map(|(_, path)| path)
+}
+
+fn build_probe(target_dir: &std::path::Path) -> std::path::PathBuf {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let built = std::process::Command::new(cargo)
@@ -55,21 +85,18 @@ fn build_probe(profile: &std::path::Path) -> std::path::PathBuf {
             "--offline",
             "--manifest-path",
             manifest.to_str().expect("manifest path is Unicode"),
-            "--example",
+            "--test",
             "launch_probe",
             "--target-dir",
         ])
-        .arg(&target_dir)
+        .arg(target_dir)
         .status();
-    let probe = target_dir
-        .join("debug")
-        .join("examples")
-        .join(format!("launch_probe{}", std::env::consts::EXE_SUFFIX));
+    let probe = find_probe_binary(&target_dir.join("debug").join("deps"));
     assert!(
-        built.is_ok_and(|status| status.success()) && probe.is_file(),
-        "launch probe build failed; run `cargo build -p tui-test-rs --example launch_probe`"
+        built.is_ok_and(|status| status.success()) && probe.as_ref().is_some_and(|p| p.is_file()),
+        "launch probe build failed; run `cargo build -p tui-test-rs --test launch_probe`"
     );
-    probe
+    probe.expect("probe binary located after successful build")
 }
 
 fn test_engine(label: &str) -> Engine {
@@ -568,10 +595,10 @@ fn u08_i_unix_native_environment_values_are_unchanged() {
 
 #[test]
 fn u08_j_environment_keys_obey_platform_comparison() {
-    if std::env::var_os("PATH").is_none() {
-        eprintln!("u08_j needs PATH in the runner environment; nothing to compare");
-        return;
-    }
+    assert!(
+        std::env::var_os("PATH").is_some(),
+        "u08_j needs PATH in the runner environment to compare platform key semantics"
+    );
     // Removal with a different case must not remove PATH on case-sensitive
     // platforms, and must remove it where comparison ignores case.
     let engine = test_engine("key-comparison");
@@ -598,8 +625,6 @@ fn u08_j_environment_keys_obey_platform_comparison() {
     );
     assert_eq!(state.exited, Some(0));
     close_engine(&engine);
-    // Windows CI runs the same assertions on Windows; record pending results
-    // in the task report when this platform cannot run them.
 }
 
 #[test]

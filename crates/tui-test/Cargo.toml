@@ -12,6 +12,17 @@ readme = "../../README.md"
 name = "tui_test"
 path = "src/lib.rs"
 
+# Harness-free fixture binary for tests/launch_options.rs. It lives outside
+# examples/ so it is not a user-facing example. `harness = false` keeps the
+# argument vector intact (libtest would mangle it), and `test = false` keeps
+# `cargo test` from executing it: the launch_options test builds it on demand
+# into an isolated target directory.
+[[test]]
+name = "launch_probe"
+path = "tests/fixtures/launch_probe.rs"
+harness = false
+test = false
+
 [features]
 default = []
 ghostty = ["dep:ghostty-vt"]
