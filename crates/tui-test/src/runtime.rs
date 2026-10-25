@@ -14,6 +14,7 @@ use crate::diagnostics::ExecutionContext;
 use crate::engine::Engine;
 use crate::logger::Logger;
 use crate::snapshot::{SnapshotOptions, SnapshotScope, TerminalSnapshot};
+use crate::wait::WaitQuietOptions;
 
 const MAX_COMPLETED_RECORDINGS: usize = 1024;
 
@@ -466,6 +467,50 @@ impl Session {
         options: &SnapshotOptions,
     ) -> Result<TerminalSnapshot, TuiTestError> {
         self.engine.capture_snapshot_with(options)
+    }
+
+    /// Wait until the terminal stays quiet, then return success.
+    ///
+    /// Visual-quiet mode samples the raw active screen at request start and
+    /// every 50 milliseconds, and restarts its timer when two successive
+    /// canonical samples differ. Byte-quiet mode restarts its timer on every
+    /// nonempty successful PTY output read and never samples the screen.
+    /// Equal-screen output restarts a byte-quiet timer but never a
+    /// visual-quiet timer. The quiet interval starts with this request; other
+    /// callers, viewport movement, and the shared idle clock cannot reset it.
+    ///
+    /// Sampling limit: only sampled states are compared. A terminal change
+    /// that appears and disappears between two consecutive samples is not
+    /// observed. This wait is not an application frame boundary.
+    ///
+    /// Cancellation uses the engine mechanism from
+    /// [`Engine::execute_with_context_cancellable`]: pass a flag through
+    /// [`Session::wait_quiet_cancellable`]. A cancelled wait reports
+    /// cancellation and leaves the child and the session usable.
+    pub fn wait_quiet(&self, options: &WaitQuietOptions) -> Result<(), TuiTestError> {
+        self.wait_quiet_cancellable(options, &|| false)
+    }
+
+    /// Cancellable quiet wait through the session's engine.
+    ///
+    /// `cancelled` mirrors
+    /// [`Engine::execute_with_context_cancellable`]: it is checked before any
+    /// success return and between polls, never terminates the child, and
+    /// never cancels another caller. This is per-request cancellation, not
+    /// [`Session::interrupt`], and it adds no second cancellation framework.
+    /// The wait holds no operation resources across polls, so every outcome
+    /// leaves the session ready for subsequent operations.
+    pub fn wait_quiet_cancellable(
+        &self,
+        options: &WaitQuietOptions,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), TuiTestError> {
+        crate::wait::run_quiet_wait(
+            options,
+            cancelled,
+            &|| self.engine.capture_snapshot(SnapshotScope::ActiveScreen),
+            &|| self.engine.last_output_time(),
+        )
     }
 
     /// Cancel pending operations, including startup readiness, and terminate the
