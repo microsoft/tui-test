@@ -18,10 +18,11 @@ use tui_test::profile::{Profile, Rgb};
 use tui_test::render::style::Padding;
 use tui_test::terminal::cell::Attrs;
 use tui_test::{
-    render_snapshot_png, CursorPhase, PinnedFace, PinnedFontError, PinnedFontSet, RenderError,
-    SnapshotCell, SnapshotColor, SnapshotCursor, SnapshotCursorShape, SnapshotMetadata,
-    SnapshotParts, SnapshotRenderOptions, SnapshotScope, SnapshotUnderline, TerminalSnapshot,
-    RASTER_POLICY_PINNED_V1, RASTER_POLICY_SYSTEM_V1, RENDER_CONTRACT_VERSION,
+    render_snapshot_png, write_snapshot_png, CaptureBackground, CursorPhase, PinnedFace,
+    PinnedFontError, PinnedFontSet, RenderError, SnapshotCell, SnapshotColor, SnapshotCursor,
+    SnapshotCursorShape, SnapshotMetadata, SnapshotParts, SnapshotRenderOptions, SnapshotScope,
+    SnapshotUnderline, TerminalSnapshot, RASTER_POLICY_PINNED_V1, RASTER_POLICY_SYSTEM_V1,
+    RENDER_CONTRACT_VERSION,
 };
 
 fn regular_bytes() -> Vec<u8> {
@@ -433,4 +434,154 @@ fn u04_f_recorded_font_selection_is_unchanged() {
         RENDER_CONTRACT_VERSION
     );
     assert!(!decode_png(rendered.png()).2.is_empty());
+}
+
+/// U04-G (R5): the path entry point shares the byte entry point's pinned behavior.
+///
+/// A regular-only set cannot draw bold text: both `render_snapshot_png` and
+/// `write_snapshot_png` must report the same typed `MissingFace` failure and
+/// stage no PNG file. With a complete set both entry points succeed with
+/// equal evidence and equal decoded pixels.
+#[test]
+fn u04_g_path_and_bytes_share_pinned_behavior() {
+    let regular_only = PinnedFontSet::new(vec![regular_face()]).expect("regular set builds");
+    let bold_snapshot = snapshot_with(
+        vec![
+            bold_cell("b"),
+            plain_cell(" ", 1),
+            plain_cell(" ", 1),
+            plain_cell(" ", 1),
+            plain_cell(" ", 1),
+            plain_cell(" ", 1),
+        ],
+        None,
+    );
+    let options = strict_options(&regular_only);
+    let byte_err = render_snapshot_png(&bold_snapshot, &options)
+        .expect_err("bytes entry point reports the missing bold face");
+    assert!(
+        matches!(
+            byte_err,
+            RenderError::PinnedFont(PinnedFontError::MissingFace {
+                bold: true,
+                italic: false
+            })
+        ),
+        "bytes failure stays typed, got: {byte_err}"
+    );
+    let dir = TempDir::new("u04-g");
+    let missing_path = dir.path().join("missing.png");
+    let path_err = write_snapshot_png(&missing_path, &bold_snapshot, &options)
+        .expect_err("path entry point reports the same missing bold face");
+    assert!(
+        matches!(
+            path_err,
+            RenderError::PinnedFont(PinnedFontError::MissingFace {
+                bold: true,
+                italic: false
+            })
+        ),
+        "path failure stays typed, got: {path_err}"
+    );
+    assert!(
+        !missing_path.exists(),
+        "a pinned failure stages no PNG file"
+    );
+
+    let set = titled_pair();
+    let snapshot = ascii_snapshot(Some("pinned"));
+    let options = strict_options(&set);
+    let rendered = render_snapshot_png(&snapshot, &options).expect("bytes render works");
+    let ok_path = dir.path().join("ok.png");
+    let evidence = write_snapshot_png(&ok_path, &snapshot, &options).expect("path render works");
+    assert_eq!(rendered.evidence(), &evidence);
+    let file_bytes = std::fs::read(&ok_path).expect("path render writes bytes");
+    assert_eq!(
+        decode_png(rendered.png()),
+        decode_png(&file_bytes),
+        "path and byte entry points decode to equal pixels"
+    );
+}
+
+/// U04-H (R6): the returned contract covers every output-affecting option.
+///
+/// Each single-option change below changes the decoded image or the raster
+/// policy inputs, so the contract must change with it. Canvas padding and
+/// the synthetic-style selection previously left the contract equal while
+/// the pixels moved.
+#[test]
+fn u04_h_contract_covers_every_output_setting() {
+    let snapshot = ascii_snapshot(Some("pinned"));
+    let base_options = strict_options(&titled_pair());
+    let base = render_snapshot_png(&snapshot, &base_options).expect("baseline renders");
+    let base_pixels = decode_png(base.png());
+    let render_contract = |options: &SnapshotRenderOptions| {
+        render_snapshot_png(&snapshot, options)
+            .expect("option-variant pinned render works")
+            .contract()
+            .clone()
+    };
+    let changed = |label: &str, options: SnapshotRenderOptions| {
+        let contract = render_contract(&options);
+        assert_ne!(
+            base.contract(),
+            &contract,
+            "{label} joins the render contract"
+        );
+        contract
+    };
+
+    let padded_options = base_options
+        .clone()
+        .with_canvas_padding(Padding::Uniform(12));
+    let padded = render_snapshot_png(&snapshot, &padded_options).expect("padded renders");
+    assert_ne!(
+        decode_png(padded.png()),
+        base_pixels,
+        "canvas padding moves the decoded pixels"
+    );
+    assert_ne!(
+        base.contract(),
+        padded.contract(),
+        "canvas padding joins the render contract"
+    );
+
+    changed(
+        "content padding",
+        base_options
+            .clone()
+            .with_content_padding(Padding::Uniform(4)),
+    );
+    changed(
+        "capture background",
+        base_options
+            .clone()
+            .with_background(Some(CaptureBackground::Transparent)),
+    );
+    changed("title bar", base_options.clone().with_title_bar(true));
+    changed(
+        "title controls",
+        base_options.clone().with_title_controls(true),
+    );
+    changed("shadow", base_options.clone().with_shadow(true));
+    changed("border width", base_options.clone().with_border_width(4.0));
+    changed(
+        "border radius",
+        base_options.clone().with_border_radius(2.0),
+    );
+    changed("output scale", base_options.clone().with_scale(2.0));
+    changed("cell width", base_options.clone().with_cell_width(12.0));
+    changed("cell height", base_options.clone().with_cell_height(23.0));
+    changed("font size", base_options.clone().with_font_size(15.0));
+    changed("baseline", base_options.clone().with_baseline(12.0));
+
+    let synthetic_set = titled_pair().with_synthetic_style(true);
+    let synthetic_options = strict_options(&synthetic_set);
+    let synthetic =
+        render_snapshot_png(&snapshot, &synthetic_options).expect("synthetic render works");
+    assert_ne!(
+        base.contract(),
+        synthetic.contract(),
+        "synthetic-style selection joins the render contract"
+    );
 }

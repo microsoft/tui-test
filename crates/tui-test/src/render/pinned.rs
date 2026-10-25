@@ -39,7 +39,11 @@ use crate::api::CaptureBackground;
 use crate::profile::Rgb;
 
 /// Schema version of [`RenderContract`].
-pub const RENDER_CONTRACT_VERSION: u32 = 1;
+///
+/// Version 2 records every normalized output setting and the
+/// synthetic-style selection alongside the fonts and geometry, so two
+/// renders with different pixels never share a contract.
+pub const RENDER_CONTRACT_VERSION: u32 = 2;
 
 /// Raster policy name recorded when no pinned fonts are selected.
 pub const RASTER_POLICY_SYSTEM_V1: &str = "system-v1";
@@ -730,22 +734,51 @@ impl ContractFont {
 ///
 /// The contract names the renderer version, the raster policy version, the
 /// pinned fonts (digests, face indices, styles, fallback order), the
-/// geometry, the output scale, the palette digest, and the cursor phase
-/// with the blink intent kept from the snapshot state. Strict image gates
-/// compare decoded pixels; the contract tells reviewers and future runs
-/// which font and raster configuration produced them.
+/// synthetic-style selection, the geometry, the output scale, every
+/// normalized output setting (title chrome, content and canvas padding,
+/// backgrounds, window and border chrome, the shadow, and the exact-size
+/// switch), the palette digest, and the cursor phase with the blink intent
+/// kept from the snapshot state. Strict image gates compare decoded pixels;
+/// the contract tells reviewers and future runs which font and raster
+/// configuration produced them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderContract {
     contract_version: u32,
     renderer_version: String,
     raster_policy: String,
     fonts: Vec<ContractFont>,
+    synthetic: bool,
     cell_width_bits: u32,
     cell_height_bits: u32,
     font_size_bits: u32,
     baseline_bits: u32,
+    title_font_size_bits: u32,
+    header_height_bits: u32,
+    divider_height_bits: u32,
+    content_left_bits: u32,
+    content_top_bits: u32,
+    content_right_bits: u32,
+    content_bottom_bits: u32,
+    canvas_left: u32,
+    canvas_right: u32,
+    canvas_top: u32,
+    canvas_bottom: u32,
+    canvas_background: Rgb,
+    background: Option<CaptureBackground>,
     scale_bits: u64,
     title_bar: bool,
+    title_controls: bool,
+    window_background: Rgb,
+    window_foreground: Rgb,
+    window_divider: Rgb,
+    border_width_bits: u32,
+    border_color: Rgb,
+    border_radius_bits: u32,
+    shadow_enabled: bool,
+    shadow_color: Rgb,
+    shadow_offset_bits: u32,
+    shadow_spread_bits: u32,
+    exact_size: bool,
     palette_digest: String,
     cursor_phase: CursorPhase,
     blink: Option<bool>,
@@ -754,6 +787,10 @@ pub struct RenderContract {
 impl RenderContract {
     /// Build the contract for a pinned render from the cache key that
     /// identifies the render and the snapshot it drew.
+    ///
+    /// The key carries the synthetic-style selection, the capture
+    /// background override, and the exact-size switch the layout alone
+    /// does not hold; everything else comes from the shared layout.
     #[cfg(feature = "recording-raster")]
     pub(crate) fn pinned(
         key: &PinnedCacheKey,
@@ -775,8 +812,11 @@ impl RenderContract {
                     fallback_position: position,
                 })
                 .collect(),
+            key.synthetic(),
             layout,
             scale,
+            key.background(),
+            key.exact_size(),
             snapshot,
             cursor_drawn,
         )
@@ -791,12 +831,17 @@ impl RenderContract {
         scale: f64,
         snapshot: &crate::snapshot::TerminalSnapshot,
         cursor_drawn: bool,
+        background: Option<CaptureBackground>,
+        exact_size: bool,
     ) -> Self {
         Self::for_render(
             RASTER_POLICY_SYSTEM_V1,
             Vec::new(),
+            false,
             layout,
             scale,
+            background,
+            exact_size,
             snapshot,
             cursor_drawn,
         )
@@ -807,8 +852,11 @@ impl RenderContract {
     fn for_render(
         raster_policy: &str,
         fonts: Vec<ContractFont>,
+        synthetic: bool,
         layout: &crate::render::svg::ResolvedLayout,
         scale: f64,
+        background: Option<CaptureBackground>,
+        exact_size: bool,
         snapshot: &crate::snapshot::TerminalSnapshot,
         cursor_drawn: bool,
     ) -> Self {
@@ -829,12 +877,38 @@ impl RenderContract {
             renderer_version: env!("CARGO_PKG_VERSION").to_string(),
             raster_policy: raster_policy.to_string(),
             fonts,
+            synthetic,
             cell_width_bits: layout.cell_w.to_bits(),
             cell_height_bits: layout.cell_h.to_bits(),
             font_size_bits: layout.font_size.to_bits(),
             baseline_bits: layout.baseline.to_bits(),
+            title_font_size_bits: layout.title_font_size.to_bits(),
+            header_height_bits: layout.header_h.to_bits(),
+            divider_height_bits: layout.divider_h.to_bits(),
+            content_left_bits: layout.content_left.to_bits(),
+            content_top_bits: layout.content_top.to_bits(),
+            content_right_bits: layout.content_right.to_bits(),
+            content_bottom_bits: layout.content_bottom.to_bits(),
+            canvas_left: layout.canvas_left,
+            canvas_right: layout.canvas_right,
+            canvas_top: layout.canvas_top,
+            canvas_bottom: layout.canvas_bottom,
+            canvas_background: layout.canvas_background,
+            background,
             scale_bits: scale.to_bits(),
             title_bar: layout.title_bar,
+            title_controls: layout.title_controls,
+            window_background: layout.window_background,
+            window_foreground: layout.window_foreground,
+            window_divider: layout.window_divider,
+            border_width_bits: layout.border_width.to_bits(),
+            border_color: layout.border_color,
+            border_radius_bits: layout.border_radius.to_bits(),
+            shadow_enabled: layout.shadow_enabled,
+            shadow_color: layout.shadow_color,
+            shadow_offset_bits: layout.shadow_offset.to_bits(),
+            shadow_spread_bits: layout.shadow_spread.to_bits(),
+            exact_size,
             palette_digest: format!("{:x}", hasher.finalize()),
             cursor_phase: if cursor_drawn {
                 CursorPhase::Shown
@@ -865,6 +939,11 @@ impl RenderContract {
         &self.fonts
     }
 
+    /// Whether synthetic bold or italic rendering was selected.
+    pub fn synthetic(&self) -> bool {
+        self.synthetic
+    }
+
     /// The cell width in pixels.
     pub fn cell_width(&self) -> f32 {
         f32::from_bits(self.cell_width_bits)
@@ -893,6 +972,131 @@ impl RenderContract {
     /// Whether the title bar was drawn.
     pub fn title_bar(&self) -> bool {
         self.title_bar
+    }
+
+    /// The title font size in pixels.
+    pub fn title_font_size(&self) -> f32 {
+        f32::from_bits(self.title_font_size_bits)
+    }
+
+    /// The title header height in pixels.
+    pub fn header_height(&self) -> f32 {
+        f32::from_bits(self.header_height_bits)
+    }
+
+    /// The title divider height in pixels.
+    pub fn divider_height(&self) -> f32 {
+        f32::from_bits(self.divider_height_bits)
+    }
+
+    /// The left content gap in pixels.
+    pub fn content_left(&self) -> f32 {
+        f32::from_bits(self.content_left_bits)
+    }
+
+    /// The top content gap in pixels.
+    pub fn content_top(&self) -> f32 {
+        f32::from_bits(self.content_top_bits)
+    }
+
+    /// The right content gap in pixels.
+    pub fn content_right(&self) -> f32 {
+        f32::from_bits(self.content_right_bits)
+    }
+
+    /// The bottom content gap in pixels.
+    pub fn content_bottom(&self) -> f32 {
+        f32::from_bits(self.content_bottom_bits)
+    }
+
+    /// The left canvas padding in pixels.
+    pub fn canvas_left(&self) -> u32 {
+        self.canvas_left
+    }
+
+    /// The right canvas padding in pixels.
+    pub fn canvas_right(&self) -> u32 {
+        self.canvas_right
+    }
+
+    /// The top canvas padding in pixels.
+    pub fn canvas_top(&self) -> u32 {
+        self.canvas_top
+    }
+
+    /// The bottom canvas padding in pixels.
+    pub fn canvas_bottom(&self) -> u32 {
+        self.canvas_bottom
+    }
+
+    /// The canvas fill used without a capture override.
+    pub fn canvas_background(&self) -> Rgb {
+        self.canvas_background
+    }
+
+    /// The capture background override, if any.
+    pub fn background(&self) -> Option<CaptureBackground> {
+        self.background
+    }
+
+    /// Whether the window controls were drawn.
+    pub fn title_controls(&self) -> bool {
+        self.title_controls
+    }
+
+    /// The title bar fill.
+    pub fn window_background(&self) -> Rgb {
+        self.window_background
+    }
+
+    /// The title text color.
+    pub fn window_foreground(&self) -> Rgb {
+        self.window_foreground
+    }
+
+    /// The title divider color.
+    pub fn window_divider(&self) -> Rgb {
+        self.window_divider
+    }
+
+    /// The panel border width in pixels.
+    pub fn border_width(&self) -> f32 {
+        f32::from_bits(self.border_width_bits)
+    }
+
+    /// The panel border color.
+    pub fn border_color(&self) -> Rgb {
+        self.border_color
+    }
+
+    /// The panel corner radius in pixels.
+    pub fn border_radius(&self) -> f32 {
+        f32::from_bits(self.border_radius_bits)
+    }
+
+    /// Whether the drop shadow was drawn.
+    pub fn shadow_enabled(&self) -> bool {
+        self.shadow_enabled
+    }
+
+    /// The drop shadow color.
+    pub fn shadow_color(&self) -> Rgb {
+        self.shadow_color
+    }
+
+    /// The drop shadow offset in pixels.
+    pub fn shadow_offset(&self) -> f32 {
+        f32::from_bits(self.shadow_offset_bits)
+    }
+
+    /// The drop shadow spread in pixels.
+    pub fn shadow_spread(&self) -> f32 {
+        f32::from_bits(self.shadow_spread_bits)
+    }
+
+    /// Whether exact (unpadded) output size was used.
+    pub fn exact_size(&self) -> bool {
+        self.exact_size
     }
 
     /// SHA-256 over the snapshot palette and default colors.
