@@ -125,6 +125,17 @@ pub enum RenderError {
         /// The accepted limit.
         limit: f64,
     },
+    /// A cell edge below one logical pixel.
+    ///
+    /// Subpixel cells round to nothing in the renderers, so offline options
+    /// reject them exactly like the live style does ("too small to draw a
+    /// cell"), at any scale: scaling cannot restore a degenerate SVG viewBox.
+    CellTooSmall {
+        /// The option field that failed validation.
+        field: &'static str,
+        /// The rejected value.
+        value: f64,
+    },
     /// The text baseline falls outside the cell it must sit in.
     BaselineOutsideCell {
         /// The rejected baseline, measured from the top of the cell.
@@ -167,6 +178,9 @@ impl std::fmt::Display for RenderError {
                 limit,
             } => {
                 write!(f, "{field} must not exceed {limit} (got {value})")
+            }
+            RenderError::CellTooSmall { field, value } => {
+                write!(f, "{field} must be at least one pixel (got {value})")
             }
             RenderError::BaselineOutsideCell {
                 baseline,
@@ -413,8 +427,8 @@ impl SnapshotRenderOptions {
         self
     }
 
-    /// Reject nonfinite values, bad dimensions, and a baseline outside the
-    /// cell, before any image-size arithmetic or allocation.
+    /// Reject nonfinite values, bad dimensions, subpixel cells, and a baseline
+    /// outside the cell, before any image-size arithmetic or allocation.
     pub fn validate(&self) -> Result<(), RenderError> {
         for (field, value) in [
             ("cell_width", f64::from(self.cell_width)),
@@ -446,6 +460,13 @@ impl SnapshotRenderOptions {
                     value,
                     limit: MAX_METRIC_PX,
                 });
+            }
+            // Same floor the live style enforces: a subpixel logical cell
+            // rounds to nothing, so SVG and PNG size math diverge (a zero
+            // viewBox against nonzero pixels). Scale cannot fix it, because
+            // the viewBox rounds the unscaled size.
+            if value < 1.0 {
+                return Err(RenderError::CellTooSmall { field, value });
             }
         }
         if !self.baseline.is_finite() {
@@ -939,12 +960,16 @@ fn snapshot_underline_to_emu(underline: SnapshotUnderline) -> UnderlineStyle {
 }
 
 /// Resolve snapshot colors to the render state the renderer reads.
+///
+/// The cursor slot carries the captured cursor color, not the default: the
+/// two match on a fresh live capture, but a snapshot may resolve them
+/// differently, and the renderer must draw what was captured.
 fn snapshot_colors(snapshot: &TerminalSnapshot) -> RenderState {
     RenderState::from_parts(
         *snapshot.palette(),
         snapshot.default_foreground(),
         snapshot.default_background(),
-        snapshot.default_cursor(),
+        snapshot.cursor().color(),
         match snapshot.cursor().shape() {
             crate::snapshot::SnapshotCursorShape::Block => CursorShape::Block,
             crate::snapshot::SnapshotCursorShape::Underline => CursorShape::Underline,
