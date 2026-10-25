@@ -108,6 +108,37 @@ struct SpawnSpec {
 enum SpawnCommand {
     Open(OpenOptions),
     Run(RunOptions),
+    Launch(LaunchSpawn),
+}
+
+/// A resolved native launch with the session settings it runs under. The
+/// launch carries the full resolved environment, so restart reuses these
+/// values without reading the parent environment again.
+#[derive(Clone)]
+struct LaunchSpawn {
+    launch: crate::launch::ResolvedLaunch,
+    backend: crate::terminal::backend::Backend,
+    profile: crate::profile::Profile,
+    style: crate::render::style::Style,
+    cols: u16,
+    rows: u16,
+    wait_ready: Option<bool>,
+    restart: bool,
+    timeouts: crate::api::Timeouts,
+    recording: crate::api::AutomaticRecording,
+}
+
+/// How a spawned session is constructed: either from the recorded
+/// string-based options or from a resolved native launch.
+enum SessionSource {
+    Legacy {
+        shell: Option<crate::shell::Shell>,
+        program: Option<Vec<String>>,
+        env: Vec<(String, String)>,
+    },
+    Native {
+        launch: crate::launch::ResolvedLaunch,
+    },
 }
 
 impl SpawnSpec {
@@ -115,6 +146,7 @@ impl SpawnSpec {
         match &mut self.command {
             SpawnCommand::Open(options) => options.restart = true,
             SpawnCommand::Run(options) => options.restart = true,
+            SpawnCommand::Launch(launch) => launch.restart = true,
         }
         self
     }
@@ -128,6 +160,10 @@ impl SpawnSpec {
             SpawnCommand::Run(options) => {
                 options.cols = cols;
                 options.rows = rows;
+            }
+            SpawnCommand::Launch(launch) => {
+                launch.cols = cols;
+                launch.rows = rows;
             }
         }
     }
@@ -593,6 +629,153 @@ impl Engine {
         )
     }
 
+    /// Spawn a child from native launch options.
+    ///
+    /// The launch supplies the program, arguments, environment, and working
+    /// directory as native values. The matching `RunOptions` fields
+    /// (`program`, `args`, `env`, and `cwd`) are ignored; the remaining
+    /// fields select the backend, profile, style, dimensions, readiness,
+    /// restart, timeouts, and recording behavior. Restart through
+    /// `Operation::Restart` reuses the resolved values from the first spawn.
+    pub fn spawn_with(
+        &self,
+        launch: crate::launch::LaunchOptions,
+        options: RunOptions,
+    ) -> Result<OpenResult, TuiTestError> {
+        self.spawn_with_context(launch, options, ExecutionContext::default())
+    }
+
+    /// Spawn a child from native launch options under an execution context.
+    ///
+    /// This follows the same lifecycle protocol as the recorded open and run
+    /// paths: the child environment resolves before any session state
+    /// changes, concurrent operations wait on the lifecycle lock, and the
+    /// resolved launch is retained for restart.
+    pub fn spawn_with_context(
+        &self,
+        launch: crate::launch::LaunchOptions,
+        options: RunOptions,
+        context: ExecutionContext,
+    ) -> Result<OpenResult, TuiTestError> {
+        let resolved = launch.resolve()?;
+        if let Some(artifact) = &context.artifact {
+            artifact.validate().map_err(TuiTestError::usage)?;
+        }
+        if let Some(trace) = &context.trace {
+            trace.validate().map_err(TuiTestError::usage)?;
+        }
+        let pending = LifecycleRequest::new(&self.pending_lifecycle);
+        let _exclusive = self
+            .lifecycle
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        drop(pending);
+        let _operation = self
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let interrupt_generation = self.interrupt_generation.load(Ordering::Acquire);
+        let name = context
+            .operation_name
+            .clone()
+            .unwrap_or_else(|| "launch".to_string());
+        let screen_before = self.capture_current_screen_sequence(true, false);
+        let started_ms = self.current_session_elapsed_ms().unwrap_or(0);
+        // Environment values may hold secrets, so the summary records only
+        // the program, argument count, and working directory.
+        let safe_summary = format!(
+            "Launch {{ backend: {}, program: {:?}, args: <{}>, cwd: {:?}, restart: {} }}",
+            options.backend.as_str(),
+            resolved.program().to_string_lossy(),
+            resolved.args().len(),
+            resolved.cwd().map(|cwd| cwd.to_string_lossy().into_owned()),
+            options.restart,
+        );
+        let mut metadata = OperationMetadata {
+            sequence: 0,
+            interrupt_generation,
+            name: name.clone(),
+            timeout_ms: None,
+            started_at: Instant::now(),
+            started_ms,
+            screen_before,
+            safe_summary: safe_summary.clone(),
+            is_assertion: false,
+            expectation: None,
+            input: None,
+        };
+        if self.logger.enabled() {
+            self.logger.event(&format!("operation {safe_summary}"));
+        }
+        let history_pending = self
+            .operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .begin(name, started_ms, screen_before, safe_summary, false, None);
+        metadata.sequence = history_pending.sequence();
+        let spec = SpawnSpec {
+            command: SpawnCommand::Launch(LaunchSpawn {
+                launch: resolved,
+                backend: options.backend,
+                profile: options.profile,
+                style: options.style,
+                cols: options.cols,
+                rows: options.rows,
+                wait_ready: options.wait_ready,
+                restart: options.restart,
+                timeouts: options.timeouts,
+                recording: options.recording,
+            }),
+            resolved_cwd: None,
+            retention: context.retention,
+            trace: context.trace.clone(),
+        };
+        let mut result = self.spawn(spec, &context, &metadata);
+        let failed = result
+            .as_ref()
+            .is_err_and(|error| matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal));
+        if failed {
+            self.recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed = true;
+        }
+        if let Err(error) = &mut result {
+            self.prepare_failure_observation(error);
+        }
+        let screen_at_return = result
+            .as_ref()
+            .err()
+            .and_then(|error| error.observation.as_deref())
+            .map_or_else(
+                || self.capture_current_screen_sequence(true, false),
+                |observation| observation.screen_sequence,
+            );
+        let result_name = match &result {
+            Ok(_) => "ok",
+            Err(error) => error.kind.as_str(),
+        };
+        let ended_ms = result
+            .as_ref()
+            .err()
+            .and_then(|error| error.observation.as_deref())
+            .map_or_else(
+                || self.current_session_elapsed_ms(),
+                |observation| Some(observation.captured_ms),
+            );
+        self.operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish(
+                history_pending,
+                ended_ms,
+                screen_at_return,
+                result_name,
+                None,
+            );
+        result
+    }
+
     fn restart(
         &self,
         graceful_timeout_ms: u64,
@@ -635,30 +818,32 @@ impl Engine {
     ) -> Result<OpenResult, TuiTestError> {
         let diagnostics = spec.retention;
         let (
-            shell,
-            program,
+            source,
             backend,
             profile,
             style,
             cols,
             rows,
             cwd,
-            env,
+            default_wait_ready,
             wait_ready,
             restart,
             timeouts,
             mut recording,
         ) = match &spec.command {
             SpawnCommand::Open(options) => (
-                options.shell,
-                None,
+                SessionSource::Legacy {
+                    shell: options.shell,
+                    program: None,
+                    env: options.env.clone(),
+                },
                 options.backend,
                 options.profile,
                 options.style.clone(),
                 options.cols,
                 options.rows,
-                options.cwd.clone(),
-                options.env.clone(),
+                options.cwd.clone().map(PathBuf::from),
+                true,
                 options.wait_ready,
                 options.restart,
                 options.timeouts,
@@ -669,29 +854,51 @@ impl Engine {
                 program.push(options.program.clone());
                 program.extend(options.args.clone());
                 (
-                    None,
-                    Some(program),
+                    SessionSource::Legacy {
+                        shell: None,
+                        program: Some(program),
+                        env: options.env.clone(),
+                    },
                     options.backend,
                     options.profile,
                     options.style.clone(),
                     options.cols,
                     options.rows,
-                    options.cwd.clone(),
-                    options.env.clone(),
+                    options.cwd.clone().map(PathBuf::from),
+                    false,
                     options.wait_ready,
                     options.restart,
                     options.timeouts,
                     options.recording.clone(),
                 )
             }
+            SpawnCommand::Launch(launch) => (
+                SessionSource::Native {
+                    launch: launch.launch.clone(),
+                },
+                launch.backend,
+                launch.profile,
+                launch.style.clone(),
+                launch.cols,
+                launch.rows,
+                launch.launch.cwd().map(PathBuf::from),
+                false,
+                launch.wait_ready,
+                launch.restart,
+                launch.timeouts,
+                launch.recording.clone(),
+            ),
         };
         style.validate().map_err(TuiTestError::usage)?;
         crate::terminal::pty::validate_size(cols, rows)?;
         let cwd = match &spec.resolved_cwd {
             Some(cwd) => cwd.clone(),
-            None => std::path::absolute(cwd.as_deref().unwrap_or(".")).map_err(|error| {
-                TuiTestError::usage(format!("failed to resolve session cwd: {error}"))
-            })?,
+            None => {
+                std::path::absolute(cwd.as_deref().unwrap_or_else(|| std::path::Path::new(".")))
+                    .map_err(|error| {
+                        TuiTestError::usage(format!("failed to resolve session cwd: {error}"))
+                    })?
+            }
         };
         crate::terminal::pty::validate_cwd(&cwd)?;
         spec.resolved_cwd = Some(cwd.clone());
@@ -719,6 +926,7 @@ impl Engine {
         match &mut spec.command {
             SpawnCommand::Open(options) => options.recording = recording.clone(),
             SpawnCommand::Run(options) => options.recording = recording.clone(),
+            SpawnCommand::Launch(launch) => launch.recording = recording.clone(),
         }
         diagnostics.validate().map_err(TuiTestError::usage)?;
         let mut current = self.write_session();
@@ -772,22 +980,41 @@ impl Engine {
             mode: recording.mode,
             failed: false,
         };
-        let session = TerminalSession::open(
-            shell,
-            program.clone(),
-            backend,
-            profile,
-            style,
-            cols,
-            rows,
-            Some(cwd),
-            env,
-            timeouts,
-            diagnostics,
-            self.logger.clone(),
-            recording_path.clone(),
-            recording_required,
-        )
+        let session = match source {
+            SessionSource::Legacy {
+                shell,
+                program,
+                env,
+            } => TerminalSession::open(
+                shell,
+                program,
+                backend,
+                profile,
+                style,
+                cols,
+                rows,
+                Some(cwd),
+                env,
+                timeouts,
+                diagnostics,
+                self.logger.clone(),
+                recording_path.clone(),
+                recording_required,
+            ),
+            SessionSource::Native { launch } => TerminalSession::spawn_with(
+                &launch,
+                backend,
+                profile,
+                style,
+                cols,
+                rows,
+                timeouts,
+                diagnostics,
+                self.logger.clone(),
+                recording_path.clone(),
+                recording_required,
+            ),
+        }
         .map_err(|error| TuiTestError::internal(format!("failed to open session: {error}")))?;
         {
             let mut interrupt = self
@@ -815,7 +1042,7 @@ impl Engine {
 
         let shell_pid = session.pid();
         let ready_timeout = open_ready_timeout(&session);
-        let ready = if wait_ready.unwrap_or(program.is_none()) {
+        let ready = if wait_ready.unwrap_or(default_wait_ready) {
             await_ready(&session, ready_timeout, &|| false)
         } else {
             session.is_ready()
