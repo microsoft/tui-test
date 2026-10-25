@@ -204,9 +204,43 @@ impl MouseMode {
     }
 }
 
+/// The exact tracking selector the child negotiated.
+///
+/// X10 (`CSI ? 9 h`) shares the click [`MouseMode`] level with mode 1000,
+/// but it reports button presses only, so releases must be refused before
+/// writing. Highlight tracking (`CSI ? 1001 h`) accepts nothing this crate
+/// can send. The negotiated selector is kept so enabling one of these clears
+/// the previous level instead of leaving it stale.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum NegotiatedTracking {
+    #[default]
+    None,
+    /// `CSI ? 9 h`: X10 compatibility tracking (presses only).
+    X10,
+    /// `CSI ? 1000 h`.
+    Click,
+    /// `CSI ? 1001 h`: highlight tracking; unsupported, never accepts input.
+    Unsupported,
+    /// `CSI ? 1002 h`.
+    Drag,
+    /// `CSI ? 1003 h`.
+    Motion,
+}
+
+impl NegotiatedTracking {
+    const fn level(self) -> MouseMode {
+        match self {
+            Self::None | Self::Unsupported => MouseMode::None,
+            Self::X10 | Self::Click => MouseMode::Click,
+            Self::Drag => MouseMode::Drag,
+            Self::Motion => MouseMode::Motion,
+        }
+    }
+}
+
 #[derive(Default)]
 struct MouseModeState {
-    tracking: MouseMode,
+    tracking: NegotiatedTracking,
     sgr: bool,
 }
 
@@ -218,12 +252,26 @@ impl Perform for MouseModeState {
         let enabled = action == 'h';
         for mode in params.iter().filter_map(|param| param.first()).copied() {
             match mode {
-                9 | 1000 if enabled => self.tracking = MouseMode::Click,
-                1002 if enabled => self.tracking = MouseMode::Drag,
-                1003 if enabled => self.tracking = MouseMode::Motion,
-                9 | 1000 if self.tracking == MouseMode::Click => self.tracking = MouseMode::None,
-                1002 if self.tracking == MouseMode::Drag => self.tracking = MouseMode::None,
-                1003 if self.tracking == MouseMode::Motion => self.tracking = MouseMode::None,
+                9 if enabled => self.tracking = NegotiatedTracking::X10,
+                1000 if enabled => self.tracking = NegotiatedTracking::Click,
+                1001 if enabled => self.tracking = NegotiatedTracking::Unsupported,
+                1002 if enabled => self.tracking = NegotiatedTracking::Drag,
+                1003 if enabled => self.tracking = NegotiatedTracking::Motion,
+                9 if self.tracking == NegotiatedTracking::X10 => {
+                    self.tracking = NegotiatedTracking::None;
+                }
+                1000 if self.tracking == NegotiatedTracking::Click => {
+                    self.tracking = NegotiatedTracking::None;
+                }
+                1001 if self.tracking == NegotiatedTracking::Unsupported => {
+                    self.tracking = NegotiatedTracking::None;
+                }
+                1002 if self.tracking == NegotiatedTracking::Drag => {
+                    self.tracking = NegotiatedTracking::None;
+                }
+                1003 if self.tracking == NegotiatedTracking::Motion => {
+                    self.tracking = NegotiatedTracking::None;
+                }
                 1006 if enabled => self.sgr = true,
                 1005 | 1015 | 1016 if enabled => self.sgr = false,
                 1006 => self.sgr = false,
@@ -261,9 +309,21 @@ impl MouseModeTracker {
     /// Independent of how the child asked for the reports to be encoded:
     /// `CSI ?1000 h` on its own is click tracking whether or not `CSI ?1006 h`
     /// followed it, and saying otherwise would report "none" for a program
-    /// that is plainly reading clicks.
+    /// that is plainly reading clicks. Unsupported selectors such as
+    /// `CSI ?1001 h` report [`MouseMode::None`]: the child is tracking, but
+    /// at a level this crate cannot send reports for.
     pub(crate) fn mode(&self) -> MouseMode {
-        self.state.tracking
+        self.state.tracking.level()
+    }
+
+    /// Whether the negotiated tracking reports button releases.
+    ///
+    /// X10 (`CSI ? 9 h`) reports button presses only; every other
+    /// negotiated selector either reports releases or accepts no input at
+    /// all (in which case [`Self::mode`] already reports [`MouseMode::None`]
+    /// and input is refused before this is consulted).
+    pub(crate) fn reports_releases(&self) -> bool {
+        !matches!(self.state.tracking, NegotiatedTracking::X10)
     }
 
     /// The tracking level a viewer can relay, which is `None` unless the child
@@ -276,7 +336,7 @@ impl MouseModeTracker {
     /// the child requested, which is why it is separate from `mode`.
     pub(crate) fn relayable(&self) -> MouseMode {
         if self.state.sgr {
-            self.state.tracking
+            self.mode()
         } else {
             MouseMode::None
         }
@@ -647,5 +707,79 @@ mod tests {
             MouseMode::Drag,
             "but the child is still tracking drags"
         );
+    }
+
+    #[test]
+    fn x10_is_press_only_and_distinct_from_click() {
+        let mut tracker = MouseModeTracker::new();
+        tracker.process(b"\x1b[?9h");
+        assert_eq!(
+            tracker.mode(),
+            MouseMode::Click,
+            "X10 shares the click level"
+        );
+        assert!(
+            !tracker.reports_releases(),
+            "X10 reports button presses only"
+        );
+        tracker.process(b"\x1b[?9l");
+        assert_eq!(tracker.mode(), MouseMode::None);
+        assert!(tracker.reports_releases());
+    }
+
+    #[test]
+    fn x10_and_click_disable_only_their_own_selector() {
+        let mut tracker = MouseModeTracker::new();
+        tracker.process(b"\x1b[?9h");
+        tracker.process(b"\x1b[?1000l");
+        assert_eq!(
+            tracker.mode(),
+            MouseMode::Click,
+            "disabling 1000 must not clear X10"
+        );
+        assert!(
+            !tracker.reports_releases(),
+            "the surviving selector is still X10"
+        );
+        tracker.process(b"\x1b[?1000h");
+        assert!(tracker.reports_releases(), "enabling 1000 replaces X10");
+        tracker.process(b"\x1b[?9l");
+        assert_eq!(
+            tracker.mode(),
+            MouseMode::Click,
+            "disabling 9 must not clear 1000"
+        );
+        assert!(tracker.reports_releases());
+    }
+
+    #[test]
+    fn unsupported_tracking_clears_stale_level() {
+        let mut tracker = MouseModeTracker::new();
+        tracker.process(b"\x1b[?1000h\x1b[?1006h");
+        assert_eq!(tracker.relayable(), MouseMode::Click);
+        tracker.process(b"\x1b[?1001h");
+        assert_eq!(
+            tracker.mode(),
+            MouseMode::None,
+            "1001 must not leave stale click tracking active"
+        );
+        assert_eq!(tracker.relayable(), MouseMode::None);
+        tracker.process(b"\x1b[?1001l");
+        assert_eq!(
+            tracker.mode(),
+            MouseMode::None,
+            "disabling 1001 leaves tracking off instead of restoring 1000"
+        );
+        tracker.process(b"\x1b[?1003h");
+        assert_eq!(tracker.mode(), MouseMode::Motion);
+        tracker.process(b"\x1b[?1001h");
+        assert_eq!(
+            tracker.mode(),
+            MouseMode::None,
+            "1001 must not leave stale motion tracking active"
+        );
+        tracker.process(b"\x1bc");
+        assert_eq!(tracker.mode(), MouseMode::None, "RIS clears tracking");
+        assert!(tracker.reports_releases());
     }
 }

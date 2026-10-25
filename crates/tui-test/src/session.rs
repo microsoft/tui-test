@@ -659,9 +659,13 @@ impl Session {
     /// The method reads the tracking level, the encoding flag, the viewport,
     /// and the screen size from one terminal state lock. It validates the
     /// coordinates and the mode before it writes any byte. A press or a
-    /// release needs click tracking or better. A move with a pressed button
-    /// needs drag tracking or motion tracking. A move with no pressed button
-    /// needs motion tracking. Tracking without SGR encoding (mode 1006)
+    /// release needs click tracking or better, except under X10 (mode 9)
+    /// tracking, which reports presses only and refuses releases. A move
+    /// with a pressed button needs drag tracking or motion tracking. A move
+    /// with no pressed button needs motion tracking. A tracking selector
+    /// this crate cannot send reports for, such as highlight tracking
+    /// (mode 1001), behaves as if tracking were off. Tracking without SGR
+    /// encoding (mode 1006)
     /// cannot receive the SGR bytes this method sends, so the method returns
     /// `Unsupported` and writes nothing in that case.
     ///
@@ -677,6 +681,7 @@ impl Session {
         let viewport_offset = state.emu.viewport().offset;
         let tracking = state.mouse_mode.mode();
         let relayable = state.mouse_mode.relayable();
+        let reports_releases = state.mouse_mode.reports_releases();
         drop(state);
         let (x, y, minimum) = match action {
             CheckedMouseAction::Press { x, y, .. } => (x, y, MouseMode::Click),
@@ -698,6 +703,12 @@ impl Session {
         if tracking == MouseMode::None {
             return Err(CheckedInputError::Unsupported(
                 "the application did not enable mouse tracking".to_string(),
+            ));
+        }
+        if matches!(action, CheckedMouseAction::Release { .. }) && !reports_releases {
+            return Err(CheckedInputError::Unsupported(
+                "X10 (mode 9) mouse tracking reports button presses only; releases are never reported"
+                    .to_string(),
             ));
         }
         let sufficient = match minimum {
