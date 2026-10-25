@@ -26,21 +26,48 @@ const CHECK_HEX: &str = "TUI_TEST_U08_CHECK_HEX";
 const CHECK_NAME: &str = "TUI_TEST_U08_CHECK_NAME";
 
 /// The probe binary has no test harness, so non-UTF8 and shell-looking
-/// arguments reach it unchanged. Cargo builds examples for `cargo test`;
-/// the binary sits next to the `deps` directory holding this test binary.
+/// arguments reach it unchanged. A bare `cargo test --test` selection never
+/// builds examples, so the first test needing the probe builds it on demand
+/// into an isolated target directory (a separate lock from the running test
+/// session, and no network use).
 fn probe_program() -> std::path::PathBuf {
     let current = std::env::current_exe().expect("test binary path");
-    let debug = current
+    let profile = current
         .parent()
         .and_then(|path| path.parent())
-        .expect("test binary under target/debug/deps");
-    let probe = debug
+        .expect("test binary under target/<profile>/deps");
+    let probe = profile
+        .join("examples")
+        .join(format!("launch_probe{}", std::env::consts::EXE_SUFFIX));
+    if probe.is_file() {
+        return probe;
+    }
+    build_probe(profile)
+}
+
+fn build_probe(profile: &std::path::Path) -> std::path::PathBuf {
+    let target_dir = profile.join("launch-probe-target");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let built = std::process::Command::new(cargo)
+        .args([
+            "build",
+            "--offline",
+            "--manifest-path",
+            manifest.to_str().expect("manifest path is Unicode"),
+            "--example",
+            "launch_probe",
+            "--target-dir",
+        ])
+        .arg(&target_dir)
+        .status();
+    let probe = target_dir
+        .join("debug")
         .join("examples")
         .join(format!("launch_probe{}", std::env::consts::EXE_SUFFIX));
     assert!(
-        probe.is_file(),
-        "launch probe binary must exist at {}",
-        probe.display()
+        built.is_ok_and(|status| status.success()) && probe.is_file(),
+        "launch probe build failed; run `cargo build -p tui-test-rs --example launch_probe`"
     );
     probe
 }
