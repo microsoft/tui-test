@@ -35,6 +35,7 @@ use crate::session::{
     capture_visual_state, scroll_emulator_and_record, try_capture_visual_state,
     Session as TerminalSession, TermState, TextHighlight,
 };
+pub use crate::session::{CheckedInputError, CheckedMouseAction};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::emu::{
     ClipboardType, CursorShape, Emulator, KeyboardMode, MouseMode, TerminalMode,
@@ -1592,6 +1593,48 @@ impl Engine {
 
     pub fn log_event(&self, message: &str) {
         self.logger.event(message);
+    }
+
+    /// Send one mouse report after checks against the terminal modes.
+    ///
+    /// This delegates to [`TerminalSession::mouse_checked`]. It fails with
+    /// [`CheckedInputError`] before any byte write when the application did
+    /// not enable matching tracking, selected a non-SGR encoding, or the
+    /// coordinates miss the active screen.
+    pub fn mouse_checked(&self, action: CheckedMouseAction) -> Result<(), CheckedInputError> {
+        self.with_checked_session(|session| session.mouse_checked(action))
+    }
+
+    /// Send text as a paste through the ordered input write path.
+    ///
+    /// This delegates to [`TerminalSession::paste`]: bracketed-paste markers
+    /// when the application enabled the mode, raw text without markers when
+    /// it did not.
+    pub fn paste(&self, text: &str) -> Result<(), CheckedInputError> {
+        self.with_checked_session(|session| session.paste(text))
+    }
+
+    /// Send a focus report through the ordered input write path.
+    ///
+    /// This delegates to [`TerminalSession::focus`]. It fails with
+    /// [`CheckedInputError::Unsupported`] when the application did not enable
+    /// focus events.
+    pub fn focus(&self, focused: bool) -> Result<(), CheckedInputError> {
+        self.with_checked_session(|session| session.focus(focused))
+    }
+
+    fn with_checked_session<R>(
+        &self,
+        run: impl FnOnce(&TerminalSession) -> Result<R, CheckedInputError>,
+    ) -> Result<R, CheckedInputError> {
+        let guard = self.lock_session();
+        let session = guard
+            .as_ref()
+            .ok_or_else(|| CheckedInputError::Failed(TuiTestError::no_session().message))?;
+        if let Some(fault) = session.fault() {
+            return Err(CheckedInputError::Failed(fault));
+        }
+        run(session)
     }
 
     pub fn interrupt(&self) {
