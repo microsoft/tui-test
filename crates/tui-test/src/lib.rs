@@ -21,6 +21,12 @@ mod session;
 pub use api::*;
 pub use diagnostics::*;
 pub use engine::Engine;
+#[cfg(feature = "recording-raster")]
+pub use render::offline::{render_snapshot_png, write_snapshot_png, RenderedPng};
+pub use render::offline::{
+    render_snapshot_svg, write_snapshot_svg, RenderError, RenderEvidence, RenderedSvg,
+    SnapshotRenderOptions,
+};
 pub use runtime::{
     global_registry, Locator, LocatorClickOptions, LocatorExpectOptions, LocatorFilterOptions,
     Session, SessionHandle, SessionRegistry,
