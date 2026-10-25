@@ -406,7 +406,7 @@ impl FrameRenderer for GridRenderer {
                         cell_origin_y + cell_height - 3.0 * scale,
                         cell_width,
                         scale.max(1.0),
-                        paint.fg,
+                        paint.underline_color,
                     );
                 }
                 if paint.strike {

@@ -330,6 +330,11 @@ pub(crate) fn bg_of(cell: &EmuCell, colors: &dyn RenderColors) -> Rgb {
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct CellPaint {
     pub fg: Rgb,
+    /// The underline color: the cell's explicit underline color resolved
+    /// through the palette (RGB values used directly), or the foreground
+    /// color when the cell supplies none. Kept equal to `fg` for cells
+    /// without an underline so run grouping stays unchanged.
+    pub underline_color: Rgb,
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
@@ -346,11 +351,19 @@ pub(crate) fn cell_paint(cell: &EmuCell, colors: &dyn RenderColors) -> CellPaint
     if cell.has(Attrs::DIM) {
         fg = dim(fg);
     }
+    let underlined = cell.underline.is_underlined();
+    let underline_color = if underlined {
+        cell.underline_color
+            .map_or(fg, |color| colors.resolve(Some(color), true))
+    } else {
+        fg
+    };
     CellPaint {
         fg,
+        underline_color,
         bold: cell.has(Attrs::BOLD),
         italic: cell.has(Attrs::ITALIC),
-        underline: cell.underline.is_underlined(),
+        underline: underlined,
         strike: cell.has(Attrs::STRIKE),
         invisible: cell.has(Attrs::INVISIBLE),
     }
@@ -434,6 +447,13 @@ fn write_text_run(
             (false, true) => r#" text-decoration="line-through""#,
             (false, false) => "",
         };
+        // An explicit underline color rides on its own property, so cells
+        // without one keep the previous bare `text-decoration` output bytes.
+        let underline_color = if paint.underline && paint.underline_color != paint.fg {
+            format!(r#" text-decoration-color="{}""#, hex(paint.underline_color))
+        } else {
+            String::new()
+        };
         let resolved = layout.font.resolve(paint.bold, paint.italic);
         let family = if resolved == layout.font.family {
             String::new()
@@ -442,7 +462,7 @@ fn write_text_run(
         };
         let _ = write!(
             out,
-            r#"<text x="{tx:.2}" y="{baseline:.2}" fill="{fg}"{family}{weight}{italic}{deco} textLength="{width:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{esc}</text>"#,
+            r#"<text x="{tx:.2}" y="{baseline:.2}" fill="{fg}"{family}{weight}{italic}{deco}{underline_color} textLength="{width:.2}" lengthAdjust="spacingAndGlyphs" xml:space="preserve">{esc}</text>"#,
             esc = escape(&text)
         );
     }
@@ -960,6 +980,45 @@ mod tests {
         assert!(
             !svg.contains('X'),
             "the cursor must not redraw text hidden with SGR 8: {svg}"
+        );
+    }
+
+    /// An explicit underline color wins; otherwise the paint keeps the
+    /// resolved foreground color, for live and offline colors alike.
+    #[test]
+    fn underline_paint_prefers_the_explicit_color() {
+        let emu = colors();
+        let foreground = RenderColors::color(&emu, ColorSlot::Foreground);
+
+        let mut rgb = cell("u", None, None);
+        rgb.underline = UnderlineStyle::Single;
+        rgb.underline_color = Some(Color::Rgb(10, 20, 30));
+        let paint = cell_paint(&rgb, &emu);
+        assert!(paint.underline);
+        assert_eq!(paint.underline_color, Rgb::new(10, 20, 30));
+
+        let mut indexed = cell("u", None, None);
+        indexed.underline = UnderlineStyle::Single;
+        indexed.underline_color = Some(Color::Idx(1));
+        let paint = cell_paint(&indexed, &emu);
+        assert_eq!(
+            paint.underline_color,
+            RenderColors::color(&emu, ColorSlot::Indexed(1)),
+            "an indexed underline color resolves through the palette"
+        );
+
+        let mut missing = cell("u", None, None);
+        missing.underline = UnderlineStyle::Single;
+        let paint = cell_paint(&missing, &emu);
+        assert_eq!(paint.underline_color, paint.fg);
+        assert_eq!(paint.fg, foreground);
+
+        let plain = cell("u", None, None);
+        let paint = cell_paint(&plain, &emu);
+        assert!(!paint.underline);
+        assert_eq!(
+            paint.underline_color, paint.fg,
+            "cells without an underline keep the previous paint"
         );
     }
 
