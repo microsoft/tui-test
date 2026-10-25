@@ -1820,7 +1820,9 @@ impl Engine {
     /// no output has arrived yet.
     pub(crate) fn last_output_time(&self) -> Option<Instant> {
         let guard = self.lock_session();
-        guard.as_ref().and_then(|session| session.last_output_time())
+        guard
+            .as_ref()
+            .and_then(|session| session.last_output_time())
     }
 
     fn write_session(&self) -> RwLockWriteGuard<'_, Option<TerminalSession>> {

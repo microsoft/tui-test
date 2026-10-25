@@ -33,6 +33,4 @@ pub use snapshot::{
     MAX_SNAPSHOT_DIM, MAX_TITLE_BYTES, SNAPSHOT_SCHEMA_VERSION,
 };
 pub use terminal::backend::Backend;
-pub use wait::{
-    WaitQuietMode, WaitQuietOptions, DEFAULT_QUIET_INTERVAL, DEFAULT_QUIET_TIMEOUT,
-};
+pub use wait::{WaitQuietMode, WaitQuietOptions, DEFAULT_QUIET_INTERVAL, DEFAULT_QUIET_TIMEOUT};

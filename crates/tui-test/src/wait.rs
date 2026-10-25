@@ -185,9 +185,9 @@ pub(crate) fn run_quiet_wait(
     last_output: &dyn Fn() -> Option<Instant>,
 ) -> Result<(), TuiTestError> {
     let start = Instant::now();
-    let overall_deadline = start.checked_add(options.timeout).ok_or_else(|| {
-        TuiTestError::internal("wait quiet: overall deadline is out of range")
-    })?;
+    let overall_deadline = start
+        .checked_add(options.timeout)
+        .ok_or_else(|| TuiTestError::internal("wait quiet: overall deadline is out of range"))?;
     if cancelled() {
         return Err(cancelled_error());
     }
@@ -224,9 +224,9 @@ pub(crate) fn run_quiet_wait(
                 }
             }
         }
-        let quiet_deadline = last_change.checked_add(options.quiet).ok_or_else(|| {
-            TuiTestError::internal("wait quiet: quiet deadline is out of range")
-        })?;
+        let quiet_deadline = last_change
+            .checked_add(options.quiet)
+            .ok_or_else(|| TuiTestError::internal("wait quiet: quiet deadline is out of range"))?;
         if Instant::now() >= quiet_deadline {
             // The visual sample above is the required last sample: it was
             // captured before this success check, so a change observed here
@@ -377,24 +377,14 @@ mod tests {
     fn options_reject_zero_and_overlong_intervals() {
         assert!(WaitQuietOptions::new(Duration::ZERO, Duration::from_millis(1)).is_err());
         assert!(WaitQuietOptions::new(Duration::from_secs(1), Duration::ZERO).is_err());
-        assert!(WaitQuietOptions::new(
-            Duration::from_millis(100),
-            Duration::from_millis(200)
-        )
-        .is_err());
-        assert!(WaitQuietOptions::new(
-            Duration::from_millis(200),
-            Duration::from_millis(200)
-        )
-        .is_ok());
-        assert_eq!(
-            WaitQuietOptions::default().quiet(),
-            DEFAULT_QUIET_INTERVAL
+        assert!(
+            WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(200)).is_err()
         );
-        assert_eq!(
-            WaitQuietOptions::default().timeout(),
-            DEFAULT_QUIET_TIMEOUT
+        assert!(
+            WaitQuietOptions::new(Duration::from_millis(200), Duration::from_millis(200)).is_ok()
         );
+        assert_eq!(WaitQuietOptions::default().quiet(), DEFAULT_QUIET_INTERVAL);
+        assert_eq!(WaitQuietOptions::default().timeout(), DEFAULT_QUIET_TIMEOUT);
     }
 
     #[test]

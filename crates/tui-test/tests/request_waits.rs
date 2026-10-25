@@ -5,8 +5,8 @@
 //! and structural lower bounds. No process-wide environment changes.
 
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use std::time::{Duration, Instant};
 
@@ -60,7 +60,10 @@ fn ready_session(tag: &str, script: &str) -> Session {
     let session = Session::new(session_name(tag));
     if cfg!(windows) {
         session
-            .run(run_options("powershell.exe", &["-NoProfile", "-Command", script]))
+            .run(run_options(
+                "powershell.exe",
+                &["-NoProfile", "-Command", script],
+            ))
             .expect("run child");
     } else {
         session
@@ -213,8 +216,7 @@ fn u10_b_cancellation_is_bounded() {
     let options = WaitQuietOptions::new(Duration::from_secs(10), Duration::from_secs(2))
         .expect("test options are valid");
     let worker = session.clone();
-    let handle =
-        std::thread::spawn(move || worker.wait_quiet_cancellable(&options, &check));
+    let handle = std::thread::spawn(move || worker.wait_quiet_cancellable(&options, &check));
     std::thread::sleep(Duration::from_millis(300));
     flag.store(true, Ordering::Release);
     let started = Instant::now();
@@ -243,8 +245,7 @@ fn u10_c_cancel_leaves_child_and_other_caller_alone() {
     let options = WaitQuietOptions::new(Duration::from_secs(10), Duration::from_secs(2))
         .expect("test options are valid");
     let first = session.clone();
-    let cancelled =
-        std::thread::spawn(move || first.wait_quiet_cancellable(&options, &check));
+    let cancelled = std::thread::spawn(move || first.wait_quiet_cancellable(&options, &check));
     let second = session.clone();
     let other = std::thread::spawn(move || second.wait_quiet(&visual_options(QUIET)));
     std::thread::sleep(Duration::from_millis(300));
@@ -334,8 +335,7 @@ fn u10_e_resources_released_after_success_timeout_and_cancel() {
     let options = WaitQuietOptions::new(Duration::from_secs(10), Duration::from_secs(2))
         .expect("test options are valid");
     let worker = session.clone();
-    let handle =
-        std::thread::spawn(move || worker.wait_quiet_cancellable(&options, &check));
+    let handle = std::thread::spawn(move || worker.wait_quiet_cancellable(&options, &check));
     std::thread::sleep(Duration::from_millis(200));
     flag.store(true, Ordering::Release);
     let error = handle
@@ -349,8 +349,12 @@ fn u10_e_resources_released_after_success_timeout_and_cancel() {
     let one = std::thread::spawn(move || first.wait_quiet(&visual_options(QUIET)));
     let second = session.clone();
     let two = std::thread::spawn(move || second.wait_quiet(&visual_options(QUIET)));
-    one.join().expect("first join").expect("first concurrent wait");
-    two.join().expect("second join").expect("second concurrent wait");
+    one.join()
+        .expect("first join")
+        .expect("first concurrent wait");
+    two.join()
+        .expect("second join")
+        .expect("second concurrent wait");
 
     session
         .execute(Operation::Submit {
@@ -371,8 +375,7 @@ fn u10_f_other_callers_do_not_reset_visual_timer() {
     };
     let session = ready_session("f-callers", script);
     let worker = session.clone();
-    let handle =
-        std::thread::spawn(move || worker.wait_quiet(&visual_options(QUIET)));
+    let handle = std::thread::spawn(move || worker.wait_quiet(&visual_options(QUIET)));
     // Another caller hammers capture and metadata reads while the wait runs.
     for _ in 0..10 {
         session
@@ -417,7 +420,10 @@ fn u10_f_viewport_scroll_does_not_reset_visual_timer() {
     let session = Session::new(session_name("f-scroll"));
     if cfg!(windows) {
         session
-            .run(run_options("powershell.exe", &["-NoProfile", "-Command", script]))
+            .run(run_options(
+                "powershell.exe",
+                &["-NoProfile", "-Command", script],
+            ))
             .expect("run child");
     } else {
         session
@@ -429,8 +435,7 @@ fn u10_f_viewport_scroll_does_not_reset_visual_timer() {
         .wait_quiet(&visual_options(QUIET))
         .expect("screen settles before the scroll test");
     let worker = session.clone();
-    let handle =
-        std::thread::spawn(move || worker.wait_quiet(&visual_options(QUIET)));
+    let handle = std::thread::spawn(move || worker.wait_quiet(&visual_options(QUIET)));
     std::thread::sleep(Duration::from_millis(100));
     session
         .execute(Operation::Scroll {
@@ -438,7 +443,10 @@ fn u10_f_viewport_scroll_does_not_reset_visual_timer() {
         })
         .expect("scroll viewport");
     let started = Instant::now();
-    handle.join().expect("wait joins").expect("scroll must not reset timer");
+    handle
+        .join()
+        .expect("wait joins")
+        .expect("scroll must not reset timer");
     assert!(
         started.elapsed() < QUIET + Duration::from_secs(2),
         "viewport scroll delayed the wait"
@@ -512,7 +520,10 @@ fn u10_h_title_change_restarts_visual_quiet() {
             data: Some(command.to_string()),
         })
         .expect("set title");
-    handle.join().expect("wait joins").expect("title change restarts");
+    handle
+        .join()
+        .expect("wait joins")
+        .expect("title change restarts");
     let elapsed = changed_at.elapsed();
     assert!(
         elapsed >= Duration::from_millis(350),
@@ -550,7 +561,10 @@ fn u10_h_palette_change_restarts_visual_quiet() {
             data: Some(command.to_string()),
         })
         .expect("set palette entry");
-    handle.join().expect("wait joins").expect("palette change restarts");
+    handle
+        .join()
+        .expect("wait joins")
+        .expect("palette change restarts");
     let elapsed = changed_at.elapsed();
     assert!(
         elapsed >= Duration::from_millis(350),
@@ -599,7 +613,10 @@ fn u10_h_resize_restarts_visual_quiet() {
     std::thread::sleep(Duration::from_millis(50));
     let changed_at = Instant::now();
     session
-        .execute(Operation::Resize { cols: 100, rows: 30 })
+        .execute(Operation::Resize {
+            cols: 100,
+            rows: 30,
+        })
         .expect("resize terminal");
     handle.join().expect("wait joins").expect("resize restarts");
     let elapsed = changed_at.elapsed();
@@ -686,12 +703,8 @@ fn u10_j_equal_deadlines_return_timeout() {
 fn u10_options_validation_rejects_zero_and_overlong() {
     assert!(WaitQuietOptions::new(Duration::ZERO, QUIET).is_err());
     assert!(WaitQuietOptions::new(Duration::from_secs(1), Duration::ZERO).is_err());
-    assert!(
-        WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(200)).is_err()
-    );
-    assert!(
-        WaitQuietOptions::new(Duration::from_millis(200), Duration::from_millis(200)).is_ok()
-    );
+    assert!(WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(200)).is_err());
+    assert!(WaitQuietOptions::new(Duration::from_millis(200), Duration::from_millis(200)).is_ok());
     let defaults = WaitQuietOptions::default();
     assert_eq!(defaults.quiet(), Duration::from_millis(250));
     assert_eq!(defaults.timeout(), Duration::from_secs(5));
