@@ -27,6 +27,11 @@ pub use render::offline::{
     render_snapshot_svg, write_snapshot_svg, RenderError, RenderEvidence, RenderedSvg,
     SnapshotRenderOptions,
 };
+pub use render::pinned::{
+    ContractFont, CursorPhase, PinnedCacheKey, PinnedCachedFace, PinnedFace, PinnedFontError,
+    PinnedFontSet, RenderContract, RASTER_POLICY_PINNED_V1, RASTER_POLICY_SYSTEM_V1,
+    RENDER_CONTRACT_VERSION,
+};
 pub use runtime::{
     global_registry, Locator, LocatorClickOptions, LocatorExpectOptions, LocatorFilterOptions,
     Session, SessionHandle, SessionRegistry,

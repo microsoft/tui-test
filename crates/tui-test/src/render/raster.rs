@@ -19,7 +19,9 @@ use draw::{
     fill_rounded_rect_alpha, fill_top_rounded_rect, format_glyph_sequence, is_default_ignorable,
     stroke_rounded_rect, unpremultiply, unsupported_grapheme,
 };
-use font::{FontSystem, GlyphKey};
+use font::{FontBackend, GlyphKey};
+
+use super::pinned::{PinnedCacheKey, PinnedFontError, PinnedFontSet};
 
 use crate::render::style::Style;
 
@@ -60,7 +62,7 @@ pub struct GridRenderer {
     width: u32,
     height: u32,
     pixmap: Pixmap,
-    fonts: FontSystem,
+    fonts: FontBackend,
     layout: ResolvedLayout,
     /// Overrides the layout's canvas background for one capture.
     background: Option<CaptureBackground>,
@@ -143,12 +145,58 @@ impl GridRenderer {
         Self::with_layout_and_size(cols, rows, layout, background, exact_size)
     }
 
+    /// Build from an already-resolved layout with only pinned bytes.
+    ///
+    /// The cache key is derived from the set and the layout the render
+    /// actually uses, so the key pins the scale and raster settings by
+    /// construction. A typed [`PinnedFontError`] passes through unchanged
+    /// for the offline layer to report.
+    pub(crate) fn with_pinned_layout(
+        cols: u16,
+        rows: usize,
+        layout: ResolvedLayout,
+        set: &PinnedFontSet,
+        background: Option<CaptureBackground>,
+        exact_size: bool,
+    ) -> anyhow::Result<Self> {
+        if !layout.zoom.is_finite() || layout.zoom <= 0.0 || layout.zoom > f64::from(f32::MAX) {
+            anyhow::bail!("recording zoom must be finite and greater than zero");
+        }
+        let fonts = FontBackend::pinned(set)?;
+        Self::with_layout_backend(cols, rows, layout, background, exact_size, fonts)
+    }
+
+    /// The pinned cache identity for a layout and set, without allocating
+    /// the renderer. The offline layer records it in the render contract.
+    pub(crate) fn pinned_cache_key(layout: &ResolvedLayout, set: &PinnedFontSet) -> PinnedCacheKey {
+        PinnedCacheKey::new(
+            set,
+            layout.zoom,
+            layout.font_size,
+            layout.cell_w,
+            layout.cell_h,
+            layout.baseline,
+        )
+    }
+
     fn with_layout_and_size(
         cols: u16,
         rows: usize,
         layout: ResolvedLayout,
         background: Option<CaptureBackground>,
         exact_size: bool,
+    ) -> anyhow::Result<Self> {
+        let fonts = FontBackend::system(&layout.font)?;
+        Self::with_layout_backend(cols, rows, layout, background, exact_size, fonts)
+    }
+
+    fn with_layout_backend(
+        cols: u16,
+        rows: usize,
+        layout: ResolvedLayout,
+        background: Option<CaptureBackground>,
+        exact_size: bool,
+        fonts: FontBackend,
     ) -> anyhow::Result<Self> {
         let zoom = layout.zoom;
         let (base_width, base_height) = if exact_size {
@@ -187,7 +235,7 @@ impl GridRenderer {
             pixmap: Pixmap::new(width, height).ok_or_else(|| {
                 anyhow::anyhow!("terminal recording dimensions must fit a pixmap")
             })?,
-            fonts: FontSystem::new(&layout.font)?,
+            fonts,
             layout,
             background,
         })
@@ -309,7 +357,7 @@ impl FrameRenderer for GridRenderer {
                 scale,
                 &mut missing,
                 layout,
-            );
+            )?;
         }
 
         let blank = EmuCell::blank();
@@ -368,6 +416,9 @@ impl FrameRenderer for GridRenderer {
                         * scale;
 
                 if unsupported_grapheme(cell.ch.as_str()) {
+                    if fonts.is_pinned() {
+                        return Err(reject_sequence(cell.ch.as_str()).into());
+                    }
                     missing.insert(format_glyph_sequence(cell.ch.as_str()));
                     continue;
                 }
@@ -380,7 +431,7 @@ impl FrameRenderer for GridRenderer {
                         bold: paint.bold,
                         italic: paint.italic,
                     };
-                    match fonts.resolve(key) {
+                    match fonts.resolve_strict(key)? {
                         Some(glyph) => draw_glyph(
                             pixmap,
                             glyph,
@@ -434,7 +485,7 @@ impl FrameRenderer for GridRenderer {
                 scale,
                 &mut missing,
                 layout,
-            );
+            )?;
         }
 
         // Last, so the content it frames cannot paint over it.
@@ -485,9 +536,18 @@ fn grid_y(origin_y: f32, row: usize, scale: f32, layout: &ResolvedLayout) -> u32
 }
 
 #[allow(clippy::too_many_arguments)]
+/// A multi-scalar sequence the pinned renderer stops on: shaping arrives
+/// in a later task, so no face is split across the sequence.
+fn reject_sequence(sequence: &str) -> PinnedFontError {
+    PinnedFontError::UnsupportedSequence {
+        sequence: sequence.to_string(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn draw_cursor(
     pixmap: &mut Pixmap,
-    fonts: &mut FontSystem,
+    fonts: &mut FontBackend,
     grid: &[Vec<EmuCell>],
     (cx, cy): (u16, usize),
     colors: &dyn RenderColors,
@@ -496,12 +556,12 @@ fn draw_cursor(
     scale: f32,
     missing: &mut BTreeSet<String>,
     layout: &ResolvedLayout,
-) {
+) -> anyhow::Result<()> {
     let Some(row) = grid.get(cy) else {
-        return;
+        return Ok(());
     };
     let Some(cell) = row.get(usize::from(cx)) else {
-        return;
+        return Ok(());
     };
     let span = if row
         .get(usize::from(cx) + 1)
@@ -536,7 +596,7 @@ fn draw_cursor(
                 bottom,
                 color,
             );
-            return;
+            return Ok(());
         }
         CursorShape::Bar => {
             fill_pixel_rect(
@@ -547,20 +607,23 @@ fn draw_cursor(
                 bottom,
                 color,
             );
-            return;
+            return Ok(());
         }
     }
 
     if cell.ch.as_str() == CONTINUATION || cell.ch.chars().all(char::is_whitespace) {
-        return;
+        return Ok(());
     }
     let paint = svg::cell_paint(cell, colors);
     if paint.invisible {
-        return;
+        return Ok(());
     }
     if unsupported_grapheme(cell.ch.as_str()) {
+        if fonts.is_pinned() {
+            return Err(reject_sequence(cell.ch.as_str()).into());
+        }
         missing.insert(format_glyph_sequence(cell.ch.as_str()));
-        return;
+        return Ok(());
     }
     let baseline = panel_origin_y
         + (layout.header_h + layout.content_top + cy as f32 * layout.cell_h + layout.baseline)
@@ -574,7 +637,7 @@ fn draw_cursor(
             bold: paint.bold,
             italic: paint.italic,
         };
-        match fonts.resolve(key) {
+        match fonts.resolve_strict(key)? {
             Some(glyph) => draw_glyph(
                 pixmap,
                 glyph,
@@ -592,6 +655,7 @@ fn draw_cursor(
             }
         }
     }
+    Ok(())
 }
 
 fn draw_shadow(
@@ -621,7 +685,7 @@ fn draw_shadow(
 #[allow(clippy::too_many_arguments)]
 fn draw_title(
     pixmap: &mut Pixmap,
-    fonts: &mut FontSystem,
+    fonts: &mut FontBackend,
     title: Option<&str>,
     cols: u16,
     rows: usize,
@@ -631,9 +695,9 @@ fn draw_title(
     scale: f32,
     missing: &mut BTreeSet<String>,
     layout: &ResolvedLayout,
-) {
+) -> anyhow::Result<()> {
     let Some(title) = svg::visible_title(title, cols, rows, panel_width, layout) else {
-        return;
+        return Ok(());
     };
     let advance = svg::title_advance(layout);
     let title_width = crate::terminal::cell::display_width(&title) as f32 * advance * scale;
@@ -649,7 +713,7 @@ fn draw_title(
                 bold: true,
                 italic: false,
             };
-            match fonts.resolve(key) {
+            match fonts.resolve_strict(key)? {
                 Some(glyph) => draw_glyph(
                     pixmap,
                     glyph,
@@ -669,6 +733,7 @@ fn draw_title(
         }
         x += width;
     }
+    Ok(())
 }
 
 fn scaled_dimension(base: u32, zoom: f64, name: &str) -> anyhow::Result<u32> {
