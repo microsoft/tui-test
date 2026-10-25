@@ -787,6 +787,11 @@ fn layout_from_options(options: &SnapshotRenderOptions) -> Result<ResolvedLayout
     layout.content_left = content_left as f32;
     layout.title_bar = options.title_bar;
     layout.title_controls = options.title_controls;
+    if !options.title_bar {
+        // Same rule the live style uses: no bar, no header or divider.
+        layout.header_h = 0.0;
+        layout.divider_h = 0.0;
+    }
     layout.shadow_enabled = options.shadow;
     layout.border_width = options.border_width;
     layout.border_radius = options.border_radius;
