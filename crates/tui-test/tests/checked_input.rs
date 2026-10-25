@@ -10,8 +10,9 @@
 //! `drag_reports_exact_bytes`, `motion_reports_exact_bytes`, and
 //! `paste_and_focus_report_exact_bytes` cover U07-B;
 //! `unsupported_encoding_fails_before_write`,
-//! `out_of_bounds_fails_before_write`, and
-//! `history_viewport_fails_before_write` cover U07-C;
+//! `out_of_bounds_fails_before_write`,
+//! `history_viewport_fails_before_write`, and
+//! `paste_terminator_rejected_before_write` cover U07-C;
 //! `legacy_mouse_and_raw_write_keep_behavior` covers U07-D.
 
 use std::io::{Read, Write};
@@ -306,16 +307,24 @@ fn mouse_modes_enabled_disabled_changed() {
         .expect("press under click mode");
     wait_for_text(&engine, "rx:1b5b3c303b353b334d");
 
-    engine
+    let error = engine
         .mouse_checked(CheckedMouseAction::Motion { x: 6, y: 3 })
         .expect_err("click mode rejects unpressed movement");
-    engine
+    assert!(
+        matches!(error, CheckedInputError::Unsupported(_)),
+        "{error:?}"
+    );
+    let error = engine
         .mouse_checked(CheckedMouseAction::Drag {
             x: 6,
             y: 3,
             options: left(),
         })
         .expect_err("click mode rejects pressed movement");
+    assert!(
+        matches!(error, CheckedInputError::Unsupported(_)),
+        "{error:?}"
+    );
 
     send_command(&engine, "mouse-drag");
     wait_for_mouse_mode(&engine, "drag");
@@ -327,9 +336,13 @@ fn mouse_modes_enabled_disabled_changed() {
         })
         .expect("pressed movement under drag mode");
     wait_for_text(&engine, "rx:1b5b3c33323b373b344d");
-    engine
+    let error = engine
         .mouse_checked(CheckedMouseAction::Motion { x: 6, y: 3 })
         .expect_err("drag mode rejects unpressed movement");
+    assert!(
+        matches!(error, CheckedInputError::Unsupported(_)),
+        "{error:?}"
+    );
 
     send_command(&engine, "mouse-motion");
     wait_for_mouse_mode(&engine, "motion");
@@ -347,13 +360,17 @@ fn mouse_modes_enabled_disabled_changed() {
 
     send_command(&engine, "mouse-off");
     wait_for_mouse_mode(&engine, "none");
-    engine
+    let error = engine
         .mouse_checked(CheckedMouseAction::Press {
             x: 4,
             y: 2,
             options: left(),
         })
         .expect_err("disabled tracking rejects press");
+    assert!(
+        matches!(error, CheckedInputError::Unsupported(_)),
+        "{error:?}"
+    );
     engine.execute(Operation::Close).expect("session closes");
 }
 
@@ -369,9 +386,13 @@ fn paste_and_focus_modes() {
         !screen_text(&engine).contains("3230307e"),
         "disabled paste sends no bracketed-paste start marker",
     );
-    engine
+    let error = engine
         .focus(true)
         .expect_err("disabled focus events reject the report");
+    assert!(
+        matches!(error, CheckedInputError::Unsupported(_)),
+        "{error:?}"
+    );
 
     send_command(&engine, "paste-on");
     wait_for_mode(&engine, "bracketed_paste", true);
@@ -389,7 +410,11 @@ fn paste_and_focus_modes() {
     wait_for_text(&engine, "rx:1b5b49");
     send_command(&engine, "focus-off");
     wait_for_mode(&engine, "focus_events", false);
-    engine.focus(false).expect_err("focus report after disable");
+    let error = engine.focus(false).expect_err("focus report after disable");
+    assert!(
+        matches!(error, CheckedInputError::Unsupported(_)),
+        "{error:?}"
+    );
     engine.execute(Operation::Close).expect("session closes");
 }
 
@@ -570,6 +595,22 @@ fn history_viewport_fails_before_write() {
         })
         .expect("live viewport accepts mouse input");
     wait_for_text(&engine, "rx:1b5b3c303b353b334d");
+    engine.execute(Operation::Close).expect("session closes");
+}
+
+// U07-C: paste text containing the bracketed-paste terminator fails while
+// markers are on, before any byte write.
+#[test]
+fn paste_terminator_rejected_before_write() {
+    let engine = start_session("paste-terminator", "paste-on");
+    wait_for_mode(&engine, "bracketed_paste", true);
+    assert_eq!(rx_count(&engine), 0);
+    let error = engine
+        .paste("ab\x1b[201~cd")
+        .expect_err("paste containing the terminator fails while markers are on");
+    assert!(matches!(error, CheckedInputError::Rejected(_)), "{error:?}");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(rx_count(&engine), 0, "child received nothing");
     engine.execute(Operation::Close).expect("session closes");
 }
 

@@ -704,6 +704,9 @@ impl Session {
             MouseMode::Click => true,
             MouseMode::Drag => matches!(tracking, MouseMode::Drag | MouseMode::Motion),
             MouseMode::Motion => tracking == MouseMode::Motion,
+            // Unreachable in practice: `minimum` derives from the action and
+            // is never `None`. The arm stays so the match is exhaustive over
+            // `MouseMode`.
             MouseMode::None => false,
         };
         if !sufficient {
@@ -738,6 +741,10 @@ impl Session {
     /// writes nothing. With markers off, the terminator has no framing
     /// effect and travels unchanged. Raw bytes stay available through
     /// [`Session::write`] for deliberate protocol tests.
+    ///
+    /// An empty text with markers on still sends the empty framing pair
+    /// (`ESC [ 200 ~` followed by `ESC [ 201 ~`); with markers off an empty
+    /// text writes nothing.
     pub fn paste(&self, text: &str) -> Result<(), CheckedInputError> {
         let bracketed = {
             let state = self
