@@ -272,8 +272,33 @@ pub(super) fn is_default_ignorable(character: char) -> bool {
     )
 }
 
-pub(super) fn unsupported_grapheme(grapheme: &str) -> bool {
+/// Whether a cell grapheme holds more than one Unicode scalar value (a base
+/// character plus combining marks). Both font backends shape these with one
+/// face covering the full sequence; single scalars keep the legacy verbatim
+/// path so recorded pixels do not change.
+pub(super) fn multi_scalar_grapheme(grapheme: &str) -> bool {
     grapheme.chars().count() > 1
+}
+
+/// Whether a multi-scalar grapheme is a base character plus combining
+/// marks: the sequences the shaper positions on both backends. Anything
+/// else multi-scalar (ZWJ emoji, regional indicators, ...) keeps the
+/// legacy report instead of a misrender. Mark detection uses the
+/// maintained `unicode-properties` General Category tables the shaper
+/// itself is built on — no local Unicode tables.
+pub(super) fn combining_sequence(grapheme: &str) -> bool {
+    let mut scalars = grapheme.chars();
+    if scalars.next().is_none() {
+        return false;
+    }
+    scalars.all(is_combining_mark)
+}
+
+/// Whether a scalar is a combining mark (General Category M: spacing,
+/// nonspacing, or enclosing).
+fn is_combining_mark(character: char) -> bool {
+    use unicode_properties::{GeneralCategoryGroup, UnicodeGeneralCategory};
+    character.general_category_group() == GeneralCategoryGroup::Mark
 }
 
 /// Draw one shaped cell run. A verbatim run draws exactly like a legacy
@@ -413,6 +438,8 @@ pub(super) fn cell_clip(
     Some(mask)
 }
 
+/// Name a multi-scalar grapheme the renderer cannot draw: the sequence
+/// plus every codepoint, so no scalar is silently dropped from the report.
 pub(super) fn format_glyph_sequence(grapheme: &str) -> String {
     let codepoints = grapheme
         .chars()

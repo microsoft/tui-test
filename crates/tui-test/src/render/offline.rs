@@ -731,7 +731,9 @@ impl RenderedPng {
 /// not drawn, and the evidence records that.
 ///
 /// Without pinned fonts the rasterizer keeps its recorded system-font
-/// behavior. With pinned fonts it loads only the specified bytes and
+/// fallback: multi-scalar graphemes shape with the first catalog face
+/// covering the full sequence, and a missing scalar fails the render.
+/// With pinned fonts it loads only the specified bytes and
 /// reports them in the render contract; a missing style face or glyph is a
 /// [`RenderError::PinnedFont`] error with no host fallback.
 #[cfg(feature = "recording-raster")]

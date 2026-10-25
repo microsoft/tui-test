@@ -17,7 +17,7 @@ default = []
 ghostty = ["dep:ghostty-vt"]
 rio = ["dep:rio-vt"]
 xtermjs = ["dep:rquickjs"]
-recording-raster = ["dep:fontdb", "dep:gif", "dep:png", "dep:tiny-skia", "dep:rustybuzz"]
+recording-raster = ["dep:fontdb", "dep:gif", "dep:png", "dep:tiny-skia", "dep:rustybuzz", "dep:unicode-properties"]
 recording-font-jetbrains-mono = ["recording-raster"]
 recording-font-jetbrains-mono-styles = ["recording-font-jetbrains-mono"]
 recording-font-jetbrains-mono-full = ["recording-font-jetbrains-mono-styles"]
@@ -45,6 +45,7 @@ sha2.workspace = true
 toml.workspace = true
 tiny-skia = { workspace = true, optional = true }
 ttf-parser.workspace = true
+unicode-properties = { workspace = true, optional = true }
 unicode-width.workspace = true
 
 [target.'cfg(unix)'.dependencies]

@@ -19,8 +19,8 @@
 //! shaping disables the ligature features so one cluster keeps its own
 //! columns, exactly like the per-character layout it replaces.
 
-use super::draw::is_default_ignorable;
-use super::font::{GlyphKey, GlyphOutline, PinnedFontSystem};
+use super::draw::{format_glyph_sequence, is_default_ignorable};
+use super::font::{FontSystem, GlyphKey, GlyphOutline, PinnedFontSystem};
 use crate::render::pinned::PinnedFontError;
 
 /// rustybuzz 0.20 reports advances and offsets in font units: its face
@@ -127,6 +127,106 @@ fn shape_pinned_text_with_features(
         return Err(missing_glyph_for(text, &positions, fonts, bold, italic));
     };
     shape_with_face(fonts, position, text, bold, italic, features)
+}
+
+/// Shape one system-backend cell grapheme with one catalog face.
+///
+/// The run geometry is shared with the pinned path: a [`ShapedRun`] the
+/// caller draws through the same positioned run, so cells and cursor
+/// repaint shape equally on both backends. Only the selection policy
+/// differs: the first catalog candidate for the style slot covering every
+/// scalar wins, keeping the recorded host fallback order, and a grapheme
+/// no single face can draw reports the full sequence for the caller's
+/// missing-glyph collection instead of a typed error. Empty,
+/// whitespace-only, and ignorable-only text draws nothing. Single-scalar
+/// text never reaches here: the caller keeps the legacy verbatim path so
+/// recorded pixels do not change.
+pub(super) fn shape_system_text(
+    fonts: &FontSystem,
+    text: &str,
+    bold: bool,
+    italic: bool,
+) -> Result<ShapedRun, String> {
+    debug_assert!(
+        text.chars().count() > 1,
+        "single scalars keep the legacy verbatim path"
+    );
+    if text
+        .chars()
+        .all(|scalar| scalar.is_whitespace() || is_default_ignorable(scalar))
+    {
+        return Ok(ShapedRun::Empty);
+    }
+    let base = text.chars().next().unwrap_or('\0');
+    for id in fonts.style_candidates(bold, italic, base) {
+        if !text.chars().all(|scalar| fonts.face_has_glyph(id, scalar)) {
+            continue;
+        }
+        let shaped = fonts.with_face_data(id, |data, index| {
+            shape_system_data(fonts, id, data, index, text, bold, italic)
+        });
+        match shaped.flatten() {
+            Some(result) => return result,
+            // Readable coverage but unreadable bytes: try the next face
+            // covering the full grapheme rather than failing here.
+            None => continue,
+        }
+    }
+    Err(format_glyph_sequence(text))
+}
+
+/// Shape `text` with the catalog face `id`, already known to cover every
+/// scalar. `None` means the face bytes do not parse, so the caller tries
+/// the next covering face. A `.notdef` id the shaper still emits is a
+/// missing sequence naming every scalar, never tofu. Glyphs with no
+/// outline (spaces, zero-width marks) keep their advance but draw nothing;
+/// when no glyph draws anything visible, the sequence is reported instead
+/// of a blank success, so a visible scalar is never silently dropped.
+fn shape_system_data(
+    fonts: &FontSystem,
+    id: fontdb::ID,
+    data: &[u8],
+    index: u32,
+    text: &str,
+    bold: bool,
+    italic: bool,
+) -> Option<Result<ShapedRun, String>> {
+    let face = rustybuzz::Face::from_slice(data, index)?;
+    let mut buffer = rustybuzz::UnicodeBuffer::new();
+    buffer.push_str(text);
+    let shaped = rustybuzz::shape(&face, &[], buffer);
+    let infos = shaped.glyph_infos();
+    let advances = shaped.glyph_positions();
+    let mut glyphs = Vec::new();
+    let mut advance = 0.0f32;
+    for (info, placement) in infos.iter().zip(advances.iter()) {
+        advance += placement.x_advance as f32 / POSITION_SCALE;
+        let glyph_id = u16::try_from(info.glyph_id).ok()?;
+        if glyph_id == 0 {
+            return Some(Err(format_glyph_sequence(text)));
+        }
+        if let Some(outline) = fonts.outline_for_shaped_glyph(
+            id,
+            ttf_parser::GlyphId(glyph_id),
+            bold,
+            italic,
+        ) {
+            glyphs.push(ShapedGlyph {
+                outline,
+                dx: placement.x_offset as f32 / POSITION_SCALE,
+                dy: placement.y_offset as f32 / POSITION_SCALE,
+                advance: placement.x_advance as f32 / POSITION_SCALE,
+            });
+        }
+    }
+    if glyphs.is_empty()
+        && text
+            .chars()
+            .any(|scalar| !scalar.is_whitespace() && !is_default_ignorable(scalar))
+    {
+        return Some(Err(format_glyph_sequence(text)));
+    }
+    Some(Ok(ShapedRun::Shaped { glyphs, advance }))
 }
 
 /// Name the scalar a missing-glyph error reports. A scalar no candidate

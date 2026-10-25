@@ -46,6 +46,83 @@ impl FontSystem {
         self.glyphs.get(&key).and_then(Option::as_ref)
     }
 
+    /// Candidate faces for a style slot in catalog rank order: the recorded
+    /// system fallback policy. The system shaper tries these in order and
+    /// shapes a grapheme with the first covering every scalar; the pinned
+    /// backend never consults the catalog.
+    pub fn style_candidates(
+        &self,
+        bold: bool,
+        italic: bool,
+        character: char,
+    ) -> Vec<fontdb::ID> {
+        self.catalog.candidates(bold, italic, character)
+    }
+
+    /// Whether face `id` maps `character` to a real (non-`.notdef`) glyph.
+    pub fn face_has_glyph(&self, id: fontdb::ID, character: char) -> bool {
+        self.catalog
+            .database
+            .with_face_data(id, |data, index| {
+                Face::parse(data, index).ok().is_some_and(|face| {
+                    face.glyph_index(character)
+                        .is_some_and(|glyph_id| glyph_id.0 != 0)
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    /// Run a closure with the raw bytes and collection index of face `id`,
+    /// for the system shaper to parse. Returns `None` when the face has no
+    /// readable data.
+    pub fn with_face_data<T>(
+        &self,
+        id: fontdb::ID,
+        fill: impl FnOnce(&[u8], u32) -> T,
+    ) -> Option<T> {
+        self.catalog.database.with_face_data(id, fill)
+    }
+
+    /// The outline for a glyph id the shaper placed on face `id`. The
+    /// synthetic style decisions match [`FontSystem::load`]; a `.notdef` id
+    /// or an empty outline is `None` so the caller keeps the advance without
+    /// drawing, exactly like the pinned path. Shaped runs keep their shaper
+    /// positions, so powerline stretch stays off here.
+    pub fn outline_for_shaped_glyph(
+        &self,
+        id: fontdb::ID,
+        glyph_id: ttf_parser::GlyphId,
+        bold: bool,
+        italic: bool,
+    ) -> Option<GlyphOutline> {
+        if glyph_id.0 == 0 {
+            return None;
+        }
+        let info = self.catalog.database.face(id)?;
+        let synthetic_bold = bold && !is_bold_face(info);
+        let synthetic_italic = italic && info.style == fontdb::Style::Normal;
+        self.catalog
+            .database
+            .with_face_data(id, |data, index| {
+                let parsed = Face::parse(data, index).ok()?;
+                let mut builder = TinyPathBuilder::default();
+                let bounds = parsed.outline_glyph(glyph_id, &mut builder)?;
+                let path = builder.finish()?;
+                Some(GlyphOutline {
+                    path,
+                    bounds,
+                    advance: parsed
+                        .glyph_hor_advance(glyph_id)
+                        .unwrap_or(parsed.units_per_em()),
+                    units_per_em: parsed.units_per_em(),
+                    synthetic_bold,
+                    synthetic_italic,
+                    powerline: false,
+                })
+            })
+            .flatten()
+    }
+
     fn load(&self, key: GlyphKey) -> Option<GlyphOutline> {
         for id in self.catalog.candidates(key.bold, key.italic, key.character) {
             let info = self.catalog.database.face(id)?;

@@ -16,9 +16,10 @@ mod font;
 mod shaping;
 
 use draw::{
-    cell_clip, draw_glyph, draw_shaped_run, fill_antialiased_rect, fill_circle, fill_pixel_rect,
-    fill_rounded_rect, fill_rounded_rect_alpha, fill_top_rounded_rect, format_glyph_sequence,
-    is_default_ignorable, stroke_rounded_rect, unpremultiply, unsupported_grapheme,
+    cell_clip, combining_sequence, draw_glyph, draw_shaped_run, fill_antialiased_rect, fill_circle,
+    fill_pixel_rect, fill_rounded_rect, fill_rounded_rect_alpha, fill_top_rounded_rect,
+    format_glyph_sequence, is_default_ignorable, multi_scalar_grapheme, stroke_rounded_rect,
+    unpremultiply,
 };
 use font::{FontBackend, GlyphKey};
 
@@ -570,16 +571,22 @@ fn grid_y(origin_y: f32, row: usize, scale: f32, layout: &ResolvedLayout) -> u32
         as u32
 }
 
-/// The one shaping path for cell rendering and cursor repaint.
+/// The one shaping path for cell rendering and cursor repaint, shared by
+/// both font backends.
 ///
-/// The system backend keeps its recorded behavior: one scalar-count check
-/// and per-character fallback with missing-glyph collection. The pinned
-/// backend shapes the grapheme with one face selected for the full
-/// sequence and draws the run: verbatim for a single scalar (recorded
-/// pixels), positioned and clipped to `clip_rect` for a shaped run or a
-/// wide scalar at the grid edge. A shaped cell is pushed to `shaped` for
-/// glyph evidence when the caller passes the sink; cursor repaint passes
-/// `None` because the cell already recorded.
+/// Face selection stays per-backend: the pinned backend shapes with the
+/// first pinned face covering the full grapheme and reports a missing
+/// scalar as a typed error; the system backend shapes with the first
+/// catalog candidate covering the full grapheme (host fallback order) and
+/// collects an undrawable sequence for the end-of-render failure. Only
+/// base-plus-combining-mark sequences shape; other multi-scalar sequences
+/// keep the recorded report instead of a misrender. A shaped run draws
+/// positioned and clipped to `clip_rect`; a single scalar keeps the
+/// legacy verbatim path on both backends so recorded pixels do not change.
+/// A shaped cell is pushed to `shaped` for glyph evidence when the caller
+/// passes the sink; cursor repaint passes `None` because the cell already
+/// recorded. Only the pinned backend records: the system backend draws the
+/// same run geometry without recording.
 #[allow(clippy::too_many_arguments)]
 fn draw_cell_text(
     pixmap: &mut Pixmap,
@@ -600,9 +607,9 @@ fn draw_cell_text(
     missing: &mut BTreeSet<String>,
     shaped: Option<&mut Vec<String>>,
 ) -> anyhow::Result<()> {
+    let wide_edge = crate::terminal::cell::display_width(text) == 2 && span < 2;
     if let Some(pinned) = fonts.pinned_mut() {
         let run = shaping::shape_pinned_text(pinned, text, bold, italic)?;
-        let wide_edge = crate::terminal::cell::display_width(text) == 2 && span < 2;
         if run.is_shaped() {
             if let Some(shaped) = shaped {
                 shaped.push(text.to_string());
@@ -629,7 +636,46 @@ fn draw_cell_text(
         );
         return Ok(());
     }
-    if unsupported_grapheme(text) {
+    let FontBackend::System(system) = fonts else {
+        unreachable!("pinned backend returns above");
+    };
+    if multi_scalar_grapheme(text) {
+        if combining_sequence(text) {
+            // Shared shaping with the system selection policy: the first
+            // catalog face covering the full grapheme wins, and a grapheme
+            // no single face can draw joins the missing-glyph collection
+            // for the end-of-render failure. Shaped evidence stays
+            // pinned-only.
+            match shaping::shape_system_text(system, text, bold, italic) {
+                Ok(run) => {
+                    let clip = if run.is_shaped() || wide_edge {
+                        let (left, top, right, bottom) = clip_rect;
+                        cell_clip(pixmap.width(), pixmap.height(), left, top, right, bottom)
+                    } else {
+                        None
+                    };
+                    draw_shaped_run(
+                        pixmap,
+                        &run,
+                        origin_x,
+                        origin_y,
+                        cell_width,
+                        cell_height,
+                        baseline,
+                        color,
+                        font_size,
+                        scale,
+                        clip.as_ref(),
+                    );
+                }
+                Err(entry) => {
+                    missing.insert(entry);
+                }
+            }
+            return Ok(());
+        }
+        // Not a combining sequence (ZWJ emoji, regional indicators, ...):
+        // keep the recorded report instead of a misrender.
         missing.insert(format_glyph_sequence(text));
         return Ok(());
     }
