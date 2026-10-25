@@ -232,12 +232,40 @@ fn launch_fixture() {
     };
     match mode.as_str() {
         "print-env" => print_env(),
+        "print-cwd" => print_cwd(),
         "check-native-env" => check_native_env(),
         "driver-a" => driver_a(),
         "driver-b" => driver_b(),
         "driver-h" => driver_h(),
+        "driver-cwd-absent" => driver_cwd_absent(),
+        "driver-cwd-relative" => driver_cwd_relative(),
         other => panic!("unknown launch fixture mode: {other}"),
     }
+}
+
+fn print_cwd() {
+    println!(
+        "CWD:{}",
+        std::env::current_dir()
+            .expect("fixture child needs a cwd")
+            .display()
+    );
+}
+
+/// Parse the `CWD:<path>` line from fixture output.
+fn child_cwd(text: &str) -> std::path::PathBuf {
+    for line in text.lines() {
+        let trimmed = line.trim_end();
+        if let Some(rest) = trimmed.strip_prefix("CWD:") {
+            return std::path::PathBuf::from(rest);
+        }
+    }
+    panic!("fixture child reported no CWD line: {text}");
+}
+
+fn canonical(path: &std::path::Path) -> std::path::PathBuf {
+    path.canonicalize()
+        .unwrap_or_else(|_| panic!("test path must exist: {}", path.display()))
 }
 
 fn print_env() {
@@ -342,6 +370,89 @@ fn driver_h() {
     );
     assert_eq!(state.exited, Some(0));
     println!("U08H-PASS");
+    close_engine(&engine);
+}
+
+fn spawn_cwd_fixture(engine: &Engine, build: impl FnOnce(LaunchOptions) -> LaunchOptions) {
+    let launch = build(
+        LaunchOptions::new(std::env::current_exe().unwrap())
+            .with_args(["--exact", "launch_fixture", "--nocapture"])
+            .with_env(FIXTURE_ENV, "print-cwd"),
+    );
+    engine.spawn_with(launch, base_options()).unwrap();
+}
+
+fn restart_engine(engine: &Engine) {
+    engine
+        .execute(Operation::Restart {
+            graceful_timeout_ms: 1_000,
+        })
+        .unwrap();
+}
+
+/// Absent launch cwd: the child starts in the driver's cwd (dir A). After
+/// the driver moves to dir B, restart must still start the child in dir A.
+fn driver_cwd_absent() {
+    let base = std::env::temp_dir().join(format!("u08-cwd-absent-{}", std::process::id()));
+    let dir_a = base.join("a");
+    let dir_b = base.join("b");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+    std::env::set_current_dir(&dir_a).unwrap();
+    let engine = test_engine("driver-cwd-absent");
+    spawn_cwd_fixture(&engine, |launch| launch);
+    wait_exit(&engine);
+    let before = canonical(&child_cwd(&engine_state(&engine).text));
+    assert_eq!(
+        before,
+        canonical(&dir_a),
+        "child without a launch cwd must start in the driver directory"
+    );
+    std::env::set_current_dir(&dir_b).unwrap();
+    restart_engine(&engine);
+    wait_exit(&engine);
+    let state = engine_state(&engine);
+    assert_eq!(
+        canonical(&child_cwd(&state.text)),
+        canonical(&dir_a),
+        "restart must reuse the frozen default cwd, not the moved driver directory"
+    );
+    assert_eq!(state.exited, Some(0));
+    println!("U08CWD-ABSENT-PASS");
+    close_engine(&engine);
+}
+
+/// Relative launch cwd: the child starts in the resolved directory. After
+/// the driver moves elsewhere, restart must still start the child in the
+/// first resolved directory.
+fn driver_cwd_relative() {
+    let base = std::env::temp_dir().join(format!("u08-cwd-relative-{}", std::process::id()));
+    let parent = base.join("parent");
+    let dir_a = parent.join("rel-a");
+    let dir_b = base.join("elsewhere");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+    std::env::set_current_dir(&parent).unwrap();
+    let engine = test_engine("driver-cwd-relative");
+    spawn_cwd_fixture(&engine, |launch| launch.with_cwd("rel-a"));
+    wait_exit(&engine);
+    let before = canonical(&child_cwd(&engine_state(&engine).text));
+    assert_eq!(
+        before,
+        canonical(&dir_a),
+        "child with a relative launch cwd must start in the resolved directory"
+    );
+    std::env::set_current_dir(&dir_b).unwrap();
+    restart_engine(&engine);
+    wait_exit(&engine);
+    let state = engine_state(&engine);
+    assert_eq!(
+        canonical(&child_cwd(&state.text)),
+        canonical(&dir_a),
+        "restart must reuse the frozen relative cwd, not re-resolve it"
+    );
+    assert_eq!(state.exited, Some(0));
+    println!("U08CWD-RELATIVE-PASS");
     close_engine(&engine);
 }
 
@@ -567,6 +678,16 @@ fn u08_g_cleared_environment_contains_only_specified_values() {
 #[test]
 fn u08_h_restart_reuses_resolved_values_after_parent_change() {
     run_driver("driver-h", "U08H-PASS");
+}
+
+#[test]
+fn u08_r11_restart_keeps_default_cwd() {
+    run_driver("driver-cwd-absent", "U08CWD-ABSENT-PASS");
+}
+
+#[test]
+fn u08_r11_restart_keeps_relative_cwd() {
+    run_driver("driver-cwd-relative", "U08CWD-RELATIVE-PASS");
 }
 
 #[cfg(unix)]

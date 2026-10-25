@@ -233,6 +233,15 @@ impl ResolvedLaunch {
     pub fn env(&self) -> &[(OsString, OsString)] {
         &self.env
     }
+
+    /// Record the frozen absolute working directory for this spawn. The
+    /// engine resolves the launch directory once (falling back to the
+    /// parent directory when unset) and stores it here, so restart reuses
+    /// the same directory even after the parent moves.
+    pub(crate) fn with_cwd(mut self, cwd: PathBuf) -> Self {
+        self.cwd = Some(cwd);
+        self
+    }
 }
 
 /// Compare environment keys with the platform rule: exact bytes on Unix,

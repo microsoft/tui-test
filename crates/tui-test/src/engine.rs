@@ -818,7 +818,7 @@ impl Engine {
     ) -> Result<OpenResult, TuiTestError> {
         let diagnostics = spec.retention;
         let (
-            source,
+            mut source,
             backend,
             profile,
             style,
@@ -902,6 +902,14 @@ impl Engine {
         };
         crate::terminal::pty::validate_cwd(&cwd)?;
         spec.resolved_cwd = Some(cwd.clone());
+        // The native branch spawns from the resolved launch, not the frozen
+        // `cwd` above, so record the frozen absolute directory on the launch
+        // used for this spawn. Restart reuses `resolved_cwd` and re-applies
+        // it here, keeping the child in the first directory (including the
+        // default) even after the parent moves.
+        if let SessionSource::Native { launch } = &mut source {
+            *launch = launch.clone().with_cwd(cwd.clone());
+        }
         recording.validate()?;
         let mut trace_options = context.trace.clone().unwrap_or_default();
         trace_options.directory =
