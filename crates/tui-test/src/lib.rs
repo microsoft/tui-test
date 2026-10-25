@@ -6,6 +6,7 @@ pub mod engine;
 pub mod input;
 pub mod locator_query;
 pub mod logger;
+pub mod pixel;
 pub mod profile;
 pub mod record;
 pub mod render;
