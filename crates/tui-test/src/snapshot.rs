@@ -296,6 +296,10 @@ impl SnapshotCell {
     }
 
     /// Whether this cell continues the wide character in the previous column.
+    ///
+    /// A continuation holds empty text with width zero and sits inside an
+    /// open span; see [`TerminalSnapshot::try_new`] for the span rules,
+    /// including the clipped-edge representation at a row end.
     pub fn is_continuation(&self) -> bool {
         self.text.is_empty()
     }
@@ -357,6 +361,9 @@ impl SnapshotCell {
         self.link_id.as_deref()
     }
 
+    /// Per-cell size checks. Continuation placement is structural (it needs
+    /// the row's span state) and lives in [`check_row_spans`], which
+    /// [`assemble`] runs over the same cells right after this.
     fn check_at(&self, col: u32, row: u32) -> Result<(), SnapshotError> {
         if self.text.len() > MAX_CELL_TEXT_BYTES {
             return Err(SnapshotError::CellTextTooLarge {
@@ -365,9 +372,6 @@ impl SnapshotCell {
                 bytes: self.text.len(),
                 limit: MAX_CELL_TEXT_BYTES,
             });
-        }
-        if self.text.is_empty() && (col == 0 || self.width != 0) {
-            return Err(SnapshotError::BadContinuation { col, row });
         }
         for uri in self.link_uri.iter().chain(self.link_id.iter()) {
             if uri.len() > MAX_LINK_BYTES {
@@ -621,8 +625,10 @@ pub enum SnapshotError {
     },
     /// A cell grapheme exceeds [`MAX_CELL_TEXT_BYTES`] (coordinate-free).
     OversizeText { bytes: usize, limit: usize },
-    /// A continuation cell (empty text) at column zero, or a non-continuation
-    /// width on empty text.
+    /// A cell that breaks the row's wide-character span: a continuation with
+    /// no open span (including any continuation at column zero, since spans
+    /// never cross rows), a continuation carrying a nonzero width, or a
+    /// leading cell inside an unfinished span (a missing continuation).
     BadContinuation { col: u32, row: u32 },
     /// A hyperlink URI or identity exceeds [`MAX_LINK_BYTES`].
     LinkTooLarge {
@@ -800,6 +806,20 @@ impl TerminalSnapshot {
     /// continuations, out-of-bounds in-capture cursors, misplaced origins,
     /// and oversize titles and links, using checked arithmetic throughout.
     /// Cell geometry is recorded, never recomputed from UTF-8 byte length.
+    ///
+    /// Wide-character spans are validated per row with an explicit
+    /// remaining-span counter. A leading cell with width `w > 1` opens a
+    /// span covering the next `w - 1` cells, each of which must be a
+    /// continuation (empty text, width zero). A continuation with no open
+    /// span is rejected, as is a leading cell inside an unfinished span.
+    /// Spans never cross a row boundary: every row starts outside any span,
+    /// so a continuation at column zero is always invalid. A leading cell
+    /// whose span would extend past its row's last column is the supported
+    /// clipped-edge representation: it keeps its full recorded width and
+    /// the continuations past the edge are omitted, so a trailing open span
+    /// at row end is accepted. A leading cell with width zero (for example
+    /// a lone combining mark or zero-width space, which xterm.js reports as
+    /// a genuine cell owning its column) opens no span.
     ///
     /// ```
     /// use tui_test::profile::Rgb;
@@ -1067,6 +1087,38 @@ impl<'de> Deserialize<'de> for TerminalSnapshot {
     }
 }
 
+/// Validate one row's wide-character spans with an explicit counter of how
+/// many continuation cells the current span still covers (`remaining`).
+///
+/// A leading cell with width `w > 1` opens a span of `w - 1` continuations;
+/// each continuation consumes one. A continuation with nothing to consume is
+/// uncovered (an orphan), and a leading cell that arrives while `remaining`
+/// is nonzero sits inside an unfinished span (a missing continuation). A
+/// span that would run past the row's last column is the supported
+/// clipped-edge representation: the leading cell keeps its full recorded
+/// width and the past-the-edge continuations are omitted, so `remaining` may
+/// still be nonzero when the row ends. Spans never cross rows: callers reset
+/// the counter by validating each row separately, so a continuation at
+/// column zero always fails as uncovered.
+fn check_row_spans(row_cells: &[SnapshotCell], row: u32) -> Result<(), SnapshotError> {
+    let mut remaining: u32 = 0;
+    for (col, cell) in row_cells.iter().enumerate() {
+        let col = col as u32;
+        if cell.is_continuation() {
+            if cell.width() != 0 || remaining == 0 {
+                return Err(SnapshotError::BadContinuation { col, row });
+            }
+            remaining -= 1;
+        } else {
+            if remaining > 0 {
+                return Err(SnapshotError::BadContinuation { col, row });
+            }
+            remaining = u32::from(cell.width()).saturating_sub(1);
+        }
+    }
+    Ok(())
+}
+
 /// Shared validation for [`TerminalSnapshot::try_new`] and deserialization.
 fn assemble(parts: SnapshotParts) -> Result<TerminalSnapshot, SnapshotError> {
     let SnapshotParts {
@@ -1111,10 +1163,14 @@ fn assemble(parts: SnapshotParts) -> Result<TerminalSnapshot, SnapshotError> {
             actual: cells.len(),
         });
     }
-    for (index, cell) in cells.iter().enumerate() {
-        let col = (index as u32) % cols;
-        let row = (index as u32) / cols;
-        cell.check_at(col, row)?;
+    // `cols` is nonzero and `cells.len() == cols * rows`, so the chunks
+    // cover every cell exactly once.
+    for (row, chunk) in cells.chunks_exact(cols as usize).enumerate() {
+        let row = row as u32;
+        for (col, cell) in chunk.iter().enumerate() {
+            cell.check_at(col as u32, row)?;
+        }
+        check_row_spans(chunk, row)?;
     }
     if scope == SnapshotScope::FullHistory && viewport_origin != 0 {
         return Err(SnapshotError::BadViewportOrigin {
@@ -1845,6 +1901,110 @@ mod tests {
         assert!(
             error.to_string().contains("unsupported snapshot schema"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn wide_spans_need_covering_continuations() {
+        let profile = profile();
+
+        fn span_cell(text: &str, width: u16) -> SnapshotCell {
+            SnapshotCell::new(
+                text.to_string(),
+                width,
+                SnapshotColor::Default,
+                SnapshotColor::Default,
+                Attrs::empty(),
+                SnapshotUnderline::None,
+                SnapshotColor::Default,
+                None,
+                None,
+            )
+            .expect("coordinate-free construction succeeds")
+        }
+
+        // `try_new` over one row of `cells`; every case below is also
+        // mirrored through JSON by splicing the same cells into a valid
+        // wire payload, proving constructors and deserialization share the
+        // validator.
+        fn try_row(
+            profile: &Profile,
+            cells: Vec<SnapshotCell>,
+        ) -> Result<TerminalSnapshot, SnapshotError> {
+            let cols = cells.len() as u32;
+            let mut parts = blank_parts(profile, cols, 1);
+            parts.cells = cells;
+            TerminalSnapshot::try_new(parts)
+        }
+
+        fn json_row(profile: &Profile, cells: Vec<SnapshotCell>) -> serde_json::Value {
+            let cols = cells.len() as u32;
+            let valid = TerminalSnapshot::try_new(blank_parts(profile, cols, 1)).expect("valid");
+            let mut wire = serde_json::to_value(&valid).expect("serializes");
+            wire["cells"] = serde_json::Value::Array(
+                cells
+                    .iter()
+                    .map(|cell| serde_json::to_value(cell).expect("cell serializes"))
+                    .collect(),
+            );
+            wire
+        }
+
+        fn assert_rejected(profile: &Profile, cells: Vec<SnapshotCell>, col: u32, row: u32) {
+            assert_eq!(
+                try_row(profile, cells.clone()),
+                Err(SnapshotError::BadContinuation { col, row })
+            );
+            let error = serde_json::from_value::<TerminalSnapshot>(json_row(profile, cells))
+                .expect_err("JSON rejects the same span");
+            assert!(
+                error.to_string().contains("continuation"),
+                "unexpected error: {error}"
+            );
+        }
+
+        // Orphan continuation: no open span covers column 1.
+        assert_rejected(&profile, vec![span_cell("x", 1), span_cell("", 0)], 1, 0);
+        // Missing continuation: a leading cell inside an unfinished span.
+        assert_rejected(&profile, vec![span_cell("x", 2), span_cell("y", 1)], 1, 0);
+        // Continuation carrying a nonzero width is not a continuation.
+        assert_rejected(&profile, vec![span_cell("", 1)], 0, 0);
+        // A width-3 span short one continuation.
+        assert_rejected(
+            &profile,
+            vec![span_cell("a", 3), span_cell("", 0), span_cell("b", 1)],
+            2,
+            0,
+        );
+
+        // Covered spans pass through both doors.
+        for cells in [
+            vec![span_cell("東", 2), span_cell("", 0)],
+            vec![span_cell("a", 3), span_cell("", 0), span_cell("", 0)],
+            // Clipped edge: the span runs past the row end, so the
+            // past-the-edge continuations are omitted.
+            vec![span_cell("x", 1), span_cell("東", 2)],
+            // A zero-width leading cell (lone combining mark) opens no span.
+            vec![span_cell("́", 0), span_cell("x", 1)],
+        ] {
+            let snapshot = try_row(&profile, cells.clone()).expect("span is covered");
+            let back: TerminalSnapshot =
+                serde_json::from_value(json_row(&profile, cells)).expect("JSON accepts");
+            assert_eq!(snapshot, back);
+        }
+
+        // Spans never cross rows: row 1 starts outside any span, so its
+        // column-zero continuation is uncovered even though row 0 is clean.
+        let mut cross = blank_parts(&profile, 2, 2);
+        cross.cells = vec![
+            span_cell("x", 1),
+            span_cell("y", 1),
+            span_cell("", 0),
+            span_cell(" ", 1),
+        ];
+        assert_eq!(
+            TerminalSnapshot::try_new(cross),
+            Err(SnapshotError::BadContinuation { col: 0, row: 1 })
         );
     }
 
