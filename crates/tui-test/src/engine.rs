@@ -1599,8 +1599,10 @@ impl Engine {
     ///
     /// This delegates to [`TerminalSession::mouse_checked`]. It fails with
     /// [`CheckedInputError`] before any byte write when the application did
-    /// not enable matching tracking, selected a non-SGR encoding, or the
-    /// coordinates miss the active screen.
+    /// not enable matching tracking, selected a non-SGR encoding, the
+    /// coordinates miss the active screen, or the viewport shows history.
+    /// Presses work under X10 (mode 9) tracking with SGR encoding; releases
+    /// never do, since X10 reports button presses only.
     pub fn mouse_checked(&self, action: CheckedMouseAction) -> Result<(), CheckedInputError> {
         self.with_checked_session(|session| session.mouse_checked(action))
     }
@@ -1609,7 +1611,8 @@ impl Engine {
     ///
     /// This delegates to [`TerminalSession::paste`]: bracketed-paste markers
     /// when the application enabled the mode, raw text without markers when
-    /// it did not.
+    /// it did not. It scrolls to the bottom first so the paste targets the
+    /// live screen.
     pub fn paste(&self, text: &str) -> Result<(), CheckedInputError> {
         self.with_checked_session(|session| session.paste(text))
     }
@@ -4937,6 +4940,326 @@ mod tests {
             final_viewport.offset > 0,
             "scroll must complete after the write"
         );
+    }
+
+    /// A checked mouse report must hold the viewport/input gate from sampling
+    /// through the completed write: a concurrent scroll either waits for the
+    /// report or rejects after observing history, never completes first and
+    /// then permits the stale report.
+    #[test]
+    fn checked_mouse_waits_for_blocked_write_before_scrolling() {
+        use std::sync::mpsc;
+
+        struct GateWriter {
+            entered: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            state: Arc<Mutex<TermState>>,
+            observed: mpsc::Sender<usize>,
+        }
+
+        impl std::io::Write for GateWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.entered.send(()).unwrap();
+                self.release.recv_timeout(Duration::from_secs(10)).unwrap();
+                self.observed
+                    .send(self.state.lock().unwrap().emu.viewport().offset)
+                    .unwrap();
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let engine = Arc::new(Engine::new(
+            "checked-mouse-scroll".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        ));
+        let mut options = sleeping_program(false);
+        options.cols = 12;
+        options.rows = 3;
+        engine.execute(Operation::Run(options)).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let state = {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            state
+                .emu
+                .process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            state.mouse_mode.process(b"\x1b[?1000h\x1b[?1006h");
+            state.screen_dirty = true;
+            session.pty.replace_test_writer(Box::new(GateWriter {
+                entered: entered_tx,
+                release: release_rx,
+                state: session.state.clone(),
+                observed: observed_tx,
+            }));
+            session.state.clone()
+        };
+        let mouse_engine = engine.clone();
+        let mouse = std::thread::spawn(move || {
+            mouse_engine.mouse_checked(CheckedMouseAction::Press {
+                x: 1,
+                y: 1,
+                options: crate::api::MouseOptions::default(),
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let state_is_unlocked = state.try_lock().is_ok();
+        let (scroll_started_tx, scroll_started_rx) = mpsc::channel();
+        let (scrolled_tx, scrolled_rx) = mpsc::channel();
+        let scroll_engine = engine.clone();
+        let scroll = std::thread::spawn(move || {
+            scroll_started_tx.send(()).unwrap();
+            let result = scroll_engine.execute(Operation::Scroll {
+                target: ScrollTarget::Top,
+            });
+            scrolled_tx.send(()).unwrap();
+            result
+        });
+        scroll_started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        let scrolled_during_write = scrolled_rx.recv_timeout(Duration::from_millis(200)).is_ok();
+        release_tx.send(()).unwrap();
+        mouse.join().unwrap().unwrap();
+        scroll.join().unwrap().unwrap();
+        let offset_at_write = observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let final_viewport = state.lock().unwrap().emu.viewport();
+        engine.execute(Operation::Close).unwrap();
+        assert!(state_is_unlocked, "PTY input must not hold terminal state");
+        assert!(
+            !scrolled_during_write,
+            "scroll overtook a pending checked mouse write"
+        );
+        assert_eq!(
+            offset_at_write, 0,
+            "checked mouse input reached a historical viewport"
+        );
+        assert!(
+            final_viewport.offset > 0,
+            "scroll must complete after the write"
+        );
+    }
+
+    /// A checked paste must hold the viewport/input gate from sampling through
+    /// the completed write, like a checked mouse report.
+    #[test]
+    fn checked_paste_waits_for_blocked_write_before_scrolling() {
+        use std::sync::mpsc;
+
+        struct GateWriter {
+            entered: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+            state: Arc<Mutex<TermState>>,
+            observed: mpsc::Sender<usize>,
+        }
+
+        impl std::io::Write for GateWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.entered.send(()).unwrap();
+                self.release.recv_timeout(Duration::from_secs(10)).unwrap();
+                self.observed
+                    .send(self.state.lock().unwrap().emu.viewport().offset)
+                    .unwrap();
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let engine = Arc::new(Engine::new(
+            "checked-paste-scroll".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        ));
+        let mut options = sleeping_program(false);
+        options.cols = 12;
+        options.rows = 3;
+        engine.execute(Operation::Run(options)).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let state = {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            state
+                .emu
+                .process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            state.emu.process(b"\x1b[?2004h");
+            state.screen_dirty = true;
+            session.pty.replace_test_writer(Box::new(GateWriter {
+                entered: entered_tx,
+                release: release_rx,
+                state: session.state.clone(),
+                observed: observed_tx,
+            }));
+            session.state.clone()
+        };
+        let paste_engine = engine.clone();
+        let paste = std::thread::spawn(move || paste_engine.paste("x"));
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let state_is_unlocked = state.try_lock().is_ok();
+        let (scroll_started_tx, scroll_started_rx) = mpsc::channel();
+        let (scrolled_tx, scrolled_rx) = mpsc::channel();
+        let scroll_engine = engine.clone();
+        let scroll = std::thread::spawn(move || {
+            scroll_started_tx.send(()).unwrap();
+            let result = scroll_engine.execute(Operation::Scroll {
+                target: ScrollTarget::Top,
+            });
+            scrolled_tx.send(()).unwrap();
+            result
+        });
+        scroll_started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        let scrolled_during_write = scrolled_rx.recv_timeout(Duration::from_millis(200)).is_ok();
+        release_tx.send(()).unwrap();
+        paste.join().unwrap().unwrap();
+        scroll.join().unwrap().unwrap();
+        let offset_at_write = observed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let final_viewport = state.lock().unwrap().emu.viewport();
+        engine.execute(Operation::Close).unwrap();
+        assert!(state_is_unlocked, "PTY input must not hold terminal state");
+        assert!(
+            !scrolled_during_write,
+            "scroll overtook a pending checked paste write"
+        );
+        assert_eq!(
+            offset_at_write, 0,
+            "checked paste reached a historical viewport"
+        );
+        assert!(
+            final_viewport.offset > 0,
+            "scroll must complete after the write"
+        );
+    }
+
+    /// A checked paste targets the live screen like other keyboard input: it
+    /// scrolls to the bottom before writing, in both framed and raw paths,
+    /// while empty input keeps its documented behavior.
+    #[test]
+    fn checked_paste_scrolls_to_bottom_before_writing() {
+        struct RecordingWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for RecordingWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let engine = Engine::new(
+            "checked-paste-policy".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let mut options = sleeping_program(false);
+        options.cols = 12;
+        options.rows = 3;
+        engine.execute(Operation::Run(options)).unwrap();
+        let written = Arc::new(Mutex::new(Vec::new()));
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            state
+                .emu
+                .process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            state.emu.process(b"\x1b[?2004h");
+            state.screen_dirty = true;
+            session
+                .pty
+                .replace_test_writer(Box::new(RecordingWriter(written.clone())));
+        }
+        engine
+            .execute(Operation::Scroll {
+                target: ScrollTarget::Top,
+            })
+            .unwrap();
+        let viewport = engine.execute(Operation::GetViewport).unwrap();
+        assert!(matches!(viewport, OperationResult::Viewport(viewport) if viewport.offset > 0));
+        engine.paste("x").unwrap();
+        let viewport = engine.execute(Operation::GetViewport).unwrap();
+        assert!(
+            matches!(viewport, OperationResult::Viewport(viewport) if viewport.offset == 0),
+            "paste must scroll to the bottom first, got {viewport:?}"
+        );
+        assert_eq!(&*written.lock().unwrap(), b"\x1b[200~x\x1b[201~");
+        engine
+            .execute(Operation::Scroll {
+                target: ScrollTarget::Top,
+            })
+            .unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            session.state.lock().unwrap().emu.process(b"\x1b[?2004l");
+        }
+        engine.paste("y").unwrap();
+        let viewport = engine.execute(Operation::GetViewport).unwrap();
+        assert!(
+            matches!(viewport, OperationResult::Viewport(viewport) if viewport.offset == 0),
+            "raw paste must scroll to the bottom first, got {viewport:?}"
+        );
+        assert_eq!(&*written.lock().unwrap(), b"\x1b[200~x\x1b[201~y");
+        engine
+            .execute(Operation::Scroll {
+                target: ScrollTarget::Top,
+            })
+            .unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            session.state.lock().unwrap().emu.process(b"\x1b[?2004h");
+        }
+        engine.paste("").unwrap();
+        let viewport = engine.execute(Operation::GetViewport).unwrap();
+        assert!(
+            matches!(viewport, OperationResult::Viewport(viewport) if viewport.offset == 0),
+            "framed empty paste still targets the bottom, got {viewport:?}"
+        );
+        assert_eq!(
+            &*written.lock().unwrap(),
+            b"\x1b[200~x\x1b[201~y\x1b[200~\x1b[201~"
+        );
+        let before = written.lock().unwrap().len();
+        let error = engine
+            .paste("a\x1b[201~b")
+            .expect_err("terminator paste fails while markers are on");
+        assert!(matches!(error, CheckedInputError::Rejected(_)));
+        assert_eq!(written.lock().unwrap().len(), before);
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            session.state.lock().unwrap().emu.process(b"\x1b[?2004l");
+        }
+        engine
+            .execute(Operation::Scroll {
+                target: ScrollTarget::Top,
+            })
+            .unwrap();
+        engine.paste("").unwrap();
+        let viewport = engine.execute(Operation::GetViewport).unwrap();
+        assert!(
+            matches!(viewport, OperationResult::Viewport(viewport) if viewport.offset > 0),
+            "raw empty paste writes nothing and scrolls nothing, got {viewport:?}"
+        );
+        assert_eq!(written.lock().unwrap().len(), before);
+        engine.execute(Operation::Close).unwrap();
     }
 
     #[test]

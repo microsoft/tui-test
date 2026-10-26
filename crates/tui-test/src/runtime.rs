@@ -443,7 +443,10 @@ impl Session {
 
     /// Send one mouse report after checks against the terminal modes.
     ///
-    /// This delegates to [`Engine::mouse_checked`].
+    /// This delegates to [`Engine::mouse_checked`]. Presses work under X10
+    /// (mode 9) tracking with SGR encoding; releases never do, since X10
+    /// reports button presses only. Reports targeting a history viewport
+    /// fail; scroll to the bottom first and send again.
     pub fn mouse_checked(&self, action: CheckedMouseAction) -> Result<(), CheckedInputError> {
         self.engine.mouse_checked(action)
     }
@@ -451,7 +454,9 @@ impl Session {
     /// Send text as a paste through the ordered input write path.
     ///
     /// This delegates to [`Engine::paste`]: bracketed-paste markers when the
-    /// application enabled the mode, raw text without markers when it did not.
+    /// application enabled the mode, raw text without markers when it did
+    /// not. It scrolls to the bottom first so the paste targets the live
+    /// screen.
     pub fn paste(&self, text: &str) -> Result<(), CheckedInputError> {
         self.engine.paste(text)
     }
