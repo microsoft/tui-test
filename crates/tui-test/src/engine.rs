@@ -1629,7 +1629,7 @@ impl Engine {
         self.execute_raw_bytes(data, ExecutionContext::default())
     }
 
-    fn execute_raw_bytes(
+    pub(crate) fn execute_raw_bytes(
         &self,
         data: &[u8],
         context: ExecutionContext,

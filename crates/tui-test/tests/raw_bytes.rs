@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use tui_test::{
-    AutomaticRecording, AutomaticRecordingMode, ErrorKind, OpenOptions, Operation, RunOptions,
-    Session, Timeouts,
+    AutomaticRecording, AutomaticRecordingMode, ErrorKind, ExecutionContext, FailureArtifactMode,
+    FailureArtifactOptions, OpenOptions, Operation, RunOptions, Session, Timeouts, TraceMode,
+    TraceOptions,
 };
 
 const FIXTURE: &str = "TUI_TEST_RAW_BYTES_FIXTURE";
@@ -231,4 +232,87 @@ fn u09_c_write_after_close_returns_typed_error() {
     let error = session.write_bytes(b"after close").unwrap_err();
     assert_eq!(error.kind, ErrorKind::NoSession);
     assert!(!error.message.is_empty());
+}
+
+// U09-D (upstream F2): the public [`Session::write_bytes`] preserves the
+// session execution context instead of falling back to a default one, so a
+// configured failure directory is honored after the child has exited.
+#[test]
+fn public_write_bytes_preserves_execution_context() {
+    const PAYLOAD: &[u8] = b"ping";
+    let directory = test_directory("u09-context");
+    let out = directory.join("out.bin");
+    let ready = directory.join("ready");
+    let failure_dir = directory.join("failures");
+    let context = ExecutionContext {
+        artifact: Some(FailureArtifactOptions {
+            directory: failure_dir.clone(),
+            mode: FailureArtifactMode::Text,
+            include_recording: false,
+        }),
+        trace: Some(TraceOptions {
+            mode: TraceMode::Off,
+            directory: directory.join("traces"),
+        }),
+        diagnostic_context: [("test".to_string(), "public_write_bytes_context".to_string())].into(),
+        ..ExecutionContext::default()
+    }
+    .with_operation("write-bytes-context-check");
+    let session = Session::new("raw-bytes-u09-context").with_execution_context(context);
+    session
+        .run(run_options(&out, &ready, PAYLOAD.len()))
+        .unwrap();
+    wait_for_len(
+        &ready,
+        b"ready".len(),
+        "fixture readiness",
+        Duration::from_secs(10),
+    );
+    session.write_bytes(PAYLOAD).unwrap();
+    let received = wait_for_len(&out, PAYLOAD.len(), "raw bytes", Duration::from_secs(10));
+    assert_eq!(received, PAYLOAD);
+    // The fixture exits after writing the file, so the session is still open
+    // but the child is gone.
+    wait_exit(&session, "fixture");
+    let error = session.write_bytes(b"after exit").unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Internal);
+    assert!(!error.message.is_empty());
+    let details = error.details.as_ref().expect("structured failure details");
+    assert_eq!(details.operation, "write-bytes-context-check");
+    let artifact = error.artifact.as_ref().expect("failure artifact reference");
+    let manifest = artifact
+        .manifest
+        .as_ref()
+        .map(PathBuf::from)
+        .expect("failure manifest");
+    assert!(
+        manifest.starts_with(&failure_dir),
+        "manifest {} is not under {}",
+        manifest.display(),
+        failure_dir.display()
+    );
+    assert!(manifest.is_file());
+    let manifest_json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    assert_eq!(
+        manifest_json["operation"]["name"],
+        "write-bytes-context-check"
+    );
+    assert_eq!(
+        manifest_json["context"]["test"],
+        "public_write_bytes_context"
+    );
+    let report = artifact
+        .report
+        .as_ref()
+        .map(PathBuf::from)
+        .expect("failure report");
+    assert!(
+        report.starts_with(&failure_dir),
+        "report {} is not under {}",
+        report.display(),
+        failure_dir.display()
+    );
+    assert!(report.is_file());
+    session.close().unwrap();
 }

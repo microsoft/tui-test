@@ -463,7 +463,7 @@ impl Session {
     /// exited or the process status query has failed. With no open session
     /// (after [`Session::close`]) every payload reports a no-session error.
     pub fn write_bytes(&self, data: &[u8]) -> Result<(), TuiTestError> {
-        self.engine.write_bytes(data)
+        self.engine.execute_raw_bytes(data, self.context.clone())
     }
 
     /// Cancel pending operations, terminate the child, and release the terminal.
