@@ -238,7 +238,7 @@ pub struct LiveFrame {
 
 /// One-line operation description for the verbose log. Open and Run redact env
 /// values (they may contain secrets) and report only the variable count.
-
+///
 /// Coordination flags for one request through the shared wrapper.
 struct RequestPlan {
     waiting: bool,
@@ -452,11 +452,25 @@ impl Engine {
                 // cancellation and deadline checks keep acquisition bounded.
                 if !plan.acquire_before_poll {
                     if cancelled() {
-                        return Err(TuiTestError::assertion("operation was cancelled"));
+                        let mut error = TuiTestError::assertion("operation was cancelled");
+                        self.finalize_acquisition_error(
+                            &mut error,
+                            FailureReason::Cancelled,
+                            &metadata_inputs,
+                            context,
+                        );
+                        return Err(error);
                     }
                     if let Some(acquisition) = &plan.acquisition_deadline {
                         if Instant::now() >= acquisition.deadline {
-                            return Err(acquisition.error.clone());
+                            let mut error = acquisition.error.clone();
+                            self.finalize_acquisition_error(
+                                &mut error,
+                                FailureReason::TimedOut,
+                                &metadata_inputs,
+                                context,
+                            );
+                            return Err(error);
                         }
                     }
                 }
@@ -466,11 +480,25 @@ impl Engine {
                     Err(TryLockError::WouldBlock) => {
                         if plan.acquire_before_poll {
                             if cancelled() {
-                                return Err(TuiTestError::assertion("operation was cancelled"));
+                                let mut error = TuiTestError::assertion("operation was cancelled");
+                                self.finalize_acquisition_error(
+                                    &mut error,
+                                    FailureReason::Cancelled,
+                                    &metadata_inputs,
+                                    context,
+                                );
+                                return Err(error);
                             }
                             if let Some(acquisition) = &plan.acquisition_deadline {
                                 if Instant::now() >= acquisition.deadline {
-                                    return Err(acquisition.error.clone());
+                                    let mut error = acquisition.error.clone();
+                                    self.finalize_acquisition_error(
+                                        &mut error,
+                                        FailureReason::TimedOut,
+                                        &metadata_inputs,
+                                        context,
+                                    );
+                                    return Err(error);
                                 }
                             }
                         }
@@ -1274,6 +1302,116 @@ impl Engine {
         let failure = details.failure_details();
         error.message = failure.summary.clone();
         error.details = Some(Box::new(failure));
+    }
+
+    /// Finalize a quiet-wait acquisition error without touching the
+    /// lifecycle lock.
+    ///
+    /// Cancellation and deadline errors return while a lifecycle writer
+    /// still holds the exclusive lock, so this path must never block on it
+    /// (or on session/state locks a lifecycle transition may hold): the
+    /// observation, history, and diagnostics below all use non-waiting
+    /// attempts and degrade gracefully when the contended state is
+    /// unavailable. The error still completes history, marks the recording
+    /// outcome, and carries finalized details like any other failure.
+    fn finalize_acquisition_error(
+        &self,
+        error: &mut TuiTestError,
+        reason: FailureReason,
+        metadata_inputs: &RequestMetadata,
+        context: &ExecutionContext,
+    ) {
+        if !matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal) {
+            return;
+        }
+        if error.report.is_none() {
+            error.report = Some(Box::new(FailureReport::new(
+                metadata_inputs.name.clone(),
+                metadata_inputs.timeout_ms,
+                reason,
+                base_error_message(&error.message),
+            )));
+        }
+        let (started_ms, screen_before, observation) = self.try_acquisition_diagnostics();
+        if error.observation.is_none() {
+            error.observation = observation.map(Box::new);
+        }
+        if matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal) {
+            self.recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed = true;
+        }
+        let pending = self
+            .operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .begin(
+                metadata_inputs.name.clone(),
+                started_ms,
+                screen_before,
+                metadata_inputs.safe_summary.clone(),
+                metadata_inputs.is_assertion,
+                metadata_inputs.expectation.clone(),
+            );
+        let metadata = OperationMetadata {
+            sequence: pending.sequence(),
+            interrupt_generation: self.interrupt_generation.load(Ordering::Acquire),
+            name: metadata_inputs.name.clone(),
+            timeout_ms: metadata_inputs.timeout_ms,
+            started_at: Instant::now(),
+            started_ms,
+            screen_before,
+            safe_summary: metadata_inputs.safe_summary.clone(),
+            is_assertion: metadata_inputs.is_assertion,
+            expectation: metadata_inputs.expectation.clone(),
+            input: metadata_inputs.input.clone(),
+        };
+        let screen_at_return = error
+            .observation
+            .as_deref()
+            .map_or(screen_before, |value| value.screen_sequence);
+        let ended_ms = error.observation.as_deref().map(|value| value.captured_ms);
+        self.operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish(
+                pending,
+                ended_ms,
+                screen_at_return,
+                error.kind.as_str(),
+                metadata_inputs.input.clone(),
+            );
+        // No session handle: the shared finalizer must not block acquiring
+        // one. The best-effort observation above already rides on the error,
+        // so details and artifacts are still produced; without one, the
+        // report finalizes observation-free.
+        self.finalize_failure_with_session(error, context, &metadata, None, false);
+        error.observation = None;
+        error.report = None;
+    }
+
+    /// Best-effort acquisition-time diagnostics using non-waiting lock
+    /// attempts only. Returns `(started_ms, screen_before, observation)`,
+    /// degrading to zeroes and no observation when the contended session or
+    /// emulator state is unavailable.
+    fn try_acquisition_diagnostics(&self) -> (u64, u64, Option<FailureObservation>) {
+        let Some(session_guard) = self.session.try_read().ok() else {
+            return (0, 0, None);
+        };
+        let Some(session) = session_guard.as_ref() else {
+            return (0, 0, None);
+        };
+        let Ok(mut state) = session.state.try_lock() else {
+            return (0, 0, None);
+        };
+        let started_ms = elapsed_ms(state.started_at);
+        let screen_before = try_capture_visual_state(&mut state, true).unwrap_or(0);
+        let observation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            capture_failure_observation_locked(session, &mut state)
+        }))
+        .ok();
+        (started_ms, screen_before, observation)
     }
 
     fn finish_trace(
@@ -7017,6 +7155,42 @@ mod tests {
         ))
     }
 
+    // F3: an acquisition error finalizes like any other failure — structured
+    // reason in details, a completed history entry, and the failed recording
+    // outcome — all produced while the lifecycle writer still holds the
+    // exclusive lock, so the assertions below double as proof the request
+    // never waited on that lock.
+    fn assert_finalized_acquisition_error(
+        engine: &Engine,
+        error: &TuiTestError,
+        reason: FailureReason,
+    ) {
+        let details = error
+            .details
+            .as_ref()
+            .expect("acquisition error must carry finalized details");
+        assert_eq!(details.operation, "wait.quiet");
+        assert_eq!(details.reason, reason);
+        let history = engine
+            .operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot();
+        let event = history
+            .iter()
+            .find(|event| event.name == "wait.quiet")
+            .expect("acquisition error must complete history");
+        assert_eq!(event.result, "assertion");
+        assert!(
+            engine
+                .recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed,
+            "acquisition error must mark the recording outcome failed"
+        );
+    }
+
     // Startup/Restart contention with pre-cancellation: a quiet request that
     // is already cancelled must report cancellation without waiting for a
     // lifecycle writer to release the lock.
@@ -7041,6 +7215,7 @@ mod tests {
             engine.lifecycle.try_read().is_err(),
             "pre-cancelled quiet blocked on lifecycle acquisition"
         );
+        assert_finalized_acquisition_error(&engine, &error, FailureReason::Cancelled);
         let _ = release_tx.send(());
         holder.join().unwrap();
     }
@@ -7091,6 +7266,7 @@ mod tests {
             engine.lifecycle.try_read().is_err(),
             "cancelled quiet blocked on lifecycle acquisition"
         );
+        assert_finalized_acquisition_error(&engine, &error, FailureReason::Cancelled);
         let _ = release_tx.send(());
         holder.join().unwrap();
     }
@@ -7119,7 +7295,86 @@ mod tests {
             engine.lifecycle.try_read().is_err(),
             "timed-out quiet blocked on lifecycle acquisition past its deadline"
         );
+        assert_finalized_acquisition_error(&engine, &error, FailureReason::TimedOut);
         let _ = release_tx.send(());
         holder.join().unwrap();
+    }
+
+    // Acquisition errors on a live session still write the failure file: with
+    // an artifact directory configured, a pre-cancelled quiet wait finalizes
+    // (Cancelled details, history, failed OnFailure recording) and exports
+    // the artifact while the writer holds the lifecycle lock.
+    #[test]
+    fn quiet_acquisition_cancel_writes_failure_file_on_live_session() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = std::sync::Arc::new(Engine::new(
+            "quiet-acquisition-live".into(),
+            std::sync::Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        ));
+        let mut run = sleeping_program(false);
+        run.recording.mode = AutomaticRecordingMode::OnFailure;
+        engine.execute(Operation::Run(run)).unwrap();
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Text,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "pre-cancelled quiet blocked on lifecycle acquisition"
+        );
+        assert_finalized_acquisition_error(&engine, &error, FailureReason::Cancelled);
+        let artifact = error
+            .artifact
+            .as_ref()
+            .expect("live acquisition error must write a failure file");
+        assert_eq!(artifact.status, FailureArtifactStatus::Written);
+        let files = [
+            artifact.manifest.as_ref(),
+            artifact.report.as_ref(),
+            artifact.screen_text.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        assert!(
+            !files.is_empty(),
+            "failure artifact must reference at least one file"
+        );
+        for path in files {
+            assert!(
+                std::path::Path::new(path).is_file(),
+                "missing failure file: {path}"
+            );
+        }
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        engine.execute(Operation::Close).unwrap();
+        assert!(
+            engine
+                .recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed,
+            "failed acquisition must retain the OnFailure recording outcome"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
