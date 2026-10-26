@@ -471,6 +471,13 @@ impl Session {
 
     /// Wait until the terminal stays quiet, then return success.
     ///
+    /// This is the Session-level quiet wait. The new capabilities over the
+    /// pre-existing waits are the configurable quiet criteria (overall
+    /// timeout plus quiet interval in [`WaitQuietOptions`]) and the
+    /// byte-vs-visual observation modes; overall timeouts (as on `WaitIdle`)
+    /// and cancellable execution pre-date this wait. Failures report as
+    /// [`TuiTestError`](crate::api::TuiTestError), like every other wait.
+    ///
     /// Visual-quiet mode samples the raw active screen at request start and
     /// every 50 milliseconds, and restarts its timer when two successive
     /// canonical samples differ. Byte-quiet mode restarts its timer on every
@@ -481,7 +488,8 @@ impl Session {
     ///
     /// Sampling limit: only sampled states are compared. A terminal change
     /// that appears and disappears between two consecutive samples is not
-    /// observed. This wait is not an application frame boundary.
+    /// observed. This wait is not an application frame boundary. Screen and
+    /// output observation build on the session state from #278.
     ///
     /// Cancellation uses the engine mechanism from
     /// [`Engine::execute_with_context_cancellable`]: pass a flag through
@@ -508,12 +516,26 @@ impl Session {
     /// cannot itself proceed until waits yield. A session generation captured
     /// at request start is re-checked before any success return, so a Close
     /// or Restart that completes mid-wait never surfaces as quiet success.
+    ///
+    /// The request runs through the shared request wrapper under this
+    /// session's execution context, with the ordinary operation history,
+    /// failure finalization, and recording outcome. A timeout on a live
+    /// child finalizes as a `TimedOut` failure: the returned
+    /// [`TuiTestError`](crate::api::TuiTestError) carries failure details, a
+    /// configured failure artifact is written, and the automatic recording
+    /// is marked failed so an `OnFailure` recording survives close.
+    /// Cancellation keeps the `Cancelled` reason and never reports success.
+    /// One request deadline covers acquisition and observation together: a
+    /// wait queued behind a lifecycle writer still times out on schedule
+    /// instead of inheriting a fresh budget once the lock frees.
     pub fn wait_quiet_cancellable(
         &self,
         options: &WaitQuietOptions,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<(), TuiTestError> {
-        self.engine.run_quiet_wait_cancellable(options, cancelled)
+        let context = self.context.clone().with_operation("wait.quiet");
+        self.engine
+            .run_quiet_wait_cancellable(options, &context, cancelled)
     }
 
     /// Cancel pending operations, including startup readiness, and terminate the

@@ -16,6 +16,10 @@
 //! change that appears and disappears between two consecutive samples is not
 //! observed and does not restart the timer. This wait is not an application
 //! frame boundary and is not a DEC 2026 boundary.
+//!
+//! Observation builds on the session state from #278: visual mode compares
+//! canonical active-screen snapshots and byte mode consults the monotonic
+//! time of the most recent PTY output read.
 
 use std::time::{Duration, Instant};
 
@@ -154,7 +158,7 @@ pub(crate) fn cancelled_error() -> TuiTestError {
     TuiTestError::assertion("operation was cancelled")
 }
 
-fn timeout_error(options: &WaitQuietOptions) -> TuiTestError {
+pub(crate) fn timeout_error(options: &WaitQuietOptions) -> TuiTestError {
     TuiTestError::assertion(format!(
         "wait quiet: timed out after {}ms without {}ms of {} quiet",
         options.timeout.as_millis(),

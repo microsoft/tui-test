@@ -220,7 +220,9 @@ fn join_bounded<T: Send + 'static>(handle: std::thread::JoinHandle<T>, what: &st
 /// fires once from inside the cancellation callback, then answers from
 /// `flag`. Waiting on the receiver (with `GATE_BOUND`) replaces every
 /// "sleep, then assume the wait started" rendezvous.
-fn entry_gate() -> (Arc<Mutex<Option<mpsc::Sender<()>>>>, mpsc::Receiver<()>) {
+type EntryGate = (Arc<Mutex<Option<mpsc::Sender<()>>>>, mpsc::Receiver<()>);
+
+fn entry_gate() -> EntryGate {
     let (tx, rx) = mpsc::channel();
     (Arc::new(Mutex::new(Some(tx))), rx)
 }
@@ -711,6 +713,110 @@ fn u10_j_equal_deadlines_return_timeout() {
             .expect_err("equal deadlines must time out");
         assert!(is_timeout(&error), "unexpected error: {error}");
     }
+    session.close().expect("close terminal");
+}
+
+// P2b repro: a quiet timeout on a live child must finalize like an ordinary
+// failure: failure details, a failure artifact, and a retained OnFailure
+// recording that survives close.
+#[test]
+fn u10_k_quiet_timeout_finalizes_failure_artifact_and_recording() {
+    use tui_test::{ExecutionContext, FailureArtifactMode, FailureArtifactOptions, FailureReason};
+
+    let tag = "k-timeout-finalize";
+    let root = std::env::temp_dir().join(format!("u10-{tag}-{}", std::process::id()));
+    let artifacts = root.join("artifacts");
+    let recordings = root.join("recordings");
+    let session = Session::new(session_name(tag)).with_execution_context(ExecutionContext {
+        artifact: Some(FailureArtifactOptions {
+            directory: artifacts.clone(),
+            mode: FailureArtifactMode::Text,
+            include_recording: false,
+        }),
+        ..Default::default()
+    });
+    let mut run = fixture_options("busy");
+    run.recording = AutomaticRecording {
+        mode: AutomaticRecordingMode::OnFailure,
+        directory: Some(recordings.clone()),
+    };
+    session.run(run).expect("run fixture child");
+    wait_for_text(&session, "READY");
+
+    let options = WaitQuietOptions::new(Duration::from_millis(800), Duration::from_millis(200))
+        .expect("test options are valid");
+    let error = session
+        .wait_quiet(&options)
+        .expect_err("busy child never settles");
+    assert!(is_timeout(&error), "unexpected error: {error}");
+    let details = error
+        .details
+        .as_ref()
+        .expect("quiet timeout must carry failure details");
+    assert_eq!(
+        details.reason,
+        FailureReason::TimedOut,
+        "quiet timeout must finalize as a timeout failure"
+    );
+    let manifests: Vec<_> = std::fs::read_dir(&artifacts)
+        .expect("artifact directory must exist")
+        .map(|item| item.unwrap().path())
+        .collect();
+    assert!(
+        !manifests.is_empty(),
+        "quiet timeout must write a failure artifact"
+    );
+    let recording = session
+        .recording_path()
+        .expect("automatic recording is configured");
+    session.close().expect("close terminal");
+    assert!(
+        recording.is_file(),
+        "OnFailure must retain the recording after a quiet timeout"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// Cancellation-vs-failure distinction: cancelling a live quiet wait reports
+// cancellation with the Cancelled reason (not a timeout failure), and the
+// child and session stay usable afterwards.
+#[test]
+fn u10_l_cancelled_quiet_keeps_cancelled_reason_and_usable_session() {
+    use tui_test::FailureReason;
+
+    let session = ready_session("l-cancel-distinction", "busy");
+    let (flag, check) = cancel_flag();
+    let (gate, entered) = entry_gate();
+    let options = WaitQuietOptions::new(Duration::from_secs(10), Duration::from_secs(2))
+        .expect("test options are valid");
+    let worker = session.clone();
+    let handle = std::thread::spawn(move || {
+        worker.wait_quiet_cancellable(&options, &move || {
+            signal_entry(&gate);
+            check()
+        })
+    });
+    await_entry(&entered, "cancelled wait");
+    flag.store(true, Ordering::Release);
+    let error = join_bounded(handle, "cancelled wait")
+        .expect_err("cancelled wait must report cancellation");
+    assert!(is_cancelled(&error), "unexpected error: {error}");
+    assert!(
+        !error.to_string().contains("timed out"),
+        "cancellation must not surface as a timeout: {error}"
+    );
+    let details = error
+        .details
+        .as_ref()
+        .expect("cancelled quiet must carry failure details");
+    assert_eq!(
+        details.reason,
+        FailureReason::Cancelled,
+        "cancelled quiet must keep the Cancelled reason"
+    );
+    session
+        .capture_snapshot(SnapshotScope::ActiveScreen)
+        .expect("capture works after cancellation");
     session.close().expect("close terminal");
 }
 

@@ -238,6 +238,55 @@ pub struct LiveFrame {
 
 /// One-line operation description for the verbose log. Open and Run redact env
 /// values (they may contain secrets) and report only the variable count.
+
+/// Coordination flags for one request through the shared wrapper.
+struct RequestPlan {
+    waiting: bool,
+    lifecycle: bool,
+    /// Overall request deadline enforced while acquiring the lifecycle lock.
+    /// Only quiet waits set this: ordinary waits start their clocks after
+    /// acquisition, while a quiet request's deadline covers acquisition and
+    /// observation together.
+    acquisition_deadline: Option<AcquisitionDeadline>,
+    /// Acquire the shared lifecycle lock before any caller-supplied closure
+    /// runs: try first, and only poll cancellation and the deadline while
+    /// contended. Quiet waits set this so parking inside `cancelled` (or a
+    /// slow observer) already blocks lifecycle writers, never letting them
+    /// complete underneath the wait (R8). Ordinary waits poll first and
+    /// acquire after.
+    acquire_before_poll: bool,
+}
+
+struct AcquisitionDeadline {
+    deadline: Instant,
+    /// Timeout error reported when acquisition outlives `deadline`.
+    error: TuiTestError,
+}
+
+/// History and diagnostics inputs for one request through the shared wrapper.
+struct RequestMetadata {
+    name: String,
+    timeout_ms: Option<u64>,
+    log_summary: String,
+    safe_summary: String,
+    is_assertion: bool,
+    expectation: Option<OperationExpectation>,
+    input: Option<InputDetails>,
+}
+
+/// Cancellation error for a wait that observed cancellation before reporting
+/// success. Carries the Cancelled failure reason, preserving the
+/// cancellation-vs-failure distinction ordinary waits already report.
+fn cancelled_wait_error(metadata: &OperationMetadata) -> TuiTestError {
+    let message = "operation was cancelled";
+    TuiTestError::assertion(message).with_report(FailureReport::new(
+        metadata.name.clone(),
+        metadata.timeout_ms,
+        FailureReason::Cancelled,
+        message,
+    ))
+}
+
 fn operation_summary(operation: &Operation) -> String {
     match operation {
         Operation::Open(options) => format!(
@@ -323,33 +372,108 @@ impl Engine {
             trace.validate().map_err(TuiTestError::usage)?;
         }
         self.interrupt_for_operation(&operation);
+        let canonical_name = diagnostic_operation_name(&operation);
+        let name = context
+            .operation_name
+            .clone()
+            .unwrap_or_else(|| canonical_name.to_string());
+        let plan = RequestPlan {
+            waiting: operation.is_wait(),
+            lifecycle: matches!(
+                operation,
+                Operation::Open(_)
+                    | Operation::Run(_)
+                    | Operation::Restart { .. }
+                    | Operation::Close
+                    | Operation::FinishTrace { .. }
+            ),
+            acquisition_deadline: None,
+            acquire_before_poll: false,
+        };
+        let metadata = RequestMetadata {
+            name,
+            timeout_ms: operation_timeout(&operation),
+            log_summary: operation_summary(&operation),
+            safe_summary: safe_operation_summary(&operation),
+            is_assertion: canonical_name.starts_with("expect.")
+                || canonical_name.starts_with("wait.")
+                || matches!(canonical_name, "locator.wait" | "locator.resolve"),
+            expectation: OperationExpectation::capture(&operation),
+            input: InputDetails::capture(&operation),
+        };
+        self.execute_planned_request(
+            plan,
+            metadata,
+            &context,
+            cancelled,
+            |cancelled, metadata| self.execute_inner(operation, &context, metadata, cancelled),
+        )
+    }
+
+    /// Shared request wrapper behind [`Engine::execute_with_context_cancellable`]
+    /// and quiet waits: lifecycle coordination with cancellable acquisition,
+    /// operation history, failure finalization, and the recording outcome.
+    ///
+    /// Every request observes the same coordination: waits acquire the shared
+    /// lifecycle lock without excluding input or resize, pre-cancelled and
+    /// preempted waits fail before their first observation, and a wait that
+    /// observes cancellation before success reports cancellation (with the
+    /// Cancelled reason) instead of success. Assertion and internal failures
+    /// finalize with failure details and mark the automatic recording failed;
+    /// other outcomes leave it alone.
+    fn execute_planned_request(
+        &self,
+        plan: RequestPlan,
+        metadata_inputs: RequestMetadata,
+        context: &ExecutionContext,
+        cancelled: &dyn Fn() -> bool,
+        run: impl FnOnce(
+            &dyn Fn() -> bool,
+            &mut OperationMetadata,
+        ) -> Result<OperationResult, TuiTestError>,
+    ) -> Result<OperationResult, TuiTestError> {
         let interrupt_generation = self.interrupt_generation.load(Ordering::Acquire);
-        let waiting = operation.is_wait();
-        let lifecycle = matches!(
-            operation,
-            Operation::Open(_)
-                | Operation::Run(_)
-                | Operation::Restart { .. }
-                | Operation::Close
-                | Operation::FinishTrace { .. }
-        );
         // A wait pins its generation through diagnostics, but does not exclude
         // input or resize. Announce lifecycle writers before locking so even a
         // newly arriving waiter yields, independent of RwLock's fairness policy.
-        let pending = lifecycle.then(|| LifecycleRequest::new(&self.pending_lifecycle));
+        let pending = plan
+            .lifecycle
+            .then(|| LifecycleRequest::new(&self.pending_lifecycle));
         let cancelled =
-            || cancelled() || (waiting && self.pending_lifecycle.load(Ordering::Acquire) != 0);
-        let _shared = if lifecycle {
+            || cancelled() || (plan.waiting && self.pending_lifecycle.load(Ordering::Acquire) != 0);
+        let _shared = if plan.lifecycle {
             None
-        } else if waiting {
+        } else if plan.waiting {
             Some(loop {
-                if cancelled() {
-                    return Err(TuiTestError::assertion("operation was cancelled"));
+                // With `acquire_before_poll` the first attempt never runs
+                // caller code: a free lock is taken before `cancelled` (or an
+                // observer) can park, so lifecycle writers are already pinned
+                // when the request starts polling. While contended, the same
+                // cancellation and deadline checks keep acquisition bounded.
+                if !plan.acquire_before_poll {
+                    if cancelled() {
+                        return Err(TuiTestError::assertion("operation was cancelled"));
+                    }
+                    if let Some(acquisition) = &plan.acquisition_deadline {
+                        if Instant::now() >= acquisition.deadline {
+                            return Err(acquisition.error.clone());
+                        }
+                    }
                 }
                 match self.lifecycle.try_read() {
                     Ok(guard) => break guard,
                     Err(TryLockError::Poisoned(error)) => break error.into_inner(),
                     Err(TryLockError::WouldBlock) => {
+                        if plan.acquire_before_poll {
+                            if cancelled() {
+                                return Err(TuiTestError::assertion("operation was cancelled"));
+                            }
+                            if let Some(acquisition) = &plan.acquisition_deadline {
+                                if Instant::now() >= acquisition.deadline {
+                                    return Err(acquisition.error.clone());
+                                }
+                            }
+                        }
                         std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
                     }
                 }
@@ -361,69 +485,53 @@ impl Engine {
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             )
         };
-        let _exclusive = lifecycle.then(|| {
+        let _exclusive = plan.lifecycle.then(|| {
             self.lifecycle
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         });
         drop(pending);
-        let _operation = (!waiting).then(|| {
+        let _operation = (!plan.waiting).then(|| {
             self.operations
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         });
         if self.logger.enabled() {
             self.logger
-                .event(&format!("operation {}", operation_summary(&operation)));
+                .event(&format!("operation {}", metadata_inputs.log_summary));
         }
-        let name = context
-            .operation_name
-            .clone()
-            .unwrap_or_else(|| diagnostic_operation_name(&operation).to_string());
         let screen_before = self.capture_current_screen_sequence(true, false);
-        let canonical_name = diagnostic_operation_name(&operation);
-        let is_assertion = canonical_name.starts_with("expect.")
-            || canonical_name.starts_with("wait.")
-            || matches!(canonical_name, "locator.wait" | "locator.resolve");
         let started_ms = self.current_session_elapsed_ms().unwrap_or(0);
         let mut metadata = OperationMetadata {
             sequence: 0,
             interrupt_generation,
-            name: name.clone(),
-            timeout_ms: operation_timeout(&operation),
+            name: metadata_inputs.name.clone(),
+            timeout_ms: metadata_inputs.timeout_ms,
             started_at: Instant::now(),
             started_ms,
             screen_before,
-            safe_summary: safe_operation_summary(&operation),
-            is_assertion,
-            expectation: OperationExpectation::capture(&operation),
-            input: InputDetails::capture(&operation),
+            safe_summary: metadata_inputs.safe_summary.clone(),
+            is_assertion: metadata_inputs.is_assertion,
+            expectation: metadata_inputs.expectation.clone(),
+            input: metadata_inputs.input.clone(),
         };
         let pending = self
             .operation_history
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .begin(
-                name,
+                metadata_inputs.name,
                 started_ms,
                 screen_before,
                 metadata.safe_summary.clone(),
-                is_assertion,
+                metadata.is_assertion,
                 metadata.expectation.clone(),
             );
         metadata.sequence = pending.sequence();
         let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let result = self.execute_inner(operation, &context, &mut metadata, &cancelled);
-            if waiting && cancelled() {
-                let message = "operation was cancelled";
-                Err(
-                    TuiTestError::assertion(message).with_report(FailureReport::new(
-                        metadata.name.clone(),
-                        metadata.timeout_ms,
-                        FailureReason::Cancelled,
-                        message,
-                    )),
-                )
+            let result = run(&cancelled, &mut metadata);
+            if plan.waiting && cancelled() {
+                Err(cancelled_wait_error(&metadata))
             } else {
                 result
             }
@@ -446,7 +554,7 @@ impl Engine {
         if let Err(error) = &mut result {
             self.prepare_failure_observation(error);
         }
-        let pin_checkpoint = is_assertion
+        let pin_checkpoint = metadata.is_assertion
             || (metadata.input.is_some()
                 && self
                     .trace
@@ -488,7 +596,7 @@ impl Engine {
             );
         if let Err(error) = &mut result {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.finalize_failure(error, &context, &metadata);
+                self.finalize_failure(error, context, &metadata);
             }));
             error.observation = None;
             error.report = None;
@@ -1870,9 +1978,9 @@ impl Engine {
         self.session_generation.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// Run a request-scoped quiet wait coordinated with the lifecycle guard.
+    /// Run a request-scoped quiet wait through the shared request wrapper.
     ///
-    /// Holds the shared lifecycle lock for the wait (like waits dispatched
+    /// The wait holds the shared lifecycle lock (like waits dispatched
     /// through [`Engine::execute_with_context_cancellable`]) so a concurrent
     /// Close/Restart announces itself through `pending_lifecycle` and blocks
     /// on the exclusive lock instead of completing underneath the wait. The
@@ -1881,42 +1989,91 @@ impl Engine {
     /// transition that completes mid-wait can never surface as quiet
     /// success (R8). Cancellation never terminates the session and never
     /// cancels another caller.
+    ///
+    /// The request runs under the caller's [`ExecutionContext`] with the
+    /// ordinary operation history, failure finalization, and recording
+    /// outcome: a timeout finalizes as a TimedOut failure (details, artifact,
+    /// recording marked failed) while cancellation keeps the Cancelled
+    /// reason. A single request deadline covers acquisition and observation
+    /// together: acquisition checks cancellation and the deadline while
+    /// polling for the lock, and observation runs on the remaining budget.
     pub(crate) fn run_quiet_wait_cancellable(
         &self,
         options: &WaitQuietOptions,
+        context: &ExecutionContext,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<(), TuiTestError> {
-        // The shared lock is acquired before any caller-supplied closure
-        // runs: parking inside `cancelled` (or a slow observer) must already
-        // block lifecycle writers, never let them complete underneath us.
-        let _shared = self
-            .lifecycle
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // A lifecycle request announced while acquiring the lock, or a
-        // caller that was already cancelled, preempts the wait before its
-        // first observation.
-        if cancelled() || self.has_pending_lifecycle() {
-            return Err(crate::wait::cancelled_error());
-        }
-        let generation = self.session_generation();
-        let outcome = crate::wait::run_quiet_wait(
-            options,
-            &|| cancelled() || self.has_pending_lifecycle(),
-            &|| self.capture_snapshot(SnapshotScope::ActiveScreen),
-            &|| self.last_output_time(),
-        );
-        // A lifecycle transition announced while polling, or a generation
-        // change from a transition that completed mid-wait, preempts success:
-        // the request did not observe quiet on a stable live session.
-        if outcome.is_ok()
-            && (cancelled()
-                || self.has_pending_lifecycle()
-                || self.session_generation() != generation)
-        {
-            return Err(crate::wait::cancelled_error());
-        }
-        outcome
+        let overall = options.timeout();
+        let deadline = Instant::now().checked_add(overall).ok_or_else(|| {
+            TuiTestError::internal("wait quiet: overall deadline is out of range")
+        })?;
+        let timeout_ms = u64::try_from(overall.as_millis()).unwrap_or(u64::MAX);
+        let name = context
+            .operation_name
+            .clone()
+            .unwrap_or_else(|| "wait.quiet".to_string());
+        let (subject, expected) = match options.mode() {
+            crate::wait::WaitQuietMode::Visual => (
+                "Screen",
+                format!("remains unchanged for {}ms", options.quiet().as_millis()),
+            ),
+            crate::wait::WaitQuietMode::Bytes => (
+                "Terminal output",
+                format!("remains quiet for {}ms", options.quiet().as_millis()),
+            ),
+        };
+        self.execute_planned_request(
+            RequestPlan {
+                waiting: true,
+                lifecycle: false,
+                acquisition_deadline: Some(AcquisitionDeadline {
+                    deadline,
+                    error: crate::wait::timeout_error(options),
+                }),
+                acquire_before_poll: true,
+            },
+            RequestMetadata {
+                name,
+                timeout_ms: Some(timeout_ms),
+                log_summary: format!("WaitQuiet {options:?}"),
+                safe_summary: format!("waited for the {subject} to {expected}"),
+                is_assertion: true,
+                expectation: Some(OperationExpectation::Value {
+                    subject: subject.into(),
+                    expected,
+                }),
+                input: None,
+            },
+            context,
+            cancelled,
+            |cancelled, metadata| {
+                let generation = self.session_generation();
+                // Observation runs on the remaining budget so the single
+                // request deadline covers acquisition and observation
+                // together. A remaining budget that cannot fit another quiet
+                // interval can never succeed: the overall deadline wins.
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let adjusted = match options.with_timeout(remaining) {
+                    Ok(adjusted) => adjusted,
+                    Err(_) => return Err(crate::wait::timeout_error(options)),
+                };
+                let outcome = crate::wait::run_quiet_wait(
+                    &adjusted,
+                    cancelled,
+                    &|| self.capture_snapshot(SnapshotScope::ActiveScreen),
+                    &|| self.last_output_time(),
+                );
+                // A lifecycle transition announced while polling, or a
+                // generation change from a transition that completed mid-wait,
+                // preempts success: the request did not observe quiet on a
+                // stable live session.
+                if outcome.is_ok() && (cancelled() || self.session_generation() != generation) {
+                    return Err(cancelled_wait_error(metadata));
+                }
+                outcome.map(|()| OperationResult::Unit)
+            },
+        )
+        .map(|_| ())
     }
 
     fn write_session(&self) -> RwLockWriteGuard<'_, Option<TerminalSession>> {
@@ -6820,5 +6977,149 @@ mod tests {
             engine.execute(Operation::Close).unwrap();
         }
         reporter.join().unwrap();
+    }
+
+    // P2a: acquisition is cancellable and deadline-bound. The holder keeps
+    // the exclusive lifecycle lock (as a concurrent Run does inside its
+    // readiness wait) until the test releases it, so any return while the
+    // lock is still held proves the request stopped waiting for the lock:
+    // no wall-clock assertions needed.
+    fn hold_lifecycle_write(
+        engine: &std::sync::Arc<Engine>,
+    ) -> (
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = {
+            let engine = std::sync::Arc::clone(engine);
+            std::thread::spawn(move || {
+                let _exclusive = engine
+                    .lifecycle
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let _ = entered_tx.send(());
+                // The test releases the lock after its assertions; the bound
+                // only fires if the request under test wedged on acquisition.
+                let _ = release_rx.recv_timeout(Duration::from_secs(25));
+            })
+        };
+        (entered_rx, release_tx, holder)
+    }
+
+    fn quiet_test_engine(tag: &str) -> std::sync::Arc<Engine> {
+        std::sync::Arc::new(Engine::new(
+            format!("quiet-acquisition-{tag}"),
+            std::sync::Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        ))
+    }
+
+    // Startup/Restart contention with pre-cancellation: a quiet request that
+    // is already cancelled must report cancellation without waiting for a
+    // lifecycle writer to release the lock.
+    #[test]
+    fn quiet_precancelled_returns_while_lifecycle_write_is_held() {
+        let engine = quiet_test_engine("precancelled");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext::default();
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "pre-cancelled quiet blocked on lifecycle acquisition"
+        );
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+    }
+
+    // Cancellation-while-acquiring: the flag flips after the request starts
+    // polling for the lock. The request must still report cancellation while
+    // the lifecycle writer holds the lock.
+    #[test]
+    fn quiet_cancelled_while_acquiring_returns_while_write_is_held() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let engine = quiet_test_engine("cancel-while-acquiring");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let (polled_tx, polled_rx) = std::sync::mpsc::channel::<()>();
+        let polled_tx = std::sync::Mutex::new(Some(polled_tx));
+        let flag = std::sync::Arc::new(AtomicBool::new(false));
+        let context = ExecutionContext::default();
+        let options = WaitQuietOptions::new(Duration::from_secs(30), Duration::from_millis(50))
+            .expect("test options are valid");
+        let worker = {
+            let engine = std::sync::Arc::clone(&engine);
+            let flag = std::sync::Arc::clone(&flag);
+            std::thread::spawn(move || {
+                engine.run_quiet_wait_cancellable(&options, &context, &|| {
+                    if let Some(tx) = polled_tx.lock().unwrap().take() {
+                        let _ = tx.send(());
+                    }
+                    flag.load(Ordering::Acquire)
+                })
+            })
+        };
+        polled_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("quiet request reaches acquisition");
+        flag.store(true, Ordering::Release);
+        let error = worker
+            .join()
+            .unwrap()
+            .expect_err("cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "cancelled quiet blocked on lifecycle acquisition"
+        );
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+    }
+
+    // Timeout-only requests: with no cancellation, a deadline that passes
+    // during acquisition reports timeout while the writer still holds the
+    // lock, instead of inheriting a fresh observation budget on release.
+    #[test]
+    fn quiet_timeout_only_returns_while_lifecycle_write_is_held() {
+        let engine = quiet_test_engine("timeout-only");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext::default();
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| false)
+            .expect_err("expired acquisition must report timeout");
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "timed-out quiet blocked on lifecycle acquisition past its deadline"
+        );
+        let _ = release_tx.send(());
+        holder.join().unwrap();
     }
 }
