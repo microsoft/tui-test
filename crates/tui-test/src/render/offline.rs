@@ -462,9 +462,9 @@ impl SnapshotRenderOptions {
                 });
             }
             // Same floor the live style enforces: a subpixel logical cell
-            // rounds to nothing, so SVG and PNG size math diverge (a zero
-            // viewBox against nonzero pixels). Scale cannot fix it, because
-            // the viewBox rounds the unscaled size.
+            // rounds to nothing at the shared pixel-allocation boundary, so
+            // the output collapses (a zero-pixel image). Scale cannot fix
+            // it, because the shared size ceils the scaled grid.
             if value < 1.0 {
                 return Err(RenderError::CellTooSmall { field, value });
             }
@@ -850,45 +850,23 @@ fn snapshot_grid_size(snapshot: &TerminalSnapshot) -> Result<(u16, usize), Rende
 
 /// Checked canvas-inclusive output size at the layout zoom, before allocation.
 ///
-/// Mirrors the renderers' size math (ceiled panel plus canvas, scaled) with
-/// finite and range checks on every step and the shared pixel cap at the end.
+/// This is the renderers' own size math
+/// ([`ResolvedLayout::output_pixel_size`], shared by the PNG pixmap, the SVG
+/// document, and both evidences) with the shared pixel cap at the end, so the
+/// checked size and the allocated size agree by construction.
 fn checked_output_size(
     layout: &ResolvedLayout,
     cols: u32,
     rows: u32,
 ) -> Result<(u32, u32), RenderError> {
     let too_large = || RenderError::ImageTooLarge { cols, rows };
-    let panel_w = f64::from(layout.content_left)
-        + f64::from(layout.content_right)
-        + f64::from(cols) * f64::from(layout.cell_w);
-    let panel_h = f64::from(layout.header_h)
-        + f64::from(layout.content_top)
-        + f64::from(layout.content_bottom)
-        + f64::from(rows.max(1)) * f64::from(layout.cell_h);
-    let width =
-        (panel_w + f64::from(layout.canvas_left) + f64::from(layout.canvas_right)) * layout.zoom;
-    let height =
-        (panel_h + f64::from(layout.canvas_top) + f64::from(layout.canvas_bottom)) * layout.zoom;
-    let width = ceil_u32(width).ok_or_else(too_large)?;
-    let height = ceil_u32(height).ok_or_else(too_large)?;
+    let rows = usize::try_from(rows).map_err(|_| too_large())?;
+    let (width, height) = layout.output_pixel_size(cols, rows).ok_or_else(too_large)?;
     let pixels = u64::from(width) * u64::from(height);
     if pixels > MAX_RENDER_PIXELS {
         return Err(too_large());
     }
     Ok((width, height))
-}
-
-/// Ceil a size to `u32`, or `None` past zero, nonfinite, or `u32::MAX`.
-fn ceil_u32(value: f64) -> Option<u32> {
-    if !value.is_finite() || value <= 0.0 || value > f64::from(u32::MAX) {
-        return None;
-    }
-    let ceiled = value.ceil();
-    if ceiled > f64::from(u32::MAX) {
-        return None;
-    }
-    // In range by the checks above; `as` cannot saturate here.
-    Some(ceiled as u32)
 }
 
 /// Convert snapshot cells to the renderer grid.

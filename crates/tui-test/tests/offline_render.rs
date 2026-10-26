@@ -219,6 +219,74 @@ fn undecorated_grid_reports_exact_svg_size() {
     );
 }
 
+/// Parse the SVG `viewBox="0 0 w h"` into its two unscaled extents.
+fn svg_view_box(svg: &str) -> (f32, f32) {
+    let start = svg.find("viewBox=\"0 0 ").expect("an SVG viewBox") + 13;
+    let rest = &svg[start..];
+    let end = rest.find('"').expect("a closing quote");
+    let mut parts = rest[..end].split(' ');
+    (
+        parts
+            .next()
+            .expect("a viewBox width")
+            .parse()
+            .expect("a number"),
+        parts
+            .next()
+            .expect("a viewBox height")
+            .parse()
+            .expect("a number"),
+    )
+}
+
+/// Round-2: fractional metrics share one output size.
+///
+/// A 3-by-2 grid with 10.1-by-20.1 cells used to produce three sizes (SVG
+/// document 60.6x80.4 over a rounded 30x40 viewBox, evidence 61x81, PNG
+/// 62x82): PNG sizing rounded before scaling while SVG and evidence used
+/// different arithmetic. One rounding at the pixel-allocation boundary
+/// gives one size everywhere, and the viewBox stays the exact unscaled
+/// canvas so the content still fills it.
+#[test]
+fn fractional_metrics_share_one_svg_size() {
+    for scale in [1.0, 1.5, 2.0] {
+        let snapshot = snapshot_of(3, 2, &[" "; 6]);
+        let options = undecorated()
+            .with_cell_width(10.1)
+            .with_cell_height(20.1)
+            .with_scale(scale);
+        let rendered =
+            tui_test::render_snapshot_svg(&snapshot, &options).expect("offline SVG renders");
+        let (width, height) = (rendered.width(), rendered.height());
+        assert_eq!(
+            (rendered.evidence().width(), rendered.evidence().height()),
+            (width, height),
+            "scale {scale}: evidence must match the reported size"
+        );
+        assert!(
+            rendered
+                .svg()
+                .contains(&format!(r#"width="{width}" height="{height}""#)),
+            "scale {scale}: the document size must match the evidence: {}",
+            rendered.svg()
+        );
+        let (view_w, view_h) = svg_view_box(rendered.svg());
+        assert!(
+            view_w > 0.0 && view_h > 0.0,
+            "scale {scale}: the viewBox must stay non-degenerate: {}",
+            rendered.svg()
+        );
+        assert_eq!(
+            (
+                (f64::from(view_w) * scale).ceil() as u32,
+                (f64::from(view_h) * scale).ceil() as u32
+            ),
+            (width, height),
+            "scale {scale}: the viewBox scaled and ceiled must recover the pixels"
+        );
+    }
+}
+
 /// U03-H: invalid metrics and scale values fail without a panic.
 #[test]
 fn invalid_metrics_and_scale_fail_without_panic() {
@@ -526,6 +594,51 @@ mod raster_tests {
         assert_eq!((rendered.width(), rendered.height()), (30, 40));
         let (width, height, _) = decode_png(rendered.png());
         assert_eq!((width, height), (30, 40));
+    }
+
+    /// Round-2 (PNG half): fractional metrics share one output size across
+    /// PNG and SVG.
+    ///
+    /// Same grid as `fractional_metrics_share_one_svg_size`: the decoded
+    /// PNG, the PNG evidence, the SVG evidence, and the SVG document must
+    /// all agree. At 2x the shared size is exactly 61x81.
+    #[test]
+    fn fractional_metrics_share_one_png_size() {
+        for scale in [1.0, 1.5, 2.0] {
+            let snapshot = snapshot_of(3, 2, &[" "; 6]);
+            let options = undecorated()
+                .with_cell_width(10.1)
+                .with_cell_height(20.1)
+                .with_scale(scale);
+            let png = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+            let svg =
+                tui_test::render_snapshot_svg(&snapshot, &options).expect("offline SVG renders");
+            let (width, height, _) = decode_png(png.png());
+            assert_eq!(
+                (width, height),
+                (png.width(), png.height()),
+                "scale {scale}: decoded PNG must match the PNG evidence"
+            );
+            assert_eq!(
+                (svg.width(), svg.height()),
+                (width, height),
+                "scale {scale}: SVG and PNG must share one size"
+            );
+            assert_eq!(
+                (svg.evidence().width(), svg.evidence().height()),
+                (width, height),
+                "scale {scale}: SVG evidence must match the shared size"
+            );
+        }
+        let snapshot = snapshot_of(3, 2, &[" "; 6]);
+        let options = undecorated()
+            .with_cell_width(10.1)
+            .with_cell_height(20.1)
+            .with_scale(2.0);
+        let rendered = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+        assert_eq!((rendered.width(), rendered.height()), (61, 81));
+        let (width, height, _) = decode_png(rendered.png());
+        assert_eq!((width, height), (61, 81));
     }
 
     /// U03-I (PNG half): default options keep the recorded screenshot size.

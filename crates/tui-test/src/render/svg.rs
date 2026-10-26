@@ -39,6 +39,20 @@ fn svg_dimension(value: f64) -> String {
     output
 }
 
+/// Ceil one scaled axis to whole pixels, or `None` past zero, nonfinite,
+/// or `u32` range.
+fn ceil_pixel(value: f64) -> Option<u32> {
+    if !value.is_finite() || value <= 0.0 || value > f64::from(u32::MAX) {
+        return None;
+    }
+    let ceiled = value.ceil();
+    if ceiled > f64::from(u32::MAX) {
+        return None;
+    }
+    // In range by the checks above; `as` cannot saturate here.
+    Some(ceiled as u32)
+}
+
 fn dim(c: Rgb) -> Rgb {
     let s = |v: u8| (v as f32 * 0.6) as u8;
     Rgb::new(s(c.r), s(c.g), s(c.b))
@@ -312,6 +326,40 @@ impl ResolvedLayout {
     pub(crate) fn even_grid_pixel_size(&self, cols: u16, rows: usize) -> (u32, u32) {
         let (width, height) = self.grid_pixel_size(cols, rows);
         (width + width % 2, height + height % 2)
+    }
+
+    /// ONE output-size calculation for every renderer.
+    ///
+    /// PNG pixels, SVG `width`/`height`, evidence dimensions, and the SVG
+    /// viewBox all derive from this: the unscaled panel plus canvas, times
+    /// the zoom, ceiled once at the pixel-allocation boundary. Ceiling the
+    /// panel before scaling (as the raster path did) or not at all (as the
+    /// SVG document did) gave one grid up to three sizes under fractional
+    /// metrics; rounding once, here, keeps them identical.
+    ///
+    /// `None` past zero, nonfinite, or `u32` range; callers map that to
+    /// their own error.
+    pub(crate) fn output_pixel_size(&self, cols: u32, rows: usize) -> Option<(u32, u32)> {
+        let (panel_width, panel_height) = self.panel_size(cols as usize, rows);
+        let width =
+            (f64::from(panel_width) + f64::from(self.canvas_left) + f64::from(self.canvas_right))
+                * self.zoom;
+        let height =
+            (f64::from(panel_height) + f64::from(self.canvas_top) + f64::from(self.canvas_bottom))
+                * self.zoom;
+        Some((ceil_pixel(width)?, ceil_pixel(height)?))
+    }
+
+    /// Panel-only variant of [`output_pixel_size`](Self::output_pixel_size),
+    /// without the canvas: per-frame placement adds the canvas separately
+    /// when it centers a frame, so it rounds the same scaled panel rather
+    /// than re-deriving one.
+    pub(crate) fn panel_pixel_size(&self, cols: u16, rows: usize) -> Option<(u32, u32)> {
+        let (panel_width, panel_height) = self.panel_size(cols as usize, rows);
+        Some((
+            ceil_pixel(f64::from(panel_width) * self.zoom)?,
+            ceil_pixel(f64::from(panel_height) * self.zoom)?,
+        ))
     }
 }
 
@@ -695,21 +743,31 @@ pub(crate) fn render_svg_with_layout(
     let title_divider = layout.window_divider;
     let font_family = escape_attribute(&layout.font.family);
     let nerd_font = NerdFont::new(rows, font_size);
-    let cols = cols as usize;
-    let x0 = layout.content_left;
-    let y0 = header_h + layout.content_top;
-    let (panel_width, panel_height) = layout.panel_size(cols, rows.len());
+    let (panel_width, panel_height) = layout.panel_size(cols as usize, rows.len());
     let pad_left = layout.canvas_left as f32;
     let pad_top = layout.canvas_top as f32;
     let width = panel_width + pad_left + layout.canvas_right as f32;
     let height = panel_height + pad_top + layout.canvas_bottom as f32;
-    let output_width = svg_dimension(f64::from(width) * layout.zoom);
-    let output_height = svg_dimension(f64::from(height) * layout.zoom);
+    // THE size the PNG pixmap and both evidences share: one rounding at
+    // the pixel boundary. Callers validate metrics and zoom first (live
+    // resolves the zoom, offline checks the size before drawing), so this
+    // is only `None` on already-validated input past `u32` range.
+    let (output_width, output_height) = layout
+        .output_pixel_size(u32::from(cols), rows.len())
+        .expect("output size was checked by the caller");
+    // The viewBox is the exact unscaled canvas, so the drawn content fills
+    // it with no rounding sliver; the integer `width`/`height` above is the
+    // same rect in pixels.
+    let view_width = svg_dimension(f64::from(width));
+    let view_height = svg_dimension(f64::from(height));
+    let cols = cols as usize;
+    let x0 = layout.content_left;
+    let y0 = header_h + layout.content_top;
 
     let mut out = String::new();
     let _ = write!(
         out,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{font_size}px">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {view_width} {view_height}" font-family="{font_family}" font-size="{font_size}px">"#
     );
     nerd_font.write_defs(&mut out);
     match background {
@@ -717,14 +775,14 @@ pub(crate) fn render_svg_with_layout(
         Some(CaptureBackground::Color(color)) => {
             let _ = write!(
                 out,
-                r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
+                r#"<rect width="{view_width}" height="{view_height}" fill="{}"/>"#,
                 hex(color)
             );
         }
         None => {
             let _ = write!(
                 out,
-                r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
+                r#"<rect width="{view_width}" height="{view_height}" fill="{}"/>"#,
                 hex(layout.canvas_background)
             );
         }
@@ -742,9 +800,14 @@ pub(crate) fn render_svg_with_layout(
             hex(shadow_color)
         );
     }
+    // Exact panel decimals, like the viewBox: rounding here would leave a
+    // canvas sliver along the right and bottom edges under fractional
+    // metrics. Integer layouts format identically to before.
+    let panel_w = svg_dimension(f64::from(panel_width));
+    let panel_h = svg_dimension(f64::from(panel_height));
     let _ = write!(
         out,
-        r#"<g transform="translate({pad_left:.0} {pad_top:.0})"><rect width="{panel_width:.0}" height="{panel_height:.0}" rx="{radius:.0}" fill="{}"/>"#,
+        r#"<g transform="translate({pad_left:.0} {pad_top:.0})"><rect width="{panel_w}" height="{panel_h}" rx="{radius:.0}" fill="{}"/>"#,
         hex(colors.resolve(None, false))
     );
     if layout.title_bar {
@@ -758,7 +821,7 @@ pub(crate) fn render_svg_with_layout(
         );
         let _ = write!(
             out,
-            r#"<rect y="{title_bottom:.1}" width="{panel_width:.0}" height="{divider_h:.1}" fill="{}"/>"#,
+            r#"<rect y="{title_bottom:.1}" width="{panel_w}" height="{divider_h:.1}" fill="{}"/>"#,
             hex(title_divider)
         );
         let lights = layout.traffic_lights();
@@ -1361,11 +1424,13 @@ mod tests {
                 parts.next().unwrap().parse::<f32>().unwrap(),
             )
         };
+        // One rounding at the pixel boundary: halving an odd extent (125)
+        // ceils to whole pixels (63), exactly like the PNG pixmap.
         assert!(
             svg.contains(&format!(
                 r#"width="{}" height="{}" {view_box}"#,
-                w / 2.0,
-                h / 2.0
+                (w / 2.0).ceil() as u32,
+                (h / 2.0).ceil() as u32
             )),
             "halving the zoom halves the drawn size and leaves the view box: {svg}"
         );
