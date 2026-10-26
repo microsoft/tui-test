@@ -3,20 +3,29 @@
 //! Live content is produced by the child (`printf` at startup, then `sleep`),
 //! so no PTY echo path can mangle escape sequences. Each capture is polled to
 //! a known marker before asserting, so no assertion depends on timing.
-
-#![cfg(unix)]
-
-use std::time::{Duration, Instant};
+//!
+//! Only the live-session fixtures need Unix (they spawn `sh` under a PTY);
+//! the pure constructor, Serde, equality, and limit tests run un-gated on
+//! every platform.
 
 use tui_test::profile::{Profile, Rgb};
 use tui_test::terminal::cell::Attrs;
 use tui_test::{
-    OpenOptions, Operation, OperationResult, RunOptions, ScrollTarget, Session, SnapshotCell,
-    SnapshotColor, SnapshotCursor, SnapshotCursorShape, SnapshotError, SnapshotMetadata,
-    SnapshotOptions, SnapshotParts, SnapshotScope, SnapshotSource, SnapshotUnderline,
-    TerminalSnapshot, MAX_CELL_TEXT_BYTES, MAX_SNAPSHOT_CELLS, MAX_SNAPSHOT_DIM,
+    SnapshotCell, SnapshotColor, SnapshotCursor, SnapshotCursorShape, SnapshotError,
+    SnapshotMetadata, SnapshotParts, SnapshotScope, SnapshotUnderline, TerminalSnapshot,
+    MAX_CELL_TEXT_BYTES, MAX_SNAPSHOT_CELLS, MAX_SNAPSHOT_DIM,
 };
 
+// Live-session fixtures: need a PTY-backed child, so these stay Unix-gated.
+#[cfg(unix)]
+use std::time::{Duration, Instant};
+#[cfg(unix)]
+use tui_test::{
+    OpenOptions, Operation, OperationResult, RunOptions, ScrollTarget, Session, SnapshotOptions,
+    SnapshotSource,
+};
+
+#[cfg(unix)]
 fn session_with_script(test: &str, script: &str, cols: u16, rows: u16) -> Session {
     let session = Session::new(format!("owned-snapshot-{test}-{}", std::process::id()));
     let defaults = OpenOptions::default();
@@ -40,6 +49,7 @@ fn session_with_script(test: &str, script: &str, cols: u16, rows: u16) -> Sessio
     session
 }
 
+#[cfg(unix)]
 fn live_text(session: &Session) -> String {
     match session.execute(Operation::Text { full: false }) {
         Ok(OperationResult::Text(text)) => text,
@@ -47,6 +57,7 @@ fn live_text(session: &Session) -> String {
     }
 }
 
+#[cfg(unix)]
 fn poll_text(session: &Session, needle: &str) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
@@ -63,6 +74,7 @@ fn poll_text(session: &Session, needle: &str) {
     }
 }
 
+#[cfg(unix)]
 fn close(session: &Session) {
     session.close().expect("session closes");
 }
@@ -113,6 +125,7 @@ fn blank_parts(cols: u32, rows: u32) -> SnapshotParts {
     }
 }
 
+#[cfg(unix)]
 fn assert_rectangular(snapshot: &TerminalSnapshot) {
     assert_ne!((snapshot.cols(), snapshot.rows()), (0, 0));
     assert_eq!(
@@ -135,6 +148,8 @@ fn assert_rectangular(snapshot: &TerminalSnapshot) {
 
 /// U02-A: live transitions across the Unicode corpus, styles, palette,
 /// defaults, underline, reverse, cursor, links, and title stay coherent.
+// Needs a live PTY session, so this stays Unix-gated.
+#[cfg(unix)]
 #[test]
 fn u02_a_live_transitions_stay_coherent() {
     let script = concat!(
@@ -259,6 +274,8 @@ fn u02_a_live_transitions_stay_coherent() {
 }
 
 /// U02-B: snapshots stay usable after the session closes (fully owned data).
+// Needs a live PTY session, so this stays Unix-gated.
+#[cfg(unix)]
 #[test]
 fn u02_b_snapshot_outlives_session_close() {
     let session = session_with_script("b", "owned-data\\r\\n", 80, 24);
@@ -278,6 +295,8 @@ fn u02_b_snapshot_outlives_session_close() {
 }
 
 /// U02-C: locator highlighting never leaks into the default snapshot.
+// Needs a live PTY session, so this stays Unix-gated.
+#[cfg(unix)]
 #[test]
 fn u02_c_highlighting_needs_explicit_option() {
     let session = session_with_script("c", "findable marker here\\r\\n", 80, 24);
@@ -309,6 +328,8 @@ fn u02_c_highlighting_needs_explicit_option() {
 }
 
 /// U02-D: alternate screen, history coordinates, and resize keep geometry.
+// Needs a live PTY session, so this stays Unix-gated.
+#[cfg(unix)]
 #[test]
 fn u02_d_scopes_keep_rectangular_geometry() {
     let session = session_with_script("d-alt", "\\033[?1049hALTSCREEN\\r\\n", 80, 24);
@@ -372,6 +393,8 @@ fn u02_d_scopes_keep_rectangular_geometry() {
 }
 
 /// U02-E: serialization keeps palette changes and OSC 8 links.
+// Needs a live PTY session, so this stays Unix-gated.
+#[cfg(unix)]
 #[test]
 fn u02_e_serialization_keeps_palette_and_links() {
     let session = session_with_script(
@@ -515,6 +538,8 @@ fn u02_g_schemas_and_limits_are_rejected() {
 }
 
 /// U02-H: capture and serialization keep palette changes at indices 1 and 200.
+// Needs a live PTY session, so this stays Unix-gated.
+#[cfg(unix)]
 #[test]
 fn u02_h_palette_slots_1_and_200_survive() {
     let session = session_with_script(
@@ -545,6 +570,8 @@ fn u02_h_palette_slots_1_and_200_survive() {
 }
 
 /// U02-I: capture and serialization keep default fg/bg/cursor changes.
+// Needs a live PTY session, so this stays Unix-gated.
+#[cfg(unix)]
 #[test]
 fn u02_i_default_colors_survive() {
     let session = session_with_script(

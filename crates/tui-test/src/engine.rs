@@ -4733,6 +4733,111 @@ mod tests {
         engine.execute(Operation::Close).unwrap();
     }
 
+    /// Snapshot capture at the [`Engine::capture_snapshot`] boundary is
+    /// atomic: grid, cursor, dimensions, title, and resolved colors are read
+    /// while the writer below resizes and scrolls the same terminal state.
+    /// Every capture runs against one terminal moment, so each must succeed
+    /// and stay self-consistent. If capture read related fields under
+    /// separate locks, a resize or scroll landing between the reads would
+    /// surface here as a capture error (`MalformedRow`, `CellCountMismatch`,
+    /// or `CursorOutOfBounds`) or as a cursor that disagrees with its grid.
+    #[test]
+    fn snapshot_capture_at_engine_boundary_is_atomic() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let engine = Arc::new(Engine::new(
+            "snapshot-atomic-boundary".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        ));
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        // Seed scrollback so the writer's scrolls move the viewport origin
+        // and the cursor across capture regions.
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            let mut state = session.state.lock().unwrap();
+            for line in 0..40 {
+                state
+                    .emu
+                    .process(format!("history line {line:02}\r\n").as_bytes());
+            }
+            state.screen_dirty = true;
+        }
+
+        let done = Arc::new(AtomicBool::new(false));
+        let writer_done = Arc::clone(&done);
+        let writer_engine = engine.clone();
+        let writer = std::thread::spawn(move || {
+            for index in 0..200 {
+                let (cols, rows) = if index % 2 == 0 { (100, 30) } else { (80, 24) };
+                writer_engine
+                    .execute(Operation::Resize { cols, rows })
+                    .expect("writer resizes");
+                writer_engine
+                    .execute(Operation::Scroll {
+                        target: if index % 4 < 2 {
+                            ScrollTarget::Top
+                        } else {
+                            ScrollTarget::Bottom
+                        },
+                    })
+                    .expect("writer scrolls");
+            }
+            writer_done.store(true, Ordering::SeqCst);
+        });
+
+        // Every capture below overlaps the writer's mutation window: the loop
+        // only exits once the writer reports it is done.
+        let mut captures = 0;
+        while !done.load(Ordering::SeqCst) {
+            let scope = match captures % 3 {
+                0 => SnapshotScope::Viewport,
+                1 => SnapshotScope::ActiveScreen,
+                _ => SnapshotScope::FullHistory,
+            };
+            let snapshot = engine
+                .capture_snapshot(scope)
+                .expect("capture under concurrent mutation succeeds");
+            assert_eq!(snapshot.scope(), scope);
+            assert_eq!(
+                snapshot.cells().len() as u64,
+                u64::from(snapshot.cols()) * u64::from(snapshot.rows()),
+                "cells match dimensions under mutation"
+            );
+            for row in 0..snapshot.rows() {
+                assert_eq!(
+                    snapshot.row(row).expect("row exists").len() as u32,
+                    snapshot.cols(),
+                    "row {row} keeps rectangular geometry under mutation"
+                );
+            }
+            assert_eq!(
+                snapshot.cursor_local().is_some(),
+                snapshot.cursor().in_capture(),
+                "cursor membership agrees with local coordinates"
+            );
+            if snapshot.cursor().in_capture() {
+                let (col, row) = snapshot
+                    .cursor_local()
+                    .expect("in-capture cursor has local coordinates");
+                assert!(
+                    col < snapshot.cols() && row < snapshot.rows(),
+                    "in-capture cursor ({col}, {row}) lands in the grid"
+                );
+            }
+            if scope == SnapshotScope::FullHistory {
+                assert_eq!(snapshot.viewport_origin(), 0);
+            }
+            captures += 1;
+        }
+        assert!(captures > 0, "reader captured while the writer mutated");
+        writer.join().expect("writer finishes");
+        engine.execute(Operation::Close).unwrap();
+    }
+
     #[test]
     fn failed_pty_resize_preserves_emulator_and_restart_dimensions() {
         let engine = Engine::new(

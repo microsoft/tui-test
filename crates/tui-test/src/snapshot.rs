@@ -32,18 +32,22 @@ pub const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 
 /// Largest accepted snapshot dimension in columns or rows.
 ///
-/// Matches the downstream image-dimension bound so a snapshot can always be
-/// rendered without a second size check.
+/// An input limit only, not a rendering guarantee: downstream stages still
+/// validate the sizes they allocate from, since cell metrics and image scale
+/// change the final allocation. A snapshot inside this bound can still be
+/// rejected later when a renderer sizes its own output.
 pub const MAX_SNAPSHOT_DIM: u32 = 32_768;
 
 /// Largest accepted cell count (`cols * rows`) in one snapshot.
 ///
-/// Matches the downstream per-sample cell bound.
+/// An input limit only, independent of any downstream per-sample bound;
+/// later stages validate their own allocations before rendering.
 pub const MAX_SNAPSHOT_CELLS: u64 = 1_000_000;
 
 /// Largest accepted UTF-8 byte length of one cell grapheme.
 ///
-/// Matches the downstream per-cell string bound.
+/// An input limit only, independent of any downstream per-cell string bound;
+/// later stages validate their own allocations before rendering.
 pub const MAX_CELL_TEXT_BYTES: usize = 4_096;
 
 /// Largest accepted UTF-8 byte length of one hyperlink URI or link identity.
@@ -420,10 +424,16 @@ impl From<CursorShape> for SnapshotCursorShape {
 /// The captured cursor: position, visibility, shape, color, and blink intent.
 ///
 /// Position is in full-grid coordinates (history rows first, active screen
-/// last), never clamped: a cursor outside the captured region keeps its real
-/// position and reports [`SnapshotCursor::in_capture`] as `false`. Terminal
-/// cursor visibility stays separate from capture clipping: a hidden cursor
-/// still has a position, and a visible cursor can sit outside the capture.
+/// last), never clamped: it keeps the real cursor position even when the
+/// cursor is not part of the capture. Whether the cursor belongs to the
+/// capture is the independent [`SnapshotCursor::in_capture`] clipping flag,
+/// not a geometric fact derived from the position: `false` marks the cursor
+/// as outside the capture even when the coordinates would land inside the
+/// grid. An out-of-capture cursor skips grid-membership validation and
+/// [`SnapshotCursor::cursor_local`] reports `None` for it, while an
+/// in-capture cursor must lie inside the captured grid. Terminal cursor
+/// visibility stays separate from capture clipping: a hidden cursor still
+/// has a position, and a visible cursor can sit outside the capture.
 ///
 /// Blink is `None` when the backend does not report blink intent. An unknown
 /// blink stays unknown; it is never normalized to `false`.
@@ -442,6 +452,11 @@ pub struct SnapshotCursor {
 impl SnapshotCursor {
     /// Build a cursor value. Bounds against the capture grid are checked by
     /// [`TerminalSnapshot::try_new`], which knows the grid dimensions.
+    ///
+    /// `in_capture` is a clipping override, not a derived fact: pass `false`
+    /// to mark the cursor as outside the capture (grid-membership validation
+    /// is then skipped and [`SnapshotCursor::cursor_local`] returns `None`),
+    /// even when the coordinates land inside the grid.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         col: u32,
@@ -473,7 +488,11 @@ impl SnapshotCursor {
         self.row
     }
 
-    /// Whether the cursor position falls inside the captured grid.
+    /// Whether the cursor belongs to this capture.
+    ///
+    /// This is the clipping override recorded at construction, not a
+    /// geometric test of the coordinates: `false` stays `false` even when
+    /// the position would land inside the captured grid.
     pub fn in_capture(&self) -> bool {
         self.in_capture
     }
@@ -510,6 +529,8 @@ impl SnapshotCursor {
     }
 
     fn check_in(&self, cols: u32, rows: u32, origin: u64) -> Result<(), SnapshotError> {
+        // An out-of-capture cursor is an explicit clipping override: any
+        // position is accepted unvalidated, inside the grid or outside it.
         if !self.in_capture {
             return Ok(());
         }
@@ -805,6 +826,8 @@ impl TerminalSnapshot {
     /// Rejects empty dimensions, oversize input, ragged cells, invalid
     /// continuations, out-of-bounds in-capture cursors, misplaced origins,
     /// and oversize titles and links, using checked arithmetic throughout.
+    /// An out-of-capture cursor is a clipping override: its position is
+    /// recorded without a grid-membership check, inside the grid or outside.
     /// Cell geometry is recorded, never recomputed from UTF-8 byte length.
     ///
     /// Wide-character spans are validated per row with an explicit
@@ -929,6 +952,11 @@ impl TerminalSnapshot {
     }
 
     /// Capture-local cursor coordinates, or `None` outside the capture.
+    ///
+    /// `None` covers both senses of "outside": a cursor marked out-of-capture
+    /// (the clipping override) and a position that would not land in the
+    /// grid. A valid snapshot never pairs `in_capture() == true` with `None`
+    /// here.
     pub fn cursor_local(&self) -> Option<(u32, u32)> {
         if !self.cursor.in_capture {
             return None;
@@ -1944,6 +1972,51 @@ mod tests {
             error.to_string().contains("unsupported snapshot schema"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn out_of_capture_cursor_is_a_clipping_override() {
+        let profile = profile();
+        // `in_capture == false` skips grid-membership validation: the real
+        // position is kept even when it lands inside the grid, and local
+        // coordinates stay unavailable.
+        let mut inside = blank_parts(&profile, 2, 2);
+        inside.cursor = SnapshotCursor::new(
+            1,
+            1,
+            false,
+            true,
+            SnapshotCursorShape::Block,
+            Rgb::new(0, 0, 0),
+            None,
+        );
+        let snapshot = TerminalSnapshot::try_new(inside).expect("override inside the grid passes");
+        assert!(!snapshot.cursor().in_capture());
+        assert_eq!((snapshot.cursor().col(), snapshot.cursor().row()), (1, 1));
+        assert_eq!(snapshot.cursor_local(), None);
+
+        // Outside the grid passes the same way, with the position unclamped.
+        let mut outside = blank_parts(&profile, 2, 2);
+        outside.cursor = SnapshotCursor::new(
+            90,
+            90,
+            false,
+            true,
+            SnapshotCursorShape::Block,
+            Rgb::new(0, 0, 0),
+            None,
+        );
+        let snapshot =
+            TerminalSnapshot::try_new(outside).expect("override outside the grid passes");
+        assert!(!snapshot.cursor().in_capture());
+        assert_eq!((snapshot.cursor().col(), snapshot.cursor().row()), (90, 90));
+        assert_eq!(snapshot.cursor_local(), None);
+
+        // The override survives a serialization round trip unchanged.
+        let json = serde_json::to_string(&snapshot).expect("serializes");
+        let back: TerminalSnapshot = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(snapshot, back);
+        assert!(!back.cursor().in_capture());
     }
 
     #[test]
