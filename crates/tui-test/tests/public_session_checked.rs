@@ -113,6 +113,15 @@ fn run_fixture(spec: &str) {
         .status()
         .expect("stty runs")
         .success());
+    #[cfg(windows)]
+    unsafe {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetStdHandle(which: u32) -> *mut std::ffi::c_void;
+            fn SetConsoleMode(handle: *mut std::ffi::c_void, mode: u32) -> i32;
+        }
+        assert_ne!(SetConsoleMode(GetStdHandle(-10i32 as u32), 0), 0);
+    }
     for command in spec.split(',') {
         if command.is_empty() {
             continue;
