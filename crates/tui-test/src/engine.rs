@@ -22,11 +22,12 @@ use crate::diagnostics::strings::{
 };
 use crate::diagnostics::{
     allocate_artifact_directory, allocate_trace_directory, elapsed_ms, failure_reason,
-    recording_temp_path, write_failure_artifact, ArtifactInputs, CellMismatch, CellStyleEvaluation,
-    ExecutionContext, FailureArtifactRef, FailureArtifactStatus, FailureObservation, FailureReason,
-    FailureReport, InputDetails, LocatorFailureReason, OperationEvent, OperationExpectation,
-    OperationHistory, PreparedRecording, ProcessDiagnostics, RecordingDiagnostics, RecordingStatus,
-    RuntimeDiagnostics, TraceMode, TraceOptions, TraceOutcome, RECORDING_COPY_LIMIT,
+    recording_temp_path, write_failure_artifact, write_observation_free_artifact, ArtifactInputs,
+    CellMismatch, CellStyleEvaluation, ExecutionContext, FailureArtifactRef, FailureArtifactStatus,
+    FailureObservation, FailureReason, FailureReport, InputDetails, LocatorFailureReason,
+    OperationEvent, OperationExpectation, OperationHistory, PreparedRecording, ProcessDiagnostics,
+    RecordingDiagnostics, RecordingStatus, RuntimeDiagnostics, TraceMode, TraceOptions,
+    TraceOutcome, RECORDING_COPY_LIMIT,
 };
 use crate::diagnostics::{comparison_failure, merge_failure_details};
 use crate::input::{keys, mouse};
@@ -1213,7 +1214,7 @@ impl Engine {
             (false, context.artifact.as_ref()),
             (true, trace_artifact.as_ref()),
         ] {
-            let (Some(options), Some(observation)) = (options, observation) else {
+            let Some(options) = options else {
                 continue;
             };
             if options.mode != crate::diagnostics::FailureArtifactMode::None {
@@ -1230,27 +1231,35 @@ impl Engine {
                         if is_trace {
                             owned_directory = Some(directory.clone());
                         }
-                        let prepared_recording = if options.include_recording {
-                            session.and_then(|session| {
-                                self.prepare_recording_artifact(
-                                    session,
+                        // Without a terminal observation no recording can be
+                        // snapshotted and no terminal evidence rendered; the
+                        // report still exports operation, reason, context, and
+                        // history. This path takes no locks.
+                        if let Some(observation) = observation {
+                            let prepared_recording = if options.include_recording {
+                                session.and_then(|session| {
+                                    self.prepare_recording_artifact(
+                                        session,
+                                        observation,
+                                        &directory,
+                                        &mut export_details,
+                                    )
+                                })
+                            } else {
+                                None
+                            };
+                            write_failure_artifact(
+                                options,
+                                ArtifactInputs {
+                                    details: &mut export_details,
                                     observation,
-                                    &directory,
-                                    &mut export_details,
-                                )
-                            })
+                                    recording: prepared_recording,
+                                },
+                                directory,
+                            )
                         } else {
-                            None
-                        };
-                        write_failure_artifact(
-                            options,
-                            ArtifactInputs {
-                                details: &mut export_details,
-                                observation,
-                                recording: prepared_recording,
-                            },
-                            directory,
-                        )
+                            write_observation_free_artifact(options, &mut export_details, directory)
+                        }
                     }
                     Err(error) => FailureArtifactRef {
                         status: FailureArtifactStatus::Failed,
@@ -1499,19 +1508,29 @@ impl Engine {
         context: &ExecutionContext,
         failed: Option<bool>,
     ) -> Result<(), TuiTestError> {
-        let previous_failed = self
-            .recording
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .failed;
-        if failed.is_some_and(|failed| failed != previous_failed) {
+        // Read the stored outcome and apply an explicit one under a single
+        // recording lock: a concurrent acquisition failure landing between a
+        // split read and write-back would otherwise be lost. A `None`
+        // outcome carries no new information, so it is reported without
+        // writing back the read value. The lock is released before the file
+        // work below.
+        let (failed, outcome_changed) = {
+            let mut recording = self
+                .recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match failed {
+                Some(explicit) => {
+                    let changed = explicit != recording.failed;
+                    recording.failed = explicit;
+                    (explicit, changed)
+                }
+                None => (recording.failed, false),
+            }
+        };
+        if outcome_changed {
             self.discard_trace_artifacts()?;
         }
-        let failed = failed.unwrap_or(previous_failed);
-        self.recording
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .failed = failed;
         let options = {
             let trace = self
                 .trace
@@ -7374,6 +7393,245 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .failed,
             "failed acquisition must retain the OnFailure recording outcome"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // F3-A: a quiet acquisition error that finalizes without a terminal
+    // observation must still write failure files. Both tests hold the work
+    // that blocks acquisition (lifecycle writer, and a busy emulator state
+    // for the second) until after the manifest and report assertions, so the
+    // assertions below prove the files were written without that work.
+    fn assert_observation_free_failure_files(
+        error: &TuiTestError,
+        reason: FailureReason,
+        root: &std::path::Path,
+    ) {
+        let details = error
+            .details
+            .as_ref()
+            .expect("acquisition error must carry finalized details");
+        assert_eq!(details.reason, reason);
+        let artifact = error
+            .artifact
+            .as_ref()
+            .expect("observation-free failure must write a failure file");
+        assert_eq!(artifact.status, FailureArtifactStatus::Partial);
+        for path in [&artifact.manifest, &artifact.report].into_iter().flatten() {
+            assert!(
+                std::path::Path::new(path).is_file(),
+                "missing failure file: {path}"
+            );
+            assert!(
+                std::path::Path::new(path).starts_with(root),
+                "failure file must live under the artifact directory: {path}"
+            );
+        }
+        let manifest = std::fs::read_to_string(
+            artifact
+                .manifest
+                .as_ref()
+                .expect("manifest must be referenced"),
+        )
+        .expect("manifest must be readable");
+        assert!(
+            manifest.contains("wait.quiet"),
+            "manifest must carry the operation: {manifest}"
+        );
+        assert!(
+            manifest.contains("timed_out") || manifest.contains("cancelled"),
+            "manifest must carry the reason"
+        );
+        assert!(
+            manifest.contains("terminal evidence unavailable"),
+            "manifest must state that terminal evidence is unavailable"
+        );
+        let report =
+            std::fs::read_to_string(artifact.report.as_ref().expect("report must be referenced"))
+                .expect("report must be readable");
+        assert!(
+            report.contains("wait.quiet"),
+            "text report must carry the operation"
+        );
+    }
+
+    // Timeout during startup: the lifecycle writer holds the lock before
+    // session installation, so no session (and no observation) exists when
+    // the deadline passes. The timeout must still write manifest + report.
+    #[test]
+    fn quiet_acquisition_timeout_during_startup_writes_failure_file() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = quiet_test_engine("timeout-during-startup");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Text,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(200), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| false)
+            .expect_err("expired acquisition must report timeout");
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_failure_files(&error, FailureReason::TimedOut, &root);
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "files must be written before the held startup work is released"
+        );
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // Cancellation with busy emulator state: the lifecycle writer holds the
+    // lock while the state lock is busy, so no observation can be captured
+    // even though a session is live. The cancellation must still write
+    // manifest + report.
+    #[test]
+    fn quiet_acquisition_cancel_with_busy_state_writes_failure_file() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = std::sync::Arc::new(Engine::new(
+            "quiet-acquisition-busy".into(),
+            std::sync::Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        ));
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let session_guard = engine.lock_session();
+        let _state_guard = session_guard
+            .as_ref()
+            .expect("session is live")
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Text,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_failure_files(&error, FailureReason::Cancelled, &root);
+        drop(_state_guard);
+        drop(session_guard);
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // F3-B: a quiet acquisition failure that lands while Close is parked
+    // mid-teardown must survive Close: the recording outcome stays failed
+    // and the recording file is retained.
+    #[test]
+    fn quiet_acquisition_failure_is_not_lost_during_close() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = std::sync::Arc::new(Engine::new(
+            "quiet-acquisition-close".into(),
+            std::sync::Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        ));
+        let mut run = sleeping_program(false);
+        run.recording.mode = AutomaticRecordingMode::OnFailure;
+        engine.execute(Operation::Run(run)).unwrap();
+        let recording_path = engine
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .path
+            .clone()
+            .expect("OnFailure recording must exist");
+        assert!(
+            recording_path.is_file(),
+            "recording file must exist before Close"
+        );
+        // Barrier-pause Close: hold the emulator state so Close parks before
+        // it can finish the trace and clean up the recording.
+        let session_guard = engine.lock_session();
+        let _state_guard = session_guard
+            .as_ref()
+            .expect("session is live")
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let closer = {
+            let engine = std::sync::Arc::clone(&engine);
+            std::thread::spawn(move || engine.execute(Operation::Close))
+        };
+        let parked = Instant::now();
+        while engine.lifecycle.try_read().is_ok() {
+            assert!(
+                parked.elapsed() < Duration::from_secs(15),
+                "Close must take the lifecycle lock"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Fail mid-pause: Close holds the lifecycle lock, so the quiet wait
+        // reports cancellation through the acquisition path.
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &ExecutionContext::default(), &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            engine
+                .recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed,
+            "acquisition failure mid-Close must mark the recording outcome failed"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "Close must still be parked while the failure lands"
+        );
+        // Resume Close: the failure must survive teardown.
+        drop(_state_guard);
+        drop(session_guard);
+        closer
+            .join()
+            .expect("Close thread must finish")
+            .expect("Close must succeed");
+        assert!(
+            engine
+                .recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed,
+            "Close must not clear a concurrent acquisition failure"
+        );
+        assert!(
+            recording_path.is_file(),
+            "OnFailure must retain the recording after a mid-Close acquisition failure"
         );
         std::fs::remove_dir_all(root).unwrap();
     }

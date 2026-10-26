@@ -1581,6 +1581,153 @@ pub(crate) fn write_failure_artifact(
     reference
 }
 
+/// Write a failure artifact without a terminal observation.
+///
+/// Some failures finalize while terminal state is unavailable: a quiet-wait
+/// acquisition error returns while a lifecycle transition still holds the
+/// session or emulator-state lock, so no observation can be captured without
+/// blocking on that transition. The finalized report — operation, reason,
+/// context, and history — is still exported as a manifest plus a text
+/// report; every terminal-derived file is marked omitted and the missing
+/// terminal evidence is stated explicitly. This function only renders and
+/// writes files; it takes no lifecycle, session, or emulator-state locks.
+pub(crate) fn write_observation_free_artifact(
+    options: &FailureArtifactOptions,
+    details: &mut FailureReport,
+    directory: PathBuf,
+) -> FailureArtifactRef {
+    let mut reference = FailureArtifactRef {
+        status: FailureArtifactStatus::Failed,
+        directory: directory.to_string_lossy().into_owned(),
+        manifest: None,
+        report: None,
+        report_html: None,
+        timeline: None,
+        screen_text: None,
+        screen_svg: None,
+        recording: None,
+        errors: Vec::new(),
+    };
+    if options.mode == FailureArtifactMode::None {
+        return reference;
+    }
+    const UNAVAILABLE: &str =
+        "terminal evidence unavailable: the failure finalized without a terminal observation";
+    reference.errors.push(UNAVAILABLE.to_string());
+    let mut files = Vec::new();
+    let mut total = 0u64;
+    if options.include_recording {
+        files.push(ArtifactFile {
+            kind: "recording".to_string(),
+            path: "session.cast".to_string(),
+            status: ArtifactFileStatus::Omitted,
+            bytes: None,
+            sha256: None,
+            reason: Some(UNAVAILABLE.to_string()),
+        });
+    }
+    if options.wants_text() {
+        files.push(ArtifactFile {
+            kind: "screen_text".to_string(),
+            path: "current.txt".to_string(),
+            status: ArtifactFileStatus::Omitted,
+            bytes: None,
+            sha256: None,
+            reason: Some(UNAVAILABLE.to_string()),
+        });
+    }
+    if options.wants_svg() {
+        files.push(ArtifactFile {
+            kind: "screen_svg".to_string(),
+            path: "current.svg".to_string(),
+            status: ArtifactFileStatus::Omitted,
+            bytes: None,
+            sha256: None,
+            reason: Some(UNAVAILABLE.to_string()),
+        });
+    }
+
+    let markdown_name = details.artifact_name("md");
+    let manifest_name = details.artifact_name("json");
+    if options.wants_markdown() {
+        let markdown = markdown::render(details, &files);
+        write_optional_file(
+            &directory,
+            "report",
+            &markdown_name,
+            markdown.as_bytes(),
+            REPORT_LIMIT as u64,
+            &mut total,
+            &mut files,
+            &mut reference.errors,
+        );
+        if files
+            .last()
+            .is_some_and(|file| file.status == ArtifactFileStatus::Written)
+        {
+            reference.report = Some(
+                directory
+                    .join(&markdown_name)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+
+    if !options.wants_json() {
+        reference.status = if reference.report_html.is_some() {
+            FailureArtifactStatus::Partial
+        } else {
+            FailureArtifactStatus::Failed
+        };
+        return reference;
+    }
+
+    let sensitivity = sensitivity(details, &files);
+    let manifest = FailureArtifactManifest {
+        details: details.clone(),
+        sensitivity,
+        files,
+        errors: reference.errors.clone(),
+    };
+    let json = match serde_json::to_vec_pretty(&manifest) {
+        Ok(json) if json.len() <= FAILURE_JSON_LIMIT => json,
+        Ok(_) => {
+            reference
+                .errors
+                .push(format!("{manifest_name} exceeded the 2 MiB limit"));
+            return reference;
+        }
+        Err(error) => {
+            reference
+                .errors
+                .push(format!("failed to serialize {manifest_name}: {error}"));
+            return reference;
+        }
+    };
+    if total.saturating_add(json.len() as u64) > ARTIFACT_TOTAL_LIMIT {
+        reference.errors.push(format!(
+            "{manifest_name} would exceed the total artifact limit"
+        ));
+        return reference;
+    }
+    let manifest_path = directory.join(&manifest_name);
+    match write_atomic(&manifest_path, &json) {
+        Ok(()) => {
+            reference.manifest = Some(manifest_path.to_string_lossy().into_owned());
+            reference.status = if reference.report.is_some() {
+                FailureArtifactStatus::Partial
+            } else {
+                FailureArtifactStatus::Failed
+            };
+        }
+        Err(error) => reference
+            .errors
+            .push(format!("failed to commit {manifest_name}: {error}")),
+    }
+    reference
+}
+
 #[allow(clippy::too_many_arguments)]
 fn write_optional_file(
     directory: &Path,
