@@ -352,55 +352,6 @@ impl Session {
         Ok(())
     }
 
-    /// Write raw bytes to the child without UTF-8 conversion.
-    ///
-    /// Every byte is preserved, including NUL bytes, escape bytes, and
-    /// sequences that are not valid UTF-8. Short writes are retried until
-    /// the full slice reaches the PTY, and interrupted writes are retried.
-    ///
-    /// An empty payload is a no-op that always succeeds while the session is
-    /// open, even after the child has exited. A non-empty payload fails with
-    /// an internal error when the child has already exited or the process
-    /// status query has failed: the kernel may still accept PTY bytes for a
-    /// dead child, so the recorded exit state is checked before logging or
-    /// writing anything.
-    pub fn write_bytes(&self, data: &[u8]) -> Result<(), crate::api::TuiTestError> {
-        if data.is_empty() {
-            return Ok(());
-        }
-        {
-            let st = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(error) = st.exit_error.clone() {
-                return Err(crate::api::TuiTestError::internal(format!(
-                    "failed to write raw bytes: {error}"
-                )));
-            }
-            if let Some(code) = st.exited {
-                return Err(crate::api::TuiTestError::internal(format!(
-                    "failed to write raw bytes: child process has exited (code {code})"
-                )));
-            }
-        }
-        self.logger.write(data);
-        {
-            let mut st = self
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if !st.tracker.executing() {
-                let started_count = st.tracker.started_count();
-                st.awaiting_start = Some(started_count);
-            }
-        }
-        self.pty.write(data).map_err(|error| {
-            crate::api::TuiTestError::internal(format!("failed to write raw bytes: {error}"))
-        })?;
-        Ok(())
-    }
-
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), crate::api::TuiTestError> {
         validate_size(cols, rows)?;
         self.logger.event(&format!("resize {cols}x{rows}"));
