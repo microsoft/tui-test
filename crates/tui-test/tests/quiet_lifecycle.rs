@@ -100,6 +100,42 @@ fn byte_options(timeout: Duration, quiet: Duration) -> WaitQuietOptions {
         .with_mode(WaitQuietMode::Bytes)
 }
 
+/// Barrier handshake for lifecycle preemption (R8 determinism).
+///
+/// Call once the waiter is parked inside its cancellation callback (which
+/// holds the shared lifecycle lock for the whole wait). Spins until the peer
+/// lifecycle request announces itself through the engine's pending counter,
+/// proving it reached its preemption point. At that moment the peer is
+/// pinned: it cannot acquire the exclusive lifecycle lock until the parked
+/// wait yields, so a still-pending completion is a deterministic observation,
+/// not a timing guess. A completion before the announcement means the request
+/// escaped coordination and fails the test outright.
+fn await_lifecycle_pin<T: Send>(
+    session: &Session,
+    done_rx: &mpsc::Receiver<T>,
+    started_rx: &mpsc::Receiver<()>,
+    what: &str,
+) {
+    started_rx
+        .recv_timeout(GATE_BOUND)
+        .unwrap_or_else(|_| panic!("{what} thread never started within {GATE_BOUND:?}"));
+    let deadline = std::time::Instant::now() + GATE_BOUND;
+    loop {
+        if session.has_pending_lifecycle() {
+            return;
+        }
+        if done_rx.try_recv().is_ok() {
+            panic!(
+                "{what} completed underneath a parked quiet wait (R8: no lifecycle coordination)"
+            );
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!("{what} never announced its lifecycle request within {GATE_BOUND:?}");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 /// Join a thread with a hard bound; a hang fails the test instead of
 /// hanging the suite.
 fn join_bounded<T: Send + 'static>(handle: std::thread::JoinHandle<T>, what: &str) -> T {
@@ -166,18 +202,20 @@ fn r8_close_during_wait_never_reports_success() {
         .expect("wait reaches the cancellation gate");
 
     let (done_tx, done_rx) = mpsc::channel();
+    let (started_tx, started_rx) = mpsc::channel();
     let closer = session.clone();
     std::thread::spawn(move || {
+        let _ = started_tx.send(());
         let _ = done_tx.send(closer.close());
     });
-    // Grace for Close to announce itself (fixed code: it blocks on the
-    // lifecycle guard; base code: it completes underneath the parked wait).
-    let pre_release_close = done_rx.recv_timeout(Duration::from_secs(3)).ok();
-    let _ = release_tx.send(());
+    // Pin the peer at its preemption point: announced, blocked on the
+    // lifecycle guard, unable to complete until the parked wait yields.
+    await_lifecycle_pin(&session, &done_rx, &started_rx, "Close");
     assert!(
-        pre_release_close.is_none(),
-        "Close completed underneath a parked quiet wait (R8: no lifecycle coordination)"
+        matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "Close finished while the parked wait still holds the lifecycle lock (R8)"
     );
+    let _ = release_tx.send(());
 
     let outcome = join_bounded(wait, "quiet wait");
     let close_result = done_rx
@@ -218,18 +256,22 @@ fn r8_restart_during_wait_never_reports_success() {
         .expect("wait reaches the cancellation gate");
 
     let (done_tx, done_rx) = mpsc::channel();
+    let (started_tx, started_rx) = mpsc::channel();
     let restarter = session.clone();
     std::thread::spawn(move || {
+        let _ = started_tx.send(());
         let _ = done_tx.send(restarter.execute(Operation::Restart {
             graceful_timeout_ms: 1_000,
         }));
     });
-    let pre_release_restart = done_rx.recv_timeout(Duration::from_secs(3)).ok();
-    let _ = release_tx.send(());
+    // Pin the peer at its preemption point: announced, blocked on the
+    // lifecycle guard, unable to complete until the parked wait yields.
+    await_lifecycle_pin(&session, &done_rx, &started_rx, "Restart");
     assert!(
-        pre_release_restart.is_none(),
-        "Restart completed underneath a parked quiet wait (R8: no lifecycle coordination)"
+        matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "Restart finished while the parked wait still holds the lifecycle lock (R8)"
     );
+    let _ = release_tx.send(());
 
     let outcome = join_bounded(wait, "quiet wait");
     let restart_result = done_rx

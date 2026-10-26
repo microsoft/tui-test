@@ -1684,8 +1684,12 @@ impl Engine {
     /// Whether a lifecycle operation (Close/Restart/...) is announced and
     /// waiting for exclusive access. Waits that poll outside
     /// [`Engine::execute_with_context_cancellable`] compose this into their
-    /// cancellation check so lifecycle requests preempt them.
-    pub(crate) fn has_pending_lifecycle(&self) -> bool {
+    /// cancellation check so lifecycle requests preempt them. Tests use this
+    /// as a barrier handshake: once a parked wait holds the shared lifecycle
+    /// lock and this reports true, the lifecycle request cannot complete
+    /// until the wait yields, so the peer thread's pending completion is a
+    /// deterministic observation rather than a timing guess.
+    pub fn has_pending_lifecycle(&self) -> bool {
         self.pending_lifecycle.load(Ordering::Acquire) != 0
     }
 

@@ -526,6 +526,16 @@ impl Session {
         self.engine.is_open()
     }
 
+    /// Whether a lifecycle operation (Close/Restart/...) has announced itself
+    /// and is waiting for exclusive access. Test barrier handshake for
+    /// lifecycle/quiet-wait coordination: once a parked quiet wait holds the
+    /// shared lifecycle lock and this reports true, the lifecycle request is
+    /// pinned at its preemption point and cannot complete until the wait
+    /// yields.
+    pub fn has_pending_lifecycle(&self) -> bool {
+        self.engine.has_pending_lifecycle()
+    }
+
     pub fn recording_path(&self) -> Option<PathBuf> {
         self.engine.recording_path()
     }
