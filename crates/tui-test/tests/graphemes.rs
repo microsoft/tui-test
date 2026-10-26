@@ -847,3 +847,92 @@ fn u05_i_default_ignorables_shape_without_coverage() {
         "unsupported scalar fails as missing glyph, got {error}"
     );
 }
+
+/// U05 synthetic fallback: with a regular-only face and synthetic styles
+/// selected, bold-italic combining text shapes, block-cursor repaint of the
+/// combined cell works, and a visible title renders. With synthetic styles
+/// off, the same styled cell fails as a missing face.
+#[test]
+fn synthetic_style_fallback() {
+    let regular_only = || {
+        PinnedFontSet::new(vec![
+            PinnedFace::new(regular_bytes(), 0, false, false).expect("bundled face parses")
+        ])
+        .expect("regular-only set builds")
+    };
+    let synthetic = regular_only().with_synthetic_style(true);
+
+    // Bold-italic combining text shapes with the regular face.
+    let styled = snapshot_with_cells(
+        2,
+        1,
+        vec![cell(E_ACUTE, 1, Attrs::BOLD | Attrs::ITALIC), blank()],
+        hidden_cursor(),
+    );
+    let rendered = render_snapshot_png(&styled, &strict_options(&synthetic))
+        .expect("synthetic bold-italic combining cell renders");
+    assert_eq!(
+        rendered.evidence().shaped_graphemes(),
+        &[E_ACUTE.to_string()]
+    );
+    let (width, _, pixels) = decode_png(rendered.png());
+    let ink = cell_ink(&pixels, width, BLACK, 0, 0, CELL_W, CELL_H);
+    assert!(!ink.is_empty(), "synthetic styled cell holds ink");
+    assert_eq!(
+        ink.len(),
+        ink_offsets(&pixels, width, BLACK).len(),
+        "synthetic styled ink stays in its cell"
+    );
+
+    // Block-cursor repaint of the combined cell renders too.
+    let repainted = snapshot_with_cells(
+        2,
+        1,
+        vec![cell(E_ACUTE, 1, Attrs::BOLD | Attrs::ITALIC), blank()],
+        block_cursor_at(0, 0),
+    );
+    let cursor_rendered = render_snapshot_png(&repainted, &strict_options(&synthetic))
+        .expect("synthetic cursor repaint renders");
+    assert!(cursor_rendered.evidence().cursor_drawn());
+    assert!(!cursor_rendered.png().is_empty());
+
+    // A visible title renders: titles always use the bold slot, so the
+    // regular-only set needs the same synthetic fallback.
+    let titled = TerminalSnapshot::try_new(SnapshotParts {
+        cols: 12,
+        rows: 1,
+        scope: SnapshotScope::Viewport,
+        viewport_origin: 0,
+        cells: (0..12).map(|_| blank()).collect(),
+        palette: resolved_palette(),
+        default_foreground: Rgb::new(192, 192, 192),
+        default_background: Rgb::new(0, 0, 0),
+        default_cursor: Rgb::new(9, 9, 9),
+        cursor: hidden_cursor(),
+        title: Some(E_ACUTE.to_string()),
+        metadata: SnapshotMetadata::default(),
+    })
+    .expect("titled snapshot is valid");
+    let titled_rendered =
+        render_snapshot_png(&titled, &strict_options(&synthetic).with_title_bar(true))
+            .expect("synthetic title renders");
+    assert_eq!(
+        titled_rendered.evidence().title().unwrap_or_default(),
+        format!("{E_ACUTE} - 12x1").as_str()
+    );
+    assert!(!titled_rendered.png().is_empty());
+
+    // Without synthetic styles the same styled cell is a missing face.
+    let error = render_snapshot_png(&styled, &strict_options(&regular_only()))
+        .expect_err("styled combining cell without synthetic fails");
+    assert!(
+        matches!(
+            error,
+            RenderError::PinnedFont(PinnedFontError::MissingFace {
+                bold: true,
+                italic: true
+            })
+        ),
+        "unselected style fails as missing face, got {error}"
+    );
+}
