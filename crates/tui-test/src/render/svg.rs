@@ -350,6 +350,7 @@ impl ResolvedLayout {
         Some((ceil_pixel(width)?, ceil_pixel(height)?))
     }
 
+    #[cfg(feature = "recording-raster")]
     /// Panel-only variant of [`output_pixel_size`](Self::output_pixel_size),
     /// without the canvas: per-frame placement adds the canvas separately
     /// when it centers a frame, so it rounds the same scaled panel rather

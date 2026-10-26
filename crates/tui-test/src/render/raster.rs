@@ -411,26 +411,17 @@ impl FrameRenderer for GridRenderer {
                     }
                 }
 
-                if paint.underline {
-                    fill_antialiased_rect(
-                        pixmap,
-                        cell_origin_x,
-                        cell_origin_y + cell_height - 3.0 * scale,
-                        cell_width,
-                        scale.max(1.0),
-                        paint.underline_color,
-                    );
-                }
-                if paint.strike {
-                    fill_antialiased_rect(
-                        pixmap,
-                        cell_origin_x,
-                        baseline - layout.font_size * 0.32 * scale,
-                        cell_width,
-                        scale.max(1.0),
-                        paint.fg,
-                    );
-                }
+                draw_decorations(
+                    pixmap,
+                    cell_origin_x,
+                    cell_origin_y,
+                    cell_width,
+                    cell_height,
+                    baseline,
+                    &paint,
+                    layout,
+                    scale,
+                );
             }
         }
 
@@ -563,12 +554,20 @@ fn draw_cursor(
         }
     }
 
-    if cell.ch.as_str() == CONTINUATION || cell.ch.chars().all(char::is_whitespace) {
+    if cell.ch.as_str() == CONTINUATION {
         return;
     }
-    let paint = svg::cell_paint(cell, colors);
+    let mut paint = svg::cell_paint(cell, colors);
     if paint.invisible {
         return;
+    }
+    // The block already covered the cell, so the redrawn glyph takes the
+    // cell background as its fill, exactly like the SVG cursor repaint. A
+    // missing underline color follows the foreground (now the redrawn one),
+    // while an explicit underline color keeps its own paint.
+    paint.fg = svg::bg_of(cell, colors);
+    if cell.underline_color.is_none() {
+        paint.underline_color = paint.fg;
     }
     if unsupported_grapheme(cell.ch.as_str()) {
         missing.insert(format_glyph_sequence(cell.ch.as_str()));
@@ -577,32 +576,90 @@ fn draw_cursor(
     let baseline = panel_origin_y
         + (layout.header_h + layout.content_top + cy as f32 * layout.cell_h + layout.baseline)
             * scale;
-    for character in cell.ch.chars() {
-        if is_default_ignorable(character) {
-            continue;
-        }
-        let key = GlyphKey {
-            character,
-            bold: paint.bold,
-            italic: paint.italic,
-        };
-        match fonts.resolve(key) {
-            Some(glyph) => draw_glyph(
-                pixmap,
-                glyph,
-                origin_x,
-                origin_y,
-                cell_width,
-                cell_height,
-                baseline,
-                svg::bg_of(cell, colors),
-                layout.font_size,
-                scale,
-            ),
-            None => {
-                missing.insert(format!("{character:?} (U+{:04X})", character as u32));
+    // Whitespace holds no glyph, but an underlined blank still shows its
+    // bar, so only the glyph loop is skipped, never the decorations below.
+    if !cell.ch.chars().all(char::is_whitespace) {
+        for character in cell.ch.chars() {
+            if is_default_ignorable(character) {
+                continue;
+            }
+            let key = GlyphKey {
+                character,
+                bold: paint.bold,
+                italic: paint.italic,
+            };
+            match fonts.resolve(key) {
+                Some(glyph) => draw_glyph(
+                    pixmap,
+                    glyph,
+                    origin_x,
+                    origin_y,
+                    cell_width,
+                    cell_height,
+                    baseline,
+                    paint.fg,
+                    layout.font_size,
+                    scale,
+                ),
+                None => {
+                    missing.insert(format!("{character:?} (U+{:04X})", character as u32));
+                }
             }
         }
+    }
+    draw_decorations(
+        pixmap,
+        origin_x,
+        origin_y,
+        cell_width,
+        cell_height,
+        baseline,
+        &paint,
+        layout,
+        scale,
+    );
+}
+
+/// Paint a cell's underline and strike-through bars.
+///
+/// Both the grid pass and the block-cursor repaint draw through here, so a
+/// cursor covering an underlined cell restores the same bars the grid pass
+/// laid down. The caller supplies the paint to use: the grid pass passes
+/// [`svg::cell_paint`] unchanged, while the cursor repaint first applies
+/// the cursor-foreground rule (a missing underline color follows the
+/// redrawn foreground; an explicit one is untouched), mirroring the SVG
+/// cursor repaint. Strike-through always follows the foreground.
+#[allow(clippy::too_many_arguments)]
+fn draw_decorations(
+    pixmap: &mut Pixmap,
+    origin_x: f32,
+    origin_y: f32,
+    cell_width: f32,
+    cell_height: f32,
+    baseline: f32,
+    paint: &svg::CellPaint,
+    layout: &ResolvedLayout,
+    scale: f32,
+) {
+    if paint.underline {
+        fill_antialiased_rect(
+            pixmap,
+            origin_x,
+            origin_y + cell_height - 3.0 * scale,
+            cell_width,
+            scale.max(1.0),
+            paint.underline_color,
+        );
+    }
+    if paint.strike {
+        fill_antialiased_rect(
+            pixmap,
+            origin_x,
+            baseline - layout.font_size * 0.32 * scale,
+            cell_width,
+            scale.max(1.0),
+            paint.fg,
+        );
     }
 }
 

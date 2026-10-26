@@ -74,6 +74,14 @@ fn underlined_cell(
 }
 
 fn snapshot_of(cells: Vec<SnapshotCell>, palette: [Rgb; 256]) -> TerminalSnapshot {
+    snapshot_with_cursor(cells, palette, hidden_cursor())
+}
+
+fn snapshot_with_cursor(
+    cells: Vec<SnapshotCell>,
+    palette: [Rgb; 256],
+    cursor: SnapshotCursor,
+) -> TerminalSnapshot {
     let cols = cells.len() as u32;
     TerminalSnapshot::try_new(SnapshotParts {
         cols,
@@ -85,7 +93,7 @@ fn snapshot_of(cells: Vec<SnapshotCell>, palette: [Rgb; 256]) -> TerminalSnapsho
         default_foreground: Rgb::new(192, 192, 192),
         default_background: Rgb::new(0, 0, 0),
         default_cursor: Rgb::new(9, 9, 9),
-        cursor: hidden_cursor(),
+        cursor,
         title: None,
         metadata: SnapshotMetadata::default(),
     })
@@ -437,6 +445,229 @@ mod raster_tests {
             render(&missing),
             render(&explicit),
             "no underline color must paint exactly like the foreground color"
+        );
+    }
+
+    fn visible_cursor() -> SnapshotCursor {
+        SnapshotCursor::new(
+            0,
+            0,
+            true,
+            true,
+            SnapshotCursorShape::Block,
+            Rgb::new(0, 255, 0),
+            None,
+        )
+    }
+
+    fn cell_with_attrs(text: &str, attrs: Attrs, underline_color: SnapshotColor) -> SnapshotCell {
+        SnapshotCell::new(
+            text.to_string(),
+            1,
+            SnapshotColor::Default,
+            SnapshotColor::Default,
+            attrs,
+            SnapshotUnderline::Single,
+            underline_color,
+            None,
+            None,
+        )
+        .expect("test cell is valid")
+    }
+
+    /// U11-E: a visible block cursor keeps the explicit underline color.
+    ///
+    /// The opaque cursor block covers the grid-pass underline, and the
+    /// raster cursor repaint must restore the same bar; red and blue
+    /// underlines under a green block cursor decode differently, while
+    /// the hidden-cursor pair differs too. An underlined blank holds no
+    /// glyph, but its bar is still repainted.
+    #[test]
+    fn visible_block_cursor_keeps_explicit_underline_color() {
+        let pair = |color: SnapshotColor, cursor: SnapshotCursor| {
+            snapshot_with_cursor(
+                vec![underlined_cell("u", SnapshotUnderline::Single, color)],
+                resolved_palette(),
+                cursor,
+            )
+        };
+        let red = pair(SnapshotColor::Rgb(255, 0, 0), visible_cursor());
+        let blue = pair(SnapshotColor::Rgb(0, 0, 255), visible_cursor());
+        assert_ne!(
+            render(&red),
+            render(&blue),
+            "red and blue underlines differ under a visible block cursor"
+        );
+        let hidden_red = pair(SnapshotColor::Rgb(255, 0, 0), super::hidden_cursor());
+        let hidden_blue = pair(SnapshotColor::Rgb(0, 0, 255), super::hidden_cursor());
+        assert_ne!(
+            render(&hidden_red),
+            render(&hidden_blue),
+            "the hidden-cursor pair differs as well"
+        );
+
+        let blank = |color: SnapshotColor| {
+            snapshot_with_cursor(
+                vec![underlined_cell(" ", SnapshotUnderline::Single, color)],
+                resolved_palette(),
+                visible_cursor(),
+            )
+        };
+        assert_ne!(
+            render(&blank(SnapshotColor::Rgb(255, 0, 0))),
+            render(&blank(SnapshotColor::Rgb(0, 0, 255))),
+            "an underlined blank keeps its bar under a visible block cursor"
+        );
+    }
+
+    /// U11-E (indexed): an indexed underline color under a visible block
+    /// cursor resolves through the captured palette.
+    #[test]
+    fn visible_block_cursor_uses_indexed_underline_palette() {
+        let cells = || {
+            vec![underlined_cell(
+                "u",
+                SnapshotUnderline::Single,
+                SnapshotColor::Indexed(1),
+            )]
+        };
+        let mut red_palette = resolved_palette();
+        red_palette[1] = Rgb::new(255, 0, 0);
+        let mut blue_palette = resolved_palette();
+        blue_palette[1] = Rgb::new(0, 0, 255);
+        let red = snapshot_with_cursor(cells(), red_palette, visible_cursor());
+        let blue = snapshot_with_cursor(cells(), blue_palette, visible_cursor());
+        assert_ne!(
+            render(&red),
+            render(&blue),
+            "a moved palette entry must repaint the indexed underline under a cursor"
+        );
+        let rgb = snapshot_with_cursor(
+            vec![underlined_cell(
+                "u",
+                SnapshotUnderline::Single,
+                SnapshotColor::Rgb(255, 0, 0),
+            )],
+            red_palette,
+            visible_cursor(),
+        );
+        assert_eq!(
+            render(&red),
+            render(&rgb),
+            "indexed underline colors resolve through the snapshot palette under a cursor"
+        );
+    }
+
+    /// U11-E (fallback): under a visible block cursor a missing underline
+    /// color follows the redrawn foreground — the cell background — even
+    /// with inverse or dim set.
+    #[test]
+    fn visible_block_cursor_fallback_follows_redrawn_foreground() {
+        // Plain cell: the displayed background is the default background.
+        let missing = snapshot_with_cursor(
+            vec![cell_with_attrs("u", Attrs::empty(), SnapshotColor::Default)],
+            resolved_palette(),
+            visible_cursor(),
+        );
+        let explicit = snapshot_with_cursor(
+            vec![cell_with_attrs(
+                "u",
+                Attrs::empty(),
+                SnapshotColor::Rgb(0, 0, 0),
+            )],
+            resolved_palette(),
+            visible_cursor(),
+        );
+        assert_eq!(
+            render(&missing),
+            render(&explicit),
+            "a missing underline color paints like the cell background under a cursor"
+        );
+        // Inverse swaps the displayed colors, so the fallback follows the
+        // displayed background (the default foreground).
+        let missing_inverse = snapshot_with_cursor(
+            vec![cell_with_attrs("u", Attrs::INVERSE, SnapshotColor::Default)],
+            resolved_palette(),
+            visible_cursor(),
+        );
+        let explicit_inverse = snapshot_with_cursor(
+            vec![cell_with_attrs(
+                "u",
+                Attrs::INVERSE,
+                SnapshotColor::Rgb(192, 192, 192),
+            )],
+            resolved_palette(),
+            visible_cursor(),
+        );
+        assert_eq!(
+            render(&missing_inverse),
+            render(&explicit_inverse),
+            "the inverse fallback follows the swapped background under a cursor"
+        );
+        // Dim dims the foreground glyph, not the cell background the
+        // redrawn cursor glyph takes, so the fallback still matches it.
+        let missing_dim = snapshot_with_cursor(
+            vec![cell_with_attrs("u", Attrs::DIM, SnapshotColor::Default)],
+            resolved_palette(),
+            visible_cursor(),
+        );
+        let explicit_dim = snapshot_with_cursor(
+            vec![cell_with_attrs(
+                "u",
+                Attrs::DIM,
+                SnapshotColor::Rgb(0, 0, 0),
+            )],
+            resolved_palette(),
+            visible_cursor(),
+        );
+        assert_eq!(
+            render(&missing_dim),
+            render(&explicit_dim),
+            "the dimmed fallback matches the cell background under a cursor"
+        );
+    }
+
+    /// U11-E (strike): the strike-through is repainted too, keeping its
+    /// own foreground color while the underline keeps the explicit one.
+    #[test]
+    fn visible_block_cursor_keeps_strike_with_explicit_underline() {
+        let struck = |color: SnapshotColor| {
+            snapshot_with_cursor(
+                vec![SnapshotCell::new(
+                    "u".to_string(),
+                    1,
+                    SnapshotColor::Default,
+                    SnapshotColor::Default,
+                    Attrs::STRIKE,
+                    SnapshotUnderline::Single,
+                    color,
+                    None,
+                    None,
+                )
+                .expect("test cell is valid")],
+                resolved_palette(),
+                visible_cursor(),
+            )
+        };
+        assert_ne!(
+            render(&struck(SnapshotColor::Rgb(255, 0, 0))),
+            render(&struck(SnapshotColor::Rgb(0, 0, 255))),
+            "the explicit underline survives the cursor next to a strike"
+        );
+        let struck_missing = snapshot_with_cursor(
+            vec![cell_with_attrs("u", Attrs::STRIKE, SnapshotColor::Default)],
+            resolved_palette(),
+            visible_cursor(),
+        );
+        let plain_missing = snapshot_with_cursor(
+            vec![cell_with_attrs("u", Attrs::empty(), SnapshotColor::Default)],
+            resolved_palette(),
+            visible_cursor(),
+        );
+        assert_ne!(
+            render(&struck_missing),
+            render(&plain_missing),
+            "the strike-through bar is repainted under a visible block cursor"
         );
     }
 
