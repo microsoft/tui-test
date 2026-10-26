@@ -508,13 +508,7 @@ impl Engine {
                 result_name,
                 metadata.input.clone(),
             );
-        if let Err(error) = &mut result {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.finalize_failure(error, &context, &metadata);
-            }));
-            error.observation = None;
-            error.report = None;
-        }
+        self.finalize_request_error(&mut result, &context, &metadata);
         result
     }
 
@@ -649,8 +643,9 @@ impl Engine {
     ///
     /// This follows the same lifecycle protocol as the recorded open and run
     /// paths: the child environment resolves before any session state
-    /// changes, concurrent operations wait on the lifecycle lock, and the
-    /// resolved launch is retained for restart.
+    /// changes, concurrent operations wait on the lifecycle lock, the
+    /// resolved launch is retained for restart, and failures carry the same
+    /// structured metadata through the shared request finalization.
     pub fn spawn_with_context(
         &self,
         launch: crate::launch::LaunchOptions,
@@ -730,7 +725,15 @@ impl Engine {
             retention: context.retention,
             trace: context.trace.clone(),
         };
-        let mut result = self.spawn(spec, &context, &metadata);
+        let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.spawn(spec, &context, &metadata)
+        }))
+        .unwrap_or_else(|payload| {
+            Err(TuiTestError::internal(format!(
+                "native terminal operation panicked: {}",
+                panic_message(payload.as_ref())
+            )))
+        });
         let failed = result
             .as_ref()
             .is_err_and(|error| matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal));
@@ -773,7 +776,26 @@ impl Engine {
                 result_name,
                 None,
             );
+        self.finalize_request_error(&mut result, &context, &metadata);
         result
+    }
+
+    /// Shared request finalization for the recorded-operation and
+    /// native-launch paths: attach structured failure metadata under a panic
+    /// boundary, then drop the transient observation and report.
+    fn finalize_request_error<T>(
+        &self,
+        result: &mut Result<T, TuiTestError>,
+        context: &ExecutionContext,
+        metadata: &OperationMetadata,
+    ) {
+        if let Err(error) = result {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.finalize_failure(error, context, metadata);
+            }));
+            error.observation = None;
+            error.report = None;
+        }
     }
 
     fn restart(
@@ -5262,7 +5284,11 @@ mod tests {
     #[test]
     fn native_spawn_stamps_output_observations_across_restart() {
         fn presence(value: Option<Instant>) -> &'static str {
-            if value.is_some() { "Some" } else { "None" }
+            if value.is_some() {
+                "Some"
+            } else {
+                "None"
+            }
         }
         let engine = Engine::new(
             "native-stamp".into(),

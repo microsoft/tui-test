@@ -12,8 +12,8 @@ use std::ffi::{OsStr, OsString};
 use std::sync::Arc;
 
 use tui_test::{
-    AutomaticRecording, AutomaticRecordingMode, Engine, ErrorKind, LaunchEnvMode, LaunchOptions,
-    OpenOptions, Operation, OperationResult, RunOptions, State,
+    AutomaticRecording, AutomaticRecordingMode, Engine, ErrorKind, ExecutionContext, LaunchEnvMode,
+    LaunchOptions, OpenOptions, Operation, OperationResult, RunOptions, State,
 };
 
 #[cfg(unix)]
@@ -40,9 +40,32 @@ fn probe_program() -> std::path::PathBuf {
         .expect("test binary under target/<profile>/deps");
     let target_dir = profile.join("launch-probe-target");
     if let Some(probe) = find_probe_binary(&target_dir.join("debug").join("deps")) {
-        return probe;
+        if !probe_source_newer_than(&probe) {
+            return probe;
+        }
     }
     build_probe(&target_dir)
+}
+
+/// The hashed binary name carries no source revision, so a reused binary
+/// is only valid when it is at least as new as the fixture source and the
+/// manifest that declares its target. Otherwise the probe rebuilds, so an
+/// edited `launch_probe.rs` can never run stale.
+fn probe_source_newer_than(probe: &std::path::Path) -> bool {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let sources = [
+        manifest_dir.join("tests/fixtures/launch_probe.rs"),
+        manifest_dir.join("Cargo.toml"),
+    ];
+    let Ok(probe_modified) = std::fs::metadata(probe).and_then(|metadata| metadata.modified())
+    else {
+        return true;
+    };
+    sources.iter().any(|source| {
+        std::fs::metadata(source)
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified >= probe_modified)
+    })
 }
 
 /// Test targets carry a metadata hash in the file name
@@ -813,4 +836,43 @@ fn u08_k_invalid_native_values_are_typed_errors() {
         !engine.is_open(),
         "a rejected launch must not open a session"
     );
+}
+
+/// A failed native spawn must finalize exactly like a failed run: the same
+/// configured operation name and structured failure metadata, and no
+/// artifacts when no session exists.
+#[test]
+fn u08_l_spawn_with_failure_carries_structured_details() {
+    const MISSING: &str = "/nonexistent-tui-test-launch-probe";
+    const OPERATION: &str = "u08-l-spawn-details";
+    let engine = test_engine("spawn-details");
+    let context = ExecutionContext::default().with_operation(OPERATION);
+
+    let mut run_options = base_options();
+    run_options.program = MISSING.to_string();
+    let run_error = engine
+        .execute_with_context(Operation::Run(run_options), context.clone())
+        .unwrap_err();
+    let spawn_error = engine
+        .spawn_with_context(LaunchOptions::new(MISSING), base_options(), context)
+        .unwrap_err();
+
+    for (label, error) in [("run", &run_error), ("spawn_with", &spawn_error)] {
+        let details = error.details.as_ref().unwrap_or_else(|| {
+            panic!("{label} of a missing executable must carry structured failure metadata")
+        });
+        assert_eq!(
+            details.operation, OPERATION,
+            "{label} must record the configured operation name"
+        );
+        assert!(
+            error.artifact.is_none(),
+            "{label} must not report artifacts when no session exists"
+        );
+    }
+    assert_eq!(
+        run_error.kind, spawn_error.kind,
+        "both entry points must classify the spawn failure the same way"
+    );
+    assert!(!engine.is_open(), "a failed spawn must not open a session");
 }

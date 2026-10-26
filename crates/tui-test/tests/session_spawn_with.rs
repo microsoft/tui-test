@@ -12,6 +12,7 @@ use tui_test::{
 
 const FIXTURE_ENV: &str = "TUI_TEST_SESSION_SPAWN_FIXTURE";
 const SENTINEL: &str = "TUI_TEST_U08_R10_SENTINEL";
+const OPERATION: &str = "u08-r10-spawn";
 
 /// Session settings for launch tests. The launch supplies the program,
 /// arguments, environment, and working directory as native values; the
@@ -52,7 +53,7 @@ fn session_spawn_fixture() {
 #[test]
 fn u08_r10_session_spawn_with_uses_session_context() {
     let session = Session::new(format!("u08-r10-{}", std::process::id()))
-        .with_execution_context(ExecutionContext::default().with_operation("u08-r10-spawn"));
+        .with_execution_context(ExecutionContext::default().with_operation(OPERATION));
     let launch = LaunchOptions::new(std::env::current_exe().unwrap())
         .with_args(["--exact", "session_spawn_fixture", "--nocapture"])
         .with_env(FIXTURE_ENV, "print-env")
@@ -72,4 +73,25 @@ fn u08_r10_session_spawn_with_uses_session_context() {
         "child spawned through Session::spawn_with must see the launch override: {text}"
     );
     session.close().unwrap();
+    // The session context must reach the spawn request itself, not just the
+    // child environment: the check above would pass even against a
+    // `spawn_with` that ignored the session context, so a failed spawn under
+    // the same context must also carry the configured operation name in its
+    // structured failure metadata.
+    let failing = Session::new(format!("u08-r10-failing-{}", std::process::id()))
+        .with_execution_context(ExecutionContext::default().with_operation(OPERATION));
+    let error = failing
+        .spawn_with(
+            LaunchOptions::new("/nonexistent-tui-test-u08-r10-probe"),
+            base_options(),
+        )
+        .unwrap_err();
+    let details = error
+        .details
+        .as_ref()
+        .expect("spawn_with through a session context must carry structured failure metadata");
+    assert_eq!(
+        details.operation, OPERATION,
+        "spawn_with must record the session context operation name"
+    );
 }

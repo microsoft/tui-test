@@ -205,6 +205,13 @@ impl LaunchOptions {
 
 /// A resolved launch: native program, arguments, directory, and the full
 /// child environment. Restart reuses these values unchanged.
+///
+/// This is an inspection snapshot, not a reusable launch object: the public
+/// spawn entry points ([`crate::engine::Engine::spawn_with`] and
+/// [`crate::runtime::Session::spawn_with`]) take an unresolved
+/// [`LaunchOptions`] and resolve it internally, so they do not accept a
+/// `ResolvedLaunch`. Callers inspect the resolved values through the
+/// accessors below; the engine keeps its own copy for restart.
 #[derive(Debug, Clone)]
 pub struct ResolvedLaunch {
     program: OsString,
