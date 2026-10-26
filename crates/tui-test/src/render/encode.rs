@@ -678,6 +678,7 @@ mod tests {
             duration,
             render_state: RenderState::capture(&emulator),
             cursor: None,
+            widths: None,
         }
     }
 

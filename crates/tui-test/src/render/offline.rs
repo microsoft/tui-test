@@ -617,7 +617,7 @@ pub fn render_snapshot_svg(
     let layout = layout_from_options(options)?;
     let (cols, rows) = snapshot_grid_size(snapshot)?;
     let (width, height) = checked_output_size(&layout, snapshot.cols(), snapshot.rows())?;
-    let grid = snapshot_rows(snapshot);
+    let (grid, widths) = snapshot_rows(snapshot);
     let colors = snapshot_colors(snapshot);
     let cursor = snapshot_cursor_position(snapshot);
     let svg = super::svg::render_svg_with_layout(
@@ -628,6 +628,7 @@ pub fn render_snapshot_svg(
         snapshot.title(),
         &layout,
         options.background,
+        Some(&widths),
     );
     Ok(RenderedSvg {
         svg,
@@ -869,18 +870,26 @@ fn checked_output_size(
     Ok((width, height))
 }
 
-/// Convert snapshot cells to the renderer grid.
+/// Convert snapshot cells to the renderer grid plus its recorded widths.
 ///
 /// Widths are recorded on the snapshot and never recomputed from the text;
 /// continuation cells (empty text off column zero) convert to the empty
-/// marker the renderer already treats as a wide-character trailer.
-fn snapshot_rows(snapshot: &TerminalSnapshot) -> Vec<Vec<EmuCell>> {
+/// marker the renderer already treats as a wide-character trailer. The
+/// widths travel beside the grid as private render data, so the public
+/// cell shape stays compatible while the renderers still size spans from
+/// what the snapshot recorded.
+fn snapshot_rows(snapshot: &TerminalSnapshot) -> (Vec<Vec<EmuCell>>, Vec<Vec<u16>>) {
     let cols = snapshot.cols() as usize;
     snapshot
         .cells()
         .chunks(cols.max(1))
-        .map(|row| row.iter().map(snapshot_cell_to_emu).collect())
-        .collect()
+        .map(|row| {
+            (
+                row.iter().map(snapshot_cell_to_emu).collect(),
+                row.iter().map(|cell| cell.width()).collect(),
+            )
+        })
+        .unzip()
 }
 
 /// Convert one snapshot cell to a renderer cell.
@@ -901,10 +910,6 @@ fn snapshot_cell_to_emu(cell: &crate::snapshot::SnapshotCell) -> EmuCell {
     }
     EmuCell {
         ch: CompactString::from(cell.text()),
-        // The recorded span travels with the cell: the shared renderer fits
-        // glyphs, clips at the row end, and sizes decorations and cursors
-        // from it instead of remeasuring the text.
-        width: cell.width(),
         fg: snapshot_color_to_emu(cell.fg()),
         bg: snapshot_color_to_emu(cell.bg()),
         underline: snapshot_underline_to_emu(cell.underline()),
@@ -982,12 +987,14 @@ fn snapshot_cursor_position(snapshot: &TerminalSnapshot) -> Option<(u16, usize)>
 /// types.
 #[cfg(feature = "recording-raster")]
 fn snapshot_frame(snapshot: &TerminalSnapshot) -> crate::record::frames::Frame {
+    let (grid, widths) = snapshot_rows(snapshot);
     crate::record::frames::Frame {
-        grid: snapshot_rows(snapshot),
+        grid,
         title: snapshot.title().map(str::to_string),
         duration: std::time::Duration::ZERO,
         render_state: snapshot_colors(snapshot),
         cursor: snapshot_cursor_position(snapshot),
+        widths: Some(widths),
     }
 }
 

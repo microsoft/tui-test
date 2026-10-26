@@ -91,14 +91,6 @@ fn styled_cell(
             }
         }
     };
-    // The renderer sizes spans from this, capped by the trailing
-    // continuations: a wide lead covers both halves, a spacer none.
-    let width = match wide {
-        Wide::Spacer => 0,
-        Wide::Wide => 2,
-        Wide::Narrow | Wide::LeadingSpacer => 1,
-    };
-
     let mut attrs = Attrs::empty();
     for (flag, attr) in [
         (StyleFlags::BOLD, Attrs::BOLD),
@@ -113,7 +105,6 @@ fn styled_cell(
 
     EmuCell {
         ch,
-        width,
         fg: color_from_rio(style.fg),
         bg: color_from_rio(style.bg),
         underline: underline_from_rio(style.flags),

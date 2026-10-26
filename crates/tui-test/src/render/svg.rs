@@ -73,18 +73,37 @@ fn cell_at(row: &[EmuCell], x: usize) -> &EmuCell {
 /// former belong to their lead's span, the latter own a column that stays
 /// background. The recorded width never widens the span past the grid, so
 /// a hand-built row with no continuations still fits one column.
-pub(crate) fn span_columns(row: &[EmuCell], x: usize, cols: usize) -> usize {
+///
+/// `recorded` is the row's per-cell widths traveling beside the grid: the
+/// offline path passes what the snapshot recorded, and `None` (live grids,
+/// whose cells carry no widths) derives the span from the grid itself. A
+/// lead with no continuations then fits one column, while a grapheme that
+/// measures zero columns wide paints nothing, the same way a recorded zero
+/// width does.
+pub(crate) fn span_columns(
+    row: &[EmuCell],
+    x: usize,
+    cols: usize,
+    recorded: Option<&[u16]>,
+) -> usize {
     let cell = cell_at(row, x);
-    if cell.ch == CONTINUATION || cell.width == 0 {
+    if cell.ch == CONTINUATION {
         return 0;
     }
     let mut counted = 1;
     while x + counted < cols && cell_at(row, x + counted).ch == CONTINUATION {
         counted += 1;
     }
-    counted
-        .min(usize::from(cell.width))
-        .min(cols.saturating_sub(x))
+    let span = match recorded {
+        Some(widths) => usize::from(widths.get(x).copied().unwrap_or(1)),
+        None => {
+            if crate::terminal::cell::display_width(cell.ch.as_str()) == 0 {
+                return 0;
+            }
+            usize::MAX
+        }
+    };
+    counted.min(span).min(cols.saturating_sub(x))
 }
 
 pub(crate) trait RenderColors {
@@ -620,6 +639,7 @@ const CURSOR_THICKNESS: f32 = 2.0;
 /// which is how a terminal keeps the character under a block cursor readable.
 /// It is drawn after the text pass so the block covers the first, normally
 /// colored draw of that character.
+#[allow(clippy::too_many_arguments)]
 fn write_cursor(
     out: &mut String,
     rows: &[Vec<EmuCell>],
@@ -628,6 +648,7 @@ fn write_cursor(
     colors: &dyn RenderColors,
     nerd_font: &NerdFont,
     layout: &ResolvedLayout,
+    recorded: Option<&[Vec<u16>]>,
 ) {
     let Some(row) = rows.get(cy) else {
         return;
@@ -635,21 +656,29 @@ fn write_cursor(
     let cell_w = layout.cell_w;
     let cell_h = layout.cell_h;
     let header_h = layout.header_h;
+    let widths = recorded
+        .and_then(|widths| widths.get(cy))
+        .map(Vec::as_slice);
     let cell = cell_at(row, cx as usize);
     // A wide character stores its trailing halves as continuation cells, so
     // the cursor has to cover the whole recorded span or it clips the glyph.
     // A zero-width lead owns its column, so the cursor still marks that one
     // even though the lead itself paints nothing to redraw.
-    let span = span_columns(row, cx as usize, cols);
+    let span = span_columns(row, cx as usize, cols, widths);
     let w = span.max(1) as f32 * cell_w;
     let x = layout.content_left + cx as f32 * cell_w;
     let y = header_h + layout.content_top + cy as f32 * cell_h;
     let fill = hex(colors.color(ColorSlot::Cursor));
 
+    // Thin shapes keep the shared 2px thickness, clamped the way the PNG
+    // path clamps its own: the underline never climbs above the cell and
+    // the bar never runs past it, so a 1px cell still holds its cursor.
+    let underline_h = CURSOR_THICKNESS.min(cell_h);
+    let bar_w = CURSOR_THICKNESS.min(w);
     let (rx, ry, rw, rh) = match colors.cursor_shape() {
         CursorShape::Block => (x, y, w, cell_h),
-        CursorShape::Underline => (x, y + cell_h - CURSOR_THICKNESS, w, CURSOR_THICKNESS),
-        CursorShape::Bar => (x, y, CURSOR_THICKNESS, cell_h),
+        CursorShape::Underline => (x, y + cell_h - underline_h, w, underline_h),
+        CursorShape::Bar => (x, y, bar_w, cell_h),
     };
     let _ = write!(
         out,
@@ -694,14 +723,17 @@ pub(crate) fn render_svg(
     background: Option<CaptureBackground>,
 ) -> String {
     let layout = ResolvedLayout::from_style(style, zoom);
-    render_svg_with_layout(rows, cols, colors, cursor, title, &layout, background)
+    // Live grids carry no recorded widths, so spans derive from the grid.
+    render_svg_with_layout(rows, cols, colors, cursor, title, &layout, background, None)
 }
 
 /// Draw the grid from an already-resolved layout.
 ///
 /// Live screenshots resolve their [`Style`] first; offline snapshots resolve
 /// [`crate::render::offline::SnapshotRenderOptions`]. Both draw here, so
-/// there is one renderer.
+/// there is one renderer. `recorded` carries the snapshot's per-cell widths
+/// beside the grid (one row per grid row); `None` derives spans from the
+/// grid itself.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_svg_with_layout(
     rows: &[Vec<EmuCell>],
@@ -711,6 +743,7 @@ pub(crate) fn render_svg_with_layout(
     title: Option<&str>,
     layout: &ResolvedLayout,
     background: Option<CaptureBackground>,
+    recorded: Option<&[Vec<u16>]>,
 ) -> String {
     let cell_w = layout.cell_w;
     let cell_h = layout.cell_h;
@@ -856,29 +889,29 @@ pub(crate) fn render_svg_with_layout(
     }
 
     for (y, row) in rows.iter().enumerate() {
+        let widths = recorded.and_then(|widths| widths.get(y)).map(Vec::as_slice);
         let mut x = 0;
         while x < cols {
-            // Continuations belong to their lead's span and zero-width leads
-            // paint nothing: neither starts a run, but both consume a column.
-            if span_columns(row, x, cols) == 0 {
+            // Each lead emits its own text with its own x and span width:
+            // joining same-paint neighbors into one run loses the per-cell
+            // geometry. Continuations belong to their lead's span and
+            // zero-width leads paint nothing: neither starts a text, but
+            // both consume a column.
+            let span = span_columns(row, x, cols, widths);
+            if span == 0 {
                 x += 1;
                 continue;
             }
             let paint = cell_paint(cell_at(row, x), colors);
-            let mut run = span_columns(row, x, cols);
-            while x + run < cols && span_columns(row, x + run, cols) > 0 {
-                if cell_paint(cell_at(row, x + run), colors) != paint {
-                    break;
-                }
-                run += span_columns(row, x + run, cols);
-            }
-            write_text_run(&mut out, row, x..x + run, y, paint, &nerd_font, layout);
-            x += run;
+            write_text_run(&mut out, row, x..x + span, y, paint, &nerd_font, layout);
+            x += span;
         }
     }
 
     if let Some(at) = cursor {
-        write_cursor(&mut out, rows, cols, at, colors, &nerd_font, layout);
+        write_cursor(
+            &mut out, rows, cols, at, colors, &nerd_font, layout, recorded,
+        );
     }
 
     // Last, so the content it frames cannot paint over it. The rect is inset
@@ -1093,12 +1126,10 @@ mod tests {
     /// cell would cover half the glyph and redraw it squashed into that half.
     #[test]
     fn a_block_cursor_covers_a_double_width_character() {
-        // The lead declares its recorded span; the renderer caps it at the
-        // trailing continuation rather than remeasuring the text.
-        let mut lead = cell("日", None, None);
-        lead.width = 2;
-        let mut trailer = cell(CONTINUATION, None, None);
-        trailer.width = 0;
+        // The span derives from the trailing continuation: the lead paints
+        // both halves without any recorded width on the cell.
+        let lead = cell("日", None, None);
+        let trailer = cell(CONTINUATION, None, None);
         let rows = vec![vec![lead, trailer, cell("a", None, None)]];
         let svg = render_svg(
             &rows,
@@ -1333,7 +1364,8 @@ mod tests {
             svg.contains(&hex(Emulator::color(&colors(), ColorSlot::Indexed(1)))),
             "slot 1 is painted with the profile color"
         );
-        assert!(svg.contains(">hi</text>"));
+        assert!(svg.contains(">h</text>"));
+        assert!(svg.contains(">i</text>"));
         assert!(!svg.contains("<defs>"));
         assert!(!svg.contains("<use"));
     }
@@ -1536,7 +1568,8 @@ mod tests {
 
         assert!(svg.contains(r#"<path id="nf-f115" d=""#));
         assert!(svg.contains(r##"<use href="#nf-f115""##));
-        assert!(svg.contains(">a b</text>"));
+        assert!(svg.contains(">a</text>"));
+        assert!(svg.contains(">b</text>"));
         assert!(!svg.contains(glyph));
         let family = &Style::default().font.family;
         assert!(svg.contains(&format!(r#"font-family="{family}" font-size="#)));

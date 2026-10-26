@@ -136,7 +136,7 @@ fn offline_svg_renders_without_a_session() {
     let snapshot = snapshot_of(2, 1, &["a", " "]);
     let rendered = tui_test::render_snapshot_svg(&snapshot, &SnapshotRenderOptions::default())
         .expect("offline SVG renders");
-    assert!(rendered.svg().contains(">a </text>"), "{}", rendered.svg());
+    assert!(rendered.svg().contains(">a</text>"), "{}", rendered.svg());
     assert_eq!((rendered.width(), rendered.height()), (98, 125));
     assert!(!rendered.evidence().cursor_drawn());
 }
@@ -405,10 +405,17 @@ fn clipped_width2_lead_fits_its_last_column_in_svg() {
     let svg = rendered.svg();
     assert!(
         svg.contains(
-            "textLength=\"20.00\" lengthAdjust=\"spacingAndGlyphs\" \
-             xml:space=\"preserve\">a漢<"
+            "textLength=\"10.00\" lengthAdjust=\"spacingAndGlyphs\" \
+             xml:space=\"preserve\">a<"
         ),
-        "the joint run fits both columns without overflowing: {svg}"
+        "the first column keeps its own text: {svg}"
+    );
+    assert!(
+        svg.contains(
+            "textLength=\"10.00\" lengthAdjust=\"spacingAndGlyphs\" \
+             xml:space=\"preserve\">漢<"
+        ),
+        "the clipped lead fits its last column without overflowing: {svg}"
     );
     assert!(
         svg.contains(
@@ -465,6 +472,148 @@ fn zero_width_lead_paints_nothing_in_svg() {
         !svg.contains("text-decoration"),
         "the zero-width underline paints nothing: {svg}"
     );
+}
+
+/// F7: same-paint leads keep their own cell geometry in SVG.
+///
+/// Every cell shares one paint, so the old joint run merged each row into a
+/// single text (`AAAB` / `ABAA`). Each lead must instead emit its own text
+/// with its own `x` and recorded span width: `B` sits at pixel 30 in the
+/// first row and pixel 10 in the second, and the shared underline survives
+/// on every split text.
+#[test]
+fn same_paint_spans_keep_cell_geometry() {
+    let cells = vec![
+        span_cell("A", 1, SnapshotUnderline::Single),
+        span_cell("A", 1, SnapshotUnderline::Single),
+        span_cell("A", 1, SnapshotUnderline::Single),
+        span_cell("B", 1, SnapshotUnderline::Single),
+        span_cell("A", 1, SnapshotUnderline::Single),
+        span_cell("B", 1, SnapshotUnderline::Single),
+        span_cell("A", 1, SnapshotUnderline::Single),
+        span_cell("A", 1, SnapshotUnderline::Single),
+    ];
+    let parts = SnapshotParts {
+        cols: 4,
+        rows: 2,
+        scope: SnapshotScope::Viewport,
+        viewport_origin: 0,
+        cells,
+        palette: resolved_palette(),
+        default_foreground: Rgb::new(192, 192, 192),
+        default_background: Rgb::new(0, 0, 0),
+        default_cursor: Rgb::new(9, 9, 9),
+        cursor: hidden_cursor(),
+        title: None,
+        metadata: SnapshotMetadata::default(),
+    };
+    let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+    let options = undecorated().with_cell_width(10.0).with_cell_height(20.0);
+    let rendered = tui_test::render_snapshot_svg(&snapshot, &options).expect("offline SVG renders");
+    assert_eq!((rendered.width(), rendered.height()), (40, 40));
+    let svg = rendered.svg();
+    assert_eq!(
+        svg.matches(
+            "textLength=\"10.00\" lengthAdjust=\"spacingAndGlyphs\" xml:space=\"preserve\">B<"
+        )
+        .count(),
+        2,
+        "each B keeps its own single-column text: {svg}"
+    );
+    assert!(
+        svg.contains("x=\"30.00\""),
+        "the first-row B starts in the fourth column: {svg}"
+    );
+    assert!(
+        svg.contains("x=\"10.00\""),
+        "the second-row B starts in the second column: {svg}"
+    );
+    assert_eq!(
+        svg.matches("text-decoration=\"underline\"").count(),
+        8,
+        "splitting the run keeps the shared underline on every cell: {svg}"
+    );
+    assert!(
+        !svg.contains(">AAAB<"),
+        "the first row must not merge into one text: {svg}"
+    );
+    assert!(
+        !svg.contains(">ABAA<"),
+        "the second row must not merge into one text: {svg}"
+    );
+    assert!(!rendered.evidence().cursor_drawn());
+}
+
+/// F8: thin cursors stay inside a 1px cell in both renderers.
+///
+/// At 1px cells the 2px thin-cursor thickness overflows the cell in SVG
+/// (the underline starts a pixel above the cell, the bar runs a pixel
+/// wide of it) while the PNG path already clamps to the cell bounds. Both
+/// shapes must draw exactly the cell's own pixel in SVG too.
+#[test]
+fn thin_cursor_stays_inside_small_cell() {
+    use tui_test::SnapshotCursor;
+    for shape in [SnapshotCursorShape::Underline, SnapshotCursorShape::Bar] {
+        let texts = [" "; 9];
+        let parts = SnapshotParts {
+            cols: 3,
+            rows: 3,
+            scope: SnapshotScope::Viewport,
+            viewport_origin: 0,
+            cells: texts.iter().map(|text| cell(text)).collect(),
+            palette: resolved_palette(),
+            default_foreground: Rgb::new(192, 192, 192),
+            default_background: Rgb::new(0, 0, 0),
+            default_cursor: Rgb::new(9, 9, 9),
+            cursor: SnapshotCursor::new(1, 1, true, true, shape, Rgb::new(255, 0, 0), None),
+            title: None,
+            metadata: SnapshotMetadata::default(),
+        };
+        let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+        let options = undecorated()
+            .with_cell_width(1.0)
+            .with_cell_height(1.0)
+            .with_baseline(0.8);
+        let rendered =
+            tui_test::render_snapshot_svg(&snapshot, &options).expect("offline SVG renders");
+        assert_eq!((rendered.width(), rendered.height()), (3, 3));
+        assert!(
+            rendered.svg().contains(
+                "<rect x=\"1.00\" y=\"1.00\" width=\"1.00\" height=\"1.00\" fill=\"#ff0000\"/>"
+            ),
+            "the {shape:?} cursor fills exactly its 1px cell: {}",
+            rendered.svg()
+        );
+        assert!(rendered.evidence().cursor_drawn());
+        #[cfg(feature = "recording-raster")]
+        {
+            use tui_test::render_snapshot_png;
+            let rendered_png =
+                render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+            assert_eq!((rendered_png.width(), rendered_png.height()), (3, 3));
+            let decoder = png::Decoder::new(rendered_png.png());
+            let mut reader = decoder.read_info().expect("PNG header decodes");
+            let mut pixels = vec![0; reader.output_buffer_size()];
+            let info = reader.next_frame(&mut pixels).expect("PNG frame decodes");
+            assert_eq!((info.width, info.height), (3, 3));
+            let red: Vec<(u32, u32)> = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .enumerate()
+                .filter(|(_, px)| px[0] == 255 && px[1] == 0 && px[2] == 0 && px[3] == 255)
+                .map(|(i, _)| ((i as u32) % 3, (i as u32) / 3))
+                .collect();
+            assert!(
+                !red.is_empty(),
+                "the {shape:?} cursor paints in PNG too: {red:?}"
+            );
+            assert!(
+                red.iter().all(|&(x, y)| x == 1 && y == 1),
+                "the {shape:?} cursor stays inside its cell in both renderers: {red:?}"
+            );
+        }
+    }
 }
 
 /// U03-H: invalid metrics and scale values fail without a panic.

@@ -4522,6 +4522,7 @@ fn screenshot(
                             duration: Duration::ZERO,
                             render_state: snapshot.render_state,
                             cursor: snapshot.cursor,
+                            widths: None,
                         };
                         let mut renderer = crate::render::raster::GridRenderer::for_screenshot(
                             snapshot.cols,
@@ -5979,7 +5980,6 @@ mod tests {
     fn cell_model_reports_the_whole_vocabulary() {
         let cell = EmuCell {
             ch: "x".into(),
-            width: 1,
             fg: Some(Color::Named(NamedColor::Red)),
             bg: Some(Color::Idx(196)),
             underline: UnderlineStyle::Curly,

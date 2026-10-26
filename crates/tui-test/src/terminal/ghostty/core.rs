@@ -105,14 +105,6 @@ fn cell_from_ghostty(
         CellWide::Narrow | CellWide::Wide if graphemes.is_empty() => CompactString::const_new(" "),
         CellWide::Narrow | CellWide::Wide => graphemes.iter().collect::<String>().into(),
     };
-    // The renderer sizes spans from this, capped by the trailing
-    // continuations: a wide lead covers both halves, a spacer tail none.
-    let width = match wide {
-        CellWide::SpacerTail => 0,
-        CellWide::Wide => 2,
-        CellWide::Narrow | CellWide::SpacerHead => 1,
-    };
-
     let bg = match cell.content_tag().context("reading cell content")? {
         CellContentTag::BgColorPalette => Some(Color::from_index(
             cell.bg_color_palette()
@@ -141,7 +133,6 @@ fn cell_from_ghostty(
 
     Ok(EmuCell {
         ch,
-        width,
         fg: cell_color(style.fg_color),
         bg,
         underline: underline(style.underline),

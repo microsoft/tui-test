@@ -348,7 +348,11 @@ impl FrameRenderer for GridRenderer {
         }
 
         let (pixmap, fonts) = (&mut self.pixmap, &mut self.fonts);
+        let recorded_grid = frame.widths.as_deref();
         for (y, row) in grid.iter().enumerate() {
+            let recorded = recorded_grid
+                .and_then(|widths| widths.get(y))
+                .map(Vec::as_slice);
             for x in 0..usize::from(cols) {
                 let cell = row.get(x).unwrap_or(&blank);
                 if cell.ch.as_str() == CONTINUATION {
@@ -362,7 +366,7 @@ impl FrameRenderer for GridRenderer {
                 // cover every continuation, and a clipped lead fits the
                 // columns it has left. Zero-width leads paint nothing here;
                 // the background pass above already filled their column.
-                let span = svg::span_columns(row, x, cols.into());
+                let span = svg::span_columns(row, x, cols.into(), recorded);
                 if span == 0 {
                     continue;
                 }
@@ -435,6 +439,9 @@ impl FrameRenderer for GridRenderer {
         }
 
         if let Some(cursor) = frame.cursor {
+            let recorded = recorded_grid
+                .and_then(|widths| widths.get(cursor.1))
+                .map(Vec::as_slice);
             draw_cursor(
                 &mut self.pixmap,
                 &mut self.fonts,
@@ -447,6 +454,7 @@ impl FrameRenderer for GridRenderer {
                 scale,
                 &mut missing,
                 layout,
+                recorded,
             );
         }
 
@@ -510,6 +518,7 @@ fn draw_cursor(
     scale: f32,
     missing: &mut BTreeSet<String>,
     layout: &ResolvedLayout,
+    recorded: Option<&[u16]>,
 ) {
     let Some(row) = grid.get(cy) else {
         return;
@@ -520,7 +529,7 @@ fn draw_cursor(
     // The cursor covers the whole recorded span; a zero-width lead still
     // owns its column, so the cursor marks that one even though there is
     // no glyph to redraw under it.
-    let recorded = svg::span_columns(row, cx.into(), cols);
+    let recorded = svg::span_columns(row, cx.into(), cols, recorded);
     let span = recorded.max(1);
     let column = usize::from(cx);
     let origin_x = panel_origin_x + (layout.content_left + f32::from(cx) * layout.cell_w) * scale;

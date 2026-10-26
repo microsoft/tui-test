@@ -11,6 +11,10 @@ pub struct Frame {
     pub duration: Duration,
     pub(crate) render_state: RenderState,
     pub(crate) cursor: Option<(u16, usize)>,
+    /// Recorded per-cell column widths beside the grid, one row per grid
+    /// row. The offline path fills this from the snapshot; live captures
+    /// leave it empty and the renderers derive spans from the grid itself.
+    pub(crate) widths: Option<Vec<Vec<u16>>>,
 }
 
 impl Frame {
@@ -184,6 +188,7 @@ impl TimedGrid {
             duration: Duration::ZERO,
             render_state: RenderState::capture(emulator),
             cursor: emulator.viewport_cursor().map(|(x, y)| (x, usize::from(y))),
+            widths: None,
         };
         if let Some(error) = emulator.fault() {
             anyhow::bail!("recording frame capture failed: {error}");
@@ -277,6 +282,7 @@ mod tests {
             duration,
             render_state: RenderState::capture(&emulator),
             cursor: Some((0, 0)),
+            widths: None,
         }
     }
 

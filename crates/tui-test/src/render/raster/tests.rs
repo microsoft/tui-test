@@ -36,6 +36,7 @@ fn frame_with_cursor(grid: Vec<Vec<EmuCell>>, cursor: Option<(u16, usize)>) -> F
         duration: Duration::ZERO,
         render_state: RenderState::capture(&emulator),
         cursor,
+        widths: None,
     }
 }
 
@@ -385,12 +386,10 @@ fn unsupported_emoji_sequences_are_reported_instead_of_misrendered() {
 #[test]
 fn cjk_uses_a_system_fallback_or_reports_the_missing_glyph() {
     let mut renderer = GridRenderer::new(2, 1);
-    // The lead declares its recorded span; the renderer fits the glyph into
-    // the capped span either way, so this stays font-dependent only.
-    let mut lead = cell("界", Attrs::empty());
-    lead.width = 2;
-    let mut trailer = cell(CONTINUATION, Attrs::empty());
-    trailer.width = 0;
+    // The span derives from the trailing continuation; the renderer fits the
+    // glyph into the capped span either way, so this stays font-dependent only.
+    let lead = cell("界", Attrs::empty());
+    let trailer = cell(CONTINUATION, Attrs::empty());
     let grid = vec![vec![lead, trailer]];
     if let Err(error) = renderer.render(&frame(grid)) {
         assert!(error.to_string().contains("U+754C"));
@@ -407,6 +406,7 @@ fn frame_palette_and_cursor_state_change_the_pixels() {
         duration: Duration::ZERO,
         render_state: RenderState::capture(&first_emu),
         cursor: Some((0, 0)),
+        widths: None,
     };
 
     let mut second_emu = AlacrittyEmu::new(1, 1, &Profile::default());
@@ -417,6 +417,7 @@ fn frame_palette_and_cursor_state_change_the_pixels() {
         duration: Duration::ZERO,
         render_state: RenderState::capture(&second_emu),
         cursor: None,
+        widths: None,
     };
 
     let mut renderer = GridRenderer::new(1, 1);
@@ -443,6 +444,7 @@ fn block_cursor_does_not_reveal_invisible_text() {
         duration: Duration::ZERO,
         render_state: render_state.clone(),
         cursor: Some((0, 0)),
+        widths: None,
     };
     let blank = Frame {
         grid: vec![vec![EmuCell::blank()]],
@@ -450,6 +452,7 @@ fn block_cursor_does_not_reveal_invisible_text() {
         duration: Duration::ZERO,
         render_state,
         cursor: Some((0, 0)),
+        widths: None,
     };
 
     let mut renderer = GridRenderer::new(1, 1);

@@ -122,16 +122,6 @@ fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell, links: &mut LinkCach
         }
         s
     };
-    // The renderer sizes spans from this, capped by the trailing
-    // continuations: a wide lead covers both halves, a spacer none.
-    let width = if flags.contains(AlacFlags::WIDE_CHAR_SPACER) {
-        0
-    } else if flags.contains(AlacFlags::WIDE_CHAR) {
-        2
-    } else {
-        1
-    };
-
     let mut attrs = Attrs::empty();
     for (flag, attr) in [
         (AlacFlags::BOLD, Attrs::BOLD),
@@ -150,7 +140,6 @@ fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell, links: &mut LinkCach
 
     EmuCell {
         ch,
-        width,
         fg: color_from_alac(c.fg),
         bg: color_from_alac(c.bg),
         underline: underline_from_alac(c),

@@ -217,13 +217,12 @@ impl LinkCache {
 pub struct EmuCell {
     /// The cell's grapheme. A blank cell holds `" "`; [`CONTINUATION`] (the
     /// empty string) is reserved for the cell trailing a double-width char.
+    ///
+    /// The column span is not stored here: it travels beside the grid in
+    /// private render data (recorded per-cell widths on the offline path,
+    /// derived from the grid itself for live emulators), so this shape stays
+    /// compatible with code written before the span was recorded.
     pub ch: CompactString,
-    /// Terminal columns this cell occupies: 1 normally, the full span for a
-    /// wide-character lead, 0 for a continuation or a zero-width lead (a
-    /// lone combining mark or zero-width space owns its column but paints
-    /// nothing). Renderers cap the span at the trailing continuations and
-    /// the row end, so a clipped lead fits its remaining columns.
-    pub width: u16,
     /// `None` means the terminal's default foreground.
     pub fg: Option<Color>,
     /// `None` means the terminal's default background.
@@ -249,7 +248,6 @@ impl EmuCell {
     pub const fn blank() -> Self {
         EmuCell {
             ch: CompactString::const_new(" "),
-            width: 1,
             fg: None,
             bg: None,
             underline: UnderlineStyle::None,
