@@ -11,7 +11,7 @@ use crate::api::{
     TextSelector, TuiTestError,
 };
 use crate::diagnostics::ExecutionContext;
-use crate::engine::Engine;
+use crate::engine::{CheckedInputError, CheckedMouseAction, Engine};
 use crate::logger::Logger;
 
 const MAX_COMPLETED_RECORDINGS: usize = 1024;
@@ -439,6 +439,35 @@ impl Session {
                 "run returned an unexpected result type",
             )),
         }
+    }
+
+    /// Send one mouse report after checks against the terminal modes.
+    ///
+    /// This delegates to [`Engine::mouse_checked`]. Presses work under X10
+    /// (mode 9) tracking with SGR encoding; releases never do, since X10
+    /// reports button presses only. Reports targeting a history viewport
+    /// fail; scroll to the bottom first and send again.
+    pub fn mouse_checked(&self, action: CheckedMouseAction) -> Result<(), CheckedInputError> {
+        self.engine.mouse_checked(action)
+    }
+
+    /// Send text as a paste through the ordered input write path.
+    ///
+    /// This delegates to [`Engine::paste`]: bracketed-paste markers when the
+    /// application enabled the mode, raw text without markers when it did
+    /// not. It scrolls to the bottom first so the paste targets the live
+    /// screen.
+    pub fn paste(&self, text: &str) -> Result<(), CheckedInputError> {
+        self.engine.paste(text)
+    }
+
+    /// Send a focus report through the ordered input write path.
+    ///
+    /// This delegates to [`Engine::focus`]. It fails with
+    /// [`CheckedInputError::Unsupported`] when the application did not enable
+    /// focus events.
+    pub fn focus(&self, focused: bool) -> Result<(), CheckedInputError> {
+        self.engine.focus(focused)
     }
 
     /// Cancel pending operations, terminate the child, and release the terminal.

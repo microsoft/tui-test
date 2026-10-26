@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::diagnostics::{elapsed_ms, DiagnosticRetentionOptions, ScreenHistory};
 use crate::event::BellTracker;
+use crate::input::mouse;
 use crate::logger::Logger;
 use crate::profile::Profile;
 use crate::record::{self, CaptureError, Recorder, StartRecording};
@@ -16,7 +17,7 @@ use crate::record::{self, CaptureError, Recorder, StartRecording};
 use crate::render::raster::GridRenderer;
 use crate::shell::{self, Shell};
 use crate::terminal::backend::Backend;
-use crate::terminal::emu::{Emulator, MouseModeTracker};
+use crate::terminal::emu::{Emulator, MouseMode, MouseModeTracker, TerminalMode};
 use crate::terminal::integration::CommandTracker;
 use crate::terminal::pty::{validate_cwd, validate_size, Pty, SpawnOptions};
 
@@ -652,13 +653,278 @@ impl Session {
     pub fn automatic_recording_enabled(&self) -> bool {
         self.recorder.automatic_enabled()
     }
+
+    /// Send one mouse report after checks against the terminal modes.
+    ///
+    /// The method takes the viewport/input gate before sampling and holds it
+    /// through the completed write, then reads the tracking level, the
+    /// encoding flag, the viewport, and the screen size from one terminal
+    /// state lock. The state lock is released before the blocking PTY write,
+    /// but the gate stays held, so a concurrent scroll either waits for this
+    /// report or runs first and makes the check below observe history. It
+    /// validates the coordinates and the mode before it writes any byte. A
+    /// press or a release needs click tracking or better, including X10
+    /// (mode 9) tracking, which reports presses only and refuses releases.
+    /// A move with a pressed button needs drag tracking or motion tracking.
+    /// A move with no pressed button needs motion tracking. A tracking
+    /// selector this crate cannot send reports for, such as highlight
+    /// tracking (mode 1001), behaves as if tracking were off. Tracking
+    /// without SGR encoding (mode 1006)
+    /// cannot receive the SGR bytes this method sends, so the method returns
+    /// `Unsupported` and writes nothing in that case.
+    ///
+    /// Mouse input that targets a history viewport fails. The caller scrolls
+    /// to the bottom first and sends again. The raw input and legacy mouse
+    /// methods keep their behavior; this method only adds the checked path.
+    pub fn mouse_checked(&self, action: CheckedMouseAction) -> Result<(), CheckedInputError> {
+        let _input = self
+            .viewport_input
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (cols, rows, viewport_offset, tracking, relayable, reports_releases) = {
+            let state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (cols, rows) = state.emu.size();
+            (
+                cols,
+                rows,
+                state.emu.viewport().offset,
+                state.mouse_mode.mode(),
+                state.mouse_mode.relayable(),
+                state.mouse_mode.reports_releases(),
+            )
+        };
+        let (x, y, minimum) = match action {
+            CheckedMouseAction::Press { x, y, .. } => (x, y, MouseMode::Click),
+            CheckedMouseAction::Release { x, y, .. } => (x, y, MouseMode::Click),
+            CheckedMouseAction::Drag { x, y, .. } => (x, y, MouseMode::Drag),
+            CheckedMouseAction::Motion { x, y } => (x, y, MouseMode::Motion),
+        };
+        if viewport_offset != 0 {
+            return Err(CheckedInputError::Rejected(
+                "mouse input cannot target a history viewport; scroll to the bottom first"
+                    .to_string(),
+            ));
+        }
+        if x >= cols || y >= rows {
+            return Err(CheckedInputError::Rejected(format!(
+                "mouse coordinates ({x}, {y}) are outside the active screen ({cols}x{rows})"
+            )));
+        }
+        if tracking == MouseMode::None {
+            return Err(CheckedInputError::Unsupported(
+                "the application did not enable mouse tracking".to_string(),
+            ));
+        }
+        if matches!(action, CheckedMouseAction::Release { .. }) && !reports_releases {
+            return Err(CheckedInputError::Unsupported(
+                "X10 (mode 9) mouse tracking reports button presses only; releases are never reported"
+                    .to_string(),
+            ));
+        }
+        let sufficient = match minimum {
+            MouseMode::Click => true,
+            MouseMode::Drag => matches!(tracking, MouseMode::Drag | MouseMode::Motion),
+            MouseMode::Motion => tracking == MouseMode::Motion,
+            // Unreachable in practice: `minimum` derives from the action and
+            // is never `None`. The arm stays so the match is exhaustive over
+            // `MouseMode`.
+            MouseMode::None => false,
+        };
+        if !sufficient {
+            return Err(CheckedInputError::Unsupported(format!(
+                "the application enabled {} tracking, which does not accept this report",
+                tracking.name()
+            )));
+        }
+        if relayable != tracking {
+            return Err(CheckedInputError::Unsupported(
+                "the application did not select SGR (mode 1006) mouse encoding".to_string(),
+            ));
+        }
+        let bytes = match action {
+            CheckedMouseAction::Press { x, y, options } => mouse::down(x, y, options),
+            CheckedMouseAction::Release { x, y, options } => mouse::up(x, y, options),
+            CheckedMouseAction::Drag { x, y, options } => mouse::drag_motion(x, y, options),
+            CheckedMouseAction::Motion { x, y } => mouse::motion(x, y),
+        };
+        self.write(bytes.as_bytes())
+            .map_err(|error| CheckedInputError::Failed(error.to_string()))?;
+        Ok(())
+    }
+
+    /// Send text as a paste through the ordered input write path.
+    ///
+    /// The method takes the viewport/input gate before sampling and holds it
+    /// through the completed write, then scrolls to the bottom like other
+    /// keyboard input before writing anything, so the paste always targets
+    /// the live screen. The state lock is released before the blocking PTY
+    /// write. When the application enabled bracketed-paste mode, the method
+    /// wraps the text in `ESC [ 200 ~` and `ESC [ 201 ~`. When the mode is
+    /// off, the method sends the text without markers. A text that contains
+    /// the terminator `ESC [ 201 ~` would end a bracketed payload before its
+    /// last character, so the method rejects such a text while markers are
+    /// on and writes nothing. With markers off, the terminator has no
+    /// framing effect and travels unchanged. Raw bytes stay available through
+    /// [`Session::write`] for deliberate protocol tests.
+    ///
+    /// An empty text with markers on still sends the empty framing pair
+    /// (`ESC [ 200 ~` followed by `ESC [ 201 ~`); with markers off an empty
+    /// text writes nothing and scrolls nothing.
+    pub fn paste(&self, text: &str) -> Result<(), CheckedInputError> {
+        let _input = self
+            .viewport_input
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bracketed = {
+            let state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.emu.mode(TerminalMode::BracketedPaste)
+        };
+        if bracketed {
+            if text.contains(BRACKETED_PASTE_END) {
+                return Err(CheckedInputError::Rejected(
+                    "paste text contains the bracketed-paste terminator".to_string(),
+                ));
+            }
+            let mut framed = String::with_capacity(
+                BRACKETED_PASTE_START.len() + text.len() + BRACKETED_PASTE_END.len(),
+            );
+            framed.push_str(BRACKETED_PASTE_START);
+            framed.push_str(text);
+            framed.push_str(BRACKETED_PASTE_END);
+            scroll_to_bottom(self)?;
+            self.write(framed.as_bytes())
+                .map_err(|error| CheckedInputError::Failed(error.to_string()))?;
+        } else if !text.is_empty() {
+            scroll_to_bottom(self)?;
+            self.write(text.as_bytes())
+                .map_err(|error| CheckedInputError::Failed(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Send a focus report through the ordered input write path.
+    ///
+    /// The method takes the viewport/input gate before sampling and holds it
+    /// through the completed write. When the application enabled focus
+    /// events (`CSI ? 1004 h`), the method sends `ESC [ I` for gained focus
+    /// and `ESC [ O` for lost focus. When the application did not enable
+    /// focus events, the method returns `Unsupported` and writes nothing.
+    pub fn focus(&self, focused: bool) -> Result<(), CheckedInputError> {
+        let _input = self
+            .viewport_input
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let enabled = {
+            let state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.emu.mode(TerminalMode::FocusEvents)
+        };
+        if !enabled {
+            return Err(CheckedInputError::Unsupported(
+                "the application did not enable focus events (CSI ? 1004 h)".to_string(),
+            ));
+        }
+        let report = if focused { FOCUS_IN } else { FOCUS_OUT };
+        self.write(report.as_bytes())
+            .map_err(|error| CheckedInputError::Failed(error.to_string()))?;
+        Ok(())
+    }
 }
+
+/// One mouse report for [`Session::mouse_checked`].
+///
+/// Coordinates are 0-based cells relative to the active screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CheckedMouseAction {
+    /// A button press.
+    Press {
+        x: u16,
+        y: u16,
+        options: crate::api::MouseOptions,
+    },
+    /// A button release.
+    Release {
+        x: u16,
+        y: u16,
+        options: crate::api::MouseOptions,
+    },
+    /// Movement with a pressed button.
+    Drag {
+        x: u16,
+        y: u16,
+        options: crate::api::MouseOptions,
+    },
+    /// Movement with no pressed button.
+    Motion { x: u16, y: u16 },
+}
+
+/// Failure from [`Session::mouse_checked`], [`Session::paste`], or
+/// [`Session::focus`].
+///
+/// `Unsupported` and `Rejected` mean the method wrote nothing.
+/// `Failed` covers everything outside validation: no open session, a
+/// recorded emulator fault, or a PTY write error after the checks passed.
+/// Each message preserves the source error it maps from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CheckedInputError {
+    /// The application did not enable the mode the input needs, or it
+    /// selected an encoding this method cannot send.
+    Unsupported(String),
+    /// The input is invalid: coordinates outside the active screen, a
+    /// history viewport target, or a payload that would corrupt its framing.
+    Rejected(String),
+    /// No session is open, the emulator recorded a fault, or the PTY write
+    /// failed after the mode checks passed.
+    Failed(String),
+}
+
+impl std::fmt::Display for CheckedInputError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unsupported(message) | Self::Rejected(message) | Self::Failed(message) => {
+                formatter.write_str(message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for CheckedInputError {}
+
+const BRACKETED_PASTE_START: &str = "\x1b[200~";
+const BRACKETED_PASTE_END: &str = "\x1b[201~";
+const FOCUS_IN: &str = "\x1b[I";
+const FOCUS_OUT: &str = "\x1b[O";
 
 fn resize_emulator_and_record(state: &mut TermState, recorder: &Recorder, cols: u16, rows: u16) {
     recorder.on_resize(cols, rows);
     state.emu.resize(cols, rows);
     invalidate_emulator_view(state);
     let _ = try_capture_visual_state(state, true);
+}
+
+/// Scroll checked keyboard-style input back to the live screen.
+///
+/// The caller must already hold `viewport_input`: this only takes the
+/// terminal-state lock, so the gate stays held across the scroll and the
+/// write that follows. Errors preserve the source [`crate::api::TuiTestError`]
+/// message.
+fn scroll_to_bottom(session: &Session) -> Result<(), CheckedInputError> {
+    let mut state = session
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    scroll_emulator_and_record(&mut state, crate::api::ScrollTarget::Bottom)
+        .map_err(|error| CheckedInputError::Failed(error.to_string()))
 }
 
 pub(crate) fn scroll_emulator_and_record(
