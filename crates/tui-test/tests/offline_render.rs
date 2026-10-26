@@ -1202,4 +1202,183 @@ mod raster_tests {
         std::fs::remove_file(&path).ok();
         assert_eq!(decode_png(&live), decode_png(rendered.png()));
     }
+
+    /// F9: underline and strike bands stay inside 1px and 2px cells.
+    ///
+    /// At scale 1 the ordinary underline sits three pixels above the cell
+    /// bottom, so a 1px cell's band painted two rows above its owner (row 2
+    /// underlined row 0); strike-through escapes the same way. Every band
+    /// is clamped into its owning cell, and a block cursor repaints the
+    /// covered cell's bands in the contrasting color without leaking
+    /// either. Blank cells need no font lookup, so this holds on any host
+    /// font.
+    #[test]
+    fn decorations_stay_inside_small_cells() {
+        fn decorated_blank() -> SnapshotCell {
+            SnapshotCell::new(
+                " ".to_string(),
+                1,
+                SnapshotColor::Rgb(255, 0, 0),
+                SnapshotColor::Default,
+                Attrs::STRIKE,
+                SnapshotUnderline::Single,
+                SnapshotColor::Default,
+                None,
+                None,
+            )
+            .expect("test cell is valid")
+        }
+
+        fn snapshot_with(cursor: SnapshotCursor) -> TerminalSnapshot {
+            let parts = SnapshotParts {
+                cols: 1,
+                rows: 3,
+                scope: SnapshotScope::Viewport,
+                viewport_origin: 0,
+                cells: vec![decorated_blank(), cell(" "), decorated_blank()],
+                palette: resolved_palette(),
+                default_foreground: Rgb::new(192, 192, 192),
+                default_background: Rgb::new(0, 0, 0),
+                default_cursor: Rgb::new(9, 9, 9),
+                cursor,
+                title: None,
+                metadata: SnapshotMetadata::default(),
+            };
+            TerminalSnapshot::try_new(parts).expect("test snapshot is valid")
+        }
+
+        fn block_cursor(row: u32) -> SnapshotCursor {
+            SnapshotCursor::new(
+                0,
+                row,
+                true,
+                true,
+                SnapshotCursorShape::Block,
+                Rgb::new(0, 0, 255),
+                None,
+            )
+        }
+
+        // A decoration pixel is any pixel the red bands touched: the bands
+        // are antialiased, so a fractional strike edge blends toward black
+        // instead of landing on exact red.
+        fn is_decoration(pixel: &[u8]) -> bool {
+            pixel[3] == 255 && pixel[0] > 0 && pixel[1] == 0 && pixel[2] == 0
+        }
+
+        fn decoration_rows(pixels: &[u8], width: u32, height: u32) -> Vec<u32> {
+            let mut rows = Vec::new();
+            for y in 0..height {
+                let touched = (0..width).any(|x| {
+                    let i = (y * width + x) as usize * 4;
+                    is_decoration(&pixels[i..i + 4])
+                });
+                if touched {
+                    rows.push(y);
+                }
+            }
+            rows
+        }
+
+        fn is_cursor(pixel: &[u8]) -> bool {
+            pixel == [0, 0, 255, 255]
+        }
+
+        for cell_height in [1.0f32, 2.0] {
+            let options = undecorated()
+                .with_cell_width(3.0)
+                .with_cell_height(cell_height)
+                .with_baseline(0.8 * cell_height);
+            let row_px = cell_height as u32;
+            let owner = |y: u32| y / row_px == 0 || y / row_px == 2;
+
+            let snapshot = snapshot_with(hidden_cursor());
+            let rendered = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+            assert!(!rendered.evidence().cursor_drawn());
+            let (width, height, pixels) = decode_png(rendered.png());
+            assert_eq!((width, height), (3, 3 * row_px));
+            let rows = decoration_rows(&pixels, width, height);
+            assert!(
+                rows.iter().all(|&y| owner(y)),
+                "height {cell_height}: hidden cursor leaves no decoration outside rows 0 and 2: {rows:?}"
+            );
+            for owning in [0, 2] {
+                assert!(
+                    rows.iter().any(|&y| y / row_px == owning),
+                    "height {cell_height}: hidden cursor keeps row {owning}'s band in its cell: {rows:?}"
+                );
+            }
+
+            let snapshot = snapshot_with(block_cursor(1));
+            let rendered = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+            assert!(rendered.evidence().cursor_drawn());
+            let (width, height, pixels) = decode_png(rendered.png());
+            assert_eq!((width, height), (3, 3 * row_px));
+            let rows = decoration_rows(&pixels, width, height);
+            assert!(
+                rows.iter().all(|&y| owner(y)),
+                "height {cell_height}: a block cursor on row 1 keeps decorations in rows 0 and 2: {rows:?}"
+            );
+            for owning in [0, 2] {
+                assert!(
+                    rows.iter().any(|&y| y / row_px == owning),
+                    "height {cell_height}: row {owning}'s band survives the neighboring cursor: {rows:?}"
+                );
+            }
+            let cursor_pixels = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .enumerate()
+                .filter(|(_, pixel)| is_cursor(pixel.as_slice()))
+                .map(|(i, _)| (i as u32) / width)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                cursor_pixels.len() as u32,
+                3 * row_px,
+                "height {cell_height}: the block cursor fills exactly row 1"
+            );
+            assert!(
+                cursor_pixels.iter().all(|&y| y / row_px == 1),
+                "height {cell_height}: the block cursor stays inside row 1: {cursor_pixels:?}"
+            );
+
+            let snapshot = snapshot_with(block_cursor(2));
+            let rendered = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+            assert!(rendered.evidence().cursor_drawn());
+            let (width, height, pixels) = decode_png(rendered.png());
+            assert_eq!((width, height), (3, 3 * row_px));
+            let rows = decoration_rows(&pixels, width, height);
+            assert!(
+                !rows.is_empty() && rows.iter().all(|&y| y / row_px == 0),
+                "height {cell_height}: the covered row 2 shows no decoration, row 0 keeps its band: {rows:?}"
+            );
+            let cursor_count = pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|pixel| is_cursor(pixel.as_slice()))
+                .count() as u32;
+            if row_px == 1 {
+                assert_eq!(
+                    cursor_count, 0,
+                    "height {cell_height}: the repaint covers the 1px cursor cell"
+                );
+            } else {
+                assert!(
+                    cursor_count < 3 * row_px,
+                    "height {cell_height}: the repaint takes back part of the cursor cell"
+                );
+            }
+            assert!(
+                pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .enumerate()
+                    .all(|(i, pixel)| !is_cursor(pixel) || (i as u32) / width / row_px == 2),
+                "height {cell_height}: cursor pixels stay inside row 2"
+            );
+        }
+    }
 }

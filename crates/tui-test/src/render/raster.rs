@@ -416,22 +416,34 @@ impl FrameRenderer for GridRenderer {
                 }
 
                 if paint.underline {
+                    let (y, thickness) = clamp_decoration_band(
+                        cell_origin_y,
+                        cell_height,
+                        cell_origin_y + cell_height - 3.0 * scale,
+                        scale,
+                    );
                     fill_antialiased_rect(
                         pixmap,
                         cell_origin_x,
-                        cell_origin_y + cell_height - 3.0 * scale,
+                        y,
                         cell_width,
-                        scale.max(1.0),
+                        thickness,
                         paint.fg,
                     );
                 }
                 if paint.strike {
+                    let (y, thickness) = clamp_decoration_band(
+                        cell_origin_y,
+                        cell_height,
+                        baseline - layout.font_size * 0.32 * scale,
+                        scale,
+                    );
                     fill_antialiased_rect(
                         pixmap,
                         cell_origin_x,
-                        baseline - layout.font_size * 0.32 * scale,
+                        y,
                         cell_width,
-                        scale.max(1.0),
+                        thickness,
                         paint.fg,
                     );
                 }
@@ -505,6 +517,24 @@ fn grid_y(origin_y: f32, row: usize, scale: f32, layout: &ResolvedLayout) -> u32
         as u32
 }
 
+/// Clamp a horizontal decoration band inside its cell.
+///
+/// Tiny cells are shorter than the band's nominal offset (an underline sits
+/// three scaled pixels above the cell bottom), so the unclipped rectangle
+/// paints a neighbor row. The band keeps its requested thickness where the
+/// cell fits it and collapses to the cell bounds where it does not.
+fn clamp_decoration_band(
+    origin_y: f32,
+    cell_height: f32,
+    requested_y: f32,
+    scale: f32,
+) -> (f32, f32) {
+    let thickness = scale.max(1.0).min(cell_height);
+    let min_y = origin_y;
+    let max_y = (origin_y + cell_height - thickness).max(origin_y);
+    (requested_y.clamp(min_y, max_y), thickness)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_cursor(
     pixmap: &mut Pixmap,
@@ -571,21 +601,47 @@ fn draw_cursor(
         }
     }
 
-    if recorded == 0 || cell.ch.as_str() == CONTINUATION || cell.ch.chars().all(char::is_whitespace)
-    {
+    if recorded == 0 || cell.ch.as_str() == CONTINUATION {
         return;
     }
     let paint = svg::cell_paint(cell, colors);
     if paint.invisible {
         return;
     }
+    let baseline = panel_origin_y
+        + (layout.header_h + layout.content_top + cy as f32 * layout.cell_h + layout.baseline)
+            * scale;
+    // The SVG renderer redraws the cell's decorations over the block fill
+    // in the contrasting color, so the raster path repaints them the same
+    // way: clamped inside the cell like the ordinary bands.
+    if paint.underline || paint.strike {
+        let repaint = svg::bg_of(cell, colors);
+        if paint.underline {
+            let (y, thickness) = clamp_decoration_band(
+                origin_y,
+                cell_height,
+                origin_y + cell_height - 3.0 * scale,
+                scale,
+            );
+            fill_antialiased_rect(pixmap, origin_x, y, cell_width, thickness, repaint);
+        }
+        if paint.strike {
+            let (y, thickness) = clamp_decoration_band(
+                origin_y,
+                cell_height,
+                baseline - layout.font_size * 0.32 * scale,
+                scale,
+            );
+            fill_antialiased_rect(pixmap, origin_x, y, cell_width, thickness, repaint);
+        }
+    }
+    if cell.ch.chars().all(char::is_whitespace) {
+        return;
+    }
     if unsupported_grapheme(cell.ch.as_str()) {
         missing.insert(format_glyph_sequence(cell.ch.as_str()));
         return;
     }
-    let baseline = panel_origin_y
-        + (layout.header_h + layout.content_top + cy as f32 * layout.cell_h + layout.baseline)
-            * scale;
     for character in cell.ch.chars() {
         if is_default_ignorable(character) {
             continue;
