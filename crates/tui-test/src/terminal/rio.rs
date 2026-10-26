@@ -72,7 +72,8 @@ fn styled_cell(
     extras: &ExtrasTable,
     links: &mut LinkCache,
 ) -> EmuCell {
-    let ch = match square.wide() {
+    let wide = square.wide();
+    let ch = match wide {
         Wide::Spacer => CompactString::const_new(CONTINUATION),
         Wide::LeadingSpacer => CompactString::const_new(" "),
         Wide::Narrow | Wide::Wide => {
@@ -90,7 +91,6 @@ fn styled_cell(
             }
         }
     };
-
     let mut attrs = Attrs::empty();
     for (flag, attr) in [
         (StyleFlags::BOLD, Attrs::BOLD),

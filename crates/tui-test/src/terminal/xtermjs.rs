@@ -383,6 +383,10 @@ fn decode_into(
             CompactString::const_new(" ")
         };
 
+        // The width only identifies the continuation above: the renderer
+        // derives spans from the grid, so a clipped lead fits its remaining
+        // columns from the trailing continuations and a genuine zero-width
+        // grapheme paints nothing because it measures zero columns wide.
         row.push(EmuCell {
             ch,
             fg: color(fg, flags, FG_PALETTE, FG_RGB),

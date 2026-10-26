@@ -122,7 +122,6 @@ fn cell_from_alac(c: &alacritty_terminal::term::cell::Cell, links: &mut LinkCach
         }
         s
     };
-
     let mut attrs = Attrs::empty();
     for (flag, attr) in [
         (AlacFlags::BOLD, Attrs::BOLD),

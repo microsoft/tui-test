@@ -36,6 +36,7 @@ fn frame_with_cursor(grid: Vec<Vec<EmuCell>>, cursor: Option<(u16, usize)>) -> F
         duration: Duration::ZERO,
         render_state: RenderState::capture(&emulator),
         cursor,
+        widths: None,
     }
 }
 
@@ -153,7 +154,7 @@ fn adjacent_background_cells_are_seamless_at_fractional_zoom() {
                 .unwrap();
         let image = renderer.render(&frame(grid.clone())).unwrap();
         let (panel_width, panel_height) =
-            crate::render::svg::pixel_size(backgrounds.len() as u16, rows, &Style::default());
+            crate::render::svg::test_pixel_size(backgrounds.len() as u16, rows, &Style::default());
         let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
         let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
         let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
@@ -200,7 +201,8 @@ fn block_cursor_is_aligned_with_background_cells_at_fractional_zoom() {
             .color(crate::profile::ColorSlot::Cursor);
         let mut renderer = GridRenderer::with_zoom(4, 1, zoom, Style::default()).unwrap();
         let image = renderer.render(&content).unwrap();
-        let (panel_width, panel_height) = crate::render::svg::pixel_size(4, 1, &Style::default());
+        let (panel_width, panel_height) =
+            crate::render::svg::test_pixel_size(4, 1, &Style::default());
         let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
         let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
         let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
@@ -247,7 +249,7 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
     let expected_background = content.render_state.resolve(None, false);
     let image = renderer.render(&content).unwrap();
     let (width, height) = image.dimensions();
-    let (panel_width, panel_height) = crate::render::svg::pixel_size(2, 1, &Style::default());
+    let (panel_width, panel_height) = crate::render::svg::test_pixel_size(2, 1, &Style::default());
     let origin_x = (width - panel_width) / 2;
     let origin_y = (height - panel_height) / 2;
 
@@ -384,10 +386,11 @@ fn unsupported_emoji_sequences_are_reported_instead_of_misrendered() {
 #[test]
 fn cjk_uses_a_system_fallback_or_reports_the_missing_glyph() {
     let mut renderer = GridRenderer::new(2, 1);
-    let grid = vec![vec![
-        cell("界", Attrs::empty()),
-        cell(CONTINUATION, Attrs::empty()),
-    ]];
+    // The span derives from the trailing continuation; the renderer fits the
+    // glyph into the capped span either way, so this stays font-dependent only.
+    let lead = cell("界", Attrs::empty());
+    let trailer = cell(CONTINUATION, Attrs::empty());
+    let grid = vec![vec![lead, trailer]];
     if let Err(error) = renderer.render(&frame(grid)) {
         assert!(error.to_string().contains("U+754C"));
     }
@@ -403,6 +406,7 @@ fn frame_palette_and_cursor_state_change_the_pixels() {
         duration: Duration::ZERO,
         render_state: RenderState::capture(&first_emu),
         cursor: Some((0, 0)),
+        widths: None,
     };
 
     let mut second_emu = AlacrittyEmu::new(1, 1, &Profile::default());
@@ -413,6 +417,7 @@ fn frame_palette_and_cursor_state_change_the_pixels() {
         duration: Duration::ZERO,
         render_state: RenderState::capture(&second_emu),
         cursor: None,
+        widths: None,
     };
 
     let mut renderer = GridRenderer::new(1, 1);
@@ -439,6 +444,7 @@ fn block_cursor_does_not_reveal_invisible_text() {
         duration: Duration::ZERO,
         render_state: render_state.clone(),
         cursor: Some((0, 0)),
+        widths: None,
     };
     let blank = Frame {
         grid: vec![vec![EmuCell::blank()]],
@@ -446,6 +452,7 @@ fn block_cursor_does_not_reveal_invisible_text() {
         duration: Duration::ZERO,
         render_state,
         cursor: Some((0, 0)),
+        widths: None,
     };
 
     let mut renderer = GridRenderer::new(1, 1);
@@ -599,7 +606,7 @@ fn the_raster_canvas_is_drawn_from_its_style() {
     let mut renderer = GridRenderer::with_zoom(4, 2, 1.0, style.clone()).unwrap();
     let plain = GridRenderer::new(4, 2);
 
-    let (panel_width, panel_height) = crate::render::svg::pixel_size(4, 2, &style);
+    let (panel_width, panel_height) = crate::render::svg::test_pixel_size(4, 2, &style);
     assert_eq!(
         renderer.dimensions(),
         (
@@ -644,7 +651,7 @@ fn a_border_is_stroked_onto_the_raster_canvas() {
         .render(&frame(vec![vec![EmuCell::blank(); 6]; 2]))
         .unwrap();
 
-    let (panel_width, _) = crate::render::svg::pixel_size(6, 2, &style);
+    let (panel_width, _) = crate::render::svg::test_pixel_size(6, 2, &style);
     // The panel is centered, so its left edge sits one padding in. Two pixels
     // further is the middle of a four-wide stroke.
     let middle_of_stroke = (image.dimensions().0 - panel_width) / 2 + 2;
@@ -696,7 +703,7 @@ fn the_raster_window_sits_at_its_own_gaps() {
         ..Style::default()
     };
     let mut renderer = GridRenderer::with_zoom(6, 2, 1.0, style.clone()).unwrap();
-    let (panel_width, panel_height) = crate::render::svg::pixel_size(6, 2, &style);
+    let (panel_width, panel_height) = crate::render::svg::test_pixel_size(6, 2, &style);
 
     assert_eq!(
         renderer.dimensions(),

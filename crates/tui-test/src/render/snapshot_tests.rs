@@ -33,6 +33,7 @@ fn single_frame_gif_and_png_renders_match_snapshots() {
                     &Profile::default(),
                 )),
                 cursor: case.cursor,
+                widths: None,
             };
             let mut renderer = GridRenderer::with_zoom(
                 COLS,

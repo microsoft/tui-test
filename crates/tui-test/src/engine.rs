@@ -35,6 +35,10 @@ use crate::session::{
     capture_visual_state, scroll_emulator_and_record, try_capture_visual_state,
     Session as TerminalSession, TermState, TextHighlight,
 };
+use crate::snapshot::{
+    capture_live, capture_time_ms, LiveHighlight, SnapshotMetadata, SnapshotOptions, SnapshotScope,
+    SnapshotSource, TerminalSnapshot,
+};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::emu::{
     ClipboardType, CursorShape, Emulator, KeyboardMode, MouseMode, TerminalMode,
@@ -1470,6 +1474,55 @@ impl Engine {
                 timeouts: None,
             },
         }
+    }
+
+    /// Capture an owned snapshot of the selected scope.
+    ///
+    /// Reads grid, cursor, dimensions, title, and resolved colors while it
+    /// holds one terminal-state lock, so the snapshot is one atomic terminal
+    /// moment. Records raw visual data; locator highlighting never leaks in.
+    /// The snapshot is fully owned and stays usable after the session closes.
+    pub fn capture_snapshot(&self, scope: SnapshotScope) -> Result<TerminalSnapshot, TuiTestError> {
+        self.capture_snapshot_with(&SnapshotOptions::new(scope))
+    }
+
+    /// Capture an owned snapshot with explicit options.
+    ///
+    /// Same atomic capture as [`Engine::capture_snapshot`]; pass
+    /// [`SnapshotOptions::with_highlight`] to fold locator highlighting into
+    /// the captured cells instead of recording raw visual data.
+    pub fn capture_snapshot_with(
+        &self,
+        options: &SnapshotOptions,
+    ) -> Result<TerminalSnapshot, TuiTestError> {
+        let guard = self.lock_session();
+        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
+        if let Some(fault) = session.fault() {
+            return Err(
+                TuiTestError::internal(fault.clone()).with_report(FailureReport::new(
+                    "terminal.operation",
+                    None,
+                    FailureReason::EmulatorFault,
+                    fault,
+                )),
+            );
+        }
+        let state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let metadata = SnapshotMetadata {
+            captured_at_ms: capture_time_ms(),
+            revision: state.visual_revision,
+            backend: session.backend.as_str().to_string(),
+            session: self.name.clone(),
+            source: SnapshotSource::Live,
+        };
+        let highlight = state.highlight.as_ref().map(|selected| LiveHighlight {
+            cells: &selected.cells,
+        });
+        capture_live(state.emu.as_ref(), highlight, options, metadata)
+            .map_err(crate::snapshot::SnapshotError::into)
     }
 
     pub fn frame(&self) -> Option<LiveFrame> {
@@ -4431,6 +4484,19 @@ fn screenshot(
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .style
                 .clone();
+            // `resolve_zoom` only bounds the zoom itself; a finite zoom can
+            // still scale the grid past `u32`, which the renderer reports by
+            // panicking. Reject those dimensions here as a usage error, the
+            // same way the PNG path rejects them through its fallible size.
+            let layout = crate::render::svg::ResolvedLayout::from_style(&style, zoom);
+            if layout
+                .output_pixel_size(u32::from(snapshot.cols), snapshot.rows.len())
+                .is_none()
+            {
+                return Err(TuiTestError::usage(
+                    "screenshot dimensions do not fit in u32 at this zoom",
+                ));
+            }
             match format {
                 ScreenshotFormat::Svg => {
                     let svg = crate::render::svg::render_svg(
@@ -4456,6 +4522,7 @@ fn screenshot(
                             duration: Duration::ZERO,
                             render_state: snapshot.render_state,
                             cursor: snapshot.cursor,
+                            widths: None,
                         };
                         let mut renderer = crate::render::raster::GridRenderer::for_screenshot(
                             snapshot.cols,

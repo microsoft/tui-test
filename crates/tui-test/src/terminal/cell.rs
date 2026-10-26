@@ -217,6 +217,11 @@ impl LinkCache {
 pub struct EmuCell {
     /// The cell's grapheme. A blank cell holds `" "`; [`CONTINUATION`] (the
     /// empty string) is reserved for the cell trailing a double-width char.
+    ///
+    /// The column span is not stored here: it travels beside the grid in
+    /// private render data (recorded per-cell widths on the offline path,
+    /// derived from the grid itself for live emulators), so this shape stays
+    /// compatible with code written before the span was recorded.
     pub ch: CompactString,
     /// `None` means the terminal's default foreground.
     pub fg: Option<Color>,

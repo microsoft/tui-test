@@ -98,13 +98,13 @@ fn cell_from_ghostty(
     graphemes: &[char],
     hyperlink: Option<Arc<Hyperlink>>,
 ) -> Result<EmuCell> {
-    let ch = match cell.wide().context("reading cell width")? {
+    let wide = cell.wide().context("reading cell width")?;
+    let ch = match wide {
         CellWide::SpacerTail => CompactString::const_new(CONTINUATION),
         CellWide::SpacerHead => CompactString::const_new(" "),
         CellWide::Narrow | CellWide::Wide if graphemes.is_empty() => CompactString::const_new(" "),
         CellWide::Narrow | CellWide::Wide => graphemes.iter().collect::<String>().into(),
     };
-
     let bg = match cell.content_tag().context("reading cell content")? {
         CellContentTag::BgColorPalette => Some(Color::from_index(
             cell.bg_color_palette()

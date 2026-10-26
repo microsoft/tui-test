@@ -13,15 +13,15 @@ use std::fmt::Write;
 use super::nerd_font::NerdFont;
 use crate::api::CaptureBackground;
 use crate::profile::{ColorSlot, Profile, Rgb};
-use crate::render::style::Style;
+use crate::render::style::{FontFamilies, Style};
 use crate::terminal::cell::{truncate_to_columns, Attrs, Color, EmuCell, CONTINUATION};
 use crate::terminal::emu::{CursorShape, Emulator};
 
 pub(crate) const DOT_R: f32 = 7.0;
 pub(crate) const RED_DOT_R: f32 = 2.5;
 pub(crate) const RED_DOT_COLOR: Rgb = Rgb::new(105, 17, 10);
-fn dots_right(style: &Style) -> f32 {
-    style.content_left() + 5.0 + 2.0 * 20.0 + DOT_R
+fn dots_right(layout: &ResolvedLayout) -> f32 {
+    layout.content_left + 5.0 + 2.0 * 20.0 + DOT_R
 }
 
 fn hex(c: Rgb) -> String {
@@ -39,6 +39,20 @@ fn svg_dimension(value: f64) -> String {
     output
 }
 
+/// Ceil one scaled axis to whole pixels, or `None` past zero, nonfinite,
+/// or `u32` range.
+fn ceil_pixel(value: f64) -> Option<u32> {
+    if !value.is_finite() || value <= 0.0 || value > f64::from(u32::MAX) {
+        return None;
+    }
+    let ceiled = value.ceil();
+    if ceiled > f64::from(u32::MAX) {
+        return None;
+    }
+    // In range by the checks above; `as` cannot saturate here.
+    Some(ceiled as u32)
+}
+
 fn dim(c: Rgb) -> Rgb {
     let s = |v: u8| (v as f32 * 0.6) as u8;
     Rgb::new(s(c.r), s(c.g), s(c.b))
@@ -48,6 +62,48 @@ static BLANK: EmuCell = EmuCell::blank();
 
 fn cell_at(row: &[EmuCell], x: usize) -> &EmuCell {
     row.get(x).unwrap_or(&BLANK)
+}
+
+/// Painted columns for the cell at `x`: the recorded span capped by the
+/// trailing continuations and the row end.
+///
+/// Wide leads paint every continuation they recorded (a width-3 lead covers
+/// three columns, not two); a clipped lead at the row end fits whatever
+/// columns remain. Continuations and zero-width leads paint nothing: the
+/// former belong to their lead's span, the latter own a column that stays
+/// background. The recorded width never widens the span past the grid, so
+/// a hand-built row with no continuations still fits one column.
+///
+/// `recorded` is the row's per-cell widths traveling beside the grid: the
+/// offline path passes what the snapshot recorded, and `None` (live grids,
+/// whose cells carry no widths) derives the span from the grid itself. A
+/// lead with no continuations then fits one column, while a grapheme that
+/// measures zero columns wide paints nothing, the same way a recorded zero
+/// width does.
+pub(crate) fn span_columns(
+    row: &[EmuCell],
+    x: usize,
+    cols: usize,
+    recorded: Option<&[u16]>,
+) -> usize {
+    let cell = cell_at(row, x);
+    if cell.ch == CONTINUATION {
+        return 0;
+    }
+    let mut counted = 1;
+    while x + counted < cols && cell_at(row, x + counted).ch == CONTINUATION {
+        counted += 1;
+    }
+    let span = match recorded {
+        Some(widths) => usize::from(widths.get(x).copied().unwrap_or(1)),
+        None => {
+            if crate::terminal::cell::display_width(cell.ch.as_str()) == 0 {
+                return 0;
+            }
+            usize::MAX
+        }
+    };
+    counted.min(span).min(cols.saturating_sub(x))
 }
 
 pub(crate) trait RenderColors {
@@ -127,6 +183,226 @@ impl RenderColors for RenderState {
 
     fn cursor_shape(&self) -> CursorShape {
         self.cursor_shape
+    }
+}
+
+impl RenderState {
+    /// Build from resolved snapshot data, without a live emulator.
+    ///
+    /// The offline renderer converts a [`crate::snapshot::TerminalSnapshot`]
+    /// into these fields so snapshots render through the same code as live
+    /// screenshots; the recording [`crate::record::frames::Frame`] stays
+    /// internal to the crate.
+    pub(crate) fn from_parts(
+        indexed: [Rgb; 256],
+        foreground: Rgb,
+        background: Rgb,
+        cursor: Rgb,
+        cursor_shape: CursorShape,
+    ) -> Self {
+        Self {
+            indexed,
+            foreground,
+            background,
+            cursor,
+            cursor_shape,
+        }
+    }
+}
+
+/// One resolved geometry and chrome bundle for both render paths.
+///
+/// Live screenshots and recordings build it from a [`Style`]; offline
+/// snapshot rendering builds it from
+/// [`crate::render::offline::SnapshotRenderOptions`]. The SVG and raster
+/// renderers both draw from it, so there is one renderer, not one per input
+/// kind. Layout defaults are preserved by construction: [`from_style`] copies
+/// the style's resolved values unchanged.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedLayout {
+    pub cell_w: f32,
+    pub cell_h: f32,
+    pub font_size: f32,
+    pub title_font_size: f32,
+    pub baseline: f32,
+    pub header_h: f32,
+    pub divider_h: f32,
+    pub content_left: f32,
+    pub content_top: f32,
+    pub content_right: f32,
+    pub content_bottom: f32,
+    pub canvas_left: u32,
+    pub canvas_right: u32,
+    pub canvas_top: u32,
+    pub canvas_bottom: u32,
+    pub canvas_background: Rgb,
+    pub font: FontFamilies,
+    pub title_bar: bool,
+    pub title_controls: bool,
+    pub window_background: Rgb,
+    pub window_foreground: Rgb,
+    pub window_divider: Rgb,
+    pub border_width: f32,
+    pub border_color: Rgb,
+    pub border_radius: f32,
+    pub shadow_enabled: bool,
+    pub shadow_color: Rgb,
+    pub shadow_offset: f32,
+    pub shadow_spread: f32,
+    pub zoom: f64,
+}
+
+impl ResolvedLayout {
+    /// Resolve a live style at one zoom, copying every value unchanged.
+    pub(crate) fn from_style(style: &Style, zoom: f64) -> Self {
+        Self {
+            cell_w: style.cell_width(),
+            cell_h: style.cell_height(),
+            font_size: style.font_size,
+            title_font_size: style.title_font_size,
+            baseline: style.baseline(),
+            header_h: style.header_height(),
+            divider_h: style.divider_height(),
+            content_left: style.content_left(),
+            content_top: style.content_top(),
+            content_right: style.content_right(),
+            content_bottom: style.content_bottom(),
+            canvas_left: style.canvas_left(),
+            canvas_right: style.canvas_right(),
+            canvas_top: style.canvas_top(),
+            canvas_bottom: style.canvas_bottom(),
+            canvas_background: style.canvas_background,
+            font: style.font.clone(),
+            title_bar: style.window.title_bar,
+            title_controls: style.window.traffic_lights,
+            window_background: style.window.background,
+            window_foreground: style.window.foreground,
+            window_divider: style.window.divider,
+            border_width: style.border.width,
+            border_color: style.border.color,
+            border_radius: style.border.radius,
+            shadow_enabled: style.shadow.enabled,
+            shadow_color: style.shadow.color,
+            shadow_offset: style.shadow.offset,
+            shadow_spread: style.shadow.spread,
+            zoom,
+        }
+    }
+
+    /// The shadow's stacked rectangles, empty when it is turned off.
+    ///
+    /// Kept in sync with the shadow math the style used before the layout
+    /// type existed: `(spread, offset, alpha)` layers, largest first.
+    pub(crate) fn shadow_layers(&self) -> Vec<(f32, f32, u8)> {
+        if !self.shadow_enabled {
+            return Vec::new();
+        }
+        let spread_step = self.shadow_spread * 2.0 / 7.0;
+        let offset_step = self.shadow_offset / 5.0;
+        let layers: [(f32, f32, u8); 4] = std::array::from_fn(|index| {
+            let step = index as f32;
+            (
+                self.shadow_spread - step * spread_step,
+                self.shadow_offset - step * offset_step,
+                18 + index as u8 * 2,
+            )
+        });
+        layers.to_vec()
+    }
+
+    /// The three controls, drawn only with the title bar and its switch on.
+    pub(crate) fn traffic_lights(&self) -> &[Rgb] {
+        const LIGHTS: [Rgb; 3] = [
+            Rgb::new(236, 106, 94),
+            Rgb::new(244, 191, 79),
+            Rgb::new(97, 197, 84),
+        ];
+        if self.title_bar && self.title_controls {
+            &LIGHTS
+        } else {
+            &[]
+        }
+    }
+
+    #[cfg(feature = "recording-raster")]
+    /// What the canvas grows by to hold the window, or `None` past `u32`.
+    pub(crate) fn canvas_horizontal(&self) -> Option<u32> {
+        self.canvas_left.checked_add(self.canvas_right)
+    }
+
+    #[cfg(feature = "recording-raster")]
+    /// What the canvas grows by to hold the window, or `None` past `u32`.
+    pub(crate) fn canvas_vertical(&self) -> Option<u32> {
+        self.canvas_top.checked_add(self.canvas_bottom)
+    }
+
+    /// F32 panel size for the grid: content gaps, header, and cells, no canvas.
+    pub(crate) fn panel_size(&self, cols: usize, rows: usize) -> (f32, f32) {
+        let width = self.content_left + self.content_right + cols as f32 * self.cell_w;
+        let height = self.header_h
+            + self.content_top
+            + self.content_bottom
+            + rows.max(1) as f32 * self.cell_h;
+        (width, height)
+    }
+
+    #[cfg(feature = "recording-raster")]
+    /// Ceiled grid pixel size for the raster renderer, before canvas and zoom.
+    ///
+    /// Screenshots keep the exact size; recordings round up to even
+    /// dimensions for the video encoders through
+    /// [`even_grid_pixel_size`].
+    pub(crate) fn grid_pixel_size(&self, cols: u16, rows: usize) -> (u32, u32) {
+        let width =
+            (self.content_left + self.content_right + f32::from(cols) * self.cell_w).ceil() as u32;
+        let height = (self.header_h
+            + self.content_top
+            + self.content_bottom
+            + rows.max(1) as f32 * self.cell_h)
+            .ceil() as u32;
+        (width, height)
+    }
+
+    #[cfg(feature = "recording-raster")]
+    /// Ceiled grid pixel size rounded up to even dimensions, for recordings.
+    pub(crate) fn even_grid_pixel_size(&self, cols: u16, rows: usize) -> (u32, u32) {
+        let (width, height) = self.grid_pixel_size(cols, rows);
+        (width + width % 2, height + height % 2)
+    }
+
+    /// ONE output-size calculation for every renderer.
+    ///
+    /// PNG pixels, SVG `width`/`height`, evidence dimensions, and the SVG
+    /// viewBox all derive from this: the unscaled panel plus canvas, times
+    /// the zoom, ceiled once at the pixel-allocation boundary. Ceiling the
+    /// panel before scaling (as the raster path did) or not at all (as the
+    /// SVG document did) gave one grid up to three sizes under fractional
+    /// metrics; rounding once, here, keeps them identical.
+    ///
+    /// `None` past zero, nonfinite, or `u32` range; callers map that to
+    /// their own error.
+    pub(crate) fn output_pixel_size(&self, cols: u32, rows: usize) -> Option<(u32, u32)> {
+        let (panel_width, panel_height) = self.panel_size(cols as usize, rows);
+        let width =
+            (f64::from(panel_width) + f64::from(self.canvas_left) + f64::from(self.canvas_right))
+                * self.zoom;
+        let height =
+            (f64::from(panel_height) + f64::from(self.canvas_top) + f64::from(self.canvas_bottom))
+                * self.zoom;
+        Some((ceil_pixel(width)?, ceil_pixel(height)?))
+    }
+
+    #[cfg(feature = "recording-raster")]
+    /// Panel-only variant of [`output_pixel_size`](Self::output_pixel_size),
+    /// without the canvas: per-frame placement adds the canvas separately
+    /// when it centers a frame, so it rounds the same scaled panel rather
+    /// than re-deriving one.
+    pub(crate) fn panel_pixel_size(&self, cols: u16, rows: usize) -> Option<(u32, u32)> {
+        let (panel_width, panel_height) = self.panel_size(cols as usize, rows);
+        Some((
+            ceil_pixel(f64::from(panel_width) * self.zoom)?,
+            ceil_pixel(f64::from(panel_height) * self.zoom)?,
+        ))
     }
 }
 
@@ -214,25 +490,28 @@ fn write_text_run(
     y: usize,
     paint: CellPaint,
     nerd_font: &NerdFont,
-    style: &Style,
+    layout: &ResolvedLayout,
 ) {
-    if paint.invisible {
+    if paint.invisible || run.is_empty() {
         return;
     }
     let (start, end) = (run.start, run.end);
-    let cell_w = style.cell_width();
-    let cell_h = style.cell_height();
-    let header_h = style.header_height();
-    let font_baseline = style.baseline();
+    let cell_w = layout.cell_w;
+    let cell_h = layout.cell_h;
+    let header_h = layout.header_h;
+    let font_baseline = layout.baseline;
     let fg = hex(paint.fg);
-    let tx = style.content_left() + start as f32 * cell_w;
-    let baseline = header_h + style.content_top() + y as f32 * cell_h + font_baseline;
+    let tx = layout.content_left + start as f32 * cell_w;
+    let baseline = header_h + layout.content_top + y as f32 * cell_h + font_baseline;
     let width = (end - start) as f32 * cell_w;
     let original_text = run_text(row, start, end);
     let (text, run_x_adjust) = nerd_font.prepare_run(&original_text, width, cell_w);
 
-    // Preserve decoration for runs containing only vector glyphs.
-    if !original_text.trim().is_empty() {
+    // Preserve decoration for runs containing only vector glyphs, and for
+    // underlined or struck blank spans: a text decoration is the only thing
+    // that paints those, so skipping the run would drop the line entirely.
+    // Plain blanks still emit nothing.
+    if !original_text.trim().is_empty() || paint.underline || paint.strike {
         let weight = if paint.bold {
             r#" font-weight="bold""#
         } else {
@@ -249,8 +528,8 @@ fn write_text_run(
             (false, true) => r#" text-decoration="line-through""#,
             (false, false) => "",
         };
-        let resolved = style.font.resolve(paint.bold, paint.italic);
-        let family = if resolved == style.font.family {
+        let resolved = layout.font.resolve(paint.bold, paint.italic);
+        let family = if resolved == layout.font.family {
             String::new()
         } else {
             format!(r#" font-family="{}""#, escape_attribute(resolved))
@@ -267,8 +546,8 @@ fn write_text_run(
                 out,
                 c,
                 (
-                    style.content_left() + i as f32 * cell_w,
-                    header_h + style.content_top() + y as f32 * cell_h,
+                    layout.content_left + i as f32 * cell_w,
+                    header_h + layout.content_top + y as f32 * cell_h,
                 ),
                 (cell_w, cell_h),
                 run_x_adjust,
@@ -278,8 +557,8 @@ fn write_text_run(
     }
 }
 
-pub(crate) fn title_advance(style: &Style) -> f32 {
-    style.title_font_size * (style.cell_width() / style.font_size)
+pub(crate) fn title_advance(layout: &ResolvedLayout) -> f32 {
+    layout.title_font_size * (layout.cell_w / layout.font_size)
 }
 
 pub(crate) fn media_title(title: Option<&str>, cols: u16, rows: usize, fits: usize) -> String {
@@ -305,16 +584,16 @@ pub(crate) fn visible_title(
     cols: u16,
     rows: usize,
     width: f32,
-    style: &Style,
+    layout: &ResolvedLayout,
 ) -> Option<String> {
     const GAP: f32 = 8.0;
-    let margin = if style.window.traffic_lights {
-        dots_right(style) + GAP
+    let margin = if layout.title_controls {
+        dots_right(layout) + GAP
     } else {
-        style.content_left().max(style.content_right()).max(GAP)
+        layout.content_left.max(layout.content_right).max(GAP)
     };
     let available = width - 2.0 * margin;
-    let fits = (available / title_advance(style)).floor().max(0.0) as usize;
+    let fits = (available / title_advance(layout)).floor().max(0.0) as usize;
     if fits == 0 {
         return None;
     }
@@ -327,16 +606,16 @@ fn write_title(
     cols: u16,
     rows: usize,
     width: f32,
-    style: &Style,
+    layout: &ResolvedLayout,
 ) {
-    let Some(shown) = visible_title(title, cols, rows, width, style) else {
+    let Some(shown) = visible_title(title, cols, rows, width, layout) else {
         return;
     };
-    let header_h = style.header_height();
-    let title_font_size = style.title_font_size;
-    let title_fg = style.window.foreground;
-    let resolved = style.font.resolve(true, false);
-    let family = if resolved == style.font.family {
+    let header_h = layout.header_h;
+    let title_font_size = layout.title_font_size;
+    let title_fg = layout.window_foreground;
+    let resolved = layout.font.resolve(true, false);
+    let family = if resolved == layout.font.family {
         String::new()
     } else {
         format!(r#" font-family="{}""#, escape_attribute(resolved))
@@ -360,40 +639,46 @@ const CURSOR_THICKNESS: f32 = 2.0;
 /// which is how a terminal keeps the character under a block cursor readable.
 /// It is drawn after the text pass so the block covers the first, normally
 /// colored draw of that character.
+#[allow(clippy::too_many_arguments)]
 fn write_cursor(
     out: &mut String,
     rows: &[Vec<EmuCell>],
+    cols: usize,
     (cx, cy): (u16, usize),
     colors: &dyn RenderColors,
     nerd_font: &NerdFont,
-    style: &Style,
+    layout: &ResolvedLayout,
+    recorded: Option<&[Vec<u16>]>,
 ) {
     let Some(row) = rows.get(cy) else {
         return;
     };
-    let cell_w = style.cell_width();
-    let cell_h = style.cell_height();
-    let header_h = style.header_height();
+    let cell_w = layout.cell_w;
+    let cell_h = layout.cell_h;
+    let header_h = layout.header_h;
+    let widths = recorded
+        .and_then(|widths| widths.get(cy))
+        .map(Vec::as_slice);
     let cell = cell_at(row, cx as usize);
-    // A double-width character stores its second half as a continuation cell,
-    // so the cursor has to cover both or it clips the glyph down the middle.
-    let span = if row
-        .get(cx as usize + 1)
-        .is_some_and(|next| next.ch == CONTINUATION)
-    {
-        2.0
-    } else {
-        1.0
-    };
-    let w = span * cell_w;
-    let x = style.content_left() + cx as f32 * cell_w;
-    let y = header_h + style.content_top() + cy as f32 * cell_h;
+    // A wide character stores its trailing halves as continuation cells, so
+    // the cursor has to cover the whole recorded span or it clips the glyph.
+    // A zero-width lead owns its column, so the cursor still marks that one
+    // even though the lead itself paints nothing to redraw.
+    let span = span_columns(row, cx as usize, cols, widths);
+    let w = span.max(1) as f32 * cell_w;
+    let x = layout.content_left + cx as f32 * cell_w;
+    let y = header_h + layout.content_top + cy as f32 * cell_h;
     let fill = hex(colors.color(ColorSlot::Cursor));
 
+    // Thin shapes keep the shared 2px thickness, clamped the way the PNG
+    // path clamps its own: the underline never climbs above the cell and
+    // the bar never runs past it, so a 1px cell still holds its cursor.
+    let underline_h = CURSOR_THICKNESS.min(cell_h);
+    let bar_w = CURSOR_THICKNESS.min(w);
     let (rx, ry, rw, rh) = match colors.cursor_shape() {
         CursorShape::Block => (x, y, w, cell_h),
-        CursorShape::Underline => (x, y + cell_h - CURSOR_THICKNESS, w, CURSOR_THICKNESS),
-        CursorShape::Bar => (x, y, CURSOR_THICKNESS, cell_h),
+        CursorShape::Underline => (x, y + cell_h - underline_h, w, underline_h),
+        CursorShape::Bar => (x, y, bar_w, cell_h),
     };
     let _ = write!(
         out,
@@ -408,11 +693,11 @@ fn write_cursor(
     write_text_run(
         out,
         row,
-        cx as usize..cx as usize + span as usize,
+        cx as usize..cx as usize + span,
         cy,
         paint,
         nerd_font,
-        style,
+        layout,
     );
 }
 
@@ -423,6 +708,9 @@ fn write_cursor(
 ///
 /// Its row is a `usize` because it indexes `rows`, which for a full-history
 /// render is as long as the scrollback and so is not bounded by the screen.
+///
+/// The style entry point keeps the recorded layout: it resolves the style to
+/// a [`ResolvedLayout`] and draws from that, exactly like offline rendering.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_svg(
     rows: &[Vec<EmuCell>],
@@ -434,34 +722,65 @@ pub(crate) fn render_svg(
     zoom: f64,
     background: Option<CaptureBackground>,
 ) -> String {
-    let cell_w = style.cell_width();
-    let cell_h = style.cell_height();
-    let font_size = style.font_size;
-    let header_h = style.header_height();
-    let divider_h = style.divider_height();
-    let radius = style.border.radius;
-    let shadow_color = style.shadow.color;
-    let title_bg = style.window.background;
-    let title_divider = style.window.divider;
-    let font_family = escape_attribute(&style.font.family);
+    let layout = ResolvedLayout::from_style(style, zoom);
+    // Live grids carry no recorded widths, so spans derive from the grid.
+    render_svg_with_layout(rows, cols, colors, cursor, title, &layout, background, None)
+}
+
+/// Draw the grid from an already-resolved layout.
+///
+/// Live screenshots resolve their [`Style`] first; offline snapshots resolve
+/// [`crate::render::offline::SnapshotRenderOptions`]. Both draw here, so
+/// there is one renderer. `recorded` carries the snapshot's per-cell widths
+/// beside the grid (one row per grid row); `None` derives spans from the
+/// grid itself.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_svg_with_layout(
+    rows: &[Vec<EmuCell>],
+    cols: u16,
+    colors: &dyn RenderColors,
+    cursor: Option<(u16, usize)>,
+    title: Option<&str>,
+    layout: &ResolvedLayout,
+    background: Option<CaptureBackground>,
+    recorded: Option<&[Vec<u16>]>,
+) -> String {
+    let cell_w = layout.cell_w;
+    let cell_h = layout.cell_h;
+    let font_size = layout.font_size;
+    let header_h = layout.header_h;
+    let divider_h = layout.divider_h;
+    let radius = layout.border_radius;
+    let shadow_color = layout.shadow_color;
+    let title_bg = layout.window_background;
+    let title_divider = layout.window_divider;
+    let font_family = escape_attribute(&layout.font.family);
     let nerd_font = NerdFont::new(rows, font_size);
+    let (panel_width, panel_height) = layout.panel_size(cols as usize, rows.len());
+    let pad_left = layout.canvas_left as f32;
+    let pad_top = layout.canvas_top as f32;
+    let width = panel_width + pad_left + layout.canvas_right as f32;
+    let height = panel_height + pad_top + layout.canvas_bottom as f32;
+    // THE size the PNG pixmap and both evidences share: one rounding at
+    // the pixel boundary. Callers validate metrics and zoom first (live
+    // resolves the zoom, offline checks the size before drawing), so this
+    // is only `None` on already-validated input past `u32` range.
+    let (output_width, output_height) = layout
+        .output_pixel_size(u32::from(cols), rows.len())
+        .expect("output size was checked by the caller");
+    // The viewBox is the exact unscaled canvas, so the drawn content fills
+    // it with no rounding sliver; the integer `width`/`height` above is the
+    // same rect in pixels.
+    let view_width = svg_dimension(f64::from(width));
+    let view_height = svg_dimension(f64::from(height));
     let cols = cols as usize;
-    let x0 = style.content_left();
-    let y0 = header_h + style.content_top();
-    let panel_width = style.content_left() + style.content_right() + cols as f32 * cell_w;
-    let panel_height =
-        header_h + style.content_top() + style.content_bottom() + rows.len().max(1) as f32 * cell_h;
-    let pad_left = style.canvas_left() as f32;
-    let pad_top = style.canvas_top() as f32;
-    let width = panel_width + pad_left + style.canvas_right() as f32;
-    let height = panel_height + pad_top + style.canvas_bottom() as f32;
-    let output_width = svg_dimension(f64::from(width) * zoom);
-    let output_height = svg_dimension(f64::from(height) * zoom);
+    let x0 = layout.content_left;
+    let y0 = header_h + layout.content_top;
 
     let mut out = String::new();
     let _ = write!(
         out,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {width:.0} {height:.0}" font-family="{font_family}" font-size="{font_size}px">"#
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{output_width}" height="{output_height}" viewBox="0 0 {view_width} {view_height}" font-family="{font_family}" font-size="{font_size}px">"#
     );
     nerd_font.write_defs(&mut out);
     match background {
@@ -469,19 +788,19 @@ pub(crate) fn render_svg(
         Some(CaptureBackground::Color(color)) => {
             let _ = write!(
                 out,
-                r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
+                r#"<rect width="{view_width}" height="{view_height}" fill="{}"/>"#,
                 hex(color)
             );
         }
         None => {
             let _ = write!(
                 out,
-                r#"<rect width="{width:.0}" height="{height:.0}" fill="{}"/>"#,
-                hex(style.canvas_background)
+                r#"<rect width="{view_width}" height="{view_height}" fill="{}"/>"#,
+                hex(layout.canvas_background)
             );
         }
     }
-    for (spread, offset_y, alpha) in style.shadow_layers() {
+    for (spread, offset_y, alpha) in layout.shadow_layers() {
         let shadow_x = pad_left - spread;
         let shadow_y = pad_top - spread + offset_y;
         let shadow_width = panel_width + spread * 2.0;
@@ -494,12 +813,17 @@ pub(crate) fn render_svg(
             hex(shadow_color)
         );
     }
+    // Exact panel decimals, like the viewBox: rounding here would leave a
+    // canvas sliver along the right and bottom edges under fractional
+    // metrics. Integer layouts format identically to before.
+    let panel_w = svg_dimension(f64::from(panel_width));
+    let panel_h = svg_dimension(f64::from(panel_height));
     let _ = write!(
         out,
-        r#"<g transform="translate({pad_left:.0} {pad_top:.0})"><rect width="{panel_width:.0}" height="{panel_height:.0}" rx="{radius:.0}" fill="{}"/>"#,
+        r#"<g transform="translate({pad_left:.0} {pad_top:.0})"><rect width="{panel_w}" height="{panel_h}" rx="{radius:.0}" fill="{}"/>"#,
         hex(colors.resolve(None, false))
     );
-    if style.window.title_bar {
+    if layout.title_bar {
         let title_bottom = header_h - divider_h;
         let radius = radius.min(panel_width / 2.0).min(title_bottom);
         let right_curve = panel_width - radius;
@@ -510,12 +834,12 @@ pub(crate) fn render_svg(
         );
         let _ = write!(
             out,
-            r#"<rect y="{title_bottom:.1}" width="{panel_width:.0}" height="{divider_h:.1}" fill="{}"/>"#,
+            r#"<rect y="{title_bottom:.1}" width="{panel_w}" height="{divider_h:.1}" fill="{}"/>"#,
             hex(title_divider)
         );
-        let lights = style.window.traffic_lights();
+        let lights = layout.traffic_lights();
         for (i, dot) in lights.iter().copied().enumerate() {
-            let cx = style.content_left() + 5.0 + i as f32 * 20.0;
+            let cx = layout.content_left + 5.0 + i as f32 * 20.0;
             let _ = write!(
                 out,
                 r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{DOT_R:.1}" fill="{}"/>"#,
@@ -528,7 +852,7 @@ pub(crate) fn render_svg(
                 out,
                 r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{RED_DOT_R:.1}" fill="{}"/>"#,
                 hex(RED_DOT_COLOR),
-                cx = style.content_left() + 5.0,
+                cx = layout.content_left + 5.0,
                 cy = header_h / 2.0,
             );
         }
@@ -538,7 +862,7 @@ pub(crate) fn render_svg(
             cols as u16,
             rows.len().max(1),
             panel_width,
-            style,
+            layout,
         );
     }
 
@@ -565,35 +889,44 @@ pub(crate) fn render_svg(
     }
 
     for (y, row) in rows.iter().enumerate() {
+        let widths = recorded.and_then(|widths| widths.get(y)).map(Vec::as_slice);
         let mut x = 0;
         while x < cols {
-            let paint = cell_paint(cell_at(row, x), colors);
-            let mut run = 1;
-            while x + run < cols && cell_paint(cell_at(row, x + run), colors) == paint {
-                run += 1;
+            // Each lead emits its own text with its own x and span width:
+            // joining same-paint neighbors into one run loses the per-cell
+            // geometry. Continuations belong to their lead's span and
+            // zero-width leads paint nothing: neither starts a text, but
+            // both consume a column.
+            let span = span_columns(row, x, cols, widths);
+            if span == 0 {
+                x += 1;
+                continue;
             }
-            write_text_run(&mut out, row, x..x + run, y, paint, &nerd_font, style);
-            x += run;
+            let paint = cell_paint(cell_at(row, x), colors);
+            write_text_run(&mut out, row, x..x + span, y, paint, &nerd_font, layout);
+            x += span;
         }
     }
 
     if let Some(at) = cursor {
-        write_cursor(&mut out, rows, at, colors, &nerd_font, style);
+        write_cursor(
+            &mut out, rows, cols, at, colors, &nerd_font, layout, recorded,
+        );
     }
 
     // Last, so the content it frames cannot paint over it. The rect is inset
     // by half the stroke because SVG centers a stroke on its path, and a
     // border that straddled the panel edge would bleed into the padding.
-    if style.border.width > 0.0 {
-        let inset = style.border.width / 2.0;
+    if layout.border_width > 0.0 {
+        let inset = layout.border_width / 2.0;
         let _ = write!(
             out,
             r#"<rect x="{inset:.2}" y="{inset:.2}" width="{:.2}" height="{:.2}" rx="{:.2}" fill="none" stroke="{}" stroke-width="{:.2}"/>"#,
-            (panel_width - style.border.width).max(0.0),
-            (panel_height - style.border.width).max(0.0),
+            (panel_width - layout.border_width).max(0.0),
+            (panel_height - layout.border_width).max(0.0),
             (radius - inset).max(0.0),
-            hex(style.border.color),
-            style.border.width,
+            hex(layout.border_color),
+            layout.border_width,
         );
     }
 
@@ -601,23 +934,13 @@ pub(crate) fn render_svg(
     out
 }
 
-#[cfg(feature = "recording-raster")]
-pub(crate) fn pixel_size(cols: u16, rows: usize, style: &Style) -> (u32, u32) {
-    let (width, height) = exact_pixel_size(cols, rows, style);
-    (width + width % 2, height + height % 2)
-}
-
-#[cfg(feature = "recording-raster")]
-pub(crate) fn exact_pixel_size(cols: u16, rows: usize, style: &Style) -> (u32, u32) {
-    let cell_w = style.cell_width();
-    let cell_h = style.cell_height();
-    let header_h = style.header_height();
-    let width =
-        (style.content_left() + style.content_right() + f32::from(cols) * cell_w).ceil() as u32;
-    let height =
-        (header_h + style.content_top() + style.content_bottom() + rows.max(1) as f32 * cell_h)
-            .ceil() as u32;
-    (width, height)
+/// Grid pixel size for tests that derive expectations from the style.
+///
+/// The renderers read the same method through the layout, so these stay in
+/// sync by construction rather than by duplicated math.
+#[cfg(all(test, feature = "recording-raster"))]
+pub(crate) fn test_pixel_size(cols: u16, rows: usize, style: &Style) -> (u32, u32) {
+    ResolvedLayout::from_style(style, 1.0).even_grid_pixel_size(cols, rows)
 }
 
 #[cfg(test)]
@@ -803,11 +1126,11 @@ mod tests {
     /// cell would cover half the glyph and redraw it squashed into that half.
     #[test]
     fn a_block_cursor_covers_a_double_width_character() {
-        let rows = vec![vec![
-            cell("日", None, None),
-            cell(CONTINUATION, None, None),
-            cell("a", None, None),
-        ]];
+        // The span derives from the trailing continuation: the lead paints
+        // both halves without any recorded width on the cell.
+        let lead = cell("日", None, None);
+        let trailer = cell(CONTINUATION, None, None);
+        let rows = vec![vec![lead, trailer, cell("a", None, None)]];
         let svg = render_svg(
             &rows,
             3,
@@ -1041,7 +1364,8 @@ mod tests {
             svg.contains(&hex(Emulator::color(&colors(), ColorSlot::Indexed(1)))),
             "slot 1 is painted with the profile color"
         );
-        assert!(svg.contains(">hi</text>"));
+        assert!(svg.contains(">h</text>"));
+        assert!(svg.contains(">i</text>"));
         assert!(!svg.contains("<defs>"));
         assert!(!svg.contains("<use"));
     }
@@ -1084,11 +1408,13 @@ mod tests {
                 parts.next().unwrap().parse::<f32>().unwrap(),
             )
         };
+        // One rounding at the pixel boundary: halving an odd extent (125)
+        // ceils to whole pixels (63), exactly like the PNG pixmap.
         assert!(
             svg.contains(&format!(
                 r#"width="{}" height="{}" {view_box}"#,
-                w / 2.0,
-                h / 2.0
+                (w / 2.0).ceil() as u32,
+                (h / 2.0).ceil() as u32
             )),
             "halving the zoom halves the drawn size and leaves the view box: {svg}"
         );
@@ -1242,7 +1568,8 @@ mod tests {
 
         assert!(svg.contains(r#"<path id="nf-f115" d=""#));
         assert!(svg.contains(r##"<use href="#nf-f115""##));
-        assert!(svg.contains(">a b</text>"));
+        assert!(svg.contains(">a</text>"));
+        assert!(svg.contains(">b</text>"));
         assert!(!svg.contains(glyph));
         let family = &Style::default().font.family;
         assert!(svg.contains(&format!(r#"font-family="{family}" font-size="#)));
@@ -1359,10 +1686,12 @@ mod tests {
     #[test]
     fn title_uses_the_space_released_by_disabled_traffic_lights() {
         let mut style = Style::default();
-        assert_eq!(visible_title(Some("title"), 12, 1, 150.0, &style), None);
+        let layout = ResolvedLayout::from_style(&style, 1.0);
+        assert_eq!(visible_title(Some("title"), 12, 1, 150.0, &layout), None);
         style.window.traffic_lights = false;
+        let layout = ResolvedLayout::from_style(&style, 1.0);
         assert_eq!(
-            visible_title(Some("title"), 12, 1, 150.0, &style).as_deref(),
+            visible_title(Some("title"), 12, 1, 150.0, &layout).as_deref(),
             Some("title - 12x1")
         );
         let svg = render_svg(&[], 12, &colors(), None, Some("title"), &style, 1.0, None);
@@ -1446,12 +1775,13 @@ mod tests {
     fn assert_fits_clear_of_the_controls(drawn: &str, cols: f32) {
         let panel =
             Style::default().content_left() + Style::default().content_right() + cols * cell_w();
+        let layout = ResolvedLayout::from_style(&geometry(), 1.0);
         let drawn_width =
-            crate::terminal::cell::display_width(drawn) as f32 * title_advance(&geometry());
+            crate::terminal::cell::display_width(drawn) as f32 * title_advance(&layout);
         assert!(
-            drawn_width <= panel - 2.0 * dots_right(&Style::default()),
+            drawn_width <= panel - 2.0 * dots_right(&layout),
             "title {drawn:?} is {drawn_width} wide, past the {} available",
-            panel - 2.0 * dots_right(&Style::default())
+            panel - 2.0 * dots_right(&layout)
         );
     }
 
