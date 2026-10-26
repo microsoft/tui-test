@@ -44,11 +44,16 @@ pub enum SnapshotPolicy {
 /// recorded commit is unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyOutcome {
-    /// Saved bytes are equal. No write happens under any policy.
+    /// The saved baseline and the compared content match after trimming
+    /// surrounding whitespace on both sides. This is
+    /// comparison-after-trimming, not byte identity: `"  one\n"` equals
+    /// `"one"`, and the stored bytes keep their recorded trimmed form. No
+    /// write happens under any policy.
     Equal,
     /// No baseline file exists and the policy wrote nothing.
     Missing,
-    /// A baseline file exists with different bytes and the policy wrote nothing.
+    /// A baseline file exists whose trimmed content differs, and the policy
+    /// wrote nothing.
     Different { expected: String, actual: String },
     /// The policy wrote a baseline where none existed.
     Created,
@@ -221,7 +226,8 @@ fn box_view(view: &str, width: u16, title: Option<&str>) -> String {
 /// explicit write policy. Snapshots are resolved under `base`/`__snapshots__`
 /// so they land in the client's working directory rather than the daemon's.
 ///
-/// When the saved bytes equal `content`, this returns [`PolicyOutcome::Equal`]
+/// When the saved baseline matches `content` after trimming surrounding
+/// whitespace on both sides, this returns [`PolicyOutcome::Equal`]
 /// without a write under all policies. [`SnapshotPolicy::CheckOnly`] never
 /// makes a file or a directory. [`SnapshotPolicy::CreateMissing`] writes only
 /// through an atomic create-new step; when a concurrent writer makes the file
@@ -299,6 +305,15 @@ pub fn compare_with_policy(
 /// `Failed`. It uses the new implementation with its previous policy mapping:
 /// `update` selects [`SnapshotPolicy::Replace`], no update selects
 /// [`SnapshotPolicy::CreateMissing`].
+///
+/// Compatibility note: the recorded implementation wrote with
+/// `std::fs::write`, which follows an existing baseline symlink and updates
+/// its TARGET (the link survives). The policy implementation writes through
+/// an atomic temporary-file-plus-rename step instead, so an update installs
+/// a regular file at the baseline path and leaves the link target untouched.
+/// That change is deliberate — a snapshot write must never redirect bytes
+/// outside the snapshot directory — and matches the temporary-write rule
+/// below, which never writes through a preexisting symlink either.
 pub fn compare(
     base: &Path,
     name: &str,
@@ -336,11 +351,7 @@ fn create_new(path: &Path, base: &Path, body: &str) -> std::io::Result<()> {
     let dir = snapshot_dir(base);
     std::fs::create_dir_all(&dir)?;
     let stamp = REPLACE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp = dir.join(format!(
-        ".{}.new-{}-{stamp}",
-        sanitize(&path_lossless_name(path)),
-        std::process::id()
-    ));
+    let temp = dir.join(temp_file_name(&path_lossless_name(path), "new", stamp));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -399,25 +410,17 @@ fn atomic_replace(base: &Path, path: &Path, trimmed: &str) -> std::io::Result<()
     let dir = snapshot_dir(base);
     std::fs::create_dir_all(&dir)?;
     let stamp = REPLACE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp = dir.join(format!(
-        ".{}.tmp-{}-{stamp}",
-        sanitize(&path_lossless_name(path)),
-        std::process::id()
-    ));
+    let temp = dir.join(temp_file_name(&path_lossless_name(path), "tmp", stamp));
     // Exclusively create the temporary file: when the path already exists (a
     // stale file, a planted symlink, or a concurrent writer's temp), the open
     // fails and the preexisting path is left alone — it is not ours to write
     // through or remove. Writing through the exclusively owned handle (never
     // `std::fs::write`, which follows symlinks) keeps a preexisting symlink
     // from redirecting bytes into the baseline.
-    let mut file = match std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&temp)
-    {
-        Ok(file) => file,
-        Err(error) => return Err(error),
-    };
+        .open(&temp)?;
     // From here the temporary file is exclusively owned: only a completed
     // rename installs new bytes, and any failure below removes the temp file.
     let body = format!("{trimmed}\n");
@@ -453,6 +456,39 @@ fn path_lossless_name(path: &Path) -> String {
         .and_then(|stem| stem.to_str())
         .unwrap_or("snapshot")
         .to_string()
+}
+
+/// Temporary-file name for a baseline stem that stays short at any input length.
+///
+/// The full stem cannot be embedded: a 250-byte snapshot name makes a valid
+/// 255-byte `.snap` file, but `.{stem}.tmp-{pid}-{stamp}` would already be
+/// 263 bytes and fail with `ENAMETOOLONG`. The name below carries only a
+/// 64-bit FNV-1a hash of the stem plus the process id and a unique stamp, so
+/// it is bounded (well under every `NAME_MAX`) for every baseline while
+/// staying unique per baseline within a directory. `kind` separates the
+/// create-new (`"new"`) and replace (`"tmp"`) writers sharing one directory.
+/// The hash is deterministic (fixed FNV offset basis), so tests can derive
+/// the exact slot the next writer takes through
+/// [`__test_only_temp_file_name`].
+fn temp_file_name(stem: &str, kind: &str, stamp: u64) -> String {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in stem.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!(".{kind}-{hash:016x}-{}-{stamp}", std::process::id())
+}
+
+/// Temporary-file name the writers derive for `stem`, for tests only.
+///
+/// Integration tests plant files at the exact slot the next writer takes, so
+/// the derivation is shared through this seam rather than mirrored.
+/// Hidden from documentation; production code never calls this.
+#[doc(hidden)]
+pub fn __test_only_temp_file_name(stem: &str, kind: &str, stamp: u64) -> String {
+    temp_file_name(stem, kind, stamp)
 }
 
 #[cfg(test)]

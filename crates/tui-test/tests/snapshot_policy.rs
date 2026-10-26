@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tui_test::assert::snapshot::{
-    __test_only_replace_counter, compare, compare_with_policy, PolicyOutcome, SnapshotPolicy,
-    SnapshotStatus,
+    __test_only_replace_counter, __test_only_temp_file_name, compare, compare_with_policy,
+    PolicyOutcome, SnapshotPolicy, SnapshotStatus,
 };
 
 /// Distinct temporary roots across tests in this process.
@@ -304,6 +304,49 @@ fn u01_d_compare_with_update_keeps_behavior() {
 
 // U01-E: concurrent CreateMissing racers cannot replace each other.
 
+// U01-D (compat): updating a symlink baseline replaces the link itself.
+//
+// The recorded `compare` wrote with `std::fs::write`, which follows a
+// baseline symlink and updates its TARGET (the link survives). The policy
+// implementation writes through an atomic temporary-file-plus-rename step,
+// so an update installs a regular file at the baseline path and leaves the
+// link target's bytes untouched. That change is deliberate: a snapshot write
+// must never redirect bytes outside the snapshot directory. This test locks
+// the behavior in: after `compare` with update, the baseline is a regular
+// file with the new bytes and the former target is unchanged.
+
+#[cfg(unix)]
+#[test]
+fn u01_d_compare_update_replaces_symlink_baseline() {
+    let base = temp_base("d-symlink-baseline");
+    let dir = base.join("__snapshots__");
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("external-target.txt");
+    std::fs::write(&target, b"target-old\n").unwrap();
+    let baseline = dir.join("snap.snap");
+    std::os::unix::fs::symlink(&target, &baseline).unwrap();
+    assert_eq!(std::fs::read(&baseline).unwrap(), b"target-old\n".to_vec());
+
+    assert!(matches!(
+        compare(&base, "snap", "new", true).unwrap(),
+        SnapshotStatus::Updated
+    ));
+    assert!(
+        !std::fs::symlink_metadata(&baseline)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "an update installs a regular file at the baseline path, not a link"
+    );
+    assert_eq!(std::fs::read(&baseline).unwrap(), b"new\n".to_vec());
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        b"target-old\n".to_vec(),
+        "the former link target keeps its bytes"
+    );
+    remove_base(&base);
+}
+
 #[test]
 fn u01_e_concurrent_creators_agree_on_one_baseline() {
     use std::sync::{Arc, Barrier};
@@ -382,8 +425,9 @@ fn u01_e_concurrent_creators_never_replace() {
 // through, clobbered, or removed, and only an owned temp is cleaned up on
 // failure.
 //
-// The helpers below mirror the temp naming (`.{stem}.tmp-{pid}-{stamp}`) for
-// the snapshot name "snap" (sanitized stem "snap"). The replacement counter
+// The helpers below derive temp paths through the shared
+// `__test_only_temp_file_name` seam (never by mirroring the naming) for the
+// snapshot name "snap" (sanitized stem "snap"). The replacement counter
 // is process-global: under serial `cargo test` every test in this file shares
 // one counter in one process (and runs on concurrent threads), while nextest
 // gives each test its own process starting at stamp 0. No test assumes a
@@ -395,17 +439,20 @@ fn u01_e_concurrent_creators_never_replace() {
 
 /// Temporary path that `atomic_replace` derives for snapshot name "snap".
 fn replace_temp(dir: &Path, stamp: u64) -> PathBuf {
-    dir.join(format!(".snap.tmp-{}-{stamp}", std::process::id()))
+    dir.join(__test_only_temp_file_name("snap", "tmp", stamp))
 }
 
-/// Names of this process's temp files for snapshot name "snap" in `dir`.
+/// Names of this process's temp files in `dir`.
+///
+/// Both writers tag their temps `.tmp-`/`.new-` (`atomic_replace` uses
+/// `"tmp"`, `create_new` uses `"new"`), so either prefix marks an owned temp.
+/// Foreign debris never uses those prefixes.
 fn owned_temp_names(dir: &Path) -> Vec<String> {
-    let prefix = format!(".snap.tmp-{}-", std::process::id());
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.starts_with(&prefix))
+        .filter(|name| name.starts_with(".tmp-") || name.starts_with(".new-"))
         .collect();
     names.sort();
     names
@@ -568,7 +615,7 @@ fn u01_b3_failed_replace_removes_only_owned_temps() {
     let baseline = dir.join("snap.snap");
     // Foreign debris the implementation must never sweep.
     std::fs::write(dir.join(".other.tmp-999-999"), b"foreign").unwrap();
-    std::fs::write(dir.join(".snap.tmp-424242-424242"), b"foreign").unwrap();
+    std::fs::write(dir.join(".foreign.tmp-424242"), b"foreign").unwrap();
     let mut collided = false;
     for _cycle in 0..1000 {
         let stamp = __test_only_replace_counter();
@@ -947,6 +994,47 @@ fn u01_b3_concurrent_readers_never_observe_partial_baseline() {
     assert!(
         complete(&final_raw, TOTAL, &seed_raw),
         "the final baseline is one complete generation"
+    );
+    remove_base(&base);
+}
+
+// U01-B3 (7): bounded temporary names near the filename limit.
+//
+// A 250-byte snapshot name makes a valid 255-byte `.snap` file, but a
+// temporary name embedding the whole stem (`.{stem}.tmp-{pid}-{stamp}`) is
+// 263 bytes and fails with ENAMETOOLONG. Both writers must use short bounded
+// temp names, so creation and replacement succeed and leave no debris.
+
+#[test]
+fn u01_b3_long_snapshot_name_uses_bounded_temps() {
+    let base = temp_base("b3-long-name");
+    let name: String = "n".repeat(250);
+    assert_eq!(
+        format!("{name}.snap").len(),
+        255,
+        "the baseline itself sits exactly at the filename limit"
+    );
+    for kind in ["new", "tmp"] {
+        let temp = __test_only_temp_file_name(&name, kind, 0);
+        assert!(
+            temp.len() <= 64,
+            "temp names stay bounded for any stem, got {temp:?}"
+        );
+    }
+    assert_eq!(
+        compare_with_policy(&base, &name, "one", SnapshotPolicy::CreateMissing).unwrap(),
+        PolicyOutcome::Created
+    );
+    assert_eq!(baseline_bytes(&base, &name).unwrap(), b"one\n".to_vec());
+    assert_eq!(
+        compare_with_policy(&base, &name, "two", SnapshotPolicy::Replace).unwrap(),
+        PolicyOutcome::Replaced
+    );
+    assert_eq!(baseline_bytes(&base, &name).unwrap(), b"two\n".to_vec());
+    assert_eq!(
+        dir_names(&base.join("__snapshots__")).unwrap(),
+        vec![format!("{name}.snap")],
+        "bounded temps leave no debris behind"
     );
     remove_base(&base);
 }
