@@ -1217,7 +1217,7 @@ pub enum RecordingFormat {
     Cast,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "color")]
 pub enum CaptureBackground {
     Color(crate::profile::Rgb),

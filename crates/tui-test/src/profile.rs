@@ -36,7 +36,7 @@ pub const CONFIG_FILE: &str = "tui-test.toml";
 /// The profile used when none is named.
 pub const DEFAULT_PROFILE: &str = "default";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb {
     pub r: u8,
     pub g: u8,
