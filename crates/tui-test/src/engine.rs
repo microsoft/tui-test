@@ -1133,6 +1133,28 @@ impl Engine {
         operation(session)
     }
 
+    /// Monotonic time of the most recent nonempty successful PTY output read,
+    /// if any. Served to byte-quiet waits; `Ok(None)` only when a session is
+    /// open and no output has arrived yet. A missing session or an emulator
+    /// fault is an error, so a byte-quiet wait can never conflate no-session
+    /// with no-output.
+    #[allow(dead_code)] // Byte-quiet waits consume these observations next in the stack.
+    pub(crate) fn last_output_time(&self) -> Result<Option<Instant>, TuiTestError> {
+        let guard = self.lock_session();
+        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
+        if let Some(fault) = session.fault() {
+            return Err(
+                TuiTestError::internal(fault.clone()).with_report(FailureReport::new(
+                    "terminal.operation",
+                    None,
+                    FailureReason::EmulatorFault,
+                    fault,
+                )),
+            );
+        }
+        Ok(session.last_output_time())
+    }
+
     fn capture_current_screen_sequence(&self, force: bool, pin: bool) -> u64 {
         let guard = self.lock_session();
         let Some(session) = guard.as_ref() else {
@@ -5204,6 +5226,85 @@ mod tests {
                 "an interrupted write must not report success"
             );
         }
+    }
+
+    // Round-2 U08: the native reader must stamp byte-quiet output
+    // observations exactly like the legacy reader, pre- and post-restart.
+    // The fixture child prints a readiness marker and blocks on stdin; the
+    // public `WaitLocator` wait proves the bytes were processed, and the
+    // observation timestamps must be `Some` on both generations.
+    const NATIVE_STAMP_MARKER: &str = "NATIVE_STAMP_READY";
+    const NATIVE_STAMP_FIXTURE_ENV: &str = "TUI_TEST_NATIVE_STAMP_FIXTURE";
+
+    #[test]
+    fn native_stamp_ready_fixture() {
+        if std::env::var(NATIVE_STAMP_FIXTURE_ENV).as_deref() != Ok("ready-block") {
+            return;
+        }
+        use std::io::Write;
+        let mut stdout = std::io::stdout();
+        stdout
+            .write_all(format!("{NATIVE_STAMP_MARKER}\r\n").as_bytes())
+            .unwrap();
+        stdout.flush().unwrap();
+        // Block until the PTY goes away (restart/close kills us first via
+        // INT), then exit cleanly so a failed test never strands a child.
+        let mut buf = [0u8; 64];
+        loop {
+            match std::io::Read::read(&mut std::io::stdin(), &mut buf) {
+                Ok(0) => std::process::exit(0),
+                Ok(_) => {}
+                Err(_) => std::process::exit(0),
+            }
+        }
+    }
+
+    #[test]
+    fn native_spawn_stamps_output_observations_across_restart() {
+        fn presence(value: Option<Instant>) -> &'static str {
+            if value.is_some() { "Some" } else { "None" }
+        }
+        let engine = Engine::new(
+            "native-stamp".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let exe = std::env::current_exe().expect("unit test binary path");
+        let launch = crate::launch::LaunchOptions::new(exe)
+            .with_args([
+                "--exact",
+                "engine::tests::native_stamp_ready_fixture",
+                "--nocapture",
+            ])
+            .with_env(NATIVE_STAMP_FIXTURE_ENV, "ready-block");
+        // Program, args, env, and cwd come from the launch; the matching
+        // `RunOptions` fields are ignored. Readiness stays off: the child
+        // is not a shell, so `WaitLocator` below is the readiness proof.
+        let mut options = sleeping_program(false);
+        options.cols = 80;
+        options.rows = 24;
+        engine.spawn_with(launch, options).unwrap();
+        let wait_marker = || Operation::WaitLocator {
+            query: LocatorQuery::text(NATIVE_STAMP_MARKER),
+            not: false,
+            timeout_ms: Some(10_000),
+        };
+        engine.execute(wait_marker()).unwrap();
+        let first = engine.last_output_time().unwrap();
+        engine
+            .execute(Operation::Restart {
+                graceful_timeout_ms: 5_000,
+            })
+            .unwrap();
+        engine.execute(wait_marker()).unwrap();
+        let restarted = engine.last_output_time().unwrap();
+        engine.execute(Operation::Close).unwrap();
+        assert!(
+            first.is_some() && restarted.is_some(),
+            "native output must stamp byte-quiet observations: first={} restarted={}",
+            presence(first),
+            presence(restarted),
+        );
     }
 
     fn populate_history(engine: &Engine) {
