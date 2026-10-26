@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tui_test::assert::snapshot::{
-    compare, compare_with_policy, PolicyOutcome, SnapshotPolicy, SnapshotStatus,
+    __test_only_replace_counter, compare, compare_with_policy, PolicyOutcome, SnapshotPolicy,
+    SnapshotStatus,
 };
 
 /// Distinct temporary roots across tests in this process.
@@ -382,16 +383,32 @@ fn u01_e_concurrent_creators_never_replace() {
 // failure.
 //
 // The helpers below mirror the temp naming (`.{stem}.tmp-{pid}-{stamp}`) for
-// the snapshot name "snap" (sanitized stem "snap"). Stamps start at 0 in a
-// fresh test process and each replacement consumes exactly one stamp, so a
-// seeding write consumes stamp 0 and the next replacement takes stamp 1. That
-// counting holds under per-test process isolation, which is how nextest runs
-// these tests; tests that only need *some* slot to collide plant a whole
-// range instead of predicting one.
+// the snapshot name "snap" (sanitized stem "snap"). The replacement counter
+// is process-global: under serial `cargo test` every test in this file shares
+// one counter in one process (and runs on concurrent threads), while nextest
+// gives each test its own process starting at stamp 0. No test assumes a
+// stamp value or a fresh counter. Instead, each collision test reads the
+// stamp in play (`__test_only_replace_counter`) and occupies exactly that
+// slot; a concurrent replacement elsewhere only shifts the counter, which
+// the next cycle re-reads. Every cycle burns at most two stamps, so cycles
+// cannot escalate the way a growing planted window would.
 
 /// Temporary path that `atomic_replace` derives for snapshot name "snap".
 fn replace_temp(dir: &Path, stamp: u64) -> PathBuf {
     dir.join(format!(".snap.tmp-{}-{stamp}", std::process::id()))
+}
+
+/// Names of this process's temp files for snapshot name "snap" in `dir`.
+fn owned_temp_names(dir: &Path) -> Vec<String> {
+    let prefix = format!(".snap.tmp-{}-", std::process::id());
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(&prefix))
+        .collect();
+    names.sort();
+    names
 }
 
 /// Sorted `(name, state)` snapshot of `dir` for before/after comparisons.
@@ -421,29 +438,44 @@ fn u01_b3_regular_file_at_temp_path_is_never_clobbered() {
     let base = temp_base("b3-temp-collision");
     compare_with_policy(&base, "snap", "old", SnapshotPolicy::Replace).unwrap();
     let dir = base.join("__snapshots__");
+    let baseline = dir.join("snap.snap");
 
-    // Occupy every plausible next temp slot so the exact counter value does
-    // not matter; the replacement must collide instead of writing through.
-    for stamp in 0..=64 {
+    // Read the stamp in play and occupy exactly that slot: the attempt then
+    // takes the planted stamp and must collide instead of writing through. A
+    // concurrent replacement elsewhere only shifts the counter, so a miss
+    // restores the baseline by direct write (which consumes no stamp) and
+    // re-reads. Stamps read across cycles strictly increase — every attempt
+    // consumes exactly one — so planted slots are always fresh.
+    let mut collided = false;
+    for _cycle in 0..1000 {
+        let stamp = __test_only_replace_counter();
         std::fs::write(replace_temp(&dir, stamp), format!("planted-{stamp}")).unwrap();
+        let before = dir_state(&dir);
+        match compare_with_policy(&base, "snap", "new", SnapshotPolicy::Replace) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Neither the baseline nor any planted file may change, and
+                // the failed call must add and remove nothing.
+                assert_eq!(baseline_bytes(&base, "snap").unwrap(), b"old\n".to_vec());
+                assert_eq!(
+                    dir_state(&dir),
+                    before,
+                    "a failed replace must leave every preexisting path alone"
+                );
+                collided = true;
+                break;
+            }
+            Err(error) => {
+                panic!("a colliding temp path must fail the exclusive create, got {error:?}")
+            }
+            Ok(PolicyOutcome::Replaced) => {
+                std::fs::write(&baseline, b"old\n").unwrap();
+            }
+            Ok(outcome) => panic!("a replace over a planted temp file must not report {outcome:?}"),
+        }
     }
-    let before = dir_state(&dir);
-
-    match compare_with_policy(&base, "snap", "new", SnapshotPolicy::Replace) {
-        Err(error) => assert_eq!(
-            error.kind(),
-            std::io::ErrorKind::AlreadyExists,
-            "a colliding temp path must fail the exclusive create"
-        ),
-        Ok(outcome) => panic!("replace over a planted temp file must fail, got {outcome:?}"),
-    }
-    // Neither the baseline nor any planted file may change, and the failed
-    // call must add and remove nothing.
-    assert_eq!(baseline_bytes(&base, "snap").unwrap(), b"old\n".to_vec());
-    assert_eq!(
-        dir_state(&dir),
-        before,
-        "a failed replace must leave every preexisting path alone"
+    assert!(
+        collided,
+        "the exclusive create never collided with a planted temp"
     );
     remove_base(&base);
 }
@@ -462,33 +494,48 @@ fn u01_b3_symlink_at_temp_path_never_redirects_into_baseline() {
     let dir = base.join("__snapshots__");
     let baseline = dir.join("snap.snap");
 
-    for stamp in 0..=64 {
+    // Same read-the-stamp cycle as the regular-file test, but the occupied
+    // slot holds a symlink pointing at the baseline: the old code wrote
+    // through the link (new bytes landed in the baseline) and then renamed
+    // the link over the baseline. Read slots strictly increase, so every
+    // planted link is fresh.
+    let mut collided = false;
+    for _cycle in 0..1000 {
+        let stamp = __test_only_replace_counter();
         std::os::unix::fs::symlink(&baseline, replace_temp(&dir, stamp)).unwrap();
+        let before = dir_state(&dir);
+        match compare_with_policy(&base, "snap", "new", SnapshotPolicy::Replace) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // The baseline keeps its own bytes in its own file: no
+                // redirected write, and no rename installing a link over it.
+                assert_eq!(std::fs::read(&baseline).unwrap(), b"old\n".to_vec());
+                assert!(
+                    !std::fs::symlink_metadata(&baseline)
+                        .unwrap()
+                        .file_type()
+                        .is_symlink(),
+                    "the baseline must stay a regular file, never a link to itself"
+                );
+                assert_eq!(
+                    dir_state(&dir),
+                    before,
+                    "a failed replace must leave every preexisting path alone"
+                );
+                collided = true;
+                break;
+            }
+            Err(error) => {
+                panic!("a symlink temp path must fail the exclusive create, got {error:?}")
+            }
+            Ok(PolicyOutcome::Replaced) => {
+                std::fs::write(&baseline, b"old\n").unwrap();
+            }
+            Ok(outcome) => panic!("a replace through a symlink temp must not report {outcome:?}"),
+        }
     }
-    let before = dir_state(&dir);
-
-    match compare_with_policy(&base, "snap", "new", SnapshotPolicy::Replace) {
-        Err(error) => assert_eq!(
-            error.kind(),
-            std::io::ErrorKind::AlreadyExists,
-            "a symlink temp path must fail the exclusive create, not redirect bytes"
-        ),
-        Ok(outcome) => panic!("replace through a symlink temp must fail, got {outcome:?}"),
-    }
-    // The baseline keeps its own bytes in its own file: no redirected write,
-    // and no rename installing a link over it.
-    assert_eq!(std::fs::read(&baseline).unwrap(), b"old\n".to_vec());
     assert!(
-        !std::fs::symlink_metadata(&baseline)
-            .unwrap()
-            .file_type()
-            .is_symlink(),
-        "the baseline must stay a regular file, never a link to itself"
-    );
-    assert_eq!(
-        dir_state(&dir),
-        before,
-        "a failed replace must leave every preexisting path alone"
+        collided,
+        "the exclusive create never collided with a planted symlink"
     );
     remove_base(&base);
 }
@@ -511,32 +558,45 @@ fn u01_b3_failed_replace_removes_only_owned_temps() {
     );
     remove_base(&base);
 
-    // Failure path: colliding temps plus foreign debris all survive, and the
-    // failed call changes nothing in the directory.
+    // Failure path: the colliding temp plus foreign debris all survive, and
+    // the failed call changes nothing in the directory. The stamp in play is
+    // read like in the tests above; foreign debris is planted once and must
+    // never be swept.
     let base = temp_base("b3-owned-cleanup");
     compare_with_policy(&base, "snap", "old", SnapshotPolicy::Replace).unwrap();
     let dir = base.join("__snapshots__");
-    for stamp in 0..=32 {
-        std::fs::write(replace_temp(&dir, stamp), format!("stale-{stamp}")).unwrap();
-    }
+    let baseline = dir.join("snap.snap");
     // Foreign debris the implementation must never sweep.
     std::fs::write(dir.join(".other.tmp-999-999"), b"foreign").unwrap();
     std::fs::write(dir.join(".snap.tmp-424242-424242"), b"foreign").unwrap();
-    let before = dir_state(&dir);
-
-    match compare_with_policy(&base, "snap", "new", SnapshotPolicy::Replace) {
-        Err(error) => assert_eq!(
-            error.kind(),
-            std::io::ErrorKind::AlreadyExists,
-            "a colliding temp path must fail the exclusive create"
-        ),
-        Ok(outcome) => panic!("replace over a planted temp file must fail, got {outcome:?}"),
+    let mut collided = false;
+    for _cycle in 0..1000 {
+        let stamp = __test_only_replace_counter();
+        std::fs::write(replace_temp(&dir, stamp), format!("planted-{stamp}")).unwrap();
+        let before = dir_state(&dir);
+        match compare_with_policy(&base, "snap", "new", SnapshotPolicy::Replace) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                assert_eq!(baseline_bytes(&base, "snap").unwrap(), b"old\n".to_vec());
+                assert_eq!(
+                    dir_state(&dir),
+                    before,
+                    "a failed replace removes only temps it owns (here: none)"
+                );
+                collided = true;
+                break;
+            }
+            Err(error) => {
+                panic!("a colliding temp path must fail the exclusive create, got {error:?}")
+            }
+            Ok(PolicyOutcome::Replaced) => {
+                std::fs::write(&baseline, b"old\n").unwrap();
+            }
+            Ok(outcome) => panic!("a replace over a planted temp file must not report {outcome:?}"),
+        }
     }
-    assert_eq!(baseline_bytes(&base, "snap").unwrap(), b"old\n".to_vec());
-    assert_eq!(
-        dir_state(&dir),
-        before,
-        "a failed replace removes only temps it owns (here: none)"
+    assert!(
+        collided,
+        "the exclusive create never collided with a planted temp"
     );
     remove_base(&base);
 }
@@ -549,66 +609,212 @@ fn u01_b3_failed_replace_removes_only_owned_temps() {
 fn u01_b3_concurrent_replacers_one_wins_loser_errors() {
     use std::sync::{Arc, Barrier};
 
+    fn race_pair(base: &Path, contents: &[String; 2]) -> (u32, u32) {
+        let barrier = Arc::new(Barrier::new(2));
+        let handles: Vec<_> = contents
+            .iter()
+            .map(|content| {
+                let base: PathBuf = base.to_path_buf();
+                let barrier = barrier.clone();
+                let content = content.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    compare_with_policy(&base, "snap", &content, SnapshotPolicy::Replace)
+                })
+            })
+            .collect();
+        let mut replaced = 0;
+        let mut already_exists = 0;
+        for handle in handles {
+            match handle.join().unwrap() {
+                Ok(PolicyOutcome::Replaced) => replaced += 1,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    already_exists += 1;
+                }
+                other => panic!("a racer must replace or collide cleanly, got {other:?}"),
+            }
+        }
+        (replaced, already_exists)
+    }
+
     let base = temp_base("b3-replace-race");
     compare_with_policy(&base, "snap", "old", SnapshotPolicy::Replace).unwrap();
     let dir = base.join("__snapshots__");
-    // The seeding write consumed stamp 0 in this process, so the next
-    // replacer takes stamp 1: exactly one of the two racers collides with
-    // this sentinel. (Relies on per-test process isolation, as nextest runs
-    // each test in its own process.)
-    let sentinel = replace_temp(&dir, 1);
-    std::fs::write(&sentinel, b"sentinel").unwrap();
-    let sentinel_name = sentinel.file_name().unwrap().to_string_lossy().into_owned();
-
-    let barrier = Arc::new(Barrier::new(2));
+    let baseline = dir.join("snap.snap");
     let contents = [
         format!("racer a {}", "A".repeat(4096)),
         format!("racer b {}", "B".repeat(4096)),
     ];
-    let handles: Vec<_> = contents
-        .iter()
-        .map(|content| {
-            let base = base.clone();
-            let barrier = barrier.clone();
-            let content = content.clone();
-            std::thread::spawn(move || {
-                barrier.wait();
-                compare_with_policy(&base, "snap", &content, SnapshotPolicy::Replace)
-            })
-        })
-        .collect();
 
-    let mut replaced = 0;
-    let mut already_exists = 0;
-    for handle in handles {
-        match handle.join().unwrap() {
-            Ok(PolicyOutcome::Replaced) => replaced += 1,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => already_exists += 1,
-            other => panic!("a racer must replace or collide cleanly, got {other:?}"),
+    // Read the stamp in play and occupy exactly that slot with a sentinel,
+    // then race the pair: the racer taking the sentinel stamp errors cleanly
+    // while the other takes the next free stamp and wins. A concurrent
+    // replacement elsewhere only shifts the counter, so a round where both
+    // racers miss the sentinel restores the seed baseline by direct write
+    // (which consumes no stamp) and re-reads. Only the planted slot is ever
+    // occupied, both racers take distinct stamps past every previously read
+    // one, and every test sharing this process burns only finitely many
+    // stamps — so the straddling round always arrives, burning two stamps
+    // per cycle at most.
+    let mut converged = false;
+    for _cycle in 0..1000 {
+        let stamp = __test_only_replace_counter();
+        std::fs::write(replace_temp(&dir, stamp), format!("planted-{stamp}")).unwrap();
+        let before = dir_state(&dir);
+        match race_pair(&base, &contents) {
+            (1, 1) => {
+                converged = true;
+                // Exactly one racer won; the loser errored cleanly.
+                let after = dir_state(&dir);
+                assert_eq!(
+                    after.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+                    before.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+                    "racing replacers must add and remove nothing besides the baseline swap"
+                );
+                for ((name, old_state), (_, new_state)) in before.iter().zip(after.iter()) {
+                    if name == "snap.snap" {
+                        assert!(
+                            contents
+                                .iter()
+                                .any(|content| *new_state == format!("{content}\n").into_bytes()),
+                            "the baseline is one racer's complete content: {new_state:?}"
+                        );
+                    } else {
+                        assert_eq!(
+                            new_state, old_state,
+                            "planted path {name} must survive the race untouched"
+                        );
+                    }
+                }
+                break;
+            }
+            (2, 0) => {
+                // Both racers landed past the sentinel: another test moved
+                // the counter mid-cycle. Restore the seed and re-read.
+                std::fs::write(&baseline, b"old\n").unwrap();
+            }
+            (replaced, already_exists) => {
+                panic!("a race must end 1-1 or 2-0, got {replaced}-{already_exists}")
+            }
         }
     }
-    assert_eq!(
-        (replaced, already_exists),
-        (1, 1),
-        "exactly one racer wins, the loser errors cleanly"
+    assert!(
+        converged,
+        "the race never produced exactly one winner and one clean loser"
     );
     let stored = baseline_bytes(&base, "snap").unwrap();
     assert!(
-        contents.iter().any(|content| stored == format!("{content}\n").into_bytes()),
-        "the baseline is one racer's complete content: {stored:?}"
-    );
-    assert_eq!(std::fs::read(&sentinel).unwrap(), b"sentinel".to_vec());
-    // The winner's temp renamed away and the loser never created one: only
-    // the baseline and the sentinel remain.
-    assert_eq!(
-        dir_names(&dir).unwrap(),
-        vec![sentinel_name, "snap.snap".to_string()],
-        "racing replacers must leave no temp debris"
+        contents
+            .iter()
+            .any(|content| stored == format!("{content}\n").into_bytes()),
+        "the race must converge on one racer's complete content: {stored:?}"
     );
     remove_base(&base);
 }
 
-// U01-B3 (5): concurrent readers never observe a partial baseline. Every
+// U01-B3 (5): mid-write fault injection. The exclusive create succeeds, so
+// the failure lands AFTER partial body bytes travel through the owned
+// handle — unlike the collision tests above, which fail before writing a
+// byte and therefore cannot detect removal of partial-write cleanup. The old
+// baseline must survive, and only the owned temp may be cleaned: no residue,
+// and every preexisting path untouched.
+//
+// The fault hook (`TUI_TEST_SNAPSHOT_WRITE_FAULT=<dir>:<n>`, debug builds
+// only) is scoped to this test's snapshot directory, so tests sharing this
+// process are unaffected.
+
+/// Sets `TUI_TEST_SNAPSHOT_WRITE_FAULT` for the enclosed scope and removes
+/// it on drop, so a panicking assertion cannot leak the fault into another
+/// test sharing this process.
+struct WriteFaultGuard;
+
+impl WriteFaultGuard {
+    fn arm(dir: &Path, after_bytes: usize) -> Self {
+        std::env::set_var(
+            "TUI_TEST_SNAPSHOT_WRITE_FAULT",
+            format!("{}:{after_bytes}", dir.display()),
+        );
+        WriteFaultGuard
+    }
+}
+
+impl Drop for WriteFaultGuard {
+    fn drop(&mut self) {
+        std::env::remove_var("TUI_TEST_SNAPSHOT_WRITE_FAULT");
+    }
+}
+
+#[test]
+fn u01_b3_partial_write_failure_cleans_only_owned_temp() {
+    let base = temp_base("b3-mid-write-fault");
+    compare_with_policy(&base, "snap", "old", SnapshotPolicy::Replace).unwrap();
+    let dir = base.join("__snapshots__");
+    // Only foreign-pattern debris here: the faulted call's own exclusive
+    // create must succeed (its stamp is fresh and unique to this directory),
+    // so no real-pattern slot may be occupied.
+    std::fs::write(dir.join(".other.tmp-999-999"), b"foreign").unwrap();
+    std::fs::write(dir.join("unrelated.txt"), b"unrelated").unwrap();
+    let before = dir_state(&dir);
+
+    // Fail after 2 of the 24 body bytes travel through the owned handle.
+    let _guard = WriteFaultGuard::arm(&dir, 2);
+    let error = match compare_with_policy(
+        &base,
+        "snap",
+        "new-fault-probe-content",
+        SnapshotPolicy::Replace,
+    ) {
+        Err(error) => error,
+        Ok(outcome) => panic!("the injected mid-write fault must fail, got {outcome:?}"),
+    };
+    drop(_guard);
+    assert!(
+        error.to_string().contains("injected partial-write fault"),
+        "the failure must be the injected mid-write fault, not another error: {error}"
+    );
+    // The previous baseline survives with its exact bytes.
+    assert_eq!(baseline_bytes(&base, "snap").unwrap(), b"old\n".to_vec());
+    // Only the owned temp is cleaned: no residue under any temp name, and
+    // every preexisting path — including the foreign debris — is untouched.
+    assert_eq!(
+        dir_state(&dir),
+        before,
+        "a failed replace removes only its owned temp and changes nothing else"
+    );
+    assert!(
+        owned_temp_names(&dir).is_empty(),
+        "no temporary file may survive the failed replace"
+    );
+
+    // Control: without the fault the same replacement succeeds and leaves no
+    // debris behind, proving the failure above came from the injected fault.
+    assert_eq!(
+        compare_with_policy(
+            &base,
+            "snap",
+            "new-fault-probe-content",
+            SnapshotPolicy::Replace
+        )
+        .unwrap(),
+        PolicyOutcome::Replaced
+    );
+    assert_eq!(
+        baseline_bytes(&base, "snap").unwrap(),
+        b"new-fault-probe-content\n".to_vec()
+    );
+    assert_eq!(
+        dir_names(&dir).unwrap(),
+        vec![
+            ".other.tmp-999-999".to_string(),
+            "snap.snap".to_string(),
+            "unrelated.txt".to_string()
+        ],
+        "a successful replace leaves no temp debris"
+    );
+    remove_base(&base);
+}
+
+// U01-B3 (6): concurrent readers never observe a partial baseline. Every
 // read across a window of racing replacements must be one complete
 // generation (the seed or one fully written payload), never a mix.
 
@@ -723,9 +929,20 @@ fn u01_b3_concurrent_readers_never_observe_partial_baseline() {
         reader.join().unwrap();
     }
 
-    assert!(reads.load(Ordering::SeqCst) >= 800, "readers must overlap the writers");
-    assert_eq!(read_errors.load(Ordering::SeqCst), 0, "reads must never fail mid-replacement");
-    assert_eq!(bad.load(Ordering::SeqCst), 0, "readers must never observe a partial baseline");
+    assert!(
+        reads.load(Ordering::SeqCst) >= 800,
+        "readers must overlap the writers"
+    );
+    assert_eq!(
+        read_errors.load(Ordering::SeqCst),
+        0,
+        "reads must never fail mid-replacement"
+    );
+    assert_eq!(
+        bad.load(Ordering::SeqCst),
+        0,
+        "readers must never observe a partial baseline"
+    );
     let final_raw = std::fs::read(&path).unwrap();
     assert!(
         complete(&final_raw, TOTAL, &seed_raw),

@@ -362,6 +362,34 @@ fn create_new(path: &Path, base: &Path, body: &str) -> std::io::Result<()> {
 /// Counter that keeps temporary replacement names distinct across threads.
 static REPLACE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// The stamp the next replacement will use, for tests only.
+///
+/// Integration tests share one process-global counter across threads, so
+/// instead of assuming a stamp value they read the stamp in play and occupy
+/// exactly that temporary slot. Hidden from documentation; production code
+/// never calls this.
+#[doc(hidden)]
+pub fn __test_only_replace_counter() -> u64 {
+    REPLACE_COUNTER.load(Ordering::Relaxed)
+}
+
+/// Test-only mid-write fault hook, compiled out of release builds.
+///
+/// When the environment variable `TUI_TEST_SNAPSHOT_WRITE_FAULT` holds
+/// `<dir>:<n>` and `dir` is this call's snapshot directory, the first `n`
+/// body bytes travel through the exclusively owned temporary handle and the
+/// write then fails with an injected error, exercising partial-write cleanup.
+/// The scope is one directory so tests sharing a process stay unaffected.
+/// Production code otherwise reads no environment variables.
+#[cfg(debug_assertions)]
+fn injected_partial_write(dir: &Path) -> Option<usize> {
+    let spec = std::env::var("TUI_TEST_SNAPSHOT_WRITE_FAULT").ok()?;
+    let (scope, limit) = spec.rsplit_once(':')?;
+    (Path::new(scope) == dir)
+        .then(|| limit.parse().ok())
+        .flatten()
+}
+
 /// Save `trimmed` to `path` through a temporary file plus an atomic rename.
 ///
 /// The rename either installs the full new baseline or leaves the previous
@@ -392,8 +420,19 @@ fn atomic_replace(base: &Path, path: &Path, trimmed: &str) -> std::io::Result<()
     };
     // From here the temporary file is exclusively owned: only a completed
     // rename installs new bytes, and any failure below removes the temp file.
+    let body = format!("{trimmed}\n");
     let write = (|| -> std::io::Result<()> {
-        std::io::Write::write_all(&mut file, format!("{trimmed}\n").as_bytes())?;
+        #[cfg(debug_assertions)]
+        if let Some(limit) = injected_partial_write(&dir) {
+            let mut limit = limit.min(body.len());
+            while !body.is_char_boundary(limit) {
+                limit -= 1;
+            }
+            std::io::Write::write_all(&mut file, &body.as_bytes()[..limit])?;
+            std::io::Write::flush(&mut file)?;
+            return Err(std::io::Error::other("injected partial-write fault"));
+        }
+        std::io::Write::write_all(&mut file, body.as_bytes())?;
         std::io::Write::flush(&mut file)?;
         drop(file);
         std::fs::rename(&temp, path)
