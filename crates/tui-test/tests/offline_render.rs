@@ -147,6 +147,64 @@ fn hidden_and_clipped_cursors_stay_hidden() {
     }
 }
 
+/// R14 (SVG half): the drawn cursor uses the captured cursor color.
+///
+/// A snapshot whose captured cursor (red) differs from its default cursor
+/// (green) must draw the captured color; the default must not leak into the
+/// document.
+#[test]
+fn drawn_cursor_uses_captured_cursor_color() {
+    let mut parts = snapshot_parts(2, 1, &["a", " "]);
+    parts.default_cursor = Rgb::new(0, 255, 0);
+    parts.cursor = SnapshotCursor::new(
+        0,
+        0,
+        true,
+        true,
+        SnapshotCursorShape::Block,
+        Rgb::new(255, 0, 0),
+        None,
+    );
+    let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+    let rendered = tui_test::render_snapshot_svg(&snapshot, &SnapshotRenderOptions::default())
+        .expect("offline SVG renders");
+    assert!(rendered.evidence().cursor_drawn());
+    assert!(
+        rendered.svg().contains("#ff0000"),
+        "captured cursor color must be drawn: {}",
+        rendered.svg()
+    );
+    assert!(
+        !rendered.svg().contains("#00ff00"),
+        "default cursor color must not leak: {}",
+        rendered.svg()
+    );
+}
+
+/// R15 (SVG half): subpixel logical cells fail, at any scale.
+///
+/// Quarter-pixel cells at 40x scale used to render a zero viewBox against
+/// nonzero pixels. Like the live style, offline options reject cells under
+/// one logical pixel before any allocation or rendering.
+#[test]
+fn subpixel_cells_fail_without_rendering() {
+    let snapshot = snapshot_of(1, 1, &[" "]);
+    for scale in [1.0, 40.0] {
+        let options = SnapshotRenderOptions::default()
+            .with_cell_width(0.25)
+            .with_cell_height(0.25)
+            .with_font_size(0.2)
+            .with_baseline(0.2)
+            .with_scale(scale);
+        let error = tui_test::render_snapshot_svg(&snapshot, &options)
+            .expect_err("subpixel cells must fail");
+        assert!(
+            matches!(error, tui_test::RenderError::CellTooSmall { .. }),
+            "scale {scale}: unexpected error {error}"
+        );
+    }
+}
+
 /// U03-G (SVG half): a 3-column, 2-row grid with 10-by-20 cells and no
 /// decoration reports a 30-by-40 image.
 #[test]
@@ -159,6 +217,74 @@ fn undecorated_grid_reports_exact_svg_size() {
         (rendered.evidence().width(), rendered.evidence().height()),
         (30, 40)
     );
+}
+
+/// Parse the SVG `viewBox="0 0 w h"` into its two unscaled extents.
+fn svg_view_box(svg: &str) -> (f32, f32) {
+    let start = svg.find("viewBox=\"0 0 ").expect("an SVG viewBox") + 13;
+    let rest = &svg[start..];
+    let end = rest.find('"').expect("a closing quote");
+    let mut parts = rest[..end].split(' ');
+    (
+        parts
+            .next()
+            .expect("a viewBox width")
+            .parse()
+            .expect("a number"),
+        parts
+            .next()
+            .expect("a viewBox height")
+            .parse()
+            .expect("a number"),
+    )
+}
+
+/// Round-2: fractional metrics share one output size.
+///
+/// A 3-by-2 grid with 10.1-by-20.1 cells used to produce three sizes (SVG
+/// document 60.6x80.4 over a rounded 30x40 viewBox, evidence 61x81, PNG
+/// 62x82): PNG sizing rounded before scaling while SVG and evidence used
+/// different arithmetic. One rounding at the pixel-allocation boundary
+/// gives one size everywhere, and the viewBox stays the exact unscaled
+/// canvas so the content still fills it.
+#[test]
+fn fractional_metrics_share_one_svg_size() {
+    for scale in [1.0, 1.5, 2.0] {
+        let snapshot = snapshot_of(3, 2, &[" "; 6]);
+        let options = undecorated()
+            .with_cell_width(10.1)
+            .with_cell_height(20.1)
+            .with_scale(scale);
+        let rendered =
+            tui_test::render_snapshot_svg(&snapshot, &options).expect("offline SVG renders");
+        let (width, height) = (rendered.width(), rendered.height());
+        assert_eq!(
+            (rendered.evidence().width(), rendered.evidence().height()),
+            (width, height),
+            "scale {scale}: evidence must match the reported size"
+        );
+        assert!(
+            rendered
+                .svg()
+                .contains(&format!(r#"width="{width}" height="{height}""#)),
+            "scale {scale}: the document size must match the evidence: {}",
+            rendered.svg()
+        );
+        let (view_w, view_h) = svg_view_box(rendered.svg());
+        assert!(
+            view_w > 0.0 && view_h > 0.0,
+            "scale {scale}: the viewBox must stay non-degenerate: {}",
+            rendered.svg()
+        );
+        assert_eq!(
+            (
+                (f64::from(view_w) * scale).ceil() as u32,
+                (f64::from(view_h) * scale).ceil() as u32
+            ),
+            (width, height),
+            "scale {scale}: the viewBox scaled and ceiled must recover the pixels"
+        );
+    }
 }
 
 /// U03-H: invalid metrics and scale values fail without a panic.
@@ -397,6 +523,66 @@ mod raster_tests {
         );
     }
 
+    /// R14 (PNG half): the drawn cursor uses the captured cursor color.
+    ///
+    /// A block cursor over a blank cell fills it with the captured color
+    /// (red); the differing default (green) must not appear anywhere.
+    #[test]
+    fn drawn_cursor_uses_captured_cursor_color_in_png() {
+        let mut parts = snapshot_parts(2, 1, &[" ", " "]);
+        parts.default_cursor = Rgb::new(0, 255, 0);
+        parts.cursor = SnapshotCursor::new(
+            0,
+            0,
+            true,
+            true,
+            SnapshotCursorShape::Block,
+            Rgb::new(255, 0, 0),
+            None,
+        );
+        let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+        let options = undecorated().with_cell_width(10.0).with_cell_height(20.0);
+        let rendered = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+        assert!(rendered.evidence().cursor_drawn());
+        let (width, height, pixels) = decode_png(rendered.png());
+        assert_eq!((width, height), (20, 20));
+        let center = (10 * width + 5) as usize * 4;
+        assert_eq!(
+            &pixels[center..center + 4],
+            &[255, 0, 0, 255],
+            "cursor cell must be the captured red"
+        );
+        assert!(
+            !pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel == &[0, 255, 0, 255]),
+            "default cursor green must not leak into any pixel"
+        );
+    }
+
+    /// R15 (PNG half): subpixel logical cells fail before allocation, at any
+    /// scale, so no backend can disagree about the output size.
+    #[test]
+    fn subpixel_cells_fail_without_rendering_in_png() {
+        let snapshot = snapshot_of(1, 1, &[" "]);
+        for scale in [1.0, 40.0] {
+            let options = SnapshotRenderOptions::default()
+                .with_cell_width(0.25)
+                .with_cell_height(0.25)
+                .with_font_size(0.2)
+                .with_baseline(0.2)
+                .with_scale(scale);
+            let error =
+                render_snapshot_png(&snapshot, &options).expect_err("subpixel cells must fail");
+            assert!(
+                matches!(error, tui_test::RenderError::CellTooSmall { .. }),
+                "scale {scale}: unexpected error {error}"
+            );
+        }
+    }
+
     /// U03-G: a 3-column, 2-row grid with 10-by-20 cells gives a 30-by-40
     /// image with no decoration. Blank cells need no font lookup, so the
     /// geometry gate stays independent of host fonts.
@@ -408,6 +594,51 @@ mod raster_tests {
         assert_eq!((rendered.width(), rendered.height()), (30, 40));
         let (width, height, _) = decode_png(rendered.png());
         assert_eq!((width, height), (30, 40));
+    }
+
+    /// Round-2 (PNG half): fractional metrics share one output size across
+    /// PNG and SVG.
+    ///
+    /// Same grid as `fractional_metrics_share_one_svg_size`: the decoded
+    /// PNG, the PNG evidence, the SVG evidence, and the SVG document must
+    /// all agree. At 2x the shared size is exactly 61x81.
+    #[test]
+    fn fractional_metrics_share_one_png_size() {
+        for scale in [1.0, 1.5, 2.0] {
+            let snapshot = snapshot_of(3, 2, &[" "; 6]);
+            let options = undecorated()
+                .with_cell_width(10.1)
+                .with_cell_height(20.1)
+                .with_scale(scale);
+            let png = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+            let svg =
+                tui_test::render_snapshot_svg(&snapshot, &options).expect("offline SVG renders");
+            let (width, height, _) = decode_png(png.png());
+            assert_eq!(
+                (width, height),
+                (png.width(), png.height()),
+                "scale {scale}: decoded PNG must match the PNG evidence"
+            );
+            assert_eq!(
+                (svg.width(), svg.height()),
+                (width, height),
+                "scale {scale}: SVG and PNG must share one size"
+            );
+            assert_eq!(
+                (svg.evidence().width(), svg.evidence().height()),
+                (width, height),
+                "scale {scale}: SVG evidence must match the shared size"
+            );
+        }
+        let snapshot = snapshot_of(3, 2, &[" "; 6]);
+        let options = undecorated()
+            .with_cell_width(10.1)
+            .with_cell_height(20.1)
+            .with_scale(2.0);
+        let rendered = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+        assert_eq!((rendered.width(), rendered.height()), (61, 81));
+        let (width, height, _) = decode_png(rendered.png());
+        assert_eq!((width, height), (61, 81));
     }
 
     /// U03-I (PNG half): default options keep the recorded screenshot size.

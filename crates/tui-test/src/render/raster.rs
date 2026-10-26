@@ -230,26 +230,32 @@ impl GridRenderer {
         fonts: FontBackend,
     ) -> anyhow::Result<Self> {
         let zoom = layout.zoom;
-        let (base_width, base_height) = if exact_size {
-            layout.grid_pixel_size(cols, rows)
+        // Screenshots (exact size) share the SVG/evidence size: one rounding
+        // at the pixel boundary. Recordings keep the legacy ceil-then-scale
+        // sizing, rounded up to even dimensions for the video encoders.
+        let (width, height) = if exact_size {
+            layout
+                .output_pixel_size(u32::from(cols), rows)
+                .ok_or_else(|| anyhow::anyhow!("recording dimensions must fit in u32"))?
         } else {
             let (width, height) = layout.grid_pixel_size(cols, rows);
-            (width + width % 2, height + height % 2)
+            let horizontal = layout
+                .canvas_horizontal()
+                .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
+            let vertical = layout
+                .canvas_vertical()
+                .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
+            let width = (width + width % 2)
+                .checked_add(horizontal)
+                .ok_or_else(|| anyhow::anyhow!("recording width must fit in u32"))?;
+            let height = (height + height % 2)
+                .checked_add(vertical)
+                .ok_or_else(|| anyhow::anyhow!("recording height must fit in u32"))?;
+            (
+                scaled_dimension(width, zoom, "width")?,
+                scaled_dimension(height, zoom, "height")?,
+            )
         };
-        let horizontal = layout
-            .canvas_horizontal()
-            .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
-        let vertical = layout
-            .canvas_vertical()
-            .ok_or_else(|| anyhow::anyhow!("recording canvas padding must fit in u32"))?;
-        let width = base_width
-            .checked_add(horizontal)
-            .ok_or_else(|| anyhow::anyhow!("recording width must fit in u32"))?;
-        let height = base_height
-            .checked_add(vertical)
-            .ok_or_else(|| anyhow::anyhow!("recording height must fit in u32"))?;
-        let width = scaled_dimension(width, zoom, "width")?;
-        let height = scaled_dimension(height, zoom, "height")?;
         let pixels = u64::from(width) * u64::from(height);
         if pixels > MAX_PIXELS {
             anyhow::bail!(
@@ -291,13 +297,19 @@ impl FrameRenderer for GridRenderer {
         let scale = self.scale;
         let colors = &frame.render_state;
         let layout = &self.layout;
-        let (base_width, base_height) = if self.exact_size {
-            layout.grid_pixel_size(cols, rows)
+        // Exact-size frames round the same scaled panel the pixmap was
+        // allocated from; recordings keep the legacy even sizing.
+        let (panel_width, panel_height) = if self.exact_size {
+            layout
+                .panel_pixel_size(cols, rows)
+                .ok_or_else(|| anyhow::anyhow!("recording frame dimensions must fit in u32"))?
         } else {
-            layout.even_grid_pixel_size(cols, rows)
+            let (base_width, base_height) = layout.even_grid_pixel_size(cols, rows);
+            (
+                scaled_dimension(base_width, f64::from(self.scale), "frame width")?,
+                scaled_dimension(base_height, f64::from(self.scale), "frame height")?,
+            )
         };
-        let panel_width = scaled_dimension(base_width, f64::from(self.scale), "frame width")?;
-        let panel_height = scaled_dimension(base_height, f64::from(self.scale), "frame height")?;
         // Center smaller frames inside the configured padding after a resize.
         let pad_left = layout.canvas_left as f32 * scale;
         let pad_top = layout.canvas_top as f32 * scale;
@@ -382,7 +394,7 @@ impl FrameRenderer for GridRenderer {
                 frame.title.as_deref(),
                 cols,
                 rows,
-                base_width as f32,
+                layout.panel_size(usize::from(cols), rows).0,
                 origin_x,
                 origin_y,
                 scale,
