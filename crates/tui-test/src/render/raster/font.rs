@@ -169,19 +169,24 @@ impl PinnedFontSystem {
 
     /// Resolve one glyph from the specified faces in fallback order.
     ///
-    /// Only faces serving the requested style slot are candidates: an
-    /// empty slot is a missing-face error, and a glyph no candidate holds
-    /// is a missing-glyph error. Synthetic bold or italic applies only
-    /// when the set selected it.
+    /// Faces serving the requested style slot are candidates first; when
+    /// the slot is empty and the set selected synthetic styles, every
+    /// face is a candidate in fallback order and the outlines draw
+    /// emboldened or slanted. Without that selection an empty slot is a
+    /// missing-face error, and a glyph no candidate holds is a
+    /// missing-glyph error.
     pub fn resolve(&mut self, key: GlyphKey) -> Result<&GlyphOutline, pinned::PinnedFontError> {
         if !self.glyphs.contains_key(&key) {
-            let positions: Vec<usize> = self
+            let mut positions: Vec<usize> = self
                 .faces
                 .iter()
                 .enumerate()
                 .filter(|(_, face)| face.bold == key.bold && face.italic == key.italic)
                 .map(|(position, _)| position)
                 .collect();
+            if positions.is_empty() && self.synthetic {
+                positions = (0..self.faces.len()).collect();
+            }
             if positions.is_empty() {
                 return Err(pinned::PinnedFontError::MissingFace {
                     bold: key.bold,

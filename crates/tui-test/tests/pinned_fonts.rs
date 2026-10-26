@@ -4,9 +4,19 @@
 //! fonts and no ambient font-selection variables. These tests cover the
 //! required U04 behaviors: host-font independence (U04-A, corpus C06),
 //! digest sensitivity (U04-B), typed failures (U04-C), cache isolation
-//! (U04-D), pixel determinism (U04-E), and unchanged system-font behavior
-//! (U04-F). The font bytes come from the bundled JetBrains Mono assets read
-//! as files, so system font configuration cannot leak into the inputs.
+//! (U04-D), pixel determinism (U04-E), unchanged system-font behavior
+//! (U04-F), the shared byte/file implementation (U04-G), the updated
+//! contract over every output setting (U04-H), and synthetic-style fallback
+//! for an empty style slot (U04-I). Both PNG entry points —
+//! [`render_snapshot_png`] for bytes and [`write_snapshot_png`] for files —
+//! build the same renderer from the same pinned set, so pinned bytes,
+//! system fonts, and their typed failures agree on either path. The
+//! versioned [`RenderContract`] names the render configuration (fonts,
+//! synthetic-style selection, geometry, scale, every normalized output
+//! setting, palette digest, cursor phase), not the snapshot contents, and
+//! strict gates compare decoded pixels. The font bytes come from the
+//! bundled JetBrains Mono assets read as files, so system font
+//! configuration cannot leak into the inputs.
 
 #![cfg(feature = "recording-raster")]
 
@@ -583,5 +593,47 @@ fn u04_h_contract_covers_every_output_setting() {
         base.contract(),
         synthetic.contract(),
         "synthetic-style selection joins the render contract"
+    );
+}
+
+/// U04-I: the synthetic-style selection covers an empty style slot.
+///
+/// A regular-only set with synthetic styles selected draws bold text from
+/// the regular outlines instead of reporting a missing face; without the
+/// selection the same render keeps the typed `MissingFace` failure.
+#[test]
+fn u04_i_synthetic_selection_covers_a_missing_style_slot() {
+    let bold_snapshot = snapshot_with(
+        vec![
+            bold_cell("b"),
+            plain_cell(" ", 1),
+            plain_cell(" ", 1),
+            plain_cell(" ", 1),
+            plain_cell(" ", 1),
+            plain_cell(" ", 1),
+        ],
+        None,
+    );
+    let synthetic_only = PinnedFontSet::new(vec![regular_face()])
+        .expect("regular set builds")
+        .with_synthetic_style(true);
+    let rendered = render_snapshot_png(&bold_snapshot, &strict_options(&synthetic_only))
+        .expect("synthetic selection covers the missing bold slot");
+    assert!(!decode_png(rendered.png()).2.is_empty());
+    assert!(
+        rendered.contract().synthetic(),
+        "the contract records the synthetic-style selection"
+    );
+
+    let regular_only = PinnedFontSet::new(vec![regular_face()]).expect("regular set builds");
+    assert!(
+        matches!(
+            render_snapshot_png(&bold_snapshot, &strict_options(&regular_only)),
+            Err(RenderError::PinnedFont(PinnedFontError::MissingFace {
+                bold: true,
+                italic: false
+            }))
+        ),
+        "without the selection the missing slot still fails typed"
     );
 }

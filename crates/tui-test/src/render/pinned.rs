@@ -10,7 +10,9 @@
 //! The renderer hashes the bytes it loaded and reports them, with face
 //! indices, styles, and fallback order, in the versioned [`RenderContract`]
 //! attached to each strict image. A requested style slot with no face, or a
-//! grapheme no specified face contains, is a typed [`PinnedFontError`]:
+//! grapheme no specified face contains, is a typed [`PinnedFontError`]
+//! unless the set selected synthetic styles, in which case an empty slot
+//! synthesizes the style from the set's other faces in fallback order:
 //! the renderer never substitutes a host font, a replacement glyph, or an
 //! unselected synthetic style. Full multi-scalar shaping arrives in a later
 //! task; here the renderer stops with an error for sequences it cannot
@@ -41,8 +43,10 @@ use crate::profile::Rgb;
 /// Schema version of [`RenderContract`].
 ///
 /// Version 2 records every normalized output setting and the
-/// synthetic-style selection alongside the fonts and geometry, so two
-/// renders with different pixels never share a contract.
+/// synthetic-style selection alongside the fonts and geometry, so renders
+/// from different settings never share a contract. The contract names the
+/// configuration, not the contents: snapshots with different text or
+/// titles can share a contract, and strict gates compare decoded pixels.
 pub const RENDER_CONTRACT_VERSION: u32 = 2;
 
 /// Raster policy name recorded when no pinned fonts are selected.
@@ -124,12 +128,16 @@ impl PinnedFace {
     }
 
     /// SHA-256 over the style slot, face index, and bytes of this face.
+    ///
+    /// The byte count joins as a fixed-width `u64`: a `usize` encoding
+    /// would hash 8 bytes on 64-bit hosts and 4 on 32-bit ones, giving
+    /// identical fonts different identities per platform.
     pub fn digest(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(b"pinned-face-v1");
         hasher.update([u8::from(self.bold), u8::from(self.italic)]);
         hasher.update(self.index.to_le_bytes());
-        hasher.update(self.bytes.len().to_le_bytes());
+        hasher.update((self.bytes.len() as u64).to_le_bytes());
         hasher.update(&self.bytes);
         format!("{:x}", hasher.finalize())
     }
@@ -139,7 +147,9 @@ impl PinnedFace {
 ///
 /// The faces are tried in order for a grapheme whose style slot has more
 /// than one face; the order is the fallback order. Synthetic bold or
-/// italic is off unless [`PinnedFontSet::with_synthetic_style`] selects it.
+/// italic is off unless [`PinnedFontSet::with_synthetic_style`] selects
+/// it, in which case an empty style slot falls back to the set's other
+/// faces instead of failing.
 #[derive(Debug, Clone)]
 pub struct PinnedFontSet {
     faces: Vec<PinnedFace>,
@@ -161,7 +171,10 @@ impl PinnedFontSet {
 
     /// Allow emboldened or slanted rendering when the bytes lack the
     /// requested style. Off by default: without this selection a requested
-    /// style slot with no face is a missing-face error.
+    /// style slot with no face is a missing-face error, so register an
+    /// explicit face per slot served. With this selection an empty slot
+    /// falls back to the set's other faces in fallback order, drawing
+    /// their outlines emboldened or slanted.
     pub fn with_synthetic_style(mut self, allow: bool) -> Self {
         self.allow_synthetic_style = allow;
         self
@@ -1141,6 +1154,18 @@ mod tests {
         let garbage = PinnedFace::new(b"not a font".to_vec(), 0, false, false)
             .expect_err("garbage must fail");
         assert!(matches!(garbage, PinnedFontError::InvalidFace { .. }));
+    }
+
+    #[test]
+    fn face_digest_is_a_fixed_known_vector() {
+        // The length field is a fixed-width u64, so this vector holds on
+        // every platform: a usize encoding would hash a different stream
+        // on 32-bit hosts (see the P2 hash-byte-stream repro).
+        let face = PinnedFace::new(regular_bytes(), 0, false, false).unwrap();
+        assert_eq!(
+            face.digest(),
+            "08b324eb7d651773b79dfa0147484b9eeaf882055935a7b20304c23430bfd4b9"
+        );
     }
 
     #[test]
