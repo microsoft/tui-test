@@ -1254,6 +1254,33 @@ pub(crate) struct LiveHighlight<'a> {
     pub cells: &'a [(usize, usize)],
 }
 
+/// Reconcile a recomputed glyph width with the backend's occupancy record.
+///
+/// `run` is the number of continuation cells directly behind this one in the
+/// same backend row: the columns the backend actually gave the glyph. When
+/// recompute and backend agree, the measured width stands. When the backend
+/// is wider, the measured width would orphan attested continuations, so the
+/// span covers them. When the backend is narrower, the span collapses to the
+/// occupied columns — unless the measured span would run past the row edge,
+/// which stays the supported clipped-edge representation (the leading cell
+/// keeps its full width and the past-the-edge continuations are omitted). A
+/// zero-width grapheme keeps width zero: it opens no span, and a spacer
+/// behind one would be backend-inconsistent data that validation still
+/// rejects.
+fn reconcile_live_width(measured: u16, run: u16, col: u32, cols: u32) -> u16 {
+    if measured == 0 {
+        return 0;
+    }
+    let occupied = run.saturating_add(1);
+    if measured <= occupied {
+        return occupied;
+    }
+    if u64::from(col).saturating_add(u64::from(measured)) > u64::from(cols) {
+        return measured;
+    }
+    occupied
+}
+
 /// Capture from a live emulator. The caller holds the terminal-state lock;
 /// every field below (grid, cursor, dimensions, title, resolved colors) is
 /// read under that one lock, so the snapshot is one atomic terminal moment.
@@ -1342,11 +1369,26 @@ pub(crate) fn capture_live(
             let (text, width) = if emu_cell.ch.as_str() == CONTINUATION {
                 (String::new(), 0)
             } else {
-                let width = u16::try_from(display_width(emu_cell.ch.as_str())).map_err(|_| {
-                    SnapshotError::CountOverflow {
-                        field: "cell width",
+                let measured =
+                    u16::try_from(display_width(emu_cell.ch.as_str())).map_err(|_| {
+                        SnapshotError::CountOverflow {
+                            field: "cell width",
+                        }
+                    })?;
+                // The backend attests the occupied columns: every spacer
+                // directly behind this cell is one of them. The recomputed
+                // width can disagree (heart+VS16 and keycap sequences
+                // measure two columns but occupy one here), so reconcile
+                // against the attested run instead of emitting a span the
+                // next real cell cannot cover.
+                let mut run: u16 = 0;
+                for follower in row.iter().skip(col_index + 1) {
+                    if follower.ch.as_str() != CONTINUATION {
+                        break;
                     }
-                })?;
+                    run = run.saturating_add(1);
+                }
+                let width = reconcile_live_width(measured, run, col_index as u32, cols);
                 (emu_cell.ch.to_string(), width)
             };
             cells.push(
@@ -2102,6 +2144,74 @@ mod tests {
         let right = TerminalSnapshot::try_new(parts).expect("valid");
         assert_ne!(left, right);
         assert_ne!(canonical_hash(&left), canonical_hash(&right));
+    }
+
+    /// Live capture records the columns the backend actually occupied.
+    ///
+    /// Heart+VS16 and the keycap sequence measure two columns under
+    /// `display_width`, but the backend lays each out in a single column
+    /// with no spacer cell. Emitting the recomputed width opens a
+    /// two-column span the next real cell cannot cover, which failed with
+    /// `BadContinuation { col: 1, row: 0 }`; the capture must record the
+    /// single occupied column instead. A genuine wide glyph beside them
+    /// keeps its width-two span and continuation.
+    #[test]
+    fn live_capture_matches_backend_occupancy_for_vs16_sequences() {
+        let mut emu = AlacrittyEmu::new(COLS, ROWS, &profile());
+        emu.process("\u{2764}\u{fe0f}1\u{fe0f}\u{20e3}東".as_bytes());
+        let snapshot = capture_live(
+            &emu,
+            None,
+            &SnapshotOptions::new(SnapshotScope::Viewport),
+            SnapshotMetadata::default(),
+        )
+        .expect("VS16 capture succeeds");
+        let row = snapshot.row(0).expect("first row exists");
+        assert_eq!(row[0].text(), "\u{2764}\u{fe0f}");
+        assert_eq!(
+            row[0].width(),
+            1,
+            "heart occupies the one column the backend gave it"
+        );
+        assert!(!row[0].is_continuation());
+        assert_eq!(row[1].text(), "1\u{fe0f}\u{20e3}");
+        assert_eq!(
+            row[1].width(),
+            1,
+            "keycap occupies the one column the backend gave it"
+        );
+        assert!(!row[1].is_continuation());
+        assert_eq!(row[2].text(), "東");
+        assert_eq!(row[2].width(), 2);
+        assert!(row[3].is_continuation());
+        assert_eq!(row[3].width(), 0);
+    }
+
+    /// A VS16 heart in the last column keeps the clipped-edge form.
+    ///
+    /// The backend gives the glyph one column but the recomputed span would
+    /// run past the row edge, so the leading cell keeps its full measured
+    /// width with the past-the-edge continuation omitted — the
+    /// representation the validator accepts for a clipped wide glyph.
+    #[test]
+    fn live_capture_keeps_clipped_edge_for_vs16_at_row_end() {
+        let mut emu = AlacrittyEmu::new(3, ROWS, &profile());
+        emu.process("ab\u{2764}\u{fe0f}".as_bytes());
+        let snapshot = capture_live(
+            &emu,
+            None,
+            &SnapshotOptions::new(SnapshotScope::Viewport),
+            SnapshotMetadata::default(),
+        )
+        .expect("clipped-edge capture succeeds");
+        let row = snapshot.row(0).expect("first row exists");
+        assert_eq!(row[0].text(), "a");
+        assert_eq!(row[0].width(), 1);
+        assert_eq!(row[1].text(), "b");
+        assert_eq!(row[1].width(), 1);
+        assert_eq!(row[2].text(), "\u{2764}\u{fe0f}");
+        assert_eq!(row[2].width(), 2, "clipped glyph keeps its measured width");
+        assert!(!row[2].is_continuation());
     }
 
     #[test]
