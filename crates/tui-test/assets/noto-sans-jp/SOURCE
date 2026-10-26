@@ -1,0 +1,22 @@
+Noto Sans JP subset for U05 grapheme tests (one CJK face)
+commit: 295d98a7a0c17c68f1341eaeea354e7960ea70d3 (google/fonts, file last changed 2022-11-03)
+source: https://github.com/google/fonts
+path: ofl/notosansjp/NotoSansJP[wght].ttf
+original SHA-256: c2f3b4d463500a2ddcd3849cded1fceeb9fd6d1c32e6cbecd568453ba50fc68f
+original bytes: 9589900
+subset SHA-256: 8eec9e6c0ef45c3f0c62cd9fcd164d9c394a662b7f66328d9fc005798f441496
+subset bytes: 3884
+
+Subset keeps only U+6771 (東, CJK UNIFIED IDEOGRAPH-6771) plus .notdef,
+made with fonttools 4.67.0 subset at development time (never at test time):
+
+    python3 -m fontTools.subset NotoSansJP-wght.ttf --unicodes="U+6771" \
+        --output-file=NotoSansJP-subset.ttf --layout-features='' \
+        --no-hinting --desubroutinize --name-IDs='*' --glyph-names \
+        --recalc-bounds --recalc-timestamp --canonical-order \
+        --no-recalc-timestamp
+
+Face index 0, units per em 1000, advance of U+6771 is 1000 (full width).
+License OFL-1.1 in OFL.txt (Copyright 2014-2021 Adobe, Reserved Font
+Name 'Source'). Used only as pinned test bytes for the mandatory CJK
+corpus case; no test fetches fonts from the network.
