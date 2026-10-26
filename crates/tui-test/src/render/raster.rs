@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use tiny_skia::Pixmap;
+use tiny_skia::{Mask, Pixmap};
 
 use crate::api::CaptureBackground;
 use crate::profile::{ColorSlot, Rgb};
@@ -16,10 +16,10 @@ mod font;
 mod shaping;
 
 use draw::{
-    cell_clip, combining_sequence, draw_glyph, draw_shaped_run, fill_antialiased_rect, fill_circle,
-    fill_pixel_rect, fill_rounded_rect, fill_rounded_rect_alpha, fill_top_rounded_rect,
-    format_glyph_sequence, is_default_ignorable, multi_scalar_grapheme, stroke_rounded_rect,
-    unpremultiply,
+    cell_clip_reused, combining_sequence, draw_glyph, draw_shaped_run, fill_antialiased_rect,
+    fill_circle, fill_pixel_rect, fill_rounded_rect, fill_rounded_rect_alpha,
+    fill_top_rounded_rect, format_glyph_sequence, is_default_ignorable, multi_scalar_grapheme,
+    stroke_rounded_rect, unpremultiply,
 };
 use font::{FontBackend, GlyphKey};
 
@@ -73,6 +73,10 @@ pub struct GridRenderer {
     /// recording never push here. The offline layer drains this for glyph
     /// evidence.
     shaped: Vec<String>,
+    /// The clip mask reused across shaped cells. A full-canvas mask per
+    /// cell costs one pixmap-sized allocation each; this one is allocated
+    /// once per pixmap size and cleared per cell instead.
+    clip: Option<Mask>,
 }
 
 impl GridRenderer {
@@ -277,6 +281,7 @@ impl GridRenderer {
             layout,
             background,
             shaped: Vec::new(),
+            clip: None,
         })
     }
 
@@ -429,7 +434,12 @@ impl FrameRenderer for GridRenderer {
             }
         }
 
-        let (pixmap, fonts, shaped) = (&mut self.pixmap, &mut self.fonts, &mut self.shaped);
+        let (pixmap, fonts, shaped, clip_cache) = (
+            &mut self.pixmap,
+            &mut self.fonts,
+            &mut self.shaped,
+            &mut self.clip,
+        );
         for (y, row) in grid.iter().enumerate() {
             for x in 0..usize::from(cols) {
                 let cell = row.get(x).unwrap_or(&blank);
@@ -464,6 +474,7 @@ impl FrameRenderer for GridRenderer {
                 draw_cell_text(
                     pixmap,
                     fonts,
+                    clip_cache,
                     cell.ch.as_str(),
                     paint.bold,
                     paint.italic,
@@ -513,6 +524,7 @@ impl FrameRenderer for GridRenderer {
             draw_cursor(
                 &mut self.pixmap,
                 &mut self.fonts,
+                &mut self.clip,
                 grid,
                 cursor,
                 colors,
@@ -591,6 +603,7 @@ fn grid_y(origin_y: f32, row: usize, scale: f32, layout: &ResolvedLayout) -> u32
 fn draw_cell_text(
     pixmap: &mut Pixmap,
     fonts: &mut FontBackend,
+    clip_cache: &mut Option<Mask>,
     text: &str,
     bold: bool,
     italic: bool,
@@ -617,7 +630,15 @@ fn draw_cell_text(
         }
         let clip = if run.is_shaped() || wide_edge {
             let (left, top, right, bottom) = clip_rect;
-            cell_clip(pixmap.width(), pixmap.height(), left, top, right, bottom)
+            cell_clip_reused(
+                clip_cache,
+                pixmap.width(),
+                pixmap.height(),
+                left,
+                top,
+                right,
+                bottom,
+            )
         } else {
             None
         };
@@ -632,7 +653,7 @@ fn draw_cell_text(
             color,
             font_size,
             scale,
-            clip.as_ref(),
+            clip,
         );
         return Ok(());
     }
@@ -650,7 +671,15 @@ fn draw_cell_text(
                 Ok(run) => {
                     let clip = if run.is_shaped() || wide_edge {
                         let (left, top, right, bottom) = clip_rect;
-                        cell_clip(pixmap.width(), pixmap.height(), left, top, right, bottom)
+                        cell_clip_reused(
+                            clip_cache,
+                            pixmap.width(),
+                            pixmap.height(),
+                            left,
+                            top,
+                            right,
+                            bottom,
+                        )
                     } else {
                         None
                     };
@@ -665,7 +694,7 @@ fn draw_cell_text(
                         color,
                         font_size,
                         scale,
-                        clip.as_ref(),
+                        clip,
                     );
                 }
                 Err(entry) => {
@@ -713,6 +742,7 @@ fn draw_cell_text(
 fn draw_cursor(
     pixmap: &mut Pixmap,
     fonts: &mut FontBackend,
+    clip_cache: &mut Option<Mask>,
     grid: &[Vec<EmuCell>],
     (cx, cy): (u16, usize),
     colors: &dyn RenderColors,
@@ -792,6 +822,7 @@ fn draw_cursor(
     draw_cell_text(
         pixmap,
         fonts,
+        clip_cache,
         cell.ch.as_str(),
         paint.bold,
         paint.italic,

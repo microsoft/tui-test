@@ -141,10 +141,7 @@ fn check_ordinary_offline_combining(sequence: &str, base: &str, attrs: Attrs) {
         .expect("ordinary offline renders the bare base");
     let (base_width, base_height, base_pixels) = decode_png(base.png());
     assert_eq!((base_width, base_height), (width, height));
-    assert_ne!(
-        pixels, base_pixels,
-        "combining mark changes the image"
-    );
+    assert_ne!(pixels, base_pixels, "combining mark changes the image");
 }
 
 /// U05-R13 (offline): `e` plus U+0301 renders on the system backend.
@@ -160,6 +157,25 @@ fn ordinary_offline_renders_a_diaeresis_italic() {
     check_ordinary_offline_combining(A_DIAERESIS, "a", Attrs::ITALIC);
 }
 
+/// U05-R13 (offline): `a` plus CGJ renders on the system backend. CGJ
+/// needs no standalone coverage on either backend: it rides along in the
+/// shaping buffer and the base still draws.
+#[test]
+fn ordinary_offline_renders_cgj() {
+    let sequence = "a\u{34f}";
+    let snapshot = snapshot_of(vec![styled_cell(sequence, Attrs::empty()), blank_cell()]);
+    let rendered = tui_test::render_snapshot_png(&snapshot, &undecorated_options())
+        .expect("ordinary offline renders base plus CGJ");
+    let (width, _, pixels) = decode_png(rendered.png());
+    let cell_width = width / 2;
+    let ink = ink_offsets(&pixels, width);
+    assert!(!ink.is_empty(), "base plus CGJ holds ink");
+    assert!(
+        ink.iter().all(|(x, _)| *x < cell_width),
+        "CGJ ink stays in its cell"
+    );
+}
+
 #[cfg(unix)]
 mod live_tests {
     use super::*;
@@ -173,10 +189,7 @@ mod live_tests {
         RunOptions {
             backend: defaults.backend,
             program: "sh".to_string(),
-            args: vec![
-                "-c".to_string(),
-                format!("printf '{printf_arg}'; sleep 30"),
-            ],
+            args: vec!["-c".to_string(), format!("printf '{printf_arg}'; sleep 30")],
             profile: defaults.profile,
             style: defaults.style,
             cols: 16,
@@ -224,10 +237,8 @@ mod live_tests {
             snapshot.cells().iter().any(|cell| cell.text() == sequence),
             "one live cell holds the combining sequence"
         );
-        let path = std::env::temp_dir().join(format!(
-            "u05-r13-shot-{name}-{}.png",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("u05-r13-shot-{name}-{}.png", std::process::id()));
         let result = session
             .execute(Operation::Screenshot {
                 full: false,
@@ -237,8 +248,7 @@ mod live_tests {
             })
             .expect("live screenshot works");
         session.close().expect("session closes");
-        let OperationResult::Screenshot(tui_test::ScreenshotResult::Path(saved)) = result
-        else {
+        let OperationResult::Screenshot(tui_test::ScreenshotResult::Path(saved)) = result else {
             panic!("screenshot operation gave {result:?}");
         };
         assert_eq!(saved, path.to_string_lossy());
@@ -247,7 +257,11 @@ mod live_tests {
         let (width, height, pixels) = decode_png(&bytes);
         assert!(width > 0 && height > 0);
         assert!(
-            pixels.as_chunks::<4>().0.iter().any(|pixel| pixel != &[0, 0, 0, 255]),
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel != &[0, 0, 0, 255]),
             "live screenshot of the combining sequence is not blank"
         );
     }
@@ -271,10 +285,8 @@ mod live_tests {
     fn check_recording_combining(name: &str, sequence: &str, printf_arg: &str) {
         let session = Session::new(format!("u05-r13-rec-{name}-{}", std::process::id()));
         session.open(OpenOptions::default()).expect("open terminal");
-        let path = std::env::temp_dir().join(format!(
-            "u05-r13-rec-{name}-{}.png",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("u05-r13-rec-{name}-{}.png", std::process::id()));
         let _ = std::fs::remove_file(&path);
         session
             .execute(Operation::StartRecording {

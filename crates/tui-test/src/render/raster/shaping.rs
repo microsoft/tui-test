@@ -19,7 +19,7 @@
 //! shaping disables the ligature features so one cluster keeps its own
 //! columns, exactly like the per-character layout it replaces.
 
-use super::draw::{format_glyph_sequence, is_default_ignorable};
+use super::draw::{format_glyph_sequence, is_default_ignorable, needs_visible_glyph};
 use super::font::{FontSystem, GlyphKey, GlyphOutline, PinnedFontSystem};
 use crate::render::pinned::PinnedFontError;
 
@@ -29,11 +29,16 @@ use crate::render::pinned::PinnedFontError;
 /// `hmtx` advance). There is no 26.6 divisor.
 const POSITION_SCALE: f32 = 1.0;
 
-/// One glyph the shaper placed: its outline, the pen offset in font units
-/// (right and up positive) from the grapheme origin, and the pen advance
-/// in font units the next glyph starts after.
+/// One glyph the shaper placed: the pen offset in font units (right and
+/// up positive) from the grapheme origin, and the pen advance in font
+/// units the next glyph starts after. `outline` is `None` for
+/// advance-only glyphs (a space, a zero-width mark, or a `.notdef` id the
+/// shaper emitted for an ignorable scalar): the pen still moves by
+/// `advance` so later drawable glyphs land at their shaper positions, but
+/// nothing is painted. Dropping these entries instead would shift every
+/// following glyph left by the dropped advance.
 pub(super) struct ShapedGlyph {
-    pub outline: GlyphOutline,
+    pub outline: Option<GlyphOutline>,
     pub dx: f32,
     pub dy: f32,
     pub advance: f32,
@@ -69,7 +74,9 @@ impl ShapedRun {
 /// Empty, whitespace-only, and ignorable-only text draws nothing.
 /// A single scalar resolves through the pinned cache and draws verbatim.
 /// A multi-scalar grapheme is shaped with the first face in the requested
-/// style slot covering every scalar; a grapheme no single face covers is a
+/// style slot covering every visible scalar (whitespace and
+/// default-ignorables ride along in the shaping buffer without coverage);
+/// a grapheme no single face covers for its visible scalars is a
 /// missing-glyph error naming the scalar. Cells shape with the default
 /// OpenType features.
 pub(super) fn shape_pinned_text(
@@ -116,9 +123,17 @@ fn shape_pinned_text_with_features(
     if positions.is_empty() {
         return Err(PinnedFontError::MissingFace { bold, italic });
     }
+    // Coverage is only required where a visible glyph is needed:
+    // whitespace and default-ignorables (CGJ, variation selectors, ...)
+    // stay in the shaping buffer and the shaper positions or drops them
+    // without ink. Requiring a standalone cmap entry for those scalars
+    // would reject sequences the shaper handles fine.
     let mut selected = None;
     for &position in &positions {
-        if text.chars().all(|scalar| fonts.has_glyph(position, scalar)) {
+        if text
+            .chars()
+            .all(|scalar| !needs_visible_glyph(scalar) || fonts.has_glyph(position, scalar))
+        {
             selected = Some(position);
             break;
         }
@@ -135,7 +150,7 @@ fn shape_pinned_text_with_features(
 /// caller draws through the same positioned run, so cells and cursor
 /// repaint shape equally on both backends. Only the selection policy
 /// differs: the first catalog candidate for the style slot covering every
-/// scalar wins, keeping the recorded host fallback order, and a grapheme
+/// visible scalar wins, keeping the recorded host fallback order, and a grapheme
 /// no single face can draw reports the full sequence for the caller's
 /// missing-glyph collection instead of a typed error. Empty,
 /// whitespace-only, and ignorable-only text draws nothing. Single-scalar
@@ -159,7 +174,10 @@ pub(super) fn shape_system_text(
     }
     let base = text.chars().next().unwrap_or('\0');
     for id in fonts.style_candidates(bold, italic, base) {
-        if !text.chars().all(|scalar| fonts.face_has_glyph(id, scalar)) {
+        if !text
+            .chars()
+            .all(|scalar| !needs_visible_glyph(scalar) || fonts.face_has_glyph(id, scalar))
+        {
             continue;
         }
         let shaped = fonts.with_face_data(id, |data, index| {
@@ -176,12 +194,15 @@ pub(super) fn shape_system_text(
 }
 
 /// Shape `text` with the catalog face `id`, already known to cover every
-/// scalar. `None` means the face bytes do not parse, so the caller tries
-/// the next covering face. A `.notdef` id the shaper still emits is a
-/// missing sequence naming every scalar, never tofu. Glyphs with no
-/// outline (spaces, zero-width marks) keep their advance but draw nothing;
-/// when no glyph draws anything visible, the sequence is reported instead
-/// of a blank success, so a visible scalar is never silently dropped.
+/// visible scalar. `None` means the face bytes do not parse, so the caller
+/// tries the next covering face. A `.notdef` id the shaper still emits for
+/// a scalar needing a visible glyph is a missing sequence naming every
+/// scalar, never tofu; a `.notdef` for an ignorable scalar keeps its
+/// advance but draws nothing. Glyphs with no outline (spaces, zero-width
+/// marks) keep their advance as advance-only entries but draw nothing, so
+/// later glyphs land at their shaper positions; when no glyph draws
+/// anything visible, the sequence is reported instead of a blank success,
+/// so a visible scalar is never silently dropped.
 fn shape_system_data(
     fonts: &FontSystem,
     id: fontdb::ID,
@@ -203,30 +224,41 @@ fn shape_system_data(
         advance += placement.x_advance as f32 / POSITION_SCALE;
         let glyph_id = u16::try_from(info.glyph_id).ok()?;
         if glyph_id == 0 {
-            return Some(Err(format_glyph_sequence(text)));
+            if needs_visible_glyph(scalar_at_cluster(text, info.cluster)) {
+                return Some(Err(format_glyph_sequence(text)));
+            }
+            glyphs.push(advance_only(placement));
+            continue;
         }
-        if let Some(outline) = fonts.outline_for_shaped_glyph(
-            id,
-            ttf_parser::GlyphId(glyph_id),
-            bold,
-            italic,
-        ) {
-            glyphs.push(ShapedGlyph {
-                outline,
-                dx: placement.x_offset as f32 / POSITION_SCALE,
-                dy: placement.y_offset as f32 / POSITION_SCALE,
-                advance: placement.x_advance as f32 / POSITION_SCALE,
-            });
-        }
+        glyphs.push(ShapedGlyph {
+            outline: fonts.outline_for_shaped_glyph(
+                id,
+                ttf_parser::GlyphId(glyph_id),
+                bold,
+                italic,
+            ),
+            dx: placement.x_offset as f32 / POSITION_SCALE,
+            dy: placement.y_offset as f32 / POSITION_SCALE,
+            advance: placement.x_advance as f32 / POSITION_SCALE,
+        });
     }
-    if glyphs.is_empty()
-        && text
-            .chars()
-            .any(|scalar| !scalar.is_whitespace() && !is_default_ignorable(scalar))
+    if !glyphs.iter().any(|glyph| glyph.outline.is_some()) && text.chars().any(needs_visible_glyph)
     {
         return Some(Err(format_glyph_sequence(text)));
     }
     Some(Ok(ShapedRun::Shaped { glyphs, advance }))
+}
+
+/// An advance-only entry: the pen moves by the placement advance but
+/// nothing is painted, so a later drawable glyph lands at its shaper
+/// position.
+fn advance_only(placement: &rustybuzz::GlyphPosition) -> ShapedGlyph {
+    ShapedGlyph {
+        outline: None,
+        dx: placement.x_offset as f32 / POSITION_SCALE,
+        dy: placement.y_offset as f32 / POSITION_SCALE,
+        advance: placement.x_advance as f32 / POSITION_SCALE,
+    }
 }
 
 /// Name the scalar a missing-glyph error reports. A scalar no candidate
@@ -240,7 +272,7 @@ fn missing_glyph_for(
     bold: bool,
     italic: bool,
 ) -> PinnedFontError {
-    for scalar in text.chars() {
+    for scalar in text.chars().filter(|scalar| needs_visible_glyph(*scalar)) {
         if positions
             .iter()
             .all(|&position| !fonts.has_glyph(position, scalar))
@@ -268,12 +300,15 @@ fn missing_glyph_for(
     }
 }
 
-/// Shape `text` with the pinned face at `position`. Every scalar is covered
-/// by construction; a `.notdef` id the shaper still emits (for example a
-/// variation selector the font maps but cannot shape) is a missing-glyph
-/// error naming the scalar at that glyph's cluster, never tofu. Glyphs with
-/// no outline (spaces, zero-width marks) keep their advance but draw
-/// nothing, so no positioned scalar is silently dropped.
+/// Shape `text` with the pinned face at `position`. Every visible scalar
+/// is covered by construction; a `.notdef` id the shaper still emits for
+/// a scalar needing a visible glyph (for example a variation selector the
+/// font maps but cannot shape) is a missing-glyph error naming the scalar
+/// at that glyph's cluster, never tofu, while a `.notdef` for an
+/// ignorable scalar keeps its advance but draws nothing. Glyphs with no
+/// outline (spaces, zero-width marks) keep their advance as advance-only
+/// entries but draw nothing, so no positioned scalar is silently dropped
+/// and later glyphs land at their shaper positions.
 fn shape_with_face(
     fonts: &PinnedFontSystem,
     position: usize,
@@ -305,22 +340,23 @@ fn shape_with_face(
             detail: format!("shaper glyph id {} does not fit u16", info.glyph_id),
         })?;
         if glyph_id == 0 {
-            return Err(PinnedFontError::MissingGlyph {
-                character: scalar_at_cluster(text, info.cluster),
-                bold,
-                italic,
-            });
+            let character = scalar_at_cluster(text, info.cluster);
+            if needs_visible_glyph(character) {
+                return Err(PinnedFontError::MissingGlyph {
+                    character,
+                    bold,
+                    italic,
+                });
+            }
+            glyphs.push(advance_only(placement));
+            continue;
         }
-        if let Some(outline) =
-            fonts.outline_for_glyph(position, ttf_parser::GlyphId(glyph_id), bold, italic)
-        {
-            glyphs.push(ShapedGlyph {
-                outline,
-                dx: placement.x_offset as f32 / POSITION_SCALE,
-                dy: placement.y_offset as f32 / POSITION_SCALE,
-                advance: placement.x_advance as f32 / POSITION_SCALE,
-            });
-        }
+        glyphs.push(ShapedGlyph {
+            outline: fonts.outline_for_glyph(position, ttf_parser::GlyphId(glyph_id), bold, italic),
+            dx: placement.x_offset as f32 / POSITION_SCALE,
+            dy: placement.y_offset as f32 / POSITION_SCALE,
+            advance: placement.x_advance as f32 / POSITION_SCALE,
+        });
     }
     Ok(ShapedRun::Shaped { glyphs, advance })
 }
@@ -513,6 +549,50 @@ mod tests {
                 assert!(*advance > 0.0);
                 assert_eq!(glyphs[0].advance, *advance);
                 assert_eq!((glyphs[0].dx, glyphs[0].dy), (0.0, 0.0));
+            }
+            other => panic!("expected a shaped run, got shaped={}", other.is_shaped()),
+        }
+    }
+
+    /// A space plus a combining mark keeps the space as an advance-only
+    /// entry: the space has no outline but its advance positions the mark.
+    /// Dropping the entry would leave the mark at the cell origin.
+    #[test]
+    fn space_plus_mark_keeps_advance_only_entry() {
+        let mut system = regular_system();
+        let run =
+            shape_pinned_text(&mut system, " \u{301}", false, false).expect("space-acute shapes");
+        match &run {
+            ShapedRun::Shaped { glyphs, advance } => {
+                assert_eq!(glyphs.len(), 2);
+                assert!(
+                    glyphs[0].outline.is_none(),
+                    "the space moves the pen but draws nothing"
+                );
+                assert!(glyphs[0].advance > 0.0);
+                assert!(glyphs[1].outline.is_some(), "the mark still draws");
+                assert_eq!(*advance, glyphs[0].advance + glyphs[1].advance);
+            }
+            other => panic!("expected a shaped run, got shaped={}", other.is_shaped()),
+        }
+    }
+
+    /// CGJ has no standalone cmap entry in the bundled face, yet the
+    /// shaper handles it: coverage is only required for visible scalars,
+    /// and the run still places the base with its full advance.
+    #[test]
+    fn cgj_shapes_without_standalone_coverage() {
+        let mut system = regular_system();
+        assert!(
+            !system.has_glyph(0, '\u{34f}'),
+            "the bundled face maps no standalone CGJ glyph"
+        );
+        let run =
+            shape_pinned_text(&mut system, "a\u{34f}", false, false).expect("base plus CGJ shapes");
+        match &run {
+            ShapedRun::Shaped { glyphs, advance } => {
+                assert!(glyphs.iter().any(|glyph| glyph.outline.is_some()));
+                assert_eq!(*advance, 600.0, "the base keeps its full advance");
             }
             other => panic!("expected a shaped run, got shaped={}", other.is_shaped()),
         }

@@ -280,6 +280,15 @@ pub(super) fn multi_scalar_grapheme(grapheme: &str) -> bool {
     grapheme.chars().count() > 1
 }
 
+/// Whether a scalar needs a visible glyph: anything but whitespace and
+/// the default-ignorable scalars the shaper handles without ink (controls
+/// like CGJ, variation selectors, ZWJ). Coverage preflights and
+/// missing-glyph inspection only require these scalars; the rest ride
+/// along in the shaping buffer and draw nothing.
+pub(super) fn needs_visible_glyph(scalar: char) -> bool {
+    !scalar.is_whitespace() && !is_default_ignorable(scalar)
+}
+
 /// Whether a multi-scalar grapheme is a base character plus combining
 /// marks: the sequences the shaper positions on both backends. Anything
 /// else multi-scalar (ZWJ emoji, regional indicators, ...) keeps the
@@ -331,7 +340,7 @@ pub(super) fn draw_shaped_run(
             if clip.is_some() && outline.advance != 0 && !outline.powerline {
                 let single = ShapedRun::Shaped {
                     glyphs: vec![super::shaping::ShapedGlyph {
-                        outline: outline.clone(),
+                        outline: Some(outline.clone()),
                         dx: 0.0,
                         dy: 0.0,
                         advance: f32::from(outline.advance),
@@ -367,10 +376,14 @@ pub(super) fn draw_shaped_run(
             );
         }
         ShapedRun::Shaped { glyphs, advance } => {
-            let Some(first) = glyphs.first() else {
+            // Advance-only entries (spaces, zero-width marks) carry no
+            // outline but still move the pen; the scale comes from the
+            // first drawable glyph (one face per run, so the units agree)
+            // and a run with no drawable glyph paints nothing.
+            let Some(first) = glyphs.iter().find_map(|glyph| glyph.outline.as_ref()) else {
                 return;
             };
-            let units = f32::from(first.outline.units_per_em).max(1.0);
+            let units = f32::from(first.units_per_em).max(1.0);
             let scale_y = font_size * output_scale / units;
             // Mirror the legacy advance stretch: the whole run fills the
             // cell width. A zero total advance (only zero-width glyphs)
@@ -382,27 +395,28 @@ pub(super) fn draw_shaped_run(
             };
             let mut pen = 0.0f32;
             for glyph in glyphs {
-                let outline = &glyph.outline;
-                let shear = if outline.synthetic_italic {
-                    0.2 * scale_y
-                } else {
-                    0.0
-                };
-                let transform = Transform::from_row(
-                    scale_x,
-                    0.0,
-                    shear,
-                    -scale_y,
-                    origin_x + pen + glyph.dx * scale_x,
-                    baseline - glyph.dy * scale_y,
-                );
-                let mut paint = Paint::default();
-                paint.set_color_rgba8(color.r, color.g, color.b, 255);
-                pixmap.fill_path(&outline.path, &paint, FillRule::Winding, transform, clip);
-                if outline.synthetic_bold {
-                    let mut bold = transform;
-                    bold.tx += 0.65 * output_scale;
-                    pixmap.fill_path(&outline.path, &paint, FillRule::Winding, bold, clip);
+                if let Some(outline) = &glyph.outline {
+                    let shear = if outline.synthetic_italic {
+                        0.2 * scale_y
+                    } else {
+                        0.0
+                    };
+                    let transform = Transform::from_row(
+                        scale_x,
+                        0.0,
+                        shear,
+                        -scale_y,
+                        origin_x + pen + glyph.dx * scale_x,
+                        baseline - glyph.dy * scale_y,
+                    );
+                    let mut paint = Paint::default();
+                    paint.set_color_rgba8(color.r, color.g, color.b, 255);
+                    pixmap.fill_path(&outline.path, &paint, FillRule::Winding, transform, clip);
+                    if outline.synthetic_bold {
+                        let mut bold = transform;
+                        bold.tx += 0.65 * output_scale;
+                        pixmap.fill_path(&outline.path, &paint, FillRule::Winding, bold, clip);
+                    }
                 }
                 pen += glyph.advance * scale_x;
             }
@@ -410,23 +424,35 @@ pub(super) fn draw_shaped_run(
     }
 }
 
-/// A clip mask covering one pixel rectangle of a pixmap with the given
-/// dimensions. Shaped runs paint through it so ink stays in the permitted
-/// region (their cell, or the surviving column of a wide cell at the grid
-/// edge). Returns `None` for an empty rectangle or when no mask can be
-/// built; the caller then draws unclipped.
-pub(super) fn cell_clip(
+/// The clip mask for one pixel rectangle, reused across shaped cells.
+/// Shaped runs paint through it so ink stays in the permitted region
+/// (their cell, or the surviving column of a wide cell at the grid edge).
+/// The cached mask is allocated once per pixmap size and cleared per cell
+/// instead of allocating a full-canvas mask per shaped cell. Returns `None`
+/// for an empty rectangle or when no mask can be built; the caller then
+/// draws unclipped.
+pub(super) fn cell_clip_reused(
+    cached: &mut Option<Mask>,
     pixmap_width: u32,
     pixmap_height: u32,
     left: u32,
     top: u32,
     right: u32,
     bottom: u32,
-) -> Option<Mask> {
+) -> Option<&Mask> {
     if left >= right || top >= bottom {
         return None;
     }
-    let mut mask = Mask::new(pixmap_width, pixmap_height)?;
+    let reuse = cached
+        .as_ref()
+        .is_some_and(|mask| mask.width() == pixmap_width && mask.height() == pixmap_height);
+    let mask = if reuse {
+        let mask = cached.as_mut().expect("cached mask is present");
+        mask.clear();
+        mask
+    } else {
+        cached.insert(Mask::new(pixmap_width, pixmap_height)?)
+    };
     let mut builder = PathBuilder::new();
     builder.move_to(left as f32, top as f32);
     builder.line_to(right as f32, top as f32);

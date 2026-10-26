@@ -50,12 +50,7 @@ impl FontSystem {
     /// system fallback policy. The system shaper tries these in order and
     /// shapes a grapheme with the first covering every scalar; the pinned
     /// backend never consults the catalog.
-    pub fn style_candidates(
-        &self,
-        bold: bool,
-        italic: bool,
-        character: char,
-    ) -> Vec<fontdb::ID> {
+    pub fn style_candidates(&self, bold: bool, italic: bool, character: char) -> Vec<fontdb::ID> {
         self.catalog.candidates(bold, italic, character)
     }
 
@@ -345,7 +340,8 @@ impl PinnedFontSystem {
 
     /// The outline for a glyph id the shaper already placed. The synthetic
     /// style decisions match [`PinnedFontSystem::load`]; a `.notdef` id or
-    /// an empty outline is `None` so the caller falls back or fails.
+    /// an empty outline is `None` so the caller keeps an advance-only entry
+    /// that moves the pen without drawing.
     pub fn outline_for_glyph(
         &self,
         position: usize,

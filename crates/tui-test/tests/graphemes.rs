@@ -675,3 +675,175 @@ fn u05_g_missing_glyph_errors_without_image_success() {
         "crab never renders successfully"
     );
 }
+
+/// U05-H: a width-1 cell holding a space plus a combining mark renders a
+/// non-blank image with all ink inside the cell. The space contributes no
+/// outline but its advance: dropping the advance-only entry would leave the
+/// pen at the cell origin, so the mark would land outside the clip and the
+/// render would succeed blank. The mark sits over the space, so its ink is
+/// right of the cell origin rather than at the broken left edge. The
+/// two-mark cluster below cannot precompose (a space never merges with a
+/// mark), so unlike `e` plus U+0301 it exercises the multi-glyph pen path.
+#[test]
+fn u05_h_advance_only_glyphs_keep_pen_position() {
+    let set = corpus_set();
+    for sequence in [" \u{301}", " \u{301}\u{308}"] {
+        let snapshot =
+            snapshot_with_cells(2, 1, vec![plain(sequence, 1), blank()], hidden_cursor());
+        let rendered = render_snapshot_png(&snapshot, &strict_options(&set))
+            .unwrap_or_else(|error| panic!("{sequence:?} renders, got {error}"));
+        assert_eq!(
+            rendered.evidence().shaped_graphemes(),
+            &[sequence.to_string()]
+        );
+        let (width, _, pixels) = decode_png(rendered.png());
+        let ink = cell_ink(&pixels, width, BLACK, 0, 0, CELL_W, CELL_H);
+        assert!(!ink.is_empty(), "{sequence:?} draws ink instead of blank");
+        assert_eq!(
+            ink.len(),
+            ink_offsets(&pixels, width, BLACK).len(),
+            "{sequence:?} keeps all ink in its cell"
+        );
+        let min_x = ink.iter().map(|(x, _)| *x).min().expect("ink is non-empty");
+        assert!(
+            min_x >= 3,
+            "{sequence:?} draws over the space (min_x {min_x}), not at the dropped-pen edge"
+        );
+    }
+}
+
+/// U05-H: cursor repaint of an advance-only cell draws the mark at the same
+/// shaper position as the plain cell; only the colors change.
+#[test]
+fn u05_h_cursor_repaint_keeps_advance_only_positions() {
+    let set = corpus_set();
+    let sequence = " \u{301}";
+    let plain_snapshot =
+        snapshot_with_cells(2, 1, vec![plain(sequence, 1), blank()], hidden_cursor());
+    let plain_rendered =
+        render_snapshot_png(&plain_snapshot, &strict_options(&set)).expect("plain renders");
+    let (width, _, plain_pixels) = decode_png(plain_rendered.png());
+    let cursor_snapshot = snapshot_with_cells(
+        2,
+        1,
+        vec![plain(sequence, 1), blank()],
+        block_cursor_at(0, 0),
+    );
+    let cursor_rendered =
+        render_snapshot_png(&cursor_snapshot, &strict_options(&set)).expect("cursor renders");
+    assert!(cursor_rendered.evidence().cursor_drawn());
+    let (_, _, cursor_pixels) = decode_png(cursor_rendered.png());
+    let plain_ink = cell_ink(&plain_pixels, width, BLACK, 0, 0, CELL_W, CELL_H);
+    let cursor_ink = cell_ink(&cursor_pixels, width, CURSOR_FILL, 0, 0, CELL_W, CELL_H);
+    assert!(!plain_ink.is_empty(), "plain advance-only cell holds ink");
+    for pixel in &cursor_ink {
+        assert!(
+            plain_ink.contains(pixel),
+            "repaint pixel {pixel:?} is a plain pixel"
+        );
+    }
+    for pixel in &plain_ink {
+        let (x, y) = *pixel;
+        let near = cursor_ink
+            .iter()
+            .any(|(cx, cy)| cx.abs_diff(x) <= 1 && cy.abs_diff(y) <= 1);
+        assert!(near, "plain pixel {pixel:?} neighbors a repaint pixel");
+    }
+}
+
+/// U05-H: a pinned title containing an advance-only cluster shapes through
+/// the same per-grapheme path as cells instead of failing or blanking.
+#[test]
+fn u05_h_pinned_title_shapes_advance_only_cluster() {
+    let set = corpus_set();
+    let titled = |title: Option<&str>| {
+        TerminalSnapshot::try_new(SnapshotParts {
+            cols: 12,
+            rows: 1,
+            scope: SnapshotScope::Viewport,
+            viewport_origin: 0,
+            cells: vec![
+                plain("a", 1),
+                blank(),
+                blank(),
+                blank(),
+                blank(),
+                blank(),
+                blank(),
+                blank(),
+                blank(),
+                blank(),
+                blank(),
+                blank(),
+            ],
+            palette: resolved_palette(),
+            default_foreground: Rgb::new(192, 192, 192),
+            default_background: Rgb::new(0, 0, 0),
+            default_cursor: Rgb::new(9, 9, 9),
+            cursor: hidden_cursor(),
+            title: title.map(str::to_string),
+            metadata: SnapshotMetadata::default(),
+        })
+        .expect("titled snapshot is valid")
+    };
+    let options = strict_options(&set).with_title_bar(true);
+    let marked =
+        render_snapshot_png(&titled(Some("a \u{301}")), &options).expect("marked title renders");
+    assert_eq!(
+        marked.evidence().title().unwrap_or_default(),
+        "a \u{301} - 12x1"
+    );
+    let (_, _, marked_pixels) = decode_png(marked.png());
+    let unmarked =
+        render_snapshot_png(&titled(Some("a ")), &options).expect("unmarked title renders");
+    let (_, _, unmarked_pixels) = decode_png(unmarked.png());
+    assert_ne!(
+        marked_pixels, unmarked_pixels,
+        "the title mark changes the image instead of blanking"
+    );
+}
+
+/// U05-I: default-ignorables ride along in the shaping buffer. CGJ
+/// (U+034F, no standalone cmap entry in the bundled face) and a variation
+/// selector (U+FE00) shape with the base and draw exactly the base image;
+/// the old cmap preflight rejected both as missing glyphs. A
+/// genuinely-unsupported visible scalar next to an ignorable still fails.
+#[test]
+fn u05_i_default_ignorables_shape_without_coverage() {
+    let set = corpus_set();
+    let (_, _, base_pixels) = render_row(vec![plain("a", 1), blank()], &set);
+    for sequence in ["a\u{34f}", "a\u{fe00}"] {
+        assert_eq!(sequence.chars().count(), 2);
+        let snapshot =
+            snapshot_with_cells(2, 1, vec![plain(sequence, 1), blank()], hidden_cursor());
+        let rendered = render_snapshot_png(&snapshot, &strict_options(&set))
+            .unwrap_or_else(|error| panic!("{sequence:?} renders, got {error}"));
+        assert_eq!(
+            rendered.evidence().shaped_graphemes(),
+            &[sequence.to_string()]
+        );
+        let (_, _, pixels) = decode_png(rendered.png());
+        assert_eq!(
+            pixels, base_pixels,
+            "{sequence:?} draws exactly the base image"
+        );
+    }
+    let bad = snapshot_with_cells(
+        2,
+        1,
+        vec![plain("a\u{34f}\u{10FFFF}", 1), blank()],
+        hidden_cursor(),
+    );
+    let error = render_snapshot_png(&bad, &strict_options(&set))
+        .expect_err("unsupported scalar next to CGJ still fails");
+    assert!(
+        matches!(
+            error,
+            RenderError::PinnedFont(PinnedFontError::MissingGlyph {
+                character: '\u{10FFFF}',
+                ..
+            })
+        ),
+        "unsupported scalar fails as missing glyph, got {error}"
+    );
+}

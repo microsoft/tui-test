@@ -583,7 +583,8 @@ impl RenderEvidence {
     }
 
     /// The multi-scalar cell graphemes the pinned shaper placed, in
-    /// row-major cell order with one entry per shaped cell. Empty for SVG
+    /// row-major cell order with one entry per shaped cell. Each entry is
+    /// the input string (not glyph IDs, positions, or faces). Empty for SVG
     /// renders, system-font renders, and renders with no shaped cells:
     /// single-scalar cells draw verbatim and are not listed.
     pub fn shaped_graphemes(&self) -> &[String] {
