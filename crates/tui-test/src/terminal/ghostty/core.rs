@@ -98,11 +98,19 @@ fn cell_from_ghostty(
     graphemes: &[char],
     hyperlink: Option<Arc<Hyperlink>>,
 ) -> Result<EmuCell> {
-    let ch = match cell.wide().context("reading cell width")? {
+    let wide = cell.wide().context("reading cell width")?;
+    let ch = match wide {
         CellWide::SpacerTail => CompactString::const_new(CONTINUATION),
         CellWide::SpacerHead => CompactString::const_new(" "),
         CellWide::Narrow | CellWide::Wide if graphemes.is_empty() => CompactString::const_new(" "),
         CellWide::Narrow | CellWide::Wide => graphemes.iter().collect::<String>().into(),
+    };
+    // The renderer sizes spans from this, capped by the trailing
+    // continuations: a wide lead covers both halves, a spacer tail none.
+    let width = match wide {
+        CellWide::SpacerTail => 0,
+        CellWide::Wide => 2,
+        CellWide::Narrow | CellWide::SpacerHead => 1,
     };
 
     let bg = match cell.content_tag().context("reading cell content")? {
@@ -133,6 +141,7 @@ fn cell_from_ghostty(
 
     Ok(EmuCell {
         ch,
+        width,
         fg: cell_color(style.fg_color),
         bg,
         underline: underline(style.underline),

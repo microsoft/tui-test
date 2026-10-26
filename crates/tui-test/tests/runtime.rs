@@ -2503,3 +2503,38 @@ fn expect_colors_waits_for_a_program_to_recolor_the_terminal() {
 
     session.close().expect("close terminal");
 }
+
+/// Round-3: an oversized finite zoom is a usage error, not a panic.
+///
+/// A 16x2 grid at zoom 1e9 scales past `u32`, which the shared size reports
+/// as `None`. The SVG renderer unwraps that `None`, so the screenshot path
+/// rejects such dimensions before rendering: the caller sees a usage error
+/// rather than a caught-internal panic.
+#[cfg(unix)]
+#[test]
+fn oversized_finite_zoom_is_a_usage_error() {
+    let session = Session::new(format!("oversized-zoom-{}", std::process::id()));
+    let mut options = run_options("sh", &["-c", "sleep 30"]);
+    options.cols = 16;
+    options.rows = 2;
+    session.run(options).expect("session starts");
+    let path = std::env::temp_dir().join(format!("oversized-zoom-{}.svg", std::process::id()));
+    let error = session
+        .execute(Operation::Screenshot {
+            full: false,
+            path: Some(path.to_string_lossy().into_owned()),
+            zoom: Some(1e9),
+            background: None,
+        })
+        .expect_err("an oversized finite zoom must fail");
+    session.close().expect("session closes");
+    assert_eq!(
+        error.kind,
+        ErrorKind::Usage,
+        "oversized zoom is rejected before rendering, not caught as internal: {error:?}"
+    );
+    assert!(
+        error.message.contains("zoom"),
+        "the message names the offending knob: {error}"
+    );
+}

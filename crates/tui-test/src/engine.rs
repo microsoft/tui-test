@@ -4484,6 +4484,19 @@ fn screenshot(
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .style
                 .clone();
+            // `resolve_zoom` only bounds the zoom itself; a finite zoom can
+            // still scale the grid past `u32`, which the renderer reports by
+            // panicking. Reject those dimensions here as a usage error, the
+            // same way the PNG path rejects them through its fallible size.
+            let layout = crate::render::svg::ResolvedLayout::from_style(&style, zoom);
+            if layout
+                .output_pixel_size(u32::from(snapshot.cols), snapshot.rows.len())
+                .is_none()
+            {
+                return Err(TuiTestError::usage(
+                    "screenshot dimensions do not fit in u32 at this zoom",
+                ));
+            }
             match format {
                 ScreenshotFormat::Svg => {
                     let svg = crate::render::svg::render_svg(
@@ -5966,6 +5979,7 @@ mod tests {
     fn cell_model_reports_the_whole_vocabulary() {
         let cell = EmuCell {
             ch: "x".into(),
+            width: 1,
             fg: Some(Color::Named(NamedColor::Red)),
             bg: Some(Color::Idx(196)),
             underline: UnderlineStyle::Curly,

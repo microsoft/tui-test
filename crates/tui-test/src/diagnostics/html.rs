@@ -478,6 +478,7 @@ mod tests {
     fn cell_metadata_exposes_all_attributes_and_resolved_colors() {
         let cell = EmuCell {
             ch: "x".into(),
+            width: 1,
             fg: Some(Color::Rgb(100, 150, 200)),
             bg: Some(Color::Rgb(20, 40, 60)),
             underline: UnderlineStyle::Curly,

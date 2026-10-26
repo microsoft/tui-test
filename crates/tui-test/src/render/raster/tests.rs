@@ -385,10 +385,13 @@ fn unsupported_emoji_sequences_are_reported_instead_of_misrendered() {
 #[test]
 fn cjk_uses_a_system_fallback_or_reports_the_missing_glyph() {
     let mut renderer = GridRenderer::new(2, 1);
-    let grid = vec![vec![
-        cell("界", Attrs::empty()),
-        cell(CONTINUATION, Attrs::empty()),
-    ]];
+    // The lead declares its recorded span; the renderer fits the glyph into
+    // the capped span either way, so this stays font-dependent only.
+    let mut lead = cell("界", Attrs::empty());
+    lead.width = 2;
+    let mut trailer = cell(CONTINUATION, Attrs::empty());
+    trailer.width = 0;
+    let grid = vec![vec![lead, trailer]];
     if let Err(error) = renderer.render(&frame(grid)) {
         assert!(error.to_string().contains("U+754C"));
     }

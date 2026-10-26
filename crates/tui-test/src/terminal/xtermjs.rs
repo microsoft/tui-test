@@ -383,8 +383,14 @@ fn decode_into(
             CompactString::const_new(" ")
         };
 
+        // The recorded width travels with the cell: the renderer sizes the
+        // span from it, so a clipped lead fits its remaining columns and a
+        // genuine zero-width grapheme paints nothing. Negative widths never
+        // occur on the wire; fall back to one column if one ever does.
+        let width = u16::try_from(width).unwrap_or(1);
         row.push(EmuCell {
             ch,
+            width,
             fg: color(fg, flags, FG_PALETTE, FG_RGB),
             bg: color(bg, flags, BG_PALETTE, BG_RGB),
             underline: underline(ul_style),

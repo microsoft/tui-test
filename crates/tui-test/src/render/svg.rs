@@ -64,6 +64,29 @@ fn cell_at(row: &[EmuCell], x: usize) -> &EmuCell {
     row.get(x).unwrap_or(&BLANK)
 }
 
+/// Painted columns for the cell at `x`: the recorded span capped by the
+/// trailing continuations and the row end.
+///
+/// Wide leads paint every continuation they recorded (a width-3 lead covers
+/// three columns, not two); a clipped lead at the row end fits whatever
+/// columns remain. Continuations and zero-width leads paint nothing: the
+/// former belong to their lead's span, the latter own a column that stays
+/// background. The recorded width never widens the span past the grid, so
+/// a hand-built row with no continuations still fits one column.
+pub(crate) fn span_columns(row: &[EmuCell], x: usize, cols: usize) -> usize {
+    let cell = cell_at(row, x);
+    if cell.ch == CONTINUATION || cell.width == 0 {
+        return 0;
+    }
+    let mut counted = 1;
+    while x + counted < cols && cell_at(row, x + counted).ch == CONTINUATION {
+        counted += 1;
+    }
+    counted
+        .min(usize::from(cell.width))
+        .min(cols.saturating_sub(x))
+}
+
 pub(crate) trait RenderColors {
     fn color(&self, slot: ColorSlot) -> Rgb;
     fn cursor_shape(&self) -> CursorShape;
@@ -350,6 +373,7 @@ impl ResolvedLayout {
         Some((ceil_pixel(width)?, ceil_pixel(height)?))
     }
 
+    #[cfg(feature = "recording-raster")]
     /// Panel-only variant of [`output_pixel_size`](Self::output_pixel_size),
     /// without the canvas: per-frame placement adds the canvas separately
     /// when it centers a frame, so it rounds the same scaled panel rather
@@ -449,7 +473,7 @@ fn write_text_run(
     nerd_font: &NerdFont,
     layout: &ResolvedLayout,
 ) {
-    if paint.invisible {
+    if paint.invisible || run.is_empty() {
         return;
     }
     let (start, end) = (run.start, run.end);
@@ -464,8 +488,11 @@ fn write_text_run(
     let original_text = run_text(row, start, end);
     let (text, run_x_adjust) = nerd_font.prepare_run(&original_text, width, cell_w);
 
-    // Preserve decoration for runs containing only vector glyphs.
-    if !original_text.trim().is_empty() {
+    // Preserve decoration for runs containing only vector glyphs, and for
+    // underlined or struck blank spans: a text decoration is the only thing
+    // that paints those, so skipping the run would drop the line entirely.
+    // Plain blanks still emit nothing.
+    if !original_text.trim().is_empty() || paint.underline || paint.strike {
         let weight = if paint.bold {
             r#" font-weight="bold""#
         } else {
@@ -596,6 +623,7 @@ const CURSOR_THICKNESS: f32 = 2.0;
 fn write_cursor(
     out: &mut String,
     rows: &[Vec<EmuCell>],
+    cols: usize,
     (cx, cy): (u16, usize),
     colors: &dyn RenderColors,
     nerd_font: &NerdFont,
@@ -608,17 +636,12 @@ fn write_cursor(
     let cell_h = layout.cell_h;
     let header_h = layout.header_h;
     let cell = cell_at(row, cx as usize);
-    // A double-width character stores its second half as a continuation cell,
-    // so the cursor has to cover both or it clips the glyph down the middle.
-    let span = if row
-        .get(cx as usize + 1)
-        .is_some_and(|next| next.ch == CONTINUATION)
-    {
-        2.0
-    } else {
-        1.0
-    };
-    let w = span * cell_w;
+    // A wide character stores its trailing halves as continuation cells, so
+    // the cursor has to cover the whole recorded span or it clips the glyph.
+    // A zero-width lead owns its column, so the cursor still marks that one
+    // even though the lead itself paints nothing to redraw.
+    let span = span_columns(row, cx as usize, cols);
+    let w = span.max(1) as f32 * cell_w;
     let x = layout.content_left + cx as f32 * cell_w;
     let y = header_h + layout.content_top + cy as f32 * cell_h;
     let fill = hex(colors.color(ColorSlot::Cursor));
@@ -641,7 +664,7 @@ fn write_cursor(
     write_text_run(
         out,
         row,
-        cx as usize..cx as usize + span as usize,
+        cx as usize..cx as usize + span,
         cy,
         paint,
         nerd_font,
@@ -835,10 +858,19 @@ pub(crate) fn render_svg_with_layout(
     for (y, row) in rows.iter().enumerate() {
         let mut x = 0;
         while x < cols {
+            // Continuations belong to their lead's span and zero-width leads
+            // paint nothing: neither starts a run, but both consume a column.
+            if span_columns(row, x, cols) == 0 {
+                x += 1;
+                continue;
+            }
             let paint = cell_paint(cell_at(row, x), colors);
-            let mut run = 1;
-            while x + run < cols && cell_paint(cell_at(row, x + run), colors) == paint {
-                run += 1;
+            let mut run = span_columns(row, x, cols);
+            while x + run < cols && span_columns(row, x + run, cols) > 0 {
+                if cell_paint(cell_at(row, x + run), colors) != paint {
+                    break;
+                }
+                run += span_columns(row, x + run, cols);
             }
             write_text_run(&mut out, row, x..x + run, y, paint, &nerd_font, layout);
             x += run;
@@ -846,7 +878,7 @@ pub(crate) fn render_svg_with_layout(
     }
 
     if let Some(at) = cursor {
-        write_cursor(&mut out, rows, at, colors, &nerd_font, layout);
+        write_cursor(&mut out, rows, cols, at, colors, &nerd_font, layout);
     }
 
     // Last, so the content it frames cannot paint over it. The rect is inset
@@ -1061,11 +1093,13 @@ mod tests {
     /// cell would cover half the glyph and redraw it squashed into that half.
     #[test]
     fn a_block_cursor_covers_a_double_width_character() {
-        let rows = vec![vec![
-            cell("日", None, None),
-            cell(CONTINUATION, None, None),
-            cell("a", None, None),
-        ]];
+        // The lead declares its recorded span; the renderer caps it at the
+        // trailing continuation rather than remeasuring the text.
+        let mut lead = cell("日", None, None);
+        lead.width = 2;
+        let mut trailer = cell(CONTINUATION, None, None);
+        trailer.width = 0;
+        let rows = vec![vec![lead, trailer, cell("a", None, None)]];
         let svg = render_svg(
             &rows,
             3,

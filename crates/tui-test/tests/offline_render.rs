@@ -84,6 +84,49 @@ fn undecorated() -> SnapshotRenderOptions {
         .with_border_width(0.0)
 }
 
+/// One cell with an explicit recorded span: the offline conversion preserves
+/// this width into the render grid instead of remeasuring the text.
+fn span_cell(text: &str, width: u16, underline: SnapshotUnderline) -> SnapshotCell {
+    SnapshotCell::new(
+        text.to_string(),
+        width,
+        SnapshotColor::Default,
+        SnapshotColor::Default,
+        Attrs::empty(),
+        underline,
+        SnapshotColor::Default,
+        None,
+        None,
+    )
+    .expect("test span cell is valid")
+}
+
+fn span_parts(cols: u32, cells: Vec<SnapshotCell>, cursor: SnapshotCursor) -> SnapshotParts {
+    assert_eq!(
+        cells.len() as u64,
+        u64::from(cols),
+        "test grid must fill its single row"
+    );
+    SnapshotParts {
+        cols,
+        rows: 1,
+        scope: SnapshotScope::Viewport,
+        viewport_origin: 0,
+        cells,
+        palette: resolved_palette(),
+        default_foreground: Rgb::new(192, 192, 192),
+        default_background: Rgb::new(0, 0, 0),
+        default_cursor: Rgb::new(9, 9, 9),
+        cursor,
+        title: None,
+        metadata: SnapshotMetadata::default(),
+    }
+}
+
+fn shown_cursor(col: u32, shape: SnapshotCursorShape) -> SnapshotCursor {
+    SnapshotCursor::new(col, 0, true, true, shape, Rgb::new(255, 0, 0), None)
+}
+
 /// U03-B: offline rendering starts no process, PTY, session, or daemon.
 ///
 /// This test builds its snapshot from validated parts and renders it with no
@@ -287,6 +330,143 @@ fn fractional_metrics_share_one_svg_size() {
     }
 }
 
+/// Round-3: a recorded width-3 span paints all three columns in SVG.
+///
+/// The conversion used to drop `SnapshotCell.width`, so the renderer capped
+/// every span at two columns: an underlined width-3 blank drew a 20px
+/// underline while its span covered 30px, stretched the neighbor into the
+/// third column, and sized the cursor to two. Spans now come from the
+/// recorded width: the underline covers the full 30px, `x` keeps its own
+/// 10px, and the block cursor covers 30px.
+#[test]
+fn recorded_width3_span_paints_three_columns_in_svg() {
+    let parts = span_parts(
+        4,
+        vec![
+            span_cell(" ", 3, SnapshotUnderline::Single),
+            span_cell("", 0, SnapshotUnderline::None),
+            span_cell("", 0, SnapshotUnderline::None),
+            span_cell("x", 1, SnapshotUnderline::None),
+        ],
+        shown_cursor(0, SnapshotCursorShape::Block),
+    );
+    let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+    let options = undecorated().with_cell_width(10.0).with_cell_height(20.0);
+    let rendered = tui_test::render_snapshot_svg(&snapshot, &options).expect("offline SVG renders");
+    assert_eq!((rendered.width(), rendered.height()), (40, 20));
+    let svg = rendered.svg();
+    assert!(
+        svg.contains(
+            "text-decoration=\"underline\" textLength=\"30.00\" \
+             lengthAdjust=\"spacingAndGlyphs\" xml:space=\"preserve\"> <"
+        ),
+        "the blank span underlines all three columns: {svg}"
+    );
+    assert!(
+        svg.contains(
+            "textLength=\"10.00\" lengthAdjust=\"spacingAndGlyphs\" \
+             xml:space=\"preserve\">x<"
+        ),
+        "the neighbor keeps its own column instead of stretching: {svg}"
+    );
+    assert!(
+        !svg.contains(
+            "textLength=\"30.00\" lengthAdjust=\"spacingAndGlyphs\" \
+             xml:space=\"preserve\">x<"
+        ),
+        "the neighbor must not absorb the continuations: {svg}"
+    );
+    assert!(
+        svg.contains("width=\"30.00\" height=\"20.00\" fill=\"#ff0000\""),
+        "the block cursor covers the recorded span: {svg}"
+    );
+    assert!(rendered.evidence().cursor_drawn());
+}
+
+/// Round-3: a clipped width-2 lead fits its last column in SVG.
+///
+/// A width-2 glyph in the final column keeps its recorded width but paints
+/// only the remaining column: the joint run stays 20px, the cursor covers
+/// 10px, and nothing overflows the grid.
+#[test]
+fn clipped_width2_lead_fits_its_last_column_in_svg() {
+    let parts = span_parts(
+        2,
+        vec![
+            span_cell("a", 1, SnapshotUnderline::None),
+            span_cell("漢", 2, SnapshotUnderline::None),
+        ],
+        shown_cursor(1, SnapshotCursorShape::Block),
+    );
+    let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+    let options = undecorated().with_cell_width(10.0).with_cell_height(20.0);
+    let rendered = tui_test::render_snapshot_svg(&snapshot, &options).expect("offline SVG renders");
+    assert_eq!((rendered.width(), rendered.height()), (20, 20));
+    let svg = rendered.svg();
+    assert!(
+        svg.contains(
+            "textLength=\"20.00\" lengthAdjust=\"spacingAndGlyphs\" \
+             xml:space=\"preserve\">a漢<"
+        ),
+        "the joint run fits both columns without overflowing: {svg}"
+    );
+    assert!(
+        svg.contains(
+            "textLength=\"10.00\" lengthAdjust=\"spacingAndGlyphs\" \
+             xml:space=\"preserve\">漢<"
+        ),
+        "the cursor redraw fits the glyph into its column: {svg}"
+    );
+    assert!(
+        svg.contains("width=\"10.00\" height=\"20.00\" fill=\"#ff0000\""),
+        "the block cursor covers the clipped column only: {svg}"
+    );
+    assert!(
+        !svg.contains("width=\"20.00\" height=\"20.00\" fill=\"#ff0000\""),
+        "the cursor must not use the recorded width past the row end: {svg}"
+    );
+}
+
+/// Round-3: a zero-width lead paints nothing but keeps its column in SVG.
+///
+/// A lone combining mark owns its column with width zero: no text element,
+/// no decoration, and the neighbor keeps its own column (`b` at x=10).
+#[test]
+fn zero_width_lead_paints_nothing_in_svg() {
+    let parts = span_parts(
+        2,
+        vec![
+            span_cell("́", 0, SnapshotUnderline::Single),
+            span_cell("b", 1, SnapshotUnderline::None),
+        ],
+        hidden_cursor(),
+    );
+    let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+    let options = undecorated().with_cell_width(10.0).with_cell_height(20.0);
+    let rendered = tui_test::render_snapshot_svg(&snapshot, &options).expect("offline SVG renders");
+    assert_eq!((rendered.width(), rendered.height()), (20, 20));
+    let svg = rendered.svg();
+    assert!(
+        svg.contains(
+            "textLength=\"10.00\" lengthAdjust=\"spacingAndGlyphs\" \
+             xml:space=\"preserve\">b<"
+        ),
+        "the neighbor fits exactly one column: {svg}"
+    );
+    assert!(
+        svg.contains("x=\"10.00\""),
+        "the neighbor starts in the second column: {svg}"
+    );
+    assert!(
+        !svg.contains("<text x=\"0.00\""),
+        "the zero-width lead draws no text in its column: {svg}"
+    );
+    assert!(
+        !svg.contains("text-decoration"),
+        "the zero-width underline paints nothing: {svg}"
+    );
+}
+
 /// U03-H: invalid metrics and scale values fail without a panic.
 #[test]
 fn invalid_metrics_and_scale_fail_without_panic() {
@@ -460,6 +640,163 @@ mod raster_tests {
         std::fs::remove_file(&path).ok();
         assert_eq!(decode_png(&saved), decode_png(rendered.png()));
         assert_eq!(evidence, *rendered.evidence());
+    }
+
+    /// Extent of one RGB color in a row band: the painted geometry the
+    /// round-3 span tests assert, not just the decoded dimensions.
+    fn band_extent(
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        y0: u32,
+        y1: u32,
+        color: [u8; 3],
+    ) -> (u32, u32, u32) {
+        let mut min_x = width;
+        let mut max_x = 0;
+        let mut count = 0;
+        for y in y0..y1.min(height) {
+            for x in 0..width {
+                let i = (y * width + x) as usize * 4;
+                if pixels[i..i + 3] == color {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x);
+                    count += 1;
+                }
+            }
+        }
+        (min_x, max_x, count)
+    }
+
+    /// Round-3 (PNG half): a recorded width-3 underline paints three columns.
+    ///
+    /// Same grid as `recorded_width3_span_paints_three_columns_in_svg` but
+    /// with the cursor hidden, so the underline is the only painted decor:
+    /// it fills 30px, not 20px. Underlines need no font lookup, so this
+    /// geometry holds on any host font.
+    #[test]
+    fn recorded_width3_underline_paints_three_columns_in_png() {
+        let parts = span_parts(
+            4,
+            vec![
+                span_cell(" ", 3, SnapshotUnderline::Single),
+                span_cell("", 0, SnapshotUnderline::None),
+                span_cell("", 0, SnapshotUnderline::None),
+                span_cell("x", 1, SnapshotUnderline::None),
+            ],
+            hidden_cursor(),
+        );
+        let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+        let options = undecorated().with_cell_width(10.0).with_cell_height(20.0);
+        let rendered = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+        assert_eq!((rendered.width(), rendered.height()), (40, 20));
+        let (width, height, pixels) = decode_png(rendered.png());
+        assert_eq!((width, height), (40, 20));
+        // The default-foreground underline is one pixel tall at scale 1.
+        assert_eq!(
+            band_extent(&pixels, width, height, 17, 20, [192, 192, 192]),
+            (0, 29, 30),
+            "the underline covers all three columns"
+        );
+    }
+
+    /// Round-3 (PNG half): a block cursor covers a width-3 span.
+    ///
+    /// The blank lead redraws no glyph, so the cursor fill is the only red
+    /// in the image: 30x20 with no font lookup involved.
+    #[test]
+    fn recorded_width3_cursor_covers_three_columns_in_png() {
+        let parts = span_parts(
+            4,
+            vec![
+                span_cell(" ", 3, SnapshotUnderline::None),
+                span_cell("", 0, SnapshotUnderline::None),
+                span_cell("", 0, SnapshotUnderline::None),
+                span_cell("x", 1, SnapshotUnderline::None),
+            ],
+            shown_cursor(0, SnapshotCursorShape::Block),
+        );
+        let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+        let options = undecorated().with_cell_width(10.0).with_cell_height(20.0);
+        let rendered = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+        assert_eq!((rendered.width(), rendered.height()), (40, 20));
+        assert!(rendered.evidence().cursor_drawn());
+        let (width, height, pixels) = decode_png(rendered.png());
+        assert_eq!((width, height), (40, 20));
+        assert_eq!(
+            band_extent(&pixels, width, height, 0, 20, [255, 0, 0]),
+            (0, 29, 600),
+            "the block cursor covers the recorded span"
+        );
+    }
+
+    /// Round-3 (PNG half): a clipped width-2 lead paints one column.
+    ///
+    /// The lead keeps its recorded width of two but the grid ends after one
+    /// column, so an underline cursor covers 10px and nothing overflows the
+    /// 20px panel. The lead holds a narrow `W` with a recorded width of two
+    /// rather than a CJK glyph, so no host CJK font is needed: the renderer
+    /// cannot tell the two apart, and both take the same clipping path.
+    #[test]
+    fn clipped_width2_lead_paints_one_column_in_png() {
+        let parts = span_parts(
+            2,
+            vec![
+                span_cell("a", 1, SnapshotUnderline::None),
+                span_cell("W", 2, SnapshotUnderline::None),
+            ],
+            shown_cursor(1, SnapshotCursorShape::Underline),
+        );
+        let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+        let options = undecorated().with_cell_width(10.0).with_cell_height(20.0);
+        let rendered = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+        assert_eq!((rendered.width(), rendered.height()), (20, 20));
+        assert!(rendered.evidence().cursor_drawn());
+        let (width, height, pixels) = decode_png(rendered.png());
+        assert_eq!((width, height), (20, 20));
+        // An underline cursor is two pixels tall at scale 1 and redraws no
+        // glyph, so this geometry needs no font lookup either.
+        assert_eq!(
+            band_extent(&pixels, width, height, 0, 20, [255, 0, 0]),
+            (10, 19, 20),
+            "the cursor covers the clipped column only"
+        );
+    }
+
+    /// Round-3 (PNG half): a zero-width lead paints nothing.
+    ///
+    /// Same grid as `zero_width_lead_paints_nothing_in_svg`: the underline
+    /// band stays background, while the neighbor glyph still lands in the
+    /// second column.
+    #[test]
+    fn zero_width_lead_paints_nothing_in_png() {
+        let parts = span_parts(
+            2,
+            vec![
+                span_cell("́", 0, SnapshotUnderline::Single),
+                span_cell("b", 1, SnapshotUnderline::None),
+            ],
+            hidden_cursor(),
+        );
+        let snapshot = TerminalSnapshot::try_new(parts).expect("test snapshot is valid");
+        let options = undecorated().with_cell_width(10.0).with_cell_height(20.0);
+        let rendered = render_snapshot_png(&snapshot, &options).expect("offline PNG renders");
+        assert_eq!((rendered.width(), rendered.height()), (20, 20));
+        let (width, height, pixels) = decode_png(rendered.png());
+        assert_eq!((width, height), (20, 20));
+        let gray = [192, 192, 192];
+        assert_eq!(
+            band_extent(&pixels, width, height, 17, 20, gray),
+            (20, 0, 0),
+            "the zero-width underline paints nothing"
+        );
+        let (_, _, glyphs) = band_extent(&pixels, width, height, 0, 17, gray);
+        assert!(glyphs > 0, "the neighbor glyph still renders");
+        let (min_x, _, _) = band_extent(&pixels, width, height, 0, 17, gray);
+        assert!(
+            min_x >= 10,
+            "no glyph pixels leak into the zero-width column"
+        );
     }
 
     /// U03-D: hidden and clipped cursors stay hidden in PNG output.

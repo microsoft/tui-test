@@ -358,14 +358,14 @@ impl FrameRenderer for GridRenderer {
                 if paint.invisible {
                     continue;
                 }
-                let span = if row
-                    .get(x + 1)
-                    .is_some_and(|next| next.ch.as_str() == CONTINUATION)
-                {
-                    2
-                } else {
-                    1
-                };
+                // The whole recorded span: glyph fitting and decorations
+                // cover every continuation, and a clipped lead fits the
+                // columns it has left. Zero-width leads paint nothing here;
+                // the background pass above already filled their column.
+                let span = svg::span_columns(row, x, cols.into());
+                if span == 0 {
+                    continue;
+                }
                 let cell_origin_x =
                     origin_x + (layout.content_left + x as f32 * layout.cell_w) * scale;
                 let cell_origin_y = origin_y
@@ -439,6 +439,7 @@ impl FrameRenderer for GridRenderer {
                 &mut self.pixmap,
                 &mut self.fonts,
                 grid,
+                cols.into(),
                 cursor,
                 colors,
                 origin_x,
@@ -501,6 +502,7 @@ fn draw_cursor(
     pixmap: &mut Pixmap,
     fonts: &mut FontSystem,
     grid: &[Vec<EmuCell>],
+    cols: usize,
     (cx, cy): (u16, usize),
     colors: &dyn RenderColors,
     panel_origin_x: f32,
@@ -515,14 +517,11 @@ fn draw_cursor(
     let Some(cell) = row.get(usize::from(cx)) else {
         return;
     };
-    let span = if row
-        .get(usize::from(cx) + 1)
-        .is_some_and(|next| next.ch.as_str() == CONTINUATION)
-    {
-        2
-    } else {
-        1
-    };
+    // The cursor covers the whole recorded span; a zero-width lead still
+    // owns its column, so the cursor marks that one even though there is
+    // no glyph to redraw under it.
+    let recorded = svg::span_columns(row, cx.into(), cols);
+    let span = recorded.max(1);
     let column = usize::from(cx);
     let origin_x = panel_origin_x + (layout.content_left + f32::from(cx) * layout.cell_w) * scale;
     let origin_y =
@@ -563,7 +562,8 @@ fn draw_cursor(
         }
     }
 
-    if cell.ch.as_str() == CONTINUATION || cell.ch.chars().all(char::is_whitespace) {
+    if recorded == 0 || cell.ch.as_str() == CONTINUATION || cell.ch.chars().all(char::is_whitespace)
+    {
         return;
     }
     let paint = svg::cell_paint(cell, colors);

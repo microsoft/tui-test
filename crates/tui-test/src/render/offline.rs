@@ -901,6 +901,10 @@ fn snapshot_cell_to_emu(cell: &crate::snapshot::SnapshotCell) -> EmuCell {
     }
     EmuCell {
         ch: CompactString::from(cell.text()),
+        // The recorded span travels with the cell: the shared renderer fits
+        // glyphs, clips at the row end, and sizes decorations and cursors
+        // from it instead of remeasuring the text.
+        width: cell.width(),
         fg: snapshot_color_to_emu(cell.fg()),
         bg: snapshot_color_to_emu(cell.bg()),
         underline: snapshot_underline_to_emu(cell.underline()),
