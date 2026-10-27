@@ -1,6 +1,7 @@
 //! Terminal snapshot serialization + on-disk `.snap` comparison.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{json, Map, Value};
 
@@ -11,6 +12,56 @@ pub enum SnapshotStatus {
     Written,
     Updated,
     Failed { expected: String, actual: String },
+}
+
+/// Write policy for [`compare_with_policy`].
+///
+/// The policy selects whether a comparison may write a baseline file.
+/// It never selects ambient behavior: the new API reads no update,
+/// `BLESS`, or `INSTA` environment variables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SnapshotPolicy {
+    /// Compare only. A missing baseline returns [`PolicyOutcome::Missing`]
+    /// and different content returns [`PolicyOutcome::Different`]; no file
+    /// or directory is made.
+    #[default]
+    CheckOnly,
+    /// Write the baseline only when no file exists yet. The write uses an
+    /// atomic create-new step (a temporary file plus a hard link) that fails
+    /// when the file already exists, so a concurrent winner is never replaced.
+    /// Different content returns [`PolicyOutcome::Different`]; nothing is
+    /// replaced.
+    CreateMissing,
+    /// Write the baseline when it is missing and replace it when it differs.
+    /// Every write goes through an atomic temporary-file-plus-rename step, so
+    /// a failed write keeps the previous baseline. Unlike legacy [`compare`],
+    /// a replace installs a regular file at the baseline path: an existing
+    /// baseline symlink is replaced, never followed, and its target is left
+    /// untouched.
+    Replace,
+}
+
+/// Structured outcome of [`compare_with_policy`].
+///
+/// This is a new result type. The exhaustive [`SnapshotStatus`] enum from the
+/// recorded commit is unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyOutcome {
+    /// The saved baseline and the compared content match after trimming
+    /// surrounding whitespace on both sides. This is
+    /// comparison-after-trimming, not byte identity: `"  one\n"` equals
+    /// `"one"`, and the stored bytes keep their recorded trimmed form. No
+    /// write happens under any policy.
+    Equal,
+    /// No baseline file exists and the policy wrote nothing.
+    Missing,
+    /// A baseline file exists whose trimmed content differs, and the policy
+    /// wrote nothing.
+    Different { expected: String, actual: String },
+    /// The policy wrote a baseline where none existed.
+    Created,
+    /// The policy replaced an existing baseline with different bytes.
+    Replaced,
 }
 
 fn snapshot_dir(base: &Path) -> PathBuf {
@@ -174,9 +225,97 @@ fn box_view(view: &str, width: u16, title: Option<&str>) -> String {
     out.join("\n")
 }
 
+/// Compare serialized snapshot data against the stored baseline under an
+/// explicit write policy. Snapshots are resolved under `base`/`__snapshots__`
+/// so they land in the client's working directory rather than the daemon's.
+///
+/// When the saved baseline matches `content` after trimming surrounding
+/// whitespace on both sides, this returns [`PolicyOutcome::Equal`]
+/// without a write under all policies. [`SnapshotPolicy::CheckOnly`] never
+/// makes a file or a directory. [`SnapshotPolicy::CreateMissing`] writes only
+/// through an atomic create-new step; when a concurrent writer makes the file
+/// first, the winner's file is compared again and this returns `Equal` or
+/// `Different` without replacing it. [`SnapshotPolicy::Replace`] writes
+/// through an atomic temporary-file-plus-rename step, so a failed write keeps
+/// the previous baseline. A replace installs a regular file at the baseline
+/// path: unlike legacy [`compare`], which follows a baseline symlink and
+/// updates its target, a policy replace swaps the link itself away and never
+/// touches the old target.
+///
+/// No ambient update, `BLESS`, or `INSTA` environment variable is read.
+pub fn compare_with_policy(
+    base: &Path,
+    name: &str,
+    content: &str,
+    policy: SnapshotPolicy,
+) -> std::io::Result<PolicyOutcome> {
+    let path = snapshot_path(base, name);
+    let trimmed = content.trim();
+    match std::fs::read_to_string(&path) {
+        Ok(existing) => {
+            let existing = existing.trim();
+            if existing == trimmed {
+                return Ok(PolicyOutcome::Equal);
+            }
+            let outcome = PolicyOutcome::Different {
+                expected: existing.to_string(),
+                actual: trimmed.to_string(),
+            };
+            match policy {
+                SnapshotPolicy::CheckOnly | SnapshotPolicy::CreateMissing => Ok(outcome),
+                SnapshotPolicy::Replace => {
+                    atomic_replace(base, &path, trimmed)?;
+                    Ok(PolicyOutcome::Replaced)
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match policy {
+            SnapshotPolicy::CheckOnly => Ok(PolicyOutcome::Missing),
+            SnapshotPolicy::CreateMissing => {
+                let body = format!("{trimmed}\n");
+                match create_new(&path, base, &body) {
+                    Ok(()) => Ok(PolicyOutcome::Created),
+                    Err(race) if race.kind() == std::io::ErrorKind::AlreadyExists => {
+                        // A concurrent writer made the file first. Compare the
+                        // winner's file again and never replace it.
+                        let existing = std::fs::read_to_string(&path)?;
+                        let existing = existing.trim();
+                        if existing == trimmed {
+                            Ok(PolicyOutcome::Equal)
+                        } else {
+                            Ok(PolicyOutcome::Different {
+                                expected: existing.to_string(),
+                                actual: trimmed.to_string(),
+                            })
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            SnapshotPolicy::Replace => {
+                atomic_replace(base, &path, trimmed)?;
+                Ok(PolicyOutcome::Created)
+            }
+        },
+        Err(error) => Err(error),
+    }
+}
+
 /// Compare a freshly serialized snapshot against the stored one. Snapshots are
 /// resolved under `base`/`__snapshots__` so they land in the client's working
 /// directory rather than the daemon's.
+///
+/// This keeps the recorded signature and behavior: a missing baseline is
+/// written and reported as `Written`, different content is replaced and
+/// reported as `Updated` only when `update` is set, and otherwise reported as
+/// `Failed`.
+///
+/// Link behavior differs from [`compare_with_policy`]: this legacy API writes
+/// with `std::fs::write`, which follows an existing baseline symlink and
+/// updates its TARGET (the link survives). Only
+/// [`compare_with_policy`] with [`SnapshotPolicy::Replace`] uses the safe
+/// atomic temporary-file-plus-rename step, which installs a regular file at
+/// the baseline path and leaves the link target untouched.
 pub fn compare(
     base: &Path,
     name: &str,
@@ -185,24 +324,185 @@ pub fn compare(
 ) -> std::io::Result<SnapshotStatus> {
     let path = snapshot_path(base, name);
     let trimmed = content.trim();
-    if !path.exists() {
-        std::fs::create_dir_all(snapshot_dir(base))?;
-        std::fs::write(&path, format!("{trimmed}\n"))?;
-        return Ok(SnapshotStatus::Written);
+    match std::fs::read_to_string(&path) {
+        Ok(existing) => {
+            let existing = existing.trim();
+            if existing == trimmed {
+                return Ok(SnapshotStatus::Passed);
+            }
+            if update {
+                std::fs::create_dir_all(snapshot_dir(base))?;
+                // Legacy follow-link write: when the baseline is a symlink,
+                // the new bytes land in its target and the link survives.
+                std::fs::write(&path, format!("{trimmed}\n"))?;
+                Ok(SnapshotStatus::Updated)
+            } else {
+                Ok(SnapshotStatus::Failed {
+                    expected: existing.to_string(),
+                    actual: trimmed.to_string(),
+                })
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(snapshot_dir(base))?;
+            std::fs::write(&path, format!("{trimmed}\n"))?;
+            Ok(SnapshotStatus::Written)
+        }
+        Err(error) => Err(error),
     }
-    let existing = std::fs::read_to_string(&path)?;
-    let existing = existing.trim();
-    if existing == trimmed {
-        return Ok(SnapshotStatus::Passed);
+}
+
+/// Save `body` to `path`, failing when the file already exists.
+///
+/// The parent directory is made first because no step below makes it. The
+/// bytes go to a uniquely named temporary file made with
+/// [`std::fs::OpenOptions::create_new`], and only [`std::fs::hard_link`]
+/// places the baseline: linking fails when the file already exists, so this
+/// call never replaces a baseline that another writer made first, and
+/// concurrent readers only ever see a missing or a complete file, never a
+/// partial write.
+fn create_new(path: &Path, base: &Path, body: &str) -> std::io::Result<()> {
+    let dir = snapshot_dir(base);
+    std::fs::create_dir_all(&dir)?;
+    let stamp = REPLACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp = dir.join(temp_file_name(&path_lossless_name(path), "new", stamp));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    // The temporary file is exclusively owned from here, so a partial write
+    // must not leave it behind for a later writer to trip over.
+    if let Err(error) = std::io::Write::write_all(&mut file, body.as_bytes()) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error);
     }
-    if update {
-        std::fs::write(&path, format!("{trimmed}\n"))?;
-        return Ok(SnapshotStatus::Updated);
+    drop(file);
+    let link = std::fs::hard_link(&temp, path);
+    // The temporary file is only a vehicle; the linked baseline (or the
+    // concurrent winner's file) is what stays.
+    let _ = std::fs::remove_file(&temp);
+    link
+}
+
+/// Counter that keeps temporary replacement names distinct across threads.
+static REPLACE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// The stamp the next replacement will use, for tests only.
+///
+/// Integration tests share one process-global counter across threads, so
+/// instead of assuming a stamp value they read the stamp in play and occupy
+/// exactly that temporary slot. Hidden from documentation; production code
+/// never calls this.
+#[doc(hidden)]
+pub fn __test_only_replace_counter() -> u64 {
+    REPLACE_COUNTER.load(Ordering::Relaxed)
+}
+
+/// Test-only mid-write fault hook, compiled out of release builds.
+///
+/// When the environment variable `TUI_TEST_SNAPSHOT_WRITE_FAULT` holds
+/// `<dir>:<n>` and `dir` is this call's snapshot directory, the first `n`
+/// body bytes travel through the exclusively owned temporary handle and the
+/// write then fails with an injected error, exercising partial-write cleanup.
+/// The scope is one directory so tests sharing a process stay unaffected.
+/// Production code otherwise reads no environment variables.
+#[cfg(debug_assertions)]
+fn injected_partial_write(dir: &Path) -> Option<usize> {
+    let spec = std::env::var("TUI_TEST_SNAPSHOT_WRITE_FAULT").ok()?;
+    let (scope, limit) = spec.rsplit_once(':')?;
+    (Path::new(scope) == dir)
+        .then(|| limit.parse().ok())
+        .flatten()
+}
+
+/// Save `trimmed` to `path` through a temporary file plus an atomic rename.
+///
+/// The rename either installs the full new baseline or leaves the previous
+/// baseline unchanged, so an explicit write failure keeps the previous bytes.
+/// The temporary file lives in the same directory so the rename stays atomic.
+fn atomic_replace(base: &Path, path: &Path, trimmed: &str) -> std::io::Result<()> {
+    let dir = snapshot_dir(base);
+    std::fs::create_dir_all(&dir)?;
+    let stamp = REPLACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp = dir.join(temp_file_name(&path_lossless_name(path), "tmp", stamp));
+    // Exclusively create the temporary file: when the path already exists (a
+    // stale file, a planted symlink, or a concurrent writer's temp), the open
+    // fails and the preexisting path is left alone — it is not ours to write
+    // through or remove. Writing through the exclusively owned handle (never
+    // `std::fs::write`, which follows symlinks) keeps a preexisting symlink
+    // from redirecting bytes into the baseline.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    // From here the temporary file is exclusively owned: only a completed
+    // rename installs new bytes, and any failure below removes the temp file.
+    let body = format!("{trimmed}\n");
+    let write = (|| -> std::io::Result<()> {
+        #[cfg(debug_assertions)]
+        if let Some(limit) = injected_partial_write(&dir) {
+            let mut limit = limit.min(body.len());
+            while !body.is_char_boundary(limit) {
+                limit -= 1;
+            }
+            std::io::Write::write_all(&mut file, &body.as_bytes()[..limit])?;
+            std::io::Write::flush(&mut file)?;
+            return Err(std::io::Error::other("injected partial-write fault"));
+        }
+        std::io::Write::write_all(&mut file, body.as_bytes())?;
+        std::io::Write::flush(&mut file)?;
+        drop(file);
+        std::fs::rename(&temp, path)
+    })();
+    if write.is_err() {
+        // A failed replacement must not leave a partial baseline behind.
+        // The previous baseline is already intact because only a completed
+        // rename installs new bytes; drop the owned temporary file.
+        let _ = std::fs::remove_file(&temp);
     }
-    Ok(SnapshotStatus::Failed {
-        expected: existing.to_string(),
-        actual: trimmed.to_string(),
-    })
+    write
+}
+
+/// File stem of `path` for temporary-file naming, without touching the
+/// sanitization rules for snapshot names.
+fn path_lossless_name(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("snapshot")
+        .to_string()
+}
+
+/// Temporary-file name for a baseline stem that stays short at any input length.
+///
+/// The full stem cannot be embedded: a 250-byte snapshot name makes a valid
+/// 255-byte `.snap` file, but `.{stem}.tmp-{pid}-{stamp}` would already be
+/// 263 bytes and fail with `ENAMETOOLONG`. The name below carries only a
+/// 64-bit FNV-1a hash of the stem plus the process id and a unique stamp, so
+/// it is bounded (well under every `NAME_MAX`) for every baseline while
+/// staying unique per baseline within a directory. `kind` separates the
+/// create-new (`"new"`) and replace (`"tmp"`) writers sharing one directory.
+/// The hash is deterministic (fixed FNV offset basis), so tests can derive
+/// the exact slot the next writer takes through
+/// [`__test_only_temp_file_name`].
+fn temp_file_name(stem: &str, kind: &str, stamp: u64) -> String {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in stem.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!(".{kind}-{hash:016x}-{}-{stamp}", std::process::id())
+}
+
+/// Temporary-file name the writers derive for `stem`, for tests only.
+///
+/// Integration tests plant files at the exact slot the next writer takes, so
+/// the derivation is shared through this seam rather than mirrored.
+/// Hidden from documentation; production code never calls this.
+#[doc(hidden)]
+pub fn __test_only_temp_file_name(stem: &str, kind: &str, stamp: u64) -> String {
+    temp_file_name(stem, kind, stamp)
 }
 
 #[cfg(test)]
