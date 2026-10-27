@@ -1591,6 +1591,79 @@ pub(crate) fn write_failure_artifact(
 /// report; every terminal-derived file is marked omitted and the missing
 /// terminal evidence is stated explicitly. This function only renders and
 /// writes files; it takes no lifecycle, session, or emulator-state locks.
+fn escape_html(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// F3-A: observation-free HTML fallback report. Carries the finalized
+/// operation, reason, context, and history with an explicit statement that
+/// terminal evidence is unavailable. All embedded data is HTML-escaped;
+/// the byte bound is enforced by the caller's `write_optional_file` limit.
+fn observation_free_html(details: &FailureReport) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from(
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Failure report</title>\n</head>\n<body>\n<h1>Failure report</h1>\n<p>terminal evidence unavailable</p>\n",
+    );
+    let _ = writeln!(
+        out,
+        "<h2>Operation</h2>\n<p>{}</p>",
+        escape_html(&details.operation.name)
+    );
+    let _ = writeln!(
+        out,
+        "<h2>Reason</h2>\n<p>{}</p>",
+        escape_html(failure_reason_code(details.reason))
+    );
+    let _ = writeln!(
+        out,
+        "<h2>Summary</h2>\n<p>{}</p>",
+        escape_html(&details.summary)
+    );
+    out.push_str("<h2>Context</h2>\n");
+    if details.context.is_empty() {
+        out.push_str("<p>none</p>\n");
+    } else {
+        out.push_str("<dl>\n");
+        for (key, value) in &details.context {
+            let _ = writeln!(
+                out,
+                "<dt>{}</dt><dd>{}</dd>",
+                escape_html(key),
+                escape_html(value)
+            );
+        }
+        out.push_str("</dl>\n");
+    }
+    out.push_str("<h2>History</h2>\n");
+    if details.recent_operations.is_empty() {
+        out.push_str("<p>none</p>\n");
+    } else {
+        out.push_str("<ol>\n");
+        for event in &details.recent_operations {
+            let _ = writeln!(
+                out,
+                "<li>{} ({})</li>",
+                escape_html(&event.name),
+                escape_html(&event.result)
+            );
+        }
+        out.push_str("</ol>\n");
+    }
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
 pub(crate) fn write_observation_free_artifact(
     options: &FailureArtifactOptions,
     details: &mut FailureReport,
@@ -1671,6 +1744,32 @@ pub(crate) fn write_observation_free_artifact(
                     .to_string_lossy()
                     .into_owned(),
             );
+        }
+    }
+
+    // F3-A: observation-free HTML fallback. Mirrors the report_html file
+    // kind used with an observation, but carries only finalized details
+    // (operation, reason, context, history) since no terminal snapshot
+    // exists. Touches only `details` and the filesystem: no
+    // lifecycle/session/terminal-state locks are acquired.
+    if options.wants_html() {
+        let html_name = details.artifact_name("html");
+        let html = observation_free_html(details);
+        write_optional_file(
+            &directory,
+            "report_html",
+            &html_name,
+            html.as_bytes(),
+            HTML_LIMIT as u64,
+            &mut total,
+            &mut files,
+            &mut reference.errors,
+        );
+        if files
+            .last()
+            .is_some_and(|file| file.status == ArtifactFileStatus::Written)
+        {
+            reference.report_html = Some(directory.join(&html_name).to_string_lossy().into_owned());
         }
     }
 

@@ -7545,6 +7545,294 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    // F3-A: observation-free HTML fallback. Html mode writes only the HTML
+    // viewer (no manifest, no markdown); All mode writes manifest +
+    // markdown + HTML. Both tests cover the startup timeout and the
+    // busy-state cancellation paths, holding the blocking work until after
+    // the file assertions prove the files were written without it.
+    fn assert_observation_free_html_report(
+        error: &TuiTestError,
+        reason: FailureReason,
+        root: &std::path::Path,
+    ) {
+        let details = error
+            .details
+            .as_ref()
+            .expect("acquisition error must carry finalized details");
+        assert_eq!(details.reason, reason);
+        let artifact = error
+            .artifact
+            .as_ref()
+            .expect("observation-free failure must write a failure file");
+        assert_eq!(artifact.status, FailureArtifactStatus::Partial);
+        let path = artifact
+            .report_html
+            .as_ref()
+            .expect("HTML report must be referenced");
+        assert!(
+            std::path::Path::new(path).starts_with(root),
+            "HTML report must live under the artifact directory: {path}"
+        );
+        assert!(
+            std::path::Path::new(path).is_file(),
+            "missing HTML report: {path}"
+        );
+        let html = std::fs::read_to_string(path).expect("HTML report must be readable");
+        assert!(
+            html.contains("wait.quiet"),
+            "HTML report must carry the operation"
+        );
+        assert!(
+            html.contains("timed_out") || html.contains("cancelled"),
+            "HTML report must carry the reason"
+        );
+        assert!(
+            html.contains("terminal evidence unavailable"),
+            "HTML report must state that terminal evidence is unavailable"
+        );
+    }
+
+    fn assert_observation_free_all_reports(
+        error: &TuiTestError,
+        reason: FailureReason,
+        root: &std::path::Path,
+    ) {
+        let details = error
+            .details
+            .as_ref()
+            .expect("acquisition error must carry finalized details");
+        assert_eq!(details.reason, reason);
+        let artifact = error
+            .artifact
+            .as_ref()
+            .expect("observation-free failure must write a failure file");
+        assert_eq!(artifact.status, FailureArtifactStatus::Partial);
+        for path in [&artifact.manifest, &artifact.report, &artifact.report_html]
+            .into_iter()
+            .flatten()
+        {
+            assert!(
+                std::path::Path::new(path).is_file(),
+                "missing failure file: {path}"
+            );
+            assert!(
+                std::path::Path::new(path).starts_with(root),
+                "failure file must live under the artifact directory: {path}"
+            );
+        }
+        let manifest = std::fs::read_to_string(
+            artifact
+                .manifest
+                .as_ref()
+                .expect("manifest must be referenced"),
+        )
+        .expect("manifest must be readable");
+        assert!(
+            manifest.contains("wait.quiet"),
+            "manifest must carry the operation: {manifest}"
+        );
+        assert!(
+            manifest.contains("timed_out") || manifest.contains("cancelled"),
+            "manifest must carry the reason"
+        );
+        assert!(
+            manifest.contains("terminal evidence unavailable"),
+            "manifest must state that terminal evidence is unavailable"
+        );
+        let report =
+            std::fs::read_to_string(artifact.report.as_ref().expect("report must be referenced"))
+                .expect("report must be readable");
+        assert!(
+            report.contains("wait.quiet"),
+            "text report must carry the operation"
+        );
+        assert_observation_free_html_report(error, reason, root);
+    }
+
+    // Html mode without an observation: startup timeout, then busy-state
+    // cancellation. Each scenario asserts the HTML file exists before the
+    // held locks are released.
+    #[test]
+    fn quiet_acquisition_html_without_observation_writes_report() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = quiet_test_engine("html-startup");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Html,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(200), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| false)
+            .expect_err("expired acquisition must report timeout");
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_html_report(&error, FailureReason::TimedOut, &root);
+        assert!(
+            error
+                .artifact
+                .as_ref()
+                .expect("artifact must be referenced")
+                .manifest
+                .is_none(),
+            "Html mode must not write a manifest"
+        );
+        assert!(
+            error
+                .artifact
+                .as_ref()
+                .expect("artifact must be referenced")
+                .report
+                .is_none(),
+            "Html mode must not write a markdown report"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "files must be written before the held startup work is released"
+        );
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = std::sync::Arc::new(Engine::new(
+            "quiet-acquisition-html-busy".into(),
+            std::sync::Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        ));
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let session_guard = engine.lock_session();
+        let _state_guard = session_guard
+            .as_ref()
+            .expect("session is live")
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Html,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_html_report(&error, FailureReason::Cancelled, &root);
+        drop(_state_guard);
+        drop(session_guard);
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // All mode without an observation: startup timeout, then busy-state
+    // cancellation. Each scenario asserts manifest + markdown + HTML exist
+    // before the held locks are released.
+    #[test]
+    fn quiet_acquisition_all_without_observation_writes_reports() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = quiet_test_engine("all-startup");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::All,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(200), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| false)
+            .expect_err("expired acquisition must report timeout");
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_all_reports(&error, FailureReason::TimedOut, &root);
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "files must be written before the held startup work is released"
+        );
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = std::sync::Arc::new(Engine::new(
+            "quiet-acquisition-all-busy".into(),
+            std::sync::Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        ));
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let session_guard = engine.lock_session();
+        let _state_guard = session_guard
+            .as_ref()
+            .expect("session is live")
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::All,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_all_reports(&error, FailureReason::Cancelled, &root);
+        drop(_state_guard);
+        drop(session_guard);
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     // F3-B: a quiet acquisition failure that lands while Close is parked
     // mid-teardown must survive Close: the recording outcome stays failed
     // and the recording file is retained.
