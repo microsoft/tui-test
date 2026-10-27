@@ -22,11 +22,12 @@ use crate::diagnostics::strings::{
 };
 use crate::diagnostics::{
     allocate_artifact_directory, allocate_trace_directory, elapsed_ms, failure_reason,
-    recording_temp_path, write_failure_artifact, ArtifactInputs, CellMismatch, CellStyleEvaluation,
-    ExecutionContext, FailureArtifactRef, FailureArtifactStatus, FailureObservation, FailureReason,
-    FailureReport, InputDetails, LocatorFailureReason, OperationEvent, OperationExpectation,
-    OperationHistory, PreparedRecording, ProcessDiagnostics, RecordingDiagnostics, RecordingStatus,
-    RuntimeDiagnostics, TraceMode, TraceOptions, TraceOutcome, RECORDING_COPY_LIMIT,
+    recording_temp_path, write_failure_artifact, write_observation_free_artifact, ArtifactInputs,
+    CellMismatch, CellStyleEvaluation, ExecutionContext, FailureArtifactRef, FailureArtifactStatus,
+    FailureObservation, FailureReason, FailureReport, InputDetails, LocatorFailureReason,
+    OperationEvent, OperationExpectation, OperationHistory, PreparedRecording, ProcessDiagnostics,
+    RecordingDiagnostics, RecordingStatus, RuntimeDiagnostics, TraceMode, TraceOptions,
+    TraceOutcome, RECORDING_COPY_LIMIT,
 };
 use crate::diagnostics::{comparison_failure, merge_failure_details};
 use crate::input::{keys, mouse};
@@ -35,11 +36,16 @@ use crate::session::{
     capture_visual_state, scroll_emulator_and_record, try_capture_visual_state,
     Session as TerminalSession, TermState, TextHighlight,
 };
+use crate::snapshot::{
+    capture_live, capture_time_ms, LiveHighlight, SnapshotMetadata, SnapshotOptions, SnapshotScope,
+    SnapshotSource, TerminalSnapshot,
+};
 use crate::terminal::cell::{rows_to_strings, Attrs, Color, EmuCell};
 use crate::terminal::emu::{
     ClipboardType, CursorShape, Emulator, KeyboardMode, MouseMode, TerminalMode,
 };
 use crate::terminal::locator::{self, Pattern};
+use crate::wait::WaitQuietOptions;
 
 pub struct Engine {
     name: String,
@@ -47,6 +53,14 @@ pub struct Engine {
     lifecycle: RwLock<()>,
     pending_lifecycle: AtomicUsize,
     session: RwLock<Option<TerminalSession>>,
+    /// Stable generation of the installed session slot, bumped on every
+    /// install or removal. Quiet waits capture it at request start and
+    /// re-check it before reporting success, so a Close/Restart that
+    /// completes mid-wait can never surface as quiet success (R8). The
+    /// pending-lifecycle counter alone is insufficient: it returns to zero
+    /// once the lifecycle operation acquires the exclusive lock, while the
+    /// teardown still runs.
+    session_generation: AtomicU64,
     spawn_spec: Mutex<Option<SpawnSpec>>,
     live: Arc<Mutex<Option<LiveTarget>>>,
     interrupt: Mutex<Option<InterruptTarget>>,
@@ -225,6 +239,55 @@ pub struct LiveFrame {
 
 /// One-line operation description for the verbose log. Open and Run redact env
 /// values (they may contain secrets) and report only the variable count.
+///
+/// Coordination flags for one request through the shared wrapper.
+struct RequestPlan {
+    waiting: bool,
+    lifecycle: bool,
+    /// Overall request deadline enforced while acquiring the lifecycle lock.
+    /// Only quiet waits set this: ordinary waits start their clocks after
+    /// acquisition, while a quiet request's deadline covers acquisition and
+    /// observation together.
+    acquisition_deadline: Option<AcquisitionDeadline>,
+    /// Acquire the shared lifecycle lock before any caller-supplied closure
+    /// runs: try first, and only poll cancellation and the deadline while
+    /// contended. Quiet waits set this so parking inside `cancelled` (or a
+    /// slow observer) already blocks lifecycle writers, never letting them
+    /// complete underneath the wait (R8). Ordinary waits poll first and
+    /// acquire after.
+    acquire_before_poll: bool,
+}
+
+struct AcquisitionDeadline {
+    deadline: Instant,
+    /// Timeout error reported when acquisition outlives `deadline`.
+    error: TuiTestError,
+}
+
+/// History and diagnostics inputs for one request through the shared wrapper.
+struct RequestMetadata {
+    name: String,
+    timeout_ms: Option<u64>,
+    log_summary: String,
+    safe_summary: String,
+    is_assertion: bool,
+    expectation: Option<OperationExpectation>,
+    input: Option<InputDetails>,
+}
+
+/// Cancellation error for a wait that observed cancellation before reporting
+/// success. Carries the Cancelled failure reason, preserving the
+/// cancellation-vs-failure distinction ordinary waits already report.
+fn cancelled_wait_error(metadata: &OperationMetadata) -> TuiTestError {
+    let message = "operation was cancelled";
+    TuiTestError::assertion(message).with_report(FailureReport::new(
+        metadata.name.clone(),
+        metadata.timeout_ms,
+        FailureReason::Cancelled,
+        message,
+    ))
+}
+
 fn operation_summary(operation: &Operation) -> String {
     match operation {
         Operation::Open(options) => format!(
@@ -266,6 +329,7 @@ impl Engine {
             lifecycle: RwLock::new(()),
             pending_lifecycle: AtomicUsize::new(0),
             session: RwLock::new(None),
+            session_generation: AtomicU64::new(0),
             spawn_spec: Mutex::new(None),
             live: Arc::new(Mutex::new(None)),
             interrupt: Mutex::new(None),
@@ -309,33 +373,136 @@ impl Engine {
             trace.validate().map_err(TuiTestError::usage)?;
         }
         self.interrupt_for_operation(&operation);
+        let canonical_name = diagnostic_operation_name(&operation);
+        let name = context
+            .operation_name
+            .clone()
+            .unwrap_or_else(|| canonical_name.to_string());
+        let plan = RequestPlan {
+            waiting: operation.is_wait(),
+            lifecycle: matches!(
+                operation,
+                Operation::Open(_)
+                    | Operation::Run(_)
+                    | Operation::Restart { .. }
+                    | Operation::Close
+                    | Operation::FinishTrace { .. }
+            ),
+            acquisition_deadline: None,
+            acquire_before_poll: false,
+        };
+        let metadata = RequestMetadata {
+            name,
+            timeout_ms: operation_timeout(&operation),
+            log_summary: operation_summary(&operation),
+            safe_summary: safe_operation_summary(&operation),
+            is_assertion: canonical_name.starts_with("expect.")
+                || canonical_name.starts_with("wait.")
+                || matches!(canonical_name, "locator.wait" | "locator.resolve"),
+            expectation: OperationExpectation::capture(&operation),
+            input: InputDetails::capture(&operation),
+        };
+        self.execute_planned_request(
+            plan,
+            metadata,
+            &context,
+            cancelled,
+            |cancelled, metadata| self.execute_inner(operation, &context, metadata, cancelled),
+        )
+    }
+
+    /// Shared request wrapper behind [`Engine::execute_with_context_cancellable`]
+    /// and quiet waits: lifecycle coordination with cancellable acquisition,
+    /// operation history, failure finalization, and the recording outcome.
+    ///
+    /// Every request observes the same coordination: waits acquire the shared
+    /// lifecycle lock without excluding input or resize, pre-cancelled and
+    /// preempted waits fail before their first observation, and a wait that
+    /// observes cancellation before success reports cancellation (with the
+    /// Cancelled reason) instead of success. Assertion and internal failures
+    /// finalize with failure details and mark the automatic recording failed;
+    /// other outcomes leave it alone.
+    fn execute_planned_request(
+        &self,
+        plan: RequestPlan,
+        metadata_inputs: RequestMetadata,
+        context: &ExecutionContext,
+        cancelled: &dyn Fn() -> bool,
+        run: impl FnOnce(
+            &dyn Fn() -> bool,
+            &mut OperationMetadata,
+        ) -> Result<OperationResult, TuiTestError>,
+    ) -> Result<OperationResult, TuiTestError> {
         let interrupt_generation = self.interrupt_generation.load(Ordering::Acquire);
-        let waiting = operation.is_wait();
-        let lifecycle = matches!(
-            operation,
-            Operation::Open(_)
-                | Operation::Run(_)
-                | Operation::Restart { .. }
-                | Operation::Close
-                | Operation::FinishTrace { .. }
-        );
         // A wait pins its generation through diagnostics, but does not exclude
         // input or resize. Announce lifecycle writers before locking so even a
         // newly arriving waiter yields, independent of RwLock's fairness policy.
-        let pending = lifecycle.then(|| LifecycleRequest::new(&self.pending_lifecycle));
+        let pending = plan
+            .lifecycle
+            .then(|| LifecycleRequest::new(&self.pending_lifecycle));
         let cancelled =
-            || cancelled() || (waiting && self.pending_lifecycle.load(Ordering::Acquire) != 0);
-        let _shared = if lifecycle {
+            || cancelled() || (plan.waiting && self.pending_lifecycle.load(Ordering::Acquire) != 0);
+        let _shared = if plan.lifecycle {
             None
-        } else if waiting {
+        } else if plan.waiting {
             Some(loop {
-                if cancelled() {
-                    return Err(TuiTestError::assertion("operation was cancelled"));
+                // With `acquire_before_poll` the first attempt never runs
+                // caller code: a free lock is taken before `cancelled` (or an
+                // observer) can park, so lifecycle writers are already pinned
+                // when the request starts polling. While contended, the same
+                // cancellation and deadline checks keep acquisition bounded.
+                if !plan.acquire_before_poll {
+                    if cancelled() {
+                        let mut error = TuiTestError::assertion("operation was cancelled");
+                        self.finalize_acquisition_error(
+                            &mut error,
+                            FailureReason::Cancelled,
+                            &metadata_inputs,
+                            context,
+                        );
+                        return Err(error);
+                    }
+                    if let Some(acquisition) = &plan.acquisition_deadline {
+                        if Instant::now() >= acquisition.deadline {
+                            let mut error = acquisition.error.clone();
+                            self.finalize_acquisition_error(
+                                &mut error,
+                                FailureReason::TimedOut,
+                                &metadata_inputs,
+                                context,
+                            );
+                            return Err(error);
+                        }
+                    }
                 }
                 match self.lifecycle.try_read() {
                     Ok(guard) => break guard,
                     Err(TryLockError::Poisoned(error)) => break error.into_inner(),
                     Err(TryLockError::WouldBlock) => {
+                        if plan.acquire_before_poll {
+                            if cancelled() {
+                                let mut error = TuiTestError::assertion("operation was cancelled");
+                                self.finalize_acquisition_error(
+                                    &mut error,
+                                    FailureReason::Cancelled,
+                                    &metadata_inputs,
+                                    context,
+                                );
+                                return Err(error);
+                            }
+                            if let Some(acquisition) = &plan.acquisition_deadline {
+                                if Instant::now() >= acquisition.deadline {
+                                    let mut error = acquisition.error.clone();
+                                    self.finalize_acquisition_error(
+                                        &mut error,
+                                        FailureReason::TimedOut,
+                                        &metadata_inputs,
+                                        context,
+                                    );
+                                    return Err(error);
+                                }
+                            }
+                        }
                         std::thread::sleep(Duration::from_millis(POLL_DELAY_MS));
                     }
                 }
@@ -347,69 +514,53 @@ impl Engine {
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             )
         };
-        let _exclusive = lifecycle.then(|| {
+        let _exclusive = plan.lifecycle.then(|| {
             self.lifecycle
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         });
         drop(pending);
-        let _operation = (!waiting).then(|| {
+        let _operation = (!plan.waiting).then(|| {
             self.operations
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         });
         if self.logger.enabled() {
             self.logger
-                .event(&format!("operation {}", operation_summary(&operation)));
+                .event(&format!("operation {}", metadata_inputs.log_summary));
         }
-        let name = context
-            .operation_name
-            .clone()
-            .unwrap_or_else(|| diagnostic_operation_name(&operation).to_string());
         let screen_before = self.capture_current_screen_sequence(true, false);
-        let canonical_name = diagnostic_operation_name(&operation);
-        let is_assertion = canonical_name.starts_with("expect.")
-            || canonical_name.starts_with("wait.")
-            || matches!(canonical_name, "locator.wait" | "locator.resolve");
         let started_ms = self.current_session_elapsed_ms().unwrap_or(0);
         let mut metadata = OperationMetadata {
             sequence: 0,
             interrupt_generation,
-            name: name.clone(),
-            timeout_ms: operation_timeout(&operation),
+            name: metadata_inputs.name.clone(),
+            timeout_ms: metadata_inputs.timeout_ms,
             started_at: Instant::now(),
             started_ms,
             screen_before,
-            safe_summary: safe_operation_summary(&operation),
-            is_assertion,
-            expectation: OperationExpectation::capture(&operation),
-            input: InputDetails::capture(&operation),
+            safe_summary: metadata_inputs.safe_summary.clone(),
+            is_assertion: metadata_inputs.is_assertion,
+            expectation: metadata_inputs.expectation.clone(),
+            input: metadata_inputs.input.clone(),
         };
         let pending = self
             .operation_history
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .begin(
-                name,
+                metadata_inputs.name,
                 started_ms,
                 screen_before,
                 metadata.safe_summary.clone(),
-                is_assertion,
+                metadata.is_assertion,
                 metadata.expectation.clone(),
             );
         metadata.sequence = pending.sequence();
         let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let result = self.execute_inner(operation, &context, &mut metadata, &cancelled);
-            if waiting && cancelled() {
-                let message = "operation was cancelled";
-                Err(
-                    TuiTestError::assertion(message).with_report(FailureReport::new(
-                        metadata.name.clone(),
-                        metadata.timeout_ms,
-                        FailureReason::Cancelled,
-                        message,
-                    )),
-                )
+            let result = run(&cancelled, &mut metadata);
+            if plan.waiting && cancelled() {
+                Err(cancelled_wait_error(&metadata))
             } else {
                 result
             }
@@ -432,7 +583,7 @@ impl Engine {
         if let Err(error) = &mut result {
             self.prepare_failure_observation(error);
         }
-        let pin_checkpoint = is_assertion
+        let pin_checkpoint = metadata.is_assertion
             || (metadata.input.is_some()
                 && self
                     .trace
@@ -474,7 +625,7 @@ impl Engine {
             );
         if let Err(error) = &mut result {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.finalize_failure(error, &context, &metadata);
+                self.finalize_failure(error, context, &metadata);
             }));
             error.observation = None;
             error.report = None;
@@ -516,6 +667,7 @@ impl Engine {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
                 if let Some(session) = self.write_session().take() {
+                    self.bump_session_generation();
                     session.kill();
                     drop(session);
                 }
@@ -744,6 +896,7 @@ impl Engine {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         if let Some(previous) = current.take() {
+            self.bump_session_generation();
             self.finish_trace_with_session(&previous, context, None)?;
             previous.kill();
             drop(previous);
@@ -858,6 +1011,7 @@ impl Engine {
             shell: session.shell.map(|value| value.as_str()),
         };
         *self.write_session() = Some(session);
+        self.bump_session_generation();
         *self
             .live
             .lock()
@@ -1060,7 +1214,7 @@ impl Engine {
             (false, context.artifact.as_ref()),
             (true, trace_artifact.as_ref()),
         ] {
-            let (Some(options), Some(observation)) = (options, observation) else {
+            let Some(options) = options else {
                 continue;
             };
             if options.mode != crate::diagnostics::FailureArtifactMode::None {
@@ -1077,27 +1231,35 @@ impl Engine {
                         if is_trace {
                             owned_directory = Some(directory.clone());
                         }
-                        let prepared_recording = if options.include_recording {
-                            session.and_then(|session| {
-                                self.prepare_recording_artifact(
-                                    session,
+                        // Without a terminal observation no recording can be
+                        // snapshotted and no terminal evidence rendered; the
+                        // report still exports operation, reason, context, and
+                        // history. This path takes no locks.
+                        if let Some(observation) = observation {
+                            let prepared_recording = if options.include_recording {
+                                session.and_then(|session| {
+                                    self.prepare_recording_artifact(
+                                        session,
+                                        observation,
+                                        &directory,
+                                        &mut export_details,
+                                    )
+                                })
+                            } else {
+                                None
+                            };
+                            write_failure_artifact(
+                                options,
+                                ArtifactInputs {
+                                    details: &mut export_details,
                                     observation,
-                                    &directory,
-                                    &mut export_details,
-                                )
-                            })
+                                    recording: prepared_recording,
+                                },
+                                directory,
+                            )
                         } else {
-                            None
-                        };
-                        write_failure_artifact(
-                            options,
-                            ArtifactInputs {
-                                details: &mut export_details,
-                                observation,
-                                recording: prepared_recording,
-                            },
-                            directory,
-                        )
+                            write_observation_free_artifact(options, &mut export_details, directory)
+                        }
                     }
                     Err(error) => FailureArtifactRef {
                         status: FailureArtifactStatus::Failed,
@@ -1149,6 +1311,116 @@ impl Engine {
         let failure = details.failure_details();
         error.message = failure.summary.clone();
         error.details = Some(Box::new(failure));
+    }
+
+    /// Finalize a quiet-wait acquisition error without touching the
+    /// lifecycle lock.
+    ///
+    /// Cancellation and deadline errors return while a lifecycle writer
+    /// still holds the exclusive lock, so this path must never block on it
+    /// (or on session/state locks a lifecycle transition may hold): the
+    /// observation, history, and diagnostics below all use non-waiting
+    /// attempts and degrade gracefully when the contended state is
+    /// unavailable. The error still completes history, marks the recording
+    /// outcome, and carries finalized details like any other failure.
+    fn finalize_acquisition_error(
+        &self,
+        error: &mut TuiTestError,
+        reason: FailureReason,
+        metadata_inputs: &RequestMetadata,
+        context: &ExecutionContext,
+    ) {
+        if !matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal) {
+            return;
+        }
+        if error.report.is_none() {
+            error.report = Some(Box::new(FailureReport::new(
+                metadata_inputs.name.clone(),
+                metadata_inputs.timeout_ms,
+                reason,
+                base_error_message(&error.message),
+            )));
+        }
+        let (started_ms, screen_before, observation) = self.try_acquisition_diagnostics();
+        if error.observation.is_none() {
+            error.observation = observation.map(Box::new);
+        }
+        if matches!(error.kind, ErrorKind::Assertion | ErrorKind::Internal) {
+            self.recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed = true;
+        }
+        let pending = self
+            .operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .begin(
+                metadata_inputs.name.clone(),
+                started_ms,
+                screen_before,
+                metadata_inputs.safe_summary.clone(),
+                metadata_inputs.is_assertion,
+                metadata_inputs.expectation.clone(),
+            );
+        let metadata = OperationMetadata {
+            sequence: pending.sequence(),
+            interrupt_generation: self.interrupt_generation.load(Ordering::Acquire),
+            name: metadata_inputs.name.clone(),
+            timeout_ms: metadata_inputs.timeout_ms,
+            started_at: Instant::now(),
+            started_ms,
+            screen_before,
+            safe_summary: metadata_inputs.safe_summary.clone(),
+            is_assertion: metadata_inputs.is_assertion,
+            expectation: metadata_inputs.expectation.clone(),
+            input: metadata_inputs.input.clone(),
+        };
+        let screen_at_return = error
+            .observation
+            .as_deref()
+            .map_or(screen_before, |value| value.screen_sequence);
+        let ended_ms = error.observation.as_deref().map(|value| value.captured_ms);
+        self.operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish(
+                pending,
+                ended_ms,
+                screen_at_return,
+                error.kind.as_str(),
+                metadata_inputs.input.clone(),
+            );
+        // No session handle: the shared finalizer must not block acquiring
+        // one. The best-effort observation above already rides on the error,
+        // so details and artifacts are still produced; without one, the
+        // report finalizes observation-free.
+        self.finalize_failure_with_session(error, context, &metadata, None, false);
+        error.observation = None;
+        error.report = None;
+    }
+
+    /// Best-effort acquisition-time diagnostics using non-waiting lock
+    /// attempts only. Returns `(started_ms, screen_before, observation)`,
+    /// degrading to zeroes and no observation when the contended session or
+    /// emulator state is unavailable.
+    fn try_acquisition_diagnostics(&self) -> (u64, u64, Option<FailureObservation>) {
+        let Some(session_guard) = self.session.try_read().ok() else {
+            return (0, 0, None);
+        };
+        let Some(session) = session_guard.as_ref() else {
+            return (0, 0, None);
+        };
+        let Ok(mut state) = session.state.try_lock() else {
+            return (0, 0, None);
+        };
+        let started_ms = elapsed_ms(state.started_at);
+        let screen_before = try_capture_visual_state(&mut state, true).unwrap_or(0);
+        let observation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            capture_failure_observation_locked(session, &mut state)
+        }))
+        .ok();
+        (started_ms, screen_before, observation)
     }
 
     fn finish_trace(
@@ -1236,19 +1508,29 @@ impl Engine {
         context: &ExecutionContext,
         failed: Option<bool>,
     ) -> Result<(), TuiTestError> {
-        let previous_failed = self
-            .recording
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .failed;
-        if failed.is_some_and(|failed| failed != previous_failed) {
+        // Read the stored outcome and apply an explicit one under a single
+        // recording lock: a concurrent acquisition failure landing between a
+        // split read and write-back would otherwise be lost. A `None`
+        // outcome carries no new information, so it is reported without
+        // writing back the read value. The lock is released before the file
+        // work below.
+        let (failed, outcome_changed) = {
+            let mut recording = self
+                .recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match failed {
+                Some(explicit) => {
+                    let changed = explicit != recording.failed;
+                    recording.failed = explicit;
+                    (explicit, changed)
+                }
+                None => (recording.failed, false),
+            }
+        };
+        if outcome_changed {
             self.discard_trace_artifacts()?;
         }
-        let failed = failed.unwrap_or(previous_failed);
-        self.recording
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .failed = failed;
         let options = {
             let trace = self
                 .trace
@@ -1472,6 +1754,55 @@ impl Engine {
         }
     }
 
+    /// Capture an owned snapshot of the selected scope.
+    ///
+    /// Reads grid, cursor, dimensions, title, and resolved colors while it
+    /// holds one terminal-state lock, so the snapshot is one atomic terminal
+    /// moment. Records raw visual data; locator highlighting never leaks in.
+    /// The snapshot is fully owned and stays usable after the session closes.
+    pub fn capture_snapshot(&self, scope: SnapshotScope) -> Result<TerminalSnapshot, TuiTestError> {
+        self.capture_snapshot_with(&SnapshotOptions::new(scope))
+    }
+
+    /// Capture an owned snapshot with explicit options.
+    ///
+    /// Same atomic capture as [`Engine::capture_snapshot`]; pass
+    /// [`SnapshotOptions::with_highlight`] to fold locator highlighting into
+    /// the captured cells instead of recording raw visual data.
+    pub fn capture_snapshot_with(
+        &self,
+        options: &SnapshotOptions,
+    ) -> Result<TerminalSnapshot, TuiTestError> {
+        let guard = self.lock_session();
+        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
+        if let Some(fault) = session.fault() {
+            return Err(
+                TuiTestError::internal(fault.clone()).with_report(FailureReport::new(
+                    "terminal.operation",
+                    None,
+                    FailureReason::EmulatorFault,
+                    fault,
+                )),
+            );
+        }
+        let state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let metadata = SnapshotMetadata {
+            captured_at_ms: capture_time_ms(),
+            revision: state.visual_revision,
+            backend: session.backend.as_str().to_string(),
+            session: self.name.clone(),
+            source: SnapshotSource::Live,
+        };
+        let highlight = state.highlight.as_ref().map(|selected| LiveHighlight {
+            cells: &selected.cells,
+        });
+        capture_live(state.emu.as_ref(), highlight, options, metadata)
+            .map_err(crate::snapshot::SnapshotError::into)
+    }
+
     pub fn frame(&self) -> Option<LiveFrame> {
         let live = self
             .live
@@ -1613,6 +1944,18 @@ impl Engine {
 
     pub(crate) fn lifecycle_request(&self) -> impl Drop + '_ {
         LifecycleRequest::new(&self.pending_lifecycle)
+    }
+
+    /// Whether a lifecycle operation (Close/Restart/...) is announced and
+    /// waiting for exclusive access. Waits that poll outside
+    /// [`Engine::execute_with_context_cancellable`] compose this into their
+    /// cancellation check so lifecycle requests preempt them. Tests use this
+    /// as a barrier handshake: once a parked wait holds the shared lifecycle
+    /// lock and this reports true, the lifecycle request cannot complete
+    /// until the wait yields, so the peer thread's pending completion is a
+    /// deterministic observation rather than a timing guess.
+    pub fn has_pending_lifecycle(&self) -> bool {
+        self.pending_lifecycle.load(Ordering::Acquire) != 0
     }
 
     pub(crate) fn interrupt_for_operation(&self, operation: &Operation) {
@@ -1760,6 +2103,134 @@ impl Engine {
         self.session
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Monotonic time of the most recent nonempty successful PTY output read,
+    /// if any. Served to byte-quiet waits; `Ok(None)` only when a session is
+    /// open and no output has arrived yet. A missing session or an emulator
+    /// fault is an error, matching [`Engine::capture_snapshot_with`], so a
+    /// byte-quiet wait can never conflate no-session with no-output (R7).
+    pub(crate) fn last_output_time(&self) -> Result<Option<Instant>, TuiTestError> {
+        let guard = self.lock_session();
+        let session = guard.as_ref().ok_or_else(TuiTestError::no_session)?;
+        if let Some(fault) = session.fault() {
+            return Err(
+                TuiTestError::internal(fault.clone()).with_report(FailureReport::new(
+                    "terminal.operation",
+                    None,
+                    FailureReason::EmulatorFault,
+                    fault,
+                )),
+            );
+        }
+        Ok(session.last_output_time())
+    }
+
+    /// Stable generation of the installed session slot, for quiet waits.
+    pub(crate) fn session_generation(&self) -> u64 {
+        self.session_generation.load(Ordering::Acquire)
+    }
+
+    fn bump_session_generation(&self) {
+        self.session_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Run a request-scoped quiet wait through the shared request wrapper.
+    ///
+    /// The wait holds the shared lifecycle lock (like waits dispatched
+    /// through [`Engine::execute_with_context_cancellable`]) so a concurrent
+    /// Close/Restart announces itself through `pending_lifecycle` and blocks
+    /// on the exclusive lock instead of completing underneath the wait. The
+    /// wait aborts on that announcement; the session generation captured at
+    /// request start is re-checked before any success return, so a lifecycle
+    /// transition that completes mid-wait can never surface as quiet
+    /// success (R8). Cancellation never terminates the session and never
+    /// cancels another caller.
+    ///
+    /// The request runs under the caller's [`ExecutionContext`] with the
+    /// ordinary operation history, failure finalization, and recording
+    /// outcome: a timeout finalizes as a TimedOut failure (details, artifact,
+    /// recording marked failed) while cancellation keeps the Cancelled
+    /// reason. A single request deadline covers acquisition and observation
+    /// together: acquisition checks cancellation and the deadline while
+    /// polling for the lock, and observation runs on the remaining budget.
+    pub(crate) fn run_quiet_wait_cancellable(
+        &self,
+        options: &WaitQuietOptions,
+        context: &ExecutionContext,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), TuiTestError> {
+        let overall = options.timeout();
+        let deadline = Instant::now().checked_add(overall).ok_or_else(|| {
+            TuiTestError::internal("wait quiet: overall deadline is out of range")
+        })?;
+        let timeout_ms = u64::try_from(overall.as_millis()).unwrap_or(u64::MAX);
+        let name = context
+            .operation_name
+            .clone()
+            .unwrap_or_else(|| "wait.quiet".to_string());
+        let (subject, expected) = match options.mode() {
+            crate::wait::WaitQuietMode::Visual => (
+                "Screen",
+                format!("remains unchanged for {}ms", options.quiet().as_millis()),
+            ),
+            crate::wait::WaitQuietMode::Bytes => (
+                "Terminal output",
+                format!("remains quiet for {}ms", options.quiet().as_millis()),
+            ),
+        };
+        self.execute_planned_request(
+            RequestPlan {
+                waiting: true,
+                lifecycle: false,
+                acquisition_deadline: Some(AcquisitionDeadline {
+                    deadline,
+                    error: crate::wait::timeout_error(options),
+                }),
+                acquire_before_poll: true,
+            },
+            RequestMetadata {
+                name,
+                timeout_ms: Some(timeout_ms),
+                log_summary: format!("WaitQuiet {options:?}"),
+                safe_summary: format!("waited for the {subject} to {expected}"),
+                is_assertion: true,
+                expectation: Some(OperationExpectation::Value {
+                    subject: subject.into(),
+                    expected,
+                }),
+                input: None,
+            },
+            context,
+            cancelled,
+            |cancelled, metadata| {
+                let generation = self.session_generation();
+                // Observation runs on the remaining budget so the single
+                // request deadline covers acquisition and observation
+                // together. A remaining budget that cannot fit another quiet
+                // interval can never succeed: the overall deadline wins.
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let adjusted = match options.with_timeout(remaining) {
+                    Ok(adjusted) => adjusted,
+                    Err(_) => return Err(crate::wait::timeout_error(options)),
+                };
+                let outcome = crate::wait::run_quiet_wait(
+                    &adjusted,
+                    cancelled,
+                    &|| self.capture_snapshot(SnapshotScope::ActiveScreen),
+                    &|| self.last_output_time(),
+                );
+                // A lifecycle transition announced while polling, or a
+                // generation change from a transition that completed mid-wait,
+                // preempts success: the request did not observe quiet on a
+                // stable live session.
+                if outcome.is_ok() && (cancelled() || self.session_generation() != generation) {
+                    return Err(cancelled_wait_error(metadata));
+                }
+                outcome.map(|()| OperationResult::Unit)
+            },
+        )
+        .map(|_| ())
     }
 
     fn write_session(&self) -> RwLockWriteGuard<'_, Option<TerminalSession>> {
@@ -4510,6 +4981,45 @@ mod tests {
     use crate::terminal::cell::{NamedColor, UnderlineStyle};
     use crate::terminal::emu::Emulator;
 
+    // R7: the private byte-quiet output accessor reports a missing session
+    // as an error, never as quiet. `Ok(None)` is reserved for a live
+    // session with no output yet.
+    #[test]
+    fn last_output_time_without_session_reports_no_session() {
+        let engine = Engine::new(
+            "quiet-no-session".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let error = engine
+            .last_output_time()
+            .expect_err("no session must error");
+        assert_eq!(error.kind, ErrorKind::NoSession);
+    }
+
+    // R8: installing and removing the session advances the stable generation
+    // that quiet waits bind to; unrelated operations leave it unchanged.
+    #[test]
+    fn session_generation_advances_on_install_and_removal() {
+        let engine = Engine::new(
+            "quiet-generation".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let idle = engine.session_generation();
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let installed = engine.session_generation();
+        assert_ne!(installed, idle, "install must advance the generation");
+        engine.execute(Operation::Close).unwrap();
+        assert_ne!(
+            engine.session_generation(),
+            installed,
+            "removal must advance the generation"
+        );
+    }
+
     fn sleeping_program(wait_ready: bool) -> RunOptions {
         let (program, args) = if cfg!(windows) {
             (
@@ -6624,5 +7134,793 @@ mod tests {
             engine.execute(Operation::Close).unwrap();
         }
         reporter.join().unwrap();
+    }
+
+    // P2a: acquisition is cancellable and deadline-bound. The holder keeps
+    // the exclusive lifecycle lock (as a concurrent Run does inside its
+    // readiness wait) until the test releases it, so any return while the
+    // lock is still held proves the request stopped waiting for the lock:
+    // no wall-clock assertions needed.
+    fn hold_lifecycle_write(
+        engine: &std::sync::Arc<Engine>,
+    ) -> (
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = {
+            let engine = std::sync::Arc::clone(engine);
+            std::thread::spawn(move || {
+                let _exclusive = engine
+                    .lifecycle
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let _ = entered_tx.send(());
+                // The test releases the lock after its assertions; the bound
+                // only fires if the request under test wedged on acquisition.
+                let _ = release_rx.recv_timeout(Duration::from_secs(25));
+            })
+        };
+        (entered_rx, release_tx, holder)
+    }
+
+    fn quiet_test_engine(tag: &str) -> std::sync::Arc<Engine> {
+        std::sync::Arc::new(Engine::new(
+            format!("quiet-acquisition-{tag}"),
+            std::sync::Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        ))
+    }
+
+    // F3: an acquisition error finalizes like any other failure — structured
+    // reason in details, a completed history entry, and the failed recording
+    // outcome — all produced while the lifecycle writer still holds the
+    // exclusive lock, so the assertions below double as proof the request
+    // never waited on that lock.
+    fn assert_finalized_acquisition_error(
+        engine: &Engine,
+        error: &TuiTestError,
+        reason: FailureReason,
+    ) {
+        let details = error
+            .details
+            .as_ref()
+            .expect("acquisition error must carry finalized details");
+        assert_eq!(details.operation, "wait.quiet");
+        assert_eq!(details.reason, reason);
+        let history = engine
+            .operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot();
+        let event = history
+            .iter()
+            .find(|event| event.name == "wait.quiet")
+            .expect("acquisition error must complete history");
+        assert_eq!(event.result, "assertion");
+        assert!(
+            engine
+                .recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed,
+            "acquisition error must mark the recording outcome failed"
+        );
+    }
+
+    // Startup/Restart contention with pre-cancellation: a quiet request that
+    // is already cancelled must report cancellation without waiting for a
+    // lifecycle writer to release the lock.
+    #[test]
+    fn quiet_precancelled_returns_while_lifecycle_write_is_held() {
+        let engine = quiet_test_engine("precancelled");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext::default();
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "pre-cancelled quiet blocked on lifecycle acquisition"
+        );
+        assert_finalized_acquisition_error(&engine, &error, FailureReason::Cancelled);
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+    }
+
+    // Cancellation-while-acquiring: the flag flips after the request starts
+    // polling for the lock. The request must still report cancellation while
+    // the lifecycle writer holds the lock.
+    #[test]
+    fn quiet_cancelled_while_acquiring_returns_while_write_is_held() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let engine = quiet_test_engine("cancel-while-acquiring");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let (polled_tx, polled_rx) = std::sync::mpsc::channel::<()>();
+        let polled_tx = std::sync::Mutex::new(Some(polled_tx));
+        let flag = std::sync::Arc::new(AtomicBool::new(false));
+        let context = ExecutionContext::default();
+        let options = WaitQuietOptions::new(Duration::from_secs(30), Duration::from_millis(50))
+            .expect("test options are valid");
+        let worker = {
+            let engine = std::sync::Arc::clone(&engine);
+            let flag = std::sync::Arc::clone(&flag);
+            std::thread::spawn(move || {
+                engine.run_quiet_wait_cancellable(&options, &context, &|| {
+                    if let Some(tx) = polled_tx.lock().unwrap().take() {
+                        let _ = tx.send(());
+                    }
+                    flag.load(Ordering::Acquire)
+                })
+            })
+        };
+        polled_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("quiet request reaches acquisition");
+        flag.store(true, Ordering::Release);
+        let error = worker
+            .join()
+            .unwrap()
+            .expect_err("cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "cancelled quiet blocked on lifecycle acquisition"
+        );
+        assert_finalized_acquisition_error(&engine, &error, FailureReason::Cancelled);
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+    }
+
+    // Timeout-only requests: with no cancellation, a deadline that passes
+    // during acquisition reports timeout while the writer still holds the
+    // lock, instead of inheriting a fresh observation budget on release.
+    #[test]
+    fn quiet_timeout_only_returns_while_lifecycle_write_is_held() {
+        let engine = quiet_test_engine("timeout-only");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext::default();
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| false)
+            .expect_err("expired acquisition must report timeout");
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "timed-out quiet blocked on lifecycle acquisition past its deadline"
+        );
+        assert_finalized_acquisition_error(&engine, &error, FailureReason::TimedOut);
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+    }
+
+    // Acquisition errors on a live session still write the failure file: with
+    // an artifact directory configured, a pre-cancelled quiet wait finalizes
+    // (Cancelled details, history, failed OnFailure recording) and exports
+    // the artifact while the writer holds the lifecycle lock.
+    #[test]
+    fn quiet_acquisition_cancel_writes_failure_file_on_live_session() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = std::sync::Arc::new(Engine::new(
+            "quiet-acquisition-live".into(),
+            std::sync::Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        ));
+        let mut run = sleeping_program(false);
+        run.recording.mode = AutomaticRecordingMode::OnFailure;
+        engine.execute(Operation::Run(run)).unwrap();
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Text,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "pre-cancelled quiet blocked on lifecycle acquisition"
+        );
+        assert_finalized_acquisition_error(&engine, &error, FailureReason::Cancelled);
+        let artifact = error
+            .artifact
+            .as_ref()
+            .expect("live acquisition error must write a failure file");
+        assert_eq!(artifact.status, FailureArtifactStatus::Written);
+        let files = [
+            artifact.manifest.as_ref(),
+            artifact.report.as_ref(),
+            artifact.screen_text.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        assert!(
+            !files.is_empty(),
+            "failure artifact must reference at least one file"
+        );
+        for path in files {
+            assert!(
+                std::path::Path::new(path).is_file(),
+                "missing failure file: {path}"
+            );
+        }
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        engine.execute(Operation::Close).unwrap();
+        assert!(
+            engine
+                .recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed,
+            "failed acquisition must retain the OnFailure recording outcome"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // F3-A: a quiet acquisition error that finalizes without a terminal
+    // observation must still write failure files. Both tests hold the work
+    // that blocks acquisition (lifecycle writer, and a busy emulator state
+    // for the second) until after the manifest and report assertions, so the
+    // assertions below prove the files were written without that work.
+    fn assert_observation_free_failure_files(
+        error: &TuiTestError,
+        reason: FailureReason,
+        root: &std::path::Path,
+    ) {
+        let details = error
+            .details
+            .as_ref()
+            .expect("acquisition error must carry finalized details");
+        assert_eq!(details.reason, reason);
+        let artifact = error
+            .artifact
+            .as_ref()
+            .expect("observation-free failure must write a failure file");
+        assert_eq!(artifact.status, FailureArtifactStatus::Partial);
+        for path in [&artifact.manifest, &artifact.report].into_iter().flatten() {
+            assert!(
+                std::path::Path::new(path).is_file(),
+                "missing failure file: {path}"
+            );
+            assert!(
+                std::path::Path::new(path).starts_with(root),
+                "failure file must live under the artifact directory: {path}"
+            );
+        }
+        let manifest = std::fs::read_to_string(
+            artifact
+                .manifest
+                .as_ref()
+                .expect("manifest must be referenced"),
+        )
+        .expect("manifest must be readable");
+        assert!(
+            manifest.contains("wait.quiet"),
+            "manifest must carry the operation: {manifest}"
+        );
+        assert!(
+            manifest.contains("timed_out") || manifest.contains("cancelled"),
+            "manifest must carry the reason"
+        );
+        assert!(
+            manifest.contains("terminal evidence unavailable"),
+            "manifest must state that terminal evidence is unavailable"
+        );
+        let report =
+            std::fs::read_to_string(artifact.report.as_ref().expect("report must be referenced"))
+                .expect("report must be readable");
+        assert!(
+            report.contains("wait.quiet"),
+            "text report must carry the operation"
+        );
+    }
+
+    // Timeout during startup: the lifecycle writer holds the lock before
+    // session installation, so no session (and no observation) exists when
+    // the deadline passes. The timeout must still write manifest + report.
+    #[test]
+    fn quiet_acquisition_timeout_during_startup_writes_failure_file() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = quiet_test_engine("timeout-during-startup");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Text,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(200), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| false)
+            .expect_err("expired acquisition must report timeout");
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_failure_files(&error, FailureReason::TimedOut, &root);
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "files must be written before the held startup work is released"
+        );
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // Cancellation with busy emulator state: the lifecycle writer holds the
+    // lock while the state lock is busy, so no observation can be captured
+    // even though a session is live. The cancellation must still write
+    // manifest + report.
+    #[test]
+    fn quiet_acquisition_cancel_with_busy_state_writes_failure_file() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = std::sync::Arc::new(Engine::new(
+            "quiet-acquisition-busy".into(),
+            std::sync::Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        ));
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let session_guard = engine.lock_session();
+        let _state_guard = session_guard
+            .as_ref()
+            .expect("session is live")
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Text,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_failure_files(&error, FailureReason::Cancelled, &root);
+        drop(_state_guard);
+        drop(session_guard);
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    // F3-A: observation-free HTML fallback. Html mode writes only the HTML
+    // viewer (no manifest, no markdown); All mode writes manifest +
+    // markdown + HTML. Both tests cover the startup timeout and the
+    // busy-state cancellation paths, holding the blocking work until after
+    // the file assertions prove the files were written without it.
+    fn assert_observation_free_html_report(
+        error: &TuiTestError,
+        reason: FailureReason,
+        root: &std::path::Path,
+    ) {
+        let details = error
+            .details
+            .as_ref()
+            .expect("acquisition error must carry finalized details");
+        assert_eq!(details.reason, reason);
+        let artifact = error
+            .artifact
+            .as_ref()
+            .expect("observation-free failure must write a failure file");
+        assert_eq!(artifact.status, FailureArtifactStatus::Partial);
+        let path = artifact
+            .report_html
+            .as_ref()
+            .expect("HTML report must be referenced");
+        assert!(
+            std::path::Path::new(path).starts_with(root),
+            "HTML report must live under the artifact directory: {path}"
+        );
+        assert!(
+            std::path::Path::new(path).is_file(),
+            "missing HTML report: {path}"
+        );
+        let html = std::fs::read_to_string(path).expect("HTML report must be readable");
+        assert!(
+            html.contains("wait.quiet"),
+            "HTML report must carry the operation"
+        );
+        assert!(
+            html.contains("timed_out") || html.contains("cancelled"),
+            "HTML report must carry the reason"
+        );
+        assert!(
+            html.contains("terminal evidence unavailable"),
+            "HTML report must state that terminal evidence is unavailable"
+        );
+    }
+
+    fn assert_observation_free_all_reports(
+        error: &TuiTestError,
+        reason: FailureReason,
+        root: &std::path::Path,
+    ) {
+        let details = error
+            .details
+            .as_ref()
+            .expect("acquisition error must carry finalized details");
+        assert_eq!(details.reason, reason);
+        let artifact = error
+            .artifact
+            .as_ref()
+            .expect("observation-free failure must write a failure file");
+        assert_eq!(artifact.status, FailureArtifactStatus::Partial);
+        for path in [&artifact.manifest, &artifact.report, &artifact.report_html]
+            .into_iter()
+            .flatten()
+        {
+            assert!(
+                std::path::Path::new(path).is_file(),
+                "missing failure file: {path}"
+            );
+            assert!(
+                std::path::Path::new(path).starts_with(root),
+                "failure file must live under the artifact directory: {path}"
+            );
+        }
+        let manifest = std::fs::read_to_string(
+            artifact
+                .manifest
+                .as_ref()
+                .expect("manifest must be referenced"),
+        )
+        .expect("manifest must be readable");
+        assert!(
+            manifest.contains("wait.quiet"),
+            "manifest must carry the operation: {manifest}"
+        );
+        assert!(
+            manifest.contains("timed_out") || manifest.contains("cancelled"),
+            "manifest must carry the reason"
+        );
+        assert!(
+            manifest.contains("terminal evidence unavailable"),
+            "manifest must state that terminal evidence is unavailable"
+        );
+        let report =
+            std::fs::read_to_string(artifact.report.as_ref().expect("report must be referenced"))
+                .expect("report must be readable");
+        assert!(
+            report.contains("wait.quiet"),
+            "text report must carry the operation"
+        );
+        assert_observation_free_html_report(error, reason, root);
+    }
+
+    // Html mode without an observation: startup timeout, then busy-state
+    // cancellation. Each scenario asserts the HTML file exists before the
+    // held locks are released.
+    #[test]
+    fn quiet_acquisition_html_without_observation_writes_report() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = quiet_test_engine("html-startup");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Html,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(200), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| false)
+            .expect_err("expired acquisition must report timeout");
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_html_report(&error, FailureReason::TimedOut, &root);
+        assert!(
+            error
+                .artifact
+                .as_ref()
+                .expect("artifact must be referenced")
+                .manifest
+                .is_none(),
+            "Html mode must not write a manifest"
+        );
+        assert!(
+            error
+                .artifact
+                .as_ref()
+                .expect("artifact must be referenced")
+                .report
+                .is_none(),
+            "Html mode must not write a markdown report"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "files must be written before the held startup work is released"
+        );
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = std::sync::Arc::new(Engine::new(
+            "quiet-acquisition-html-busy".into(),
+            std::sync::Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        ));
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let session_guard = engine.lock_session();
+        let _state_guard = session_guard
+            .as_ref()
+            .expect("session is live")
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::Html,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_html_report(&error, FailureReason::Cancelled, &root);
+        drop(_state_guard);
+        drop(session_guard);
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // All mode without an observation: startup timeout, then busy-state
+    // cancellation. Each scenario asserts manifest + markdown + HTML exist
+    // before the held locks are released.
+    #[test]
+    fn quiet_acquisition_all_without_observation_writes_reports() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = quiet_test_engine("all-startup");
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::All,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(200), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| false)
+            .expect_err("expired acquisition must report timeout");
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_all_reports(&error, FailureReason::TimedOut, &root);
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "files must be written before the held startup work is released"
+        );
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = std::sync::Arc::new(Engine::new(
+            "quiet-acquisition-all-busy".into(),
+            std::sync::Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        ));
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let (entered_rx, release_tx, holder) = hold_lifecycle_write(&engine);
+        entered_rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("holder takes the lifecycle lock");
+        let session_guard = engine.lock_session();
+        let _state_guard = session_guard
+            .as_ref()
+            .expect("session is live")
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let context = ExecutionContext {
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.clone(),
+                mode: crate::diagnostics::FailureArtifactMode::All,
+                include_recording: false,
+            }),
+            ..Default::default()
+        };
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &context, &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert_observation_free_all_reports(&error, FailureReason::Cancelled, &root);
+        drop(_state_guard);
+        drop(session_guard);
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        engine.execute(Operation::Close).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // F3-B: a quiet acquisition failure that lands while Close is parked
+    // mid-teardown must survive Close: the recording outcome stays failed
+    // and the recording file is retained.
+    #[test]
+    fn quiet_acquisition_failure_is_not_lost_during_close() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = std::sync::Arc::new(Engine::new(
+            "quiet-acquisition-close".into(),
+            std::sync::Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        ));
+        let mut run = sleeping_program(false);
+        run.recording.mode = AutomaticRecordingMode::OnFailure;
+        engine.execute(Operation::Run(run)).unwrap();
+        let recording_path = engine
+            .recording
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .path
+            .clone()
+            .expect("OnFailure recording must exist");
+        assert!(
+            recording_path.is_file(),
+            "recording file must exist before Close"
+        );
+        // Barrier-pause Close: hold the emulator state so Close parks before
+        // it can finish the trace and clean up the recording.
+        let session_guard = engine.lock_session();
+        let _state_guard = session_guard
+            .as_ref()
+            .expect("session is live")
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let closer = {
+            let engine = std::sync::Arc::clone(&engine);
+            std::thread::spawn(move || engine.execute(Operation::Close))
+        };
+        let parked = Instant::now();
+        while engine.lifecycle.try_read().is_ok() {
+            assert!(
+                parked.elapsed() < Duration::from_secs(15),
+                "Close must take the lifecycle lock"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Fail mid-pause: Close holds the lifecycle lock, so the quiet wait
+        // reports cancellation through the acquisition path.
+        let options = WaitQuietOptions::new(Duration::from_millis(100), Duration::from_millis(50))
+            .expect("test options are valid");
+        let error = engine
+            .run_quiet_wait_cancellable(&options, &ExecutionContext::default(), &|| true)
+            .expect_err("pre-cancelled quiet must report cancellation");
+        assert!(
+            error.to_string().contains("cancelled"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            engine
+                .recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed,
+            "acquisition failure mid-Close must mark the recording outcome failed"
+        );
+        assert!(
+            engine.lifecycle.try_read().is_err(),
+            "Close must still be parked while the failure lands"
+        );
+        // Resume Close: the failure must survive teardown.
+        drop(_state_guard);
+        drop(session_guard);
+        closer
+            .join()
+            .expect("Close thread must finish")
+            .expect("Close must succeed");
+        assert!(
+            engine
+                .recording
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .failed,
+            "Close must not clear a concurrent acquisition failure"
+        );
+        assert!(
+            recording_path.is_file(),
+            "OnFailure must retain the recording after a mid-Close acquisition failure"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
