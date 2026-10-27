@@ -304,20 +304,18 @@ fn u01_d_compare_with_update_keeps_behavior() {
 
 // U01-E: concurrent CreateMissing racers cannot replace each other.
 
-// U01-D (compat): updating a symlink baseline replaces the link itself.
-//
-// The recorded `compare` wrote with `std::fs::write`, which follows a
-// baseline symlink and updates its TARGET (the link survives). The policy
-// implementation writes through an atomic temporary-file-plus-rename step,
-// so an update installs a regular file at the baseline path and leaves the
-// link target's bytes untouched. That change is deliberate: a snapshot write
-// must never redirect bytes outside the snapshot directory. This test locks
-// the behavior in: after `compare` with update, the baseline is a regular
-// file with the new bytes and the former target is unchanged.
+// U01-D (compat): legacy `compare` with update preserves a symlink baseline
+// and updates its target; only `compare_with_policy` with
+// `SnapshotPolicy::Replace` swaps the link itself away. The recorded
+// `compare` wrote with `std::fs::write`, which follows a baseline symlink
+// (the link survives, the target gains the new bytes). The policy
+// implementation writes through an atomic temporary-file-plus-rename step
+// instead, so a replace installs a regular file at the baseline path and
+// leaves the link target's bytes untouched. These tests lock both halves in.
 
 #[cfg(unix)]
 #[test]
-fn u01_d_compare_update_replaces_symlink_baseline() {
+fn u01_d_compare_update_preserves_symlink_baseline() {
     let base = temp_base("d-symlink-baseline");
     let dir = base.join("__snapshots__");
     std::fs::create_dir_all(&dir).unwrap();
@@ -332,11 +330,43 @@ fn u01_d_compare_update_replaces_symlink_baseline() {
         SnapshotStatus::Updated
     ));
     assert!(
+        std::fs::symlink_metadata(&baseline)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "a legacy update preserves the link at the baseline path"
+    );
+    assert_eq!(std::fs::read(&baseline).unwrap(), b"new\n".to_vec());
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        b"new\n".to_vec(),
+        "the link target gains the new bytes"
+    );
+    remove_base(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn policy_replace_replaces_symlink_baseline_without_touching_target() {
+    let base = temp_base("policy-replace-symlink");
+    let dir = base.join("__snapshots__");
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("external-target.txt");
+    std::fs::write(&target, b"target-old\n").unwrap();
+    let baseline = dir.join("snap.snap");
+    std::os::unix::fs::symlink(&target, &baseline).unwrap();
+    assert_eq!(std::fs::read(&baseline).unwrap(), b"target-old\n".to_vec());
+
+    assert_eq!(
+        compare_with_policy(&base, "snap", "new", SnapshotPolicy::Replace).unwrap(),
+        PolicyOutcome::Replaced
+    );
+    assert!(
         !std::fs::symlink_metadata(&baseline)
             .unwrap()
             .file_type()
             .is_symlink(),
-        "an update installs a regular file at the baseline path, not a link"
+        "a policy replace installs a regular file at the baseline path, not a link"
     );
     assert_eq!(std::fs::read(&baseline).unwrap(), b"new\n".to_vec());
     assert_eq!(

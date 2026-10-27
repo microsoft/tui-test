@@ -34,7 +34,10 @@ pub enum SnapshotPolicy {
     CreateMissing,
     /// Write the baseline when it is missing and replace it when it differs.
     /// Every write goes through an atomic temporary-file-plus-rename step, so
-    /// a failed write keeps the previous baseline.
+    /// a failed write keeps the previous baseline. Unlike legacy [`compare`],
+    /// a replace installs a regular file at the baseline path: an existing
+    /// baseline symlink is replaced, never followed, and its target is left
+    /// untouched.
     Replace,
 }
 
@@ -234,7 +237,10 @@ fn box_view(view: &str, width: u16, title: Option<&str>) -> String {
 /// first, the winner's file is compared again and this returns `Equal` or
 /// `Different` without replacing it. [`SnapshotPolicy::Replace`] writes
 /// through an atomic temporary-file-plus-rename step, so a failed write keeps
-/// the previous baseline.
+/// the previous baseline. A replace installs a regular file at the baseline
+/// path: unlike legacy [`compare`], which follows a baseline symlink and
+/// updates its target, a policy replace swaps the link itself away and never
+/// touches the old target.
 ///
 /// No ambient update, `BLESS`, or `INSTA` environment variable is read.
 pub fn compare_with_policy(
@@ -302,39 +308,47 @@ pub fn compare_with_policy(
 /// This keeps the recorded signature and behavior: a missing baseline is
 /// written and reported as `Written`, different content is replaced and
 /// reported as `Updated` only when `update` is set, and otherwise reported as
-/// `Failed`. It uses the new implementation with its previous policy mapping:
-/// `update` selects [`SnapshotPolicy::Replace`], no update selects
-/// [`SnapshotPolicy::CreateMissing`].
+/// `Failed`.
 ///
-/// Compatibility note: the recorded implementation wrote with
-/// `std::fs::write`, which follows an existing baseline symlink and updates
-/// its TARGET (the link survives). The policy implementation writes through
-/// an atomic temporary-file-plus-rename step instead, so an update installs
-/// a regular file at the baseline path and leaves the link target untouched.
-/// That change is deliberate — a snapshot write must never redirect bytes
-/// outside the snapshot directory — and matches the temporary-write rule
-/// below, which never writes through a preexisting symlink either.
+/// Link behavior differs from [`compare_with_policy`]: this legacy API writes
+/// with `std::fs::write`, which follows an existing baseline symlink and
+/// updates its TARGET (the link survives). Only
+/// [`compare_with_policy`] with [`SnapshotPolicy::Replace`] uses the safe
+/// atomic temporary-file-plus-rename step, which installs a regular file at
+/// the baseline path and leaves the link target untouched.
 pub fn compare(
     base: &Path,
     name: &str,
     content: &str,
     update: bool,
 ) -> std::io::Result<SnapshotStatus> {
-    let policy = if update {
-        SnapshotPolicy::Replace
-    } else {
-        SnapshotPolicy::CreateMissing
-    };
-    match compare_with_policy(base, name, content, policy)? {
-        PolicyOutcome::Equal => Ok(SnapshotStatus::Passed),
-        PolicyOutcome::Created => Ok(SnapshotStatus::Written),
-        PolicyOutcome::Replaced => Ok(SnapshotStatus::Updated),
-        PolicyOutcome::Different { expected, actual } => {
-            Ok(SnapshotStatus::Failed { expected, actual })
+    let path = snapshot_path(base, name);
+    let trimmed = content.trim();
+    match std::fs::read_to_string(&path) {
+        Ok(existing) => {
+            let existing = existing.trim();
+            if existing == trimmed {
+                return Ok(SnapshotStatus::Passed);
+            }
+            if update {
+                std::fs::create_dir_all(snapshot_dir(base))?;
+                // Legacy follow-link write: when the baseline is a symlink,
+                // the new bytes land in its target and the link survives.
+                std::fs::write(&path, format!("{trimmed}\n"))?;
+                Ok(SnapshotStatus::Updated)
+            } else {
+                Ok(SnapshotStatus::Failed {
+                    expected: existing.to_string(),
+                    actual: trimmed.to_string(),
+                })
+            }
         }
-        PolicyOutcome::Missing => Err(std::io::Error::other(
-            "snapshot baseline is still missing after a writing policy ran",
-        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(snapshot_dir(base))?;
+            std::fs::write(&path, format!("{trimmed}\n"))?;
+            Ok(SnapshotStatus::Written)
+        }
+        Err(error) => Err(error),
     }
 }
 
