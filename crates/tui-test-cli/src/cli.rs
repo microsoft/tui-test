@@ -11,6 +11,9 @@ pub enum BackendArg {
     Ghostty,
     Rio,
     Xtermjs,
+    #[cfg(all(windows, feature = "windows-terminal"))]
+    #[value(name = "windows-terminal")]
+    WindowsTerminal,
 }
 
 impl From<BackendArg> for Backend {
@@ -20,6 +23,8 @@ impl From<BackendArg> for Backend {
             BackendArg::Ghostty => Backend::Ghostty,
             BackendArg::Rio => Backend::Rio,
             BackendArg::Xtermjs => Backend::Xtermjs,
+            #[cfg(all(windows, feature = "windows-terminal"))]
+            BackendArg::WindowsTerminal => Backend::WindowsTerminal,
         }
     }
 }
@@ -790,6 +795,9 @@ mod tests {
             ("alacritty", Backend::Alacritty),
             ("ghostty", Backend::Ghostty),
             ("rio", Backend::Rio),
+            ("xtermjs", Backend::Xtermjs),
+            #[cfg(all(windows, feature = "windows-terminal"))]
+            ("windows-terminal", Backend::WindowsTerminal),
         ] {
             let cli = Cli::try_parse_from(["tui-test", "open", "--backend", name])
                 .unwrap_or_else(|error| panic!("parse {name}: {error}"));
@@ -803,6 +811,10 @@ mod tests {
             assert_eq!(Backend::from(backend), expected);
         }
         assert!(Cli::try_parse_from(["tui-test", "open", "--backend", "libghostty"]).is_err());
+        #[cfg(not(all(windows, feature = "windows-terminal")))]
+        assert!(
+            Cli::try_parse_from(["tui-test", "open", "--backend", "windows-terminal"]).is_err()
+        );
     }
 
     #[test]

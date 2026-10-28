@@ -74,6 +74,10 @@ jobs:
         run: |
           npm test --prefix .github/scripts
           node .github/scripts/release/verify-go-version.mjs
+      - name: Build pinned Windows Terminal core and static C ABI bridge
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\build-windows-terminal.ps1
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
       - run: cargo build -p tui-test-cli -p tui-test-ffi
@@ -81,6 +85,16 @@ jobs:
       # The recording renderer and its font catalog are behind a feature that
       # is off by default, so the line above never compiles them in.
       - run: cargo test -p tui-test-rs --features recording-font-jetbrains-mono-styles -- --test-threads=1
+      - name: Test the actual Windows Terminal native backend
+        if: runner.os == 'Windows'
+        run: |
+          cargo test --locked -p tui-test-rs --features windows-terminal --test core_lifecycle windows_terminal_runs_a_real_pty_and_preserves_shell_integration -- --test-threads=1
+          cargo test --locked -p tui-test-rs --features windows-terminal terminal::windows_terminal -- --test-threads=1
+      - name: Build opt-in Windows Terminal CLI and FFI
+        if: runner.os == 'Windows'
+        run: |
+          cargo build --locked -p tui-test-cli -p tui-test-ffi --features windows-terminal
+          cargo test --locked -p tui-test-cli --features windows-terminal cli::tests::open_backend_values_map_to_terminal_backends
 
       - name: Test Go binding
         shell: bash

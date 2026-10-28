@@ -171,6 +171,31 @@ fn expect_marker(timeout_ms: u64) -> Operation {
     }
 }
 
+#[cfg(all(windows, feature = "windows-terminal"))]
+#[test]
+fn windows_terminal_runs_a_real_pty_and_preserves_shell_integration() {
+    let session = Session::new(format!("windows-terminal-pty-{}", std::process::id()));
+    let mut run = options("commands");
+    run.backend = tui_test::Backend::WindowsTerminal;
+    run.wait_ready = Some(true);
+    session.run(run).unwrap();
+    session
+        .execute(Operation::Submit {
+            data: Some("emit-marker".into()),
+        })
+        .unwrap();
+    session.execute(expect_marker(5_000)).unwrap();
+    session
+        .execute(Operation::Resize { cols: 90, rows: 26 })
+        .unwrap();
+    let OperationResult::State(state) = session.execute(Operation::State).unwrap() else {
+        panic!("expected terminal state");
+    };
+    assert_eq!((state.cols, state.rows), (90, 26));
+    assert!(state.text.contains("second-client-marker"));
+    session.close().unwrap();
+}
+
 #[test]
 fn invalid_capture_style_is_rejected_before_session_creation() {
     let session = Session::new("invalid-capture-style");

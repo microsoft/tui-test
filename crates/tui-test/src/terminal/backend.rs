@@ -12,6 +12,8 @@ use crate::terminal::rio::RioEmu;
 
 #[cfg(feature = "ghostty")]
 use crate::terminal::ghostty::GhosttyEmu;
+#[cfg(all(windows, feature = "windows-terminal"))]
+use crate::terminal::windows_terminal::WindowsTerminalEmu;
 #[cfg(feature = "xtermjs")]
 use crate::terminal::xtermjs::XtermJsEmu;
 
@@ -27,6 +29,9 @@ pub enum Backend {
     Rio,
     #[cfg(feature = "xtermjs")]
     Xtermjs,
+    #[cfg(all(windows, feature = "windows-terminal"))]
+    #[serde(rename = "windows-terminal")]
+    WindowsTerminal,
 }
 
 impl Backend {
@@ -38,6 +43,8 @@ impl Backend {
         Self::Rio,
         #[cfg(feature = "xtermjs")]
         Self::Xtermjs,
+        #[cfg(all(windows, feature = "windows-terminal"))]
+        Self::WindowsTerminal,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -49,6 +56,8 @@ impl Backend {
             Self::Rio => "rio",
             #[cfg(feature = "xtermjs")]
             Self::Xtermjs => "xtermjs",
+            #[cfg(all(windows, feature = "windows-terminal"))]
+            Self::WindowsTerminal => "windows-terminal",
         }
     }
 
@@ -66,6 +75,8 @@ impl Backend {
             Self::Rio => Ok(Box::new(RioEmu::new(cols, rows, profile))),
             #[cfg(feature = "xtermjs")]
             Self::Xtermjs => Ok(Box::new(XtermJsEmu::new(cols, rows, profile)?)),
+            #[cfg(all(windows, feature = "windows-terminal"))]
+            Self::WindowsTerminal => Ok(Box::new(WindowsTerminalEmu::new(cols, rows, profile)?)),
         }
     }
 
@@ -93,6 +104,10 @@ impl Backend {
             Self::Xtermjs => Ok(Box::new(XtermJsEmu::with_bell_tracker(
                 cols, rows, profile, bells,
             )?)),
+            #[cfg(all(windows, feature = "windows-terminal"))]
+            Self::WindowsTerminal => Ok(Box::new(WindowsTerminalEmu::with_bell_tracker(
+                cols, rows, profile, bells,
+            )?)),
         }
     }
 
@@ -117,6 +132,8 @@ impl std::str::FromStr for Backend {
             "rio" => Ok(Self::Rio),
             #[cfg(feature = "xtermjs")]
             "xtermjs" => Ok(Self::Xtermjs),
+            #[cfg(all(windows, feature = "windows-terminal"))]
+            "windows-terminal" => Ok(Self::WindowsTerminal),
             other => Err(format!(
                 "unknown terminal backend {other:?}; expected one of: {}",
                 Self::expected()
@@ -139,6 +156,28 @@ mod tests {
     #[test]
     fn alacritty_remains_the_default() {
         assert_eq!(Backend::default(), Backend::Alacritty);
+    }
+
+    #[cfg(not(all(windows, feature = "windows-terminal")))]
+    #[test]
+    fn windows_terminal_is_rejected_when_unavailable() {
+        assert!("windows-terminal".parse::<Backend>().is_err());
+        assert!(serde_json::from_str::<Backend>("\"windows-terminal\"").is_err());
+    }
+
+    #[cfg(all(windows, feature = "windows-terminal"))]
+    #[test]
+    fn windows_terminal_uses_the_hyphenated_name() {
+        assert_eq!("windows-terminal".parse(), Ok(Backend::WindowsTerminal));
+        assert_eq!(
+            serde_json::to_string(&Backend::WindowsTerminal).unwrap(),
+            "\"windows-terminal\""
+        );
+        assert_eq!(
+            serde_json::from_str::<Backend>("\"windows-terminal\"").unwrap(),
+            Backend::WindowsTerminal
+        );
+        assert!("windowsterminal".parse::<Backend>().is_err());
     }
 
     #[cfg(not(feature = "rio"))]

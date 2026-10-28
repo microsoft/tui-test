@@ -20,7 +20,7 @@ def resolve_session(session: Optional[str]) -> str:
 
 
 _TIMEOUT_CLASSES = ("text", "idle", "command", "exit", "ready")
-_BACKENDS = ("alacritty", "ghostty", "rio", "xtermjs")
+_BACKENDS = ("alacritty", "ghostty", "rio", "xtermjs", "windows-terminal")
 _TRACE_MODES = ("off", "on-failure", "on")
 _PROFILE_FIELDS = frozenset(("scrollback", "colors"))
 _COLOR_FIELDS = frozenset(
