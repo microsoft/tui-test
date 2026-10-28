@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
 
 Color = Union[str, int]
-Backend = Literal["alacritty", "ghostty", "rio", "xtermjs"]
+Backend = Literal["alacritty", "ghostty", "rio", "xtermjs", "wezterm"]
 MouseButton = Literal["left", "middle", "right"]
 #: ``"none"`` is a value, not an absence: an un-underlined cell reports it.
 UnderlineStyle = Literal["none", "single", "double", "curly", "dotted", "dashed"]

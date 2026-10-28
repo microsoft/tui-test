@@ -48,6 +48,9 @@ vte = "0.15"
 tiny-skia = { version = "0.11.4", default-features = false, features = ["std"] }
 ttf-parser = { version = "0.25.1", default-features = false, features = ["std"] }
 windows-sys = "0.61.2"
+wezterm-term = { version = "0.1.0", git = "https://github.com/wezterm/wezterm.git", rev = "e68a8ec27727fbbda15e07f0a0737cd5e16481f6" }
+wezterm-surface = { version = "0.1.0", git = "https://github.com/wezterm/wezterm.git", rev = "e68a8ec27727fbbda15e07f0a0737cd5e16481f6" }
+termwiz = { version = "0.24.0", git = "https://github.com/wezterm/wezterm.git", rev = "e68a8ec27727fbbda15e07f0a0737cd5e16481f6", default-features = false }
 
 [profile.release]
 strip = true

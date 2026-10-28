@@ -51,6 +51,27 @@ fn run_options(program: &str, args: &[&str]) -> RunOptions {
     }
 }
 
+#[cfg(feature = "wezterm")]
+#[test]
+fn wezterm_backend_runs_a_program_through_the_existing_pty() {
+    let session = Session::new(format!("wezterm-runtime-{}", std::process::id()));
+    let mut options = if cfg!(windows) {
+        run_options("cmd", &["/d", "/c", "echo WEZTERM_READY"])
+    } else {
+        run_options("sh", &["-c", "printf WEZTERM_READY"])
+    };
+    options.backend = tui_test::Backend::Wezterm;
+    options.cols = 40;
+    options.rows = 4;
+    session.run(options).unwrap();
+    session
+        .get_by_text("WEZTERM_READY")
+        .wait_with_timeout(Some(5_000))
+        .unwrap();
+    wait_for_exit(&session);
+    session.close().unwrap();
+}
+
 #[test]
 fn trace_retention_writes_complete_bundles_only_for_selected_outcomes() {
     use tui_test::{TraceMode, TraceOptions};

@@ -65,11 +65,11 @@ bitflags::bitflags! {
 ///
 /// Deliberately a closed set rather than a mode number, because the point is
 /// that every backend answers the same question the same way. A variant earns
-/// its place only when all four backends can report it: alacritty and rio from
-/// their `Mode` bitflags, ghostty from `Terminal::mode`, and xterm.js from its
-/// `modes` object, whose fixed set is the binding constraint. Modes that only
-/// some backends track are left out rather than reported as `false`, which
-/// would be a wrong answer dressed as a real one.
+/// its place only when every backend can report it: alacritty and rio from
+/// their `Mode` bitflags, ghostty from `Terminal::mode`, WezTerm from its state
+/// getters, and xterm.js from its `modes` object, whose fixed set is the binding
+/// constraint. Modes that only some backends track are left out rather than
+/// reported as `false`, which would be a wrong answer dressed as a real one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TerminalMode {
     /// `DECCKM` (`CSI ?1 h`): cursor keys send `SS3` instead of `CSI`.
@@ -77,7 +77,7 @@ pub enum TerminalMode {
     /// `DECKPAM` (`ESC =`): the keypad sends application sequences.
     ///
     /// Driven by `DECKPAM`/`DECKPNM` rather than `CSI ?66 h`, which alacritty
-    /// and rio do not implement: the escape form is the one all four honor.
+    /// and rio do not implement: the escape form is the one every backend honors.
     ApplicationKeypad,
     /// `DECOM` (`CSI ?6 h`): the cursor is confined to the scroll region.
     Origin,
@@ -454,10 +454,11 @@ pub trait Emulator: Send {
     /// Encode one key event with the backend's own key encoder.
     ///
     /// `None` means the backend has no encoder, or has one that cannot express
-    /// this event, and the caller falls back to [`crate::input::keys`]. Only
-    /// ghostty ships an encoder: alacritty and rio keep theirs in their GUI
-    /// crates rather than their VT libraries, and the xterm.js headless bundle
-    /// omits `evaluateKeyboardEvent` entirely.
+    /// this event, and the caller falls back to [`crate::input::keys`]. Ghostty
+    /// exposes its encoder, and WezTerm uses its encoder for representable
+    /// legacy events. Alacritty and rio keep theirs in their GUI crates rather
+    /// than their VT libraries, and the xterm.js headless bundle omits
+    /// `evaluateKeyboardEvent` entirely.
     ///
     /// Preferring the backend matters because encoding depends on more terminal
     /// state than the shared encoder models, and a backend's own encoder reads
@@ -555,10 +556,10 @@ pub trait Emulator: Send {
     /// and this always has an answer.
     ///
     /// Backends answer color *queries* themselves, through
-    /// [`Emulator::take_pending_writes`], because each one already parses the
-    /// sequence and knows which terminator the query used. This reports the
-    /// same colors, so a screenshot and `expect --fg/--bg` agree with what a
-    /// program was told.
+    /// [`Emulator::take_pending_writes`], because each native parser already
+    /// knows the current palette. Reply formatting remains native behavior.
+    /// This reports the same colors, so a screenshot and `expect --fg/--bg`
+    /// agree with what a program was told.
     ///
     fn color(&self, slot: ColorSlot) -> Rgb;
 
