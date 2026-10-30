@@ -1,0 +1,81 @@
+---
+title: Install tui-test
+description: Install the tui-test CLI or use the terminal engine from Python, JavaScript, Rust, or Go.
+editUrl: false
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## CLI
+
+The installer downloads the latest stable release for your operating system and architecture.
+
+<Tabs>
+  <TabItem label="macOS and Linux">
+    ```sh
+    curl -fsSL https://tui-test.dev/install.sh | sh
+    ```
+  </TabItem>
+  <TabItem label="Windows">
+    ```powershell
+    irm https://tui-test.dev/install.ps1 | iex
+    ```
+  </TabItem>
+</Tabs>
+
+### Homebrew
+
+```sh
+brew tap microsoft/tui-test https://github.com/microsoft/tui-test
+brew install tui-test
+```
+
+You can also download platform archives from [GitHub Releases](https://github.com/microsoft/tui-test/releases).
+
+### Verify the installation
+
+```sh
+tui-test --version
+```
+
+If your shell cannot find `tui-test`, restart the terminal or check that the installation directory is on your `PATH`.
+
+## Libraries
+
+Library sessions run in your process and do not require the CLI.
+
+<Tabs>
+  <TabItem label="Python">
+    Requires Python 3.8 or newer.
+
+    ```sh
+    pip install tui-test
+    ```
+
+  </TabItem>
+  <TabItem label="JavaScript">
+    Requires Node.js 20 or newer.
+
+    ```sh
+    npm install @microsoft/tui-test
+    ```
+
+  </TabItem>
+  <TabItem label="Rust">
+    Requires Rust 1.90 or newer.
+
+    ```sh
+    cargo add tui-test-rs
+    ```
+
+    [Rust API reference](https://docs.rs/tui-test-rs/latest/tui_test/)
+  </TabItem>
+  <TabItem label="Go">
+    Requires Go 1.26 or newer. Published modules include the native engine.
+
+    ```sh
+    go get github.com/microsoft/tui-test/bindings/go@latest
+    ```
+
+  </TabItem>
+</Tabs>
