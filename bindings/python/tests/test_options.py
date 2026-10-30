@@ -390,6 +390,7 @@ class BackendResolutionTests(unittest.TestCase):
         self.assertEqual(cfg.normalize_backend("alacritty"), "alacritty")
         self.assertEqual(cfg.normalize_backend("ghostty"), "ghostty")
         self.assertEqual(cfg.normalize_backend("rio"), "rio")
+        self.assertEqual(cfg.normalize_backend(" WezTerm "), "wezterm")
 
     def test_rejects_unknown_backend(self):
         for backend in ("xterm", "libghostty"):

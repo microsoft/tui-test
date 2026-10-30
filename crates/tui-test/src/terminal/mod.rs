@@ -11,5 +11,7 @@ pub mod locator;
 pub mod pty;
 #[cfg(feature = "rio")]
 pub mod rio;
+#[cfg(feature = "wezterm")]
+pub mod wezterm;
 #[cfg(feature = "xtermjs")]
 pub mod xtermjs;

@@ -12,6 +12,9 @@ publish = false
 name = "tui-test"
 path = "src/main.rs"
 
+[features]
+wezterm = ["tui-test/wezterm"]
+
 [dependencies]
 anyhow.workspace = true
 clap = { workspace = true, features = ["env"] }

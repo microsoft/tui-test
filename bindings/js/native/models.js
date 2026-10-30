@@ -225,6 +225,7 @@ Alacritty: "alacritty",
 Ghostty: "ghostty",
 Rio: "rio",
 Xtermjs: "xtermjs",
+Wezterm: "wezterm",
 },
 Shell: {
 Bash: "bash",
