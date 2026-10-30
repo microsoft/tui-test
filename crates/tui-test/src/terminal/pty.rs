@@ -1,5 +1,6 @@
 //! PTY spawning and control via `portable-pty`.
 
+use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -155,6 +156,13 @@ pub struct SpawnOptions {
     pub env: Vec<(String, String)>,
 }
 
+/// Native spawn dimensions with a fully resolved native environment.
+pub(crate) struct NativeSpawnOptions {
+    pub cols: u16,
+    pub rows: u16,
+    pub env: Vec<(OsString, OsString)>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessExit {
     pub(crate) code: i32,
@@ -211,6 +219,72 @@ impl Pty {
         cmd.env("TERM", "xterm-256color");
         for (k, v) in &opts.env {
             cmd.env(k, v);
+        }
+        if let Some(cwd) = cwd {
+            cmd.cwd(cwd);
+        } else if let Ok(cwd) = std::env::current_dir() {
+            cmd.cwd(cwd);
+        }
+
+        let child = pair.slave.spawn_command(cmd)?;
+        drop(pair.slave);
+
+        let reader = pair.master.try_clone_reader()?;
+        let writer = pair.master.take_writer()?;
+        let closed = Arc::new(AtomicBool::new(false));
+        #[cfg(unix)]
+        let reader = Box::new(CancellableReader {
+            reader,
+            readiness,
+            closed: closed.clone(),
+            shutdown_started: None,
+        });
+
+        Ok((
+            Pty {
+                master: Mutex::new(Some(pair.master)),
+                writer: Mutex::new(Some(writer)),
+                child: Mutex::new(child),
+                closed,
+            },
+            reader,
+        ))
+    }
+
+    /// Spawn a program with native arguments and a resolved environment.
+    ///
+    /// The environment is complete: the transport base environment is cleared
+    /// before the resolved values are filled in, so a cleared launch stays
+    /// cleared apart from the transport defaults the spawn applies itself.
+    /// Native values pass through unchanged, with no shell parsing and no
+    /// Unicode replacement.
+    pub(crate) fn spawn_native(
+        target: &OsStr,
+        args: &[OsString],
+        opts: &NativeSpawnOptions,
+        cwd: Option<&Path>,
+    ) -> anyhow::Result<(Pty, Box<dyn Read + Send>)> {
+        validate_size(opts.cols, opts.rows)?;
+        if let Some(cwd) = cwd {
+            validate_cwd(cwd)?;
+        }
+        let pty_system = native_pty_system();
+        let pair = pty_system.openpty(PtySize {
+            rows: opts.rows,
+            cols: opts.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        #[cfg(unix)]
+        let readiness = nonblocking_master(pair.master.as_ref())?;
+
+        let mut cmd = CommandBuilder::new(target);
+        for arg in args {
+            cmd.arg(arg);
+        }
+        cmd.env_clear();
+        for (key, value) in &opts.env {
+            cmd.env(key, value);
         }
         if let Some(cwd) = cwd {
             cmd.cwd(cwd);

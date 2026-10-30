@@ -118,7 +118,10 @@ impl Default for OpenOptions {
 #[derive(Debug, Clone)]
 pub struct RunOptions {
     pub backend: crate::terminal::backend::Backend,
+    /// Program to run directly, without shell interpolation: the value is
+    /// never joined into a shell command line.
     pub program: String,
+    /// Arguments passed directly to the program, without shell parsing.
     pub args: Vec<String>,
     /// Terminal settings, already resolved from the config file by the
     /// client. The daemon never reads that file: it is long-lived and shared,
@@ -128,6 +131,11 @@ pub struct RunOptions {
     pub cols: u16,
     pub rows: u16,
     pub cwd: Option<String>,
+    /// Environment overrides applied to the child. Ignored by the native
+    /// launch entry points ([`crate::engine::Engine::spawn_with`] and
+    /// [`crate::runtime::Session::spawn_with`]), which take the environment
+    /// from [`crate::launch::LaunchOptions`] instead; `program`, `args`,
+    /// and `cwd` are ignored there as well.
     pub env: Vec<(String, String)>,
     pub wait_ready: Option<bool>,
     pub restart: bool,

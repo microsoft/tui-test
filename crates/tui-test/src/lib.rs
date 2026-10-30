@@ -4,6 +4,7 @@ pub mod config;
 pub mod diagnostics;
 pub mod engine;
 pub mod input;
+pub mod launch;
 pub mod locator_query;
 pub mod logger;
 pub mod profile;
@@ -20,6 +21,7 @@ mod session;
 pub use api::*;
 pub use diagnostics::*;
 pub use engine::Engine;
+pub use launch::{LaunchEnvMode, LaunchOptions, ResolvedLaunch};
 pub use runtime::{
     global_registry, Locator, LocatorClickOptions, LocatorExpectOptions, LocatorFilterOptions,
     Session, SessionHandle, SessionRegistry,
