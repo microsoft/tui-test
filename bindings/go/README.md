@@ -254,6 +254,11 @@ Trace and failure-artifact directories can contain terminal output, titles, loca
 
 `StartRecording` supports asciinema, APNG, GIF, and MP4. File extensions select the format unless `RecordingOptions.Format` overrides it. Recording options control FPS, speed, idle-time limit, zoom, background color, and transparency. Background color and transparency are mutually exclusive. MP4 requires `ffmpeg` on the executable search path and does not support transparency. `StopRecording` finishes the recording and returns its path.
 
+Raster recording samples the live terminal at `FPS` (default: 30) and preserves elapsed time until stop.
+There is no default idle cap or extra final hold.
+Set `IdleTimeLimit` to cap unchanged visual intervals before `Speed` scales playback time.
+Asciicast remains a timestamped output stream; FPS sampling does not change it.
+
 `ExpectSnapshot` returns `SnapshotPassed`, `SnapshotWritten`, or `SnapshotUpdated`. Set `SnapshotOptions.Update` only when you intend to update the baseline. Snapshot options also control style and title inclusion and the snapshot working directory.
 
 ## Test cleanup

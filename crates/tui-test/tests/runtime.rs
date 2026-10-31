@@ -2408,6 +2408,8 @@ fn recording_export_matches_the_session_backend_and_profile() {
                     background: None,
                 })
                 .unwrap();
+            // The raster sampler, not PTY output or resize, observes the final state.
+            std::thread::sleep(Duration::from_millis(100));
             session.execute(Operation::StopRecording).unwrap();
             session.close().unwrap();
 
