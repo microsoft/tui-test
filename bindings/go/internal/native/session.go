@@ -3,7 +3,9 @@ package native
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
+	"unsafe"
 )
 
 type Session struct {
@@ -248,6 +250,66 @@ func (runtime *Session) GetBellCount() (uint64, error) {
 		return 0, err
 	}
 	return result.number, nil
+}
+
+func (runtime *Session) GetModes() (map[string]bool, error) {
+	var modes map[string]bool
+	err := runtime.read(func(session abiString, _ *nativeMemory) *abiResult { return nativeFunctions.GetModes(session) },
+		func(result *abiResult) {
+			modes = make(map[string]bool, int(result.modesLen))
+			for _, mode := range unsafe.Slice(result.modes, int(result.modesLen)) {
+				modes[nativeText(mode.name)] = mode.enabled
+			}
+		})
+	return modes, err
+}
+
+func (runtime *Session) GetColors() (TerminalColors, error) {
+	var colors TerminalColors
+	err := runtime.read(func(session abiString, _ *nativeMemory) *abiResult { return nativeFunctions.GetColors(session) },
+		func(result *abiResult) { colors = nativeTerminalColors(result.colors) })
+	return colors, err
+}
+
+func (runtime *Session) ExpectMode(mode string, enabled bool, timeout *time.Duration) error {
+	duration, err := nativeDuration(timeout)
+	if err != nil {
+		return err
+	}
+	return runtime.unit(func(session abiString, memory *nativeMemory) *abiResult {
+		return nativeFunctions.ExpectMode(session, memory.text(mode), enabled, duration)
+	})
+}
+
+func (runtime *Session) ExpectCursor(options CursorExpectation) error {
+	duration, err := nativeDuration(options.Timeout)
+	if err != nil {
+		return err
+	}
+	return runtime.unit(func(session abiString, memory *nativeMemory) *abiResult {
+		return nativeFunctions.ExpectCursor(session, abiCursorExpectation{
+			x: nativeUint(options.X), y: nativeUint(options.Y), visible: nativeBool(options.Visible),
+			shape: memory.optionalText(options.Shape), timeoutMS: duration,
+		})
+	})
+}
+
+func (runtime *Session) ExpectColors(options ColorExpectation) error {
+	duration, err := nativeDuration(options.Timeout)
+	if err != nil {
+		return err
+	}
+	return runtime.unit(func(session abiString, memory *nativeMemory) *abiResult {
+		values := make(map[string]string, len(options.Palette))
+		for index, color := range options.Palette {
+			values[strconv.Itoa(int(index))] = color
+		}
+		palette, length := memory.pairs(values)
+		return nativeFunctions.ExpectColors(session, abiColorExpectation{
+			foreground: memory.optionalText(options.Foreground), background: memory.optionalText(options.Background),
+			cursor: memory.optionalText(options.Cursor), palette: palette, paletteLen: length, timeoutMS: duration,
+		})
+	})
 }
 
 func (runtime *Session) GetBellEvents() ([]BellEvent, error) {

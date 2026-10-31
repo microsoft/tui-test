@@ -90,7 +90,13 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `expectBellCount()`, `expectSnapshot()` | Assert bells or snapshots. |
 | `screenshot()` | Read text or save SVG or PNG. |
 | `startRecording()`, `pauseRecording()`, `resumeRecording()`, `stopRecording()` | Record without paused time. |
+| `getModes()`, `getColors()` | Read native modes and colors. |
+| `expectCursor(options)`, `expectMode(mode, enabled, options?)`, `expectColors(options)` | Poll native state with the text timeout. |
 | `close()`, `closeQuiet()` | Close. |
+
+Set `style` in the constructor, `open()`, or `run()` to control fonts, colors, padding, window controls, borders, shadows, and cursor animation.
+For example, use `style: { cursor: { blink: false, blinkIntervalMs: 250 } }`.
+A per-call style replaces the constructor style. Omitted fields use Rust defaults. Restart preserves the resolved style.
 
 `write(data)` hands the bytes to the terminal, so on Windows they pass through ConPTY input
 translation before the app sees them: a written `\n` arrives as a Ctrl key down followed by
@@ -102,7 +108,7 @@ Capture options: `background` and `transparent` (SVG, APNG, and GIF).
 
 `restart({ gracefulTimeout: 5000 })` returns an `OpenResult`, preserving the last successful spawn's original working directory, options, and latest terminal size. The timeout is milliseconds after Ctrl-C before forced replacement; `0` skips the wait. Child exit preserves restart metadata; `close()` clears it. The terminal and automatic recording start fresh.
 
-Constructor options: `backend`, `timeouts`, `profile`, `artifacts`, `recording`, `trace`, and `screenHistoryLimit`.
+Constructor options: `backend`, `timeouts`, `profile`, `style`, `artifacts`, `recording`, `trace`, and `screenHistoryLimit`.
 
 Use `trace: { mode: "on" | "off" | "on-failure", directory: "traces" }`.
 Traces default to `off`. Users can open `trace.html` or replay `session.cast`; agents should read `trace.md`, `trace.json`, and `timeline.json`.

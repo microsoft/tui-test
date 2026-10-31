@@ -110,6 +110,60 @@ export interface PackedScreen {
   readonly utf8: Uint8Array
 }
 
+export interface RenderStyle {
+  font?: FontFamilies
+  fontSize?: number
+  titleFontSize?: number
+  canvasBackground?: string
+  canvasPadding?: number | PaddingSides
+  contentPadding?: number | PaddingSides
+  window?: WindowStyle
+  border?: BorderStyle
+  shadow?: ShadowStyle
+  cursor?: RecordingCursorStyle
+}
+
+export interface FontFamilies {
+  family?: string
+  bold?: string
+  italic?: string
+  boldItalic?: string
+  files?: Array<string>
+}
+
+export interface WindowStyle {
+  titleBar?: boolean
+  trafficLights?: boolean
+  background?: string
+  foreground?: string
+  divider?: string
+}
+
+export interface BorderStyle {
+  width?: number
+  color?: string
+  radius?: number
+}
+
+export interface ShadowStyle {
+  enabled?: boolean
+  color?: string
+  offset?: number
+  spread?: number
+}
+
+export interface RecordingCursorStyle {
+  blink?: boolean
+  blinkIntervalMs?: number
+}
+
+export interface PaddingSides {
+  top?: number
+  right?: number
+  bottom?: number
+  left?: number
+}
+
 export interface Timeouts {
   text?: number
   idle?: number
@@ -145,6 +199,7 @@ export interface OpenOptions {
   profileScrollback?: number
   profileColors?: Array<[string, string]>
   timeouts?: Timeouts
+  style?: RenderStyle
   screenHistoryLimit?: number
 }
 
@@ -161,6 +216,7 @@ export interface RunOptions {
   profileScrollback?: number
   profileColors?: Array<[string, string]>
   timeouts?: Timeouts
+  style?: RenderStyle
   screenHistoryLimit?: number
 }
 
@@ -237,6 +293,22 @@ export interface RecordingOptions {
   zoom?: number
   background?: string
   transparent?: boolean
+}
+
+export interface CursorExpectation {
+  visible?: boolean
+  shape?: string
+  x?: number
+  y?: number
+  timeoutMs?: number
+}
+
+export interface ColorExpectation {
+  foreground?: string
+  background?: string
+  cursor?: string
+  palette?: Array<[number, string]>
+  timeoutMs?: number
 }
 
 export interface MouseClickOptions {
@@ -327,6 +399,8 @@ export declare class NativeSession {
   getTitle(): Promise<string | null>
   getClipboard(): Promise<string>
   getCursor(): Promise<Cursor>
+  getModes(): Promise<Record<string, boolean>>
+  getColors(): Promise<TerminalColors>
   getSize(): Promise<Size>
   getViewport(): Promise<Viewport>
   scroll(lines: number): Promise<void>
@@ -359,6 +433,9 @@ export declare class NativeSession {
   waitBell(timeoutMs?: number | undefined | null): Promise<void>
   expectExitCode(code: number, timeoutMs?: number | undefined | null): Promise<void>
   expectOutput(text: string, regex?: boolean | undefined | null): Promise<void>
+  expectMode(mode: string, enabled?: boolean | undefined | null, timeoutMs?: number | undefined | null): Promise<void>
+  expectCursor(options: CursorExpectation): Promise<void>
+  expectColors(options: ColorExpectation): Promise<void>
   expectBellCount(count: number, timeoutMs?: number | undefined | null): Promise<void>
   snapshot(name: string, options?: SnapshotOptions | undefined | null): Promise<SnapshotResult>
   screenshot(options?: ScreenshotOptions | undefined | null): Promise<string>

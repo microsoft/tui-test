@@ -421,7 +421,7 @@ class TypedCallTests(unittest.TestCase):
         self.assertTrue(args[7])
         self.assertEqual(args[8], 321)
         self.assertEqual(args[9], [("red", "#010203")])
-        self.assertEqual(args[10:], (100, None, None, None, 200, None))
+        self.assertEqual(args[10:], (100, None, None, None, 200, None, None))
 
     def test_run_uses_program_and_argv(self):
         terminal = _CapturingClient("s")
@@ -473,8 +473,8 @@ class TypedCallTests(unittest.TestCase):
         terminal = _CapturingClient("s", screen_history_limit=17)
         run(terminal.open())
         run(terminal.run("vim"))
-        self.assertEqual(terminal.fake.calls[0][1][-1], 17)
-        self.assertEqual(terminal.fake.calls[1][1][-1], 17)
+        self.assertEqual(terminal.fake.calls[0][1][-2], 17)
+        self.assertEqual(terminal.fake.calls[1][1][-2], 17)
 
     def test_obsolete_native_constructor_is_not_adapted(self):
         class ObsoleteNativeSession:
@@ -684,11 +684,11 @@ class ClientTimeoutTests(unittest.TestCase):
         run(terminal.open(timeouts=Timeouts(text=1000, ready=2000)))
         run(terminal.run("vim", timeouts=Timeouts(idle=1500)))
         self.assertEqual(
-            terminal.fake.calls[0][1][-6:-1],
+            terminal.fake.calls[0][1][-7:-2],
             (1000, None, None, None, 2000),
         )
         self.assertEqual(
-            terminal.fake.calls[1][1][-6:-1],
+            terminal.fake.calls[1][1][-7:-2],
             (None, 1500, None, None, None),
         )
 
