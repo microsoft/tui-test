@@ -52,6 +52,57 @@ fn zsh_disables_global_startup_files() {
     assert_eq!(launch.args, ["-d"]);
 }
 
+#[test]
+fn integration_scripts_skip_unchanged_files() {
+    let directory = TestDirectory::new(Shell::Cmd);
+    let scripts = directory.0.join("shell");
+    write_scripts_to(&scripts).unwrap();
+    let modified = std::time::UNIX_EPOCH + Duration::from_secs(86_400);
+    let mut existing = Vec::new();
+    for entry in std::fs::read_dir(&scripts).unwrap() {
+        let path = entry.unwrap().path();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        existing.push((path.clone(), std::fs::read(path).unwrap()));
+    }
+
+    // PowerShell can hold a script open without sharing write access.
+    #[cfg(windows)]
+    let readers = existing
+        .iter()
+        .map(|(path, _)| {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(1) // FILE_SHARE_READ
+                .open(path)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    write_scripts_to(&scripts).unwrap();
+    for (path, body) in &existing {
+        assert_eq!(std::fs::read(path).unwrap(), *body);
+        assert_eq!(
+            std::fs::metadata(path).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+    #[cfg(windows)]
+    drop(readers);
+
+    std::fs::write(scripts.join("shellIntegration.ps1"), "outdated script").unwrap();
+    std::fs::remove_file(scripts.join("shellIntegration.bash")).unwrap();
+    write_scripts_to(&scripts).unwrap();
+    for (path, body) in &existing {
+        assert_eq!(std::fs::read(path).unwrap(), *body);
+    }
+}
+
 struct TestDirectory(PathBuf);
 
 impl TestDirectory {
