@@ -103,7 +103,8 @@
 </main>
 
 <style>
-  main { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(300px, 34vw, 620px) minmax(0, 1fr); grid-template-rows: minmax(180px, 1fr) 285px; }
-  @media (max-width: 850px) { main { grid-template-columns: 190px minmax(0, 1fr); } }
-  @media (max-width: 600px) { main { grid-template-columns: 150px minmax(0, 1fr); grid-template-rows: minmax(150px, 1fr) 260px; } }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(280px, 28vw, 440px) minmax(0, 1fr); grid-template-rows: minmax(240px, 1fr) clamp(200px, 24vh, 250px); border: 1px solid var(--border); border-top: 0; background: var(--bg); }
+  @media (max-width: 850px) { main { grid-template-columns: 210px minmax(0, 1fr); } }
+  @media (max-height: 800px) and (min-width: 601px) { main { flex: none; grid-template-rows: 360px 250px; } }
+  @media (max-width: 600px) { main { flex: none; grid-template-columns: minmax(0, 1fr); grid-template-rows: 260px 560px 320px; } }
 </style>

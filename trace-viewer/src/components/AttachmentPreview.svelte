@@ -22,5 +22,5 @@
 <style>
   #attachment-preview { min-width: 0; }
   img { max-width: 100%; max-height: 300px; }
-  pre { max-height: 350px; padding: 8px; background: var(--panel); }
+  pre { max-height: 350px; padding: 12px; border: 1px solid var(--border); background: var(--panel); }
 </style>

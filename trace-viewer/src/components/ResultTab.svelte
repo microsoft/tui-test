@@ -23,11 +23,11 @@
   .error-heading { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
   h1 { color: var(--red); }
   h1.passed { color: var(--green); }
-  .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-  .comparison > div { border-left: 3px solid var(--border); padding-left: 10px; min-width: 0; }
-  .comparison .expected { border-color: var(--green); }
-  .comparison .actual { border-color: var(--red); }
-  .comparison h2 { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
+  .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .comparison > div { border: 1px solid var(--border); border-left-width: 2px; padding: 10px 12px; min-width: 0; background: var(--panel); }
+  .comparison .expected { border-left-color: var(--green); }
+  .comparison .actual { border-left-color: var(--red); }
+  .comparison h2 { margin: 0 0 6px; }
   .comparison pre { max-height: 90px; }
   @media (max-width: 600px) { .comparison { grid-template-columns: 1fr; } }
 </style>

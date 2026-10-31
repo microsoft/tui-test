@@ -12,6 +12,7 @@
 
 <style>
   .tab-panel { flex: 1; overflow: auto; min-height: 0; }
-  .metadata { padding: 0 12px 12px; }
-  .details { padding: 10px 16px; }
+  .metadata { padding: 0 16px 16px; }
+  .details { padding: 16px 20px; }
+  @media (max-width: 600px) { .details { padding: 12px; } }
 </style>

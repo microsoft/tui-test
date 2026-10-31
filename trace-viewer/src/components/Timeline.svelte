@@ -9,6 +9,7 @@
 </script>
 
 <section class="timeline" aria-label="Trace timeline">
+  <div class="timeline-heading"><span>Session timeline</span><span>{frames.length} retained frames / {actions.length} actions</span></div>
   <div id="time-scale" class="time-scale" aria-hidden="true">
     {#each [0, 1, 2, 3, 4, 5] as tick}<span>{time(Math.round(duration * tick / 5))}</span>{/each}
   </div>
@@ -35,16 +36,21 @@
 </section>
 
 <style>
-  .timeline { height: 132px; padding: 0 12px 6px; flex-shrink: 0; border-bottom: 1px solid var(--border); background: var(--panel); overflow: hidden; }
-  .time-scale { height: 21px; display: flex; justify-content: space-between; color: var(--muted); font: 10px/21px Consolas, monospace; }
+  .timeline { height: 138px; padding: 8px 16px; flex-shrink: 0; border: 1px solid var(--border); background: var(--bg); overflow: hidden; }
+  .timeline-heading { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font: 10px/1.6 var(--mono); }
+  .timeline-heading span:first-child { color: var(--text); letter-spacing: .07em; text-transform: uppercase; }
+  .time-scale { height: 22px; display: flex; justify-content: space-between; color: var(--muted); font: 10px/22px var(--mono); }
   .action-timeline { height: 23px; position: relative; border-top: 1px solid var(--border); background: repeating-linear-gradient(to right, transparent 0, transparent calc(20% - 1px), var(--border) 20%); }
-  .action-bar { position: absolute; top: 6px; height: 10px; min-width: 4px; border: 0; padding: 0; border-radius: 2px; background: #7fb0eb; }
-  .action-bar.failed { background: #d95c65; }
-  .action-bar[aria-current="true"] { outline: 2px solid var(--blue); }
-  .filmstrip { display: flex; align-items: stretch; gap: 7px; height: 78px; overflow-x: auto; }
-  .thumbnail { padding: 2px; min-width: 92px; max-width: 126px; flex-shrink: 0; text-align: left; border: 1px solid var(--border); background: var(--bg); }
-  .thumbnail img { width: 100%; height: 46px; object-fit: contain; background: #111; display: block; }
-  .thumbnail span { display: block; padding: 1px 4px; font-size: 10px; color: var(--muted); }
-  .thumbnail[aria-current="true"] { border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); }
-  @media (max-width: 600px) { .timeline { height: 112px; } .filmstrip { height: 58px; } .thumbnail img { height: 30px; } }
+  .action-bar { position: absolute; top: 6px; height: 8px; min-width: 4px; border: 0; padding: 0; border-radius: 0; background: var(--link); }
+  .action-bar.failed { background: var(--red); }
+  .action-bar:hover:not(:disabled) { background: var(--accent); }
+  .action-bar.failed:hover:not(:disabled) { background: var(--red); }
+  .action-bar[aria-current="true"] { outline: 1px solid var(--accent); outline-offset: 2px; }
+  .filmstrip { display: flex; align-items: stretch; gap: 8px; height: 60px; overflow-x: auto; padding: 3px; margin: 0 -3px; }
+  .thumbnail { padding: 3px; min-width: 104px; max-width: 140px; flex-shrink: 0; text-align: left; border: 1px solid var(--border); background: var(--panel); }
+  .thumbnail img { width: 100%; height: 30px; object-fit: contain; background: #111; display: block; }
+  .thumbnail span { display: block; padding: 3px 4px; font: 10px/1.6 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .thumbnail[aria-current="true"] { border-color: var(--link); background: var(--selected); }
+  .thumbnail[aria-current="true"] span { color: var(--link); }
+  @media (max-width: 600px) { .timeline { height: 142px; padding: 8px 10px; } .timeline-heading { font-size: 9px; } .filmstrip { height: 66px; } .thumbnail img { height: 38px; } }
 </style>

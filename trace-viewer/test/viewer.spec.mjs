@@ -317,6 +317,45 @@ test("zoom and responsive fit retain the same cell hit testing and crop", async 
   }
 });
 
+for (const colorScheme of ["dark", "light"]) {
+  test(`the ${colorScheme} workbench keeps controls and evidence usable on narrow screens`, async ({ page, openReport }) => {
+    const data = fixture();
+    data.details.runtime.session_name = "deployment-wizard-".repeat(20);
+    data.timeline.frames[2].size = { cols: 80, rows: 24 };
+    data.timeline.frames[2].svg = '<svg xmlns="http://www.w3.org/2000/svg" width="814" height="502"><rect width="100%" height="100%" fill="#112233"/></svg>';
+    await page.emulateMedia({ colorScheme });
+    await openReport(data);
+    for (const viewport of [{ width: 1280, height: 900 }, { width: 1280, height: 600 }, { width: 800, height: 720 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      for (const id of ["failure", "zoom", "play", "frame-slider", "cell-tab"]) {
+        await page.locator(`#${id}`).scrollIntoViewIfNeeded();
+        await expect(page.locator(`#${id}`)).toBeInViewport();
+      }
+      const screen = await page.locator("#terminal").boundingBox();
+      expect(screen.width).toBeGreaterThan(0);
+      expect(screen.height).toBeGreaterThan(0);
+      await page.locator("#action-filter").scrollIntoViewIfNeeded();
+      await expect(page.locator("#action-filter")).toBeInViewport();
+      if (viewport.width < 600) {
+        const navigation = await page.locator(".sidebar").boundingBox();
+        const viewer = await page.locator(".viewer").boundingBox();
+        expect(navigation.y + navigation.height).toBeLessThanOrEqual(viewer.y);
+      }
+      await page.locator("#zoom").selectOption("1.5");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.locator("#zoom").selectOption("fit");
+      await page.locator("#terminal").focus();
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Enter");
+      await expect(page.locator("#cell-panel")).toBeVisible();
+      await expect(page.locator("#cell-heading")).toContainText("Column");
+      await page.locator("#failure").click();
+      await expect(page.locator("#errors-panel")).toBeVisible();
+    }
+  });
+}
+
 test("tabs expose metadata and support roving keyboard focus", async ({ page, openReport }) => {
   await openReport();
   await expect(page.locator("#cell-tab")).toHaveAttribute("aria-controls", "cell-panel");
@@ -341,6 +380,7 @@ test("attachments preview inert text and download original bytes offline", async
   await openReport(data);
   await page.locator("#attachments-tab").click();
   await page.locator('[data-attachment="failure.md"]').click();
+  await expect(page.locator('[data-attachment="failure.md"]')).toHaveAttribute("aria-current", "true");
   await expect(page.locator("#attachment-preview pre")).toHaveText(hostile);
   await expect(page.locator("#attachment-preview script")).toHaveCount(0);
   for (const file of data.attachments) {
