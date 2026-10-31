@@ -790,6 +790,36 @@ mod tests {
     }
 
     #[test]
+    fn cursor_animation_settings_inherit_without_mutating_the_config() {
+        let config = ConfigFile::parse(
+            "[recording.style.cursor]\nblink = false\nblink_interval_ms = 250\n\
+             [profiles.demo.recording.style.cursor]\nblink = true\n\
+             [profiles.slow.recording.style.cursor]\nblink_interval_ms = 750\n",
+        )
+        .unwrap();
+        let original = config.recording.clone();
+        let demo = config.settings(Some("demo")).unwrap().style.cursor;
+        assert!(demo.blink);
+        assert_eq!(demo.blink_interval_ms, 250);
+        let slow = config.settings(Some("slow")).unwrap().style.cursor;
+        assert!(!slow.blink);
+        assert_eq!(slow.blink_interval_ms, 750);
+        assert_eq!(config.recording, original);
+        for source in [
+            "[recording.style.cursor]\nblink_interval_ms = 0",
+            "[recording.style.cursor]\nblink_interval_ms = -1",
+            "[recording.style.cursor]\nblink_interval_ms = 0.5",
+            "[recording.style.cursor]\nunknown = true",
+            "[profiles.demo.recording.style.cursor]\nblink_interval_ms = 0",
+        ] {
+            assert!(ConfigFile::parse(source).is_err(), "{source}");
+        }
+        let default = ConfigFile::default().settings(None).unwrap().style.cursor;
+        assert!(default.blink);
+        assert_eq!(default.blink_interval_ms, 500);
+    }
+
+    #[test]
     fn a_profile_style_overrides_the_file_style_key_by_key() {
         let config = ConfigFile::parse(
             "[recording.style]\nfont_size = 20\ncanvas_background = \"#ff0000\"\ncanvas_padding = 12\n\

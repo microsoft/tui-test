@@ -29,7 +29,9 @@ use rquickjs::{Context, Ctx, Function, Object, Runtime};
 use crate::event::BellTracker;
 use crate::profile::{ColorSlot, Profile, Rgb};
 use crate::terminal::cell::{Attrs, Color, EmuCell, Hyperlink, UnderlineStyle, CONTINUATION};
-use crate::terminal::emu::{ClipboardValidator, ColorTable, CursorShape, Emulator, TerminalMode};
+use crate::terminal::emu::{
+    ClipboardValidator, ColorTable, CursorShape, CursorStyle, Emulator, TerminalMode,
+};
 
 const XTERM_BUNDLE: &str = include_str!("../../assets/xtermjs/xterm-headless.js");
 const UNICODE11: &str = include_str!("../../assets/xtermjs/addon-unicode11.js");
@@ -479,13 +481,17 @@ impl Emulator for XtermJsEmu {
         self.call_or("cursorKeyApplication", 0) != 0
     }
 
-    fn cursor_shape(&self) -> CursorShape {
-        match self.call::<String>("cursorShape").as_str() {
+    fn cursor_style(&self) -> CursorStyle {
+        let shape = match self.call::<String>("cursorShape").as_str() {
             "underline" => CursorShape::Underline,
             "bar" => CursorShape::Bar,
             // xterm.js also spells the beam `bar`, and a terminal that has
             // been told nothing draws a block.
             _ => CursorShape::Block,
+        };
+        CursorStyle {
+            shape,
+            blinking: self.call::<bool>("cursorBlink"),
         }
     }
 
@@ -607,6 +613,19 @@ mod tests {
         let mut replay = XtermJsEmu::new(80, 3, &Profile::default()).unwrap();
         replay.process(seed.as_bytes());
         assert_eq!(replay.viewable_rows(), active);
+    }
+
+    #[test]
+    fn cursor_style_override_takes_precedence_over_blink_mode() {
+        let mut emu = XtermJsEmu::new(10, 2, &Profile::default()).unwrap();
+        emu.process(b"\x1b[2 q\x1b[?12h");
+        assert!(!emu.cursor_style().blinking);
+        emu.process(b"\x1b[0 q");
+        assert!(emu.cursor_style().blinking);
+        emu.process(b"\x1b[1 q\x1b[?12l");
+        assert!(emu.cursor_style().blinking);
+        emu.process(b"\x1b[0 q");
+        assert!(!emu.cursor_style().blinking);
     }
 
     /// A JS exception has to reach the caller, not read back as an empty grid.
