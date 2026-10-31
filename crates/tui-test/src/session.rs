@@ -571,6 +571,7 @@ impl Session {
                 fps,
                 speed,
                 idle_time_limit,
+                cursor: state.style.cursor,
             },
             #[cfg(feature = "recording-raster")]
             ffmpeg_path,
@@ -629,7 +630,9 @@ impl Session {
         let frames = state.recording_frames.take().map(|mut frames| {
             let stopped = Instant::now();
             // Check faults without sampling a new visual state at the stop boundary.
-            frames.capture(state.emu.as_ref(), stopped, frames.revision());
+            if let Some(error) = state.emu.fault() {
+                frames.fail(anyhow::anyhow!("recording frame capture failed: {error}"));
+            }
             frames.finish(stopped)
         });
         let stopped = self.recorder.stop();

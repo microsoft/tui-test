@@ -156,6 +156,7 @@ Exports encode these samples without replay through another emulator.
 Raster recordings preserve elapsed time until `record stop`, including quiet periods.
 There is no default idle cap or extra final hold.
 `--speed` scales playback time; `--idle-time-limit` explicitly caps each unchanged visual interval before speed scaling.
+Cursor blink phases share that interval's idle limit; they do not count as terminal activity.
 An idle limit of zero removes those intervals.
 Media formats round durations to their supported precision.
 Recordings retain frames in memory until export and merge identical samples.
@@ -269,7 +270,23 @@ enabled = true
 color = "#080812"
 offset = 5
 spread = 7
+
+[recording.style.cursor]
+blink = true
+blink_interval_ms = 500
 ```
+
+`cursor.blink` allows animation when the application's effective cursor style requests blinking.
+Set it to `false` for a steady cursor.
+`cursor.blink_interval_ms` must be a positive integer.
+It sets each visible or hidden phase before playback speed scaling; 500 means a one-second cycle.
+Low recording FPS can miss short phases.
+
+Animation starts visible and resets when a sample detects a change in cursor position, style, or visibility.
+Hidden and off-screen cursors stay hidden.
+Screenshots always use the visible phase of an otherwise-visible cursor.
+These settings do not change cursor inspection, waits, or asciicast output.
+Profiles inherit and override these fields like other style settings.
 
 There are two gaps, and each side of either can differ. A table sets the sides
 individually, and a side it does not name keeps its own default, so widening
