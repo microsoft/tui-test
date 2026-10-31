@@ -108,7 +108,15 @@ fn write_scripts_to(dir: &Path) -> std::io::Result<()> {
         ),
     ];
     for (name, body) in files {
-        std::fs::write(dir.join(name), body)?;
+        let path = dir.join(name);
+        // A running PowerShell can deny writes to its startup script.
+        match std::fs::read(&path) {
+            Ok(existing) if existing == body.as_bytes() => continue,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        std::fs::write(path, body)?;
     }
     Ok(())
 }
