@@ -45,16 +45,9 @@ pub(crate) fn encode_png(
 ) -> anyhow::Result<()> {
     let (staged_path, file) = stage_png(path)?;
     let result = (|| -> anyhow::Result<()> {
-        let (width, height) = renderer.pixel_size();
+        let bytes = encode_png_bytes(frame, renderer)?;
         let mut output = BufWriter::new(file);
-        let mut encoder = png::Encoder::new(&mut output, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
-        let mut writer = encoder.write_header()?;
-        let image = renderer.render(frame)?;
-        writer.write_image_data(image.as_raw())?;
-        writer.finish()?;
+        output.write_all(&bytes)?;
         output.flush()?;
         drop(output);
         std::fs::rename(&staged_path, path)?;
@@ -64,6 +57,29 @@ pub(crate) fn encode_png(
         let _ = std::fs::remove_file(staged_path);
     }
     result
+}
+
+/// Encode one rendered frame to PNG bytes, without touching the filesystem.
+///
+/// The file writer above shares this so live screenshots and offline snapshot
+/// renders produce identical bytes from the same frame and renderer.
+pub(crate) fn encode_png_bytes(
+    frame: &Frame,
+    renderer: &mut dyn FrameRenderer,
+) -> anyhow::Result<Vec<u8>> {
+    let (width, height) = renderer.pixel_size();
+    let mut encoded = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
+        let mut writer = encoder.write_header()?;
+        let image = renderer.render(frame)?;
+        writer.write_image_data(image.as_raw())?;
+        writer.finish()?;
+    }
+    Ok(encoded)
 }
 
 fn stage_png(path: &Path) -> std::io::Result<(PathBuf, File)> {

@@ -527,7 +527,7 @@ mod tests {
         // Derived from the style rather than pinned, so a deliberate change to
         // a default gap does not read as a broken encoder test.
         let style = crate::render::style::Style::default();
-        let (panel_width, panel_height) = crate::render::svg::pixel_size(2, 1, &style);
+        let (panel_width, panel_height) = crate::render::svg::test_pixel_size(2, 1, &style);
         assert_eq!(
             renderer.pixel_size(),
             // The renderer is built at scale 2.

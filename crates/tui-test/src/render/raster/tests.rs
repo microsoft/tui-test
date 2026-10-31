@@ -153,7 +153,7 @@ fn adjacent_background_cells_are_seamless_at_fractional_zoom() {
                 .unwrap();
         let image = renderer.render(&frame(grid.clone())).unwrap();
         let (panel_width, panel_height) =
-            crate::render::svg::pixel_size(backgrounds.len() as u16, rows, &Style::default());
+            crate::render::svg::test_pixel_size(backgrounds.len() as u16, rows, &Style::default());
         let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
         let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
         let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
@@ -200,7 +200,8 @@ fn block_cursor_is_aligned_with_background_cells_at_fractional_zoom() {
             .color(crate::profile::ColorSlot::Cursor);
         let mut renderer = GridRenderer::with_zoom(4, 1, zoom, Style::default()).unwrap();
         let image = renderer.render(&content).unwrap();
-        let (panel_width, panel_height) = crate::render::svg::pixel_size(4, 1, &Style::default());
+        let (panel_width, panel_height) =
+            crate::render::svg::test_pixel_size(4, 1, &Style::default());
         let panel_width = super::scaled_dimension(panel_width, zoom, "test width").unwrap();
         let panel_height = super::scaled_dimension(panel_height, zoom, "test height").unwrap();
         let origin_x = (image.dimensions().0 - panel_width) as f32 / 2.0;
@@ -247,7 +248,7 @@ fn smaller_terminal_is_centered_on_the_recording_canvas() {
     let expected_background = content.render_state.resolve(None, false);
     let image = renderer.render(&content).unwrap();
     let (width, height) = image.dimensions();
-    let (panel_width, panel_height) = crate::render::svg::pixel_size(2, 1, &Style::default());
+    let (panel_width, panel_height) = crate::render::svg::test_pixel_size(2, 1, &Style::default());
     let origin_x = (width - panel_width) / 2;
     let origin_y = (height - panel_height) / 2;
 
@@ -599,7 +600,7 @@ fn the_raster_canvas_is_drawn_from_its_style() {
     let mut renderer = GridRenderer::with_zoom(4, 2, 1.0, style.clone()).unwrap();
     let plain = GridRenderer::new(4, 2);
 
-    let (panel_width, panel_height) = crate::render::svg::pixel_size(4, 2, &style);
+    let (panel_width, panel_height) = crate::render::svg::test_pixel_size(4, 2, &style);
     assert_eq!(
         renderer.dimensions(),
         (
@@ -644,7 +645,7 @@ fn a_border_is_stroked_onto_the_raster_canvas() {
         .render(&frame(vec![vec![EmuCell::blank(); 6]; 2]))
         .unwrap();
 
-    let (panel_width, _) = crate::render::svg::pixel_size(6, 2, &style);
+    let (panel_width, _) = crate::render::svg::test_pixel_size(6, 2, &style);
     // The panel is centered, so its left edge sits one padding in. Two pixels
     // further is the middle of a four-wide stroke.
     let middle_of_stroke = (image.dimensions().0 - panel_width) / 2 + 2;
@@ -696,7 +697,7 @@ fn the_raster_window_sits_at_its_own_gaps() {
         ..Style::default()
     };
     let mut renderer = GridRenderer::with_zoom(6, 2, 1.0, style.clone()).unwrap();
-    let (panel_width, panel_height) = crate::render::svg::pixel_size(6, 2, &style);
+    let (panel_width, panel_height) = crate::render::svg::test_pixel_size(6, 2, &style);
 
     assert_eq!(
         renderer.dimensions(),

@@ -1,4 +1,5 @@
 mod nerd_font;
+pub mod offline;
 pub mod style;
 pub mod svg;
 

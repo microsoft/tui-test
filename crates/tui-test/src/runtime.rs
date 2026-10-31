@@ -13,6 +13,7 @@ use crate::api::{
 use crate::diagnostics::ExecutionContext;
 use crate::engine::Engine;
 use crate::logger::Logger;
+use crate::snapshot::{SnapshotOptions, SnapshotScope, TerminalSnapshot};
 
 const MAX_COMPLETED_RECORDINGS: usize = 1024;
 
@@ -444,6 +445,27 @@ impl Session {
     /// Cancel pending operations, terminate the child, and release the terminal.
     pub fn close(&self) -> Result<(), TuiTestError> {
         self.execute(Operation::Close).map(|_| ())
+    }
+
+    /// Capture an owned snapshot of the selected scope through the session's
+    /// engine.
+    ///
+    /// Reads grid, cursor, dimensions, title, and resolved colors under one
+    /// terminal-state lock. Records raw visual data; the snapshot is fully
+    /// owned and stays usable after the session closes.
+    pub fn capture_snapshot(&self, scope: SnapshotScope) -> Result<TerminalSnapshot, TuiTestError> {
+        self.engine.capture_snapshot(scope)
+    }
+
+    /// Capture an owned snapshot with explicit options.
+    ///
+    /// Pass [`SnapshotOptions::with_highlight`] to fold locator highlighting
+    /// into the captured cells instead of recording raw visual data.
+    pub fn capture_snapshot_with(
+        &self,
+        options: &SnapshotOptions,
+    ) -> Result<TerminalSnapshot, TuiTestError> {
+        self.engine.capture_snapshot_with(options)
     }
 
     /// Cancel pending operations, including startup readiness, and terminate the
