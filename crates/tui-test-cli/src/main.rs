@@ -415,6 +415,12 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         Command::Record {
             cmd: RecordCmd::Stop,
         } => Request::StopRecording,
+        Command::Record {
+            cmd: RecordCmd::Pause,
+        } => Request::PauseRecording,
+        Command::Record {
+            cmd: RecordCmd::Resume,
+        } => Request::ResumeRecording,
         Command::Cells { x, y, w, h } => Request::Cells { x, y, w, h },
         Command::Get { field } => Request::Get {
             field: map_field(field),
@@ -1530,6 +1536,21 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("require --out"));
+    }
+
+    #[test]
+    fn recording_controls_map_to_protocol_requests() {
+        for (command, kind) in [("pause", "pause_recording"), ("resume", "resume_recording")] {
+            let cli = Cli::try_parse_from(["tui-test", "record", command]).unwrap();
+            let request = build_request(cli.command.unwrap()).unwrap();
+            let json = serde_json::to_value(&request).unwrap();
+            assert_eq!(json, serde_json::json!({ "kind": kind }));
+            let decoded: Request = serde_json::from_value(json).unwrap();
+            assert!(matches!(
+                (command, decoded),
+                ("pause", Request::PauseRecording) | ("resume", Request::ResumeRecording)
+            ));
+        }
     }
 
     #[test]

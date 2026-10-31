@@ -117,6 +117,13 @@ class IntegrationTests(unittest.TestCase):
                     )
                     await su.submit("echo sdk-recording")
                     await su.wait_command()
+                    await su.pause_recording()
+                    with self.assertRaisesRegex(UsageError, "already paused"):
+                        await su.pause_recording()
+                    await su.resume_recording()
+                    with self.assertRaisesRegex(UsageError, "not paused"):
+                        await su.resume_recording()
+                    await su.pause_recording()
                     self.assertEqual(await su.stop_recording(), str(path))
                 cast = path.read_text(encoding="utf-8")
                 self.assertIn('"version":2', cast)

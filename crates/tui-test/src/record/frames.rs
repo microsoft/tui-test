@@ -78,6 +78,7 @@ pub(crate) struct FrameCapture {
     pending: Frame,
     pending_at: Instant,
     blink_started: Instant,
+    paused_at: Option<Instant>,
     output: Vec<Frame>,
     duration: Duration,
     error: Option<anyhow::Error>,
@@ -109,6 +110,7 @@ impl FrameCapture {
             source,
             pending_at: started,
             blink_started: started,
+            paused_at: None,
             output: Vec::new(),
             duration: Duration::ZERO,
             error: None,
@@ -129,6 +131,9 @@ impl FrameCapture {
 
     fn push(&mut self, emulator: &dyn Emulator, at: Instant, revision: u64) -> anyhow::Result<()> {
         self.check_time(at)?;
+        if self.paused_at.is_some() {
+            return Ok(());
+        }
         if let Some(error) = emulator.fault() {
             anyhow::bail!("recording frame capture failed: {error}");
         }
@@ -200,14 +205,52 @@ impl FrameCapture {
         Ok(duration)
     }
 
+    pub(crate) fn pause(&mut self, at: Instant) -> anyhow::Result<()> {
+        if self.paused_at.is_some() {
+            anyhow::bail!("recording is already paused");
+        }
+        self.check_time(at)?;
+        let duration = self.frame_duration(at)?;
+        let mut frame = self.pending.clone();
+        frame.duration = duration;
+        append_frame(&mut self.output, frame)?;
+        self.paused_at = Some(at);
+        Ok(())
+    }
+
+    pub(crate) fn resume(
+        &mut self,
+        emulator: &dyn Emulator,
+        at: Instant,
+        revision: u64,
+    ) -> anyhow::Result<()> {
+        self.check_time(at)?;
+        let paused_at = self
+            .paused_at
+            .ok_or_else(|| anyhow::anyhow!("recording is not paused"))?;
+        let mut source = TimedGrid::capture(emulator, at)?;
+        if self.source.frame.same_visual_state(&source.frame) {
+            source.at = self.source.at + at.duration_since(paused_at);
+        }
+        self.pending = source.frame.clone();
+        self.source = source;
+        self.pending_at = at;
+        self.blink_started = at;
+        self.revision = revision;
+        self.paused_at = None;
+        Ok(())
+    }
+
     pub(crate) fn finish(mut self, at: Instant) -> anyhow::Result<Vec<Frame>> {
         if let Some(error) = self.error {
             return Err(error);
         }
         self.check_time(at)?;
-        let duration = self.frame_duration(at)?;
-        self.pending.duration = duration;
-        append_frame(&mut self.output, self.pending)?;
+        if self.paused_at.is_none() {
+            let duration = self.frame_duration(at)?;
+            self.pending.duration = duration;
+            append_frame(&mut self.output, self.pending)?;
+        }
         Ok(self.output)
     }
 }
@@ -298,6 +341,84 @@ mod tests {
     use crate::api::RecordingFormat;
     #[cfg(feature = "recording-raster")]
     use crate::render::raster::{FrameRenderer, GridRenderer};
+
+    #[test]
+    fn pause_excludes_time_and_resume_samples_the_current_screen() {
+        let started = Instant::now();
+        let mut emu = AlacrittyEmu::new(4, 2, &Profile::default());
+        emu.process(b"A\x1b[1 q");
+        let mut capture = FrameCapture::new(&emu, TimelineOptions::default(), started, 0).unwrap();
+        capture.capture(&emu, started + Duration::from_millis(500), 0);
+        capture.pause(started + Duration::from_secs(1)).unwrap();
+        emu.resize(8, 3);
+        emu.process(b"\x1b[2J\x1b[Hhidden");
+        capture.capture(&emu, started + Duration::from_secs(5), 1);
+        emu.process(b"\x1b[2J\x1b[HB");
+        capture
+            .resume(&emu, started + Duration::from_secs(10), 2)
+            .unwrap();
+        assert!(capture.pending.cursor.is_some(), "resume starts visible");
+        capture
+            .pause(started + Duration::from_millis(10250))
+            .unwrap();
+        let frames = capture.finish(started + Duration::from_secs(99)).unwrap();
+        assert_eq!(frames.len(), 3);
+        assert_eq!(
+            frames.iter().map(|f| f.duration).sum::<Duration>(),
+            Duration::from_millis(1250)
+        );
+        assert_eq!(frames[2].dimensions().unwrap(), (8, 3));
+        assert_eq!(frames[2].grid[0][0].ch, "B");
+        assert!(frames.iter().all(|f| f.grid[0][0].ch != "h"));
+    }
+
+    #[test]
+    fn hidden_cursor_moves_during_pause_preserve_the_idle_budget() {
+        let started = Instant::now();
+        let mut emu = AlacrittyEmu::new(8, 2, &Profile::default());
+        emu.process(b"\x1b[?25l");
+        let options = TimelineOptions {
+            idle_time_limit: Some(Duration::from_secs(2)),
+            ..Default::default()
+        };
+        let mut capture = FrameCapture::new(&emu, options, started, 0).unwrap();
+        capture.pause(started + Duration::from_secs(1)).unwrap();
+        emu.process(b"\x1b[C");
+        capture
+            .resume(&emu, started + Duration::from_secs(10), 1)
+            .unwrap();
+        let frames = capture.finish(started + Duration::from_secs(12)).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].duration, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn pause_cycles_preserve_an_unchanged_screens_idle_budget() {
+        let started = Instant::now();
+        let emu = AlacrittyEmu::new(4, 2, &Profile::default());
+        for limit in [None, Some(Duration::from_secs(2)), Some(Duration::ZERO)] {
+            let options = TimelineOptions {
+                idle_time_limit: limit,
+                speed: 2.0,
+                ..Default::default()
+            };
+            let mut capture = FrameCapture::new(&emu, options, started, 0).unwrap();
+            for second in [1, 3, 5] {
+                capture
+                    .pause(started + Duration::from_secs(second))
+                    .unwrap();
+                capture
+                    .resume(&emu, started + Duration::from_secs(second + 1), 0)
+                    .unwrap();
+            }
+            let frames = capture.finish(started + Duration::from_secs(7)).unwrap();
+            assert_eq!(frames.len(), 1);
+            assert_eq!(
+                frames[0].duration,
+                limit.unwrap_or(Duration::from_secs(4)).div_f64(2.0)
+            );
+        }
+    }
 
     #[test]
     fn cursor_phases_follow_native_style_and_recording_settings() {

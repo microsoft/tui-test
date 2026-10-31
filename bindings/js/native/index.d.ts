@@ -364,6 +364,8 @@ export declare class NativeSession {
   screenshot(options?: ScreenshotOptions | undefined | null): Promise<string>
   startRecording(options: RecordingOptions): Promise<void>
   stopRecording(): Promise<string>
+  pauseRecording(): Promise<void>
+  resumeRecording(): Promise<void>
 }
 
 export declare function sessions(): Promise<Array<string>>;
