@@ -192,6 +192,62 @@ struct OperationMetadata {
     input: Option<InputDetails>,
 }
 
+/// The per-request pieces of the shared request pipeline. An [`Operation`]
+/// supplies them through [`RequestPlan::for_operation`]; a raw byte payload,
+/// which cannot be represented as a serialized operation, supplies the same
+/// pieces through [`RequestPlan::for_raw_bytes`].
+struct RequestPlan {
+    waiting: bool,
+    lifecycle: bool,
+    log_summary: String,
+    canonical_name: &'static str,
+    timeout_ms: Option<u64>,
+    safe_summary: String,
+    is_assertion: bool,
+    expectation: Option<OperationExpectation>,
+    input: Option<InputDetails>,
+}
+
+impl RequestPlan {
+    fn for_operation(operation: &Operation) -> Self {
+        let canonical_name = diagnostic_operation_name(operation);
+        Self {
+            waiting: operation.is_wait(),
+            lifecycle: matches!(
+                operation,
+                Operation::Open(_)
+                    | Operation::Run(_)
+                    | Operation::Restart { .. }
+                    | Operation::Close
+                    | Operation::FinishTrace { .. }
+            ),
+            log_summary: operation_summary(operation),
+            canonical_name,
+            timeout_ms: operation_timeout(operation),
+            safe_summary: safe_operation_summary(operation),
+            is_assertion: canonical_name.starts_with("expect.")
+                || canonical_name.starts_with("wait.")
+                || matches!(canonical_name, "locator.wait" | "locator.resolve"),
+            expectation: OperationExpectation::capture(operation),
+            input: InputDetails::capture(operation),
+        }
+    }
+
+    fn for_raw_bytes(data: &[u8]) -> Self {
+        Self {
+            waiting: false,
+            lifecycle: false,
+            log_summary: format!("write_bytes {} bytes", data.len()),
+            canonical_name: "write",
+            timeout_ms: None,
+            safe_summary: format!("wrote {} bytes", data.len()),
+            is_assertion: false,
+            expectation: None,
+            input: InputDetails::capture_bytes(data),
+        }
+    }
+}
+
 impl OperationMetadata {
     fn pending_event(&self, result: &str, screen_at_return: u64) -> OperationEvent {
         OperationEvent {
@@ -309,16 +365,38 @@ impl Engine {
             trace.validate().map_err(TuiTestError::usage)?;
         }
         self.interrupt_for_operation(&operation);
+        let plan = RequestPlan::for_operation(&operation);
+        self.execute_request(&context, cancelled, plan, |metadata, cancelled| {
+            self.execute_inner(operation, &context, metadata, cancelled)
+        })
+    }
+
+    /// Shared request pipeline: lifecycle serialization, operation history,
+    /// failure observation and finalization, and the recording outcome. Every
+    /// request, whether it arrives as an [`Operation`] or as raw bytes,
+    /// passes through here so diagnostics and retention behave identically.
+    fn execute_request(
+        &self,
+        context: &ExecutionContext,
+        cancelled: &dyn Fn() -> bool,
+        plan: RequestPlan,
+        run: impl FnOnce(
+            &mut OperationMetadata,
+            &dyn Fn() -> bool,
+        ) -> Result<OperationResult, TuiTestError>,
+    ) -> Result<OperationResult, TuiTestError> {
+        let RequestPlan {
+            waiting,
+            lifecycle,
+            log_summary,
+            canonical_name,
+            timeout_ms,
+            safe_summary,
+            is_assertion,
+            expectation,
+            input,
+        } = plan;
         let interrupt_generation = self.interrupt_generation.load(Ordering::Acquire);
-        let waiting = operation.is_wait();
-        let lifecycle = matches!(
-            operation,
-            Operation::Open(_)
-                | Operation::Run(_)
-                | Operation::Restart { .. }
-                | Operation::Close
-                | Operation::FinishTrace { .. }
-        );
         // A wait pins its generation through diagnostics, but does not exclude
         // input or resize. Announce lifecycle writers before locking so even a
         // newly arriving waiter yields, independent of RwLock's fairness policy.
@@ -359,31 +437,26 @@ impl Engine {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         });
         if self.logger.enabled() {
-            self.logger
-                .event(&format!("operation {}", operation_summary(&operation)));
+            self.logger.event(&format!("operation {log_summary}"));
         }
         let name = context
             .operation_name
             .clone()
-            .unwrap_or_else(|| diagnostic_operation_name(&operation).to_string());
+            .unwrap_or_else(|| canonical_name.to_string());
         let screen_before = self.capture_current_screen_sequence(true, false);
-        let canonical_name = diagnostic_operation_name(&operation);
-        let is_assertion = canonical_name.starts_with("expect.")
-            || canonical_name.starts_with("wait.")
-            || matches!(canonical_name, "locator.wait" | "locator.resolve");
         let started_ms = self.current_session_elapsed_ms().unwrap_or(0);
         let mut metadata = OperationMetadata {
             sequence: 0,
             interrupt_generation,
             name: name.clone(),
-            timeout_ms: operation_timeout(&operation),
+            timeout_ms,
             started_at: Instant::now(),
             started_ms,
             screen_before,
-            safe_summary: safe_operation_summary(&operation),
+            safe_summary,
             is_assertion,
-            expectation: OperationExpectation::capture(&operation),
-            input: InputDetails::capture(&operation),
+            expectation,
+            input,
         };
         let pending = self
             .operation_history
@@ -399,7 +472,7 @@ impl Engine {
             );
         metadata.sequence = pending.sequence();
         let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let result = self.execute_inner(operation, &context, &mut metadata, &cancelled);
+            let result = run(&mut metadata, &cancelled);
             if waiting && cancelled() {
                 let message = "operation was cancelled";
                 Err(
@@ -474,7 +547,7 @@ impl Engine {
             );
         if let Err(error) = &mut result {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.finalize_failure(error, &context, &metadata);
+                self.finalize_failure(error, context, &metadata);
             }));
             error.observation = None;
             error.report = None;
@@ -1528,6 +1601,53 @@ impl Engine {
     /// Forward a remapped mouse report only while the live screen accepts mouse input.
     pub fn write_monitor_mouse_raw(&self, data: &[u8]) -> Result<(), TuiTestError> {
         self.write_monitor_input(data, true)
+    }
+
+    /// Write raw bytes to the live session without UTF-8 conversion.
+    ///
+    /// The bytes are handed to the PTY exactly as given: NUL bytes, escape
+    /// bytes, and sequences that are not valid UTF-8 are all preserved, and
+    /// short or interrupted writes are retried by the shared PTY writer until
+    /// the full slice is handed over. What the child itself receives stays
+    /// subject to its own line discipline (Unix) or console translation
+    /// (ConPTY): the guarantee covers the bytes handed to the PTY, not
+    /// unconditional delivery to the child. NUL and escape bytes were already
+    /// representable through text input; sequences that are not valid UTF-8
+    /// are the new capability.
+    ///
+    /// The write travels the shared request pipeline, so viewport
+    /// serialization, execution tracking, history, failure finalization, and
+    /// the recording outcome behave exactly as for [`Operation::Write`].
+    ///
+    /// An empty payload is a no-op that succeeds while the session is open,
+    /// even after the child has exited. A non-empty payload fails with an
+    /// internal error once the recorded exit state shows the child has
+    /// exited or the process status query has failed. With no open session
+    /// (after [`Operation::Close`]) every payload, including an empty one,
+    /// reports [`ErrorKind::NoSession`].
+    pub fn write_bytes(&self, data: &[u8]) -> Result<(), TuiTestError> {
+        self.execute_raw_bytes(data, ExecutionContext::default())
+    }
+
+    pub(crate) fn execute_raw_bytes(
+        &self,
+        data: &[u8],
+        context: ExecutionContext,
+    ) -> Result<(), TuiTestError> {
+        if let Some(artifact) = &context.artifact {
+            artifact.validate().map_err(TuiTestError::usage)?;
+        }
+        if let Some(trace) = &context.trace {
+            trace.validate().map_err(TuiTestError::usage)?;
+        }
+        let plan = RequestPlan::for_raw_bytes(data);
+        self.execute_request(&context, &|| false, plan, |metadata, _| {
+            self.with_session(|session| {
+                write_raw_input(session, data, &mut metadata.input)?;
+                Ok(OperationResult::Unit)
+            })
+        })
+        .map(|_| ())
     }
 
     fn write_monitor_input(&self, data: &[u8], mouse: bool) -> Result<(), TuiTestError> {
@@ -2755,6 +2875,36 @@ pub(crate) fn cell_color(color: Option<Color>) -> CellColor {
         Some(Color::Rgb(r, g, b)) => CellColor::Rgb(r, g, b),
         Some(color) => CellColor::Indexed(color.to_index()),
     }
+}
+
+/// Shared byte-input helper behind both [`Operation::Write`] (via
+/// [`write_input`]) and [`Engine::write_bytes`]. A non-empty raw payload is
+/// rejected from the recorded exit state before anything is logged, tracked,
+/// or written: the kernel may still accept PTY bytes for a dead child, so the
+/// failure must be deterministic rather than depend on the write call.
+fn write_raw_input(
+    session: &TerminalSession,
+    bytes: &[u8],
+    input: &mut Option<InputDetails>,
+) -> Result<(), TuiTestError> {
+    if !bytes.is_empty() {
+        let state = session
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(error) = state.exit_error.clone() {
+            return Err(TuiTestError::internal(format!(
+                "failed to write raw bytes: {error}"
+            )));
+        }
+        if let Some(code) = state.exited {
+            return Err(TuiTestError::internal(format!(
+                "failed to write raw bytes: child process has exited (code {code})"
+            )));
+        }
+        drop(state);
+    }
+    write_input(session, bytes, input, None)
 }
 
 fn write_input(
@@ -6624,5 +6774,240 @@ mod tests {
             engine.execute(Operation::Close).unwrap();
         }
         reporter.join().unwrap();
+    }
+
+    #[test]
+    fn write_bytes_after_recorded_exit_returns_typed_error() {
+        struct AcceptingWriter {
+            accepted: Arc<Mutex<Vec<u8>>>,
+        }
+
+        impl std::io::Write for AcceptingWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.accepted.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let engine = Engine::new(
+            "write-bytes-after-exit".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        let accepted = Arc::new(Mutex::new(Vec::new()));
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            // The kernel still accepts PTY bytes after the child dies, so
+            // inject a writer that always accepts: a post-exit write must be
+            // rejected from the recorded exit state, not from the write call.
+            session.pty.replace_test_writer(Box::new(AcceptingWriter {
+                accepted: accepted.clone(),
+            }));
+            // Record what the process watcher publishes when the child exits.
+            session.state.lock().unwrap().exited = Some(0);
+        }
+        // An empty payload stays a no-op while the session is open, even
+        // after the child has exited.
+        engine.write_bytes(b"").unwrap();
+        assert!(accepted.lock().unwrap().is_empty());
+        let error = engine.write_bytes(b"after exit").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Internal);
+        assert!(!error.message.is_empty());
+        assert!(
+            accepted.lock().unwrap().is_empty(),
+            "no bytes may reach the PTY after a recorded exit"
+        );
+        engine.execute(Operation::Close).unwrap();
+        let error = engine.write_bytes(b"after close").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::NoSession);
+        assert!(!error.message.is_empty());
+    }
+
+    #[test]
+    fn write_bytes_after_recorded_wait_failure_returns_typed_error() {
+        struct AcceptingWriter;
+
+        impl std::io::Write for AcceptingWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let engine = Engine::new(
+            "write-bytes-after-wait-failure".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        engine
+            .execute(Operation::Run(sleeping_program(false)))
+            .unwrap();
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            session.pty.replace_test_writer(Box::new(AcceptingWriter));
+            // Record what the process watcher publishes when the status
+            // query itself fails.
+            session.state.lock().unwrap().exit_error = Some("wait failed: boom".into());
+        }
+        let error = engine.write_bytes(b"ping").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Internal);
+        assert!(
+            error.message.contains("wait failed: boom"),
+            "unexpected message: {}",
+            error.message
+        );
+        engine.execute(Operation::Close).unwrap();
+    }
+
+    #[test]
+    fn write_bytes_returns_to_bottom_like_write() {
+        let engine = Engine::new(
+            "write-bytes-viewport".into(),
+            Arc::new(Logger::disabled()),
+            PathBuf::new(),
+        );
+        let mut options = sleeping_program(false);
+        options.cols = 12;
+        options.rows = 3;
+        engine.execute(Operation::Run(options)).unwrap();
+        {
+            let guard = engine.lock_session();
+            let mut state = guard.as_ref().unwrap().state.lock().unwrap();
+            state
+                .emu
+                .process(b"row0\r\nrow1\r\nrow2\r\nrow3\r\nrow4\r\nrow5");
+            state.screen_dirty = true;
+            state.last_change = Instant::now() - Duration::from_secs(1);
+            capture_visual_state(&mut state, true)
+        };
+        let viewport_offset =
+            |engine: &Engine| match engine.execute(Operation::GetViewport).unwrap() {
+                OperationResult::Viewport(viewport) => viewport.offset,
+                result => panic!("expected viewport, got {result:?}"),
+            };
+        engine
+            .execute(Operation::Scroll {
+                target: ScrollTarget::Lines(2),
+            })
+            .unwrap();
+        assert_eq!(viewport_offset(&engine), 2);
+        engine
+            .execute(Operation::Write { data: "x".into() })
+            .unwrap();
+        assert_eq!(viewport_offset(&engine), 0);
+        engine
+            .execute(Operation::Scroll {
+                target: ScrollTarget::Lines(2),
+            })
+            .unwrap();
+        assert_eq!(viewport_offset(&engine), 2);
+        engine.write_bytes(b"x").unwrap();
+        assert_eq!(
+            viewport_offset(&engine),
+            0,
+            "raw bytes must serialize with the viewport like Operation::Write"
+        );
+        let history = engine
+            .operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot();
+        let last = history
+            .iter()
+            .rev()
+            .find(|event| event.name == "write")
+            .expect("raw write must be recorded in history");
+        assert_eq!(last.result, "ok");
+        assert_eq!(
+            last.input
+                .as_ref()
+                .expect("raw write must record input")
+                .sent_bytes
+                .as_deref(),
+            Some(b"x".as_slice())
+        );
+        engine.execute(Operation::Close).unwrap();
+    }
+
+    #[test]
+    fn write_bytes_failure_reports_details_and_retains_recording() {
+        let root = allocate_artifact_directory(&std::env::temp_dir()).unwrap();
+        let engine = Engine::new(
+            "write-bytes-failure".into(),
+            Arc::new(Logger::disabled()),
+            root.join("automatic.cast"),
+        );
+        let context = ExecutionContext {
+            trace: Some(TraceOptions {
+                mode: TraceMode::OnFailure,
+                directory: root.join("traces"),
+            }),
+            artifact: Some(crate::diagnostics::FailureArtifactOptions {
+                directory: root.join("explicit-failures"),
+                mode: crate::diagnostics::FailureArtifactMode::Text,
+                include_recording: true,
+            }),
+            ..Default::default()
+        };
+        let mut options = sleeping_program(false);
+        options.recording.directory = Some(root.join("recordings"));
+        engine
+            .execute_with_context(Operation::Run(options), context)
+            .unwrap();
+        let recording_path = engine.recording_path().unwrap();
+        assert!(
+            recording_path.is_file(),
+            "recording must exist while the session is open"
+        );
+        {
+            let guard = engine.lock_session();
+            let session = guard.as_ref().unwrap();
+            // Record what the process watcher publishes when the child exits.
+            session.state.lock().unwrap().exited = Some(0);
+        }
+        let error = engine.write_bytes(b"after exit").unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Internal);
+        assert!(
+            error.message.contains("child process has exited"),
+            "unexpected message: {}",
+            error.message
+        );
+        assert!(
+            error.details.is_some(),
+            "failed raw write must carry structured failure details"
+        );
+        assert!(
+            error.artifact.is_some(),
+            "failed raw write must write a failure artifact"
+        );
+        let history = engine
+            .operation_history
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot();
+        let last = history
+            .iter()
+            .rev()
+            .find(|event| event.name == "write")
+            .expect("failed raw write must be recorded");
+        assert_eq!(last.result, "internal");
+        engine.execute(Operation::Close).unwrap();
+        assert!(
+            recording_path.is_file(),
+            "a failed raw write must retain the OnFailure recording across close"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
