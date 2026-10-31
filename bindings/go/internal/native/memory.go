@@ -1,6 +1,7 @@
 package native
 
 import (
+	"math"
 	"runtime"
 )
 
@@ -13,6 +14,9 @@ func (memory *nativeMemory) release() {
 }
 
 func (memory *nativeMemory) text(value string) abiString {
+	if len(value) > math.MaxInt-1 {
+		panic("native: string too large")
+	}
 	buffer := make([]byte, len(value)+1)
 	copy(buffer, value)
 	pointer := &buffer[0]
