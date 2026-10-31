@@ -12,6 +12,10 @@ publish = false
 name = "tui-test"
 path = "src/main.rs"
 
+[features]
+default = []
+windows-terminal = ["tui-test/windows-terminal"]
+
 [dependencies]
 anyhow.workspace = true
 clap = { workspace = true, features = ["env"] }
