@@ -21,11 +21,11 @@
 </div>
 
 <style>
-  .expectation-banner { display: grid; gap: 4px; margin: 10px 16px 0; background: var(--panel); border: 1px solid var(--border); border-left: 2px solid var(--muted); padding: 8px 12px; font-size: 12px; overflow: auto; max-height: 110px; flex-shrink: 0; }
+  .expectation-banner { display: grid; gap: 2px; margin: 6px 8px 0; background: var(--panel); border: 1px solid var(--border); border-left: 2px solid var(--muted); padding: 6px 8px; font-size: 11px; overflow: auto; max-height: 88px; flex-shrink: 0; }
   strong { font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
   [data-outcome="failed"] { background: var(--error-bg); border-left-color: var(--red); }
   [data-outcome="failed"] strong { color: var(--red); }
   [data-outcome="passed"] { border-left-color: var(--green); }
   [data-outcome="passed"] strong { color: var(--green); }
-  @media (max-width: 600px) { .expectation-banner { margin: 10px 10px 0; } }
+  @media (max-width: 600px) { .expectation-banner { margin: 4px 6px 0; } }
 </style>

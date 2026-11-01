@@ -36,21 +36,21 @@
 </section>
 
 <style>
-  .timeline { height: 138px; padding: 8px 16px; flex-shrink: 0; border: 1px solid var(--border); background: var(--bg); overflow: hidden; }
-  .timeline-heading { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font: 10px/1.6 var(--mono); }
+  .timeline { height: 100px; padding: 4px 8px; flex-shrink: 0; border: 1px solid var(--border); background: var(--bg); overflow: hidden; }
+  .timeline-heading { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font: 9px/14px var(--mono); }
   .timeline-heading span:first-child { color: var(--text); letter-spacing: .07em; text-transform: uppercase; }
-  .time-scale { height: 22px; display: flex; justify-content: space-between; color: var(--muted); font: 10px/22px var(--mono); }
-  .action-timeline { height: 23px; position: relative; border-top: 1px solid var(--border); background: repeating-linear-gradient(to right, transparent 0, transparent calc(20% - 1px), var(--border) 20%); }
-  .action-bar { position: absolute; top: 6px; height: 8px; min-width: 4px; border: 0; padding: 0; border-radius: 0; background: var(--link); }
+  .time-scale { height: 16px; display: flex; justify-content: space-between; color: var(--muted); font: 9px/16px var(--mono); }
+  .action-timeline { height: 16px; position: relative; border-top: 1px solid var(--border); background: repeating-linear-gradient(to right, transparent 0, transparent calc(20% - 1px), var(--border) 20%); }
+  .action-bar { position: absolute; top: 4px; height: 6px; min-width: 4px; border: 0; padding: 0; border-radius: 0; background: var(--link); }
   .action-bar.failed { background: var(--red); }
   .action-bar:hover:not(:disabled) { background: var(--accent); }
   .action-bar.failed:hover:not(:disabled) { background: var(--red); }
   .action-bar[aria-current="true"] { outline: 1px solid var(--accent); outline-offset: 2px; }
-  .filmstrip { display: flex; align-items: stretch; gap: 8px; height: 60px; overflow-x: auto; padding: 3px; margin: 0 -3px; }
-  .thumbnail { padding: 3px; min-width: 104px; max-width: 140px; flex-shrink: 0; text-align: left; border: 1px solid var(--border); background: var(--panel); }
-  .thumbnail img { width: 100%; height: 30px; object-fit: contain; background: #111; display: block; }
-  .thumbnail span { display: block; padding: 3px 4px; font: 10px/1.6 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .filmstrip { display: flex; align-items: stretch; gap: 4px; height: 44px; overflow-x: auto; padding: 2px; margin: 0 -2px; }
+  .thumbnail { padding: 1px; min-width: 84px; max-width: 112px; flex-shrink: 0; text-align: left; border: 1px solid var(--border); background: var(--panel); }
+  .thumbnail img { width: 100%; height: 20px; object-fit: contain; background: #111; display: block; }
+  .thumbnail span { display: block; padding: 1px 2px; font: 9px/1.4 var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .thumbnail[aria-current="true"] { border-color: var(--link); background: var(--selected); }
   .thumbnail[aria-current="true"] span { color: var(--link); }
-  @media (max-width: 600px) { .timeline { height: 142px; padding: 8px 10px; } .timeline-heading { font-size: 9px; } .filmstrip { height: 66px; } .thumbnail img { height: 38px; } }
+  @media (max-width: 600px) { .timeline { padding: 4px 6px; } }
 </style>

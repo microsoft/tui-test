@@ -54,15 +54,15 @@
 
 <style>
   .viewer { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); }
-  .viewer-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: space-between; padding: 8px 16px; border-bottom: 1px solid var(--border); }
+  .viewer-toolbar { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: space-between; padding: 5px 8px; border-bottom: 1px solid var(--border); }
   .viewer-toolbar strong { overflow-wrap: anywhere; min-width: 0; font-weight: 500; }
-  .zoom-label { font: 10px/1.6 var(--mono); color: var(--muted); }
-  .zoom-label select { margin-left: 4px; }
-  .frame-meta { color: var(--muted); font: 10px/1.6 var(--mono); margin: 0; padding: 8px 16px; }
-  .frame-controls { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-top: 1px solid var(--border); }
-  .frame-controls button { white-space: nowrap; font-size: 11px; }
+  .zoom-label { font: 9px/1.4 var(--mono); color: var(--muted); }
+  .zoom-label select { margin-left: 2px; }
+  .frame-meta { color: var(--muted); font: 9px/1.4 var(--mono); margin: 0; padding: 3px 8px; }
+  .frame-controls { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-top: 1px solid var(--border); }
+  .frame-controls button { white-space: nowrap; font-size: 10px; }
   #frame-slider { flex: 1; min-width: 50px; padding: 0; }
-  #frame-count { white-space: nowrap; font: 10px/1.6 var(--mono); }
+  #frame-count { white-space: nowrap; font: 9px/1.4 var(--mono); }
   @media (max-width: 1000px) { .frame-controls { flex-wrap: wrap; } .viewer-toolbar { align-items: flex-start; } }
-  @media (max-width: 600px) { .viewer-toolbar, .frame-controls { padding: 10px; } .frame-controls { gap: 6px; } }
+  @media (max-width: 600px) { .viewer-toolbar, .frame-controls { padding: 4px 6px; } }
 </style>

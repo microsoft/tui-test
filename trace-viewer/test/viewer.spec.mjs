@@ -356,6 +356,70 @@ for (const colorScheme of ["dark", "light"]) {
   });
 }
 
+test("action names, descriptions, locators and durations stay on a single line", async ({ page, openReport }) => {
+  await openReport();
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const rows = await page.locator("#points .point").evaluateAll((points) => points.map((point) => {
+      const name = point.querySelector(".name").getBoundingClientRect();
+      const label = point.querySelector(".query-code, .description").getBoundingClientRect();
+      const result = point.querySelector(".result").getBoundingClientRect();
+      return {
+        sameLine: name.top < label.bottom && label.top < name.bottom,
+        resultFits: result.height <= Math.max(name.height, label.height) + 1,
+      };
+    }));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.sameLine && row.resultFits)).toBe(true);
+  }
+});
+
+test("dragging the details divider expands the panel without changing cell inspection", async ({ page, openReport }) => {
+  await openReport();
+  await clickCell(page, 1, 0);
+  const divider = page.getByRole("separator", { name: "Resize action details" });
+  const details = page.locator(".details-panel");
+  const original = await details.boundingBox();
+  const handle = await divider.boundingBox();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 30, handle.y + handle.height / 2 - 170, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => (await details.boundingBox()).height).toBeCloseTo(original.height + 170, 0);
+  await expect(page.locator("#cell-panel")).toBeVisible();
+  await expect(page.locator("#cell-heading")).toHaveText("Column 1, row 0");
+  await clickCell(page, 2, 0);
+  await expect(page.locator("#cell-heading")).toHaveText("Column 2, row 0 / continuation");
+  await page.mouse.move(20, 20);
+  expect((await details.boundingBox()).height).toBeCloseTo(original.height + 170, 0);
+  await page.locator("#call-tab").click();
+  expect((await details.boundingBox()).height).toBeCloseTo(original.height + 170, 0);
+});
+
+test("the details divider supports keyboard limits and reclamps when the window shrinks", async ({ page, openReport }) => {
+  await openReport();
+  const divider = page.getByRole("separator", { name: "Resize action details" });
+  const details = page.locator(".details-panel");
+  const original = (await details.boundingBox()).height;
+  await divider.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect.poll(async () => (await details.boundingBox()).height).toBeCloseTo(original + 24, 0);
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(async () => (await details.boundingBox()).height).toBeCloseTo(original, 0);
+  await page.keyboard.press("End");
+  await expect.poll(async () => divider.getAttribute("aria-valuenow")).toBe(await divider.getAttribute("aria-valuemax"));
+  await page.setViewportSize({ width: 800, height: 720 });
+  await expect.poll(async () => {
+    const panel = await details.boundingBox();
+    const main = await page.locator("main").boundingBox();
+    return panel.y + panel.height <= main.y + main.height + 1;
+  }).toBe(true);
+  expect((await page.locator("#terminal").boundingBox()).height).toBeGreaterThan(0);
+  await page.keyboard.press("Home");
+  await expect.poll(async () => divider.getAttribute("aria-valuenow")).toBe(await divider.getAttribute("aria-valuemin"));
+  await expect(divider).toBeFocused();
+});
+
 test("tabs expose metadata and support roving keyboard focus", async ({ page, openReport }) => {
   await openReport();
   await expect(page.locator("#cell-tab")).toHaveAttribute("aria-controls", "cell-panel");

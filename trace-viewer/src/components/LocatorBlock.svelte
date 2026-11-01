@@ -7,5 +7,5 @@
 </div>
 
 <style>
-  .locator-expression { padding: 10px 12px; border: 1px solid var(--border); background: var(--panel); color: var(--link); font: 12px/1.6 var(--mono); }
+  .locator-expression { padding: 6px 8px; border: 1px solid var(--border); background: var(--panel); color: var(--link); font: 11px/1.4 var(--mono); }
 </style>
