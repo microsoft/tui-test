@@ -1,6 +1,8 @@
 export { TuiTest } from "./client.js";
 export type {
   ClipboardWaitOptions,
+  CursorExpectation,
+  ColorExpectation,
   LocatorClickOptions,
   LocatorDirection,
   LocatorExpectOptions,
@@ -37,6 +39,13 @@ export type { ErrorKind } from "./errors.js";
 export { VERSION } from "./version.js";
 export type {
   ArtifactOptions,
+  RenderStyle,
+  FontFamilies,
+  WindowStyle,
+  BorderStyle,
+  ShadowStyle,
+  RecordingCursorStyle,
+  PaddingSides,
   AutomaticRecording,
   TraceOptions,
   Backend,

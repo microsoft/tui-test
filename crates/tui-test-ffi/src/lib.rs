@@ -15,7 +15,7 @@ pub use types::*;
 mod tasks_generated;
 pub use tasks_generated::*;
 
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 
 type Result<T> = std::result::Result<T, TuiTestError>;
 fn boundary(f: impl FnOnce() -> Result<OperationResult>) -> *mut TuiResult {
@@ -285,6 +285,65 @@ pub unsafe extern "C" fn tui_get_cwd(session: TuiString) -> *mut TuiResult {
 /// throughout this call; see TuiString and the input structure contracts.
 pub unsafe extern "C" fn tui_get_cursor(session: TuiString) -> *mut TuiResult {
     unsafe { execute(session, "getCursor", || Ok(Operation::GetCursor)) }
+}
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_get_modes(session: TuiString) -> *mut TuiResult {
+    unsafe { execute(session, "getModes", || Ok(Operation::GetModes)) }
+}
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_get_colors(session: TuiString) -> *mut TuiResult {
+    unsafe { execute(session, "getColors", || Ok(Operation::GetColors)) }
+}
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_expect_mode(
+    session: TuiString,
+    mode: TuiString,
+    enabled: bool,
+    timeout_ms: TuiOptionalU64,
+) -> *mut TuiResult {
+    unsafe {
+        execute(session, "expectMode", || {
+            Ok(Operation::ExpectMode {
+                mode: mode.required()?,
+                enabled,
+                timeout_ms: timeout_ms.option(),
+            })
+        })
+    }
+}
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_expect_cursor(
+    session: TuiString,
+    options: TuiCursorExpectation,
+) -> *mut TuiResult {
+    unsafe {
+        execute(session, "expectCursor", || {
+            Ok(Operation::ExpectCursor {
+                visible: options.visible.option(),
+                shape: options.shape.optional()?,
+                x: input::u16_option(options.x, "x")?,
+                y: input::u16_option(options.y, "y")?,
+                timeout_ms: options.timeout_ms.option(),
+            })
+        })
+    }
+}
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must remain valid throughout this call.
+pub unsafe extern "C" fn tui_expect_colors(
+    session: TuiString,
+    options: TuiColorExpectation,
+) -> *mut TuiResult {
+    unsafe { execute(session, "expectColors", || input::expect_colors(options)) }
 }
 #[no_mangle]
 /// # Safety

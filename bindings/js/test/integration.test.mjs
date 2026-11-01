@@ -325,6 +325,47 @@ test("recording API writes an asciicast file", async () => {
   }
 });
 
+test("rendering settings and native assertions preserve binding parity", async () => {
+  const root = mkdtempSync(join(tmpdir(), "tui-test-render-parity-"));
+  const style = Object.freeze({
+    font: Object.freeze({ family: "monospace" }),
+    fontSize: 24,
+    canvasPadding: 0,
+    window: Object.freeze({ titleBar: false }),
+    shadow: Object.freeze({ enabled: false }),
+    cursor: Object.freeze({ blink: false, blinkIntervalMs: 250 }),
+  });
+  const su = TuiTest.ephemeral("parity", { style });
+  try {
+    await su.run(process.execPath, runtimeScript(
+      "console.log('ready');setTimeout(()=>process.stdout.write('\\x1b[?25l\\x1b]10;#abcdef\\x07\\x1b]4;2;#123456\\x07'),500);process.stdin.resume()",
+    ));
+    await su.getByText("ready").expect();
+    await Promise.all([
+      su.expectCursor({ visible: false, timeout: 2000 }),
+      su.expectMode("cursor_visible", false, { timeout: 2000 }),
+      su.expectColors({ foreground: "#abcdef", palette: [[2, "#123456"]], timeout: 2000 }),
+    ]);
+    assert.deepEqual(await su.getModes(), (await su.state()).modes);
+    assert.deepEqual(await su.getColors(), (await su.state()).colors);
+    await assert.rejects(su.expectCursor({ visible: true, timeout: 0 }), /expectCursor/);
+    await assert.rejects(su.expectMode("not_a_mode", true, { timeout: 0 }), /unknown.*mode/);
+    const path = join(root, "custom.svg");
+    await su.screenshot(path);
+    assert.match(await readFile(path, "utf8"), /font-size="24px"/);
+    await su.close();
+    await assert.rejects(su.open({ shell, style: { cursor: { blinkIntervalMs: 0 } } }), /blink_interval_ms/);
+    await assert.rejects(su.open({ shell, style: { fontSize: NaN } }), /finite/);
+    await assert.rejects(su.open({ shell, style: { cursor: { misspelled: true } } }), /unknown rendering style/);
+    await su.open({ shell, style: { fontSize: 20 } });
+    await su.screenshot(path);
+    assert.match(await readFile(path, "utf8"), /font-size="20px"/);
+  } finally {
+    await su.closeQuiet();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("trace retention and recording directory are configurable", async () => {
   const root = mkdtempSync(join(tmpdir(), "tui-test-auto-recording-"));
   const disabled = new TuiTest(uniqueSession("recording-disabled"), {

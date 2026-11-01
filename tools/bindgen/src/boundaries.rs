@@ -33,6 +33,7 @@ impl Models {
             "shell/mod",
             "terminal/backend",
             "terminal/cell",
+            "render/style",
         ] {
             models.parse(&fs::read_to_string(
                 root.join(format!("crates/tui-test/src/{module}.rs")),
@@ -105,6 +106,16 @@ const OUTPUTS: &[&str] = &[
     "PackedScreen",
 ];
 
+const STYLE_MODELS: &[&str] = &[
+    "PaddingSides",
+    "FontFamilies",
+    "WindowStyle",
+    "BorderStyle",
+    "ShadowStyle",
+    "CursorStyle",
+    "Style",
+];
+
 fn c_name(name: &str) -> String {
     format!(
         "Tui{}",
@@ -155,7 +166,7 @@ fn option(ty: &str) -> Option<&str> {
 fn c_type(ty: &str) -> Result<String> {
     Ok(match ty {
         "String" | "Option<String>" | "PathBuf" | "Option<PathBuf>" => "TuiString".into(),
-        "Option<u64>" | "Option<u32>" | "Option<u8>" => "TuiOptionalU64".into(),
+        "Option<u64>" | "Option<u32>" | "Option<u16>" | "Option<u8>" => "TuiOptionalU64".into(),
         "Option<i32>" => "TuiOptionalI32".into(),
         "Option<bool>" => "TuiOptionalBool".into(),
         "Option<f64>" => "TuiOptionalF64".into(),
@@ -236,10 +247,45 @@ fn output_models(models: &Models, c: &mut String, cc: &mut String) -> Result<()>
 
 /// Flattened options preserve the C v3 field order and the public JavaScript API.
 fn input_fields(models: &Models, model: &str, js: bool) -> Result<Vec<Field>> {
+    if js && STYLE_MODELS.contains(&model) {
+        return Ok(models
+            .fields(model)?
+            .into_iter()
+            .map(|mut f| {
+                if option(&f.ty).is_none() {
+                    f.ty = format!("Option<{}>", f.ty);
+                }
+                f
+            })
+            .collect());
+    }
     let mut fields = Vec::new();
     for mut f in models.fields(model)? {
         match (model, f.name.as_str()) {
-            ("OpenOptions" | "RunOptions", "profile" | "style") => continue,
+            ("Operation::ExpectColors", "palette") => {
+                fields.push(Field {
+                    name: "palette".into(),
+                    ty: if js {
+                        "Option<Vec<(u8,String)>>"
+                    } else {
+                        "*const TuiPair"
+                    }
+                    .into(),
+                });
+                if !js {
+                    fields.push(Field {
+                        name: "palette_len".into(),
+                        ty: "usize".into(),
+                    });
+                }
+                continue;
+            }
+            ("OpenOptions" | "RunOptions", "profile") => continue,
+            ("OpenOptions" | "RunOptions", "style") => {
+                f.ty = if js { "Option<Style>" } else { "TuiStyle" }.into();
+                fields.push(f);
+                continue;
+            }
             ("OpenOptions" | "RunOptions", "recording") if js => continue,
             ("OpenOptions" | "RunOptions", "recording") => {
                 for mut f in models.fields("AutomaticRecording")? {
@@ -369,6 +415,7 @@ fn input_fields(models: &Models, model: &str, js: bool) -> Result<Vec<Field>> {
 }
 
 fn input_models(models: &Models, c: &mut String, ci: &mut String) -> Result<()> {
+    style_models(models, c, ci)?;
     for (model, target) in [
         ("Timeouts", "Timeouts"),
         ("OpenOptions", "OpenOptions"),
@@ -376,6 +423,8 @@ fn input_models(models: &Models, c: &mut String, ci: &mut String) -> Result<()> 
         ("Operation::WaitTitle", "WaitOptions"),
         ("Operation::StartRecording", "RecordingOptions"),
         ("Operation::Screenshot", "ScreenshotOptions"),
+        ("Operation::ExpectCursor", "CursorExpectation"),
+        ("Operation::ExpectColors", "ColorExpectation"),
     ] {
         if model == "MouseOptions" {
             c.push_str("/// button: 0 left, 1 middle, 2 right.\n");
@@ -399,6 +448,77 @@ fn input_models(models: &Models, c: &mut String, ci: &mut String) -> Result<()> 
         writeln!(ci, "{}: value.{}.option(),", f.name, f.name)?;
     }
     ci.push_str("} }\n");
+    Ok(())
+}
+
+fn style_models(models: &Models, c: &mut String, ci: &mut String) -> Result<()> {
+    for &model in STYLE_MODELS {
+        writeln!(
+            c,
+            "#[repr(C)] #[derive(Clone,Copy,Default)] pub struct Tui{model} {{"
+        )?;
+        writeln!(ci, "#[allow(clippy::field_reassign_with_default)] unsafe fn style_{}(value: Tui{model}) -> Result<tui_test::render::style::{model}> {{ let mut result = tui_test::render::style::{model}::default();", snake(model))?;
+        for f in models.fields(model)? {
+            let name = &f.name;
+            let inner = option(&f.ty).unwrap_or(&f.ty);
+            let ty = match inner {
+                "String" | "Rgb" => "TuiString".into(),
+                "bool" => "TuiOptionalBool".into(),
+                "u32" | "u64" => "TuiOptionalU64".into(),
+                "f32" => "TuiOptionalF64".into(),
+                "Vec<PathBuf>" => "*const TuiString".into(),
+                "Padding" => "TuiPadding".into(),
+                t if STYLE_MODELS.contains(&t) => format!("Tui{t}"),
+                t => bail!("no style input mapping for {t}"),
+            };
+            writeln!(c, "pub {name}: {ty},")?;
+            match inner {
+                "Vec<PathBuf>" => {
+                    writeln!(c, "pub {name}_len: usize,")?;
+                    writeln!(ci, "result.{name} = unsafe {{ strings(value.{name}, value.{name}_len)? }}.into_iter().map(Into::into).collect();")?;
+                }
+                "Padding" => writeln!(
+                    ci,
+                    "result.{name} = unsafe {{ style_padding(value.{name}, result.{name})? }};"
+                )?,
+                t if STYLE_MODELS.contains(&t) => writeln!(
+                    ci,
+                    "result.{name} = unsafe {{ style_{}(value.{name})? }};",
+                    snake(t)
+                )?,
+                _ => {
+                    let input = if matches!(inner, "String" | "Rgb") {
+                        format!("unsafe {{ value.{name}.optional()? }}")
+                    } else {
+                        format!("value.{name}.option()")
+                    };
+                    let converted = match inner {
+                        "Rgb" => "Rgb::parse(&v).map_err(TuiTestError::usage)?".into(),
+                        "f32" => "v as f32".into(),
+                        "u32" => format!("u32::try_from(v).map_err(|_| TuiTestError::usage(\"{model}.{name} exceeds u32\"))?"),
+                        _ => "v".into(),
+                    };
+                    let converted = if option(&f.ty).is_some() {
+                        format!("Some({converted})")
+                    } else {
+                        converted
+                    };
+                    writeln!(
+                        ci,
+                        "if let Some(v) = {input} {{ result.{name} = {converted}; }}"
+                    )?;
+                }
+            }
+        }
+        c.push_str("}\n");
+        if model == "PaddingSides" {
+            c.push_str("#[repr(C)] #[derive(Clone,Copy,Default)] pub struct TuiPadding { pub uniform: TuiOptionalU64, pub sides: TuiPaddingSides }\n");
+        }
+        if model == "Style" {
+            ci.push_str("result.validate().map_err(TuiTestError::usage)?;\n");
+        }
+        ci.push_str("Ok(result) }\n");
+    }
     Ok(())
 }
 
@@ -473,7 +593,7 @@ fn input_conversions(models: &Models, ci: &mut String) -> Result<()> {
         let name = &f.name;
         let value = match name.as_str() {
             "backend" | "shell" | "profile" => name.clone(),
-            "style" => "Default::default()".into(),
+            "style" => "unsafe { style_style(value.style)? }".into(),
             "cols" => "u16_option(value.cols, \"cols\")?.unwrap_or(80)".into(),
             "rows" => "u16_option(value.rows, \"rows\")?.unwrap_or(30)".into(),
             "env" => "unsafe { pairs(value.env, value.env_len)? }".into(),
@@ -592,8 +712,8 @@ pub(crate) mod tests {
         assert!(c.contains("pub new_wait: TuiOptionalU64"));
         assert!(ci.contains("new_wait: value.new_wait.option()"));
         input_conversions(&models, &mut ci).unwrap();
-        assert!(ci.contains("style: Default::default()"));
-        assert!(!c.contains("pub style:"));
+        assert!(ci.contains("style: unsafe { style_style(value.style)? }"));
+        assert!(c.contains("pub style: TuiStyle"));
         let context = session_input(&models).unwrap();
         assert!(context.contains("pub new_limit: Option<u16>"));
         assert!(context.contains("new_limit: self.new_limit.unwrap_or(defaults.new_limit)"));
@@ -612,6 +732,7 @@ pub(crate) mod tests {
             "crates/tui-test/src/shell/mod.rs",
             "crates/tui-test/src/terminal/backend.rs",
             "crates/tui-test/src/terminal/cell.rs",
+            "crates/tui-test/src/render/style.rs",
             "crates/tui-test-ffi/src/type_helpers.rs",
         ] {
             fs::create_dir_all(target.join(path).parent().unwrap()).unwrap();

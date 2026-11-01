@@ -6,7 +6,7 @@ import (
 	"unsafe"
 )
 
-const abiVersion = 6
+const abiVersion = 7
 
 type abiString struct {
 	_    structs.HostLayout
@@ -57,6 +57,9 @@ type abiColor struct {
 }
 type abiResult struct {
 	_             structs.HostLayout
+	modes         *abiMode
+	modesLen      uintptr
+	colors        abiTerminalColors
 	errorKind     uint32
 	errorMessage  abiString
 	errorDetails  abiString
@@ -178,6 +181,66 @@ type abiMatch struct {
 	spans    *abiSpan
 	spansLen uintptr
 }
+type abiPaddingSides struct {
+	_      structs.HostLayout
+	top    abiOptionalU64
+	right  abiOptionalU64
+	bottom abiOptionalU64
+	left   abiOptionalU64
+}
+type abiPadding struct {
+	_       structs.HostLayout
+	uniform abiOptionalU64
+	sides   abiPaddingSides
+}
+type abiFontFamilies struct {
+	_          structs.HostLayout
+	family     abiString
+	bold       abiString
+	italic     abiString
+	boldItalic abiString
+	files      *abiString
+	filesLen   uintptr
+}
+type abiWindowStyle struct {
+	_             structs.HostLayout
+	titleBar      abiOptionalBool
+	trafficLights abiOptionalBool
+	background    abiString
+	foreground    abiString
+	divider       abiString
+}
+type abiBorderStyle struct {
+	_      structs.HostLayout
+	width  abiOptionalF64
+	color  abiString
+	radius abiOptionalF64
+}
+type abiShadowStyle struct {
+	_       structs.HostLayout
+	enabled abiOptionalBool
+	color   abiString
+	offset  abiOptionalF64
+	spread  abiOptionalF64
+}
+type abiCursorStyle struct {
+	_               structs.HostLayout
+	blink           abiOptionalBool
+	blinkIntervalMS abiOptionalU64
+}
+type abiStyle struct {
+	_                structs.HostLayout
+	font             abiFontFamilies
+	fontSize         abiOptionalF64
+	titleFontSize    abiOptionalF64
+	canvasBackground abiString
+	canvasPadding    abiPadding
+	contentPadding   abiPadding
+	window           abiWindowStyle
+	border           abiBorderStyle
+	shadow           abiShadowStyle
+	cursor           abiCursorStyle
+}
 type abiTimeouts struct {
 	_       structs.HostLayout
 	text    abiOptionalU64
@@ -203,6 +266,7 @@ type abiOpenOptions struct {
 	timeouts           abiTimeouts
 	recordingMode      abiString
 	recordingDirectory abiString
+	style              abiStyle
 }
 type abiMouseOptions struct {
 	_      structs.HostLayout
@@ -235,4 +299,21 @@ type abiScreenshotOptions struct {
 	zoom        abiOptionalF64
 	background  abiString
 	transparent bool
+}
+type abiCursorExpectation struct {
+	_         structs.HostLayout
+	visible   abiOptionalBool
+	shape     abiString
+	x         abiOptionalU64
+	y         abiOptionalU64
+	timeoutMS abiOptionalU64
+}
+type abiColorExpectation struct {
+	_          structs.HostLayout
+	foreground abiString
+	background abiString
+	cursor     abiString
+	palette    *abiPair
+	paletteLen uintptr
+	timeoutMS  abiOptionalU64
 }

@@ -47,6 +47,7 @@ from .types import (
     MouseButton,
     OpenResult,
     Profile,
+    RenderStyle,
     RecordingFormat,
     State,
     TextMatch,
@@ -700,6 +701,7 @@ class TuiTest:
         backend: Optional[Backend] = None,
         timeouts: Optional[Timeouts] = None,
         profile: Optional[Profile] = None,
+        style: Optional[RenderStyle] = None,
         screen_history_limit: Optional[int] = None,
         artifacts: Optional[Dict[str, Any]] = None,
         recording: Optional[AutomaticRecording] = None,
@@ -725,6 +727,7 @@ class TuiTest:
         self._backend = cfg.normalize_backend(backend)
         self._timeouts = cfg.normalize_timeouts(timeouts)
         self._profile = cfg.normalize_profile(profile)
+        self._style = style
         self._screen_history_limit = screen_history_limit
         self.keyboard = _Keyboard(self)
         self.mouse = _Mouse(self)
@@ -783,6 +786,7 @@ class TuiTest:
         wait_ready: Optional[bool] = None,
         restart: bool = False,
         profile: Optional[Profile] = None,
+        style: Optional[RenderStyle] = None,
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
     ) -> OpenResult:
@@ -805,6 +809,7 @@ class TuiTest:
             *profile_values,
             *timeout_values,
             self._screen_history_limit,
+            style if style is not None else self._style,
         )
         return await self._spawn(
             lambda: self._native.open(*native_args),
@@ -823,6 +828,7 @@ class TuiTest:
         wait_ready: Optional[bool] = None,
         restart: bool = False,
         profile: Optional[Profile] = None,
+        style: Optional[RenderStyle] = None,
         timeouts: Optional[Timeouts] = None,
         retries: int = 0,
     ) -> OpenResult:
@@ -846,6 +852,7 @@ class TuiTest:
             *profile_values,
             *timeout_values,
             self._screen_history_limit,
+            style if style is not None else self._style,
         )
         return await self._spawn(
             lambda: self._native.run(*native_args),
@@ -1080,6 +1087,28 @@ class TuiTest:
 
     async def resume_recording(self) -> None:
         await self._await(self._native.resume_recording())
+
+    async def get_modes(self) -> Dict[str, bool]:
+        return await self._await(self._native.get_modes())
+
+    async def get_colors(self) -> Dict[str, Any]:
+        return await self._await(self._native.get_colors())
+
+    async def expect_mode(self, mode: str, enabled: bool, *, timeout: Optional[int] = None) -> None:
+        await self._guarded("expectMode", self._native.expect_mode(mode, enabled, self._timeout("text", timeout)))
+
+    async def expect_cursor(self, *, x: Optional[int] = None, y: Optional[int] = None,
+                            visible: Optional[bool] = None, shape: Optional[str] = None,
+                            timeout: Optional[int] = None) -> None:
+        await self._guarded("expectCursor", self._native.expect_cursor(
+            x, y, visible, shape, self._timeout("text", timeout)))
+
+    async def expect_colors(self, *, foreground: Optional[str] = None, background: Optional[str] = None,
+                            cursor: Optional[str] = None, palette: Optional[Dict[int, str]] = None,
+                            timeout: Optional[int] = None) -> None:
+        await self._guarded("expectColors", self._native.expect_colors(
+            foreground, background, cursor, palette if palette is not None else {},
+            self._timeout("text", timeout)))
 
     async def wait_title(
         self,

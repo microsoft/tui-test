@@ -9,7 +9,10 @@ import type {
   State as NativeState,
   TextMatch as NativeTextMatch,
   Timeouts as NativeTimeouts,
+  RenderStyle,
 } from "../native/index.js";
+
+export type { RenderStyle, FontFamilies, WindowStyle, BorderStyle, ShadowStyle, RecordingCursorStyle, PaddingSides } from "../native/index.js";
 
 export type Color = "default" | number | string;
 export type Backend = "alacritty" | "ghostty" | "rio" | "xtermjs";
@@ -100,6 +103,7 @@ export interface TraceOptions {
   directory?: string;
 }
 export interface SpawnOptions {
+  style?: RenderStyle;
   backend?: Backend;
   cols?: number;
   rows?: number;
@@ -121,6 +125,7 @@ export interface ArtifactOptions {
 }
 
 export interface ClientOptions {
+  style?: RenderStyle;
   backend?: Backend;
   profile?: Profile;
   timeouts?: Timeouts;

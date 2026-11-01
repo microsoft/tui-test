@@ -495,6 +495,47 @@ func TestDefaultRecordingIsDisabled(t *testing.T) {
 	}
 }
 
+func TestRenderingSettingsAndNativeAssertions(t *testing.T) {
+	style := &tuitest.RenderStyle{
+		FontSize: tuitest.Ptr(24.0),
+		Cursor:   tuitest.RecordingCursorStyle{Blink: tuitest.Ptr(false), BlinkIntervalMS: tuitest.Ptr(uint64(250))},
+	}
+	terminal := newTerminal(t, tuitest.ClientOptions{Style: style})
+	requireNoError(t, terminal.ExpectCursor(tuitest.CursorExpectation{Visible: tuitest.Ptr(true)}))
+	requireNoError(t, terminal.ExpectMode("cursor_visible", true, tuitest.WaitOptions{}))
+	colors, err := terminal.GetColors()
+	requireNoError(t, err)
+	requireNoError(t, terminal.ExpectColors(tuitest.ColorExpectation{
+		Foreground: &colors.Foreground, Background: &colors.Background, Cursor: &colors.Cursor, Palette: colors.Palette,
+	}))
+	modes, err := terminal.GetModes()
+	requireNoError(t, err)
+	if !modes["cursor_visible"] {
+		t.Fatal("cursor_visible missing from modes")
+	}
+	if err := terminal.ExpectCursor(tuitest.CursorExpectation{Visible: tuitest.Ptr(false), Timeout: tuitest.Ptr(time.Duration(0))}); err == nil {
+		t.Fatal("cursor assertion accepted a mismatch")
+	}
+	path := filepath.Join(t.TempDir(), "custom.svg")
+	_, err = terminal.Screenshot(path, tuitest.ScreenshotOptions{})
+	requireNoError(t, err)
+	svg, err := os.ReadFile(path)
+	requireNoError(t, err)
+	if !strings.Contains(string(svg), `font-size="24px"`) {
+		t.Fatal("rendering style was ignored")
+	}
+	if *style.Cursor.Blink || *style.Cursor.BlinkIntervalMS != 250 {
+		t.Fatal("caller settings changed")
+	}
+	requireNoError(t, terminal.Close())
+	_, err = terminal.Open(tuitest.OpenOptions{SpawnOptions: tuitest.SpawnOptions{
+		Style: &tuitest.RenderStyle{Cursor: tuitest.RecordingCursorStyle{BlinkIntervalMS: tuitest.Ptr(uint64(0))}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "blink_interval_ms") {
+		t.Fatalf("invalid style: %v", err)
+	}
+}
+
 func TestRecordingAndCloseAll(t *testing.T) {
 	directory := t.TempDir()
 	terminal := newTerminal(t, tuitest.ClientOptions{Recording: &tuitest.AutomaticRecording{Mode: tuitest.RecordingAlways, Directory: directory}})
