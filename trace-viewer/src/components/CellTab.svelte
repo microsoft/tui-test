@@ -55,10 +55,10 @@
 </div>
 
 <style>
-  .cell-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
-  .coordinates input { width: 55px; }
-  .coordinates label { font-size: 12px; }
-  .cell-mismatches { border-left: 3px solid var(--red); background: var(--error-bg); padding: 8px 12px; }
-  .cell-mismatches p { font: 12px/1.5 Consolas, monospace; }
+  .cell-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .coordinates input { width: 42px; }
+  .coordinates label { font-size: 10px; }
+  .cell-mismatches { border: 1px solid var(--border); border-left: 2px solid var(--red); background: var(--error-bg); padding: 6px 8px; font-size: 11px; }
+  .cell-mismatches p { font: 11px/1.4 var(--mono); }
   @media (max-width: 600px) { .cell-layout { grid-template-columns: 1fr; } }
 </style>

@@ -11,8 +11,8 @@
 </dl>
 
 <style>
-  dl { display: grid; grid-template-columns: minmax(95px, 35%) minmax(0, 1fr); gap: 5px 10px; font-size: 12px; margin: 8px 0; }
+  dl { display: grid; grid-template-columns: minmax(90px, min(30%, 150px)) minmax(0, 1fr); gap: 3px 8px; font-size: 11px; margin: 6px 0; }
   dt { color: var(--muted); }
-  dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: Consolas, monospace; }
-  .swatch { display: inline-block; width: 11px; height: 11px; border: 1px solid var(--border); margin-right: 5px; vertical-align: middle; }
+  dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); }
+  .swatch { display: inline-block; width: 9px; height: 9px; border: 1px solid var(--border); margin-right: 4px; vertical-align: middle; }
 </style>

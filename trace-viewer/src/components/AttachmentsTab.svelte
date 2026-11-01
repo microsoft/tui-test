@@ -13,7 +13,7 @@
   <div id="evidence-links">
     {#each files as file (file.id)}
       <div class="attachment">
-        <button data-attachment={file.name} onclick={() => onselect(file.id)}>{file.name} ({file.byteLength.toLocaleString("en-US")} B)</button>
+        <button data-attachment={file.name} aria-current={selected === file.id} onclick={() => onselect(file.id)}>{file.name} ({file.byteLength.toLocaleString("en-US")} B)</button>
         <a href={urls[file.id]} download={file.name} data-download={file.name}>Download</a>
       </div>
     {/each}
@@ -24,9 +24,10 @@
 <p id="recording-note" class="muted">{recordingNote}</p>
 
 <style>
-  .attachment-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; }
-  .attachment { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--border); padding: 6px 0; }
-  .attachment button { border: 0; padding-left: 0; color: var(--blue); }
-  .attachment a { color: var(--blue); font-size: 11px; }
+  .attachment-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 10px; }
+  .attachment { display: flex; align-items: center; justify-content: space-between; gap: 6px; border-bottom: 1px solid var(--border); padding: 4px 0; }
+  .attachment button { border: 0; color: var(--link); min-width: 0; overflow-wrap: anywhere; text-align: left; }
+  .attachment button[aria-current="true"] { background: var(--selected); box-shadow: inset 2px 0 0 var(--link); }
+  .attachment a { color: var(--link); font: 9px/1.4 var(--mono); text-underline-offset: 3px; }
   @media (max-width: 600px) { .attachment-layout { grid-template-columns: 1fr; } }
 </style>

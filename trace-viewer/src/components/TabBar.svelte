@@ -25,7 +25,8 @@
 </div>
 
 <style>
-  .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--panel); flex-shrink: 0; }
-  button { border: 0; border-radius: 0; padding: 7px 12px; background: transparent; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; }
-  button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--blue); }
+  .tabs { display: flex; gap: 2px; padding: 0 4px; border-bottom: 1px solid var(--border); background: var(--bg); flex-shrink: 0; overflow-x: auto; }
+  button { border: 0; border-radius: 0; padding: 4px 8px; background: transparent; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; }
+  button[aria-selected="true"] { color: var(--link); border-bottom-color: var(--link); }
+  @media (max-width: 600px) { .tabs { gap: 0; } }
 </style>

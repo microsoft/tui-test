@@ -17,4 +17,5 @@
 
 <style>
   .sidebar { min-height: 0; min-width: 0; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+  @media (max-width: 600px) { .sidebar { border-right: 0; border-bottom: 1px solid var(--border); } }
 </style>
