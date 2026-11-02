@@ -34,6 +34,29 @@ pub enum Divergence {
     /// Clipboard access is unavailable.
     ClipboardUnsupported,
 
+    /// OSC 52 writes and host-side clipboard inspection work, but the native
+    /// emulator deliberately ignores OSC 52 read queries.
+    ClipboardQueriesUnsupported,
+
+    /// OSC color replies always use ST, including replies to BEL queries.
+    ColorRepliesUseSt,
+
+    /// SGR 1 and 2 select one intensity value; setting dim replaces bold.
+    BoldAndDimAreExclusive,
+
+    /// A bare OSC 104 discards the entire palette override, including the
+    /// dynamic foreground/background/cursor colors.
+    PaletteResetResetsDynamicColors,
+
+    /// The parser recognizes title-stack operations but the emulator ignores
+    /// them, so popping leaves the most recently set title in place.
+    NoTitleStack,
+
+    /// A width-two glyph starting in the last column is stored there instead
+    /// of wrapping first. Its continuation lies outside the visible grid;
+    /// the following glyph wraps normally.
+    WideCharOverflowsRightMargin,
+
     /// The backend reports a hyperlink's URI but not its `id=` parameter.
     ///
     /// Nothing about where the link points is lost. What is lost is being
@@ -124,6 +147,26 @@ macro_rules! emulator_conformance_tests {
         fn conformance_clipboard_unsupported() -> bool {
             CONFORMANCE_DIVERGENCES
                 .contains(&$crate::terminal::conformance::Divergence::ClipboardUnsupported)
+        }
+
+        fn conformance_clipboard_query_reply(expected: &str) -> &str {
+            if CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::ClipboardQueriesUnsupported)
+            {
+                ""
+            } else {
+                expected
+            }
+        }
+
+        fn conformance_color_reply(expected: &str) -> String {
+            if CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::ColorRepliesUseSt)
+            {
+                expected.replace('\x07', "\x1b\\")
+            } else {
+                expected.to_string()
+            }
         }
 
         #[test]
@@ -479,12 +522,17 @@ macro_rules! emulator_conformance_tests {
             e.process(b"\x1b[1;2;3;4;7;8;9mX\x1b[0mY");
             let rows = e.viewable_rows();
             use $crate::terminal::cell::Attrs;
-            let set = Attrs::BOLD
+            let mut set = Attrs::BOLD
                 | Attrs::DIM
                 | Attrs::ITALIC
                 | Attrs::INVERSE
                 | Attrs::INVISIBLE
                 | Attrs::STRIKE;
+            let exclusive_intensity = CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::BoldAndDimAreExclusive);
+            if exclusive_intensity {
+                set.remove(Attrs::BOLD);
+            }
 
             let x = &rows[0][0];
             assert_eq!(x.attrs, set, "every attribute in the SGR must be set");
@@ -498,6 +546,12 @@ macro_rules! emulator_conformance_tests {
                 $crate::terminal::cell::UnderlineStyle::None,
                 "SGR 0 must clear underline"
             );
+            if exclusive_intensity {
+                e.process(b"\x1b[1mB\x1b[2mD");
+                let rows = e.viewable_rows();
+                assert_eq!(rows[0][2].attrs, Attrs::BOLD);
+                assert_eq!(rows[0][3].attrs, Attrs::DIM);
+            }
         }
 
         /// Each extended underline reports its own style, not a flat boolean.
@@ -910,6 +964,16 @@ macro_rules! emulator_conformance_tests {
             let mut e = conformance_emu(5, 3, 100);
             e.process("abcd你".as_bytes());
             let rows = e.viewable_rows();
+            if CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::WideCharOverflowsRightMargin)
+            {
+                assert_eq!(rows[0][4].ch, "你", "the native core retains the overflowing glyph");
+                assert!(rows[1].iter().all(|cell| cell.ch == " "));
+                assert_eq!(e.cursor(), (4, 0));
+                e.process(b"Z");
+                assert_eq!(e.viewable_rows()[1][0].ch, "Z", "the next glyph wraps");
+                return;
+            }
             assert_eq!(
                 rows[0][4].ch, " ",
                 "the column the wide char vacated is a blank"
@@ -937,16 +1001,21 @@ macro_rules! emulator_conformance_tests {
         #[test]
         fn conformance_snapshot_frames_a_wrapped_wide_char() {
             let mut e = conformance_emu(5, 3, 100);
-            e.process("abcd你".as_bytes());
+            let overflow = CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::WideCharOverflowsRightMargin);
+            // Both inputs produce a genuinely wrapped wide glyph. The native
+            // overflow behavior itself is pinned in the preceding case.
+            e.process(if overflow { "abcde你" } else { "abcd你" }.as_bytes());
+            let first_row = if overflow { "abcde" } else { "abcd " };
             assert_eq!(
                 $crate::assert::snapshot::serialize(&e.viewable_rows(), 5, false, None),
-                concat!(
-                    "\u{256d}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256e}\n",
-                    "\u{2502}abcd \u{2502}\n",
-                    "\u{2502}\u{4f60}   \u{2502}\n",
-                    "\u{2502}     \u{2502}\n",
-                    "\u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256f}",
-                )
+                format!(
+                    "\u{256d}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256e}\n\
+                     \u{2502}{first_row}\u{2502}\n\
+                     \u{2502}\u{4f60}   \u{2502}\n\
+                     \u{2502}     \u{2502}\n\
+                     \u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256f}"
+                ),
             );
         }
 
@@ -1203,7 +1272,7 @@ macro_rules! emulator_conformance_tests {
             e.process(b"\x1b]52;c;?\x07");
             assert_eq!(
                 String::from_utf8_lossy(&e.take_pending_writes()),
-                "\x1b]52;c;aGVsbG8=\x07",
+                conformance_clipboard_query_reply("\x1b]52;c;aGVsbG8=\x07"),
                 "a query returns the clipboard as base64"
             );
         }
@@ -1298,7 +1367,7 @@ macro_rules! emulator_conformance_tests {
             e.process(b"\x1b]52;s;?\x1b\\");
             assert_eq!(
                 String::from_utf8_lossy(&e.take_pending_writes()),
-                "\x1b]52;s;c2VsZWN0aW9u\x1b\\"
+                conformance_clipboard_query_reply("\x1b]52;s;c2VsZWN0aW9u\x1b\\")
             );
         }
 
@@ -1327,7 +1396,7 @@ macro_rules! emulator_conformance_tests {
             e.process(b"\\");
             assert_eq!(
                 String::from_utf8_lossy(&e.take_pending_writes()),
-                "\x1b]52;c;c3BsaXQ=\x1b\\"
+                conformance_clipboard_query_reply("\x1b]52;c;c3BsaXQ=\x1b\\")
             );
         }
 
@@ -1448,14 +1517,14 @@ macro_rules! emulator_conformance_tests {
             e.process(b"\x1b]11;?\x07");
             assert_eq!(
                 String::from_utf8_lossy(&e.take_pending_writes()),
-                "\x1b]11;rgb:1212/3434/5656\x07",
+                conformance_color_reply("\x1b]11;rgb:1212/3434/5656\x07"),
                 "OSC 11 must report the configured background"
             );
 
             e.process(b"\x1b]4;1;?\x07");
             assert_eq!(
                 String::from_utf8_lossy(&e.take_pending_writes()),
-                "\x1b]4;1;rgb:abab/cdcd/efef\x07",
+                conformance_color_reply("\x1b]4;1;rgb:abab/cdcd/efef\x07"),
                 "OSC 4 must report the configured palette entry"
             );
         }
@@ -1473,10 +1542,10 @@ macro_rules! emulator_conformance_tests {
             e.process(b"\x1b]11;?\x07\x1b]11;#123456\x07");
             assert_eq!(
                 String::from_utf8_lossy(&e.take_pending_writes()),
-                format!(
+                conformance_color_reply(&format!(
                     "\x1b]11;rgb:{0:02x}{0:02x}/{1:02x}{1:02x}/{2:02x}{2:02x}\x07",
                     configured.r, configured.g, configured.b
-                ),
+                )),
                 "the later set must not change the preceding answer"
             );
             assert_eq!(e.color(background), Rgb::new(0x12, 0x34, 0x56));
@@ -1484,7 +1553,7 @@ macro_rules! emulator_conformance_tests {
             e.process(b"\x1b]11;?\x07\x1b]111\x07");
             assert_eq!(
                 String::from_utf8_lossy(&e.take_pending_writes()),
-                "\x1b]11;rgb:1212/3434/5656\x07",
+                conformance_color_reply("\x1b]11;rgb:1212/3434/5656\x07"),
                 "the later reset must not change the preceding answer"
             );
             assert_eq!(e.color(background), configured);
@@ -1526,7 +1595,7 @@ macro_rules! emulator_conformance_tests {
 
             assert_eq!(
                 String::from_utf8_lossy(&e.take_pending_writes()),
-                "\x1b]10;rgb:0101/0202/0303\x07\x1b]11;rgb:0404/0505/0606\x07",
+                conformance_color_reply("\x1b]10;rgb:0101/0202/0303\x07\x1b]11;rgb:0404/0505/0606\x07"),
                 "one reply per query, each under its own code"
             );
         }
@@ -1541,9 +1610,16 @@ macro_rules! emulator_conformance_tests {
 
             e.process(b"\x1b]11;?\x07");
             let bel = e.take_pending_writes();
+            let terminator = if CONFORMANCE_DIVERGENCES
+                .contains(&$crate::terminal::conformance::Divergence::ColorRepliesUseSt)
+            {
+                b"\x1b\\".as_slice()
+            } else {
+                b"\x07".as_slice()
+            };
             assert!(
-                bel.ends_with(b"\x07"),
-                "a BEL query is answered with BEL: {:?}",
+                bel.ends_with(terminator),
+                "a BEL query uses the native reply terminator: {:?}",
                 String::from_utf8_lossy(&bel)
             );
 
@@ -1749,7 +1825,7 @@ macro_rules! emulator_conformance_tests {
                 e.process(query);
                 assert_eq!(
                     String::from_utf8_lossy(&e.take_pending_writes()),
-                    expected,
+                    conformance_color_reply(expected),
                     "querying {:?}",
                     String::from_utf8_lossy(query)
                 );
@@ -1763,6 +1839,7 @@ macro_rules! emulator_conformance_tests {
             use $crate::profile::ColorSlot;
             let mut e = conformance_emu(10, 4, 100);
             let configured_red = e.color(ColorSlot::Indexed(1));
+            let configured_background = e.color(ColorSlot::Background);
 
             e.process(b"\x1b]4;1;#111111;200;#222222\x07\x1b]11;#333333\x07");
             assert_eq!(e.color(ColorSlot::Indexed(1)), Rgb::new(0x11, 0x11, 0x11));
@@ -1772,8 +1849,14 @@ macro_rules! emulator_conformance_tests {
             assert_eq!(e.color(ColorSlot::Indexed(1)), configured_red);
             assert_eq!(
                 e.color(ColorSlot::Background),
-                Rgb::new(0x33, 0x33, 0x33),
-                "a palette reset is not a background reset"
+                if CONFORMANCE_DIVERGENCES
+                    .contains(&$crate::terminal::conformance::Divergence::PaletteResetResetsDynamicColors)
+                {
+                    configured_background
+                } else {
+                    Rgb::new(0x33, 0x33, 0x33)
+                },
+                "a bare reset follows the native palette-reset behavior"
             );
         }
 
@@ -2057,8 +2140,14 @@ macro_rules! emulator_conformance_tests {
             e.process(b"\x1b[23t");
             assert_eq!(
                 e.title().as_deref(),
-                Some("shell"),
-                "popping restores the pushed title"
+                if CONFORMANCE_DIVERGENCES
+                    .contains(&$crate::terminal::conformance::Divergence::NoTitleStack)
+                {
+                    Some("running a command")
+                } else {
+                    Some("shell")
+                },
+                "popping follows the native title-stack behavior"
             );
         }
     };

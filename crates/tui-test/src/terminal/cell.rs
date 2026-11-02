@@ -170,9 +170,9 @@ pub const CONTINUATION: &str = "";
 /// the link's identity: cells carrying the same `uri` with no `id` are
 /// ordinary unrelated links.
 ///
-/// Only these two survive parsing. OSC 8 allows arbitrary `key=value` params
-/// before the URI, but every emulator tui-test supports keeps `id` and drops
-/// the rest before a cell can be read back, so there is nothing to report.
+/// OSC 8 allows arbitrary `key=value` params before the URI. Only `id` and the
+/// URI can be recovered across all supported emulators, so other parameters
+/// are not part of this backend-neutral vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Hyperlink {
     pub id: Option<CompactString>,

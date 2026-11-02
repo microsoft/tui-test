@@ -68,13 +68,17 @@ new TuiTest(session?: string, options?: ClientOptions)
 | Option | Type | Default |
 | --- | --- | --- |
 | `session` | `string` | `TUI_TEST_SESSION` or `"default"` |
-| `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs"` | `"alacritty"` |
+| `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs" \| "wezterm"` | `"alacritty"` |
 | `timeouts` | `Timeouts` | built-in defaults |
 | `profile` | `Profile` | built-in profile |
 | `screenHistoryLimit` | `number` | `10` |
 | `artifacts` | `{ dir, onFailure?, includeRecording? }` | off |
 | `recording` | `{ directory? }` | default recording directory |
 | `trace` | `{ mode?, directory? }` | `{ mode: "off", directory: ".tui-test/traces" }` |
+
+`"wezterm"` requires a custom native library built with the `wezterm` Cargo
+feature, selected through `TUI_TEST_NATIVE_LIBRARY`; standard release builds
+do not enable it.
 
 Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Users can open `trace.html`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
 
