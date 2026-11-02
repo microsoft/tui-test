@@ -13,6 +13,8 @@ use crate::api::{
 use crate::diagnostics::ExecutionContext;
 use crate::engine::Engine;
 use crate::logger::Logger;
+use crate::snapshot::{SnapshotOptions, SnapshotScope, TerminalSnapshot};
+use crate::wait::WaitQuietOptions;
 
 const MAX_COMPLETED_RECORDINGS: usize = 1024;
 
@@ -446,6 +448,96 @@ impl Session {
         self.execute(Operation::Close).map(|_| ())
     }
 
+    /// Capture an owned snapshot of the selected scope through the session's
+    /// engine.
+    ///
+    /// Reads grid, cursor, dimensions, title, and resolved colors under one
+    /// terminal-state lock. Records raw visual data; the snapshot is fully
+    /// owned and stays usable after the session closes.
+    pub fn capture_snapshot(&self, scope: SnapshotScope) -> Result<TerminalSnapshot, TuiTestError> {
+        self.engine.capture_snapshot(scope)
+    }
+
+    /// Capture an owned snapshot with explicit options.
+    ///
+    /// Pass [`SnapshotOptions::with_highlight`] to fold locator highlighting
+    /// into the captured cells instead of recording raw visual data.
+    pub fn capture_snapshot_with(
+        &self,
+        options: &SnapshotOptions,
+    ) -> Result<TerminalSnapshot, TuiTestError> {
+        self.engine.capture_snapshot_with(options)
+    }
+
+    /// Wait until the terminal stays quiet, then return success.
+    ///
+    /// This is the Session-level quiet wait. The new capabilities over the
+    /// pre-existing waits are the configurable quiet criteria (overall
+    /// timeout plus quiet interval in [`WaitQuietOptions`]) and the
+    /// byte-vs-visual observation modes; overall timeouts (as on `WaitIdle`)
+    /// and cancellable execution pre-date this wait. Failures report as
+    /// [`TuiTestError`](crate::api::TuiTestError), like every other wait.
+    ///
+    /// Visual-quiet mode samples the raw active screen at request start and
+    /// every 50 milliseconds, and restarts its timer when two successive
+    /// canonical samples differ. Byte-quiet mode restarts its timer on every
+    /// nonempty successful PTY output read and never samples the screen.
+    /// Equal-screen output restarts a byte-quiet timer but never a
+    /// visual-quiet timer. The quiet interval starts with this request; other
+    /// callers, viewport movement, and the shared idle clock cannot reset it.
+    ///
+    /// Sampling limit: only sampled states are compared. A terminal change
+    /// that appears and disappears between two consecutive samples is not
+    /// observed. This wait is not an application frame boundary. Screen and
+    /// output observation build on the session state from #278.
+    ///
+    /// Cancellation uses the engine mechanism from
+    /// [`Engine::execute_with_context_cancellable`]: pass a flag through
+    /// [`Session::wait_quiet_cancellable`]. A cancelled wait reports
+    /// cancellation and leaves the child and the session usable.
+    pub fn wait_quiet(&self, options: &WaitQuietOptions) -> Result<(), TuiTestError> {
+        self.wait_quiet_cancellable(options, &|| false)
+    }
+
+    /// Cancellable quiet wait through the session's engine.
+    ///
+    /// `cancelled` mirrors
+    /// [`Engine::execute_with_context_cancellable`]: it is checked before any
+    /// success return and between polls, never terminates the child, and
+    /// never cancels another caller. This is per-request cancellation, not
+    /// [`Session::interrupt`], and it adds no second cancellation framework.
+    /// The wait holds no operation resources across polls, so every outcome
+    /// leaves the session ready for subsequent operations.
+    ///
+    /// Pending lifecycle requests (Close/Restart announced through the
+    /// engine's `pending_lifecycle` counter) preempt the wait: the engine
+    /// holds its shared lifecycle lock for the wait and reports cancellation
+    /// instead of letting the quiet wait run past a lifecycle request that
+    /// cannot itself proceed until waits yield. A session generation captured
+    /// at request start is re-checked before any success return, so a Close
+    /// or Restart that completes mid-wait never surfaces as quiet success.
+    ///
+    /// The request runs through the shared request wrapper under this
+    /// session's execution context, with the ordinary operation history,
+    /// failure finalization, and recording outcome. A timeout on a live
+    /// child finalizes as a `TimedOut` failure: the returned
+    /// [`TuiTestError`](crate::api::TuiTestError) carries failure details, a
+    /// configured failure artifact is written, and the automatic recording
+    /// is marked failed so an `OnFailure` recording survives close.
+    /// Cancellation keeps the `Cancelled` reason and never reports success.
+    /// One request deadline covers acquisition and observation together: a
+    /// wait queued behind a lifecycle writer still times out on schedule
+    /// instead of inheriting a fresh budget once the lock frees.
+    pub fn wait_quiet_cancellable(
+        &self,
+        options: &WaitQuietOptions,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<(), TuiTestError> {
+        let context = self.context.clone().with_operation("wait.quiet");
+        self.engine
+            .run_quiet_wait_cancellable(options, &context, cancelled)
+    }
+
     /// Cancel pending operations, including startup readiness, and terminate the
     /// child without waiting for the operation queue or PTY input writer.
     pub fn interrupt(&self) {
@@ -454,6 +546,16 @@ impl Session {
 
     pub fn is_open(&self) -> bool {
         self.engine.is_open()
+    }
+
+    /// Whether a lifecycle operation (Close/Restart/...) has announced itself
+    /// and is waiting for exclusive access. Test barrier handshake for
+    /// lifecycle/quiet-wait coordination: once a parked quiet wait holds the
+    /// shared lifecycle lock and this reports true, the lifecycle request is
+    /// pinned at its preemption point and cannot complete until the wait
+    /// yields.
+    pub fn has_pending_lifecycle(&self) -> bool {
+        self.engine.has_pending_lifecycle()
     }
 
     pub fn recording_path(&self) -> Option<PathBuf> {

@@ -61,6 +61,9 @@ pub struct TermState {
     pub diagnostic_error: Option<String>,
     /// Time of the last observed visual change, not the last raw PTY output.
     pub last_change: Instant,
+    /// Monotonic time of the most recent nonempty successful PTY output read.
+    /// Recorded for byte-quiet waits; visual-quiet waits never consult it.
+    pub(crate) last_output: Option<Instant>,
     pub awaiting_start: Option<u64>,
     pub exited: Option<i32>,
     pub exit_signal: Option<String>,
@@ -227,6 +230,7 @@ impl Session {
             last_visual_change_ms: 0,
             diagnostic_error: None,
             last_change: Instant::now(),
+            last_output: None,
             awaiting_start: None,
             exited: None,
             exit_signal: None,
@@ -312,6 +316,7 @@ impl Session {
                             let mut st = reader_state
                                 .lock()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            st.last_output = Some(Instant::now());
                             st.emu.process(&buf[..n]);
                             st.tracker.feed(&buf[..n]);
                             st.visual_revision = st.visual_revision.wrapping_add(1);
@@ -785,6 +790,16 @@ impl Session {
 
     pub fn automatic_recording_enabled(&self) -> bool {
         self.recorder.automatic_enabled()
+    }
+
+    /// Monotonic time of the most recent nonempty successful PTY output read,
+    /// if any. Served to byte-quiet waits; never derived from
+    /// [`TermState::last_change`].
+    pub(crate) fn last_output_time(&self) -> Option<Instant> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .last_output
     }
 }
 
@@ -1289,6 +1304,7 @@ mod tests {
             last_visual_change_ms: 0,
             diagnostic_error: None,
             last_change: Instant::now(),
+            last_output: None,
             awaiting_start: None,
             exited: None,
             exit_signal: None,
