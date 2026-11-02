@@ -86,7 +86,7 @@ Click options: `button`, `alt`, `ctrl`, `shift`, `clicks`, and `timeout`.
 | `expect_title()`, `expect_output()`, `expect_exit_code()` | Assert state. |
 | `expect_bell_count()`, `expect_snapshot()` | Assert bells or snapshots. |
 | `screenshot()` | Read text or save SVG or PNG. |
-| `start_recording()`, `pause_recording()`, `resume_recording()`, `stop_recording()` | Record without paused time. |
+| `start_recording()`, `pause_recording()`, `resume_recording()`, `stop_recording()` | Record output. Pause/resume supports APNG, GIF, and MP4 only. |
 | `get_modes()`, `get_colors()` | Read native modes and colors. |
 | `expect_cursor(**options)`, `expect_mode(mode, enabled, timeout=...)`, `expect_colors(**options)` | Poll native state with the text timeout. |
 | `close()`, `close_quiet()` | Close. |

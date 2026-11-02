@@ -194,11 +194,14 @@ Snapshot options are `update`, `includeStyle`, and `includeTitle`.
 | --- | --- |
 | `screenshot(path?, { full?, zoom?, background?, transparent? })` | Return text or save SVG or PNG. |
 | `startRecording(path, options?)` | Start APNG, GIF, MP4, or asciinema recording. |
-| `pauseRecording()` | Pause manual capture while the terminal continues. |
-| `resumeRecording()` | Resume from the current screen without paused time. |
+| `pauseRecording()` | Pause APNG, GIF, or MP4 capture while the terminal continues. |
+| `resumeRecording()` | Resume raster capture from the live terminal without paused time. |
 | `stopRecording()` | Finish the recording and return its path. |
 
 Recording options: `format`, `fps`, `speed`, `idleTimeLimit`, `zoom`, `background`, and `transparent`. MP4 requires `ffmpeg` and does not support transparency.
+
+Asciicast pause and resume return usage errors without changing the recording.
+Automatic diagnostic recordings and recovery casts remain continuous, including output during pauses.
 
 Raster recording samples the live terminal at `fps` (default: 30) and preserves active elapsed time until stop.
 There is no default idle cap or extra final hold.

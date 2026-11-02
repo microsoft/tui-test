@@ -255,7 +255,8 @@ Trace and failure-artifact directories can contain terminal output, titles, loca
 `StartRecording` supports asciinema, APNG, GIF, and MP4. File extensions select the format unless `RecordingOptions.Format` overrides it. Recording options control FPS, speed, idle-time limit, zoom, background color, and transparency. Background color and transparency are mutually exclusive. MP4 requires `ffmpeg` on the executable search path and does not support transparency. `StopRecording` finishes the recording and returns its path.
 
 `PauseRecording` excludes subsequent time while the terminal continues. `ResumeRecording` captures the current screen, not intermediate paused output.
-These controls apply to all manual formats. Automatic diagnostic recordings remain continuous.
+These controls support APNG, GIF, and MP4 only. Asciicast requests return usage errors without changing the recording.
+Automatic diagnostic recordings and recovery casts remain continuous, including output during pauses.
 `StopRecording` also works during a pause. Repeated pause or resume calls return usage errors.
 
 ### Rendering settings and native assertions
