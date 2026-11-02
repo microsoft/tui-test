@@ -2,7 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{mpsc, Arc};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use sha2::{Digest, Sha256};
 
@@ -16,8 +16,7 @@ struct ActiveRecording {
     request: StartRecording,
     started: Instant,
     last_at: Instant,
-    paused_at: Option<Instant>,
-    paused_duration: Duration,
+    paused: bool,
     error: Option<String>,
 }
 
@@ -48,11 +47,8 @@ pub(super) fn worker_loop(
                         }
                     }
                 }
-                if let Some(recording) = active
-                    .as_mut()
-                    .filter(|recording| at >= recording.started && recording.paused_at.is_none())
+                if let Some(recording) = active.as_mut().filter(|recording| at >= recording.started)
                 {
-                    let at = at - recording.paused_duration;
                     recording.last_at = at;
                     let text = recording.decoder.push(&bytes);
                     if text.is_empty() {
@@ -70,11 +66,8 @@ pub(super) fn worker_loop(
                         primary = None;
                     }
                 }
-                if let Some(recording) = active
-                    .as_mut()
-                    .filter(|recording| at >= recording.started && recording.paused_at.is_none())
+                if let Some(recording) = active.as_mut().filter(|recording| at >= recording.started)
                 {
-                    let at = at - recording.paused_duration;
                     let result = recording.writer.write_resize(at, cols, rows);
                     remember_error(recording, result);
                 }
@@ -120,28 +113,26 @@ pub(super) fn worker_loop(
                     request,
                     started: at,
                     last_at: at,
-                    paused_at: None,
-                    paused_duration: Duration::ZERO,
+                    paused: false,
                     error: None,
                 });
                 let _ = reply.send(Ok(()));
             }
-            Message::Pause { at, reply } => {
+            Message::Pause { reply } => {
                 let Some(recording) = active.as_mut() else {
                     let _ = reply.send(Err(CaptureError::NotActive));
                     continue;
                 };
-                if recording.paused_at.is_some() {
+                if recording.request.format == crate::api::RecordingFormat::Cast {
+                    let _ = reply.send(Err(CaptureError::UnsupportedPauseResume));
+                    continue;
+                }
+                if recording.paused {
                     let _ = reply.send(Err(CaptureError::AlreadyPaused));
                     continue;
                 }
-                let boundary = at - recording.paused_duration;
-                // An explicit boundary preserves quiet time before a pause,
-                // including when stop follows without a resume.
-                let result = recording.writer.write_output(boundary, "");
-                remember_error(recording, result);
-                recording.last_at = boundary;
-                recording.paused_at = Some(at);
+                // Recovery casts stay continuous; only the live raster capture pauses.
+                recording.paused = true;
                 let _ = reply.send(
                     recording
                         .error
@@ -149,34 +140,20 @@ pub(super) fn worker_loop(
                         .map_or(Ok(()), |error| Err(CaptureError::Io(error.clone()))),
                 );
             }
-            Message::Resume {
-                at,
-                cols,
-                rows,
-                screen,
-                reply,
-            } => {
+            Message::Resume { reply } => {
                 let Some(recording) = active.as_mut() else {
                     let _ = reply.send(Err(CaptureError::NotActive));
                     continue;
                 };
-                let Some(paused_at) = recording.paused_at else {
+                if recording.request.format == crate::api::RecordingFormat::Cast {
+                    let _ = reply.send(Err(CaptureError::UnsupportedPauseResume));
+                    continue;
+                }
+                if !recording.paused {
                     let _ = reply.send(Err(CaptureError::NotPaused));
                     continue;
-                };
-                recording.paused_duration += at.duration_since(paused_at);
-                let boundary = at - recording.paused_duration;
-                // The replay may have stopped inside an escape sequence or
-                // on another screen. Restore the seed from a reset terminal.
-                let screen = format!("\x18\x1bc{}", seed.snapshot(&screen));
-                let result = recording
-                    .writer
-                    .write_resize(boundary, cols, rows)
-                    .and_then(|()| recording.writer.write_output(boundary, &screen));
-                remember_error(recording, result);
-                recording.decoder = primary_decoder.clone();
-                recording.last_at = boundary;
-                recording.paused_at = None;
+                }
+                recording.paused = false;
                 let _ = reply.send(
                     recording
                         .error
@@ -189,11 +166,7 @@ pub(super) fn worker_loop(
                     let _ = reply.send(Err(CaptureError::NotActive));
                     continue;
                 };
-                let tail = if recording.paused_at.is_none() {
-                    recording.decoder.finish()
-                } else {
-                    String::new()
-                };
+                let tail = recording.decoder.finish();
                 if !tail.is_empty() {
                     let result = recording.writer.write_output(recording.last_at, &tail);
                     remember_error(&mut recording, result);
@@ -276,11 +249,7 @@ pub(super) fn worker_loop(
                     let _ = writer.flush();
                 }
                 if let Some(recording) = active.as_mut() {
-                    let tail = if recording.paused_at.is_none() {
-                        recording.decoder.finish()
-                    } else {
-                        String::new()
-                    };
+                    let tail = recording.decoder.finish();
                     if !tail.is_empty() {
                         let result = recording.writer.write_output(recording.last_at, &tail);
                         remember_error(recording, result);

@@ -309,17 +309,21 @@ test("recording API writes an asciicast file", async () => {
       });
       await su.submit("echo sdk-recording");
       await su.waitCommand();
-      await su.pauseRecording();
-      await assert.rejects(su.pauseRecording(), /already paused/);
-      await su.resumeRecording();
-      await assert.rejects(su.resumeRecording(), /not paused/);
-      await su.pauseRecording();
+      for (const action of [() => su.pauseRecording(), () => su.resumeRecording()]) {
+        await assert.rejects(
+          action,
+          (error) => error instanceof UsageError && /asciicast is not supported/.test(error.message),
+        );
+      }
+      await su.submit("echo recording-continues");
+      await su.waitCommand();
       assert.equal(await su.stopRecording(), path);
       await assert.rejects(su.resumeRecording(), /no recording is active/);
     });
     const cast = await readFile(path, "utf8");
     assert.match(cast, /"version":2/);
     assert.match(cast, /sdk-recording/);
+    assert.match(cast, /recording-continues/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -390,6 +394,11 @@ test("recording API exports styled Unicode to APNG and GIF", async () => {
         await su.startRecording(path, { format, fps: 30, zoom: 0.5 });
         await su.submit(command);
         await su.waitCommand();
+        await su.pauseRecording();
+        await assert.rejects(su.pauseRecording(), UsageError);
+        await su.resumeRecording();
+        await assert.rejects(su.resumeRecording(), UsageError);
+        await su.pauseRecording();
         assert.equal(await su.stopRecording(), path);
       });
       const bytes = await readFile(path);

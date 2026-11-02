@@ -506,19 +506,34 @@ func TestRecordingAndCloseAll(t *testing.T) {
 	requireNoError(t, terminal.StartRecording(filepath.Join(directory, "explicit.cast"), tuitest.RecordingOptions{Format: tuitest.Cast}))
 	requireNoError(t, terminal.Submit(tuitest.Ptr("recorded")))
 	requireNoError(t, terminal.GetByText("received:recorded", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}))
-	requireNoError(t, terminal.PauseRecording())
-	if err := terminal.PauseRecording(); err == nil || !strings.Contains(err.Error(), "already paused") {
-		t.Fatalf("repeated pause: %v", err)
+	for _, action := range []func() error{terminal.PauseRecording, terminal.ResumeRecording} {
+		err := action()
+		requireKind(t, err, tuitest.UsageError)
+		if !strings.Contains(err.Error(), "asciicast is not supported") {
+			t.Fatalf("cast pause/resume: %v", err)
+		}
 	}
-	requireNoError(t, terminal.ResumeRecording())
-	if err := terminal.ResumeRecording(); err == nil || !strings.Contains(err.Error(), "not paused") {
-		t.Fatalf("repeated resume: %v", err)
-	}
-	requireNoError(t, terminal.PauseRecording())
+	requireNoError(t, terminal.Submit(tuitest.Ptr("continues")))
+	requireNoError(t, terminal.GetByText("received:continues", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}))
 	explicit, err := terminal.StopRecording()
 	requireNoError(t, err)
 	if _, statErr := os.Stat(explicit); statErr != nil {
 		t.Fatal(statErr)
+	}
+	cast, err := os.ReadFile(explicit)
+	requireNoError(t, err)
+	if !strings.Contains(string(cast), "continues") {
+		t.Fatal("cast stopped after rejected pause")
+	}
+	for _, format := range []tuitest.RecordingFormat{tuitest.APNG, tuitest.GIF} {
+		requireNoError(t, terminal.StartRecording(filepath.Join(directory, "raster."+string(format)), tuitest.RecordingOptions{Format: format}))
+		requireNoError(t, terminal.PauseRecording())
+		requireKind(t, terminal.PauseRecording(), tuitest.UsageError)
+		requireNoError(t, terminal.ResumeRecording())
+		requireKind(t, terminal.ResumeRecording(), tuitest.UsageError)
+		requireNoError(t, terminal.PauseRecording())
+		_, err := terminal.StopRecording()
+		requireNoError(t, err)
 	}
 	requireNoError(t, tuitest.CloseAll())
 	retained, err := tuitest.Recording(terminal.Session())
