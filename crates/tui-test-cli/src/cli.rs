@@ -496,9 +496,9 @@ pub enum RecordCmd {
     },
     /// Stop the active recording and finish its output file.
     Stop,
-    /// Pause manual recording while the terminal continues.
+    /// Pause APNG, GIF, or MP4 recording while the terminal continues.
     Pause,
-    /// Resume manual recording without including paused time.
+    /// Resume APNG, GIF, or MP4 recording without including paused time.
     Resume,
 }
 

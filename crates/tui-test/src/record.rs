@@ -76,6 +76,7 @@ pub(crate) enum CaptureError {
     NotActive,
     AlreadyPaused,
     NotPaused,
+    UnsupportedPauseResume,
     WorkerStopped,
     Io(String),
 }
@@ -153,30 +154,18 @@ impl Recorder {
             .and_then(|()| response.recv().unwrap_or(Err(CaptureError::WorkerStopped)))
     }
 
-    pub fn pause_at(&self, at: Instant) -> Result<(), CaptureError> {
+    pub fn pause(&self) -> Result<(), CaptureError> {
         let (reply, response) = mpsc::sync_channel(0);
         self.sender
-            .send(Message::Pause { at, reply })
+            .send(Message::Pause { reply })
             .map_err(|_| CaptureError::WorkerStopped)?;
         response.recv().unwrap_or(Err(CaptureError::WorkerStopped))
     }
 
-    pub fn resume_at(
-        &self,
-        at: Instant,
-        cols: u16,
-        rows: u16,
-        screen: String,
-    ) -> Result<(), CaptureError> {
+    pub fn resume(&self) -> Result<(), CaptureError> {
         let (reply, response) = mpsc::sync_channel(0);
         self.sender
-            .send(Message::Resume {
-                at,
-                cols,
-                rows,
-                screen,
-                reply,
-            })
+            .send(Message::Resume { reply })
             .map_err(|_| CaptureError::WorkerStopped)?;
         response.recv().unwrap_or(Err(CaptureError::WorkerStopped))
     }
@@ -262,14 +251,9 @@ enum Message {
         reply: mpsc::SyncSender<Result<(), CaptureError>>,
     },
     Pause {
-        at: Instant,
         reply: mpsc::SyncSender<Result<(), CaptureError>>,
     },
     Resume {
-        at: Instant,
-        cols: u16,
-        rows: u16,
-        screen: String,
         reply: mpsc::SyncSender<Result<(), CaptureError>>,
     },
     Stop {
@@ -726,12 +710,15 @@ mod tests {
     }
 
     #[test]
-    fn pause_resume_cast_replays_current_state_and_preserves_automatic_capture() {
-        use crate::profile::Profile;
-        use crate::terminal::backend::Backend;
+    fn pause_resume_only_accepts_raster_and_keeps_recovery_casts_continuous() {
         use std::time::Duration;
 
-        for &backend in Backend::ALL {
+        for format in [
+            RecordingFormat::Cast,
+            RecordingFormat::Apng,
+            RecordingFormat::Gif,
+            RecordingFormat::Mp4,
+        ] {
             let primary = temp_path("pause-primary");
             let target = temp_path("pause-manual");
             let started = Instant::now();
@@ -745,22 +732,12 @@ mod tests {
                 started,
             )
             .unwrap();
-            let mut live = backend.build(5, 4, &Profile::default()).unwrap();
-            assert!(matches!(
-                recorder.pause_at(started),
-                Err(CaptureError::NotActive)
-            ));
-            assert!(matches!(
-                recorder.resume_at(started, 5, 4, String::new()),
-                Err(CaptureError::NotActive)
-            ));
-            recorder.start_at(manual_request(&target), started).unwrap();
-            assert!(matches!(
-                recorder.resume_at(started, 5, 4, String::new()),
-                Err(CaptureError::NotPaused)
-            ));
-            let send = |emu: &mut dyn crate::terminal::emu::Emulator, second: u64, bytes: &[u8]| {
-                emu.process(bytes);
+            assert!(matches!(recorder.pause(), Err(CaptureError::NotActive)));
+            assert!(matches!(recorder.resume(), Err(CaptureError::NotActive)));
+            let mut request = manual_request(&target);
+            request.format = format;
+            recorder.start_at(request, started).unwrap();
+            let send = |second: u64, bytes: &[u8]| {
                 recorder
                     .sender
                     .send(Message::Data {
@@ -769,14 +746,22 @@ mod tests {
                     })
                     .unwrap();
             };
-            send(live.as_mut(), 1, b"base\x1b[?1049hALT\x1b[31");
-            recorder.pause_at(started + Duration::from_secs(2)).unwrap();
-            assert!(matches!(
-                recorder.pause_at(started + Duration::from_secs(2)),
-                Err(CaptureError::AlreadyPaused)
-            ));
-            send(live.as_mut(), 3, b"mSECRET\x1b[2J\x1b[H");
-            live.resize(7, 3);
+            send(1, b"base\x1b[?1049hALT\x1b[31");
+            if format == RecordingFormat::Cast {
+                assert!(matches!(
+                    recorder.pause(),
+                    Err(CaptureError::UnsupportedPauseResume)
+                ));
+                assert!(matches!(
+                    recorder.resume(),
+                    Err(CaptureError::UnsupportedPauseResume)
+                ));
+            } else {
+                assert!(matches!(recorder.resume(), Err(CaptureError::NotPaused)));
+                recorder.pause().unwrap();
+                assert!(matches!(recorder.pause(), Err(CaptureError::AlreadyPaused)));
+            }
+            send(3, b"mDURING\x1b[2J\x1b[H");
             recorder
                 .sender
                 .send(Message::Resize {
@@ -785,138 +770,38 @@ mod tests {
                     rows: 3,
                 })
                 .unwrap();
-            send(live.as_mut(), 5, b"\x1b[5 qnext\xc3");
-            recorder
-                .resume_at(
-                    started + Duration::from_secs(7),
-                    7,
-                    3,
-                    cast::snapshot_to_ansi(live.as_ref()),
-                )
-                .unwrap();
-            send(live.as_mut(), 8, b"\xa9!");
-            let expected = live.viewable_rows();
-            let expected_cursor = live.cursor_style();
-            recorder.pause_at(started + Duration::from_secs(9)).unwrap();
-            send(live.as_mut(), 12, b"IGNORED");
+            send(5, b"\x1b[5 qnext\xc3");
+            if format != RecordingFormat::Cast {
+                recorder.resume().unwrap();
+                assert!(matches!(recorder.resume(), Err(CaptureError::NotPaused)));
+            }
+            send(8, b"\xa9!");
+            if format != RecordingFormat::Cast {
+                recorder.pause().unwrap();
+            }
+            send(12, b"AFTER");
             recorder.stop().unwrap();
-            assert!(matches!(
-                recorder.pause_at(started + Duration::from_secs(13)),
-                Err(CaptureError::NotActive)
-            ));
+            assert!(matches!(recorder.pause(), Err(CaptureError::NotActive)));
+            assert!(matches!(recorder.resume(), Err(CaptureError::NotActive)));
             drop(recorder);
             let manual = std::fs::read_to_string(&target).unwrap();
-            assert!(!manual.contains("SECRET"));
-            assert!(!manual.contains("IGNORED"));
+            let automatic = std::fs::read_to_string(&primary).unwrap();
+            std::fs::remove_file(primary).unwrap();
+            std::fs::remove_file(target).unwrap();
+            assert!(manual.contains("DURING"));
+            assert!(manual.contains("AFTER"));
+            assert!(manual.contains("é!"));
+            assert_eq!(
+                manual.lines().skip(2).collect::<Vec<_>>(),
+                automatic.lines().skip(1).collect::<Vec<_>>(),
+                "{format:?}"
+            );
             let events: Vec<serde_json::Value> = manual
                 .lines()
                 .skip(1)
                 .map(|line| serde_json::from_str(line).unwrap())
                 .collect();
-            assert_eq!(events.last().unwrap()[0], 4.0);
-            let mut replay = backend.build(5, 4, &Profile::default()).unwrap();
-            for event in &events {
-                match event[1].as_str().unwrap() {
-                    "o" => replay.process(event[2].as_str().unwrap().as_bytes()),
-                    "r" => {
-                        let (cols, rows) = event[2].as_str().unwrap().split_once('x').unwrap();
-                        replay.resize(cols.parse().unwrap(), rows.parse().unwrap());
-                    }
-                    code => panic!("unexpected event {code}"),
-                }
-            }
-            assert_eq!(replay.viewable_rows(), expected, "{backend:?}");
-            assert_eq!(replay.cursor_style(), expected_cursor, "{backend:?}");
-            let automatic = std::fs::read_to_string(&primary).unwrap();
-            assert!(automatic.contains("SECRET"));
-            assert!(automatic.contains("IGNORED"));
-            let last: serde_json::Value =
-                serde_json::from_str(automatic.lines().last().unwrap()).unwrap();
-            assert_eq!(last[0], 12.0);
-            std::fs::remove_file(primary).unwrap();
-            std::fs::remove_file(target).unwrap();
-        }
-    }
-
-    #[test]
-    fn pause_resume_cast_preserves_future_cursor_modes_and_tabs() {
-        use crate::profile::Profile;
-        use crate::terminal::backend::Backend;
-        use std::time::Duration;
-
-        for (prefix, suffix) in [
-            ("\x1b[3g\x1b[5G\x1bH", "\r\tX"),
-            ("\x1b[0 q\x1b[?12l", "\x1b[?12h"),
-            ("\x1b[?12h\x1b[0 q", "\x1b[?12l"),
-            ("\x1b[?12l\x1b[5 q", "\x1b[?12h"),
-            ("\x1b[5 q\x1b[?12l", "\x1b[?12h"),
-        ] {
-            for &backend in Backend::ALL {
-                let path = temp_path("resume-controls");
-                let started = Instant::now();
-                let recorder = Recorder::create_at(
-                    None,
-                    16,
-                    3,
-                    &[],
-                    false,
-                    Arc::new(crate::logger::Logger::disabled()),
-                    started,
-                )
-                .unwrap();
-                let mut request = manual_request(&path);
-                request.cols = 16;
-                request.rows = 3;
-                recorder.start_at(request, started).unwrap();
-                let mut live = backend.build(16, 3, &Profile::default()).unwrap();
-                live.process(prefix.as_bytes());
-                recorder
-                    .sender
-                    .send(Message::Data {
-                        at: started + Duration::from_secs(1),
-                        bytes: prefix.as_bytes().to_vec(),
-                    })
-                    .unwrap();
-                recorder.pause_at(started + Duration::from_secs(2)).unwrap();
-                recorder
-                    .resume_at(
-                        started + Duration::from_secs(3),
-                        16,
-                        3,
-                        cast::snapshot_to_ansi(live.as_ref()),
-                    )
-                    .unwrap();
-                live.process(suffix.as_bytes());
-                recorder
-                    .sender
-                    .send(Message::Data {
-                        at: started + Duration::from_secs(4),
-                        bytes: suffix.as_bytes().to_vec(),
-                    })
-                    .unwrap();
-                recorder.stop().unwrap();
-                drop(recorder);
-                let cast = std::fs::read_to_string(&path).unwrap();
-                std::fs::remove_file(path).unwrap();
-                let mut replay = backend.build(16, 3, &Profile::default()).unwrap();
-                for line in cast.lines().skip(1) {
-                    let event: serde_json::Value = serde_json::from_str(line).unwrap();
-                    if event[1] == "o" {
-                        replay.process(event[2].as_str().unwrap().as_bytes());
-                    }
-                }
-                assert_eq!(
-                    replay.viewable_rows(),
-                    live.viewable_rows(),
-                    "{backend:?}: {prefix:?}"
-                );
-                assert_eq!(replay.cursor(), live.cursor(), "{backend:?}: {prefix:?}");
-                assert_eq!(
-                    replay.cursor_style(),
-                    live.cursor_style(),
-                    "{backend:?}: {prefix:?}"
-                );
-            }
+            assert_eq!(events.last().unwrap()[0], 12.0);
         }
     }
 

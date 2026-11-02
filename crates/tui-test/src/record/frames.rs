@@ -373,6 +373,38 @@ mod tests {
     }
 
     #[test]
+    fn pause_resume_uses_live_tab_stops_after_resize() {
+        for &backend in Backend::ALL {
+            let started = Instant::now();
+            let mut emu = backend.build(8, 3, &Profile::default()).unwrap();
+            emu.process(b"\x1b[3g\x1b[5G\x1bH");
+            let mut capture =
+                FrameCapture::new(emu.as_ref(), TimelineOptions::default(), started, 0).unwrap();
+            capture.pause(started + Duration::from_secs(1)).unwrap();
+            emu.resize(16, 3);
+            emu.process(b"\r\tX\tY");
+            #[cfg(feature = "xtermjs")]
+            if backend == Backend::Xtermjs {
+                assert_eq!(emu.cursor(), (13, 0));
+            }
+            capture
+                .resume(emu.as_ref(), started + Duration::from_secs(10), 1)
+                .unwrap();
+            let frames = capture.finish(started + Duration::from_secs(11)).unwrap();
+            assert_eq!(
+                frames.last().unwrap().grid,
+                emu.active_rows(),
+                "{backend:?}"
+            );
+            assert_eq!(
+                frames.iter().map(|frame| frame.duration).sum::<Duration>(),
+                Duration::from_secs(2),
+                "{backend:?}"
+            );
+        }
+    }
+
+    #[test]
     fn hidden_cursor_moves_during_pause_preserve_the_idle_budget() {
         let started = Instant::now();
         let mut emu = AlacrittyEmu::new(8, 2, &Profile::default());

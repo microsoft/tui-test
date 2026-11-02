@@ -624,8 +624,9 @@ impl Session {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(feature = "recording-raster")]
         let at = Instant::now();
-        self.recorder.pause_at(at).map_err(capture_error)?;
+        self.recorder.pause().map_err(capture_error)?;
         #[cfg(feature = "recording-raster")]
         {
             let mut state = state;
@@ -652,12 +653,9 @@ impl Session {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let screen = record::cast::snapshot_to_ansi(state.emu.as_ref());
-        let (cols, rows) = state.emu.size();
+        #[cfg(feature = "recording-raster")]
         let at = Instant::now();
-        self.recorder
-            .resume_at(at, cols, rows, screen)
-            .map_err(capture_error)?;
+        self.recorder.resume().map_err(capture_error)?;
         #[cfg(feature = "recording-raster")]
         {
             let mut state = state;
@@ -675,6 +673,8 @@ impl Session {
                 }
             }
         }
+        #[cfg(not(feature = "recording-raster"))]
+        drop(state);
         Ok(())
     }
 
@@ -1002,6 +1002,9 @@ fn capture_error(error: CaptureError) -> crate::api::TuiTestError {
             crate::api::TuiTestError::usage("recording is already paused")
         }
         CaptureError::NotPaused => crate::api::TuiTestError::usage("recording is not paused"),
+        CaptureError::UnsupportedPauseResume => crate::api::TuiTestError::usage(
+            "pause and resume require APNG, GIF, or MP4 recording; asciicast is not supported",
+        ),
         CaptureError::WorkerStopped => {
             crate::api::TuiTestError::internal("recording worker stopped unexpectedly")
         }
@@ -1132,6 +1135,65 @@ mod tests {
             idle_time_limit: None,
             zoom: Some(0.5),
             background: None,
+        }
+    }
+
+    #[cfg(all(unix, feature = "recording-raster"))]
+    #[test]
+    fn recording_pause_resume_rejects_cast_and_exports_raster_formats() {
+        use crate::api::{ErrorKind, RecordingFormat};
+
+        let session = recording_session();
+        for action in [Session::pause_recording, Session::resume_recording] {
+            let error = action(&session).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Usage);
+            assert_eq!(error.message, "no recording is active");
+        }
+        for (format, extension) in [
+            (RecordingFormat::Cast, "cast"),
+            (RecordingFormat::Apng, "apng"),
+            (RecordingFormat::Gif, "gif"),
+            (RecordingFormat::Mp4, "mp4"),
+        ] {
+            if format == RecordingFormat::Mp4 && shell::which("ffmpeg").is_none() {
+                eprintln!("skipping MP4 export: ffmpeg is not installed");
+                continue;
+            }
+            let path = test_path("pause-formats").with_extension(extension);
+            let mut options = recording_options(&path, 30);
+            options.format = Some(format);
+            if format == RecordingFormat::Cast {
+                options.zoom = None;
+            }
+            session.start_recording(options).unwrap();
+            if format == RecordingFormat::Cast {
+                for action in [Session::pause_recording, Session::resume_recording] {
+                    let error = action(&session).unwrap_err();
+                    assert_eq!(error.kind, ErrorKind::Usage);
+                    assert!(error.message.contains("asciicast is not supported"));
+                }
+            } else {
+                assert_eq!(
+                    session.resume_recording().unwrap_err().kind,
+                    ErrorKind::Usage
+                );
+                session.pause_recording().unwrap();
+                assert_eq!(
+                    session.pause_recording().unwrap_err().kind,
+                    ErrorKind::Usage
+                );
+                session.resize(16, 3).unwrap();
+                session.resume_recording().unwrap();
+                assert_eq!(
+                    session.resume_recording().unwrap_err().kind,
+                    ErrorKind::Usage
+                );
+                session.pause_recording().unwrap();
+            }
+            session.stop_recording().unwrap();
+            assert!(std::fs::metadata(&path).unwrap().len() > 0);
+            assert!(!record::sidecar_path(&path).exists());
+            std::fs::remove_file(path).unwrap();
         }
     }
 

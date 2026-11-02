@@ -301,6 +301,10 @@ pub(crate) fn capture_error_message(error: &crate::record::CaptureError) -> Stri
         crate::record::CaptureError::NotActive => "no selected recording is active".to_string(),
         crate::record::CaptureError::AlreadyPaused => "recording is already paused".to_string(),
         crate::record::CaptureError::NotPaused => "recording is not paused".to_string(),
+        crate::record::CaptureError::UnsupportedPauseResume => {
+            "pause and resume require APNG, GIF, or MP4 recording; asciicast is not supported"
+                .to_string()
+        }
         crate::record::CaptureError::WorkerStopped => "recording worker stopped".to_string(),
         crate::record::CaptureError::Io(message) => message.clone(),
     }
