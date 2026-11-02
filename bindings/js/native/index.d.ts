@@ -252,6 +252,7 @@ export declare const enum Backend {
   Ghostty = "ghostty",
   Rio = "rio",
   Xtermjs = "xtermjs",
+  WindowsTerminal = "windows-terminal",
 }
 
 export declare const enum Shell {

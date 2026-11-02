@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{01B74480-F74E-405E-B713-7DC962009D71}</ProjectGuid>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <TargetName>tui_test_windows_terminal</TargetName>
+    <OutDir>$(NativeOutputDir)\</OutDir>
+    <IntDir>$(NativeOutputDir)\obj\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <RuntimeTypeInfo>false</RuntimeTypeInfo>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <DisableSpecificWarnings>4201;4324;5105</DisableSpecificWarnings>
+      <PreprocessorDefinitions>NDEBUG;UNICODE;_UNICODE;EXTERNAL_BUILD;WINRT_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/utf-8 /bigobj /Zc:__cplusplus /Zc:preprocessor %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(TerminalSourceDir)\src;$(TerminalSourceDir)\src\inc;$(TerminalSourceDir)\dep;$(TerminalSourceDir)\dep\Console;$(TerminalSourceDir)\dep\Win32K;$(TerminalSourceDir)\oss\chromium;$(TerminalSourceDir)\oss\interval_tree;$(TerminalSourceDir)\oss\pcg\include;$(TerminalSourceDir)\src\cascadia\WinRTUtils\inc;$(TerminalSourceDir)\src\cascadia\inc;$(TerminalSourceDir)\obj\$(Platform)\Release\TerminalCore\Generated Files;$(TerminalSourceDir)\src\cascadia\TerminalCore\Generated Files;$(TerminalSourceDir)\packages\Microsoft.Windows.CppWinRT.3.0.260818.1\include;$(TerminalSourceDir)\packages\Microsoft.Windows.ImplementationLibrary.1.0.250325.1\include;$(TerminalSourceDir)\obj\$(Platform)\vcpkg\$(VcpkgTriplet)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ForcedIncludeFiles>$(TerminalSourceDir)\bin\Release\inc\TilFeatureStaging.h</ForcedIncludeFiles>
+    </ClCompile>
+    <Lib>
+      <AdditionalDependencies>$(TerminalSourceDir)\bin\$(Platform)\Release\TerminalCore\TerminalCore.lib;$(TerminalSourceDir)\bin\$(Platform)\Release\ConBufferOut.lib;$(TerminalSourceDir)\bin\$(Platform)\Release\ConRenderBase.lib;$(TerminalSourceDir)\bin\$(Platform)\Release\ConTermAdapt.lib;$(TerminalSourceDir)\bin\$(Platform)\Release\ConTermParser.lib;$(TerminalSourceDir)\bin\$(Platform)\Release\TerminalInput.lib;$(TerminalSourceDir)\bin\$(Platform)\Release\ConTypes.lib;$(TerminalSourceDir)\obj\$(Platform)\vcpkg\$(VcpkgTriplet)\lib\fmt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="bridge.cpp" />
+    <ClInclude Include="bridge.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="ValidateSourcePaths" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(TerminalSourceDir)\src\cascadia\TerminalCore\Terminal.hpp')" Text="Run scripts\build-windows-terminal.ps1; TerminalSourceDir must name the pinned Windows Terminal checkout." />
+    <Error Condition="'$(NativeOutputDir)' == ''" Text="NativeOutputDir is required." />
+  </Target>
+</Project>

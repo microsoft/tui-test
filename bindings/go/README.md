@@ -136,6 +136,10 @@ Clients with the same name share the same in-process session. `Close` closes tha
 
 The default backend is Alacritty. Supported backends are Alacritty, Ghostty, Rio, and xterm.js. The default size is 80 columns by 30 rows.
 
+`WindowsTerminal` (`"windows-terminal"`) is also accepted for
+[custom Windows native builds](../../crates/tui-test/native/windows-terminal/README.md)
+with that opt-in feature. It is not included in official native packages.
+
 Automatic recording is disabled when recording, trace, and recording-inclusive artifact options are all omitted. `ClientOptions.Recording` can select `RecordingAlways`, `RecordingOnFailure`, or `RecordingDisabled`. A supplied `ClientOptions.Trace` overrides that selection: `TraceOn` records always, `TraceOnFailure` records on failure, and `TraceOff` disables recording. When trace options are omitted, `Artifacts.IncludeRecording` promotes a disabled recording to on-failure recording. These options can persist terminal output, so select them deliberately.
 
 Optional pointer fields distinguish omission from an explicit value. For example:

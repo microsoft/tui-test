@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{944575BF-E156-408C-8F8F-CE66F900A6BA}</ProjectGuid>
+    <ProjectName>TerminalCore</ProjectName>
+    <TargetName>TerminalCore</TargetName>
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <RootNamespace>Microsoft.Terminal.Core</RootNamespace>
+    <OpenConsoleUniversalApp>true</OpenConsoleUniversalApp>
+    <TerminalCppWinrt>true</TerminalCppWinrt>
+    <GeneratedFilesDir>$(SolutionDir)obj\$(Platform)\$(Configuration)\TerminalCore\Generated Files\</GeneratedFilesDir>
+  </PropertyGroup>
+  <Import Project="$(TerminalSourceDir)\common.openconsole.props" />
+  <Import Project="$(TerminalSourceDir)\src\common.nugetversions.props" />
+  <Import Project="$(TerminalSourceDir)\src\cppwinrt.build.pre.props" />
+  <ItemGroup>
+    <ClCompile Include="$(TerminalSourceDir)\src\cascadia\TerminalCore\Terminal.cpp" />
+    <ClCompile Include="$(TerminalSourceDir)\src\cascadia\TerminalCore\TerminalApi.cpp" />
+    <ClCompile Include="$(TerminalSourceDir)\src\cascadia\TerminalCore\TerminalRenderData.cpp" />
+    <ClCompile Include="$(TerminalSourceDir)\src\cascadia\TerminalCore\TerminalSelection.cpp" />
+    <ClCompile Include="$(TerminalSourceDir)\src\cascadia\TerminalCore\pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+    </ClCompile>
+    <Midl Include="$(TerminalSourceDir)\src\cascadia\TerminalCore\ICoreSettings.idl" />
+  </ItemGroup>
+  <!-- The core and renderer base are needed; the application, GPU atlas
+       renderer, shader compiler, and MIDI audio implementation are not. -->
+  <ItemGroup>
+    <ProjectReference Include="$(TerminalSourceDir)\src\types\lib\types.vcxproj" />
+    <ProjectReference Include="$(TerminalSourceDir)\src\buffer\out\lib\bufferout.vcxproj" />
+    <ProjectReference Include="$(TerminalSourceDir)\src\renderer\base\lib\base.vcxproj" />
+    <ProjectReference Include="$(TerminalSourceDir)\src\terminal\adapter\lib\adapter.vcxproj" />
+    <ProjectReference Include="$(TerminalSourceDir)\src\terminal\parser\lib\parser.vcxproj" />
+  </ItemGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <AdditionalIncludeDirectories>$(TerminalSourceDir)\src\cascadia\TerminalCore;$(WinRT_IncludePath)\..\cppwinrt\winrt;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <Import Project="$(TerminalSourceDir)\src\cppwinrt.build.post.props" />
+  <Import Project="$(TerminalSourceDir)\src\common.nugetversions.targets" />
+</Project>
