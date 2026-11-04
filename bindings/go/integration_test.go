@@ -525,6 +525,8 @@ func TestRecordingAndCloseAll(t *testing.T) {
 	if !strings.Contains(string(cast), "continues") {
 		t.Fatal("cast stopped after rejected pause")
 	}
+	requireNoError(t, terminal.Submit(tuitest.Ptr("raster")))
+	requireNoError(t, terminal.GetByText("go-raster-ready", tuitest.TextSelectorOptions{}).Expect(tuitest.LocatorExpectOptions{}))
 	for _, format := range []tuitest.RecordingFormat{tuitest.APNG, tuitest.GIF} {
 		requireNoError(t, terminal.StartRecording(filepath.Join(directory, "raster."+string(format)), tuitest.RecordingOptions{Format: format}))
 		requireNoError(t, terminal.PauseRecording())
