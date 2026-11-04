@@ -11,6 +11,7 @@ permissions:
 jobs:
   check:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
