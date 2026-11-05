@@ -264,6 +264,57 @@ mod raster {
     }
 
     #[test]
+    fn child_environment_and_invocation_directory_reach_a_real_command() {
+        let directory = Directory::new();
+        let environment = std::env::vars_os().collect::<Vec<_>>();
+        let cwd = std::env::current_dir().unwrap();
+        std::fs::write(
+            directory.0.join("child.cjs"),
+            "require('node:fs').writeFileSync('child.json', JSON.stringify({value: process.env.TAPE_RUNNER_VALUE, session: process.env.TUI_TEST_SESSION, cwd: process.cwd()})); console.log('CHILD_DONE');",
+        )
+        .unwrap();
+        let plan =
+            plan("Require node\nEnv TAPE_RUNNER_VALUE child\nType@0 'node child.cjs'\nEnter@0");
+        let session = launch(&plan, &directory.0);
+        // Tape EOF closes the shell without a command-completion wait. Test the
+        // child environment through the same executor, then await its result.
+        for action in plan.actions() {
+            perform(&session, &action.location, &action.value).unwrap();
+        }
+        let completed = session.execute(Operation::WaitLocator {
+            query: crate::LocatorQuery::text("CHILD_DONE"),
+            not: false,
+            timeout_ms: Some(5_000),
+        });
+        let failure_screen = completed.as_ref().err().map(|_| {
+            session.execute(Operation::Screenshot {
+                full: true,
+                path: None,
+                zoom: None,
+                background: None,
+            })
+        });
+        session.close().unwrap();
+        assert!(completed.is_ok(), "{completed:?}\n{failure_screen:?}");
+        let child: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.0.join("child.json")).unwrap())
+                .unwrap();
+        assert_eq!(child["value"], "child");
+        assert_eq!(
+            child["session"].as_str(),
+            std::env::var("TUI_TEST_SESSION").ok().as_deref()
+        );
+        assert_eq!(
+            Path::new(child["cwd"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            directory.0
+        );
+        assert_eq!(std::env::vars_os().collect::<Vec<_>>(), environment);
+        assert_eq!(std::env::current_dir().unwrap(), cwd);
+    }
+
+    #[test]
     fn invalid_options_and_missing_parent_preserve_existing_output() {
         let directory = Directory::new();
         #[cfg(unix)]

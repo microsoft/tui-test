@@ -55,6 +55,8 @@ Root tape, `Source`, `Require`, and output paths resolve from that directory, no
 Both commands load sources, compile the complete tape, and perform preflight.
 `check` never starts a child or creates an output.
 `run` uses an owned local session and closes it after success or failure.
+EOF closes the shell even if a submitted command still runs.
+Tape delays do not wait for command completion.
 Neither command uses a daemon, a session registry, project configuration, or `TUI_TEST_SESSION` for session selection.
 The child still inherits the process environment, including `TUI_TEST_SESSION`.
 Tape `Env` directives change only that child's environment.
@@ -375,6 +377,7 @@ It uses the tape padding as content padding.
 It uses recording zoom `0.5` for native 1x raster output because the core animation scale multiplies zoom by two.
 It disables idle compression with `idle_time_limit: None`.
 Visible quiet time and trailing `Sleep` remain in the GIF, divided by `PlaybackSpeed`.
+Delays use real elapsed time. Host scheduling and input processing can extend visible time beyond the requested delays.
 The runner adds no final hold. GIF centisecond quantization and frame sampling still apply.
 
 Preflight uses the same style validation and `GridRenderer` geometry as export.
