@@ -151,6 +151,7 @@ Timeouts: {
 "ready": ["ready", "Option<u64>"],
 },
 AutomaticRecordingOptions: {
+"mode": ["mode", "Option<String>"],
 "directory": ["directory", "Option<PathBuf>"],
 },
 TraceOptions: {
@@ -174,7 +175,9 @@ OpenOptions: {
 "profileScrollback": ["profile_scrollback", "Option<u64>"],
 "profileColors": ["profile_colors", "Option<Vec<(String,String)>>"],
 "timeouts": ["timeouts", "Option<Timeouts>"],
+"recording": ["recording", "Option<AutomaticRecording>"],
 "style": ["style", "Option<Style>"],
+"context": ["context", "Option<SessionContext>"],
 "screenHistoryLimit": ["screen_history_limit", "Option<u16>"],
 },
 RunOptions: {
@@ -190,7 +193,9 @@ RunOptions: {
 "profileScrollback": ["profile_scrollback", "Option<u64>"],
 "profileColors": ["profile_colors", "Option<Vec<(String,String)>>"],
 "timeouts": ["timeouts", "Option<Timeouts>"],
+"recording": ["recording", "Option<AutomaticRecording>"],
 "style": ["style", "Option<Style>"],
+"context": ["context", "Option<SessionContext>"],
 "screenHistoryLimit": ["screen_history_limit", "Option<u16>"],
 },
 LocatorStyle: {
@@ -206,11 +211,23 @@ LocatorStyle: {
 "strikethrough": ["strikethrough", "Option<bool>"],
 "blink": ["blink", "Option<bool>"],
 },
+TextScope: {
+"after": ["after", "Option<TextAnchor>"],
+"before": ["before", "Option<TextAnchor>"],
+},
+TextAnchor: {
+"text": ["text", "String"],
+"regex": ["regex", "Option<bool>"],
+"occurrence": ["occurrence", "Option<String>"],
+"nth": ["nth", "Option<usize>"],
+},
 LocatorNode: {
 "kind": ["kind", "LocatorNodeKind"],
 "text": ["text", "Option<String>"],
 "regex": ["regex", "Option<bool>"],
 "whitespace": ["whitespace", "Option<WhitespaceMode>"],
+"scope": ["scope", "Option<TextScope>"],
+"matchStyle": ["match_style", "Option<TextStyle>"],
 "style": ["style", "Option<TextStyle>"],
 "link": ["link", "Option<String>"],
 "full": ["full", "Option<bool>"],
@@ -273,6 +290,13 @@ ColorExpectation: {
 "cursor": ["cursor", "Option<String>"],
 "palette": ["palette", "Option<Vec<(u8,String)>>"],
 "timeoutMs": ["timeout_ms", "Option<u64>"],
+},
+SessionContext: {
+"operationName": ["operation_name", "Option<String>"],
+"diagnosticContext": ["diagnostic_context", "Option<BTreeMap<String,String>>"],
+"artifacts": ["artifacts", "Option<FailureArtifactOptions>"],
+"trace": ["trace", "Option<TraceOptions>"],
+"screenHistoryLimit": ["screen_history_limit", "Option<u16>"],
 },
 MouseClickOptions: {
 "x": ["x", "Option<u16>"],
@@ -341,6 +365,7 @@ export const UnderlineStyle = enums.UnderlineStyle;
 export const LocatorNodeKind = enums.LocatorNodeKind;
 export const LocatorStageDirection = enums.LocatorStageDirection;
 export const methods = {
+finishTrace: { result: "Unit", args: [["failed", "Option<bool>"],] },
 restart: { result: "Open", args: [["gracefulTimeoutMs", "u64"],] },
 state: { result: "State", args: [] },
 text: { result: "Text", args: [["full", "Option<bool>"],] },

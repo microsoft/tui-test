@@ -86,6 +86,88 @@ func TestNativeScrollback(t *testing.T) {
 	}
 }
 
+func TestSessionParityScopeContextTraceAndInterrupt(t *testing.T) {
+	directory, err := filepath.Abs(filepath.Join("target", fmt.Sprintf("%s-%d-%d", t.Name(), os.Getpid(), time.Now().UnixNano())))
+	requireNoError(t, err)
+	defer os.RemoveAll(directory)
+	terminal := newClient(t, tuitest.ClientOptions{
+		Context: &tuitest.ExecutionContext{OperationName: tuitest.Ptr("parity-check"), DiagnosticContext: map[string]string{"suite": "parity"}},
+	})
+	runTerminal(t, terminal, tuitest.SpawnOptions{
+		Recording: &tuitest.AutomaticRecording{Directory: directory},
+		Context: &tuitest.ExecutionContext{
+			DiagnosticContext: map[string]string{"phase": "spawn"},
+			Trace:             &tuitest.TraceOptions{Mode: tuitest.TraceOn, Directory: directory},
+		},
+	})
+	scope := &tuitest.TextScope{After: &tuitest.TextAnchor{Text: "go.re.dy", Regex: true, Nth: tuitest.Ptr(uint32(0))}, Before: &tuitest.TextAnchor{Text: "plain"}}
+	styled := terminal.GetByText("styled", tuitest.TextSelectorOptions{Scope: scope}).WithStyle(tuitest.TextStyle{Bold: tuitest.Ptr(true)})
+	scope.After.Text = "changed"
+	requireNoError(t, styled.Expect(tuitest.LocatorExpectOptions{}))
+	count, err := terminal.GetByText("styled plain", tuitest.TextSelectorOptions{}).WithStyle(tuitest.TextStyle{Bold: tuitest.Ptr(true)}).Count()
+	requireNoError(t, err)
+	if count != 0 {
+		t.Fatal("whole-match filter accepted unstyled text")
+	}
+	for _, locator := range []*tuitest.Locator{
+		terminal.GetByStyle(tuitest.TextStyle{Bold: tuitest.Ptr(true)}, tuitest.StyleSelectorOptions{}).WithStyle(tuitest.TextStyle{Bold: tuitest.Ptr(false)}),
+		terminal.GetByLink("https://example.test/docs", tuitest.LinkSelectorOptions{}).WithStyle(tuitest.TextStyle{Bold: tuitest.Ptr(true)}),
+	} {
+		count, err := locator.Count()
+		requireNoError(t, err)
+		if count != 0 {
+			t.Fatal("whole-match style did not filter the leaf")
+		}
+	}
+	relative, err := styled.RelativeTo(terminal.GetByText("go-ready", tuitest.TextSelectorOptions{}), tuitest.After)
+	requireNoError(t, err)
+	matches, err := relative.HighlightMatches(tuitest.WaitOptions{})
+	requireNoError(t, err)
+	if len(matches) != 1 || matches[0].Text != "styled" {
+		t.Fatalf("%+v", matches)
+	}
+	composite, err := relative.Or(terminal.GetByLink("test:save", tuitest.LinkSelectorOptions{}))
+	requireNoError(t, err)
+	if _, err := composite.WithStyle(tuitest.TextStyle{Bold: tuitest.Ptr(true)}).Count(); err == nil || !strings.Contains(err.Error(), "composition nodes do not accept scope or style") {
+		t.Fatalf("composite style error: %v", err)
+	}
+	screen, err := terminal.PackedScreen(tuitest.TextOptions{})
+	requireNoError(t, err)
+	if !strings.Contains(string(screen.UTF8), "styled") || screen.Cols != 80 {
+		t.Fatalf("%+v", screen)
+	}
+	requireNoError(t, terminal.FinishTrace(false))
+	_, err = terminal.State()
+	requireNoError(t, err)
+	reports, err := filepath.Glob(filepath.Join(directory, "trace-*", "trace.json"))
+	requireNoError(t, err)
+	if len(reports) != 1 {
+		t.Fatalf("trace files: %v", reports)
+	}
+	data, err := os.ReadFile(reports[0])
+	requireNoError(t, err)
+	var report struct {
+		Outcome          string
+		RecentOperations []struct{ Name string } `json:"recent_operations"`
+		Context          map[string]string
+	}
+	requireNoError(t, json.Unmarshal(data, &report))
+	if report.Outcome != "passed" || len(report.RecentOperations) == 0 || report.RecentOperations[0].Name != "parity-check" || report.Context["phase"] != "spawn" || report.Context["suite"] != "parity" {
+		t.Fatalf("%+v", report)
+	}
+	pending := make(chan error, 1)
+	go func() { pending <- terminal.WaitExit(tuitest.WaitOptions{Timeout: tuitest.Ptr(30 * time.Second)}) }()
+	requireNoError(t, terminal.Interrupt())
+	if err := <-pending; err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("wait result: %v", err)
+	}
+	requireNoError(t, terminal.Close())
+	var failure *tuitest.Error
+	if err := terminal.Interrupt(); !errors.As(err, &failure) || failure.Kind != tuitest.NoSessionError {
+		t.Fatalf("interrupt after close: %v", err)
+	}
+}
+
 func newTerminal(t *testing.T, options tuitest.ClientOptions) *tuitest.Client {
 	t.Helper()
 	terminal := newClient(t, options)

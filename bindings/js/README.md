@@ -59,6 +59,70 @@ try {
 
 ## API
 
+### Scoped queries and session context
+
+```js
+const save = terminal.getByText("Save", {
+  scope: {
+    after: { text: "Start", regex: false, occurrence: "unique" },
+    before: { text: "End", occurrence: { nth: 0 } },
+  },
+}).withStyle({ bold: true });
+const choice = save.relativeTo(terminal.getByText("Header"), "after")
+  .withStyle({ italic: false }).or(terminal.getByLink("test:save"));
+```
+
+`TextAnchor.occurrence` accepts `"any"`, `"unique"`, `"first"`, `"last"`, or `{ nth: index }`.
+Anchors default to `"unique"`.
+`withStyle` tests each whole match.
+It ignores blank cells when visible characters exist.
+It works on text, style, and link queries.
+It does not replace `and(terminal.getByStyle(...))`, which intersects cells.
+Leaf selector options also accept `matchStyle`.
+`relativeTo(parent, direction?)` supports those same query kinds and defaults to `"within"`.
+Rust rejects scope or whole-match style on composite nodes.
+Apply these fields to the operands before composition.
+The parent must belong to the same `TuiTest` instance.
+These methods copy their options and leave their operands unchanged.
+
+Constructor options and per-call `open`/`run` options accept `context: ExecutionContext`.
+The context fields are `operationName`, `diagnosticContext`, `artifacts`, `trace`, and `screenHistoryLimit`.
+`diagnosticContext` maps string keys to string values.
+The engine sanitizes and limits diagnostic fields before it writes them.
+Per-call fields override constructor fields for that spawn only.
+`open` and `run` also accept `recording: { directory }`.
+An explicit `recording: {}` restores the engine's default directory.
+The runtime API also accepts `recording.mode`: `"disabled"` (default), `"on-failure"`, or `"always"`.
+This controls automatic casts without a trace.
+Explicit trace options take precedence over this mode.
+The CLI configuration still permits only `recording.directory`.
+Explicit empty diagnostic maps clear inherited diagnostic fields.
+
+`finishTrace(failed = false)` completes the trace without closing the terminal.
+`interrupt()` cancels pending operations and terminates the child without an operation queue wait.
+It is not a keyboard interrupt.
+Later waits report cancellation until restart or close.
+An absent session produces `NoSessionError`.
+Use `close()` afterward to release the named session.
+Use `sessions()` to check whether a named session is open.
+`OpenResult.recording` supplies the automatic recording path.
+`getRecording(name)` reads current or retained recording content.
+`packedScreen({ full? })` returns owned `utf8` bytes, `cols`, and `rows`.
+UTF-8 byte offsets are not terminal cell coordinates.
+`locator.highlightMatches({ timeout? })` returns the highlighted matches.
+The existing `highlight()` method still returns no value.
+`expectSnapshot(name, { cwd, update, includeStyle, includeTitle })` accepts an explicit working directory for snapshot files.
+
+Run the complete example from the repository root:
+
+```sh
+node bindings/js/examples/parity.mjs
+```
+
+The example creates trace artifacts under `artifacts/parity-js`.
+Set `TUI_TEST_PARITY_ARTIFACTS` to choose another directory.
+Artifacts can contain terminal text.
+
 ### `TuiTest`
 
 ```ts
@@ -73,7 +137,7 @@ new TuiTest(session?: string, options?: ClientOptions)
 | `profile` | `Profile` | built-in profile |
 | `screenHistoryLimit` | `number` | `10` |
 | `artifacts` | `{ dir, onFailure?, includeRecording? }` | off |
-| `recording` | `{ directory? }` | default recording directory |
+| `recording` | `{ directory?, mode? }` | default directory, disabled mode |
 | `trace` | `{ mode?, directory? }` | `{ mode: "off", directory: ".tui-test/traces" }` |
 
 Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Users can open `trace.html`; agents should read `trace.md`, `trace.json`, and `timeline.json`.

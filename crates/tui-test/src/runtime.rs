@@ -862,6 +862,17 @@ impl SessionRegistry {
         self.close_with_context(name, ExecutionContext::default())
     }
 
+    /// Cancel pending operations and terminate the child without closing its session.
+    pub fn interrupt(&self, name: &str) -> Result<(), TuiTestError> {
+        let session = self
+            .lock_sessions()
+            .get(name)
+            .cloned()
+            .ok_or_else(TuiTestError::no_session)?;
+        session.interrupt();
+        Ok(())
+    }
+
     fn close_with_context(
         &self,
         name: &str,
@@ -1065,6 +1076,54 @@ mod tests {
     use crate::api::{AutomaticRecording, AutomaticRecordingMode, ErrorKind, Operation};
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn named_interrupt_bypasses_operation_and_lifecycle_locks() {
+        let registry = SessionRegistry::default();
+        let name = "interrupt-without-closing";
+        assert_eq!(
+            registry.interrupt(name).unwrap_err().kind,
+            ErrorKind::NoSession
+        );
+        registry
+            .session(name)
+            .open(OpenOptions {
+                wait_ready: Some(false),
+                ..OpenOptions::default()
+            })
+            .expect("open target session");
+
+        let generation = registry.generation(name);
+        let operation = generation.start_operation(true, false);
+        let lifecycle = registry
+            .inner
+            .lifecycle
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let interrupting_registry = registry.clone();
+        let (sent, received) = mpsc::sync_channel(1);
+        let interrupt = std::thread::spawn(move || {
+            let _ = sent.send(interrupting_registry.interrupt(name));
+        });
+        let result = received.recv_timeout(Duration::from_secs(2));
+        drop(lifecycle);
+        drop(operation);
+        interrupt.join().expect("interrupt thread");
+        result
+            .expect("interrupt does not wait behind session operations")
+            .expect("interrupt target session");
+        assert!(registry.lock_sessions().contains_key(name));
+        let cancelled = registry.execute(
+            name,
+            Operation::WaitExit {
+                timeout_ms: Some(2_000),
+            },
+        );
+        registry.close(name).expect("close interrupted session");
+        let error = cancelled.expect_err("interrupted session cancels waits");
+        assert_eq!(error.kind, ErrorKind::Assertion);
+        assert!(error.message.contains("session was cancelled"));
+    }
 
     #[derive(Clone, Copy)]
     enum NamedCloseEntry {

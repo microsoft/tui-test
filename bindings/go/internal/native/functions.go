@@ -14,6 +14,8 @@ type nativeFunctionTable struct {
 	CloseAll         func() *abiResult
 	Recording        func(abiString) *abiResult
 	Close            func(abiString, abiOptionalBool) *abiResult
+	FinishTrace      func(abiString, bool) *abiResult
+	Interrupt        func(abiString) *abiResult
 	Restart          func(abiString, uint64) *abiResult
 	State            func(abiString) *abiResult
 	GetCommand       func(abiString) *abiResult
@@ -84,6 +86,8 @@ func nativeRegistrations(table *nativeFunctionTable) []nativeRegistration {
 		{symbol: "tui_close_all", target: &table.CloseAll},
 		{symbol: "tui_recording", target: &table.Recording},
 		{symbol: "tui_close", target: &table.Close},
+		{symbol: "tui_finish_trace", target: &table.FinishTrace},
+		{symbol: "tui_interrupt", target: &table.Interrupt},
 		{symbol: "tui_restart", target: &table.Restart},
 		{symbol: "tui_state", target: &table.State},
 		{symbol: "tui_get_command", target: &table.GetCommand},

@@ -4,6 +4,7 @@ import {
   artifactPayload,
   assertTimeoutClasses,
   backendPayload,
+  contextPayload,
   envPairs,
   profilePayload,
   recordingPayload,
@@ -28,6 +29,7 @@ import type {
   Cursor,
   Viewport,
   OpenResult,
+  PackedScreen,
   Shell,
   Size,
   SpawnOptions,
@@ -65,7 +67,7 @@ function isRegExp(value: unknown): value is RegExp {
   return Object.prototype.toString.call(value) === "[object RegExp]";
 }
 
-type TextOccurrence =
+export type TextOccurrence =
   | "any"
   | "unique"
   | "first"
@@ -74,7 +76,20 @@ type TextOccurrence =
 
 export type LocatorDirection = "within" | "after" | "before";
 
+export interface TextAnchor {
+  text: string;
+  regex?: boolean;
+  occurrence?: TextOccurrence;
+}
+
+export interface TextScope {
+  after?: TextAnchor;
+  before?: TextAnchor;
+}
+
 export interface TextSelectorOptions {
+  scope?: TextScope;
+  matchStyle?: TextStyleExpectation;
   regex?: boolean;
   full?: boolean;
   whitespace?: "exact" | "normalize";
@@ -132,6 +147,7 @@ export interface LocatorExpectOptions {
 }
 
 export interface StyleSelectorOptions {
+  matchStyle?: TextStyleExpectation;
   full?: boolean;
 }
 
@@ -140,6 +156,7 @@ export interface RelativeStyleSelectorOptions extends StyleSelectorOptions {
 }
 
 export interface LinkSelectorOptions {
+  matchStyle?: TextStyleExpectation;
   full?: boolean;
 }
 
@@ -153,6 +170,8 @@ export interface LocatorFilterOptions {
 }
 
 export interface Locator {
+  withStyle(style: TextStyleExpectation): Locator;
+  relativeTo(parent: Locator, direction?: LocatorDirection): Locator;
   getByText(text: string, opts?: RelativeTextSelectorOptions): Locator;
   getByStyle(style: TextStyleExpectation, opts?: RelativeStyleSelectorOptions): Locator;
   getByLink(uri: string, opts?: RelativeLinkSelectorOptions): Locator;
@@ -171,6 +190,7 @@ export interface Locator {
   wait(opts?: LocatorWaitOptions): Promise<Locator>;
   click(opts?: LocatorClickOptions): Promise<void>;
   highlight(opts?: LocatorHighlightOptions): Promise<void>;
+  highlightMatches(opts?: LocatorHighlightOptions): Promise<TextMatch[]>;
   expect(opts?: LocatorExpectOptions): Promise<void>;
 }
 
@@ -318,6 +338,12 @@ function textStageValue(
     regex: opts.regex ?? false,
     full: opts.full ?? false,
     whitespace: opts.whitespace ?? "exact",
+    scope: opts.scope && Object.fromEntries(
+      Object.entries(opts.scope).filter(([, anchor]) => anchor !== undefined).map(([key, anchor]) => [
+        key, { text: anchor.text, regex: anchor.regex, ...occurrenceOptions(anchor.occurrence ?? "unique") },
+      ]),
+    ),
+    matchStyle: opts.matchStyle && textStyleValue(opts.matchStyle),
     ...occurrenceOptions(occurrence),
   };
 }
@@ -334,6 +360,7 @@ function styleStageValue(
     kind: "style",
     direction: opts.direction ?? "within",
     style: textStyleValue(style),
+    matchStyle: opts.matchStyle && textStyleValue(opts.matchStyle),
     full: opts.full ?? false,
     ...occurrenceOptions(occurrence),
   };
@@ -409,6 +436,7 @@ function linkQuery(
   return appendNode(within, {
     kind: "link",
     link: uri,
+    matchStyle: opts.matchStyle && textStyleValue(opts.matchStyle),
     full: opts.full ?? false,
     direction,
     within: within?.root,
@@ -462,6 +490,11 @@ function cloneQuery(query: LocatorQueryValue): LocatorQueryValue {
     nodes: query.nodes.map((node) => ({
       ...node,
       style: node.style ? { ...node.style } : undefined,
+      matchStyle: node.matchStyle ? { ...node.matchStyle } : undefined,
+      scope: node.scope && {
+        after: node.scope.after && { ...node.scope.after },
+        before: node.scope.before && { ...node.scope.before },
+      },
     })),
   };
 }
@@ -491,7 +524,7 @@ interface LocatorActions {
   highlight(
     query: LocatorQueryValue,
     timeout: number | undefined,
-  ): Promise<void>;
+  ): Promise<TextMatch[]>;
   expect(
     query: LocatorQueryValue,
     expectation: LocatorExpectOptions,
@@ -517,6 +550,20 @@ class LocatorImpl implements Locator {
         ? selected.occurrence ?? "any"
         : "nth";
     stage.nth = selected.nth;
+    return new LocatorImpl(query, this.#actions);
+  }
+
+  withStyle(style: TextStyleExpectation): Locator {
+    const query = cloneQuery(this.#query);
+    currentStage(query).matchStyle = textStyleValue(style);
+    return new LocatorImpl(query, this.#actions);
+  }
+
+  relativeTo(parent: Locator, direction: LocatorDirection = "within"): Locator {
+    const query = cloneQuery(this.#operand(parent));
+    const within = query.root;
+    query.root = appendOperand(query, this.#query);
+    Object.assign(currentStage(query), { within, direction: directionValue(direction) });
     return new LocatorImpl(query, this.#actions);
   }
 
@@ -661,7 +708,11 @@ class LocatorImpl implements Locator {
     return this.#actions.click(this.#query, opts);
   }
 
-  highlight(opts: LocatorHighlightOptions = {}): Promise<void> {
+  async highlight(opts: LocatorHighlightOptions = {}): Promise<void> {
+    await this.highlightMatches(opts);
+  }
+
+  highlightMatches(opts: LocatorHighlightOptions = {}): Promise<TextMatch[]> {
     return this.#actions.highlight(this.#query, opts.timeout);
   }
 
@@ -744,6 +795,7 @@ export class TuiTest {
       recordingPayload(opts.recording),
       artifacts,
       tracePayload(opts.trace),
+      contextPayload(opts.context),
     );
     this.keyboard = new Keyboard(this.#runtime);
     this.mouse = new Mouse(this.#runtime);
@@ -783,7 +835,7 @@ export class TuiTest {
         ),
       highlight: (value, timeout) =>
         this.#guard("locator.highlight", async () => {
-          await this.#runtime.highlightLocator(
+          return this.#runtime.highlightLocator(
             value,
             this.#timeout("text", timeout),
           );
@@ -877,6 +929,8 @@ export class TuiTest {
       style: opts.style ?? this.#options.style,
       timeouts: timeoutsPayload(opts.timeouts),
       screenHistoryLimit: this.#options.screenHistoryLimit,
+      recording: recordingPayload(opts.recording),
+      context: contextPayload(opts.context),
     };
     return this.#spawn(() => this.#runtime.open(options), opts.retries ?? 0);
   }
@@ -901,12 +955,27 @@ export class TuiTest {
       style: opts.style ?? this.#options.style,
       timeouts: timeoutsPayload(opts.timeouts),
       screenHistoryLimit: this.#options.screenHistoryLimit,
+      recording: recordingPayload(opts.recording),
+      context: contextPayload(opts.context),
     };
     return this.#spawn(() => this.#runtime.run(options), opts.retries ?? 0);
   }
 
   async close(options: { failed?: boolean } = {}): Promise<void> {
     await this.#runtime.close(options.failed);
+  }
+
+  async finishTrace(failed = false): Promise<void> {
+    await this.#runtime.finishTrace(failed);
+  }
+
+  packedScreen(opts: { full?: boolean } = {}): Promise<PackedScreen> {
+    return this.#runtime.packedScreen(opts.full ?? false);
+  }
+
+  /** Cancel pending operations and terminate the child without the operation queue. */
+  async interrupt(): Promise<void> {
+    await this.#runtime.interrupt();
   }
 
   async restart(opts: RestartOptions = {}): Promise<OpenResult> {
@@ -1200,14 +1269,14 @@ export class TuiTest {
 
   async expectSnapshot(
     name: string,
-    opts: { update?: boolean; includeStyle?: boolean; includeTitle?: boolean } = {},
+    opts: { update?: boolean; includeStyle?: boolean; includeTitle?: boolean; cwd?: string } = {},
   ): Promise<string> {
     return this.#guard("expectSnapshot", () =>
       this.#runtime.snapshot(name, {
         update: opts.update ?? false,
         includeStyle: opts.includeStyle ?? false,
         includeTitle: opts.includeTitle ?? false,
-        cwd: process.cwd(),
+        cwd: opts.cwd ?? process.cwd(),
       }),
     );
   }

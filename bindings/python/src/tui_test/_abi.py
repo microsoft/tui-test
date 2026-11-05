@@ -527,6 +527,10 @@ def configure(library):
     library.tui_recording.restype = ctypes.POINTER(TuiResult)
     library.tui_close.argtypes = [TuiString, TuiOptionalBool]
     library.tui_close.restype = ctypes.POINTER(TuiResult)
+    library.tui_finish_trace.argtypes = [TuiString, ctypes.c_bool]
+    library.tui_finish_trace.restype = ctypes.POINTER(TuiResult)
+    library.tui_interrupt.argtypes = [TuiString]
+    library.tui_interrupt.restype = ctypes.POINTER(TuiResult)
     library.tui_restart.argtypes = [TuiString, ctypes.c_uint64]
     library.tui_restart.restype = ctypes.POINTER(TuiResult)
     library.tui_state.argtypes = [TuiString]

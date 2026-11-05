@@ -86,6 +86,20 @@ pub unsafe extern "C" fn tui_close_start(
 /// Start a typed call after copying all borrowed inputs.
 /// # Safety
 /// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_finish_trace_start(session: TuiString, failed: bool) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_finish_trace(session, failed) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
+pub unsafe extern "C" fn tui_interrupt_start(session: TuiString) -> *mut TuiTask {
+    tasks::start(|| unsafe { tui_interrupt(session) })
+}
+#[no_mangle]
+/// Start a typed call after copying all borrowed inputs.
+/// # Safety
+/// Inputs follow the synchronous function contract through this call only.
 pub unsafe extern "C" fn tui_restart_start(
     session: TuiString,
     graceful_timeout_ms: u64,

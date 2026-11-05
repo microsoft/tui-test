@@ -16,6 +16,7 @@ type RecordingCursorStyle = native.RecordingCursorStyle
 type Padding = native.Padding
 type CursorExpectation = native.CursorExpectation
 type ColorExpectation = native.ColorExpectation
+type PackedScreen = native.PackedScreen
 
 // Ptr marks an option as explicitly supplied, including false and zero.
 func Ptr[Value any](value Value) *Value { return &value }
@@ -151,6 +152,7 @@ type TraceOptions struct {
 	Directory string
 }
 type ClientOptions struct {
+	Context            *ExecutionContext
 	Style              *RenderStyle
 	Backend            Backend
 	Profile            *Profile
@@ -161,6 +163,8 @@ type ClientOptions struct {
 	Trace              *TraceOptions
 }
 type SpawnOptions struct {
+	Recording          *AutomaticRecording
+	Context            *ExecutionContext
 	Style              *RenderStyle
 	Backend            Backend
 	Cols, Rows         *uint16
@@ -215,9 +219,34 @@ const (
 
 type OutputOptions struct{ Regex bool }
 type TextSelectorOptions struct {
+	Scope       *TextScope
 	Regex, Full bool
 	Whitespace  Whitespace
 	Direction   Direction
+}
+type TextAnchor struct {
+	Text       string
+	Regex      bool
+	Occurrence TextOccurrence
+	Nth        *uint32
+}
+type TextOccurrence string
+
+const (
+	OccurrenceAny    TextOccurrence = "any"
+	OccurrenceUnique TextOccurrence = "unique"
+	OccurrenceFirst  TextOccurrence = "first"
+	OccurrenceLast   TextOccurrence = "last"
+)
+
+type TextScope struct{ After, Before *TextAnchor }
+
+type ExecutionContext struct {
+	OperationName      *string
+	DiagnosticContext  map[string]string
+	Artifacts          *ArtifactOptions
+	Trace              *TraceOptions
+	ScreenHistoryLimit *uint16
 }
 type StyleSelectorOptions struct {
 	Full      bool

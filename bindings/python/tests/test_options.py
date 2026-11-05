@@ -225,13 +225,15 @@ class ProfileResolutionTests(unittest.TestCase):
 
 
 class RecordingResolutionTests(unittest.TestCase):
-    def test_accepts_only_directory(self):
+    def test_accepts_directory_and_runtime_modes(self):
         self.assertEqual(
             cfg.normalize_recording(
                 AutomaticRecording(directory="casts")
             ),
-            {"directory": "casts"},
+            {"directory": "casts", "mode": None},
         )
+        for mode in ("disabled", "on-failure", "always"):
+            self.assertEqual(cfg.normalize_recording({"mode": mode}), {"mode": mode})
         with self.assertRaises(ValueError):
             cfg.normalize_recording({"mode": "sometimes"})
         with self.assertRaises(TypeError):

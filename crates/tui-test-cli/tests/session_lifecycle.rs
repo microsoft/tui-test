@@ -19,6 +19,401 @@ const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
 #[cfg(unix)]
 #[test]
+fn cli_parity_interrupt_cancels_waits_and_retains_session_state() {
+    let sandbox = Sandbox::new("interrupt-state");
+    sandbox.ok(&[
+        "--verbose",
+        "run",
+        "--backend",
+        "alacritty",
+        "--",
+        "sh",
+        "-c",
+        "stty -echo; printf interrupt-ready; read answer",
+    ]);
+    sandbox.ok(&["wait", "text", "interrupt-ready", "--timeout", "5000"]);
+    let mut waiter = sandbox.spawn(&["wait", "exit", "--timeout", "30000"]);
+    sandbox.wait_for_logged_operation("operation WaitExit { timeout_ms: Some(30000) }");
+    assert!(waiter.try_wait().unwrap().is_none());
+    let started = Instant::now();
+    sandbox.ok(&["interrupt"]);
+    let output = waiter.wait_with_output().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "interrupt waited behind the pending wait"
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cancelled"));
+    assert!(sandbox.ok(&["text"]).contains("interrupt-ready"));
+    let state: serde_json::Value = serde_json::from_str(&sandbox.ok(&["state", "--json"])).unwrap();
+    assert_eq!(state["ok"], true);
+    assert_eq!(state["data"]["ready"], false);
+    sandbox.ok(&["daemon", "status"]);
+    sandbox.ok(&["interrupt"]);
+    sandbox.ok(&["restart", "--graceful-timeout", "0"]);
+    sandbox.ok(&["wait", "text", "interrupt-ready", "--timeout", "5000"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_parity_interrupt_bypasses_a_pending_startup() {
+    let sandbox = Sandbox::new("interrupt-startup");
+    let marker = sandbox.home.join("started");
+    let env = format!("TEST_READY_PATH={}", marker.display());
+    let mut launcher = sandbox.spawn(&[
+        "run",
+        "--backend",
+        "alacritty",
+        "--wait-ready",
+        "--timeout-ready",
+        "30000",
+        "--env",
+        &env,
+        "--",
+        "sh",
+        "-c",
+        "stty -echo; printf startup-ready; : > \"$TEST_READY_PATH\"; read answer",
+    ]);
+    let started = Instant::now();
+    while !marker.is_file() {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "child never reached startup"
+        );
+        assert!(
+            launcher.try_wait().unwrap().is_none(),
+            "startup returned before the marker"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(launcher.try_wait().unwrap().is_none());
+    let started = Instant::now();
+    sandbox.ok(&["interrupt"]);
+    let output = launcher.wait_with_output().unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "interrupt waited behind startup"
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cancelled"));
+    sandbox.ok(&["daemon", "status"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_parity_nested_queries_cover_style_link_relative_and_occurrence_selection() {
+    let sandbox = Sandbox::new("nested-query");
+    sandbox.ok(&[
+        "run", "--backend", "alacritty", "--cols", "40", "--rows", "6", "--",
+        "sh", "-c",
+        "stty -echo; printf 'Settings\\r\\n\\033[1m\\033]8;;test:save\\033\\\\Save\\033]8;;\\033\\\\\\033[0m\\r\\nitem item\\r\\n'; read answer; printf '\\033[2J\\033[HDone\\r\\n'; read answer",
+    ]);
+    sandbox.ok(&["wait", "text", "item item", "--timeout", "5000"]);
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/locator-query.json");
+    let path = fixture.to_str().unwrap();
+    for action in ["find", "resolve", "wait", "expect", "highlight", "click"] {
+        sandbox.ok(&[action, "query", "--query-file", path]);
+    }
+    for query in [
+        r#"{"selector":{"kind":"style","selector":{"style":{"bold":true}}}}"#,
+        r#"{"selector":{"kind":"link","selector":{"uri":"test:save"}}}"#,
+    ] {
+        let output = sandbox.ok(&["find", "query", "--query", query, "--json"]);
+        let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["data"]["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(output["data"]["matches"][0]["text"], "Save");
+    }
+    let repeated = r#"{"selector":{"kind":"text","selector":{"text":"item"}}}"#;
+    let found = sandbox.ok(&["find", "query", "--query", repeated, "--json"]);
+    let found: serde_json::Value = serde_json::from_str(&found).unwrap();
+    assert_eq!(found["data"]["matches"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        sandbox
+            .run(&["resolve", "query", "--query", repeated])
+            .status
+            .code(),
+        Some(1)
+    );
+    sandbox.ok(&["resolve", "text", "item", "--nth", "1"]);
+    assert_eq!(
+        sandbox
+            .run(&["wait", "text", "item", "--not", "--timeout", "0"])
+            .status
+            .code(),
+        Some(1)
+    );
+    assert_eq!(
+        sandbox
+            .run(&[
+                "wait",
+                "query",
+                "--query-file",
+                path,
+                "--not",
+                "--timeout",
+                "0"
+            ])
+            .status
+            .code(),
+        Some(1)
+    );
+    sandbox.ok(&["key", "press", "Enter"]);
+    sandbox.ok(&["wait", "text", "Done", "--timeout", "5000"]);
+    sandbox.ok(&[
+        "wait",
+        "query",
+        "--query-file",
+        path,
+        "--not",
+        "--timeout",
+        "5000",
+    ]);
+    sandbox.ok(&["wait", "text", "item", "--not", "--timeout", "5000"]);
+    sandbox.ok(&[
+        "expect",
+        "query",
+        "--query-file",
+        path,
+        "--not",
+        "--timeout",
+        "5000",
+    ]);
+    let packed = sandbox.ok(&["packed-screen", "--json"]);
+    let packed: serde_json::Value = serde_json::from_str(&packed).unwrap();
+    assert_eq!(packed["data"]["cols"], 40);
+    assert_eq!(packed["data"]["rows"], 6);
+    let text = packed["data"]["text"].as_str().unwrap();
+    let rows: Vec<_> = text.split('\n').collect();
+    assert_eq!(rows.len(), 6);
+    assert!(rows.iter().all(|row| row.chars().count() == 40));
+    assert!(rows[0].starts_with("Done"));
+    let snapshots = sandbox.home.join("baselines");
+    sandbox.ok(&[
+        "expect",
+        "snapshot",
+        "query-screen",
+        "--cwd",
+        snapshots.to_str().unwrap(),
+        "--update",
+    ]);
+    sandbox.ok(&[
+        "expect",
+        "snapshot",
+        "query-screen",
+        "--cwd",
+        snapshots.to_str().unwrap(),
+    ]);
+    assert!(snapshots.join("__snapshots__/query-screen.snap").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_parity_composite_queries_preserve_rust_scope_and_style_usage_errors() {
+    let sandbox = Sandbox::new("composite-scope");
+    sandbox.ok(&[
+        "run",
+        "--backend",
+        "alacritty",
+        "--",
+        "sh",
+        "-c",
+        "stty -echo; printf 'Settings\\r\\n\\033[1mSave\\033[0m\\r\\n'; read answer",
+    ]);
+    sandbox.ok(&["wait", "text", "Save", "--timeout", "5000"]);
+    let query = serde_json::json!({
+        "selector": {
+            "kind": "or",
+            "selector": {
+                "left": {"selector": {"kind": "text", "selector": {"text": "Save"}}},
+                "right": {"selector": {"kind": "text", "selector": {"text": "Cancel"}}}
+            }
+        },
+        "within": {"selector": {"kind": "text", "selector": {"text": "Settings"}}},
+        "direction": "after",
+        "style": {"bold": true},
+        "occurrence": "unique"
+    });
+    let mut scope_only = query.clone();
+    scope_only.as_object_mut().unwrap().remove("style");
+    let mut style_only = query.clone();
+    style_only.as_object_mut().unwrap().remove("within");
+    style_only.as_object_mut().unwrap().remove("direction");
+    for query in [query, scope_only, style_only] {
+        let output = sandbox.run(&["resolve", "query", "--query", &query.to_string(), "--json"]);
+        assert_eq!(output.status.code(), Some(2));
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["kind"], "usage");
+        assert_eq!(
+            response["message"],
+            "composition nodes do not accept scope or style fields"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_parity_context_artifact_directory_validation_matches_rust() {
+    let sandbox = Sandbox::new("context-artifact-directory");
+    sandbox.ok(&[
+        "run",
+        "--backend",
+        "alacritty",
+        "--",
+        "sh",
+        "-c",
+        "stty -echo; printf Ready; read answer",
+    ]);
+    sandbox.ok(&["wait", "text", "Ready", "--timeout", "5000"]);
+    let path = sandbox.home.join("context.json");
+    for mode in ["none", "all", "text", "html"] {
+        for artifact in [
+            serde_json::json!({"mode": mode}),
+            serde_json::json!({"mode": mode, "directory": ""}),
+        ] {
+            std::fs::write(
+                &path,
+                serde_json::to_vec(&serde_json::json!({"artifact": artifact})).unwrap(),
+            )
+            .unwrap();
+            let output =
+                sandbox.run(&["--context-file", path.to_str().unwrap(), "state", "--json"]);
+            if mode == "none" {
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(response["ok"], true);
+            } else {
+                assert_eq!(output.status.code(), Some(2));
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stderr).trim(),
+                    "failure artifact directory must not be empty"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_parity_context_retention_overrides_profile_even_at_the_rust_default() {
+    let default = tui_test::DiagnosticRetentionOptions::default().screen_history_limit;
+    for (context_value, expected) in [
+        (serde_json::json!({}), 3),
+        (
+            serde_json::json!({"retention": {"screen_history_limit": default}}),
+            default,
+        ),
+        (
+            serde_json::json!({"retention": {"screen_history_limit": 0}}),
+            0,
+        ),
+        (serde_json::json!({"retention": {}}), default),
+    ] {
+        let sandbox = Sandbox::new("context-retention");
+        let config_path = sandbox.home.join("config.toml");
+        let context_path = sandbox.home.join("context.json");
+        let config = "[diagnostics]\nscreen-history-limit = 3\n";
+        let context_json = context_value.to_string();
+        std::fs::write(&config_path, config).unwrap();
+        std::fs::write(&context_path, &context_json).unwrap();
+        sandbox.ok(&[
+            "--context-file",
+            context_path.to_str().unwrap(),
+            "run",
+            "--backend",
+            "alacritty",
+            "--config",
+            config_path.to_str().unwrap(),
+            "--",
+            "sh",
+            "-c",
+            "stty -echo; printf Ready; read answer",
+        ]);
+        sandbox.ok(&["wait", "text", "Ready", "--timeout", "5000"]);
+        let artifacts = sandbox.home.join("failures");
+        let output = sandbox.run(&[
+            "--json",
+            "--failure-artifacts",
+            artifacts.to_str().unwrap(),
+            "--failure-artifact-mode",
+            "text",
+            "expect",
+            "text",
+            "absent",
+            "--timeout",
+            "0",
+        ]);
+        assert_eq!(output.status.code(), Some(1));
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let manifest = response["artifact"]["manifest"].as_str().unwrap();
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(manifest).unwrap()).unwrap();
+        assert_eq!(report["terminal"]["screen_history"]["limit"], expected);
+        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), config);
+        assert_eq!(
+            std::fs::read_to_string(&context_path).unwrap(),
+            context_json
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_parity_trace_finish_uses_explicit_outcomes_and_keeps_the_session_open() {
+    for outcome in ["passed", "failed"] {
+        let sandbox = Sandbox::new("trace-outcome");
+        let context = sandbox.home.join("context.json");
+        let traces = sandbox.home.join("traces");
+        std::fs::write(
+            &context,
+            serde_json::to_vec(&serde_json::json!({
+                "trace": {"mode": "on-failure", "directory": traces},
+                "retention": {"screen_history_limit": 3},
+                "diagnostic_context": {"test": "external-outcome"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        sandbox.ok(&[
+            "--context-file",
+            context.to_str().unwrap(),
+            "run",
+            "--backend",
+            "alacritty",
+            "--",
+            "sh",
+            "-c",
+            "stty -echo; printf Ready; read answer",
+        ]);
+        sandbox.ok(&[
+            "--operation-name",
+            "ready-check",
+            "wait",
+            "text",
+            "Ready",
+            "--timeout",
+            "5000",
+        ]);
+        sandbox.ok(&["trace", "finish", outcome]);
+        sandbox.ok(&["expect", "text", "Ready", "--timeout", "0"]);
+        let exports = std::fs::read_dir(&traces)
+            .map(|entries| entries.filter_map(Result::ok).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if outcome == "failed" {
+            assert_eq!(exports.len(), 1);
+            assert!(exports[0].path().join("trace.json").is_file());
+        } else {
+            assert!(exports.is_empty());
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn native_scrollback_moves_the_view_without_changing_full_text() {
     let sandbox = Sandbox::new("native-scrollback");
     sandbox.ok(&[

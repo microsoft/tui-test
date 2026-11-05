@@ -66,6 +66,7 @@ export type State = NativeState;
 export type TextMatch = NativeTextMatch;
 
 export type OpenResult = NativeOpenResult;
+export type { PackedScreen } from "../native/index.js";
 
 export interface Colors {
   foreground?: string;
@@ -95,6 +96,7 @@ export interface Profile {
 }
 
 export interface AutomaticRecording {
+  mode?: "disabled" | "on-failure" | "always";
   directory?: string;
 }
 
@@ -103,6 +105,8 @@ export interface TraceOptions {
   directory?: string;
 }
 export interface SpawnOptions {
+  recording?: AutomaticRecording;
+  context?: ExecutionContext;
   style?: RenderStyle;
   backend?: Backend;
   cols?: number;
@@ -125,6 +129,7 @@ export interface ArtifactOptions {
 }
 
 export interface ClientOptions {
+  context?: ExecutionContext;
   style?: RenderStyle;
   backend?: Backend;
   profile?: Profile;
@@ -133,6 +138,14 @@ export interface ClientOptions {
   artifacts?: ArtifactOptions;
   recording?: AutomaticRecording;
   trace?: TraceOptions;
+}
+
+export interface ExecutionContext {
+  operationName?: string;
+  diagnosticContext?: Record<string, string>;
+  artifacts?: ArtifactOptions;
+  trace?: TraceOptions;
+  screenHistoryLimit?: number;
 }
 
 export type FailureReason =

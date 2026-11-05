@@ -2,6 +2,71 @@
 
 Control, inspect, and test terminal apps from Python.
 
+## Scoped queries and session context
+
+For scope anchors, whole-match style, relative queries, and trace completion, see
+[`examples/parity.py`](examples/parity.py).
+
+```python
+from tui_test import ExecutionContext, TextAnchor, TextScope, TextStyle
+
+save = terminal.get_by_text(
+    "Save", scope=TextScope(after=TextAnchor("Start"), before=TextAnchor("End")),
+).with_style(TextStyle(bold=True))
+choice = save.relative_to(
+    terminal.get_by_text("Header"), "after",
+).with_style(TextStyle(italic=False)).or_(terminal.get_by_link("test:save"))
+```
+
+`TextAnchor` accepts `text`, `regex`, and `occurrence`.
+Occurrence defaults to `"unique"`; alternatives are `"any"`, `"first"`, `"last"`, or a zero-based integer.
+`with_style` tests each whole match.
+It ignores blank cells when visible characters exist.
+It supports text, style, and link locators.
+Rust rejects scope or whole-match style on composite nodes.
+Apply these fields to the operands before composition.
+It does not replace `and_(terminal.get_by_style(...))`, which intersects cells.
+`relative_to(parent, direction="within")` also accepts `"after"` and `"before"`.
+The parent must belong to the same `TuiTest` instance.
+Locator methods copy options and leave the original query unchanged.
+
+The constructor and `open`/`run` accept `context=ExecutionContext(...)`.
+Context fields are `operation_name`, `diagnostic_context`, `artifacts`, `trace`, and `screen_history_limit`.
+`diagnostic_context` maps string keys to string values.
+The engine sanitizes and limits those fields before it writes them.
+Per-call fields override constructor fields for that spawn only.
+`open` and `run` also accept `recording=AutomaticRecording(directory=...)`.
+An explicit `AutomaticRecording()` restores the engine's default directory.
+`AutomaticRecording.mode` accepts `"disabled"`, `"on-failure"`, or `"always"` in the runtime API.
+The default mode is `"disabled"`.
+This controls automatic casts without a trace.
+Explicit trace options take precedence over this mode.
+The CLI configuration still permits only `recording.directory`.
+
+`await terminal.finish_trace(failed=False)` completes the trace and keeps the terminal open.
+`await terminal.interrupt()` cancels pending operations and terminates the child without an operation queue wait.
+It does not send a keyboard interrupt.
+Later waits report cancellation until restart or close.
+An absent session produces `NoSessionError`.
+Call `close()` afterward to release the named session.
+Use `sessions()` to check whether a named session is open.
+`OpenResult["recording"]` supplies the automatic recording path.
+`get_recording(name)` reads current or retained recording content.
+`packed_screen(full=False)` returns an owned, read-only UTF-8 memoryview, columns, and rows.
+`locator.highlight_matches(timeout=...)` returns the highlighted matches.
+The existing `highlight()` method still returns `None`.
+`expect_snapshot(name, cwd=...)` accepts an explicit working directory for snapshot files.
+
+Run the example from the repository root:
+
+```sh
+PYTHONPATH=bindings/python/src python3 bindings/python/examples/parity.py
+```
+
+The example creates trace artifacts under `artifacts/parity-python`.
+Set `TUI_TEST_PARITY_ARTIFACTS` to choose another directory.
+Artifacts can contain terminal text.
+
 ## Install
 
 ```sh
@@ -87,7 +152,7 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_histo
 | `profile` | `Profile \| dict` | built-in profile |
 | `screen_history_limit` | `int \| None` | core default |
 | `artifacts` | `dict` | off |
-| `recording` | `AutomaticRecording \| dict` (directory only) | default recording directory |
+| `recording` | `AutomaticRecording \| dict` (`directory`, optional `mode`) | default directory, disabled mode |
 | `trace` | `TraceOptions \| dict` | `{"mode": "off", "directory": ".tui-test/traces"}` |
 
 Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Users can open `trace.html`; agents should read `trace.md`, `trace.json`, and `timeline.json`.

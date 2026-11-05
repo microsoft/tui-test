@@ -173,6 +173,7 @@ export interface Timeouts {
 }
 
 export interface AutomaticRecordingOptions {
+  mode?: string
   directory?: string
 }
 
@@ -199,7 +200,9 @@ export interface OpenOptions {
   profileScrollback?: number
   profileColors?: Array<[string, string]>
   timeouts?: Timeouts
+  recording?: AutomaticRecordingOptions
   style?: RenderStyle
+  context?: SessionContext
   screenHistoryLimit?: number
 }
 
@@ -216,7 +219,9 @@ export interface RunOptions {
   profileScrollback?: number
   profileColors?: Array<[string, string]>
   timeouts?: Timeouts
+  recording?: AutomaticRecordingOptions
   style?: RenderStyle
+  context?: SessionContext
   screenHistoryLimit?: number
 }
 
@@ -234,11 +239,25 @@ export interface LocatorStyle {
   blink?: boolean
 }
 
+export interface TextScope {
+  after?: TextAnchor
+  before?: TextAnchor
+}
+
+export interface TextAnchor {
+  text: string
+  regex?: boolean
+  occurrence?: string
+  nth?: number
+}
+
 export interface LocatorNode {
   kind: LocatorNodeKind
   text?: string
   regex?: boolean
   whitespace?: string
+  scope?: TextScope
+  matchStyle?: LocatorStyle
   style?: LocatorStyle
   link?: string
   full?: boolean
@@ -311,6 +330,14 @@ export interface ColorExpectation {
   timeoutMs?: number
 }
 
+export interface SessionContext {
+  operationName?: string
+  diagnosticContext?: Record<string, string>
+  artifacts?: FailureArtifactOptions
+  trace?: TraceOptions
+  screenHistoryLimit?: number
+}
+
 export interface MouseClickOptions {
   x?: number
   y?: number
@@ -376,12 +403,14 @@ export declare const enum LocatorStageDirection {
 }
 
 export declare class NativeSession {
-  constructor(name: string, recording?: AutomaticRecordingOptions | null, artifacts?: FailureArtifactOptions | null, trace?: TraceOptions | null)
+  constructor(name: string, recording?: AutomaticRecordingOptions | null, artifacts?: FailureArtifactOptions | null, trace?: TraceOptions | null, context?: SessionContext | null)
   name(): string
   open(options?: OpenOptions | null): Promise<OpenResult>
   run(options: RunOptions): Promise<OpenResult>
   close(failed?: boolean | null): Promise<void>
+  interrupt(): Promise<void>
   panicProbe(): Promise<void>
+  finishTrace(failed?: boolean | undefined | null): Promise<void>
   restart(gracefulTimeoutMs: number): Promise<OpenResult>
   state(): Promise<State>
   text(full?: boolean | undefined | null): Promise<string>

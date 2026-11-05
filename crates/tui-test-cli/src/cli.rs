@@ -173,6 +173,14 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "KEY=VALUE")]
     pub diagnostic_context: Vec<String>,
 
+    /// Read an ExecutionContext JSON file. Relative paths use the client's cwd.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub context_file: Option<std::path::PathBuf>,
+
+    /// Name this operation in trace and failure diagnostics.
+    #[arg(long, global = true, value_name = "NAME")]
+    pub operation_name: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -324,6 +332,17 @@ pub enum Command {
         #[arg(long)]
         full: bool,
     },
+    /// Read packed UTF-8 rows with dimensions. Use --json to retain trailing spaces.
+    PackedScreen {
+        /// Include scrollback, not just the visible viewport.
+        #[arg(long)]
+        full: bool,
+    },
+    /// Finish a trace with an explicit test outcome, without closing the session.
+    Trace {
+        #[command(subcommand)]
+        cmd: TraceCmd,
+    },
     /// Capture a screenshot: terminal text to stdout, or a full-color SVG/PNG
     /// image selected by the output extension (SVG is the default).
     Screenshot(ScreenshotArgs),
@@ -403,8 +422,10 @@ pub enum Command {
     },
     /// Kill the session's child process.
     Kill,
-    /// Block until the title changes, the screen is idle, a command finishes,
-    /// the shell is ready, a bell rings, or the session exits.
+    /// Cancel pending operations and terminate the child without closing the session.
+    /// This is not Ctrl-C or SIGINT.
+    Interrupt,
+    /// Wait for a locator, title, clipboard, idle screen, command, prompt, bell, or process exit.
     Wait {
         #[command(subcommand)]
         what: WaitCmd,
@@ -419,12 +440,17 @@ pub enum Command {
         #[command(subcommand)]
         what: FindCmd,
     },
-    /// Wait for a text match, then click its middle cell.
+    /// Resolve exactly one current match after occurrence selection.
+    Resolve {
+        #[command(subcommand)]
+        what: FindCmd,
+    },
+    /// Wait for a locator match, then click its middle cell.
     Click {
         #[command(subcommand)]
         what: ClickCmd,
     },
-    /// Highlight text matching the query and optional style constraints.
+    /// Highlight matches from a text selector or nested locator query.
     Highlight {
         #[command(subcommand)]
         what: HighlightCmd,
@@ -464,6 +490,22 @@ pub enum Command {
     /// Internal: run the session daemon.
     #[command(name = "__daemon", hide = true)]
     InternalDaemon,
+}
+
+#[derive(Subcommand)]
+pub enum TraceCmd {
+    /// Export or discard the trace according to its mode and this outcome.
+    Finish {
+        #[arg(value_enum)]
+        outcome: TraceOutcomeArg,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub enum TraceOutcomeArg {
+    Passed,
+    Failed,
 }
 
 #[derive(Subcommand)]
@@ -548,6 +590,80 @@ fn parse_palette_entry(value: &str) -> Result<(u8, String), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_commands_require_exactly_one_json_source() {
+        let query = r#"{"selector":{"kind":"text","selector":{"text":"Save"}}}"#;
+        for command in ["find", "resolve", "wait", "expect", "click", "highlight"] {
+            assert!(Cli::try_parse_from(["tui-test", command, "query"]).is_err());
+            assert!(Cli::try_parse_from(["tui-test", command, "query", "--query", query]).is_ok());
+            assert!(Cli::try_parse_from([
+                "tui-test",
+                command,
+                "query",
+                "--query-file",
+                "query.json"
+            ])
+            .is_ok());
+            assert!(Cli::try_parse_from([
+                "tui-test",
+                command,
+                "query",
+                "--query",
+                query,
+                "--query-file",
+                "query.json",
+            ])
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn query_actions_accept_negative_waits_and_mouse_options() {
+        let query = r#"{"selector":{"kind":"link","selector":{"uri":"test:save"}}}"#;
+        for command in ["wait", "expect"] {
+            assert!(Cli::try_parse_from([
+                "tui-test",
+                command,
+                "query",
+                "--query",
+                query,
+                "--not",
+                "--timeout",
+                "12",
+            ])
+            .is_ok());
+        }
+        assert!(Cli::try_parse_from([
+            "tui-test",
+            "click",
+            "query",
+            "--query",
+            query,
+            "--button",
+            "right",
+            "--alt",
+            "--ctrl",
+            "--shift",
+            "--clicks",
+            "2",
+            "--timeout",
+            "12",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "tui-test",
+            "wait",
+            "text",
+            "gone",
+            "--not",
+            "--fg",
+            "green",
+            "--timeout",
+            "12",
+        ])
+        .is_ok());
+    }
 
     #[test]
     fn expect_colors_accepts_defaults_and_palette_entries() {
@@ -1442,8 +1558,21 @@ pub struct TextQueryArgs {
     pub link: Option<String>,
 }
 
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+pub struct LocatorQueryArgs {
+    /// Native nested LocatorQuery JSON, including selector, occurrence, within, direction, and style.
+    #[arg(long, value_name = "JSON")]
+    pub query: Option<String>,
+    /// Read native nested LocatorQuery JSON from this file.
+    #[arg(long, value_name = "PATH")]
+    pub query_file: Option<std::path::PathBuf>,
+}
+
 #[derive(Subcommand)]
 pub enum FindCmd {
+    /// Find a nested locator query from JSON.
+    Query(LocatorQueryArgs),
     /// Find text and return its row/column spans.
     Text {
         #[command(flatten)]
@@ -1453,6 +1582,19 @@ pub enum FindCmd {
 
 #[derive(Subcommand)]
 pub enum ClickCmd {
+    /// Wait for a nested locator query, then click its middle cell.
+    Query {
+        #[command(flatten)]
+        query: LocatorQueryArgs,
+        #[command(flatten)]
+        options: MouseOptionsArg,
+        /// Number of clicks.
+        #[arg(long, default_value_t = 1)]
+        clicks: u8,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     /// Wait for matching text, then click its middle cell.
     Text {
         #[command(flatten)]
@@ -1470,6 +1612,14 @@ pub enum ClickCmd {
 
 #[derive(Subcommand)]
 pub enum HighlightCmd {
+    /// Wait for a nested locator query, then highlight its selected matches.
+    Query {
+        #[command(flatten)]
+        query: LocatorQueryArgs,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     /// Wait for matching text, then highlight every selected occurrence.
     Text {
         #[command(flatten)]
@@ -1482,6 +1632,28 @@ pub enum HighlightCmd {
 
 #[derive(Subcommand)]
 pub enum WaitCmd {
+    /// Wait for text to appear or disappear.
+    Text {
+        #[command(flatten)]
+        query: TextQueryArgs,
+        /// Wait until the text is absent.
+        #[arg(long)]
+        not: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
+    /// Wait for a nested locator query to match or become absent.
+    Query {
+        #[command(flatten)]
+        query: LocatorQueryArgs,
+        /// Wait until the query has no matches.
+        #[arg(long)]
+        not: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     /// Wait until the window title (set with OSC 0/2) matches text/regex.
     ///
     /// Programs set the title to announce what they are doing, so this is how
@@ -1553,6 +1725,17 @@ pub enum WaitCmd {
 
 #[derive(Subcommand)]
 pub enum ExpectCmd {
+    /// Assert a nested locator query, with retries.
+    Query {
+        #[command(flatten)]
+        query: LocatorQueryArgs,
+        /// Assert that the query has no matches.
+        #[arg(long)]
+        not: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     /// Assert text is visible, optionally with a required color.
     Text {
         #[command(flatten)]
@@ -1635,6 +1818,9 @@ pub enum ExpectCmd {
         /// would tie the snapshot to one machine.
         #[arg(long)]
         include_title: bool,
+        /// Snapshot root directory (default: the client's working directory).
+        #[arg(long, value_name = "DIR")]
+        cwd: Option<String>,
     },
 }
 

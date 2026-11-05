@@ -3,6 +3,9 @@
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionInput {
     pub name: String,
+    pub operation_name: Option<String>,
+    #[serde(default)]
+    pub diagnostic_context: std::collections::BTreeMap<String, String>,
     pub artifact_directory: Option<String>,
     pub artifact_mode: Option<String>,
     #[serde(default)]
@@ -54,7 +57,8 @@ impl SessionInput {
                 artifact,
                 trace,
                 retention,
-                ..ExecutionContext::default()
+                operation_name: self.operation_name,
+                diagnostic_context: self.diagnostic_context,
             },
         ))
     }

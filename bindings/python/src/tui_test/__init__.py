@@ -17,6 +17,9 @@ from .errors import (
     UsageError,
 )
 from .types import (
+    ExecutionContext,
+    TextAnchor,
+    TextScope,
     RenderStyle,
     FontFamilies,
     WindowStyle,
@@ -47,6 +50,9 @@ from .types import (
 )
 
 __all__ = [
+    "ExecutionContext",
+    "TextAnchor",
+    "TextScope",
     "RenderStyle",
     "FontFamilies",
     "WindowStyle",

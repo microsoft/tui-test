@@ -166,6 +166,8 @@ func main() {
 | JavaScript | [bindings/js/README.md](bindings/js/README.md) |
 | Go | [bindings/go/README.md](bindings/go/README.md) |
 
+See the [public API parity contract](references/api-parity.md) for the shared behavior and its boundaries.
+
 ## CLI reference
 
 ### Global options
@@ -179,6 +181,8 @@ func main() {
 | `--failure-artifact-mode MODE` | Select `none`, `text`, `html`, or `all` (default when exports are enabled). |
 | `--failure-artifact-recording` | Copy the automatic cast through the failure boundary. |
 | `--diagnostic-context KEY=VALUE` | Add safe caller context to failure details. |
+| `--context-file PATH` | Read a Rust `ExecutionContext` JSON file. |
+| `--operation-name NAME` | Override the operation name in diagnostics. |
 
 CLI sessions persist between commands. `open` and `run` reuse a live session unless `--restart` is set.
 
@@ -210,6 +214,8 @@ tui-test highlight text TEXT [options]
 | Command | Description |
 | --- | --- |
 | `find text` | Return current matches and cell spans. |
+| `resolve text` | Resolve the selected occurrence with Rust selection rules. |
+| `wait text` | Wait for matching text to appear or disappear. |
 | `expect text` | Retry until the locator passes. |
 | `click text` | Retry, then click the middle cell. |
 | `highlight text` | Mark matches in screenshots and the live monitor. |
@@ -234,12 +240,17 @@ Style options are `--fg`, `--bg`, `--bold`, `--dim`, `--italic`, `--underline-st
 `--link URI` separately requires every matched cell, including spaces, to
 have that OSC 8 target. `--link ""` requires no link.
 
-Programmatic locators add `getByLink()` / `get_by_link()`, cell-set
+Locators support `getByLink()` / `get_by_link()`, cell-set
 intersection and union (`and`/`or` in Rust and JavaScript, `and_`/`or_` in
 Python), and locator-only `filter` containment. AND/OR form new contiguous
 per-row runs; filters preserve whole matches. See the
 [JavaScript](bindings/js/README.md#compose-locators) and
 [Python](bindings/python/README.md#compose-locators) composition examples.
+
+The CLI accepts the same nested Rust `LocatorQuery` through
+`find|resolve|wait|expect|click|highlight query --query JSON` or `--query-file PATH`.
+This includes style-only and link-only selectors, relative queries, composition, and filters.
+See the [CLI query reference](references/cli.md) for a runnable example.
 
 `expect text` also accepts `--not` and `--timeout MS`. `click text` accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`, `--clicks N`, and `--timeout MS`. `highlight text` accepts `--timeout MS`.
 
@@ -265,6 +276,7 @@ per-row runs; filters preserve whole matches. See the
 | `resize COLS ROWS` | Resize the terminal. |
 | `signal INT\|TERM\|KILL\|QUIT` | Send a signal. |
 | `kill` | Kill the child process. |
+| `interrupt` | Cancel waits and terminate the child without removing the session. |
 
 Mouse button actions accept `--button left|middle|right`, `--alt`, `--ctrl`, and `--shift`. Click also accepts `--clicks N`.
 
@@ -276,12 +288,15 @@ Named keys include arrows, Home, End, PageUp, PageDown, Insert, Delete, Backspac
 | --- | --- |
 | `state` | Print session state and visible text. |
 | `text [--full]` | Print terminal text. |
+| `packed-screen [--full] --json` | Return dimensions and a UTF-8 snapshot with trailing spaces and blank rows. |
 | `cells X Y [W H]` | Return cells and styles. |
 | `get command` | Return the last command. |
 | `get output` | Return the last command output. |
 | `get exit-code` | Return the last exit code. |
 | `get cwd` | Return the working directory. |
 | `get cursor` | Return the cursor position. |
+| `get modes` | Return terminal modes. |
+| `get colors` | Return default colors and palette overrides. |
 | `get viewport` | Return the history offset and available rows. |
 | `get size` | Return the terminal size. |
 | `get title` | Return the window title. |
@@ -308,11 +323,15 @@ See the [history reference](references/cli.md#native-history),
 | `wait exit [--timeout MS]` | Wait for the program to exit. |
 | `wait ready [--timeout MS]` | Wait for a shell prompt. |
 | `wait bell [--timeout MS]` | Wait for a bell. |
+| `wait text TEXT [--not --timeout MS]` | Wait for text to appear or disappear. |
 | `expect title TEXT [--regex --not --timeout MS]` | Assert the title. |
 | `expect exit-code CODE [--timeout MS]` | Assert the last exit code. |
 | `expect output TEXT [--regex]` | Assert command output. |
 | `expect bell COUNT [--timeout MS]` | Wait until the cumulative bell count reaches `COUNT`. |
-| `expect snapshot NAME [-u] [--include-style] [--include-title]` | Assert a snapshot. |
+| `expect mode NAME [--off --timeout MS]` | Wait for a terminal mode. |
+| `expect cursor [options]` | Wait for cursor position, visibility, or shape. |
+| `expect colors [options]` | Wait for default colors or palette entries. |
+| `expect snapshot NAME [-u] [--include-style] [--include-title] [--cwd PATH]` | Assert a snapshot. |
 
 Use `wait command` after `submit`, `wait exit` after `run`, and text locators for visible state. `wait idle` only means the screen stopped changing.
 
@@ -333,6 +352,9 @@ Timeout defaults:
 | `screenshot [PATH] [-o PATH] [--full] [--zoom N] [--background COLOR \| --transparent]` | Print text or save SVG or PNG. |
 | `record start PATH [options] [--background COLOR \| --transparent]` | Start APNG, GIF, MP4, or asciinema recording. |
 | `record stop` | Finish the recording. |
+| `record pause` | Pause APNG, GIF, or MP4 capture while the terminal continues. |
+| `record resume` | Resume raster capture from the live terminal. |
+| `trace finish passed\|failed` | Finalize a trace outcome without closing the session. |
 | `get-recording [SESSION] [--config PATH]` | Print the automatic asciinema recording. |
 | `monitor [--interactive]` | Watch a CLI session or send input with `--interactive`. |
 

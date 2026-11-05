@@ -43,9 +43,36 @@ locator = (
 | `locations()`, `location()`, `count()`, `all()` | Read matches. |
 | `wait(state="visible", timeout=None)` | Wait for visible or hidden. |
 | `expect(not_=False, timeout=None)` | Assert. |
+| `with_style(style)` | Keep whole matches whose visible cells satisfy the style. |
+| `relative_to(parent, direction="within")` | Apply a parent region to a text, style, or link locator. |
+| `highlight_matches(timeout=None)` | Highlight and return the resolved matches. |
 | `click(**options)` | Click. |
 | `highlight(timeout=None)` | Highlight. |
 
+`get_by_text` accepts `scope=TextScope(after=..., before=...)`.
+Each `TextAnchor` has `text`, `regex=False`, and `occurrence="unique"`.
+Occurrence also accepts `"any"`, `"first"`, `"last"`, or a zero-based integer.
+`with_style` supports text, style, and link locators.
+Rust rejects scope or whole-match style on composite nodes.
+Apply these fields to operands before composition.
+`and_(terminal.get_by_style(...))` still intersects cells rather than preserving whole matches.
+`relative_to` requires a parent from the same terminal instance.
+
+The constructor and `open`/`run` accept `context=ExecutionContext(...)`.
+Context fields are `operation_name`, `diagnostic_context`, `artifacts`, `trace`, and `screen_history_limit`.
+Per-call fields apply only to that spawn.
+`open` and `run` also accept `recording=AutomaticRecording(directory=...)`.
+Runtime `AutomaticRecording.mode` accepts `"disabled"`, `"on-failure"`, or `"always"` for casts without traces.
+Explicit trace options take precedence. CLI configuration still permits only the recording directory.
+`finish_trace(failed=False)` completes a trace without closing the terminal.
+`interrupt()` cancels pending operations and terminates the child without an operation queue wait.
+It is not a keyboard interrupt; call `close()` afterward.
+Later waits report cancellation until restart or close.
+`packed_screen(full=False)` returns an owned UTF-8 memoryview, columns, and rows.
+`expect_snapshot(name, cwd=...)` selects the working directory for snapshot files.
+
+Run `PYTHONPATH=bindings/python/src python3 bindings/python/examples/parity.py` from a built checkout.
+See [the binding reference](../bindings/python/README.md#scoped-queries-and-session-context) for recording access and context details.
 Text options: `regex`, `full`, `whitespace`, and chained `direction`.
 
 Style/link options are `full` and chained `direction`. Filter accepts locators

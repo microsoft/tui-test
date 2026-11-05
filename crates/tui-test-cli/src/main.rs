@@ -15,6 +15,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use clap::{CommandFactory, Parser};
 
 use cli::{
@@ -148,6 +149,8 @@ fn has_command_before_separator(args: &[OsString]) -> bool {
                 | "--failure-artifacts"
                 | "--failure-artifact-mode"
                 | "--diagnostic-context"
+                | "--context-file"
+                | "--operation-name"
         ) {
             skip_value = true;
         } else if value == "--json"
@@ -168,10 +171,10 @@ fn run_remote(
     command: Command,
     json: bool,
     verbose: bool,
-    context: ExecutionContext,
+    context: ClientExecutionContext,
 ) -> i32 {
     let request = match build_request(command) {
-        Ok(request) => request.with_context(context),
+        Ok(request) => context.apply(request),
         Err(e) => {
             eprintln!("{e}");
             return 2;
@@ -215,19 +218,61 @@ fn run_remote(
     }
 }
 
-fn build_execution_context(cli: &Cli) -> anyhow::Result<ExecutionContext> {
-    let artifact = match cli.failure_artifacts.as_ref() {
-        Some(directory) => {
-            let directory = std::path::absolute(directory)?;
-            Some(FailureArtifactOptions {
-                directory,
-                mode: cli.failure_artifact_mode.into(),
-                include_recording: cli.failure_artifact_recording,
-            })
+struct ClientExecutionContext {
+    context: ExecutionContext,
+    retention_override: Option<tui_test::DiagnosticRetentionOptions>,
+}
+
+impl ClientExecutionContext {
+    fn apply(self, mut request: Request) -> Request {
+        if let (Some(retention), Request::Open { diagnostics, .. }) =
+            (self.retention_override, &mut request)
+        {
+            // Copy explicit retention into the owned spawn request so the
+            // protocol's default fallback cannot replace an explicit default.
+            *diagnostics = retention;
         }
-        None => None,
+        request.with_context(self.context)
+    }
+}
+
+fn build_execution_context(cli: &Cli) -> anyhow::Result<ClientExecutionContext> {
+    let mut retention_override = None;
+    let mut context: ExecutionContext = match &cli.context_file {
+        Some(path) => {
+            let value: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(path)
+                    .with_context(|| format!("read context file {}", path.display()))?,
+            )
+            .context("invalid ExecutionContext JSON")?;
+            let has_retention = value.get("retention").is_some();
+            let context: ExecutionContext =
+                serde_json::from_value(value).context("invalid ExecutionContext JSON")?;
+            retention_override = has_retention.then_some(context.retention);
+            context
+        }
+        None => ExecutionContext::default(),
     };
-    let mut diagnostic_context = std::collections::BTreeMap::new();
+    if let Some(name) = &cli.operation_name {
+        context.operation_name = Some(name.clone());
+    }
+    context.artifact = match cli.failure_artifacts.as_ref() {
+        Some(directory) => Some(FailureArtifactOptions {
+            directory: directory.clone(),
+            mode: cli.failure_artifact_mode.into(),
+            include_recording: cli.failure_artifact_recording,
+        }),
+        None => context.artifact,
+    };
+    if let Some(artifact) = &mut context.artifact {
+        artifact.validate().map_err(anyhow::Error::msg)?;
+        if !artifact.directory.as_os_str().is_empty() {
+            artifact.directory = std::path::absolute(&artifact.directory)?;
+        }
+    }
+    if let Some(trace) = &mut context.trace {
+        trace.directory = std::path::absolute(&trace.directory)?;
+    }
     for pair in &cli.diagnostic_context {
         let (key, value) = pair
             .split_once('=')
@@ -235,14 +280,13 @@ fn build_execution_context(cli: &Cli) -> anyhow::Result<ExecutionContext> {
         if key.trim().is_empty() {
             anyhow::bail!("--diagnostic-context key must not be empty");
         }
-        diagnostic_context.insert(key.to_string(), value.to_string());
+        context
+            .diagnostic_context
+            .insert(key.to_string(), value.to_string());
     }
-    Ok(ExecutionContext {
-        operation_name: None,
-        artifact,
-        diagnostic_context,
-        retention: Default::default(),
-        trace: None,
+    Ok(ClientExecutionContext {
+        context,
+        retention_override,
     })
 }
 
@@ -370,6 +414,12 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         }
         Command::State => Request::State,
         Command::Text { full } => Request::Text { full },
+        Command::PackedScreen { full } => Request::PackedScreen { full },
+        Command::Trace {
+            cmd: cli::TraceCmd::Finish { outcome },
+        } => Request::FinishTrace {
+            failed: matches!(outcome, cli::TraceOutcomeArg::Failed),
+        },
         Command::Screenshot(ScreenshotArgs {
             path,
             out,
@@ -451,11 +501,17 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
         Command::Kill => Request::Signal {
             name: "KILL".to_string(),
         },
-        Command::Wait { what } => map_wait(what),
-        Command::Find { what } => map_find(what),
-        Command::Click { what } => map_click(what),
-        Command::Highlight { what } => map_highlight(what),
-        Command::Expect { what } => map_expect(what),
+        Command::Interrupt => Request::Interrupt,
+        Command::Wait { what } => map_wait(what)?,
+        Command::Find { what } => Request::FindLocator {
+            query: map_find(what)?,
+        },
+        Command::Resolve { what } => Request::ResolveLocator {
+            query: map_find(what)?,
+        },
+        Command::Click { what } => map_click(what)?,
+        Command::Highlight { what } => map_highlight(what)?,
+        Command::Expect { what } => map_expect(what)?,
         _ => anyhow::bail!("unsupported command"),
     };
     Ok(req)
@@ -566,8 +622,26 @@ fn map_mouse(action: MouseCmd) -> MouseAction {
     }
 }
 
-fn map_wait(what: WaitCmd) -> Request {
-    match what {
+fn map_wait(what: WaitCmd) -> anyhow::Result<Request> {
+    Ok(match what {
+        WaitCmd::Text {
+            query,
+            not,
+            timeout,
+        } => Request::WaitLocator {
+            query: map_query(query, MatchOccurrence::Any),
+            not,
+            timeout_ms: timeout,
+        },
+        WaitCmd::Query {
+            query,
+            not,
+            timeout,
+        } => Request::WaitLocator {
+            query: read_query(query)?,
+            not,
+            timeout_ms: timeout,
+        },
         WaitCmd::Title {
             text,
             regex,
@@ -603,7 +677,7 @@ fn map_wait(what: WaitCmd) -> Request {
         WaitCmd::Bell { timeout } => Request::WaitBell {
             timeout_ms: timeout,
         },
-    }
+    })
 }
 
 fn map_occurrence(
@@ -701,16 +775,36 @@ fn map_query(args: TextQueryArgs, default: MatchOccurrence) -> LocatorQuery {
     }
 }
 
-fn map_find(what: FindCmd) -> Request {
-    match what {
-        FindCmd::Text { query } => Request::FindLocator {
-            query: map_query(query, MatchOccurrence::Any),
-        },
-    }
+fn read_query(args: cli::LocatorQueryArgs) -> anyhow::Result<LocatorQuery> {
+    let json = match (args.query, args.query_file) {
+        (Some(json), None) => json,
+        (None, Some(path)) => std::fs::read_to_string(&path)
+            .with_context(|| format!("read locator query file {}", path.display()))?,
+        _ => anyhow::bail!("supply exactly one of --query or --query-file"),
+    };
+    serde_json::from_str(&json).context("invalid LocatorQuery JSON")
 }
 
-fn map_click(what: ClickCmd) -> Request {
-    match what {
+fn map_find(what: FindCmd) -> anyhow::Result<LocatorQuery> {
+    Ok(match what {
+        FindCmd::Text { query } => map_query(query, MatchOccurrence::Any),
+        FindCmd::Query(query) => read_query(query)?,
+    })
+}
+
+fn map_click(what: ClickCmd) -> anyhow::Result<Request> {
+    Ok(match what {
+        ClickCmd::Query {
+            query,
+            options,
+            clicks,
+            timeout,
+        } => Request::ClickLocator {
+            query: read_query(query)?,
+            button: MouseOptions::from(options).sgr_code(),
+            clicks,
+            timeout_ms: timeout,
+        },
         ClickCmd::Text {
             query,
             options,
@@ -722,20 +816,33 @@ fn map_click(what: ClickCmd) -> Request {
             clicks,
             timeout_ms: timeout,
         },
-    }
+    })
 }
 
-fn map_highlight(what: HighlightCmd) -> Request {
-    match what {
+fn map_highlight(what: HighlightCmd) -> anyhow::Result<Request> {
+    Ok(match what {
+        HighlightCmd::Query { query, timeout } => Request::HighlightLocator {
+            query: read_query(query)?,
+            timeout_ms: timeout,
+        },
         HighlightCmd::Text { query, timeout } => Request::HighlightLocator {
             query: map_query(query, MatchOccurrence::Any),
             timeout_ms: timeout,
         },
-    }
+    })
 }
 
-fn map_expect(what: ExpectCmd) -> Request {
-    match what {
+fn map_expect(what: ExpectCmd) -> anyhow::Result<Request> {
+    Ok(match what {
+        ExpectCmd::Query {
+            query,
+            not,
+            timeout,
+        } => Request::ExpectLocator {
+            query: read_query(query)?,
+            not,
+            timeout_ms: timeout,
+        },
         ExpectCmd::Text {
             query,
             not,
@@ -809,16 +916,15 @@ fn map_expect(what: ExpectCmd) -> Request {
             update,
             include_style,
             include_title,
+            cwd,
         } => Request::Snapshot {
             name,
             update,
             include_style,
             include_title,
-            cwd: std::env::current_dir()
-                .ok()
-                .map(|p| p.to_string_lossy().into_owned()),
+            cwd: Some(resolve_client_path(cwd.unwrap_or_else(|| ".".into()))?),
         },
-    }
+    })
 }
 
 fn parse_env(pairs: &[String]) -> anyhow::Result<Vec<(String, String)>> {
@@ -1467,11 +1573,15 @@ SESSION   open [--shell S] [--cols N --rows N] [--cwd D] [--env K=V]\n\
           run [--config F] [--profile P] [--restart] <program> [args...]\n\
           [global options] -- <program> [args...]  (direct run shorthand)\n\
           restart [--graceful-timeout MS]\n\
+          interrupt (cancel operations and terminate the child; retain session state)\n\
           sessions | close [--all] | daemon start|status | daemon stop --session N|--all\n\
 INSPECT   state | text [--full] | screenshot [-o file.svg|file.png] [--full] [--zoom N]\n\
           [--background COLOR | --transparent]\n\
           find text \"T\" [selector/style options] | cells X Y [W H]\n\
-          get command|output|exit-code|cwd|cursor|viewport|size|title|clipboard|bells|bell-events\n\
+          packed-screen [--full] --json | resolve text \"T\" [selector/style options]\n\
+          get command|output|exit-code|cwd|cursor|viewport|modes|colors|size|title|clipboard|bells|bell-events\n\
+QUERY     find|resolve|wait|expect|click|highlight query --query JSON|--query-file PATH\n\
+          Native nested LocatorQuery JSON; no shell expression language\n\
 HISTORY   scroll up|down [LINES] | scroll top|bottom\n\
 INPUT     type \"text\" | submit [\"text\"]\n\
           key press|down|repeat|up <Key...>\n\
@@ -1479,20 +1589,23 @@ INPUT     type \"text\" | submit [\"text\"]\n\
           mouse click X Y | mouse click --on-text \"OK\" | mouse move|down|up|drag|scroll\n\
 PTY       resize COLS ROWS | write <data> | signal INT|TERM|KILL|QUIT | kill\n\
 WAIT      wait title \"T\" [--regex --not --timeout MS]\n\
+          wait text \"T\" [selector/style options] [--not --timeout MS]\n\
           wait clipboard [TEXT] [--regex] | wait idle | wait command | wait exit | wait ready | wait bell\n\
 EXPECT    expect text \"T\" [selector/style options] [--not --timeout MS]\n\
           expect title \"T\" [--regex --not --timeout MS]\n\
           expect exit-code N | expect output \"T\" [--regex] | expect bell N\n\
-          expect snapshot NAME [-u] [--include-style --include-title]\n\
+          expect snapshot NAME [-u] [--include-style --include-title] [--cwd DIR]\n\
 DEBUG     highlight text \"T\" [selector/style options] [--timeout MS]\n\
 RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [--zoom N]\n\
           [--background COLOR | --transparent]\n\
-          record stop | get-recording [session] > out.cast (when tracing is enabled)\n\
+          record pause|resume|stop | get-recording [session] > out.cast (when tracing is enabled)\n\
+TRACE     trace finish passed|failed (keep the session open)\n\
 WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
 GLOBAL    --session NAME | --json | --verbose | --failure-artifacts DIR\n\
           [--failure-artifact-mode none|text|html|all]\n\
           [--failure-artifact-recording] [--diagnostic-context KEY=VALUE]\n\
+          [--context-file PATH] [--operation-name NAME]\n\
 EXIT      0 ok | 1 assertion/wait failed | 2 usage | 3 no session | 4 daemon/IPC | 5 internal\n\
 "
 }
@@ -1511,6 +1624,372 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::cell::RefCell;
+
+    #[test]
+    fn query_commands_preserve_every_nested_locator_field() {
+        let mut query = LocatorQuery::text(TextSelector {
+            text: "Save".into(),
+            regex: true,
+            full: true,
+            whitespace: WhitespaceMode::Normalize,
+            scope: TextScope {
+                after: Some(TextAnchor {
+                    text: "Start".into(),
+                    regex: false,
+                    occurrence: MatchOccurrence::First,
+                }),
+                before: None,
+            },
+        })
+        .and(LocatorQuery::style(TextStyle {
+            bold: Some(true),
+            ..TextStyle::default()
+        }))
+        .or(LocatorQuery::link("test:save"))
+        .filter(
+            Some(LocatorQuery::text("Save")),
+            Some(LocatorQuery::text("old")),
+        );
+        query.within = Some(Box::new(LocatorQuery::text("Settings")));
+        query.direction = LocatorDirection::After;
+        query.occurrence = MatchOccurrence::Nth(1);
+        query.style = TextStyle {
+            italic: Some(false),
+            ..TextStyle::default()
+        };
+        let json = serde_json::to_string(&query).unwrap();
+        for command in ["find", "resolve", "wait", "expect", "click", "highlight"] {
+            let cli =
+                Cli::try_parse_from(["tui-test", command, "query", "--query", &json]).unwrap();
+            let request = build_request(cli.command.unwrap()).unwrap();
+            let actual = match request {
+                Request::FindLocator { query }
+                | Request::ResolveLocator { query }
+                | Request::WaitLocator { query, .. }
+                | Request::ExpectLocator { query, .. }
+                | Request::ClickLocator { query, .. }
+                | Request::HighlightLocator { query, .. } => query,
+                other => panic!("unexpected {other:?}"),
+            };
+            assert_eq!(actual, query, "{command}");
+        }
+    }
+
+    #[test]
+    fn query_arguments_require_one_source_and_report_invalid_json() {
+        for command in ["find", "resolve", "wait", "expect", "click", "highlight"] {
+            assert!(Cli::try_parse_from(["tui-test", command, "query"]).is_err());
+            assert!(Cli::try_parse_from([
+                "tui-test",
+                command,
+                "query",
+                "--query",
+                "{}",
+                "--query-file",
+                "query.json",
+            ])
+            .is_err());
+            let cli = Cli::try_parse_from(["tui-test", command, "query", "--query", "{}"]).unwrap();
+            assert!(build_request(cli.command.unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("LocatorQuery"));
+        }
+    }
+
+    #[test]
+    fn query_file_uses_the_same_native_json_contract() {
+        let query = read_query(cli::LocatorQueryArgs {
+            query: None,
+            query_file: Some(
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/locator-query.json"),
+            ),
+        })
+        .unwrap();
+        assert_eq!(query.occurrence, MatchOccurrence::Unique);
+        let LocatorSelector::And { left, .. } = query.selector else {
+            panic!("expected composite query");
+        };
+        assert_eq!(left.direction, LocatorDirection::After);
+        assert!(left.within.is_some());
+        assert_eq!(left.style.bold, Some(true));
+        assert!(read_query(cli::LocatorQueryArgs {
+            query: None,
+            query_file: Some(std::path::PathBuf::from("nonexistent-locator-query.json")),
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn wait_text_and_query_preserve_negative_wait_options() {
+        for args in [
+            vec![
+                "tui-test",
+                "wait",
+                "text",
+                "gone",
+                "--not",
+                "--timeout",
+                "123",
+                "--bold=false",
+            ],
+            vec![
+                "tui-test",
+                "wait",
+                "query",
+                "--query",
+                r#"{"selector":{"kind":"text","selector":{"text":"gone"}},"style":{"bold":false}}"#,
+                "--not",
+                "--timeout",
+                "123",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Request::WaitLocator {
+                query,
+                not,
+                timeout_ms,
+            } = build_request(cli.command.unwrap()).unwrap()
+            else {
+                panic!("expected wait locator");
+            };
+            assert!(not);
+            assert_eq!(timeout_ms, Some(123));
+            assert_eq!(query.style.bold, Some(false));
+        }
+    }
+
+    #[test]
+    fn new_session_commands_map_to_requests() {
+        let cli = Cli::try_parse_from(["tui-test", "interrupt"]).unwrap();
+        assert!(matches!(
+            build_request(cli.command.unwrap()).unwrap(),
+            Request::Interrupt
+        ));
+        let cli = Cli::try_parse_from(["tui-test", "packed-screen", "--full"]).unwrap();
+        assert!(matches!(
+            build_request(cli.command.unwrap()).unwrap(),
+            Request::PackedScreen { full: true }
+        ));
+        for (outcome, expected) in [("passed", false), ("failed", true)] {
+            let cli = Cli::try_parse_from(["tui-test", "trace", "finish", outcome]).unwrap();
+            assert!(
+                matches!(build_request(cli.command.unwrap()).unwrap(), Request::FinishTrace { failed } if failed == expected)
+            );
+        }
+        assert!(Cli::try_parse_from(["tui-test", "trace", "finish"]).is_err());
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "expect",
+            "snapshot",
+            "screen",
+            "--cwd",
+            "baselines",
+        ])
+        .unwrap();
+        let Request::Snapshot { cwd, .. } = build_request(cli.command.unwrap()).unwrap() else {
+            panic!("expected snapshot");
+        };
+        assert_eq!(
+            std::path::PathBuf::from(cwd.unwrap()),
+            std::path::absolute("baselines").unwrap()
+        );
+    }
+
+    #[test]
+    fn context_file_preserves_fields_and_explicit_flags_override_it() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/execution-context.json");
+        let cli = Cli::try_parse_from([
+            "tui-test",
+            "--context-file",
+            path.to_str().unwrap(),
+            "--operation-name",
+            "save",
+            "--diagnostic-context",
+            "step=override",
+            "state",
+        ])
+        .unwrap();
+        let context = build_execution_context(&cli).unwrap().context;
+        assert_eq!(context.operation_name.as_deref(), Some("save"));
+        assert_eq!(context.diagnostic_context["step"], "override");
+        assert_eq!(context.diagnostic_context["test"], "settings");
+        assert_eq!(context.retention.screen_history_limit, 3);
+        assert_eq!(
+            context.trace.as_ref().unwrap().mode,
+            tui_test::TraceMode::OnFailure
+        );
+        assert_eq!(
+            context.trace.unwrap().directory,
+            std::path::absolute("artifacts/traces").unwrap()
+        );
+        let artifact = context.artifact.unwrap();
+        assert_eq!(
+            artifact.directory,
+            std::path::absolute("artifacts/failures").unwrap()
+        );
+        assert_eq!(artifact.mode, tui_test::FailureArtifactMode::Text);
+        assert!(artifact.include_recording);
+        for flag in ["--context-file", "--operation-name"] {
+            let args = command_line_args_from(
+                ["tui-test", flag, "run", "--", "sh"]
+                    .into_iter()
+                    .map(OsString::from),
+            );
+            assert!(matches!(
+                Cli::try_parse_from(args).unwrap().command,
+                Some(Command::Run { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn context_file_retention_overrides_are_resolved_before_protocol_dispatch() {
+        let directory = unique_test_path("context-retention");
+        std::fs::create_dir_all(&directory).unwrap();
+        let config_path = directory.join("config.toml");
+        let context_path = directory.join("context.json");
+        let config = "[diagnostics]\nscreen-history-limit = 3\n";
+        std::fs::write(&config_path, config).unwrap();
+        let default = tui_test::DiagnosticRetentionOptions::default().screen_history_limit;
+        for (retention, flag, expected) in [
+            (None, None, 3),
+            (None, Some("5"), 5),
+            (Some(default), None, default),
+            (Some(default), Some("5"), default),
+            (Some(0), None, 0),
+            (Some(7), None, 7),
+        ] {
+            let value = match retention {
+                Some(limit) => json!({"retention": {"screen_history_limit": limit}}),
+                None => json!({"operation_name": "spawn"}),
+            };
+            std::fs::write(&context_path, serde_json::to_vec(&value).unwrap()).unwrap();
+            for command in ["open", "run"] {
+                let mut args = vec![
+                    "tui-test",
+                    "--context-file",
+                    context_path.to_str().unwrap(),
+                    command,
+                    "--config",
+                    config_path.to_str().unwrap(),
+                ];
+                if let Some(flag) = flag {
+                    args.extend(["--screen-history-limit", flag]);
+                }
+                if command == "run" {
+                    args.push("program");
+                }
+                let cli = Cli::try_parse_from(args).unwrap();
+                let context = build_execution_context(&cli).unwrap();
+                assert_eq!(
+                    context
+                        .retention_override
+                        .map(|options| options.screen_history_limit),
+                    retention
+                );
+                let request = context.apply(build_request(cli.command.unwrap()).unwrap());
+                let decoded: Request =
+                    serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
+                let request = match decoded {
+                    Request::WithContext { request, context } => {
+                        if let Some(limit) = retention {
+                            assert_eq!(context.retention.screen_history_limit, limit);
+                        }
+                        *request
+                    }
+                    request => request,
+                };
+                let Request::Open { diagnostics, .. } = request else {
+                    panic!("expected spawn request");
+                };
+                assert_eq!(diagnostics.screen_history_limit, expected);
+            }
+            assert_eq!(std::fs::read_to_string(&config_path).unwrap(), config);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&std::fs::read(&context_path).unwrap())
+                    .unwrap(),
+                value
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn context_file_disabled_artifacts_preserve_empty_directories() {
+        let directory = unique_test_path("disabled-artifact-context");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("context.json");
+        for artifact in [
+            json!({"mode": "none"}),
+            json!({"mode": "none", "directory": ""}),
+            json!({"mode": "none", "directory": "artifacts/disabled"}),
+        ] {
+            let value = json!({"artifact": artifact});
+            std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+            let cli = Cli::try_parse_from([
+                "tui-test",
+                "--context-file",
+                path.to_str().unwrap(),
+                "state",
+            ])
+            .unwrap();
+            let context = build_execution_context(&cli).unwrap().context;
+            let actual = context.artifact.unwrap();
+            assert_eq!(actual.mode, tui_test::FailureArtifactMode::None);
+            assert!(actual.validate().is_ok());
+            if artifact["directory"].as_str().is_none_or(str::is_empty) {
+                assert!(actual.directory.as_os_str().is_empty());
+            } else {
+                assert_eq!(
+                    actual.directory,
+                    std::path::absolute("artifacts/disabled").unwrap()
+                );
+            }
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap())
+                    .unwrap(),
+                value
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn context_file_active_artifacts_reject_empty_directories_with_rust_validation() {
+        let directory = unique_test_path("active-artifact-context");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("context.json");
+        for mode in ["all", "text", "html"] {
+            for artifact in [
+                json!({"mode": mode}),
+                json!({"mode": mode, "directory": ""}),
+            ] {
+                std::fs::write(
+                    &path,
+                    serde_json::to_vec(&json!({"artifact": artifact})).unwrap(),
+                )
+                .unwrap();
+                let cli = Cli::try_parse_from([
+                    "tui-test",
+                    "--context-file",
+                    path.to_str().unwrap(),
+                    "state",
+                ])
+                .unwrap();
+                let error = build_execution_context(&cli)
+                    .err()
+                    .expect("invalid artifact directory");
+                assert_eq!(
+                    error.to_string(),
+                    "failure artifact directory must not be empty"
+                );
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     fn unique_test_path(label: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -1677,7 +2156,7 @@ mod tests {
             "missing",
         ])
         .unwrap();
-        let context = build_execution_context(&cli).unwrap();
+        let context = build_execution_context(&cli).unwrap().context;
         let artifact = context.artifact.unwrap();
         assert!(artifact.directory.is_absolute());
         assert_eq!(artifact.mode, tui_test::FailureArtifactMode::Text);
@@ -1825,8 +2304,16 @@ mod tests {
     }
 
     #[test]
-    fn removed_wait_text_command_is_rejected() {
-        assert!(Cli::try_parse_from(["tui-test", "wait", "text", "Saving"]).is_err());
+    fn wait_text_command_maps_to_a_locator_wait() {
+        let cli = Cli::try_parse_from(["tui-test", "wait", "text", "Saving"]).unwrap();
+        assert!(matches!(
+            build_request(cli.command.unwrap()).unwrap(),
+            Request::WaitLocator {
+                not: false,
+                timeout_ms: None,
+                ..
+            }
+        ));
     }
 
     #[test]

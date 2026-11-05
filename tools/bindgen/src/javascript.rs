@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 // JavaScript method, owned operation, result variant.
 const METHODS: &[(&str, &str, &str)] = &[
+    ("finishTrace", "FinishTrace", "Unit"),
     ("restart", "Restart", "Open"),
     ("state", "State", "State"),
     ("text", "Text", "Text"),
@@ -82,6 +83,8 @@ const INPUTS: &[(&str, &str)] = &[
     ("OpenOptions", "OpenOptions"),
     ("RunOptions", "RunOptions"),
     ("TextStyle", "LocatorStyle"),
+    ("TextScope", "TextScope"),
+    ("TextAnchor", "TextAnchor"),
     ("LocatorNode", "LocatorNode"),
     ("LocatorExpression", "LocatorExpression"),
     ("Operation::WaitTitle", "TitleOptions"),
@@ -149,6 +152,9 @@ fn ts_type(ty: &str) -> Result<String> {
         "(String,String)" => "[string, string]".into(),
         "(u8,String)" => "[number, string]".into(),
         "BTreeMap<String,bool>" => "Record<string, boolean>".into(),
+        "BTreeMap<String,String>" => "Record<string, string>".into(),
+        "SessionContext" => "SessionContext".into(),
+        "AutomaticRecording" => "AutomaticRecordingOptions".into(),
         "std::collections::BTreeMap<u8,String>" => "Record<string, string>".into(),
         "CellColor" => "Color".into(),
         "TextStyle" => "LocatorStyle".into(),
@@ -376,6 +382,36 @@ pub(super) fn generate(models: &Models, root: &Path, check: bool) -> Result<()> 
     }
     model(
         models,
+        "SessionContext",
+        "SessionContext",
+        vec![
+            Field {
+                name: "operation_name".into(),
+                ty: "Option<String>".into(),
+            },
+            Field {
+                name: "diagnostic_context".into(),
+                ty: "Option<BTreeMap<String,String>>".into(),
+            },
+            Field {
+                name: "artifacts".into(),
+                ty: "Option<FailureArtifactOptions>".into(),
+            },
+            Field {
+                name: "trace".into(),
+                ty: "Option<TraceOptions>".into(),
+            },
+            Field {
+                name: "screen_history_limit".into(),
+                ty: "Option<u16>".into(),
+            },
+        ],
+        false,
+        &mut dts,
+        &mut schema,
+    )?;
+    model(
+        models,
         "MouseClickOptions",
         "MouseClickOptions",
         models
@@ -403,7 +439,7 @@ pub(super) fn generate(models: &Models, root: &Path, check: bool) -> Result<()> 
     schema.push_str("};\n");
     schema.push_str(&exports);
     schema.push_str("export const methods = {\n");
-    dts.push_str("export declare class NativeSession {\n  constructor(name: string, recording?: AutomaticRecordingOptions | null, artifacts?: FailureArtifactOptions | null, trace?: TraceOptions | null)\n  name(): string\n  open(options?: OpenOptions | null): Promise<OpenResult>\n  run(options: RunOptions): Promise<OpenResult>\n  close(failed?: boolean | null): Promise<void>\n  panicProbe(): Promise<void>\n");
+    dts.push_str("export declare class NativeSession {\n  constructor(name: string, recording?: AutomaticRecordingOptions | null, artifacts?: FailureArtifactOptions | null, trace?: TraceOptions | null, context?: SessionContext | null)\n  name(): string\n  open(options?: OpenOptions | null): Promise<OpenResult>\n  run(options: RunOptions): Promise<OpenResult>\n  close(failed?: boolean | null): Promise<void>\n  interrupt(): Promise<void>\n  panicProbe(): Promise<void>\n");
     for &(method, variant, result) in METHODS {
         let fields = parameters(models, method, variant)?;
         let result_fields = models.fields(&format!("OperationResult::{result}"))?;

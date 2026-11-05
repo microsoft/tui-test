@@ -14,6 +14,11 @@ from unittest.mock import patch
 import tui_test
 from tui_test import (
     Colors,
+    AutomaticRecording,
+    ExecutionContext,
+    TextAnchor,
+    TextScope,
+    TraceOptions,
     ExpectationError,
     FailureArtifactRef,
     FailureArtifactStatus,
@@ -63,6 +68,60 @@ class IntegrationTests(unittest.TestCase):
     def _client(self, **kwargs):
         return TuiTest.ephemeral("pytest", **kwargs)
 
+    def test_session_parity_scope_context_trace_and_interrupt(self):
+        async def scenario():
+            directory = (Path("target") / unique_session("python-session-parity")).resolve()
+            terminal = self._client(context=ExecutionContext(operation_name="parity-check", diagnostic_context={"suite": "parity"}))
+            try:
+                opened = await terminal.run(
+                    sys.executable, "-u", "-c",
+                    "import sys; print('Start\\r\\n\\x1b[1mSave\\x1b[0m plain\\r\\nEnd', flush=True); sys.stdin.read()",
+                    wait_ready=False, recording=AutomaticRecording(directory=str(directory)),
+                    context=ExecutionContext(diagnostic_context={"phase": "spawn"},
+                                             trace=TraceOptions(mode="on", directory=str(directory))),
+                )
+                self.assertTrue(opened["recording"].startswith(str(directory)))
+                scope = TextScope(after=TextAnchor("Sta.t", regex=True, occurrence=0), before=TextAnchor("End"))
+                save = terminal.get_by_text("Save", scope=scope).with_style(TextStyle(bold=True))
+                scope.after.text = "changed"
+                await save.expect()
+                self.assertEqual(await terminal.get_by_text("Save plain").with_style(TextStyle(bold=True)).count(), 0)
+                self.assertEqual((await terminal.get_by_text("Save plain").and_(terminal.get_by_style(TextStyle(bold=True))).location()).text, "Save")
+                self.assertEqual(await terminal.get_by_style(TextStyle(bold=True)).with_style(TextStyle(bold=False)).count(), 0)
+                self.assertEqual(await terminal.get_by_link("").with_style(TextStyle(bold=True)).count(), 0)
+                relative = save.relative_to(terminal.get_by_text("Start"), "after")
+                self.assertEqual(await relative.count(), 1)
+                self.assertEqual((await relative.highlight_matches())[0].text, "Save")
+                composite = relative.or_(terminal.get_by_link("test:save"))
+                self.assertEqual(await composite.count(), 1)
+                with self.assertRaisesRegex(UsageError, "composition nodes do not accept scope or style"):
+                    await composite.with_style(TextStyle(bold=True)).count()
+                with self.assertRaisesRegex(UsageError, "composition nodes do not accept scope or style"):
+                    await composite.relative_to(save).count()
+                data, cols, rows = await terminal.packed_screen()
+                self.assertEqual((cols, rows), (80, 30))
+                self.assertIn(b"Save", data.tobytes())
+                self.assertEqual(await terminal.expect_snapshot("parity", cwd=str(directory), update=True), "written")
+                await terminal.finish_trace(False)
+                await terminal.state()
+                report = json.loads(next(directory.glob("trace-*/trace.json")).read_text())
+                self.assertEqual(report["outcome"], "passed")
+                self.assertTrue(any(operation["name"] == "parity-check" for operation in report["recent_operations"]))
+                self.assertEqual(report["context"]["phase"], "spawn")
+                self.assertEqual(report["context"]["suite"], "parity")
+                pending = asyncio.create_task(terminal.wait_exit(timeout=30_000))
+                await terminal.interrupt()
+                with self.assertRaisesRegex(ExpectationError, "cancelled"):
+                    await pending
+                with self.assertRaisesRegex(ExpectationError, "cancelled"):
+                    await terminal.wait_exit(timeout=0)
+            finally:
+                await terminal.close_quiet()
+                shutil.rmtree(directory, ignore_errors=True)
+            with self.assertRaises(NoSessionError):
+                await terminal.interrupt()
+        run(scenario())
+
     def test_echo_roundtrip(self):
         async def scenario():
             async with self._client() as su:
@@ -75,6 +134,59 @@ class IntegrationTests(unittest.TestCase):
                 self.assertGreater(st.cols, 0)
 
         run(scenario())
+
+    def test_runtime_recording_mode_without_trace(self):
+        async def scenario():
+            directory = (Path("target") / unique_session("python-cast-only")).resolve()
+            defaults = AutomaticRecording(directory=str(directory), mode="disabled")
+            terminal = self._client(recording=defaults)
+            try:
+                opened = await terminal.run(
+                    sys.executable, "-u", "-c",
+                    "import sys; print('cast-only', flush=True); sys.stdin.read()",
+                    wait_ready=False,
+                    recording=AutomaticRecording(directory=str(directory), mode="always"),
+                )
+                await terminal.get_by_text("cast-only").expect()
+                self.assertTrue(opened["recording"].startswith(str(directory)))
+                self.assertIn("cast-only", await get_recording(terminal.session))
+                await terminal.close()
+                self.assertIn("cast-only", await get_recording(terminal.session))
+                self.assertEqual(defaults.mode, "disabled")
+                self.assertFalse(list(directory.glob("trace-*")))
+            finally:
+                await terminal.close_quiet()
+                shutil.rmtree(directory, ignore_errors=True)
+        run(scenario())
+
+    def test_empty_context_trace_disables_automatic_recording(self):
+        async def scenario(scope):
+            directory = (Path("target") / unique_session("python-trace-off")).resolve()
+            context = ExecutionContext(trace=TraceOptions())
+            terminal = self._client(
+                trace=TraceOptions(mode="on", directory=str(directory)),
+                context=context if scope == "constructor" else None,
+            )
+            try:
+                opened = await terminal.run(
+                    sys.executable, "-u", "-c",
+                    "import sys; print('trace-off', flush=True); sys.stdin.read()",
+                    wait_ready=False,
+                    recording=AutomaticRecording(directory=str(directory), mode="always"),
+                    context=context if scope == "spawn" else None,
+                )
+                self.assertEqual(opened["recording"], "")
+                await terminal.get_by_text("trace-off").expect()
+                await terminal.close()
+                self.assertFalse(list(directory.glob("*.cast")))
+                self.assertFalse(list(directory.glob("trace-*")))
+                self.assertIsNone(context.trace.mode)
+            finally:
+                await terminal.close_quiet()
+                shutil.rmtree(directory, ignore_errors=True)
+        for scope in ("constructor", "spawn"):
+            with self.subTest(scope=scope):
+                run(scenario(scope))
 
     def test_invalid_spawn_options_with_retries_preserve_existing_session(self):
         async def scenario():

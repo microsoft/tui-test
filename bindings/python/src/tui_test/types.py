@@ -13,6 +13,28 @@ TraceMode = Literal["off", "on-failure", "on"]
 LocatorDirection = Literal["within", "after", "before"]
 
 
+@dataclass
+class TextAnchor:
+    text: str
+    regex: bool = False
+    occurrence: Union[Literal["any", "unique", "first", "last"], int] = "unique"
+
+
+@dataclass
+class TextScope:
+    after: Optional[TextAnchor] = None
+    before: Optional[TextAnchor] = None
+
+
+@dataclass
+class ExecutionContext:
+    operation_name: Optional[str] = None
+    diagnostic_context: Optional[Dict[str, str]] = None
+    artifacts: Optional[Dict[str, Any]] = None
+    trace: Optional["TraceOptions"] = None
+    screen_history_limit: Optional[int] = None
+
+
 class OpenResult(TypedDict):
     shell_pid: Optional[int]
     session: str
@@ -135,6 +157,7 @@ class Timeouts:
 @dataclass
 class AutomaticRecording:
     directory: Optional[str] = None
+    mode: Optional[Literal["disabled", "on-failure", "always"]] = None
 
 @dataclass
 class TraceOptions:

@@ -330,10 +330,17 @@ fn c_context_and_owned_context_share_validation() {
     let context = session::SessionInput {
         name: "ffi-context".into(),
         screen_history_limit: Some(0),
+        operation_name: Some("custom.operation".into()),
+        diagnostic_context: [("case".into(), "parity".into())].into(),
         ..Default::default()
     };
     let (name, validated) = context.clone().validate().unwrap();
     assert_eq!(validated.retention.screen_history_limit, 0);
+    assert_eq!(
+        validated.operation_name.as_deref(),
+        Some("custom.operation")
+    );
+    assert_eq!(validated.diagnostic_context["case"], "parity");
     let error = session::execute(name, validated, "state", Operation::State).unwrap_err();
     assert_eq!(error.kind, ErrorKind::NoSession);
     assert_eq!(context.screen_history_limit, Some(0));

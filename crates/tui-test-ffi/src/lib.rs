@@ -232,6 +232,28 @@ pub unsafe extern "C" fn tui_close(session: TuiString, failed: TuiOptionalBool) 
 #[no_mangle]
 /// # Safety
 /// Borrowed input buffers must be valid and readable for their stated lengths.
+pub unsafe extern "C" fn tui_finish_trace(session: TuiString, failed: bool) -> *mut TuiResult {
+    unsafe {
+        execute(session, "trace.finish", || {
+            Ok(Operation::FinishTrace { failed })
+        })
+    }
+}
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must be valid and readable for their stated lengths.
+pub unsafe extern "C" fn tui_interrupt(session: TuiString) -> *mut TuiResult {
+    match unsafe { input::session(session) } {
+        Ok((name, _)) => tasks::execute(move || {
+            global_registry().interrupt(&name)?;
+            Ok(OperationResult::Unit)
+        }),
+        Err(error) => output::error(error),
+    }
+}
+#[no_mangle]
+/// # Safety
+/// Borrowed input buffers must be valid and readable for their stated lengths.
 pub unsafe extern "C" fn tui_restart(
     session: TuiString,
     graceful_timeout_ms: u64,

@@ -47,6 +47,34 @@ const locator = terminal
 | `expect({ not?, timeout? })` | Assert. |
 | `click(options?)` | Click. |
 | `highlight({ timeout? })` | Highlight. |
+| `withStyle(style)` | Keep whole matches whose visible cells satisfy the style. |
+| `relativeTo(parent, direction?)` | Apply a parent region to a text, style, or link locator. |
+| `highlightMatches({ timeout? })` | Highlight and return the resolved matches. |
+
+`getByText` accepts `scope: { after?, before? }`.
+Each anchor has `text`, optional `regex`, and optional `occurrence`.
+Occurrence defaults to `"unique"` and also accepts `"any"`, `"first"`, `"last"`, or `{ nth: index }`.
+All leaf selectors accept `matchStyle`; `withStyle` supports text, style, and link locators.
+Rust rejects scope or whole-match style on composite nodes.
+Apply these fields to operands before composition.
+`and(terminal.getByStyle(...))` still intersects cells rather than preserving whole matches.
+`relativeTo` requires a parent from the same terminal instance.
+
+Constructor options and `open`/`run` options accept an `ExecutionContext` through `context`.
+Its fields are `operationName`, `diagnosticContext`, `artifacts`, `trace`, and `screenHistoryLimit`.
+Per-call fields apply only to that spawn.
+`open` and `run` also accept `recording: { directory }`.
+Runtime recording options also accept `mode: "disabled" | "on-failure" | "always"` for casts without traces.
+Explicit trace options take precedence. CLI configuration still permits only the recording directory.
+`finishTrace(failed = false)` completes a trace without closing the terminal.
+`interrupt()` cancels pending operations and terminates the child without an operation queue wait.
+It is not a keyboard interrupt; call `close()` afterward.
+Later waits report cancellation until restart or close.
+`packedScreen({ full? })` returns owned `utf8` bytes, `cols`, and `rows`.
+`expectSnapshot(name, { cwd })` selects the working directory for snapshot files.
+
+Run `node bindings/js/examples/parity.mjs` from a built checkout for a complete example.
+See [the binding reference](../bindings/js/README.md#scoped-queries-and-session-context) for recording access and context details.
 
 Text options: `regex`, `full`, `whitespace`, and chained `direction`.
 

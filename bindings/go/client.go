@@ -227,11 +227,26 @@ func (client *Client) Close(options ...CloseOptions) error {
 	if len(options) > 1 {
 		return &Error{Kind: UsageError, Message: "close accepts at most one options value"}
 	}
+
 	var failed *bool
 	if len(options) == 1 {
 		failed = options[0].Failed
 	}
 	return client.runtime.close(failed)
+}
+
+func (client *Client) FinishTrace(failed bool) error {
+	return engineError(client.runtime.session.FinishTrace(failed))
+}
+
+func (client *Client) PackedScreen(options TextOptions) (PackedScreen, error) {
+	result, err := client.runtime.session.PackedScreen(options.Full)
+	return result, engineError(err)
+}
+
+// Interrupt cancels pending operations and terminates the child without the operation queue.
+func (client *Client) Interrupt() error {
+	return engineError(client.runtime.session.Interrupt())
 }
 
 // CloseQuiet attempts cleanup and reports success without returning diagnostics.

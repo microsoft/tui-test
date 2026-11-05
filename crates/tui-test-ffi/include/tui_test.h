@@ -440,6 +440,18 @@ struct TuiResult *tui_close(struct TuiString session, struct TuiOptionalBool fai
  * # Safety
  * Borrowed input buffers must be valid and readable for their stated lengths.
  */
+struct TuiResult *tui_finish_trace(struct TuiString session, bool failed);
+
+/**
+ * # Safety
+ * Borrowed input buffers must be valid and readable for their stated lengths.
+ */
+struct TuiResult *tui_interrupt(struct TuiString session);
+
+/**
+ * # Safety
+ * Borrowed input buffers must be valid and readable for their stated lengths.
+ */
 struct TuiResult *tui_restart(struct TuiString session, uint64_t graceful_timeout_ms);
 
 /**
@@ -967,6 +979,20 @@ struct TuiTask *tui_recording_start(struct TuiString session);
  * Inputs follow the synchronous function contract through this call only.
  */
 struct TuiTask *tui_close_start(struct TuiString session, struct TuiOptionalBool failed);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_finish_trace_start(struct TuiString session, bool failed);
+
+/**
+ * Start a typed call after copying all borrowed inputs.
+ * # Safety
+ * Inputs follow the synchronous function contract through this call only.
+ */
+struct TuiTask *tui_interrupt_start(struct TuiString session);
 
 /**
  * Start a typed call after copying all borrowed inputs.

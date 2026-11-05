@@ -145,6 +145,8 @@ type TraceOptions struct {
 }
 
 type SpawnOptions struct {
+	Recording          *AutomaticRecording
+	Context            *ExecutionContext
 	Style              *RenderStyle
 	Backend            Backend
 	Cols, Rows         *uint16
@@ -155,15 +157,32 @@ type SpawnOptions struct {
 	Timeouts           Timeouts
 }
 type SessionOptions struct {
+	Context            *ExecutionContext
 	Recording          *AutomaticRecording
 	Artifacts          *ArtifactOptions
 	Trace              *TraceOptions
 	ScreenHistoryLimit *uint16
 }
 
+type ExecutionContext struct {
+	OperationName            *string            `json:"operation_name,omitempty"`
+	DiagnosticContext        *map[string]string `json:"diagnostic_context,omitempty"`
+	ArtifactDirectory        *string            `json:"artifact_directory,omitempty"`
+	ArtifactMode             *string            `json:"artifact_mode,omitempty"`
+	ArtifactIncludeRecording *bool              `json:"artifact_include_recording,omitempty"`
+	TraceMode                *string            `json:"trace_mode,omitempty"`
+	TraceDirectory           *string            `json:"trace_directory,omitempty"`
+	ScreenHistoryLimit       *uint16            `json:"screen_history_limit,omitempty"`
+}
+
 type OpenOptions struct {
 	SpawnOptions
 	Shell Shell
+}
+
+type PackedScreen struct {
+	Cols, Rows uint16
+	UTF8       []byte
 }
 
 type TitleOptions struct {
@@ -338,6 +357,8 @@ func (failure *Error) Error() string          { return failure.Message }
 func pointerTo[Value any](value Value) *Value { return &value }
 
 type LocatorNode struct {
+	Scope      *TextScope  `json:"scope,omitempty"`
+	MatchStyle *TextStyle  `json:"match_style,omitempty"`
 	Kind       string      `json:"kind"`
 	Text       *string     `json:"text,omitempty"`
 	Regex      *bool       `json:"regex,omitempty"`
@@ -353,6 +374,15 @@ type LocatorNode struct {
 	Has        *uint32     `json:"has,omitempty"`
 	HasNot     *uint32     `json:"has_not,omitempty"`
 	Occurrence any         `json:"occurrence"`
+}
+type TextAnchor struct {
+	Text       string `json:"text"`
+	Regex      bool   `json:"regex"`
+	Occurrence any    `json:"occurrence"`
+}
+type TextScope struct {
+	After  *TextAnchor `json:"after,omitempty"`
+	Before *TextAnchor `json:"before,omitempty"`
 }
 type LocatorExpression struct {
 	Nodes []LocatorNode `json:"nodes"`

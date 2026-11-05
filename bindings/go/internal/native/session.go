@@ -41,7 +41,31 @@ func NewSession(name string, options SessionOptions) (*Session, error) {
 	if err != nil {
 		return nil, &Error{Kind: InternalError, Message: "encode native session context: " + err.Error()}
 	}
-	return &Session{name: string(encoded), recording: options.Recording}, nil
+	name, err = mergeContext(string(encoded), options.Context)
+	return &Session{name: name, recording: options.Recording}, err
+}
+
+func mergeContext(name string, context *ExecutionContext) (string, error) {
+	if context == nil {
+		return name, nil
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(name), &values); err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(context)
+	if err != nil {
+		return "", err
+	}
+	var overrides map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &overrides); err != nil {
+		return "", err
+	}
+	for key, value := range overrides {
+		values[key] = value
+	}
+	encoded, err = json.Marshal(values)
+	return string(encoded), err
 }
 
 func checkNativeVersion() error {
@@ -97,7 +121,11 @@ func (runtime *Session) Open(options OpenOptions) (OpenResult, error) {
 		return OpenResult{}, err
 	}
 	memory.pinner.Pin(&converted)
-	result := nativeFunctions.Open(memory.text(runtime.name), &converted)
+	context, err := mergeContext(runtime.name, options.Context)
+	if err != nil {
+		return OpenResult{}, err
+	}
+	result := nativeFunctions.Open(memory.text(context), &converted)
 	defer nativeFunctions.ResultFree(result)
 	return readOpenResult(result)
 }
@@ -111,9 +139,29 @@ func (runtime *Session) Run(program string, args []string, options SpawnOptions)
 	}
 	arguments, length := memory.strings(args)
 	memory.pinner.Pin(&converted)
-	result := nativeFunctions.Run(memory.text(runtime.name), &converted, memory.text(program), arguments, length)
+	context, err := mergeContext(runtime.name, options.Context)
+	if err != nil {
+		return OpenResult{}, err
+	}
+	result := nativeFunctions.Run(memory.text(context), &converted, memory.text(program), arguments, length)
 	defer nativeFunctions.ResultFree(result)
 	return readOpenResult(result)
+}
+
+func (runtime *Session) FinishTrace(failed bool) error {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.FinishTrace(memory.text(runtime.name), failed)
+	defer nativeFunctions.ResultFree(result)
+	return nativeError(result)
+}
+
+func (runtime *Session) Interrupt() error {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.Interrupt(memory.text(runtime.name))
+	defer nativeFunctions.ResultFree(result)
+	return nativeError(result)
 }
 
 func (runtime *Session) State() (State, error) {
@@ -684,11 +732,36 @@ func (runtime *Session) ClickLocator(expression LocatorExpression, options Locat
 }
 
 func (runtime *Session) HighlightLocator(expression LocatorExpression, timeout *time.Duration) error {
+	_, err := runtime.HighlightMatches(expression, timeout)
+	return err
+}
+
+func (runtime *Session) HighlightMatches(expression LocatorExpression, timeout *time.Duration) ([]TextMatch, error) {
 	duration, err := nativeDuration(timeout)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return runtime.locatorUnit(expression, func(session abiString, query abiQuery) *abiResult {
-		return nativeFunctions.HighlightLocator(session, query, duration)
-	})
+	memory := nativeMemory{}
+	defer memory.release()
+	query, err := memory.query(expression)
+	if err != nil {
+		return nil, err
+	}
+	result := nativeFunctions.HighlightLocator(memory.text(runtime.name), query, duration)
+	defer nativeFunctions.ResultFree(result)
+	if err := nativeError(result); err != nil {
+		return nil, err
+	}
+	return nativeMatches(result), nil
+}
+
+func (runtime *Session) PackedScreen(full bool) (PackedScreen, error) {
+	memory := nativeMemory{}
+	defer memory.release()
+	result := nativeFunctions.PackedScreen(memory.text(runtime.name), full)
+	defer nativeFunctions.ResultFree(result)
+	if err := nativeError(result); err != nil {
+		return PackedScreen{}, err
+	}
+	return PackedScreen{Cols: result.size.cols, Rows: result.size.rows, UTF8: []byte(nativeText(result.text))}, nil
 }

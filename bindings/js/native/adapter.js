@@ -3,7 +3,7 @@ import { layouts, types } from "./abi.js";
 import { enums, methods, models } from "./models.js";
 
 const PREFIX = "__tui_test_native_error__:";
-const aliases = { TextStyle: "LocatorStyle", LocatorQuery: "LocatorExpression", LocatorDirection: "LocatorStageDirection", Style: "RenderStyle", CursorStyle: "RecordingCursorStyle" };
+const aliases = { AutomaticRecording: "AutomaticRecordingOptions", TextStyle: "LocatorStyle", LocatorQuery: "LocatorExpression", LocatorDirection: "LocatorStageDirection", Style: "RenderStyle", CursorStyle: "RecordingCursorStyle" };
 const snake = (name) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 const optional = (type) => type.startsWith("Option<") ? type.slice(7, -1) : undefined;
 const absent = (value) => value === undefined || value === null;
@@ -19,6 +19,10 @@ function integer(value, label, max = Number.MAX_SAFE_INTEGER, min = 0) {
 function validate(type, value, label) {
   const inner = optional(type);
   if (inner) return absent(value) ? undefined : validate(inner, value, label);
+  if (type === "BTreeMap<String,String>") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError(`${label} must be an object`);
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, validate("String", item, label)]));
+  }
   if (type === "Padding") {
     return typeof value === "number"
       ? { uniform: validate("u32", value, label) }
@@ -194,6 +198,11 @@ function locator(expression) {
       if (!["any", "unique", "first", "last"].includes(node.occurrence)) throw error("usage", `invalid occurrence '${node.occurrence}'`);
     }
     delete node.nth;
+    for (const anchor of Object.values(node.scope ?? {})) {
+      if (!anchor) continue;
+      anchor.occurrence = absent(anchor.nth) ? anchor.occurrence ?? "unique" : { nth: anchor.nth };
+      delete anchor.nth;
+    }
   }
   integer(expression.root, "locator root", 255);
   return { json: JSON.stringify(expression) };
@@ -201,6 +210,20 @@ function locator(expression) {
 
 const mouseDefault = () => ({ button: 0, shift: false, alt: false, ctrl: false });
 const pairs = (values) => values?.map(([key, value]) => ({ key, value }));
+
+function sessionContext(context = {}) {
+  const result = {};
+  for (const key of ["operation_name", "diagnostic_context", "screen_history_limit"]) {
+    if (context[key] !== undefined) result[key] = context[key];
+  }
+  if (context.artifacts) Object.assign(result, {
+    artifact_directory: context.artifacts.directory,
+    artifact_mode: context.artifacts.mode ?? "all",
+    artifact_include_recording: context.artifacts.include_recording ?? false,
+  });
+  if (context.trace) Object.assign(result, { trace_directory: context.trace.directory, trace_mode: context.trace.mode ?? "off" });
+  return result;
+}
 
 export function createAdapter(functions) {
   const reads = [];
@@ -287,12 +310,14 @@ export function createAdapter(functions) {
     #name;
     #context;
     #directory;
-    constructor(name, recording, artifacts, trace) {
+    #recordingMode;
+    constructor(name, recording, artifacts, trace, context) {
       this.#name = validate("String", name, "name");
       recording = validate("Option<AutomaticRecordingOptions>", recording, "");
       artifacts = validate("Option<FailureArtifactOptions>", artifacts, "");
       trace = validate("Option<TraceOptions>", trace, "");
       this.#directory = recording?.directory;
+      this.#recordingMode = recording?.mode;
       this.#context = { name };
       if (artifacts) Object.assign(this.#context, {
         artifact_directory: artifacts.directory,
@@ -300,16 +325,19 @@ export function createAdapter(functions) {
         artifact_include_recording: artifacts.include_recording ?? false,
       });
       if (trace) Object.assign(this.#context, { trace_directory: trace.directory, trace_mode: trace.mode ?? "off" });
+      Object.assign(this.#context, sessionContext(validate("Option<SessionContext>", context, "context")));
     }
     name() { return this.#name; }
     async open(options) { return this.#open("open", validate("OpenOptions", options ?? {}, "")); }
     async run(options) { return this.#open("run", validate("RunOptions", options, "")); }
     #open(method, options) {
       const input = new Inputs();
-      const context = input.string(JSON.stringify({ ...this.#context, screen_history_limit: options.screen_history_limit }));
+      const context = input.string(JSON.stringify({ ...this.#context, ...(options.screen_history_limit === undefined ? {} : { screen_history_limit: options.screen_history_limit }), ...sessionContext(options.context) }));
       const native = input.struct("TuiOpenOptions", {
         ...options, env: pairs(options.env), colors: pairs(options.profile_colors),
-        scrollback: options.profile_scrollback, recording_directory: this.#directory,
+        scrollback: options.profile_scrollback,
+        recording_directory: options.recording === undefined ? this.#directory : options.recording.directory,
+        recording_mode: options.recording === undefined ? this.#recordingMode : options.recording.mode,
       });
       const args = [context, native];
       if (method === "run") args.push(input.string(options.program), input.array("TuiString", options.args), options.args?.length ?? 0);
@@ -319,6 +347,10 @@ export function createAdapter(functions) {
       failed = validate("Option<bool>", failed, "failed");
       const input = new Inputs();
       return call("tui_close", [input.string(JSON.stringify(this.#context)), input.struct("TuiOptionalBool", failed)], "Unit", input);
+    }
+    async interrupt() {
+      const input = new Inputs();
+      return call("tui_interrupt", [input.string(JSON.stringify(this.#context))], "Unit", input);
     }
     async panicProbe() { return call("tui_panic_probe", [], "Unit"); }
     async #invoke(method, args) {
@@ -336,6 +368,7 @@ export function createAdapter(functions) {
         name = "tui_key";
         native = [input.array("TuiString", v.keys), v.keys.length, ["press", "keyDown", "repeat", "keyUp"].indexOf(method)];
       } else switch (method) {
+        case "finishTrace": native = [v.failed ?? false]; break;
         case "text": case "packedScreen": native = [v.full ?? false]; break;
         case "cells": native = [v.x, v.y, v.w ?? 1, v.h ?? 1]; break;
         case "write": native = [s(v.data)]; break;

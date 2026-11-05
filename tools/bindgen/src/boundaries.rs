@@ -286,7 +286,11 @@ fn input_fields(models: &Models, model: &str, js: bool) -> Result<Vec<Field>> {
                 fields.push(f);
                 continue;
             }
-            ("OpenOptions" | "RunOptions", "recording") if js => continue,
+            ("OpenOptions" | "RunOptions", "recording") if js => {
+                f.ty = "Option<AutomaticRecording>".into();
+                fields.push(f);
+                continue;
+            }
             ("OpenOptions" | "RunOptions", "recording") => {
                 for mut f in models.fields("AutomaticRecording")? {
                     f.name = format!("recording_{}", f.name);
@@ -329,9 +333,16 @@ fn input_fields(models: &Models, model: &str, js: bool) -> Result<Vec<Field>> {
                     }
                 }
             }
-            ("AutomaticRecording", "mode")
-            | ("Operation::Snapshot", "name")
-            | ("Operation::WaitTitle", "text") => continue,
+            ("AutomaticRecording", "mode") => {
+                if js {
+                    fields.push(Field {
+                        name: f.name,
+                        ty: "Option<String>".into(),
+                    });
+                }
+                continue;
+            }
+            ("Operation::Snapshot", "name") | ("Operation::WaitTitle", "text") => continue,
             ("Operation::Screenshot" | "Operation::StartRecording", "background") => {
                 fields.push(Field {
                     name: f.name,
@@ -363,7 +374,8 @@ fn input_fields(models: &Models, model: &str, js: bool) -> Result<Vec<Field>> {
                 ("TraceOptions", _) | ("FailureArtifactOptions", "mode" | "include_recording") => {
                     format!("Option<{}>", f.ty)
                 }
-                ("LocatorNode", "occurrence") => "Option<String>".into(),
+                ("LocatorNode" | "TextAnchor", "occurrence") => "Option<String>".into(),
+                ("TextAnchor", "regex") => "Option<bool>".into(),
                 ("Operation::WaitTitle" | "Operation::Snapshot" | "Operation::Screenshot", _)
                     if f.ty == "bool" =>
                 {
@@ -383,7 +395,7 @@ fn input_fields(models: &Models, model: &str, js: bool) -> Result<Vec<Field>> {
             }
         };
         let env = !js && f.name == "env";
-        let nth = js && model == "LocatorNode" && f.name == "occurrence";
+        let nth = js && matches!(model, "LocatorNode" | "TextAnchor") && f.name == "occurrence";
         fields.push(f);
         if env {
             fields.push(Field {
@@ -399,6 +411,10 @@ fn input_fields(models: &Models, model: &str, js: bool) -> Result<Vec<Field>> {
         }
     }
     if js && matches!(model, "OpenOptions" | "RunOptions") {
+        fields.push(Field {
+            name: "context".into(),
+            ty: "Option<SessionContext>".into(),
+        });
         for mut f in models.fields("DiagnosticRetentionOptions")? {
             f.ty = format!("Option<{}>", f.ty);
             fields.push(f);
@@ -532,7 +548,7 @@ fn assignment(out: &mut String, name: &str, expr: &str) -> Result<()> {
 }
 
 fn session_input(models: &Models) -> Result<String> {
-    let mut out = format!("// {NOTICE}\n#[derive(Clone, Default, serde::Deserialize)] #[serde(deny_unknown_fields)] pub(crate) struct SessionInput {{ pub name: String,\n");
+    let mut out = format!("// {NOTICE}\n#[derive(Clone, Default, serde::Deserialize)] #[serde(deny_unknown_fields)] pub(crate) struct SessionInput {{ pub name: String,\npub operation_name: Option<String>,\n#[serde(default)] pub diagnostic_context: std::collections::BTreeMap<String,String>,\n");
     for (model, prefix) in [
         ("FailureArtifactOptions", "artifact_"),
         ("TraceOptions", "trace_"),
@@ -583,7 +599,7 @@ fn session_input(models: &Models) -> Result<String> {
             f.name, f.name, f.name
         )?;
     }
-    out.push_str("}; retention.validate().map_err(TuiTestError::usage)?;\nOk((self.name, ExecutionContext { artifact, trace, retention, ..ExecutionContext::default() })) } }\n");
+    out.push_str("}; retention.validate().map_err(TuiTestError::usage)?;\nOk((self.name, ExecutionContext { artifact, trace, retention, operation_name: self.operation_name, diagnostic_context: self.diagnostic_context })) } }\n");
     Ok(out)
 }
 
