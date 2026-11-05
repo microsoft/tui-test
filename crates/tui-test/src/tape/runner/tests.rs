@@ -27,7 +27,7 @@ impl Drop for Directory {
 
 fn plan(body: &str) -> Plan {
     compile(&parse("runner.tape", &format!(
-        "Output result.gif\nSet Rows 3\nSet Columns 16\nSet Padding 0\nSet FontSize 12\nSet CursorBlink false\n{body}"
+        "Output result.gif\nSet Rows 3\nSet Columns 16\nSet Padding 0\nSet FontSize 12\nSet FontFamily monospace\nSet CursorBlink false\n{body}"
     )).unwrap()).unwrap()
 }
 
@@ -524,7 +524,7 @@ mod raster {
             assert!(error.message.contains(message), "{error}");
             assert_eq!(error.location.path, PathBuf::from("runner.tape"));
             if message != "GIF" {
-                assert_eq!(error.location.line, 7);
+                assert_eq!(error.location.line, 8);
             }
             assert_eq!(std::fs::read(&target).unwrap(), b"existing artifact");
             assert!(!directory.0.join("marker").exists());
@@ -558,7 +558,7 @@ mod raster {
         let plan = plan(actions);
         let error = run(&plan, &directory.0).unwrap_err();
         assert_eq!(error.phase, RunnerPhase::Preflight);
-        assert_eq!(error.location.line, if cfg!(unix) { 13 } else { 11 });
+        assert_eq!(error.location.line, if cfg!(unix) { 14 } else { 12 });
         assert!(error.message.contains("timeline"));
         assert!(!directory.0.join("child.pid").exists());
         assert!(!directory.0.join("marker").exists());
