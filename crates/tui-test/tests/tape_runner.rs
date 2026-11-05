@@ -25,7 +25,9 @@ fn public_runner_exports_a_decodable_gif_and_keeps_plan_immutable() {
     let original = serde_json::to_value(&plan).unwrap();
     let expected = check(&plan, &directory).unwrap();
     assert!(!expected.output.exists());
+    let started = std::time::Instant::now();
     let actual = run(&plan, &directory).unwrap();
+    let elapsed = started.elapsed();
     assert_eq!(actual, expected);
     assert_eq!(serde_json::to_value(&plan).unwrap(), original);
     let mut decoder = gif::DecodeOptions::new()
@@ -40,7 +42,13 @@ fn public_runner_exports_a_decodable_gif_and_keeps_plan_immutable() {
         duration += u64::from(frame.delay);
     }
     assert!(count > 0);
-    assert!((20..=25).contains(&duration), "GIF duration: {duration} cs");
+    let recorded = std::time::Duration::from_millis(duration * 10);
+    let quantum = std::time::Duration::from_millis(10);
+    assert!(
+        recorded + quantum >= std::time::Duration::from_millis(200)
+            && recorded <= elapsed + quantum,
+        "GIF duration: {duration} cs; elapsed: {elapsed:?}"
+    );
     drop(decoder);
     std::fs::remove_dir_all(directory).unwrap();
 }
