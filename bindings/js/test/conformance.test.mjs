@@ -27,6 +27,9 @@ const MAPPING = {
   sessions: [["module", "sessions"]],
   state: [["client", "state"]],
   text: [["client", "text"]],
+  "packed-screen": [["client", "packedScreen"]],
+  trace: [["client", "finishTrace"]],
+  interrupt: [["client", "interrupt"]],
   screenshot: [["client", "screenshot"]],
   record: [["client", "startRecording"], ["client", "stopRecording"]],
   cells: [["client", "cells"]],
@@ -36,6 +39,8 @@ const MAPPING = {
     ["client", "getExitCode"],
     ["client", "getCwd"],
     ["client", "getCursor"],
+    ["client", "getModes"],
+    ["client", "getColors"],
     ["client", "getSize"],
     ["client", "getViewport"],
     ["client", "getTitle"],
@@ -53,11 +58,12 @@ const MAPPING = {
   write: [["client", "write"]],
   signal: [["client", "signal"]],
   kill: [["client", "kill"]],
-  wait: [["client", "waitTitle"], ["client", "waitClipboard"], ["client", "waitIdle"], ["client", "waitCommand"], ["client", "waitExit"], ["client", "waitBell"]],
-  expect: [["client", "getByText"], ["client", "expectTitle"], ["client", "expectExitCode"], ["client", "expectOutput"], ["client", "expectBellCount"], ["client", "expectSnapshot"]],
+  wait: [["locator", "wait"], ["client", "waitTitle"], ["client", "waitClipboard"], ["client", "waitIdle"], ["client", "waitCommand"], ["client", "waitExit"], ["client", "waitBell"]],
+  expect: [["client", "getByText"], ["client", "expectTitle"], ["client", "expectExitCode"], ["client", "expectOutput"], ["client", "expectBellCount"], ["client", "expectSnapshot"], ["client", "expectMode"], ["client", "expectCursor"], ["client", "expectColors"]],
   find: [["client", "getByText"]],
+  resolve: [["locator", "location"]],
   click: [["client", "getByText"]],
-  highlight: [["client", "getByText"]],
+  highlight: [["client", "getByText"], ["locator", "highlightMatches"]],
   "get-recording": [["module", "getRecording"]],
 };
 
@@ -65,13 +71,18 @@ const EXCLUDED = new Set(["monitor", "status", "daemon", "usage", "agent-context
 
 test("every cli command is mapped or excluded", { skip: !schema }, () => {
   const instance = new TuiTest("conformance");
+  const targets = {
+    client: instance,
+    module: sdk,
+    locator: instance.getByText("conformance"),
+  };
   for (const command of Object.keys(schema.commands)) {
     if (EXCLUDED.has(command)) {
       continue;
     }
     assert.ok(MAPPING[command], `cli command '${command}' has no SDK mapping`);
     for (const [scope, name] of MAPPING[command]) {
-      const target = scope === "client" ? instance : sdk;
+      const target = targets[scope];
       assert.ok(
         typeof target[name] !== "undefined",
         `missing SDK member for '${command}': ${scope}.${name}`,
