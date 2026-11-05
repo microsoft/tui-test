@@ -14,9 +14,14 @@ struct Field {
     ty: String,
 }
 
+struct EnumVariant {
+    name: String,
+    wire_name: String,
+}
+
 struct Models {
     fields: BTreeMap<String, Vec<Field>>,
-    enums: BTreeMap<String, Vec<String>>,
+    enums: BTreeMap<String, Vec<EnumVariant>>,
 }
 
 impl Models {
@@ -64,10 +69,27 @@ impl Models {
                 }
                 Item::Enum(item) => {
                     let name = item.ident.to_string();
-                    self.enums.insert(
-                        name.clone(),
-                        item.variants.iter().map(|v| v.ident.to_string()).collect(),
-                    );
+                    let variants = item
+                        .variants
+                        .iter()
+                        .map(|variant| {
+                            let name = variant.ident.to_string();
+                            let mut wire_name = name.to_lowercase();
+                            for attribute in &variant.attrs {
+                                if attribute.path().is_ident("serde") {
+                                    attribute.parse_nested_meta(|meta| {
+                                        if meta.path.is_ident("rename") {
+                                            wire_name =
+                                                meta.value()?.parse::<syn::LitStr>()?.value();
+                                        }
+                                        Ok(())
+                                    })?;
+                                }
+                            }
+                            Ok(EnumVariant { name, wire_name })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    self.enums.insert(name.clone(), variants);
                     for variant in item.variants {
                         self.fields.insert(
                             format!("{name}::{}", variant.ident),
@@ -552,6 +574,17 @@ pub(crate) mod tests {
         ));
         fs::create_dir_all(parent).unwrap();
         tempfile::tempdir_in(parent).unwrap()
+    }
+
+    #[test]
+    fn explicitly_renamed_backend_variants_keep_their_wire_spelling() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let models = Models::load(root).unwrap();
+        let variant = models.enums["Backend"]
+            .iter()
+            .find(|variant| variant.name == "WindowsTerminal")
+            .unwrap();
+        assert_eq!(variant.wire_name, "windows-terminal");
     }
     #[test]
     fn owned_fields_drive_c_types_and_conversions() {

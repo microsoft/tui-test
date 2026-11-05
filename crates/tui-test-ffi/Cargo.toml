@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = []
+windows-terminal = ["tui-test/windows-terminal"]
+
 [lib]
 name = "tui_test_ffi"
 crate-type = ["cdylib", "rlib"]

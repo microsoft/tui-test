@@ -28,7 +28,7 @@ const TIMEOUT_CLASSES: readonly TimeoutClass[] = [
   "exit",
   "ready",
 ];
-const BACKENDS: readonly Backend[] = ["alacritty", "ghostty", "rio", "xtermjs"];
+const BACKENDS: readonly Backend[] = ["alacritty", "ghostty", "rio", "xtermjs", "windows-terminal"];
 const PROFILE_FIELDS = new Set(["scrollback", "colors"]);
 const TRACE_MODES = new Set(["off", "on-failure", "on"]);
 const FAILURE_ARTIFACT_MODES = new Set([

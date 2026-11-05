@@ -11,5 +11,7 @@ pub mod locator;
 pub mod pty;
 #[cfg(feature = "rio")]
 pub mod rio;
+#[cfg(all(windows, feature = "windows-terminal"))]
+pub mod windows_terminal;
 #[cfg(feature = "xtermjs")]
 pub mod xtermjs;

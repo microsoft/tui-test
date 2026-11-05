@@ -68,13 +68,16 @@ new TuiTest(session?: string, options?: ClientOptions)
 | Option | Type | Default |
 | --- | --- | --- |
 | `session` | `string` | `TUI_TEST_SESSION` or `"default"` |
-| `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs"` | `"alacritty"` |
+| `backend` | `"alacritty" \| "ghostty" \| "rio" \| "xtermjs" \| "windows-terminal"` | `"alacritty"` |
 | `timeouts` | `Timeouts` | built-in defaults |
 | `profile` | `Profile` | built-in profile |
 | `screenHistoryLimit` | `number` | `10` |
 | `artifacts` | `{ dir, onFailure?, includeRecording? }` | off |
 | `recording` | `{ directory? }` | default recording directory |
 | `trace` | `{ mode?, directory? }` | `{ mode: "off", directory: ".tui-test/traces" }` |
+
+`windows-terminal` requires a [custom Windows native library](../../crates/tui-test/native/windows-terminal/README.md)
+built with that feature; it is not included in official native packages.
 
 Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Users can open `trace.html`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
 

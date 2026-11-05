@@ -9,10 +9,11 @@ func Ptr[Value any](value Value) *Value { return &value }
 type Backend string
 
 const (
-	Alacritty Backend = "alacritty"
-	Ghostty   Backend = "ghostty"
-	Rio       Backend = "rio"
-	XtermJS   Backend = "xtermjs"
+	Alacritty       Backend = "alacritty"
+	Ghostty         Backend = "ghostty"
+	Rio             Backend = "rio"
+	XtermJS         Backend = "xtermjs"
+	WindowsTerminal Backend = "windows-terminal"
 )
 
 type Shell string

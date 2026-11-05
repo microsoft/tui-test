@@ -430,6 +430,13 @@ Shells: bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, and nushell.
 
 Backends: Alacritty, Ghostty, Rio, and xterm.js. Default: Alacritty.
 
+Windows custom builds can also enable the experimental `windows-terminal`
+backend. It uses Microsoft's headless TerminalCore through a static native bridge,
+not the Windows Terminal application or ConPTY as an emulator. It is **not**
+included in release binaries or native binding packages. Build the pinned native
+sources first, then enable `windows-terminal` on `tui-test-rs`, `tui-test-cli`, or
+`tui-test-ffi`. See the [native build instructions and limitations](crates/tui-test/native/windows-terminal/README.md).
+
 ### Exit codes
 
 | Code | Meaning |
