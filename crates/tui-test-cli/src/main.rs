@@ -20,8 +20,8 @@ use clap::{CommandFactory, Parser};
 
 use cli::{
     Cli, ClickCmd, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, HighlightCmd, KeyCmd, MatchArg,
-    MouseCmd, RecordCmd, ScreenshotArgs, ScrollCmd, TextQueryArgs, TextSelectorArgs, TextStyleArgs,
-    WaitCmd, WhitespaceArg,
+    MouseCmd, OpenArgs, RecordCmd, RunArgs, ScreenshotArgs, ScrollCmd, TextQueryArgs,
+    TextSelectorArgs, TextStyleArgs, WaitCmd, WhitespaceArg,
 };
 use protocol::{GetField, MouseAction, Request, Response};
 use tui_test::{
@@ -325,7 +325,7 @@ fn ready_flag(wait_ready: bool, no_wait_ready: bool) -> Option<bool> {
 
 fn build_request(command: Command) -> anyhow::Result<Request> {
     let req = match command {
-        Command::Open {
+        Command::Open(OpenArgs {
             shell,
             backend,
             cols,
@@ -338,7 +338,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             profile,
             timeouts,
             diagnostics,
-        } => {
+        }) => {
             let settings = resolve_client_settings(&profile)?;
             Request::Open {
                 shell: shell.map(Into::into),
@@ -362,7 +362,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
                 },
             }
         }
-        Command::Run {
+        Command::Run(RunArgs {
             program,
             args,
             backend,
@@ -376,7 +376,7 @@ fn build_request(command: Command) -> anyhow::Result<Request> {
             profile,
             timeouts,
             diagnostics,
-        } => {
+        }) => {
             let mut prog = vec![program];
             prog.extend(args);
             let settings = resolve_client_settings(&profile)?;
@@ -1840,7 +1840,7 @@ mod tests {
             );
             assert!(matches!(
                 Cli::try_parse_from(args).unwrap().command,
-                Some(Command::Run { .. })
+                Some(Command::Run(_))
             ));
         }
     }
@@ -2072,11 +2072,11 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::Run {
+            Some(Command::Run(RunArgs {
                 program,
                 args,
                 ..
-            }) if program == "vim" && args == ["--clean"]
+            })) if program == "vim" && args == ["--clean"]
         ));
     }
 
@@ -2115,7 +2115,7 @@ mod tests {
                     .unwrap_or_else(|error| panic!("{args:?}: {error}"));
                 assert!(matches!(
                     cli.command,
-                    Some(Command::Run { program, args, .. })
+                    Some(Command::Run(RunArgs { program, args, .. }))
                         if program == "vim" && args == ["--clean"]
                 ));
             }
@@ -2132,11 +2132,11 @@ mod tests {
         let cli = Cli::try_parse_from(args).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::Run {
+            Some(Command::Run(RunArgs {
                 program,
                 args,
                 ..
-            }) if program == "vim" && args == ["--clean"]
+            })) if program == "vim" && args == ["--clean"]
         ));
     }
 

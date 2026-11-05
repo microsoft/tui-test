@@ -227,84 +227,92 @@ pub struct ScreenshotArgs {
     pub transparent: bool,
 }
 
+// Separate argument builders keep clap's generated subcommand builder within
+// the default Windows stack in debug builds.
+#[derive(Args)]
+pub struct OpenArgs {
+    /// Shell to launch (defaults to the platform shell).
+    #[arg(long, value_enum)]
+    pub shell: Option<ShellArg>,
+    /// Terminal emulator to use (defaults to alacritty).
+    #[arg(long, value_enum)]
+    pub backend: Option<BackendArg>,
+    /// Terminal width in columns.
+    #[arg(long, default_value_t = DEFAULT_COLS)]
+    pub cols: u16,
+    /// Terminal height in rows.
+    #[arg(long, default_value_t = DEFAULT_ROWS)]
+    pub rows: u16,
+    /// Working directory for the session.
+    #[arg(long)]
+    pub cwd: Option<String>,
+    /// Environment overrides as KEY=VALUE (repeatable).
+    #[arg(long = "env")]
+    pub env: Vec<String>,
+    /// Block until the shell reports a ready prompt (the default), or
+    /// return as soon as it is spawned with --no-wait-ready.
+    #[arg(long)]
+    pub wait_ready: bool,
+    /// Return as soon as the shell is spawned, without waiting for a prompt.
+    #[arg(long, conflicts_with = "wait_ready")]
+    pub no_wait_ready: bool,
+    /// Replace a live session instead of reusing it.
+    #[arg(long, visible_alias = "force")]
+    pub restart: bool,
+    #[command(flatten)]
+    pub profile: ProfileArgs,
+    #[command(flatten)]
+    pub timeouts: TimeoutArgs,
+    #[command(flatten)]
+    pub diagnostics: DiagnosticRetentionArgs,
+}
+
+#[derive(Args)]
+pub struct RunArgs {
+    /// Program to run.
+    pub program: String,
+    /// Arguments passed to the program.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
+    /// Terminal emulator to use (defaults to alacritty).
+    #[arg(long, value_enum)]
+    pub backend: Option<BackendArg>,
+    /// Terminal width in columns.
+    #[arg(long, default_value_t = DEFAULT_COLS)]
+    pub cols: u16,
+    /// Terminal height in rows.
+    #[arg(long, default_value_t = DEFAULT_ROWS)]
+    pub rows: u16,
+    /// Working directory for the session.
+    #[arg(long)]
+    pub cwd: Option<String>,
+    /// Environment overrides as KEY=VALUE (repeatable).
+    #[arg(long = "env")]
+    pub env: Vec<String>,
+    /// Block until the program reports a ready prompt (off by default;
+    /// only meaningful for programs with shell integration).
+    #[arg(long)]
+    pub wait_ready: bool,
+    /// Return as soon as the program is spawned (the default).
+    #[arg(long, conflicts_with = "wait_ready")]
+    pub no_wait_ready: bool,
+    /// Replace a live session instead of reusing it.
+    #[arg(long, visible_alias = "force")]
+    pub restart: bool,
+    #[command(flatten)]
+    pub profile: ProfileArgs,
+    #[command(flatten)]
+    pub timeouts: TimeoutArgs,
+    #[command(flatten)]
+    pub diagnostics: DiagnosticRetentionArgs,
+}
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Spawn a shell session (auto-starts the daemon).
-    Open {
-        /// Shell to launch (defaults to the platform shell).
-        #[arg(long, value_enum)]
-        shell: Option<ShellArg>,
-        /// Terminal emulator to use (defaults to alacritty).
-        #[arg(long, value_enum)]
-        backend: Option<BackendArg>,
-        /// Terminal width in columns.
-        #[arg(long, default_value_t = DEFAULT_COLS)]
-        cols: u16,
-        /// Terminal height in rows.
-        #[arg(long, default_value_t = DEFAULT_ROWS)]
-        rows: u16,
-        /// Working directory for the session.
-        #[arg(long)]
-        cwd: Option<String>,
-        /// Environment overrides as KEY=VALUE (repeatable).
-        #[arg(long = "env")]
-        env: Vec<String>,
-        /// Block until the shell reports a ready prompt (the default), or
-        /// return as soon as it is spawned with --no-wait-ready.
-        #[arg(long)]
-        wait_ready: bool,
-        /// Return as soon as the shell is spawned, without waiting for a prompt.
-        #[arg(long, conflicts_with = "wait_ready")]
-        no_wait_ready: bool,
-        /// Replace a live session instead of reusing it.
-        #[arg(long, visible_alias = "force")]
-        restart: bool,
-        #[command(flatten)]
-        profile: ProfileArgs,
-        #[command(flatten)]
-        timeouts: TimeoutArgs,
-        #[command(flatten)]
-        diagnostics: DiagnosticRetentionArgs,
-    },
+    Open(OpenArgs),
     /// Spawn a session running a program directly.
-    Run {
-        /// Program to run.
-        program: String,
-        /// Arguments passed to the program.
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-        /// Terminal emulator to use (defaults to alacritty).
-        #[arg(long, value_enum)]
-        backend: Option<BackendArg>,
-        /// Terminal width in columns.
-        #[arg(long, default_value_t = DEFAULT_COLS)]
-        cols: u16,
-        /// Terminal height in rows.
-        #[arg(long, default_value_t = DEFAULT_ROWS)]
-        rows: u16,
-        /// Working directory for the session.
-        #[arg(long)]
-        cwd: Option<String>,
-        /// Environment overrides as KEY=VALUE (repeatable).
-        #[arg(long = "env")]
-        env: Vec<String>,
-        /// Block until the program reports a ready prompt (off by default;
-        /// only meaningful for programs with shell integration).
-        #[arg(long)]
-        wait_ready: bool,
-        /// Return as soon as the program is spawned (the default).
-        #[arg(long, conflicts_with = "wait_ready")]
-        no_wait_ready: bool,
-        /// Replace a live session instead of reusing it.
-        #[arg(long, visible_alias = "force")]
-        restart: bool,
-        #[command(flatten)]
-        profile: ProfileArgs,
-        #[command(flatten)]
-        timeouts: TimeoutArgs,
-        #[command(flatten)]
-        diagnostics: DiagnosticRetentionArgs,
-    },
+    Run(RunArgs),
     /// Gracefully stop and recreate the session from its last successful open or run.
     Restart {
         /// Time to wait after Ctrl-C/SIGINT before forcibly killing the child.
@@ -825,11 +833,11 @@ mod tests {
         let cli = Cli::try_parse_from(["tui-test", "open", "--no-wait-ready"]).expect("parse open");
         assert!(matches!(
             cli.command,
-            Some(Command::Open {
+            Some(Command::Open(OpenArgs {
                 wait_ready: false,
                 no_wait_ready: true,
                 ..
-            })
+            }))
         ));
     }
 
@@ -842,7 +850,7 @@ mod tests {
             let cli = Cli::try_parse_from(args).expect("parse open restart");
             assert!(matches!(
                 cli.command,
-                Some(Command::Open { restart: true, .. })
+                Some(Command::Open(OpenArgs { restart: true, .. }))
             ));
         }
 
@@ -853,7 +861,7 @@ mod tests {
             let cli = Cli::try_parse_from(args).expect("parse run restart");
             assert!(matches!(
                 cli.command,
-                Some(Command::Run { restart: true, .. })
+                Some(Command::Run(RunArgs { restart: true, .. }))
             ));
         }
     }
@@ -894,9 +902,9 @@ mod tests {
         for (value, expected) in cases {
             let cli =
                 Cli::try_parse_from(["tui-test", "open", "--shell", value]).expect("parse shell");
-            let Some(Command::Open {
+            let Some(Command::Open(OpenArgs {
                 shell: Some(shell), ..
-            }) = cli.command
+            })) = cli.command
             else {
                 panic!("expected Open with a shell");
             };
@@ -913,10 +921,10 @@ mod tests {
         ] {
             let cli = Cli::try_parse_from(["tui-test", "open", "--backend", name])
                 .unwrap_or_else(|error| panic!("parse {name}: {error}"));
-            let Some(Command::Open {
+            let Some(Command::Open(OpenArgs {
                 backend: Some(backend),
                 ..
-            }) = cli.command
+            })) = cli.command
             else {
                 panic!("expected Open with backend {name}");
             };
@@ -931,11 +939,11 @@ mod tests {
             Cli::try_parse_from(["tui-test", "run", "--wait-ready", "vim"]).expect("parse run");
         assert!(matches!(
             cli.command,
-            Some(Command::Run {
+            Some(Command::Run(RunArgs {
                 wait_ready: true,
                 no_wait_ready: false,
                 ..
-            })
+            }))
         ));
     }
 
@@ -967,7 +975,7 @@ mod tests {
             "20000",
         ])
         .expect("parse open with timeouts");
-        let Some(Command::Open { timeouts, .. }) = cli.command else {
+        let Some(Command::Open(OpenArgs { timeouts, .. })) = cli.command else {
             panic!("expected Open");
         };
         let defaults: Timeouts = timeouts.into();

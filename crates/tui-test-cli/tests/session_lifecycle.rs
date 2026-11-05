@@ -502,6 +502,33 @@ fn cli_startup_fits_the_default_process_stack() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn cli_startup_fits_a_windows_sized_stack() {
+    for args in [
+        vec!["--help"],
+        vec!["--version"],
+        vec!["open", "--help"],
+        vec!["run", "--help"],
+        vec!["expect", "text", "--help"],
+        vec!["wait", "query", "--help"],
+        vec!["agent-context"],
+    ] {
+        // Leave 64 KiB for startup overhead below Windows' default 1 MiB stack.
+        // Unix defaults otherwise hide oversized clap-generated debug frames.
+        let output = Command::new("sh")
+            .args(["-c", "ulimit -S -s 960 && exec \"$@\"", "sh", BIN])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?} failed with a constrained stack: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 static SANDBOX_SEQ: AtomicU32 = AtomicU32::new(0);
