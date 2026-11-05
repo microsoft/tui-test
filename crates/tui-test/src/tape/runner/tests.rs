@@ -274,6 +274,30 @@ mod raster {
     }
 
     #[test]
+    fn preflight_rejects_lock_only_output_without_modifying_it() {
+        let directory = Directory::new();
+        let plan = plan("Hide Sleep .02 Show Sleep .02");
+        let lock = directory.0.join("result.gif.tui-test.lock");
+        std::fs::create_dir(&lock).unwrap();
+        std::fs::write(lock.join("owner"), "preserve").unwrap();
+        for error in [
+            check(&plan, &directory.0).unwrap_err(),
+            run(&plan, &directory.0).unwrap_err(),
+        ] {
+            assert_eq!(error.phase, RunnerPhase::Preflight);
+            assert_eq!(error.kind, ErrorKind::Usage);
+            assert_eq!(error.location, plan.output().location);
+            assert!(error.message.contains("already owned"), "{error}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(lock.join("owner")).unwrap(),
+            "preserve"
+        );
+        assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(lock).unwrap().count(), 1);
+    }
+
+    #[test]
     fn ownership_is_exclusive_and_does_not_remove_existing_files() {
         let directory = Directory::new();
         let output = directory.0.join("result.gif");

@@ -180,10 +180,14 @@ fn run_observed(
     result.map(|()| prepared.summary)
 }
 
-fn reserve_output(output: &Path, location: &Location) -> Result<PathBuf, RunnerError> {
+fn output_ownership_path(output: &Path) -> PathBuf {
     let mut path = output.as_os_str().to_os_string();
     path.push(".tui-test.lock");
-    let path = PathBuf::from(path);
+    PathBuf::from(path)
+}
+
+fn reserve_output(output: &Path, location: &Location) -> Result<PathBuf, RunnerError> {
+    let path = output_ownership_path(output);
     std::fs::create_dir(&path).map_err(|error| {
         let message = if error.kind() == std::io::ErrorKind::AlreadyExists {
             format!("output is already owned: {}", path.display())
@@ -485,6 +489,13 @@ fn prepare(plan: &Plan, invocation_cwd: &Path) -> Result<Prepared, RunnerError> 
         }
     }
     check_output_files(&output, output_location)?;
+    let ownership = output_ownership_path(&output);
+    if path_metadata(&ownership, output_location)?.is_some() {
+        return Err(invalid(format!(
+            "output is already owned: {}",
+            ownership.display()
+        )));
+    }
     if output.to_str().is_none() || cwd.to_str().is_none() {
         return Err(invalid(
             "invocation directory and output must use UTF-8 paths".into(),

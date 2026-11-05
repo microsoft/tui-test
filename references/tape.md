@@ -186,7 +186,8 @@ Filesystem changes after preflight can still cause execution failures.
 `run` exclusively creates an adjacent `.tui-test.lock` directory before it starts a child.
 Another tape run cannot use the same output while that directory exists.
 The runner rechecks work files after it acquires ownership and releases ownership after cleanup, including failed exports.
-`check` does not acquire ownership or create the directory.
+`check` rejects an existing ownership path without acquiring ownership or changing that path.
+`run` still acquires ownership atomically, because another run can start after preflight.
 An interrupted process can leave the directory behind.
 Remove a stale lock only after you confirm that no run still owns that output.
 
