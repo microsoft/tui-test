@@ -183,6 +183,19 @@ Output symlinks, directories, and read-only files are errors.
 Existing `.tui-test.cast` or `.tui-test.tmp` work files are errors, not files that the runner can discard.
 Filesystem changes after preflight can still cause execution failures.
 
+`run` exclusively creates an adjacent `.tui-test.lock` directory before it starts a child.
+Another tape run cannot use the same output while that directory exists.
+The runner rechecks work files after it acquires ownership and releases ownership after cleanup, including failed exports.
+`check` does not acquire ownership or create the directory.
+An interrupted process can leave the directory behind.
+Remove a stale lock only after you confirm that no run still owns that output.
+
+GIF exports have a limit of 100,000 encoded frames, including repeated frames for long holds.
+Preflight rejects known playback durations that necessarily exceed this limit.
+The encoder also checks the actual timeline before it opens the staging output or renders frames.
+This second check covers execution overhead and scheduler delays that preflight cannot predict.
+An export-limit failure retains the recovery cast and closes the child.
+
 The core stages the GIF before replacement.
 If export fails, it retains the recovery cast and includes its path in the error.
 The runner does not delete that cast or user files.
@@ -204,6 +217,7 @@ The runner uses `Operation::Run`, not `Open`.
 It does not load project configuration, install shell integration, or use a daemon or global session registry.
 It closes its child after success or failure.
 It waits up to five seconds for the controlled `> ` prompt before frame capture.
+Preflight requires at least three columns for the prompt and input cursor.
 It does not use `WaitReady`, which requires shell integration.
 
 | Shell | Startup controls |
@@ -305,7 +319,7 @@ The supported settings are:
 | --- | --- | --- |
 | `Shell` | `bash` on Unix; `powershell` on Windows | Controlled name only |
 | `Rows` | 24 | Positive `u16`; at most 32767 on Windows |
-| `Columns` | 80 | Positive `u16`; at most 32767 on Windows |
+| `Columns` | 80 | Positive `u16`; at most 32767 on Windows; runner requires at least 3 |
 | `FontFamily` | `JetBrains Mono` | Nonempty string without NUL |
 | `FontSize` | 22 | Finite positive `f32` |
 | `Framerate` | 50 | Integer from 1 to 255 |

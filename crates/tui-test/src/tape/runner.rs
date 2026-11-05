@@ -105,9 +105,12 @@ fn run_observed(
     // Bracket logical tape actions, not recorder calls, so tests can measure
     // visible intervals independently of pause/resume behavior.
     let prepared = prepare(plan, invocation_cwd)?;
+    let ownership = reserve_output(&prepared.summary.output, &plan.output().location)?;
     let session = Session::new("tape");
     let mut started = false;
     let mut result = (|| {
+        // A previous owner may have left recovery files after our preflight.
+        check_output_files(&prepared.summary.output, &plan.output().location)?;
         execute(
             &session,
             plan.shell_location(),
@@ -162,7 +165,34 @@ fn run_observed(
             .close()
             .map_err(|error| RunnerError::execution(plan.shell_location(), error)),
     );
+    merge_cleanup(
+        &mut result,
+        std::fs::remove_dir(&ownership).map_err(|error| {
+            RunnerError::execution(
+                &plan.output().location,
+                TuiTestError::internal(format!(
+                    "cannot release output ownership {}: {error}",
+                    ownership.display()
+                )),
+            )
+        }),
+    );
     result.map(|()| prepared.summary)
+}
+
+fn reserve_output(output: &Path, location: &Location) -> Result<PathBuf, RunnerError> {
+    let mut path = output.as_os_str().to_os_string();
+    path.push(".tui-test.lock");
+    let path = PathBuf::from(path);
+    std::fs::create_dir(&path).map_err(|error| {
+        let message = if error.kind() == std::io::ErrorKind::AlreadyExists {
+            format!("output is already owned: {}", path.display())
+        } else {
+            format!("cannot reserve output {}: {error}", path.display())
+        };
+        RunnerError::preflight(location, message)
+    })?;
+    Ok(path)
 }
 
 fn merge_cleanup(result: &mut Result<(), RunnerError>, cleanup: Result<(), RunnerError>) {
@@ -454,24 +484,7 @@ fn prepare(plan: &Plan, invocation_cwd: &Path) -> Result<Prepared, RunnerError> 
             )));
         }
     }
-    if let Some(metadata) = path_metadata(&output, output_location)? {
-        if !metadata.is_file() || metadata.permissions().readonly() {
-            return Err(invalid(format!(
-                "output {} must be a writable regular file, not a symlink or directory",
-                output.display()
-            )));
-        }
-    }
-    for suffix in [".tui-test.cast", ".tui-test.tmp"] {
-        let mut path = output.as_os_str().to_os_string();
-        path.push(suffix);
-        if path_metadata(Path::new(&path), output_location)?.is_some() {
-            return Err(invalid(format!(
-                "refusing to overwrite recording work file {}",
-                Path::new(&path).display()
-            )));
-        }
-    }
+    check_output_files(&output, output_location)?;
     if output.to_str().is_none() || cwd.to_str().is_none() {
         return Err(invalid(
             "invocation directory and output must use UTF-8 paths".into(),
@@ -511,6 +524,12 @@ fn prepare(plan: &Plan, invocation_cwd: &Path) -> Result<Prepared, RunnerError> 
         .to_string();
     let args = clean_shell(plan.settings().shell, &mut env);
     let settings = plan.settings();
+    if settings.columns < 3 {
+        return Err(RunnerError::preflight(
+            plan.setting_location("Columns"),
+            "tape shell startup requires at least three columns for its prompt and input cursor",
+        ));
+    }
     let style = tape_style(plan);
     style.validate().map_err(|error| {
         let name = if error.contains("padding") {
@@ -564,12 +583,18 @@ fn prepare(plan: &Plan, invocation_cwd: &Path) -> Result<Prepared, RunnerError> 
         } else {
             0.0
         };
-        Duration::try_from_secs_f64(duration / settings.playback_speed).map_err(|_| {
-            RunnerError::preflight(
-                &action.location,
-                "action durations exceed the recording timeline range at this PlaybackSpeed",
-            )
-        })?;
+        let playback_duration = Duration::try_from_secs_f64(duration / settings.playback_speed)
+            .map_err(|_| {
+                RunnerError::preflight(
+                    &action.location,
+                    "action durations exceed the recording timeline range at this PlaybackSpeed",
+                )
+            })?;
+        #[cfg(feature = "recording-raster")]
+        crate::render::encode::validate_gif_duration(playback_duration)
+            .map_err(|error| RunnerError::preflight(&action.location, error.to_string()))?;
+        #[cfg(not(feature = "recording-raster"))]
+        let _ = playback_duration;
     }
     Ok(Prepared {
         summary: Summary {
@@ -599,6 +624,34 @@ fn prepare(plan: &Plan, invocation_cwd: &Path) -> Result<Prepared, RunnerError> 
             style,
         },
     })
+}
+
+fn check_output_files(output: &Path, location: &Location) -> Result<(), RunnerError> {
+    if let Some(metadata) = path_metadata(output, location)? {
+        if !metadata.is_file() || metadata.permissions().readonly() {
+            return Err(RunnerError::preflight(
+                location,
+                format!(
+                    "output {} must be a writable regular file, not a symlink or directory",
+                    output.display()
+                ),
+            ));
+        }
+    }
+    for suffix in [".tui-test.cast", ".tui-test.tmp"] {
+        let mut path = output.as_os_str().to_os_string();
+        path.push(suffix);
+        if path_metadata(Path::new(&path), location)?.is_some() {
+            return Err(RunnerError::preflight(
+                location,
+                format!(
+                    "refusing to overwrite recording work file {}",
+                    Path::new(&path).display()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn path_metadata(

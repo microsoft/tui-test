@@ -174,6 +174,8 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 Interactive monitors mirror the session's keyboard, paste, and mouse modes.
 
 APNG, GIF, and MP4 recordings sample the session's live emulator at `--fps` (default: 30).
+GIF export rejects timelines above 100,000 encoded frames, including repeated frames for long holds.
+The check occurs before image encoding; a failed export retains its recovery cast.
 Output, resize, and viewport changes appear in the next sample.
 A state shorter than one sample interval can be missed.
 Exports encode these samples without replay through another emulator.

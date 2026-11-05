@@ -205,6 +205,91 @@ mod raster {
     use super::*;
     use std::time::Instant;
 
+    #[test]
+    fn overlapping_runs_reserve_output_before_capture_starts() {
+        let directory = Directory::new();
+        let plan = plan("Sleep .02");
+        let mut attempted = false;
+        let summary = run_observed(&plan, &directory.0, |_, action, entering| {
+            if !attempted && entering && matches!(action, Action::Show) {
+                attempted = true;
+                let error = run(&plan, &directory.0).unwrap_err();
+                assert!(error.message.contains("owned"), "{error}");
+            }
+        })
+        .unwrap();
+        assert!(attempted);
+        decode(&summary.output);
+        assert!(!directory.0.join("result.gif.tui-test.lock").exists());
+        run(&plan, &directory.0).unwrap();
+    }
+
+    #[test]
+    fn preflight_rejects_unrepresentable_prompt_and_excessive_gif_expansion() {
+        let directory = Directory::new();
+        for (body, expected) in [
+            (
+                "Set Columns 1 Set Rows 1 Sleep .1",
+                "at least three columns",
+            ),
+            (
+                "Set Columns 2 Set Rows 1 Sleep .1",
+                "at least three columns",
+            ),
+            (
+                "Set PlaybackSpeed 0.0000000000000001 Sleep .1",
+                "GIF frame limit",
+            ),
+        ] {
+            let plan = plan(body);
+            for error in [
+                check(&plan, &directory.0).unwrap_err(),
+                run(&plan, &directory.0).unwrap_err(),
+            ] {
+                assert_eq!(error.phase, RunnerPhase::Preflight);
+                assert!(error.message.contains(expected), "{error}");
+            }
+            assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 0);
+        }
+        run(&plan("Set Columns 3 Set Rows 1 Sleep .02"), &directory.0).unwrap();
+    }
+
+    #[test]
+    fn actual_elapsed_export_limit_releases_owned_output() {
+        let directory = Directory::new();
+        let plan = plan("Set PlaybackSpeed .000000000001 Type@0 'X'");
+        check(&plan, &directory.0).unwrap();
+        let error = run_observed(&plan, &directory.0, |_, action, entering| {
+            if entering && matches!(action, Action::Type { .. }) {
+                // This models scheduler delay that the static plan cannot predict.
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error.phase, RunnerPhase::Execution);
+        assert!(error.message.contains("GIF frame limit"), "{error}");
+        assert!(error.message.contains("captured cast retained"), "{error}");
+        assert!(directory.0.join("result.gif.tui-test.cast").exists());
+        assert!(!directory.0.join("result.gif.tui-test.lock").exists());
+    }
+
+    #[test]
+    fn ownership_is_exclusive_and_does_not_remove_existing_files() {
+        let directory = Directory::new();
+        let output = directory.0.join("result.gif");
+        let location = plan("Sleep .02").output().location.clone();
+        let lock = reserve_output(&output, &location).unwrap();
+        assert!(reserve_output(&output, &location).is_err());
+        assert!(lock.is_dir());
+        std::fs::remove_dir(lock).unwrap();
+        let cast = directory.0.join("result.gif.tui-test.cast");
+        std::fs::write(&cast, "recovery").unwrap();
+        let lock = reserve_output(&output, &location).unwrap();
+        assert!(check_output_files(&output, &location).is_err());
+        std::fs::remove_dir(lock).unwrap();
+        assert_eq!(std::fs::read_to_string(cast).unwrap(), "recovery");
+    }
+
     fn decode(path: &Path) -> ((u16, u16), u64, Vec<Vec<u8>>) {
         let mut options = gif::DecodeOptions::new();
         options.set_color_output(gif::ColorOutput::RGBA);
@@ -442,7 +527,7 @@ mod raster {
     #[test]
     fn late_invalid_timeline_fails_before_any_child_or_output() {
         let directory = Directory::new();
-        let actions = "Type 'touch marker'\nEnter\nSleep 9223372036\nSet TypingSpeed 9223372036s\nEnter 18446744073709551615";
+        let actions = "Type 'touch marker'\nEnter\nSleep .1\nSet TypingSpeed 9223372036s\nEnter 18446744073709551615";
         #[cfg(unix)]
         let plan = fixture_plan(&directory.0, "input", actions);
         #[cfg(not(unix))]
