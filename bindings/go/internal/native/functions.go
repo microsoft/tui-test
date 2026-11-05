@@ -27,6 +27,8 @@ type nativeFunctionTable struct {
 	GetBellCount     func(abiString) *abiResult
 	GetBellEvents    func(abiString) *abiResult
 	StopRecording    func(abiString) *abiResult
+	PauseRecording   func(abiString) *abiResult
+	ResumeRecording  func(abiString) *abiResult
 	Text             func(abiString, bool) *abiResult
 	PackedScreen     func(abiString, bool) *abiResult
 	Cells            func(abiString, uint16, uint16, uint16, uint16) *abiResult
@@ -90,6 +92,8 @@ func nativeRegistrations(table *nativeFunctionTable) []nativeRegistration {
 		{symbol: "tui_get_bell_count", target: &table.GetBellCount},
 		{symbol: "tui_get_bell_events", target: &table.GetBellEvents},
 		{symbol: "tui_stop_recording", target: &table.StopRecording},
+		{symbol: "tui_pause_recording", target: &table.PauseRecording},
+		{symbol: "tui_resume_recording", target: &table.ResumeRecording},
 		{symbol: "tui_text", target: &table.Text},
 		{symbol: "tui_packed_screen", target: &table.PackedScreen},
 		{symbol: "tui_cells", target: &table.Cells},

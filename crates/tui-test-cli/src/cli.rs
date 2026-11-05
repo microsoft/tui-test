@@ -496,6 +496,10 @@ pub enum RecordCmd {
     },
     /// Stop the active recording and finish its output file.
     Stop,
+    /// Pause APNG, GIF, or MP4 recording while the terminal continues.
+    Pause,
+    /// Resume APNG, GIF, or MP4 recording without including paused time.
+    Resume,
 }
 
 /// Signals deliverable to a session's child process.

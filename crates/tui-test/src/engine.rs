@@ -2351,6 +2351,14 @@ fn dispatch(
             })?;
             Ok(OperationResult::Unit)
         }
+        Operation::PauseRecording => {
+            session.pause_recording()?;
+            Ok(OperationResult::Unit)
+        }
+        Operation::ResumeRecording => {
+            session.resume_recording()?;
+            Ok(OperationResult::Unit)
+        }
         Operation::StopRecording => Ok(OperationResult::Recording(session.stop_recording()?)),
         Operation::Open(_)
         | Operation::Run(_)

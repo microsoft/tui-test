@@ -16,6 +16,7 @@ struct ActiveRecording {
     request: StartRecording,
     started: Instant,
     last_at: Instant,
+    paused: bool,
     error: Option<String>,
 }
 
@@ -112,9 +113,53 @@ pub(super) fn worker_loop(
                     request,
                     started: at,
                     last_at: at,
+                    paused: false,
                     error: None,
                 });
                 let _ = reply.send(Ok(()));
+            }
+            Message::Pause { reply } => {
+                let Some(recording) = active.as_mut() else {
+                    let _ = reply.send(Err(CaptureError::NotActive));
+                    continue;
+                };
+                if recording.request.format == crate::api::RecordingFormat::Cast {
+                    let _ = reply.send(Err(CaptureError::UnsupportedPauseResume));
+                    continue;
+                }
+                if recording.paused {
+                    let _ = reply.send(Err(CaptureError::AlreadyPaused));
+                    continue;
+                }
+                // Recovery casts stay continuous; only the live raster capture pauses.
+                recording.paused = true;
+                let _ = reply.send(
+                    recording
+                        .error
+                        .as_ref()
+                        .map_or(Ok(()), |error| Err(CaptureError::Io(error.clone()))),
+                );
+            }
+            Message::Resume { reply } => {
+                let Some(recording) = active.as_mut() else {
+                    let _ = reply.send(Err(CaptureError::NotActive));
+                    continue;
+                };
+                if recording.request.format == crate::api::RecordingFormat::Cast {
+                    let _ = reply.send(Err(CaptureError::UnsupportedPauseResume));
+                    continue;
+                }
+                if !recording.paused {
+                    let _ = reply.send(Err(CaptureError::NotPaused));
+                    continue;
+                }
+                recording.paused = false;
+                let _ = reply.send(
+                    recording
+                        .error
+                        .as_ref()
+                        .map_or(Ok(()), |error| Err(CaptureError::Io(error.clone()))),
+                );
             }
             Message::Stop { reply } => {
                 let Some(mut recording) = active.take() else {

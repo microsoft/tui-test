@@ -166,11 +166,11 @@ pub(crate) fn snapshot_to_ansi(emulator: &dyn Emulator) -> String {
         "\x1b[0m\x1b[{};{}H\x1b[{} q\x1b[?7h{}",
         u32::from(cursor.1) + 1,
         u32::from(cursor.0) + 1,
-        match emulator.cursor_shape() {
+        match emulator.cursor_style().shape {
             CursorShape::Block => 2,
             CursorShape::Underline => 4,
             CursorShape::Bar => 6,
-        },
+        } - u8::from(emulator.cursor_style().blinking),
         if emulator.cursor_visible() {
             "\x1b[?25h"
         } else {
@@ -418,13 +418,13 @@ mod tests {
     fn snapshot_captures_existing_visual_state() {
         use crate::profile::{ColorSlot, Profile, Rgb};
         use crate::terminal::alacritty::AlacrittyEmu;
-        use crate::terminal::emu::{CursorShape, Emulator};
+        use crate::terminal::emu::{CursorShape, CursorStyle, Emulator};
 
         let mut source = AlacrittyEmu::new(2, 1, &Profile::default());
         source.process(
             b"\x1b]2;before recording\x07\x1b]4;1;#010203\x07\
               \x1b]10;#040506\x07\x1b]11;#070809\x07\x1b]12;#0a0b0c\x07\
-              \x1b[1;2H\x1b[6 q\x1b[?25l",
+              \x1b[1;2H\x1b[5 q\x1b[?25l",
         );
 
         let mut replay = AlacrittyEmu::new(2, 1, &Profile::default());
@@ -437,6 +437,13 @@ mod tests {
         assert_eq!(replay.color(ColorSlot::Cursor), Rgb::new(10, 11, 12));
         assert_eq!(replay.cursor(), (1, 0));
         assert_eq!(replay.cursor_shape(), CursorShape::Bar);
+        assert_eq!(
+            replay.cursor_style(),
+            CursorStyle {
+                shape: CursorShape::Bar,
+                blinking: true,
+            }
+        );
         assert!(!replay.cursor_visible());
     }
 }

@@ -797,6 +797,10 @@ pub enum Operation {
         zoom: Option<f64>,
         background: Option<CaptureBackground>,
     },
+    /// Pause an APNG, GIF, or MP4 recording. Asciicast is not supported.
+    PauseRecording,
+    /// Resume an APNG, GIF, or MP4 recording from the live terminal.
+    ResumeRecording,
     StopRecording,
 }
 

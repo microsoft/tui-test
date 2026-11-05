@@ -498,6 +498,14 @@ export class NativeRuntime {
     return this.#call((session) => session.stopRecording());
   }
 
+  pauseRecording(): Promise<void> {
+    return this.#call((session) => session.pauseRecording());
+  }
+
+  resumeRecording(): Promise<void> {
+    return this.#call((session) => session.resumeRecording());
+  }
+
   panicProbe(): Promise<void> {
     return this.#call((session) => session.panicProbe());
   }

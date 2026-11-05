@@ -142,6 +142,8 @@ Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 | --- | --- |
 | `record start PATH [--background COLOR \| --transparent]` | Start a recording. |
 | `record stop` | Finish it. |
+| `record pause` | Pause APNG, GIF, or MP4 capture while the terminal continues. |
+| `record resume` | Resume raster capture from the live terminal without paused time. |
 | `get-recording [SESSION]` | Read the automatic asciinema recording. |
 | `monitor` | Watch a session live. |
 | `monitor --interactive` | Forward keyboard, paste, and supported SGR mouse input; Ctrl+] detaches. |
@@ -153,7 +155,11 @@ Output, resize, and viewport changes appear in the next sample.
 A state shorter than one sample interval can be missed.
 Exports encode these samples without replay through another emulator.
 
-Raster recordings preserve elapsed time until `record stop`, including quiet periods.
+Raster recordings preserve active elapsed time until `record stop`, including quiet periods.
+Pause and resume support APNG, GIF, and MP4 only. Asciicast requests return usage errors without changing the recording.
+The terminal continues during a pause. Resume captures its current screen, not the intermediate output.
+Stop also works during a pause. Automatic diagnostic recordings and recovery casts remain continuous, including output during pauses.
+Pause requires an active recording. Resume requires a paused recording.
 There is no default idle cap or extra final hold.
 `--speed` scales playback time; `--idle-time-limit` explicitly caps each unchanged visual interval before speed scaling.
 Cursor blink phases share that interval's idle limit; they do not count as terminal activity.

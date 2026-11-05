@@ -1075,6 +1075,12 @@ class TuiTest:
     async def stop_recording(self) -> str:
         return await self._await(self._native.stop_recording())
 
+    async def pause_recording(self) -> None:
+        await self._await(self._native.pause_recording())
+
+    async def resume_recording(self) -> None:
+        await self._await(self._native.resume_recording())
+
     async def wait_title(
         self,
         text: str,
