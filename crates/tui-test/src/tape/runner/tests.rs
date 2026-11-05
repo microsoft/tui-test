@@ -107,6 +107,19 @@ fn environment_keys_follow_host_rules() {
     assert_eq!(env_value(&env, "PATH"), Some("last"));
 }
 
+#[cfg(windows)]
+#[test]
+fn child_cwd_preserves_drive_and_unc_paths_without_verbatim_prefixes() {
+    for (canonical, expected) in [
+        (r"\\?\C:\work\tape", r"C:\work\tape"),
+        (r"\\?\UNC\server\share\tape", r"\\server\share\tape"),
+        (r"C:\work\tape", r"C:\work\tape"),
+        (r"\\server\share\tape", r"\\server\share\tape"),
+    ] {
+        assert_eq!(child_cwd(Path::new(canonical)), expected);
+    }
+}
+
 #[test]
 fn cleanup_errors_do_not_mask_primary_context() {
     let plan = plan("Sleep .1");
@@ -227,6 +240,59 @@ mod raster {
         session
     }
 
+    fn timed_run(plan: &Plan, directory: &Path) -> (Summary, (Duration, Duration)) {
+        let mut visible: Option<(Instant, Instant)> = None;
+        let mut before = Instant::now();
+        let mut minimum = Duration::ZERO;
+        let mut maximum = Duration::ZERO;
+        let summary = run_observed(plan, directory, |session, action, entering| {
+            if entering {
+                before = Instant::now();
+                return;
+            }
+            let after = Instant::now();
+            match action {
+                Action::Show if visible.is_none() => visible = Some((before, after)),
+                Action::Hide => {
+                    if let Some((start_before, start_after)) = visible.take() {
+                        minimum += before.duration_since(start_after);
+                        maximum += after.duration_since(start_before);
+                    }
+                }
+                // Confirm hidden edits before the next visibility boundary.
+                Action::Type { text, .. } if visible.is_none() => wait(session, text),
+                Action::Key {
+                    key: Key::Backspace,
+                    ..
+                } if visible.is_none() => {
+                    session
+                        .execute(Operation::WaitLocator {
+                            query: crate::LocatorQuery::text("Z"),
+                            not: true,
+                            timeout_ms: Some(5_000),
+                        })
+                        .unwrap();
+                }
+                _ => {}
+            }
+        })
+        .unwrap();
+        assert!(visible.is_none());
+        let speed = plan.settings().playback_speed;
+        (summary, (minimum.div_f64(speed), maximum.div_f64(speed)))
+    }
+
+    fn assert_timing(duration: u64, bounds: (Duration, Duration), requested: Duration) {
+        let recorded = Duration::from_millis(duration * 10);
+        let quantum = Duration::from_millis(10);
+        let minimum = bounds.0.max(requested);
+        assert!(
+            recorded + quantum >= minimum && recorded <= bounds.1 + quantum,
+            "GIF duration {recorded:?}, measured visible interval {minimum:?}..={:?}",
+            bounds.1
+        );
+    }
+
     #[cfg(unix)]
     fn fixture_plan(directory: &Path, mode: &str, actions: &str) -> Plan {
         use std::os::unix::fs::PermissionsExt;
@@ -339,7 +405,7 @@ mod raster {
                 "Set PlaybackSpeed 0.0000000000000000000000001",
                 "PlaybackSpeed",
             ),
-            ("Set Columns 65535", "GIF"),
+            ("Set Columns 32767", "GIF"),
         ] {
             let plan = plan(&format!(
                 "{setting}\n{environment}Type 'touch marker'\nEnter\nSleep .1"
@@ -413,8 +479,8 @@ mod raster {
     fn quiet_sleep_and_speed_decode_to_expected_gif_duration() {
         let directory = Directory::new();
         for speed in [1.0, 2.0] {
-            let plan = plan(&format!("Set PlaybackSpeed {speed}\nSleep .4"));
-            let summary = run(&plan, &directory.0).unwrap();
+            let plan = plan(&format!("Set PlaybackSpeed {speed}\nSleep .4\nHide"));
+            let (summary, bounds) = timed_run(&plan, &directory.0);
             let (dimensions, duration, frames) = decode(&summary.output);
             assert_eq!(
                 dimensions,
@@ -423,11 +489,7 @@ mod raster {
                     summary.geometry.height as u16
                 )
             );
-            let expected = 40.0 / speed;
-            assert!(
-                (duration as f64 - expected).abs() <= 5.0,
-                "{duration} cs at speed {speed}"
-            );
+            assert_timing(duration, bounds, Duration::from_secs_f64(0.4 / speed));
             assert!(frames.iter().all(|frame| frame == &frames[0]));
             assert!(!directory.0.join("result.gif.tui-test.cast").exists());
         }
@@ -436,27 +498,28 @@ mod raster {
     #[test]
     fn initial_and_final_hidden_work_never_enter_gif_frames_or_time() {
         let directory = Directory::new();
-        let baseline = run(&plan("Hide\nType@40ms 'X'\nShow\nSleep .2"), &directory.0).unwrap();
-        let (_, baseline_duration, baseline_frames) = decode(&baseline.output);
-        let hidden = run(&plan("Hide\nHide\nType@40ms 'X'\nSleep .3\nShow\nShow\nSleep .2\nHide\nHide\nType@40ms 'ZZZ'\nSleep .3"), &directory.0).unwrap();
+        let (baseline, _) = timed_run(
+            &plan("Hide\nType@40ms 'X'\nShow\nSleep .2\nHide"),
+            &directory.0,
+        );
+        let (_, _, baseline_frames) = decode(&baseline.output);
+        let (hidden, bounds) = timed_run(&plan("Hide\nHide\nType@40ms 'X'\nSleep .3\nShow\nShow\nSleep .2\nHide\nHide\nType@40ms 'ZZZ'\nSleep .3"), &directory.0);
         let (_, duration, frames) = decode(&hidden.output);
-        assert!((duration as i64 - baseline_duration as i64).abs() <= 5);
+        assert_timing(duration, bounds, Duration::from_millis(200));
         assert!(frames.iter().all(|frame| frame == &baseline_frames[0]));
-        assert!(duration < 30, "hidden elapsed time leaked: {duration}");
     }
 
     #[test]
     fn pause_and_resume_remove_hidden_intervals_and_hidden_edits() {
         let directory = Directory::new();
         let baseline = run(&plan("Sleep .4"), &directory.0).unwrap();
-        let (_, baseline_duration, baseline_frames) = decode(&baseline.output);
-        let paused = run(
+        let (_, _, baseline_frames) = decode(&baseline.output);
+        let (paused, bounds) = timed_run(
             &plan("Sleep .2\nHide\nType@40ms 'Z'\nBackspace@40ms\nSleep .3\nShow\nSleep .2\nHide"),
             &directory.0,
-        )
-        .unwrap();
+        );
         let (_, duration, frames) = decode(&paused.output);
-        assert!((duration as i64 - baseline_duration as i64).abs() <= 5);
+        assert_timing(duration, bounds, Duration::from_millis(400));
         assert!(frames.iter().all(|frame| frame == &baseline_frames[0]));
     }
 
@@ -736,7 +799,34 @@ mod raster {
                 eprintln!("{shell} is unavailable; install it to exercise this native shell");
                 continue;
             }
-            let plan = plan(&format!("Set Shell {shell}\nSleep .2"));
+            let plan = plan(&format!(
+                "Set Shell {shell}\nSet Columns 80\nSet Rows 6\nSleep .2"
+            ));
+            let session = launch(&plan, &directory.0);
+            if shell != "cmd" {
+                let crate::OperationResult::Text(text) =
+                    session.execute(Operation::Text { full: true }).unwrap()
+                else {
+                    panic!()
+                };
+                assert_eq!(text.trim(), ">", "{shell} startup output: {text:?}");
+                perform(&session, plan.shell_location(), &Action::Type {
+                    text: "if (Get-Command Get-PSReadLineOption -ErrorAction SilentlyContinue) { (Get-PSReadLineOption).HistorySaveStyle } else { 'Save' + 'Nothing' }".into(),
+                    delay: Duration::ZERO,
+                }).unwrap();
+                perform(
+                    &session,
+                    plan.shell_location(),
+                    &Action::Key {
+                        key: Key::Enter,
+                        delay: Duration::ZERO,
+                        count: 1,
+                    },
+                )
+                .unwrap();
+                wait(&session, "SaveNothing");
+            }
+            session.close().unwrap();
             run(&plan, &directory.0).unwrap();
             decode(&directory.0.join("result.gif"));
         }

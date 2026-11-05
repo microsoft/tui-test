@@ -60,6 +60,7 @@ Tape delays do not wait for command completion.
 Neither command uses a daemon, a session registry, project configuration, or `TUI_TEST_SESSION` for session selection.
 The child still inherits the process environment, including `TUI_TEST_SESSION`.
 Tape `Env` directives change only that child's environment.
+On Windows, the child receives an ordinary drive or UNC path for its working directory, not a verbatim path.
 
 Only the global `--json` output flag applies to tape commands.
 Explicit `--session`, `--verbose`, `--failure-artifacts`, `--failure-artifact-mode`, `--failure-artifact-recording`, and `--diagnostic-context` flags fail with exit code 2.
@@ -389,6 +390,7 @@ Native font metrics and glyph fallback can differ between hosts.
 
 The runner tests decode GIF frames and delays rather than only checking file sizes.
 They cover hidden frames, quiet time, playback speed, Unicode input, modifiers, viewport movement, and child cleanup.
+Timing checks use measured visible intervals, not fixed limits on host scheduling delays.
 Tests create unique directories under the worktree's `target` directory and remove their artifacts.
 
 ```sh

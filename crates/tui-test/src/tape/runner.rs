@@ -94,7 +94,17 @@ pub fn check(plan: &Plan, invocation_cwd: impl AsRef<Path>) -> Result<Summary, R
 /// It closes the child on success and failure. A failed export retains the core
 /// recovery cast; its path appears in the error.
 pub fn run(plan: &Plan, invocation_cwd: impl AsRef<Path>) -> Result<Summary, RunnerError> {
-    let prepared = prepare(plan, invocation_cwd.as_ref())?;
+    run_observed(plan, invocation_cwd.as_ref(), |_, _, _| {})
+}
+
+fn run_observed(
+    plan: &Plan,
+    invocation_cwd: &Path,
+    mut observe: impl FnMut(&Session, &Action, bool),
+) -> Result<Summary, RunnerError> {
+    // Bracket logical tape actions, not recorder calls, so tests can measure
+    // visible intervals independently of pause/resume behavior.
+    let prepared = prepare(plan, invocation_cwd)?;
     let session = Session::new("tape");
     let mut started = false;
     let mut result = (|| {
@@ -113,10 +123,13 @@ pub fn run(plan: &Plan, invocation_cwd: impl AsRef<Path>) -> Result<Summary, Run
             },
         )?;
         if plan.initially_visible() {
+            observe(&session, &Action::Show, true);
             start_recording(&session, plan, &prepared.summary)?;
             started = true;
+            observe(&session, &Action::Show, false);
         }
         for action in plan.actions() {
+            observe(&session, &action.value, true);
             match &action.value {
                 Action::Hide => {
                     execute(&session, &action.location, Operation::PauseRecording)?;
@@ -130,15 +143,18 @@ pub fn run(plan: &Plan, invocation_cwd: impl AsRef<Path>) -> Result<Summary, Run
                 }
                 value => perform(&session, &action.location, value)?,
             }
+            observe(&session, &action.value, false);
         }
         Ok(())
     })();
     // Stop while paused at a hidden EOF. Resume would capture hidden content.
     if started {
+        observe(&session, &Action::Hide, true);
         merge_cleanup(
             &mut result,
             execute(&session, &plan.output().location, Operation::StopRecording).map(|_| ()),
         );
+        observe(&session, &Action::Hide, false);
     }
     merge_cleanup(
         &mut result,
@@ -367,11 +383,27 @@ fn clean_shell(shell: Shell, env: &mut Vec<(String, String)>) -> Vec<String> {
         ],
         Shell::Powershell | Shell::Pwsh => &[
             "-NoLogo", "-NoProfile", "-NoExit", "-Command",
-            "function global:prompt { '> ' }; if (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue) { Set-PSReadLineOption -HistorySaveStyle SaveNothing }; $MaximumHistoryCount = 0",
+            "function global:prompt { '> ' }; if (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue) { Set-PSReadLineOption -HistorySaveStyle SaveNothing }",
         ],
         Shell::Cmd => &["/D", "/Q", "/K", "prompt $G$S"],
     };
     args.iter().map(|value| (*value).into()).collect()
+}
+
+fn child_cwd(cwd: &Path) -> String {
+    let cwd = cwd.to_str().expect("preflight checked UTF-8");
+    // Keep canonical paths for file operations, but use ordinary DOS/UNC paths
+    // for child processes. PowerShell and Node do not accept verbatim cwd paths.
+    #[cfg(windows)]
+    {
+        if let Some(path) = cwd.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{path}");
+        }
+        if let Some(path) = cwd.strip_prefix(r"\\?\") {
+            return path.into();
+        }
+    }
+    cwd.into()
 }
 
 fn prepare(plan: &Plan, invocation_cwd: &Path) -> Result<Prepared, RunnerError> {
@@ -555,7 +587,7 @@ fn prepare(plan: &Plan, invocation_cwd: &Path) -> Result<Prepared, RunnerError> 
             program,
             args,
             env,
-            cwd: Some(cwd.to_str().expect("checked UTF-8").into()),
+            cwd: Some(child_cwd(&cwd)),
             cols: settings.columns,
             rows: settings.rows,
             backend: Default::default(),
