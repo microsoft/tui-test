@@ -823,15 +823,12 @@ fn duration(value: &str) -> Option<Duration> {
     } else {
         whole.parse::<u128>().ok()?
     };
-    let digits = fraction.len().min(18);
-    let fraction = if digits == 0 {
-        0
-    } else {
-        fraction[..digits].parse::<u128>().ok()?
-    };
-    let nanos = whole
-        .checked_mul(unit)?
-        .checked_add(fraction.checked_mul(unit)? / 10_u128.pow(digits as u32))?;
+    // Scale from the least significant digit so every digit contributes without
+    // an unbounded numerator. The carry stays smaller than one unit.
+    let fraction = fraction.bytes().rev().fold(0_u128, |carry, digit| {
+        (u128::from(digit - b'0') * unit + carry) / 10
+    });
+    let nanos = whole.checked_mul(unit)?.checked_add(fraction)?;
     if nanos > i64::MAX as u128 {
         return None;
     }

@@ -107,6 +107,20 @@ fn durations_are_exact_and_checked() {
         parsed("Sleep .0000000009").commands()[0].value,
         Command::Sleep(Duration::ZERO)
     );
+    for (fraction, nanos) in [
+        ("00000000001666666666", 0),
+        ("00000000001666666667", 1),
+        ("9999999999999999999999999999999999999999", 59_999_999_999),
+    ] {
+        assert_eq!(
+            parsed(&format!("Sleep .{fraction}m")).commands()[0].value,
+            Command::Sleep(Duration::from_nanos(nanos)),
+        );
+    }
+    assert_eq!(
+        plan("Output fraction.gif Sleep .00000000001666666667m").actions()[0].value,
+        Action::Sleep(Duration::from_nanos(1))
+    );
 }
 
 #[test]
