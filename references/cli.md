@@ -21,6 +21,29 @@ Use `--session NAME` to select a session. `open` and `run` reuse it unless `--re
 
 `restart` replays the last successful spawn, preserving its original working directory, options, and latest terminal size. It sends Ctrl-C and waits up to 5000 ms before forcing replacement; `--graceful-timeout 0` skips the wait. It works after child exit, but not after `close` or daemon shutdown. The terminal and automatic recording start fresh.
 
+## Tape to GIF
+
+```sh
+tui-test tape check demo.tape --json
+tui-test tape run demo.tape
+```
+
+`check` loads all sources, compiles the complete tape, and checks execution requirements without a child or output writes.
+`run` repeats those checks, executes the tape, exports one GIF, and closes its isolated local session.
+Both commands report terminal columns and rows, actual pixel dimensions, and source-located warnings.
+Relative tape, `Source`, and output paths use the invocation directory, not the tape directory.
+
+Tape commands do not use a daemon, project configuration, or `TUI_TEST_SESSION`.
+They reject `--session`, `--verbose`, `--failure-artifacts`, `--failure-artifact-mode`, `--failure-artifact-recording`, and `--diagnostic-context`.
+The core tape API does not accept a session execution context or produce the CLI failure bundles.
+Use ordinary session commands when you need those diagnostics.
+`--json` returns `{"ok":true,"data":{...}}` or `{"ok":false,"error":{...}}` on stdout, without diagnostic text on stderr.
+Syntax, unsupported features, and preflight failures return exit code 2.
+Execution failures use the core error exit code.
+
+Warning: Run only trusted tapes. Tapes can execute shell commands; they are not sandboxed.
+See [Tape](tape.md) for a runnable example, supported commands, and exact result fields.
+
 ## Locate text
 
 ```sh
