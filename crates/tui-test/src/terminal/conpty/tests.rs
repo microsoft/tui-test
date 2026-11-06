@@ -178,7 +178,7 @@ fn conpty_preserves_text_before_finish_and_prompt_markers() {
     .unwrap();
     let (sender, receiver) = mpsc::channel();
     let reading = std::thread::spawn(move || {
-        let mut bytes = [0; 8192];
+        let mut bytes = [0; 17];
         while let Ok(count) = reader.read(&mut bytes) {
             if count == 0 || sender.send(bytes[..count].to_vec()).is_err() {
                 break;
@@ -190,7 +190,7 @@ fn conpty_preserves_text_before_finish_and_prompt_markers() {
         let mut transcript = Vec::new();
         let mut completed = 0;
         let deadline = Instant::now() + Duration::from_secs(30);
-        while completed < 12 {
+        while completed < 12 || !tracker.is_ready() {
             let chunk =
                 receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
             let query_start = transcript.len().saturating_sub(3);
