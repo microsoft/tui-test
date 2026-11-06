@@ -126,10 +126,14 @@ Most waits accept `--timeout MS`. `expect`, `click`, and `highlight` retry. `fin
 `-V` and `--version` print the same complete report without a session or daemon.
 Rust package versions come from the build's
 resolved dependencies; Ghostty reports its native build version, and xterm.js
-reports the vendored headless and Unicode 11 addon versions. On Windows,
-portable-pty selects ConPTY: the command reports the loaded `conpty.dll` file
-version, or the system `conhost.exe` version when using Windows' built-in ConPTY.
-portable-pty does not pin a ConPTY release.
+reports the vendored headless and Unicode 11 addon versions. On Windows, the
+report includes the bundled ConPTY package and file versions without extracting
+the bundle or starting a console host.
+
+Windows sessions use tui-test's bundled Microsoft ConPTY host instead of the
+system host. The engine extracts and verifies it on first PTY use in a process.
+See the [ConPTY asset README](../crates/tui-test/assets/conpty/README.md) for its
+source, version, and update instructions.
 
 Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 `size`, `title`, `clipboard`, `bells`, and `bell-events`.

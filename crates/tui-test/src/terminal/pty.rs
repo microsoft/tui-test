@@ -191,6 +191,8 @@ impl Pty {
         if let Some(cwd) = cwd {
             validate_cwd(cwd)?;
         }
+        #[cfg(windows)]
+        super::conpty::initialize()?;
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows: opts.rows,
