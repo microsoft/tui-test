@@ -4,11 +4,15 @@ import type { ErrorKind, TuiTestError } from "./errors.js";
 import type { FailureArtifactRef, FailureDetails } from "./types.js";
 import type {
   AutomaticRecordingOptions,
+  SessionContext,
   TraceOptions,
   BellEvent,
   Cell,
   ClipboardWaitOptions,
   Cursor,
+  CursorExpectation,
+  ColorExpectation,
+  TerminalColors,
   Viewport,
   EffectiveTimeouts,
   FailureArtifactOptions,
@@ -208,9 +212,10 @@ async function createSession(
   recording?: AutomaticRecordingOptions,
   artifacts?: FailureArtifactOptions,
   trace?: TraceOptions,
+  context?: SessionContext,
 ): Promise<NativeSessionHandle> {
   const binding = await loadBinding();
-  return new binding.NativeSession(name, recording, artifacts, trace);
+  return new binding.NativeSession(name, recording, artifacts, trace, context);
 }
 
 export class NativeRuntime {
@@ -221,8 +226,9 @@ export class NativeRuntime {
     recording?: AutomaticRecordingOptions,
     artifacts?: FailureArtifactOptions,
     trace?: TraceOptions,
+    context?: SessionContext,
   ) {
-    this.#session = createSession(name, recording, artifacts, trace);
+    this.#session = createSession(name, recording, artifacts, trace, context);
   }
 
   async #call<T>(action: (session: NativeSessionHandle) => Promise<T>): Promise<T> {
@@ -243,6 +249,14 @@ export class NativeRuntime {
 
   close(failed?: boolean): Promise<void> {
     return this.#call((session) => session.close(failed));
+  }
+
+  finishTrace(failed: boolean): Promise<void> {
+    return this.#call((session) => session.finishTrace(failed));
+  }
+
+  interrupt(): Promise<void> {
+    return this.#call((session) => session.interrupt());
   }
 
   state(): Promise<State> {
@@ -342,6 +356,21 @@ export class NativeRuntime {
 
   getCursor(): Promise<Cursor> {
     return this.#call((session) => session.getCursor());
+  }
+  getModes(): Promise<Record<string, boolean>> {
+    return this.#call((session) => session.getModes());
+  }
+  getColors(): Promise<TerminalColors> {
+    return this.#call((session) => session.getColors());
+  }
+  expectCursor(options: CursorExpectation): Promise<void> {
+    return this.#call((session) => session.expectCursor(options));
+  }
+  expectColors(options: ColorExpectation): Promise<void> {
+    return this.#call((session) => session.expectColors(options));
+  }
+  expectMode(mode: string, enabled: boolean, timeoutMs?: number): Promise<void> {
+    return this.#call((session) => session.expectMode(mode, enabled, timeoutMs));
   }
 
   getViewport(): Promise<Viewport> {

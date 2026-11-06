@@ -13,6 +13,28 @@ TraceMode = Literal["off", "on-failure", "on"]
 LocatorDirection = Literal["within", "after", "before"]
 
 
+@dataclass
+class TextAnchor:
+    text: str
+    regex: bool = False
+    occurrence: Union[Literal["any", "unique", "first", "last"], int] = "unique"
+
+
+@dataclass
+class TextScope:
+    after: Optional[TextAnchor] = None
+    before: Optional[TextAnchor] = None
+
+
+@dataclass
+class ExecutionContext:
+    operation_name: Optional[str] = None
+    diagnostic_context: Optional[Dict[str, str]] = None
+    artifacts: Optional[Dict[str, Any]] = None
+    trace: Optional["TraceOptions"] = None
+    screen_history_limit: Optional[int] = None
+
+
 class OpenResult(TypedDict):
     shell_pid: Optional[int]
     session: str
@@ -57,6 +79,67 @@ class Colors:
 
 
 @dataclass
+class FontFamilies:
+    family: Optional[str] = None
+    bold: Optional[str] = None
+    italic: Optional[str] = None
+    bold_italic: Optional[str] = None
+    files: Optional[List[str]] = None
+
+
+@dataclass
+class WindowStyle:
+    title_bar: Optional[bool] = None
+    traffic_lights: Optional[bool] = None
+    background: Optional[str] = None
+    foreground: Optional[str] = None
+    divider: Optional[str] = None
+
+
+@dataclass
+class BorderStyle:
+    width: Optional[float] = None
+    color: Optional[str] = None
+    radius: Optional[float] = None
+
+
+@dataclass
+class ShadowStyle:
+    enabled: Optional[bool] = None
+    color: Optional[str] = None
+    offset: Optional[float] = None
+    spread: Optional[float] = None
+
+
+@dataclass
+class RecordingCursorStyle:
+    blink: Optional[bool] = None
+    blink_interval_ms: Optional[int] = None
+
+
+@dataclass
+class PaddingSides:
+    top: Optional[int] = None
+    right: Optional[int] = None
+    bottom: Optional[int] = None
+    left: Optional[int] = None
+
+
+@dataclass
+class RenderStyle:
+    font: Optional[FontFamilies] = None
+    font_size: Optional[float] = None
+    title_font_size: Optional[float] = None
+    canvas_background: Optional[str] = None
+    canvas_padding: Optional[Union[int, PaddingSides]] = None
+    content_padding: Optional[Union[int, PaddingSides]] = None
+    window: Optional[WindowStyle] = None
+    border: Optional[BorderStyle] = None
+    shadow: Optional[ShadowStyle] = None
+    cursor: Optional[RecordingCursorStyle] = None
+
+
+@dataclass
 class Profile:
     scrollback: Optional[int] = None
     colors: Optional[Colors] = None
@@ -74,6 +157,7 @@ class Timeouts:
 @dataclass
 class AutomaticRecording:
     directory: Optional[str] = None
+    mode: Optional[Literal["disabled", "on-failure", "always"]] = None
 
 @dataclass
 class TraceOptions:

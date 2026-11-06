@@ -23,7 +23,7 @@ func newNativeRuntime(name string, options ClientOptions) (*nativeRuntime, error
 	if options.Trace != nil {
 		trace = &native.TraceOptions{Mode: string(options.Trace.Mode), Directory: options.Trace.Directory}
 	}
-	session, err := native.NewSession(name, native.SessionOptions{Recording: nativeRecording, Artifacts: artifacts, Trace: trace, ScreenHistoryLimit: options.ScreenHistoryLimit})
+	session, err := native.NewSession(name, native.SessionOptions{Context: engineContext(options.Context), Recording: nativeRecording, Artifacts: artifacts, Trace: trace, ScreenHistoryLimit: options.ScreenHistoryLimit})
 	if err != nil {
 		return nil, engineError(err)
 	}
@@ -174,6 +174,23 @@ func (runtime *nativeRuntime) getCursor() (Cursor, error) {
 	value, err := runtime.session.GetCursor()
 	return Cursor(value), engineError(err)
 }
+func (runtime *nativeRuntime) getModes() (map[string]bool, error) {
+	value, err := runtime.session.GetModes()
+	return value, engineError(err)
+}
+func (runtime *nativeRuntime) getColors() (TerminalColors, error) {
+	value, err := runtime.session.GetColors()
+	return TerminalColors(value), engineError(err)
+}
+func (runtime *nativeRuntime) expectMode(mode string, enabled bool, timeout *time.Duration) error {
+	return engineError(runtime.session.ExpectMode(mode, enabled, timeout))
+}
+func (runtime *nativeRuntime) expectCursor(options CursorExpectation) error {
+	return engineError(runtime.session.ExpectCursor(options))
+}
+func (runtime *nativeRuntime) expectColors(options ColorExpectation) error {
+	return engineError(runtime.session.ExpectColors(options))
+}
 
 func (runtime *nativeRuntime) getViewport() (Viewport, error) {
 	value, err := runtime.session.GetViewport()
@@ -251,11 +268,15 @@ func (runtime *nativeRuntime) findLocator(query locatorQuery, requireOne bool) (
 }
 
 func engineSpawnOptions(options SpawnOptions) native.SpawnOptions {
+	var recording *native.AutomaticRecording
+	if options.Recording != nil {
+		recording = &native.AutomaticRecording{Mode: native.RecordingMode(options.Recording.Mode), Directory: options.Recording.Directory}
+	}
 	var profile *native.Profile
 	if options.Profile != nil {
 		profile = &native.Profile{Scrollback: options.Profile.Scrollback, Colors: native.Colors(options.Profile.Colors)}
 	}
-	return native.SpawnOptions{Backend: native.Backend(options.Backend), Cols: options.Cols, Rows: options.Rows, Cwd: options.Cwd, Env: options.Env, WaitReady: options.WaitReady, Restart: options.Restart, Profile: profile, Timeouts: native.Timeouts(options.Timeouts)}
+	return native.SpawnOptions{Recording: recording, Context: engineContext(options.Context), Backend: native.Backend(options.Backend), Cols: options.Cols, Rows: options.Rows, Cwd: options.Cwd, Env: options.Env, WaitReady: options.WaitReady, Restart: options.Restart, Profile: profile, Style: options.Style, Timeouts: native.Timeouts(options.Timeouts)}
 }
 func engineOpenOptions(options OpenOptions) native.OpenOptions {
 	return native.OpenOptions{SpawnOptions: engineSpawnOptions(options.SpawnOptions), Shell: native.Shell(options.Shell)}
@@ -287,8 +308,57 @@ func engineLocatorQuery(query locatorQuery) native.LocatorExpression {
 			style := engineTextStyle(*node.style)
 			converted[index].Style = &style
 		}
+		if node.matchStyle != nil {
+			style := engineTextStyle(*node.matchStyle)
+			converted[index].MatchStyle = &style
+		}
+		if node.scope != nil {
+			convert := func(anchor *TextAnchor) *native.TextAnchor {
+				if anchor == nil {
+					return nil
+				}
+				var occurrence any = anchor.Occurrence
+				if anchor.Occurrence == "" {
+					occurrence = "unique"
+				}
+				if anchor.Nth != nil {
+					occurrence = map[string]uint32{"nth": *anchor.Nth}
+				}
+				return &native.TextAnchor{Text: anchor.Text, Regex: anchor.Regex, Occurrence: occurrence}
+			}
+			converted[index].Scope = &native.TextScope{After: convert(node.scope.After), Before: convert(node.scope.Before)}
+		}
 	}
+
 	return native.LocatorExpression{Nodes: converted, Root: query.root}
+}
+func engineContext(context *ExecutionContext) *native.ExecutionContext {
+	if context == nil {
+		return nil
+	}
+	result := &native.ExecutionContext{OperationName: context.OperationName, ScreenHistoryLimit: context.ScreenHistoryLimit}
+	if context.DiagnosticContext != nil {
+		result.DiagnosticContext = &context.DiagnosticContext
+	}
+	if context.Artifacts != nil {
+		mode := context.Artifacts.OnFailure
+		if mode == "" {
+			mode = ArtifactAll
+		}
+		result.ArtifactDirectory, result.ArtifactMode = Ptr(context.Artifacts.Dir), Ptr(string(mode))
+		result.ArtifactIncludeRecording = Ptr(context.Artifacts.IncludeRecording)
+	}
+	if context.Trace != nil {
+		mode := context.Trace.Mode
+		if mode == "" {
+			mode = TraceOff
+		}
+		result.TraceMode = Ptr(string(mode))
+		if context.Trace.Directory != "" {
+			result.TraceDirectory = Ptr(context.Trace.Directory)
+		}
+	}
+	return result
 }
 func engineState(state native.State) State {
 	return State{SessionShell: state.SessionShell, Cols: state.Cols, Rows: state.Rows, Cursor: Cursor(state.Cursor), Title: state.Title, Cwd: state.Cwd, LastCommand: state.LastCommand, LastExit: state.LastExit, ExitSignal: state.ExitSignal, Exited: state.Exited, Ready: state.Ready, BellCount: state.BellCount, Modes: state.Modes, MouseMode: state.MouseMode, Colors: TerminalColors(state.Colors), Timeouts: EffectiveTimeouts(state.Timeouts), Text: state.Text}

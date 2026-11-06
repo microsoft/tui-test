@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::{
     LinkSelector, LocatorDirection, LocatorQuery, LocatorSelector, MatchOccurrence, StyleSelector,
-    TextSelector, TextStyle, TuiTestError, WhitespaceMode,
+    TextScope, TextSelector, TextStyle, TuiTestError, WhitespaceMode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +25,8 @@ pub struct LocatorNode {
     pub text: Option<String>,
     pub regex: Option<bool>,
     pub whitespace: Option<WhitespaceMode>,
+    pub scope: Option<TextScope>,
+    pub match_style: Option<TextStyle>,
     pub style: Option<TextStyle>,
     pub link: Option<String>,
     pub full: Option<bool>,
@@ -81,11 +83,13 @@ impl LocatorExpression {
             let filter = node.kind == LocatorNodeKind::Filter;
             let leaf = !binary && !filter;
             if (node.kind != LocatorNodeKind::Text
-                && (node.text.is_some() || node.regex.is_some() || node.whitespace.is_some()))
+                && (node.text.is_some()
+                    || node.regex.is_some()
+                    || node.whitespace.is_some()
+                    || node.scope.is_some()))
                 || (node.kind != LocatorNodeKind::Style && node.style.is_some())
                 || (node.kind != LocatorNodeKind::Link && node.link.is_some())
-                || (!leaf
-                    && (node.full.is_some() || node.within.is_some() || node.direction.is_some()))
+                || (!leaf && node.full.is_some())
                 || (!binary && (node.left.is_some() || node.right.is_some()))
                 || (!filter
                     && (node.input.is_some() || node.has.is_some() || node.has_not.is_some()))
@@ -153,7 +157,7 @@ impl LocatorExpression {
                 regex: node.regex.unwrap_or(false),
                 full: node.full.unwrap_or(false),
                 whitespace: node.whitespace.unwrap_or_default(),
-                scope: Default::default(),
+                scope: node.scope.clone().unwrap_or_default(),
             }),
             LocatorNodeKind::Style => LocatorSelector::Style(StyleSelector {
                 style: node.style.clone().expect("validated style"),
@@ -181,6 +185,7 @@ impl LocatorExpression {
             occurrence: node.occurrence.clone(),
             within: node.within.map(&mut child).transpose()?,
             direction: node.direction.unwrap_or_default(),
+            style: node.match_style.clone().unwrap_or_default(),
             ..LocatorQuery::new(selector)
         })
     }
@@ -228,6 +233,7 @@ mod tests {
             json!([{"kind": "link", "occurrence": "any"}]),
             json!([{"kind": "style", "style": {}, "occurrence": "any"}]),
             json!([{"kind": "text", "text": "x", "style": {"bold": true}, "occurrence": "any"}]),
+            json!([{"kind": "link", "link": "", "scope": {}, "occurrence": "any"}]),
             json!([
                 {"kind": "text", "text": "x", "occurrence": "any"},
                 {"kind": "filter", "input": 0, "occurrence": "any"}
@@ -244,6 +250,46 @@ mod tests {
         )
         .into_query()
         .is_err());
+    }
+
+    #[test]
+    fn scope_style_and_composite_relative_queries_preserve_core_fields() {
+        let query = expression(json!([
+            {"kind": "text", "text": "Header", "occurrence": "unique"},
+            {"kind": "text", "text": "Save", "scope": {
+                "after": {"text": "Start", "regex": true, "occurrence": {"nth": 1}},
+                "before": {"text": "End"}
+            }, "match_style": {"bold": true}, "occurrence": "any"},
+            {"kind": "link", "link": "test:save", "match_style": {"italic": false}, "occurrence": "any"},
+            {"kind": "or", "left": 1, "right": 2, "within": 0, "direction": "after",
+             "match_style": {"foreground": "red"}, "occurrence": "first"},
+            {"kind": "filter", "input": 3, "has": 1, "within": 0, "direction": "before",
+             "match_style": {"dim": false}, "occurrence": "unique"}
+        ]), 4).into_query().unwrap();
+        assert_eq!(query.direction, LocatorDirection::Before);
+        assert_eq!(query.style.dim, Some(false));
+        assert!(query.within.is_some());
+        let LocatorSelector::Filter { input, .. } = query.selector else {
+            panic!("filter")
+        };
+        assert_eq!(input.direction, LocatorDirection::After);
+        assert_eq!(input.style.foreground.as_deref(), Some("red"));
+        let LocatorSelector::Or { left, right } = input.selector else {
+            panic!("or")
+        };
+        assert_eq!(right.style.italic, Some(false));
+        assert_eq!(left.style.bold, Some(true));
+        let LocatorSelector::Text(selector) = left.selector else {
+            panic!("text")
+        };
+        assert_eq!(
+            selector.scope.after.unwrap().occurrence,
+            MatchOccurrence::Nth(1)
+        );
+        assert_eq!(
+            selector.scope.before.unwrap().occurrence,
+            MatchOccurrence::Unique
+        );
     }
 
     #[test]

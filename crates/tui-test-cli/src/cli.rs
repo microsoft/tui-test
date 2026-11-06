@@ -173,6 +173,14 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "KEY=VALUE")]
     pub diagnostic_context: Vec<String>,
 
+    /// Read an ExecutionContext JSON file. Relative paths use the client's cwd.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub context_file: Option<std::path::PathBuf>,
+
+    /// Name this operation in trace and failure diagnostics.
+    #[arg(long, global = true, value_name = "NAME")]
+    pub operation_name: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -219,84 +227,92 @@ pub struct ScreenshotArgs {
     pub transparent: bool,
 }
 
+// Separate argument builders keep clap's generated subcommand builder within
+// the default Windows stack in debug builds.
+#[derive(Args)]
+pub struct OpenArgs {
+    /// Shell to launch (defaults to the platform shell).
+    #[arg(long, value_enum)]
+    pub shell: Option<ShellArg>,
+    /// Terminal emulator to use (defaults to alacritty).
+    #[arg(long, value_enum)]
+    pub backend: Option<BackendArg>,
+    /// Terminal width in columns.
+    #[arg(long, default_value_t = DEFAULT_COLS)]
+    pub cols: u16,
+    /// Terminal height in rows.
+    #[arg(long, default_value_t = DEFAULT_ROWS)]
+    pub rows: u16,
+    /// Working directory for the session.
+    #[arg(long)]
+    pub cwd: Option<String>,
+    /// Environment overrides as KEY=VALUE (repeatable).
+    #[arg(long = "env")]
+    pub env: Vec<String>,
+    /// Block until the shell reports a ready prompt (the default), or
+    /// return as soon as it is spawned with --no-wait-ready.
+    #[arg(long)]
+    pub wait_ready: bool,
+    /// Return as soon as the shell is spawned, without waiting for a prompt.
+    #[arg(long, conflicts_with = "wait_ready")]
+    pub no_wait_ready: bool,
+    /// Replace a live session instead of reusing it.
+    #[arg(long, visible_alias = "force")]
+    pub restart: bool,
+    #[command(flatten)]
+    pub profile: ProfileArgs,
+    #[command(flatten)]
+    pub timeouts: TimeoutArgs,
+    #[command(flatten)]
+    pub diagnostics: DiagnosticRetentionArgs,
+}
+
+#[derive(Args)]
+pub struct RunArgs {
+    /// Program to run.
+    pub program: String,
+    /// Arguments passed to the program.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
+    /// Terminal emulator to use (defaults to alacritty).
+    #[arg(long, value_enum)]
+    pub backend: Option<BackendArg>,
+    /// Terminal width in columns.
+    #[arg(long, default_value_t = DEFAULT_COLS)]
+    pub cols: u16,
+    /// Terminal height in rows.
+    #[arg(long, default_value_t = DEFAULT_ROWS)]
+    pub rows: u16,
+    /// Working directory for the session.
+    #[arg(long)]
+    pub cwd: Option<String>,
+    /// Environment overrides as KEY=VALUE (repeatable).
+    #[arg(long = "env")]
+    pub env: Vec<String>,
+    /// Block until the program reports a ready prompt (off by default;
+    /// only meaningful for programs with shell integration).
+    #[arg(long)]
+    pub wait_ready: bool,
+    /// Return as soon as the program is spawned (the default).
+    #[arg(long, conflicts_with = "wait_ready")]
+    pub no_wait_ready: bool,
+    /// Replace a live session instead of reusing it.
+    #[arg(long, visible_alias = "force")]
+    pub restart: bool,
+    #[command(flatten)]
+    pub profile: ProfileArgs,
+    #[command(flatten)]
+    pub timeouts: TimeoutArgs,
+    #[command(flatten)]
+    pub diagnostics: DiagnosticRetentionArgs,
+}
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Spawn a shell session (auto-starts the daemon).
-    Open {
-        /// Shell to launch (defaults to the platform shell).
-        #[arg(long, value_enum)]
-        shell: Option<ShellArg>,
-        /// Terminal emulator to use (defaults to alacritty).
-        #[arg(long, value_enum)]
-        backend: Option<BackendArg>,
-        /// Terminal width in columns.
-        #[arg(long, default_value_t = DEFAULT_COLS)]
-        cols: u16,
-        /// Terminal height in rows.
-        #[arg(long, default_value_t = DEFAULT_ROWS)]
-        rows: u16,
-        /// Working directory for the session.
-        #[arg(long)]
-        cwd: Option<String>,
-        /// Environment overrides as KEY=VALUE (repeatable).
-        #[arg(long = "env")]
-        env: Vec<String>,
-        /// Block until the shell reports a ready prompt (the default), or
-        /// return as soon as it is spawned with --no-wait-ready.
-        #[arg(long)]
-        wait_ready: bool,
-        /// Return as soon as the shell is spawned, without waiting for a prompt.
-        #[arg(long, conflicts_with = "wait_ready")]
-        no_wait_ready: bool,
-        /// Replace a live session instead of reusing it.
-        #[arg(long, visible_alias = "force")]
-        restart: bool,
-        #[command(flatten)]
-        profile: ProfileArgs,
-        #[command(flatten)]
-        timeouts: TimeoutArgs,
-        #[command(flatten)]
-        diagnostics: DiagnosticRetentionArgs,
-    },
+    Open(OpenArgs),
     /// Spawn a session running a program directly.
-    Run {
-        /// Program to run.
-        program: String,
-        /// Arguments passed to the program.
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-        /// Terminal emulator to use (defaults to alacritty).
-        #[arg(long, value_enum)]
-        backend: Option<BackendArg>,
-        /// Terminal width in columns.
-        #[arg(long, default_value_t = DEFAULT_COLS)]
-        cols: u16,
-        /// Terminal height in rows.
-        #[arg(long, default_value_t = DEFAULT_ROWS)]
-        rows: u16,
-        /// Working directory for the session.
-        #[arg(long)]
-        cwd: Option<String>,
-        /// Environment overrides as KEY=VALUE (repeatable).
-        #[arg(long = "env")]
-        env: Vec<String>,
-        /// Block until the program reports a ready prompt (off by default;
-        /// only meaningful for programs with shell integration).
-        #[arg(long)]
-        wait_ready: bool,
-        /// Return as soon as the program is spawned (the default).
-        #[arg(long, conflicts_with = "wait_ready")]
-        no_wait_ready: bool,
-        /// Replace a live session instead of reusing it.
-        #[arg(long, visible_alias = "force")]
-        restart: bool,
-        #[command(flatten)]
-        profile: ProfileArgs,
-        #[command(flatten)]
-        timeouts: TimeoutArgs,
-        #[command(flatten)]
-        diagnostics: DiagnosticRetentionArgs,
-    },
+    Run(RunArgs),
     /// Gracefully stop and recreate the session from its last successful open or run.
     Restart {
         /// Time to wait after Ctrl-C/SIGINT before forcibly killing the child.
@@ -323,6 +339,17 @@ pub enum Command {
         /// Include scrollback, not just the visible viewport.
         #[arg(long)]
         full: bool,
+    },
+    /// Read packed UTF-8 rows with dimensions. Use --json to retain trailing spaces.
+    PackedScreen {
+        /// Include scrollback, not just the visible viewport.
+        #[arg(long)]
+        full: bool,
+    },
+    /// Finish a trace with an explicit test outcome, without closing the session.
+    Trace {
+        #[command(subcommand)]
+        cmd: TraceCmd,
     },
     /// Capture a screenshot: terminal text to stdout, or a full-color SVG/PNG
     /// image selected by the output extension (SVG is the default).
@@ -403,8 +430,10 @@ pub enum Command {
     },
     /// Kill the session's child process.
     Kill,
-    /// Block until the title changes, the screen is idle, a command finishes,
-    /// the shell is ready, a bell rings, or the session exits.
+    /// Cancel pending operations and terminate the child without closing the session.
+    /// This is not Ctrl-C or SIGINT.
+    Interrupt,
+    /// Wait for a locator, title, clipboard, idle screen, command, prompt, bell, or process exit.
     Wait {
         #[command(subcommand)]
         what: WaitCmd,
@@ -419,12 +448,17 @@ pub enum Command {
         #[command(subcommand)]
         what: FindCmd,
     },
-    /// Wait for a text match, then click its middle cell.
+    /// Resolve exactly one current match after occurrence selection.
+    Resolve {
+        #[command(subcommand)]
+        what: FindCmd,
+    },
+    /// Wait for a locator match, then click its middle cell.
     Click {
         #[command(subcommand)]
         what: ClickCmd,
     },
-    /// Highlight text matching the query and optional style constraints.
+    /// Highlight matches from a text selector or nested locator query.
     Highlight {
         #[command(subcommand)]
         what: HighlightCmd,
@@ -464,6 +498,22 @@ pub enum Command {
     /// Internal: run the session daemon.
     #[command(name = "__daemon", hide = true)]
     InternalDaemon,
+}
+
+#[derive(Subcommand)]
+pub enum TraceCmd {
+    /// Export or discard the trace according to its mode and this outcome.
+    Finish {
+        #[arg(value_enum)]
+        outcome: TraceOutcomeArg,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+#[clap(rename_all = "lowercase")]
+pub enum TraceOutcomeArg {
+    Passed,
+    Failed,
 }
 
 #[derive(Subcommand)]
@@ -548,6 +598,80 @@ fn parse_palette_entry(value: &str) -> Result<(u8, String), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_commands_require_exactly_one_json_source() {
+        let query = r#"{"selector":{"kind":"text","selector":{"text":"Save"}}}"#;
+        for command in ["find", "resolve", "wait", "expect", "click", "highlight"] {
+            assert!(Cli::try_parse_from(["tui-test", command, "query"]).is_err());
+            assert!(Cli::try_parse_from(["tui-test", command, "query", "--query", query]).is_ok());
+            assert!(Cli::try_parse_from([
+                "tui-test",
+                command,
+                "query",
+                "--query-file",
+                "query.json"
+            ])
+            .is_ok());
+            assert!(Cli::try_parse_from([
+                "tui-test",
+                command,
+                "query",
+                "--query",
+                query,
+                "--query-file",
+                "query.json",
+            ])
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn query_actions_accept_negative_waits_and_mouse_options() {
+        let query = r#"{"selector":{"kind":"link","selector":{"uri":"test:save"}}}"#;
+        for command in ["wait", "expect"] {
+            assert!(Cli::try_parse_from([
+                "tui-test",
+                command,
+                "query",
+                "--query",
+                query,
+                "--not",
+                "--timeout",
+                "12",
+            ])
+            .is_ok());
+        }
+        assert!(Cli::try_parse_from([
+            "tui-test",
+            "click",
+            "query",
+            "--query",
+            query,
+            "--button",
+            "right",
+            "--alt",
+            "--ctrl",
+            "--shift",
+            "--clicks",
+            "2",
+            "--timeout",
+            "12",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "tui-test",
+            "wait",
+            "text",
+            "gone",
+            "--not",
+            "--fg",
+            "green",
+            "--timeout",
+            "12",
+        ])
+        .is_ok());
+    }
 
     #[test]
     fn expect_colors_accepts_defaults_and_palette_entries() {
@@ -709,11 +833,11 @@ mod tests {
         let cli = Cli::try_parse_from(["tui-test", "open", "--no-wait-ready"]).expect("parse open");
         assert!(matches!(
             cli.command,
-            Some(Command::Open {
+            Some(Command::Open(OpenArgs {
                 wait_ready: false,
                 no_wait_ready: true,
                 ..
-            })
+            }))
         ));
     }
 
@@ -726,7 +850,7 @@ mod tests {
             let cli = Cli::try_parse_from(args).expect("parse open restart");
             assert!(matches!(
                 cli.command,
-                Some(Command::Open { restart: true, .. })
+                Some(Command::Open(OpenArgs { restart: true, .. }))
             ));
         }
 
@@ -737,7 +861,7 @@ mod tests {
             let cli = Cli::try_parse_from(args).expect("parse run restart");
             assert!(matches!(
                 cli.command,
-                Some(Command::Run { restart: true, .. })
+                Some(Command::Run(RunArgs { restart: true, .. }))
             ));
         }
     }
@@ -778,9 +902,9 @@ mod tests {
         for (value, expected) in cases {
             let cli =
                 Cli::try_parse_from(["tui-test", "open", "--shell", value]).expect("parse shell");
-            let Some(Command::Open {
+            let Some(Command::Open(OpenArgs {
                 shell: Some(shell), ..
-            }) = cli.command
+            })) = cli.command
             else {
                 panic!("expected Open with a shell");
             };
@@ -797,10 +921,10 @@ mod tests {
         ] {
             let cli = Cli::try_parse_from(["tui-test", "open", "--backend", name])
                 .unwrap_or_else(|error| panic!("parse {name}: {error}"));
-            let Some(Command::Open {
+            let Some(Command::Open(OpenArgs {
                 backend: Some(backend),
                 ..
-            }) = cli.command
+            })) = cli.command
             else {
                 panic!("expected Open with backend {name}");
             };
@@ -815,11 +939,11 @@ mod tests {
             Cli::try_parse_from(["tui-test", "run", "--wait-ready", "vim"]).expect("parse run");
         assert!(matches!(
             cli.command,
-            Some(Command::Run {
+            Some(Command::Run(RunArgs {
                 wait_ready: true,
                 no_wait_ready: false,
                 ..
-            })
+            }))
         ));
     }
 
@@ -851,7 +975,7 @@ mod tests {
             "20000",
         ])
         .expect("parse open with timeouts");
-        let Some(Command::Open { timeouts, .. }) = cli.command else {
+        let Some(Command::Open(OpenArgs { timeouts, .. })) = cli.command else {
             panic!("expected Open");
         };
         let defaults: Timeouts = timeouts.into();
@@ -1442,8 +1566,21 @@ pub struct TextQueryArgs {
     pub link: Option<String>,
 }
 
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+pub struct LocatorQueryArgs {
+    /// Native nested LocatorQuery JSON, including selector, occurrence, within, direction, and style.
+    #[arg(long, value_name = "JSON")]
+    pub query: Option<String>,
+    /// Read native nested LocatorQuery JSON from this file.
+    #[arg(long, value_name = "PATH")]
+    pub query_file: Option<std::path::PathBuf>,
+}
+
 #[derive(Subcommand)]
 pub enum FindCmd {
+    /// Find a nested locator query from JSON.
+    Query(LocatorQueryArgs),
     /// Find text and return its row/column spans.
     Text {
         #[command(flatten)]
@@ -1453,6 +1590,19 @@ pub enum FindCmd {
 
 #[derive(Subcommand)]
 pub enum ClickCmd {
+    /// Wait for a nested locator query, then click its middle cell.
+    Query {
+        #[command(flatten)]
+        query: LocatorQueryArgs,
+        #[command(flatten)]
+        options: MouseOptionsArg,
+        /// Number of clicks.
+        #[arg(long, default_value_t = 1)]
+        clicks: u8,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     /// Wait for matching text, then click its middle cell.
     Text {
         #[command(flatten)]
@@ -1470,6 +1620,14 @@ pub enum ClickCmd {
 
 #[derive(Subcommand)]
 pub enum HighlightCmd {
+    /// Wait for a nested locator query, then highlight its selected matches.
+    Query {
+        #[command(flatten)]
+        query: LocatorQueryArgs,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     /// Wait for matching text, then highlight every selected occurrence.
     Text {
         #[command(flatten)]
@@ -1482,6 +1640,28 @@ pub enum HighlightCmd {
 
 #[derive(Subcommand)]
 pub enum WaitCmd {
+    /// Wait for text to appear or disappear.
+    Text {
+        #[command(flatten)]
+        query: TextQueryArgs,
+        /// Wait until the text is absent.
+        #[arg(long)]
+        not: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
+    /// Wait for a nested locator query to match or become absent.
+    Query {
+        #[command(flatten)]
+        query: LocatorQueryArgs,
+        /// Wait until the query has no matches.
+        #[arg(long)]
+        not: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     /// Wait until the window title (set with OSC 0/2) matches text/regex.
     ///
     /// Programs set the title to announce what they are doing, so this is how
@@ -1553,6 +1733,17 @@ pub enum WaitCmd {
 
 #[derive(Subcommand)]
 pub enum ExpectCmd {
+    /// Assert a nested locator query, with retries.
+    Query {
+        #[command(flatten)]
+        query: LocatorQueryArgs,
+        /// Assert that the query has no matches.
+        #[arg(long)]
+        not: bool,
+        /// Timeout in milliseconds.
+        #[arg(long, value_name = "MS")]
+        timeout: Option<u64>,
+    },
     /// Assert text is visible, optionally with a required color.
     Text {
         #[command(flatten)]
@@ -1635,6 +1826,9 @@ pub enum ExpectCmd {
         /// would tie the snapshot to one machine.
         #[arg(long)]
         include_title: bool,
+        /// Snapshot root directory (default: the client's working directory).
+        #[arg(long, value_name = "DIR")]
+        cwd: Option<String>,
     },
 }
 

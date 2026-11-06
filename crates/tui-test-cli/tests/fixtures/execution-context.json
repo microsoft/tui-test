@@ -1,0 +1,11 @@
+{
+  "operation_name": "checkpoint",
+  "artifact": {
+    "directory": "artifacts/failures",
+    "mode": "text",
+    "include_recording": true
+  },
+  "diagnostic_context": {"test": "settings", "step": "original"},
+  "retention": {"screen_history_limit": 3},
+  "trace": {"mode": "on-failure", "directory": "artifacts/traces"}
+}

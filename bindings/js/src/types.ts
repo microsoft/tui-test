@@ -9,7 +9,10 @@ import type {
   State as NativeState,
   TextMatch as NativeTextMatch,
   Timeouts as NativeTimeouts,
+  RenderStyle,
 } from "../native/index.js";
+
+export type { RenderStyle, FontFamilies, WindowStyle, BorderStyle, ShadowStyle, RecordingCursorStyle, PaddingSides } from "../native/index.js";
 
 export type Color = "default" | number | string;
 export type Backend = "alacritty" | "ghostty" | "rio" | "xtermjs";
@@ -63,6 +66,7 @@ export type State = NativeState;
 export type TextMatch = NativeTextMatch;
 
 export type OpenResult = NativeOpenResult;
+export type { PackedScreen } from "../native/index.js";
 
 export interface Colors {
   foreground?: string;
@@ -92,6 +96,7 @@ export interface Profile {
 }
 
 export interface AutomaticRecording {
+  mode?: "disabled" | "on-failure" | "always";
   directory?: string;
 }
 
@@ -100,6 +105,9 @@ export interface TraceOptions {
   directory?: string;
 }
 export interface SpawnOptions {
+  recording?: AutomaticRecording;
+  context?: ExecutionContext;
+  style?: RenderStyle;
   backend?: Backend;
   cols?: number;
   rows?: number;
@@ -121,6 +129,8 @@ export interface ArtifactOptions {
 }
 
 export interface ClientOptions {
+  context?: ExecutionContext;
+  style?: RenderStyle;
   backend?: Backend;
   profile?: Profile;
   timeouts?: Timeouts;
@@ -128,6 +138,14 @@ export interface ClientOptions {
   artifacts?: ArtifactOptions;
   recording?: AutomaticRecording;
   trace?: TraceOptions;
+}
+
+export interface ExecutionContext {
+  operationName?: string;
+  diagnosticContext?: Record<string, string>;
+  artifacts?: ArtifactOptions;
+  trace?: TraceOptions;
+  screenHistoryLimit?: number;
 }
 
 export type FailureReason =

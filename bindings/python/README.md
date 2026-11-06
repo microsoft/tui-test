@@ -2,6 +2,71 @@
 
 Control, inspect, and test terminal apps from Python.
 
+## Scoped queries and session context
+
+For scope anchors, whole-match style, relative queries, and trace completion, see
+[`examples/parity.py`](examples/parity.py).
+
+```python
+from tui_test import ExecutionContext, TextAnchor, TextScope, TextStyle
+
+save = terminal.get_by_text(
+    "Save", scope=TextScope(after=TextAnchor("Start"), before=TextAnchor("End")),
+).with_style(TextStyle(bold=True))
+choice = save.relative_to(
+    terminal.get_by_text("Header"), "after",
+).with_style(TextStyle(italic=False)).or_(terminal.get_by_link("test:save"))
+```
+
+`TextAnchor` accepts `text`, `regex`, and `occurrence`.
+Occurrence defaults to `"unique"`; alternatives are `"any"`, `"first"`, `"last"`, or a zero-based integer.
+`with_style` tests each whole match.
+It ignores blank cells when visible characters exist.
+It supports text, style, and link locators.
+Rust rejects scope or whole-match style on composite nodes.
+Apply these fields to the operands before composition.
+It does not replace `and_(terminal.get_by_style(...))`, which intersects cells.
+`relative_to(parent, direction="within")` also accepts `"after"` and `"before"`.
+The parent must belong to the same `TuiTest` instance.
+Locator methods copy options and leave the original query unchanged.
+
+The constructor and `open`/`run` accept `context=ExecutionContext(...)`.
+Context fields are `operation_name`, `diagnostic_context`, `artifacts`, `trace`, and `screen_history_limit`.
+`diagnostic_context` maps string keys to string values.
+The engine sanitizes and limits those fields before it writes them.
+Per-call fields override constructor fields for that spawn only.
+`open` and `run` also accept `recording=AutomaticRecording(directory=...)`.
+An explicit `AutomaticRecording()` restores the engine's default directory.
+`AutomaticRecording.mode` accepts `"disabled"`, `"on-failure"`, or `"always"` in the runtime API.
+The default mode is `"disabled"`.
+This controls automatic casts without a trace.
+Explicit trace options take precedence over this mode.
+The CLI configuration still permits only `recording.directory`.
+
+`await terminal.finish_trace(failed=False)` completes the trace and keeps the terminal open.
+`await terminal.interrupt()` cancels pending operations and terminates the child without an operation queue wait.
+It does not send a keyboard interrupt.
+Later waits report cancellation until restart or close.
+An absent session produces `NoSessionError`.
+Call `close()` afterward to release the named session.
+Use `sessions()` to check whether a named session is open.
+`OpenResult["recording"]` supplies the automatic recording path.
+`get_recording(name)` reads current or retained recording content.
+`packed_screen(full=False)` returns an owned, read-only UTF-8 memoryview, columns, and rows.
+`locator.highlight_matches(timeout=...)` returns the highlighted matches.
+The existing `highlight()` method still returns `None`.
+`expect_snapshot(name, cwd=...)` accepts an explicit working directory for snapshot files.
+
+Run the example from the repository root:
+
+```sh
+PYTHONPATH=bindings/python/src python3 bindings/python/examples/parity.py
+```
+
+The example creates trace artifacts under `artifacts/parity-python`.
+Set `TUI_TEST_PARITY_ARTIFACTS` to choose another directory.
+Artifacts can contain terminal text.
+
 ## Install
 
 ```sh
@@ -87,7 +152,7 @@ TuiTest(session=None, *, backend=None, timeouts=None, profile=None, screen_histo
 | `profile` | `Profile \| dict` | built-in profile |
 | `screen_history_limit` | `int \| None` | core default |
 | `artifacts` | `dict` | off |
-| `recording` | `AutomaticRecording \| dict` (directory only) | default recording directory |
+| `recording` | `AutomaticRecording \| dict` (`directory`, optional `mode`) | default directory, disabled mode |
 | `trace` | `TraceOptions \| dict` | `{"mode": "off", "directory": ".tui-test/traces"}` |
 
 Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Users can open `trace.html`; agents should read `trace.md`, `trace.json`, and `timeline.json`.
@@ -114,7 +179,7 @@ Set `trace.mode` to `"on"` for every session or `"on-failure"` for failures. Use
 | `await close_quiet()` | Close without raising. |
 | `async with TuiTest()` | Close on exit. |
 
-`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, and `timeouts`. `run()` accepts the same options except `shell`.
+`open()` options are `shell`, `backend`, `cols`, `rows`, `cwd`, `env`, `wait_ready`, `restart`, `retries`, `profile`, `style`, and `timeouts`. `run()` accepts the same options except `shell`.
 
 The default size is 80 by 30. Timeout defaults are 5 seconds for text and idle, and 30 seconds for command, exit, and ready.
 
@@ -173,6 +238,8 @@ await terminal.scroll_to_bottom()
 | `await get_exit_code()` | `int \| None` |
 | `await get_cwd()` | `str \| None` |
 | `await get_cursor()` | `Cursor` |
+| `await get_modes()` | `dict[str, bool]` |
+| `await get_colors()` | `dict` |
 | `await get_size()` | `dict` |
 | `await get_title()` | `str \| None` |
 | `await get_clipboard()` | `str` |
@@ -195,6 +262,11 @@ await terminal.scroll_to_bottom()
 | `await expect_output(text, regex=False)` | Assert command output. |
 | `await expect_bell_count(count, timeout=None)` | Wait until the cumulative bell count reaches `count`. |
 | `await expect_snapshot(name, **options)` | Assert or update a snapshot. |
+| `await expect_cursor(**options)` | Wait for cursor position, visibility, or shape. |
+| `await expect_mode(mode, enabled, timeout=...)` | Wait for a native terminal mode. |
+| `await expect_colors(**options)` | Wait for foreground, background, cursor, or palette colors. |
+
+Native assertions accept `timeout` in milliseconds and use the text timeout by default. Palette expectations use a dictionary of indices and colors.
 
 `wait_clipboard()` waits for the next change. A string matches text. A compiled text `re.Pattern` uses Python's `search()` semantics; bytes patterns are rejected.
 
@@ -215,12 +287,34 @@ Recording options: `format`, `fps`, `speed`, `idle_time_limit`, `zoom`, `backgro
 Asciicast pause and resume return usage errors without changing the recording.
 Automatic diagnostic recordings and recovery casts remain continuous, including output during pauses.
 
-Raster recording samples the live terminal at `fps` (default: 30) and preserves elapsed time until stop.
+Raster recording samples the live terminal at `fps` (default: 30) and preserves active elapsed time until stop.
 There is no default idle cap or extra final hold.
 Set `idle_time_limit` to cap unchanged visual intervals before `speed` scales playback time.
 Asciicast remains a timestamped output stream; FPS sampling does not change it.
 
 The extension selects the format: `.png` or `.apng`, `.gif`, `.mp4`, or `.cast`. `format` overrides it.
+
+### Rendering settings
+
+Pass a `RenderStyle` to the client constructor, `open()`, or `run()`. It supports fonts, colors, padding, window controls, borders, shadows, and cursor animation.
+A per-call style replaces the constructor style. Omitted nested fields use Rust defaults. Explicit `False` and zero remain unchanged.
+Restart preserves the resolved style. These settings affect screenshots and raster recordings, not terminal colors or locator assertions.
+
+```python
+from tui_test import TuiTest, RenderStyle, WindowStyle, RecordingCursorStyle
+
+terminal = TuiTest.ephemeral(
+    style=RenderStyle(
+        font_size=24,
+        window=WindowStyle(title_bar=False),
+        cursor=RecordingCursorStyle(blink=False, blink_interval_ms=250),
+    )
+)
+```
+
+`blink` permits application-requested animation; it does not make a steady cursor blink. Each phase uses `blink_interval_ms` before playback speed scaling.
+The default values are `True` and `500`. Screenshots always use the visible phase.
+Run `examples/rendering.py` for a complete example.
 
 ### `Locator`
 
