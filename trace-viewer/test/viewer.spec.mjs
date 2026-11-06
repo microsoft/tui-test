@@ -356,18 +356,19 @@ for (const colorScheme of ["dark", "light"]) {
   });
 }
 
-test("the header title, labels, values and action share a text baseline", async ({ page, openReport }) => {
+test("the header wordmark is vertically centered with the logo and neighboring text", async ({ page, openReport }) => {
   await openReport();
-  const baselines = await page.locator(".brand strong, .brand > div > span, #session-summary .metadata-label, #session-summary .metadata-value, #failure")
-    .evaluateAll((elements) => elements.map((element) => {
-      const marker = document.createElement("span");
-      marker.style.cssText = "display:inline-block;width:0;height:0;margin:0;padding:0;border:0;font-size:0;line-height:0;vertical-align:baseline";
-      element.append(marker);
-      const baseline = marker.getBoundingClientRect().top;
-      marker.remove();
-      return baseline;
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const selector = width > 600
+      ? ".brand-mark, .brand strong, .brand > div > span, #session-summary .metadata-label, #session-summary .metadata-value, #failure"
+      : ".brand-mark, .brand strong, #failure";
+    const centers = await page.locator(selector).evaluateAll((elements) => elements.map((element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.y + bounds.height / 2;
     }));
-  expect(Math.max(...baselines) - Math.min(...baselines)).toBeLessThan(1);
+    expect(Math.max(...centers) - Math.min(...centers)).toBeLessThan(.5);
+  }
 });
 
 test("action names, descriptions, locators and durations stay on a single line", async ({ page, openReport }) => {
