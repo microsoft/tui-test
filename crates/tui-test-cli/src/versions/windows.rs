@@ -96,11 +96,12 @@ fn resource_version(module: HMODULE) -> Result<String> {
                 &mut length,
             )
         } != 0
-            && !info.is_null()
             && length as usize >= std::mem::size_of::<VS_FIXEDFILEINFO>(),
         "missing fixed file version information"
     );
-    let info = unsafe { info.cast::<VS_FIXEDFILEINFO>().read_unaligned() };
+    let info = std::ptr::NonNull::new(info.cast::<VS_FIXEDFILEINFO>())
+        .context("missing fixed file version information")?;
+    let info = unsafe { info.as_ptr().read_unaligned() };
     ensure!(
         info.dwSignature == 0xfeef04bd,
         "invalid file version signature"
