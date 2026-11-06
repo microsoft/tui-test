@@ -10,6 +10,7 @@ mod monitor;
 mod monitor_input;
 mod protocol;
 mod skill;
+mod versions;
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -57,6 +58,19 @@ const SKILL_REFERENCES: &[(&str, &str)] = &[
 
 fn main() {
     let cli = Cli::parse_from(command_line_args());
+    if cli.version {
+        let code = match versions::render(cli.json) {
+            Ok(report) => {
+                println!("{report}");
+                0
+            }
+            Err(error) => {
+                eprintln!("failed to report versions: {error:#}");
+                5
+            }
+        };
+        std::process::exit(code);
+    }
     let session = config::session_name_from_env(cli.session.clone());
     let execution_context = match build_execution_context(&cli) {
         Ok(context) => context,
@@ -1490,7 +1504,7 @@ RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [-
           record stop | get-recording [session] > out.cast (when tracing is enabled)\n\
 WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
-GLOBAL    --session NAME | --json | --verbose | --failure-artifacts DIR\n\
+GLOBAL    -V/--version (all versions) | --session NAME | --json | --verbose | --failure-artifacts DIR\n\
           [--failure-artifact-mode none|text|html|all]\n\
           [--failure-artifact-recording] [--diagnostic-context KEY=VALUE]\n\
 EXIT      0 ok | 1 assertion/wait failed | 2 usage | 3 no session | 4 daemon/IPC | 5 internal\n\

@@ -17,6 +17,80 @@ mod cli_config;
 
 const BIN: &str = env!("CARGO_BIN_EXE_tui-test");
 
+#[test]
+fn version_flags_report_all_emulators_without_starting_a_daemon() {
+    let sandbox = Sandbox::new("versions");
+    let text = sandbox.ok(&["--version"]);
+    assert_eq!(text, sandbox.ok(&["-V"]));
+    let report: serde_json::Value =
+        serde_json::from_str(&sandbox.ok(&["--version", "--json"])).unwrap();
+    assert!(text.starts_with(&format!(
+        "tui-test {}\n",
+        report["tui_test"].as_str().unwrap()
+    )));
+    let schema: serde_json::Value = serde_json::from_str(&sandbox.ok(&["agent-context"])).unwrap();
+    assert!(schema["commands"].get("versions").is_none());
+    for argument in ["--versions", "versions"] {
+        assert_eq!(sandbox.run(&[argument]).status.code(), Some(2));
+    }
+    let backends = schema["commands"]["open"]["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|argument| argument["long"] == "--backend")
+        .unwrap()["values"]
+        .as_array()
+        .unwrap();
+    for backend in backends {
+        let name = backend.as_str().unwrap();
+        let version = report["terminal_emulators"][name]["version"]
+            .as_str()
+            .unwrap_or_else(|| panic!("missing version for {name}"));
+        assert!(!version.is_empty(), "empty version for {name}");
+        assert!(text.contains(&format!("{name}: {version}")));
+    }
+    assert_eq!(
+        report["terminal_emulators"].as_object().unwrap().len(),
+        backends.len()
+    );
+    assert!(text.contains(&format!(
+        "portable-pty: {}",
+        report["portable_pty"].as_str().unwrap()
+    )));
+    #[cfg(windows)]
+    {
+        let conpty = &report["conpty"];
+        let version = conpty["version"].as_str().unwrap();
+        assert_eq!(version.split('.').count(), 4);
+        assert!(version.split('.').all(|part| part.parse::<u16>().is_ok()));
+        assert!(PathBuf::from(conpty["source"].as_str().unwrap()).is_file());
+        assert!(text.contains(&format!("conpty: {version}")));
+        let expected = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($env:TUI_TEST_VERSION_SOURCE); \
+                 '{0}.{1}.{2}.{3}' -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart",
+            ])
+            .env("TUI_TEST_VERSION_SOURCE", conpty["source"].as_str().unwrap())
+            .output()
+            .expect("read file version independently in a manifested Windows process");
+        assert!(
+            expected.status.success(),
+            "{}",
+            String::from_utf8_lossy(&expected.stderr)
+        );
+        assert_eq!(version, String::from_utf8(expected.stdout).unwrap().trim());
+    }
+    #[cfg(not(windows))]
+    assert!(report.get("conpty").is_none());
+    assert!(
+        std::fs::read_dir(&sandbox.home).unwrap().next().is_none(),
+        "version flags must not create daemon or session files"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn native_scrollback_moves_the_view_without_changing_full_text() {
