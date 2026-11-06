@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="181" height="48" viewBox="0 0 181 48" fill="none" role="img" aria-labelledby="title">
   <title id="title">tui-test</title>
   <style>
-    .wordmark { fill: #1f2328; }
-    @media (prefers-color-scheme: dark) { .wordmark { fill: #e6edf3; } }
+    .wordmark { color: #1f2328; fill: currentColor; stroke: currentColor; stroke-width: 0.75; stroke-linejoin: round; }
+    @media (prefers-color-scheme: dark) { .wordmark { color: #e6edf3; } }
   </style>
   <g transform="scale(0.1875)">
     <rect x="32" y="36" width="192" height="144" rx="28" fill="none" stroke="#33FF33" stroke-width="20"/>
