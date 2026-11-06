@@ -16,10 +16,6 @@
 
 `tui-test` controls, inspects, tests, and records real terminal apps on Windows, Linux, and macOS. Use the CLI or the Rust, Python, JavaScript, and Go libraries for tests and AI agent workflows.
 
-## Demo
-
-<!-- Add a demo video here. -->
-
 ## Installation
 
 ### CLI
