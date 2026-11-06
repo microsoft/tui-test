@@ -1,10 +1,12 @@
-//! Parse and validate a limited VHS tape dialect.
+//! Parse, validate, and run a limited VHS tape dialect.
 //!
 //! [`parse`] is pure. [`load`] and [`resolve_sources`] only read source files.
-//! [`compile`] produces an owned, immutable [`Plan`] without a child or output writes.
+//! [`compile`] produces an owned, immutable [`Plan`]. [`check`] performs preflight
+//! without a child or output writes. [`run`] records an owned shell to GIF.
 
 mod compiler;
 mod parser;
+mod runner;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -14,6 +16,7 @@ use serde::Serialize;
 
 pub use compiler::{compile, Action, Plan, Settings, Shell, Warning, WarningKind};
 pub use parser::parse;
+pub use runner::{check, run, Geometry, RunnerError, RunnerPhase, Summary};
 
 /// The grammar reference, not a claim of full VHS compatibility.
 pub const VHS_REVISION: &str = "24fa2254a9806091e6ee6a980e9f3bcfe0a9ba53";

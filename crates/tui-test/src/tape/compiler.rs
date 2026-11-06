@@ -144,6 +144,8 @@ impl std::fmt::Display for Warning {
 pub struct Plan {
     output: Located<std::path::PathBuf>,
     settings: Settings,
+    #[serde(skip)]
+    setting_locations: std::collections::BTreeMap<&'static str, Location>,
     shell_location: Location,
     environment: Vec<Located<(String, String)>>,
     requirements: Vec<Located<String>>,
@@ -153,6 +155,12 @@ pub struct Plan {
 }
 
 impl Plan {
+    pub(super) fn setting_location(&self, name: &str) -> &Location {
+        self.setting_locations
+            .get(name)
+            .unwrap_or(&self.output.location)
+    }
+
     /// The path is relative to the invocation directory, not the tape file.
     pub fn output(&self) -> &Located<std::path::PathBuf> {
         &self.output
@@ -197,6 +205,7 @@ impl Plan {
 /// Runtime TypingSpeed directives become resolved delays on subsequent actions.
 pub fn compile(tape: &Tape) -> Result<Plan, Error> {
     let mut settings = Settings::default();
+    let mut setting_locations = std::collections::BTreeMap::new();
     let mut shell_location = tape.origin.clone();
     let mut environment = Vec::new();
     let mut requirements = Vec::new();
@@ -261,6 +270,9 @@ pub fn compile(tape: &Tape) -> Result<Plan, Error> {
                                 message: format!("Set {} is ignored after the initial section; move it above all actions and Env directives", setting.name()),
                             });
                             continue;
+                        }
+                        if initial_section {
+                            setting_locations.insert(setting.name(), location.clone());
                         }
                         match setting {
                             Setting::Rows(value) => {
@@ -426,6 +438,7 @@ pub fn compile(tape: &Tape) -> Result<Plan, Error> {
     Ok(Plan {
         output,
         settings,
+        setting_locations,
         shell_location,
         environment,
         requirements,
