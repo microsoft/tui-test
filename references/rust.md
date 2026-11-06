@@ -38,6 +38,8 @@ Core types:
 Locator methods: `get_by_text`, `get_by_style`, `any`, `unique`, `first`, `last`, `nth`, `locations`, `location`, `count`, `all`, `wait`, `wait_hidden`, `expect`, `click`, and `highlight`. Option variants are `wait_with_timeout`, `expect_with`, `click_with`, and `highlight_with_timeout`.
 
 Add `recording-raster` for APNG, GIF, and MP4. Add `ghostty`, `rio`, or `xtermjs` for another backend.
+Source builds can additionally enable `wezterm` for WezTerm's headless VT core;
+see the [backend build requirements](../README.md#shells-and-backends).
 
 Raster output uses installed fonts. Add a `recording-font-jetbrains-mono*` feature to bundle one.
 

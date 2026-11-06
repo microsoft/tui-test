@@ -60,7 +60,7 @@ func New(session string, options ClientOptions) (*Client, error) {
 
 func validateClientOptions(options ClientOptions) error {
 	switch options.Backend {
-	case "", Alacritty, Ghostty, Rio, XtermJS:
+	case "", Alacritty, Ghostty, Rio, XtermJS, WezTerm:
 	default:
 		return &Error{Kind: UsageError, Message: "unknown backend: " + string(options.Backend)}
 	}

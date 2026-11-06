@@ -430,6 +430,30 @@ Shells: bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, and nushell.
 
 Backends: Alacritty, Ghostty, Rio, and xterm.js. Default: Alacritty.
 
+Source builds can also enable the experimental `wezterm` feature:
+
+```sh
+cargo run --locked -p tui-test-cli --features wezterm -- run --backend wezterm my-app
+cargo build --locked -p tui-test-ffi --features wezterm
+```
+
+This embeds WezTerm's MIT-licensed, non-UI VT crates at a pinned revision.
+It does not start WezTerm or require its desktop application. The Rust library
+uses the same `wezterm` feature. Python, JavaScript, and Go can select this backend
+with a matching custom native library through `TUI_TEST_NATIVE_LIBRARY`; the
+standard release builds do not enable it.
+
+The adapter preserves native WezTerm behavior rather than emulating another
+backend's quirks. Color replies use ST even for BEL queries; OSC 52 writes work
+but read queries are ignored; title-stack operations are ignored; bold and dim
+are mutually exclusive; a bare OSC 104 also resets dynamic colors; and a wide
+glyph at the right margin can overflow instead of wrapping first. These
+differences are explicit conformance cases, not skipped tests.
+
+The upstream VT crates are currently Git dependencies rather than published
+crates.io packages. Their distribution must be resolved before publishing a
+crates.io release containing this feature.
+
 ### Exit codes
 
 | Code | Meaning |

@@ -10,6 +10,9 @@ use crate::terminal::emu::Emulator;
 #[cfg(feature = "rio")]
 use crate::terminal::rio::RioEmu;
 
+#[cfg(feature = "wezterm")]
+use crate::terminal::wezterm::WezTermEmu;
+
 #[cfg(feature = "ghostty")]
 use crate::terminal::ghostty::GhosttyEmu;
 #[cfg(feature = "xtermjs")]
@@ -27,6 +30,8 @@ pub enum Backend {
     Rio,
     #[cfg(feature = "xtermjs")]
     Xtermjs,
+    #[cfg(feature = "wezterm")]
+    Wezterm,
 }
 
 impl Backend {
@@ -38,6 +43,8 @@ impl Backend {
         Self::Rio,
         #[cfg(feature = "xtermjs")]
         Self::Xtermjs,
+        #[cfg(feature = "wezterm")]
+        Self::Wezterm,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -49,6 +56,8 @@ impl Backend {
             Self::Rio => "rio",
             #[cfg(feature = "xtermjs")]
             Self::Xtermjs => "xtermjs",
+            #[cfg(feature = "wezterm")]
+            Self::Wezterm => "wezterm",
         }
     }
 
@@ -66,6 +75,8 @@ impl Backend {
             Self::Rio => Ok(Box::new(RioEmu::new(cols, rows, profile))),
             #[cfg(feature = "xtermjs")]
             Self::Xtermjs => Ok(Box::new(XtermJsEmu::new(cols, rows, profile)?)),
+            #[cfg(feature = "wezterm")]
+            Self::Wezterm => Ok(Box::new(WezTermEmu::new(cols, rows, profile))),
         }
     }
 
@@ -93,6 +104,10 @@ impl Backend {
             Self::Xtermjs => Ok(Box::new(XtermJsEmu::with_bell_tracker(
                 cols, rows, profile, bells,
             )?)),
+            #[cfg(feature = "wezterm")]
+            Self::Wezterm => Ok(Box::new(WezTermEmu::with_bell_tracker(
+                cols, rows, profile, bells,
+            ))),
         }
     }
 
@@ -117,6 +132,8 @@ impl std::str::FromStr for Backend {
             "rio" => Ok(Self::Rio),
             #[cfg(feature = "xtermjs")]
             "xtermjs" => Ok(Self::Xtermjs),
+            #[cfg(feature = "wezterm")]
+            "wezterm" => Ok(Self::Wezterm),
             other => Err(format!(
                 "unknown terminal backend {other:?}; expected one of: {}",
                 Self::expected()
@@ -153,6 +170,13 @@ mod tests {
     fn xtermjs_is_rejected_when_its_feature_is_disabled() {
         assert!("xtermjs".parse::<Backend>().is_err());
         assert!(serde_json::from_str::<Backend>("\"xtermjs\"").is_err());
+    }
+
+    #[cfg(not(feature = "wezterm"))]
+    #[test]
+    fn wezterm_is_rejected_when_its_feature_is_disabled() {
+        assert!("wezterm".parse::<Backend>().is_err());
+        assert!(serde_json::from_str::<Backend>("\"wezterm\"").is_err());
     }
 
     #[cfg(feature = "ghostty")]

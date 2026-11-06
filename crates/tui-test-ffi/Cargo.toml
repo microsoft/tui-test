@@ -11,6 +11,9 @@ publish = false
 name = "tui_test_ffi"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+wezterm = ["tui-test/wezterm"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true

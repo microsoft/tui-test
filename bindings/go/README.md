@@ -135,6 +135,8 @@ Clients with the same name share the same in-process session. `Close` closes tha
 `ClientOptions` sets the backend, profile, timeouts, screen-history limit, automatic recording, failure artifacts, and traces. `SpawnOptions` controls dimensions, working directory, environment, readiness, restart, retries, and per-launch overrides. `OpenOptions` embeds `SpawnOptions` and adds `Shell`.
 
 The default backend is Alacritty. Supported backends are Alacritty, Ghostty, Rio, and xterm.js. The default size is 80 columns by 30 rows.
+Custom native builds with the `wezterm` Cargo feature also support `tuitest.WezTerm`.
+Set `TUI_TEST_NATIVE_LIBRARY` to that build; standard release binaries do not enable it.
 
 Automatic recording is disabled when recording, trace, and recording-inclusive artifact options are all omitted. `ClientOptions.Recording` can select `RecordingAlways`, `RecordingOnFailure`, or `RecordingDisabled`. A supplied `ClientOptions.Trace` overrides that selection: `TraceOn` records always, `TraceOnFailure` records on failure, and `TraceOff` disables recording. When trace options are omitted, `Artifacts.IncludeRecording` promotes a disabled recording to on-failure recording. These options can persist terminal output, so select them deliberately.
 

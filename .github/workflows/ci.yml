@@ -79,6 +79,10 @@ jobs:
       - run: cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
       - run: cargo build -p tui-test-cli -p tui-test-ffi
       - run: cargo test --workspace -- --test-threads=1
+      - name: Test headless WezTerm backend and CLI selection
+        run: |
+          cargo test --locked -p tui-test-rs --features wezterm wezterm -- --test-threads=1
+          cargo test --locked -p tui-test-cli --features wezterm cli::tests::open_backend_values_map_to_terminal_backends -- --test-threads=1
       # The recording renderer and its font catalog are behind a feature that
       # is off by default, so the line above never compiles them in.
       - run: cargo test -p tui-test-rs --features recording-font-jetbrains-mono-styles -- --test-threads=1

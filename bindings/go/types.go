@@ -13,6 +13,7 @@ const (
 	Ghostty   Backend = "ghostty"
 	Rio       Backend = "rio"
 	XtermJS   Backend = "xtermjs"
+	WezTerm   Backend = "wezterm"
 )
 
 type Shell string
