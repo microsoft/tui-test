@@ -44,9 +44,10 @@ pub fn render(json_output: bool) -> Result<String> {
     lines.push(format!("portable-pty: {PORTABLE_PTY_VERSION}"));
     if let Some(conpty) = report.get("conpty") {
         lines.push(format!(
-            "conpty: {} ({})",
+            "conpty: {} ({}; file {})",
             conpty["version"].as_str().unwrap(),
-            conpty["source"].as_str().unwrap()
+            conpty["source"].as_str().unwrap(),
+            conpty["file_version"].as_str().unwrap()
         ));
     }
     Ok(lines.join("\n"))
@@ -55,13 +56,17 @@ pub fn render(json_output: bool) -> Result<String> {
 fn add_conpty(report: &mut Value) -> Result<()> {
     #[cfg(windows)]
     {
-        let (dll, host) = conpty_mapping(PORTABLE_PTY_VERSION).with_context(|| {
+        let package = conpty_mapping(PORTABLE_PTY_VERSION).with_context(|| {
             format!(
                 "portable-pty {PORTABLE_PTY_VERSION} has no ConPTY mapping; \
                  review its Windows loader and update versions::conpty_mapping"
             )
         })?;
-        report["conpty"] = windows::detect(dll, host)?;
+        anyhow::ensure!(
+            package == tui_test::terminal::conpty::package_name(),
+            "portable-pty ConPTY mapping does not match the bundled package"
+        );
+        report["conpty"] = windows::report(package);
     }
     #[cfg(not(windows))]
     let _ = report;
@@ -69,11 +74,10 @@ fn add_conpty(report: &mut Value) -> Result<()> {
 }
 
 #[cfg(any(windows, test))]
-fn conpty_mapping(portable_pty_version: &str) -> Option<(&'static str, &'static str)> {
-    // portable-pty's src/win/psuedocon.rs prefers conpty.dll, then uses
-    // kernel32's ConPTY API backed by the system conhost.exe, not a pinned host.
+fn conpty_mapping(portable_pty_version: &str) -> Option<&'static str> {
+    // This loader resolves the preloaded conpty.dll by basename.
     match portable_pty_version {
-        "0.9.0" => Some(("conpty.dll", "conhost.exe")),
+        "0.9.0" => Some("Microsoft.Windows.Console.ConPTY"),
         _ => None,
     }
 }

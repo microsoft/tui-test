@@ -61,27 +61,12 @@ fn version_flags_report_all_emulators_without_starting_a_daemon() {
     {
         let conpty = &report["conpty"];
         let version = conpty["version"].as_str().unwrap();
-        assert_eq!(version.split('.').count(), 4);
-        assert!(version.split('.').all(|part| part.parse::<u16>().is_ok()));
-        assert!(PathBuf::from(conpty["source"].as_str().unwrap()).is_file());
+        assert_eq!(version, tui_test::terminal::conpty::package_version());
+        assert_eq!(conpty["source"], "bundled Microsoft.Windows.Console.ConPTY");
+        let file_version = conpty["file_version"].as_str().unwrap();
+        assert_eq!(file_version, tui_test::terminal::conpty::file_version());
         assert!(text.contains(&format!("conpty: {version}")));
-        let expected = Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "$info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($env:TUI_TEST_VERSION_SOURCE); \
-                 '{0}.{1}.{2}.{3}' -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart",
-            ])
-            .env("TUI_TEST_VERSION_SOURCE", conpty["source"].as_str().unwrap())
-            .output()
-            .expect("read file version independently in a manifested Windows process");
-        assert!(
-            expected.status.success(),
-            "{}",
-            String::from_utf8_lossy(&expected.stderr)
-        );
-        assert_eq!(version, String::from_utf8(expected.stdout).unwrap().trim());
+        assert!(text.contains(&format!("file {file_version}")));
     }
     #[cfg(not(windows))]
     assert!(report.get("conpty").is_none());
