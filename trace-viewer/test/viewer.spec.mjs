@@ -435,6 +435,48 @@ test("the details divider supports keyboard limits and reclamps when the window 
   await expect(divider).toBeFocused();
 });
 
+test("maximizing details keeps fallback evidence and controls visible as frame content changes", async ({ page, openReport }) => {
+  const data = fixture();
+  delete data.timeline.frames[2].svg;
+  data.timeline.frames[2].grid = [];
+  data.timeline.frames[2].cells = [];
+  data.timeline.frames[2].omission = "Screen exceeds the byte limit";
+  await page.setViewportSize({ width: 320, height: 900 });
+  await openReport(data);
+  const divider = page.getByRole("separator", { name: "Resize action details" });
+  const details = page.locator(".details-panel");
+
+  async function evidenceFits() {
+    return page.locator(".viewer").evaluate((viewer) => {
+      const viewport = viewer.querySelector("#viewport").getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(viewer.querySelector("#screen-text"));
+      const text = range.getBoundingClientRect();
+      const controls = viewer.querySelector(".frame-controls").getBoundingClientRect();
+      const next = viewer.querySelector("#next-frame");
+      const button = next.getBoundingClientRect();
+      const hit = document.elementFromPoint(button.x + button.width / 2, button.y + button.height / 2);
+      return {
+        textVisible: text.top >= viewport.top && text.bottom <= viewport.bottom,
+        controlsInsideViewer: controls.bottom <= viewer.getBoundingClientRect().bottom + 1,
+        controlsHit: next.contains(hit),
+      };
+    });
+  }
+
+  await divider.focus();
+  await page.keyboard.press("End");
+  await expect.poll(evidenceFits).toEqual({ textVisible: true, controlsInsideViewer: true, controlsHit: true });
+
+  await page.locator('#filmstrip [data-frame="0"]').click();
+  await divider.focus();
+  await page.keyboard.press("End");
+  const expandedHeight = (await details.boundingBox()).height;
+  await page.locator("#failure").click();
+  await expect.poll(evidenceFits).toEqual({ textVisible: true, controlsInsideViewer: true, controlsHit: true });
+  expect((await details.boundingBox()).height).toBeLessThan(expandedHeight);
+});
+
 test("tabs expose metadata and support roving keyboard focus", async ({ page, openReport }) => {
   await openReport();
   await expect(page.locator("#cell-tab")).toHaveAttribute("aria-controls", "cell-panel");

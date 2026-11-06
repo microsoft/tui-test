@@ -23,7 +23,19 @@
     const main = panel?.parentElement;
     const narrow = window.matchMedia("(max-width: 600px)").matches;
     const navigation = narrow ? main?.querySelector<HTMLElement>(".sidebar")?.getBoundingClientRect().height ?? 0 : 0;
-    return { height, maximum: Math.max(minimum, (main?.clientHeight ?? minimum) - navigation - (narrow ? 260 : 220)) };
+    const viewport = main?.querySelector<HTMLElement>("#viewport");
+    let reserved = narrow ? 260 : 220;
+    if (viewport?.parentElement) {
+      const chrome = Array.from(viewport.parentElement.children).reduce((total, child) => {
+        const style = getComputedStyle(child);
+        if (child === viewport || style.display === "none") return total;
+        return total + child.getBoundingClientRect().height
+          + (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+      }, 0);
+      const style = getComputedStyle(viewport);
+      reserved = Math.max(reserved, chrome + 80 + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom));
+    }
+    return { height, maximum: Math.max(minimum, (main?.clientHeight ?? minimum) - navigation - reserved) };
   }
 
   function resize(height: number) {
@@ -67,6 +79,8 @@
     });
     observer.observe(panel);
     observer.observe(panel.parentElement);
+    const viewer = panel.parentElement.querySelector(".viewer");
+    if (viewer) for (const child of viewer.children) observer.observe(child);
     return () => observer.disconnect();
   });
 </script>
