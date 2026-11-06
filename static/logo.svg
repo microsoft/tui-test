@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none" role="img" aria-labelledby="title">
+  <title id="title">tui-test</title>
+  <rect x="32" y="36" width="192" height="144" rx="28" fill="none" stroke="#33FF33" stroke-width="20"/>
+  <path d="M 104,180 L 92,220 M 152,180 L 164,220 M 72,220 L 184,220" fill="none" stroke="#33FF33" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="72,86 100,106 72,126" fill="none" stroke="#7CD67C" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <polyline points="140,108 156,124 188,86" fill="none" stroke="#7CD67C" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
