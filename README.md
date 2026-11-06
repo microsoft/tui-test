@@ -1,6 +1,5 @@
 <h1 align="center">
-  <img src="static/logo.svg" alt="" width="48" height="48" align="middle">
-  <samp>tui-test</samp>
+  <img src="static/logo.svg" alt="tui-test" width="181" height="48">
 </h1>
 
 <p align="center">
