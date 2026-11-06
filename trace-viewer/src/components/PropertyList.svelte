@@ -11,7 +11,7 @@
 </dl>
 
 <style>
-  dl { display: grid; grid-template-columns: minmax(90px, min(30%, 150px)) minmax(0, 1fr); gap: 3px 8px; font-size: 11px; margin: 6px 0; }
+  dl { display: grid; grid-template-columns: minmax(90px, min(30%, 150px)) minmax(0, 1fr); gap: 3px 8px; font-size: 12px; margin: 6px 0; }
   dt { color: var(--muted); }
   dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); }
   .swatch { display: inline-block; width: 9px; height: 9px; border: 1px solid var(--border); margin-right: 4px; vertical-align: middle; }

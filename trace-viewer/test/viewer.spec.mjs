@@ -356,6 +356,20 @@ for (const colorScheme of ["dark", "light"]) {
   });
 }
 
+test("the header title, labels, values and action share a text baseline", async ({ page, openReport }) => {
+  await openReport();
+  const baselines = await page.locator(".brand strong, .brand > div > span, #session-summary .metadata-label, #session-summary .metadata-value, #failure")
+    .evaluateAll((elements) => elements.map((element) => {
+      const marker = document.createElement("span");
+      marker.style.cssText = "display:inline-block;width:0;height:0;margin:0;padding:0;border:0;font-size:0;line-height:0;vertical-align:baseline";
+      element.append(marker);
+      const baseline = marker.getBoundingClientRect().top;
+      marker.remove();
+      return baseline;
+    }));
+  expect(Math.max(...baselines) - Math.min(...baselines)).toBeLessThan(1);
+});
+
 test("action names, descriptions, locators and durations stay on a single line", async ({ page, openReport }) => {
   await openReport();
   for (const width of [1280, 390]) {

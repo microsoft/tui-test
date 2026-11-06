@@ -28,15 +28,15 @@
 </header>
 
 <style>
-  .topbar { min-height: 36px; display: flex; gap: 20px; align-items: center; padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-  .brand { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-family: var(--mono); }
-  .brand-mark { width: 28px; height: 28px; flex-shrink: 0; }
+  .topbar { min-height: 34px; display: flex; gap: 20px; align-items: baseline; padding-bottom: 4px; flex-shrink: 0; }
+  .brand { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; font-family: var(--mono); }
+  .brand-mark { width: 28px; height: 28px; flex-shrink: 0; align-self: center; }
   .brand > div { display: flex; align-items: baseline; gap: 8px; }
   .brand strong { font-size: 18px; font-weight: 600; letter-spacing: -.04em; line-height: 1.3; }
-  .brand span { color: var(--muted); font-size: 9px; letter-spacing: .07em; text-transform: uppercase; }
-  .session-summary { display: flex; flex: 1; flex-wrap: wrap; gap: 4px 16px; min-width: 0; font: 10px/1.4 var(--mono); }
+  .brand span { color: var(--muted); font-size: 11px; letter-spacing: .07em; text-transform: uppercase; }
+  .session-summary { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-width: 0; font: 11px/1.4 var(--mono); }
   .metadata-item { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; max-width: 100%; }
-  .metadata-label { flex-shrink: 0; color: var(--muted); font-size: 9px; letter-spacing: .04em; text-transform: uppercase; }
+  .metadata-label { flex-shrink: 0; color: var(--muted); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
   .metadata-value { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .failure-button { color: var(--link); border-color: var(--link); white-space: nowrap; }
   .failure-button.failed { color: var(--red); border-color: var(--red); }
