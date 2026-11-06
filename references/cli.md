@@ -242,7 +242,16 @@ Most waits accept `--timeout MS`. `expect`, `click`, and `highlight` retry. `fin
 | `packed-screen [--full] --json` | Read dimensions and untrimmed UTF-8 rows. |
 | `cells X Y [W H]` | Read cells and styles. |
 | `get FIELD` | Read one field. |
+| `-V` / `--version [--json]` | Report tui-test, emulator, and portable-pty versions, plus ConPTY on Windows. |
 | `screenshot [PATH] [--background COLOR \| --transparent]` | Read text or save SVG or PNG. |
+
+`-V` and `--version` print the same complete report without a session or daemon.
+Rust package versions come from the build's
+resolved dependencies; Ghostty reports its native build version, and xterm.js
+reports the vendored headless and Unicode 11 addon versions. On Windows,
+portable-pty selects ConPTY: the command reports the loaded `conpty.dll` file
+version, or the system `conhost.exe` version when using Windows' built-in ConPTY.
+portable-pty does not pin a ConPTY release.
 
 Fields: `command`, `output`, `exit-code`, `cwd`, `cursor`, `modes`, `colors`,
 `size`, `title`, `clipboard`, `bells`, and `bell-events`.

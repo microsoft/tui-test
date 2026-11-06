@@ -137,8 +137,17 @@ pub struct DiagnosticRetentionArgs {
 }
 
 #[derive(Parser)]
-#[command(name = "tui-test", version, about = "Headless terminal cli + daemon")]
+#[command(
+    name = "tui-test",
+    version,
+    disable_version_flag = true,
+    about = "Headless terminal cli + daemon"
+)]
 pub struct Cli {
+    /// Report tui-test, terminal emulator, portable-pty, and Windows ConPTY versions.
+    #[arg(short = 'V', long, global = true)]
+    pub version: bool,
+
     /// Target a named session (env: TUI_TEST_SESSION).
     #[arg(long, global = true)]
     pub session: Option<String>,

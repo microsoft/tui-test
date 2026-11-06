@@ -11,6 +11,7 @@ mod monitor_input;
 mod protocol;
 mod skill;
 mod tape;
+mod versions;
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -64,6 +65,19 @@ const SKILL_REFERENCES: &[(&str, &str)] = &[
 fn main() {
     let matches = Cli::command().get_matches_from(command_line_args());
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    if cli.version {
+        let code = match versions::render(cli.json) {
+            Ok(report) => {
+                println!("{report}");
+                0
+            }
+            Err(error) => {
+                eprintln!("failed to report versions: {error:#}");
+                5
+            }
+        };
+        std::process::exit(code);
+    }
     if let Some(Command::Tape(args)) = &cli.command {
         std::process::exit(tape::execute(args, cli.json, &matches));
     }
@@ -1612,7 +1626,7 @@ TRACE     trace finish passed|failed (keep the session open)\n\
 TAPE      tape check FILE | tape run FILE (trusted scripts; isolated local session)\n\
 WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
-GLOBAL    --session NAME | --json | --verbose | --failure-artifacts DIR\n\
+GLOBAL    -V/--version (all versions) | --session NAME | --json | --verbose | --failure-artifacts DIR\n\
           [--failure-artifact-mode none|text|html|all]\n\
           [--failure-artifact-recording] [--diagnostic-context KEY=VALUE]\n\
           [--context-file PATH] [--operation-name NAME]\n\
