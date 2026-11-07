@@ -139,7 +139,8 @@ fn main() {
 fn print_versions(args: &[OsString]) -> i32 {
     // Parse output options without validating commands that will not execute.
     fn output_options(command: clap::Command) -> clap::Command {
-        command
+        let has_subcommands = command.get_subcommands().next().is_some();
+        let mut command = command
             .disable_help_flag(true)
             .disable_help_subcommand(true)
             .disable_version_flag(true)
@@ -149,7 +150,22 @@ fn print_versions(args: &[OsString]) -> i32 {
                     .long("help")
                     .action(clap::ArgAction::Count),
             )
-            .mut_subcommands(output_options)
+            .mut_subcommands(output_options);
+        if has_subcommands {
+            command = command.subcommand(
+                clap::Command::new("help")
+                    .disable_help_flag(true)
+                    .disable_help_subcommand(true)
+                    .arg(
+                        clap::Arg::new("help")
+                            .short('h')
+                            .long("help")
+                            .action(clap::ArgAction::Count),
+                    )
+                    .arg(clap::Arg::new("command").num_args(0..)),
+            );
+        }
+        command
     }
     let matches = output_options(Cli::command())
         .arg(

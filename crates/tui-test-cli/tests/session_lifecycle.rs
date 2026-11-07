@@ -34,6 +34,8 @@ fn version_flags_short_circuit_incomplete_commands() {
             vec!["-Vh", "--json"],
             vec!["-VV", "--json"],
             vec!["--version", "--version", "--json"],
+            vec!["--version", "help", "run", "--json"],
+            vec!["--version", "tape", "help", "run", "--json"],
         ] {
             let report: serde_json::Value = serde_json::from_str(&sandbox.ok(&args)).unwrap();
             assert!(report["terminal_emulators"].is_object());
