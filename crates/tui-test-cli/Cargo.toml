@@ -34,4 +34,5 @@ tui-test = { workspace = true, features = [
 windows-sys = { workspace = true, features = ["Win32_System_Console", "Win32_System_Pipes"] }
 
 [dev-dependencies]
+gif.workspace = true
 png.workspace = true

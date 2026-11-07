@@ -71,6 +71,20 @@ tui-test screenshot -o result.svg
 tui-test close
 ```
 
+Record a trusted tape as a GIF:
+
+```sh
+tui-test tape check crates/tui-test/tests/fixtures/tape/run.tape --json
+tui-test tape run crates/tui-test/tests/fixtures/tape/run.tape
+```
+
+Run these commands from the repository root.
+The example writes `tape-example.gif` in that directory.
+The commands report the effective terminal grid, pixel dimensions, and source-located warnings.
+Tape execution uses an isolated local session, not a daemon session.
+Warning: Run only trusted tapes. Tapes can execute shell commands; they are not sandboxed.
+See the [tape reference](references/tape.md) for the supported subset and a standalone example.
+
 ### Python
 
 ```python

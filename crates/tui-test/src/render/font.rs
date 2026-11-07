@@ -134,10 +134,32 @@ pub(crate) fn catalog_for(font: &FontFamilies) -> anyhow::Result<Arc<Catalog>> {
     if let Some(existing) = catalogs.get(font).and_then(Weak::upgrade) {
         return Ok(existing);
     }
+
     // Hold the lock to avoid duplicate, expensive font ranking.
     let catalog = Arc::new(build_catalog(font)?);
     catalogs.insert(font.clone(), Arc::downgrade(&catalog));
     Ok(catalog)
+}
+
+/// Tape settings must name an installed or bundled family, not a silent fallback.
+pub(crate) fn validate_requested_family(font: &FontFamilies) -> anyhow::Result<()> {
+    let catalog = catalog_for(font)?;
+    let requested = split_font_stack(&font.family);
+    if !requested.is_empty()
+        && !catalog.database.faces().any(|face| {
+            face.families.iter().any(|(name, _)| {
+                requested
+                    .iter()
+                    .any(|family| family.eq_ignore_ascii_case(name))
+            })
+        })
+    {
+        anyhow::bail!(
+            "FontFamily {:?} is not available in bundled or system fonts",
+            font.family
+        );
+    }
+    Ok(())
 }
 
 /// Bound total custom font data from untrusted config files.

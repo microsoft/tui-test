@@ -219,8 +219,31 @@ pub struct ScreenshotArgs {
     pub transparent: bool,
 }
 
+#[derive(Args)]
+pub struct TapeArgs {
+    #[command(subcommand)]
+    pub command: TapeCommand,
+}
+
+#[derive(Subcommand)]
+pub enum TapeCommand {
+    /// Validate the complete tape without a child or output writes.
+    Check(TapeFileArgs),
+    /// Execute a trusted tape and export one GIF.
+    Run(TapeFileArgs),
+}
+
+#[derive(Args)]
+pub struct TapeFileArgs {
+    /// Tape path, relative to the invocation directory.
+    #[arg(value_name = "FILE")]
+    pub file: std::path::PathBuf,
+}
+
 #[derive(Subcommand)]
 pub enum Command {
+    /// Check or run a trusted tape in an isolated local session.
+    Tape(TapeArgs),
     /// Spawn a shell session (auto-starts the daemon).
     Open {
         /// Shell to launch (defaults to the platform shell).
