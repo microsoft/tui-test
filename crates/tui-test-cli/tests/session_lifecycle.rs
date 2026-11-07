@@ -28,6 +28,19 @@ fn version_flags_short_circuit_incomplete_commands() {
             let report: serde_json::Value = serde_json::from_str(&sandbox.ok(&args)).unwrap();
             assert!(report["terminal_emulators"].is_object());
         }
+        for args in [
+            vec!["--version", "--help", "--json"],
+            vec!["-V", "-h", "--json"],
+            vec!["-Vh", "--json"],
+            vec!["-VV", "--json"],
+            vec!["--version", "--version", "--json"],
+        ] {
+            let report: serde_json::Value = serde_json::from_str(&sandbox.ok(&args)).unwrap();
+            assert!(report["terminal_emulators"].is_object());
+        }
+        assert!(sandbox
+            .ok(&["--version", "--", "python", "--json"])
+            .starts_with("tui-test "));
         let report: serde_json::Value =
             serde_json::from_str(&sandbox.ok(&[flag, "--json", "--help"])).unwrap();
         assert!(report["terminal_emulators"].is_object());

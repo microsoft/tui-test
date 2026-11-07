@@ -143,6 +143,12 @@ fn print_versions(args: &[OsString]) -> i32 {
             .disable_help_flag(true)
             .disable_help_subcommand(true)
             .disable_version_flag(true)
+            .arg(
+                clap::Arg::new("help")
+                    .short('h')
+                    .long("help")
+                    .action(clap::ArgAction::Count),
+            )
             .mut_subcommands(output_options)
     }
     let matches = output_options(Cli::command())
@@ -150,7 +156,7 @@ fn print_versions(args: &[OsString]) -> i32 {
             clap::Arg::new("version")
                 .short('V')
                 .long("version")
-                .action(clap::ArgAction::SetTrue),
+                .action(clap::ArgAction::Count),
         )
         .ignore_errors(true)
         .get_matches_from(args);
