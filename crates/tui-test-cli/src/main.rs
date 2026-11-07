@@ -10,13 +10,14 @@ mod monitor;
 mod monitor_input;
 mod protocol;
 mod skill;
+mod tape;
 
 use std::ffi::OsString;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, FromArgMatches};
 
 use cli::{
     Cli, ClickCmd, Command, DaemonCmd, ExpectCmd, FindCmd, GetArg, HighlightCmd, KeyCmd, MatchArg,
@@ -54,10 +55,18 @@ const SKILL_REFERENCES: &[(&str, &str)] = &[
         "references/recipes.md",
         include_str!("../../../references/recipes.md"),
     ),
+    (
+        "references/tape.md",
+        include_str!("../../../references/tape.md"),
+    ),
 ];
 
 fn main() {
-    let cli = Cli::parse_from(command_line_args());
+    let matches = Cli::command().get_matches_from(command_line_args());
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    if let Some(Command::Tape(args)) = &cli.command {
+        std::process::exit(tape::execute(args, cli.json, &matches));
+    }
     let session = config::session_name_from_env(cli.session.clone());
     let execution_context = match build_execution_context(&cli) {
         Ok(context) => context,
@@ -1600,6 +1609,7 @@ RECORD    record start OUT [--format apng|gif|mp4|cast] [--fps N] [--speed N] [-
           [--background COLOR | --transparent]\n\
           record pause|resume|stop | get-recording [session] > out.cast (when tracing is enabled)\n\
 TRACE     trace finish passed|failed (keep the session open)\n\
+TAPE      tape check FILE | tape run FILE (trusted scripts; isolated local session)\n\
 WATCH     monitor [--interactive] (read-only detach: q/Esc/Ctrl-C; interactive detach: Ctrl+])\n\
 AGENT     agent-context (JSON cli schema) | skill [--add] (workflow guide)\n\
 GLOBAL    --session NAME | --json | --verbose | --failure-artifacts DIR\n\
@@ -1622,6 +1632,7 @@ fn exit_code(resp: &Response) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use serde_json::json;
     use std::cell::RefCell;
 

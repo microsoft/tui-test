@@ -56,7 +56,8 @@ MAPPING = {
     "get-recording": [("module", "get_recording")],
 }
 
-EXCLUDED = {"monitor", "usage", "agent-context", "skill", "daemon"}
+# Tape is a CLI script workflow with no corresponding session command.
+EXCLUDED = {"monitor", "usage", "agent-context", "skill", "daemon", "tape"}
 
 
 def _have_binary():

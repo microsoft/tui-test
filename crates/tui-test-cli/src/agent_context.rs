@@ -148,6 +148,12 @@ mod tests {
         assert_eq!(doc["schema_version"], json!(SCHEMA_VERSION));
         assert_eq!(doc["name"], json!("tui-test"));
         assert!(doc["commands"]["expect"].is_object());
+        for action in ["check", "run"] {
+            let file = &doc["commands"]["tape"]["subcommands"][action]["args"][0];
+            assert_eq!(file["name"], "file");
+            assert_eq!(file["required"], true);
+            assert_eq!(file["positional"], true);
+        }
         assert_eq!(
             doc["commands"]["monitor"]["args"][0]["long"],
             json!("--interactive")

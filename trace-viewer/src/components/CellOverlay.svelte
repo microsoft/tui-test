@@ -21,6 +21,6 @@
 
 <style>
   svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  .selected-cell { fill: #6ca8ff; fill-opacity: .16; stroke: #b6d6ff; stroke-width: 1.2; }
+  .selected-cell { fill: var(--accent); fill-opacity: .16; stroke: var(--link); stroke-width: 1.2; }
   .mismatch-cell { fill: #ff5369; fill-opacity: .26; }
 </style>

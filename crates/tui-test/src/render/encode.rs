@@ -248,13 +248,14 @@ fn encode_gif(
     frames: &[Frame],
     renderer: &mut dyn FrameRenderer,
 ) -> anyhow::Result<()> {
+    let timeline = gif_timeline(frames)?;
     let (width, height) = renderer.pixel_size();
     let width: u16 = width.try_into()?;
     let height: u16 = height.try_into()?;
     let output = BufWriter::new(File::create(path)?);
     let mut encoder = gif::Encoder::new(output, width, height, &[])?;
     encoder.set_repeat(gif::Repeat::Infinite)?;
-    for step in gif_timeline(frames) {
+    for step in timeline {
         let mut pixels = renderer.render(&frames[step.frame])?.into_raw();
         let mut frame = gif::Frame::from_rgba_speed(width, height, &mut pixels, 10);
         frame.delay = step.delay;
@@ -346,19 +347,33 @@ struct GifStep {
     delay: u16,
 }
 
-fn gif_timeline(frames: &[Frame]) -> Vec<GifStep> {
-    const TICK_NANOS: u128 = 10_000_000;
+const MAX_GIF_FRAMES: usize = 100_000;
+const GIF_TICK_NANOS: u128 = 10_000_000;
 
+fn check_gif_frame_count(count: u128) -> anyhow::Result<()> {
+    if count > MAX_GIF_FRAMES as u128 {
+        anyhow::bail!("GIF frame limit of {MAX_GIF_FRAMES} would be exceeded ({count} frames)");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_gif_duration(duration: Duration) -> anyhow::Result<()> {
+    let ticks = (duration.as_nanos() + GIF_TICK_NANOS / 2) / GIF_TICK_NANOS;
+    check_gif_frame_count(ticks.div_ceil(u128::from(u16::MAX)).max(1))
+}
+
+fn gif_timeline(frames: &[Frame]) -> anyhow::Result<Vec<GifStep>> {
     let mut output: Vec<GifStep> = Vec::new();
     let mut elapsed = 0u128;
     let mut emitted = 0u128;
     for (index, frame) in frames.iter().enumerate() {
         elapsed = elapsed.saturating_add(frame.duration.as_nanos());
-        let rounded = elapsed.saturating_add(TICK_NANOS / 2) / TICK_NANOS;
+        let rounded = elapsed.saturating_add(GIF_TICK_NANOS / 2) / GIF_TICK_NANOS;
         if rounded <= emitted {
             continue;
         }
         let mut delay = rounded - emitted;
+        check_gif_frame_count(output.len() as u128 + delay.div_ceil(u128::from(u16::MAX)))?;
         while delay > 0 {
             let chunk = delay.min(u128::from(u16::MAX)) as u16;
             output.push(GifStep {
@@ -382,6 +397,7 @@ fn gif_timeline(frames: &[Frame]) -> Vec<GifStep> {
         let last_frame = frames.len() - 1;
         if let Some(previous) = output.iter_mut().rev().find(|step| step.delay > 1) {
             previous.delay -= 1;
+            check_gif_frame_count(output.len() as u128 + 1)?;
             output.push(GifStep {
                 frame: last_frame,
                 delay: 1,
@@ -390,7 +406,7 @@ fn gif_timeline(frames: &[Frame]) -> Vec<GifStep> {
             previous.frame = last_frame;
         }
     }
-    output
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -515,7 +531,10 @@ mod tests {
         for duration in [Duration::ZERO, Duration::from_nanos(1)] {
             let frames = [frame(Color::Rgb(1, 2, 3), duration)];
             assert_eq!(apng_delay(duration), (1, u16::MAX));
-            assert_eq!(gif_timeline(&frames), vec![GifStep { frame: 0, delay: 1 }]);
+            assert_eq!(
+                gif_timeline(&frames).unwrap(),
+                vec![GifStep { frame: 0, delay: 1 }]
+            );
             assert_eq!(
                 mp4_timeline(&frames, 30).unwrap(),
                 vec![Mp4Step {
@@ -531,7 +550,7 @@ mod tests {
         let frames = (0..30)
             .map(|_| frame(Color::Rgb(1, 2, 3), Duration::from_secs_f64(1.0 / 30.0)))
             .collect::<Vec<_>>();
-        let timeline = gif_timeline(&frames);
+        let timeline = gif_timeline(&frames).unwrap();
         assert!(timeline.iter().all(|step| step.delay > 0));
         assert_eq!(
             timeline
@@ -544,11 +563,41 @@ mod tests {
     }
 
     #[test]
+    fn gif_expansion_limit_preserves_existing_output() {
+        let path = temp_path("gif");
+        std::fs::write(&path, b"existing output").unwrap();
+        let duration =
+            Duration::from_millis(u64::from(u16::MAX) * 10 * (MAX_GIF_FRAMES as u64 + 1));
+        assert!(validate_gif_duration(duration).is_err());
+        let frames = [frame(Color::Rgb(1, 2, 3), duration)];
+        let mut renderer = GridRenderer::new(1, 1);
+        let error = encode_gif(&path, &frames, &mut renderer).unwrap_err();
+        assert!(error.to_string().contains("GIF frame limit"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing output");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn gif_frame_limit_includes_fragmented_holds_and_final_state() {
+        let duration = Duration::from_millis(u64::from(u16::MAX) * 10);
+        let frames = [
+            frame(Color::Rgb(1, 2, 3), duration * (MAX_GIF_FRAMES as u32 - 1)),
+            frame(Color::Rgb(4, 5, 6), duration),
+        ];
+        assert_eq!(gif_timeline(&frames).unwrap().len(), MAX_GIF_FRAMES);
+        let mut frames = frames.to_vec();
+        frames.push(frame(Color::Rgb(7, 8, 9), Duration::from_millis(1)));
+        assert!(gif_timeline(&frames).is_err());
+        frames[2].duration = Duration::from_millis(10);
+        assert!(gif_timeline(&frames).is_err());
+    }
+
+    #[test]
     fn sub_centisecond_frames_are_coalesced_without_zero_delays() {
         let frames = (0..4)
             .map(|index| frame(Color::Rgb(index, 0, 0), Duration::from_millis(4)))
             .collect::<Vec<_>>();
-        let timeline = gif_timeline(&frames);
+        let timeline = gif_timeline(&frames).unwrap();
         assert!(timeline.iter().all(|step| step.delay > 0));
         assert_eq!(timeline.last().unwrap().frame, frames.len() - 1);
     }
@@ -564,7 +613,7 @@ mod tests {
         .map(|(red, duration)| frame(Color::Rgb(red, 0, 0), duration))
         .collect::<Vec<_>>();
         assert_eq!(
-            gif_timeline(&frames),
+            gif_timeline(&frames).unwrap(),
             vec![
                 GifStep {
                     frame: 0,
@@ -588,7 +637,7 @@ mod tests {
         .map(|(red, duration)| frame(Color::Rgb(red, 0, 0), duration))
         .collect::<Vec<_>>();
         assert_eq!(
-            gif_timeline(&frames),
+            gif_timeline(&frames).unwrap(),
             vec![
                 GifStep { frame: 0, delay: 9 },
                 GifStep { frame: 1, delay: 1 }

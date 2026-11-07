@@ -67,7 +67,8 @@ const MAPPING = {
   "get-recording": [["module", "getRecording"]],
 };
 
-const EXCLUDED = new Set(["monitor", "status", "daemon", "usage", "agent-context", "skill"]);
+// Tape is a CLI script workflow with no corresponding session command.
+const EXCLUDED = new Set(["monitor", "status", "daemon", "usage", "agent-context", "skill", "tape"]);
 
 test("every cli command is mapped or excluded", { skip: !schema }, () => {
   const instance = new TuiTest("conformance");

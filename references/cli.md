@@ -28,6 +28,29 @@ It preserves the daemon and terminal state for inspection.
 Use `restart` to start another child, or `close` to release the session.
 This command is not Ctrl-C or SIGINT. Use `key press Ctrl+C` or `signal INT` for a terminal interrupt character.
 
+## Tape to GIF
+
+```sh
+tui-test tape check demo.tape --json
+tui-test tape run demo.tape
+```
+
+`check` loads all sources, compiles the complete tape, and checks execution requirements without a child or output writes.
+`run` repeats those checks, executes the tape, exports one GIF, and closes its isolated local session.
+Both commands report terminal columns and rows, actual pixel dimensions, and source-located warnings.
+Relative tape, `Source`, and output paths use the invocation directory, not the tape directory.
+
+Tape commands do not use a daemon, project configuration, or `TUI_TEST_SESSION`.
+They reject `--session`, `--verbose`, `--failure-artifacts`, `--failure-artifact-mode`, `--failure-artifact-recording`, `--diagnostic-context`, `--context-file`, and `--operation-name`.
+The core tape API does not accept a session execution context or produce the CLI failure bundles.
+Use ordinary session commands when you need those diagnostics.
+`--json` returns `{"ok":true,"data":{...}}` or `{"ok":false,"error":{...}}` on stdout, without diagnostic text on stderr.
+Syntax, unsupported features, and preflight failures return exit code 2.
+Execution failures use the core error exit code.
+
+Warning: Run only trusted tapes. Tapes can execute shell commands; they are not sandboxed.
+See [Tape](tape.md) for a runnable example, supported commands, and exact result fields.
+
 ## Locate text
 
 ```sh
@@ -260,6 +283,8 @@ The client resolves relative paths before it sends the request.
 Interactive monitors mirror the session's keyboard, paste, and mouse modes.
 
 APNG, GIF, and MP4 recordings sample the session's live emulator at `--fps` (default: 30).
+GIF export rejects timelines above 100,000 encoded frames, including repeated frames for long holds.
+The check occurs before image encoding; a failed export retains its recovery cast.
 Output, resize, and viewport changes appear in the next sample.
 A state shorter than one sample interval can be missed.
 Exports encode these samples without replay through another emulator.
