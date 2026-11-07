@@ -1,11 +1,19 @@
 use super::*;
 use crate::terminal::integration::CommandTracker;
 use crate::terminal::pty::{Pty, SpawnOptions};
+use std::os::windows::ffi::OsStringExt;
 use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
+use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Console::{
     GetConsoleMode, GetStdHandle, SetConsoleMode, DISABLE_NEWLINE_AUTO_RETURN,
     ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_OUTPUT_HANDLE,
+};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 struct TestDirectory(PathBuf);
@@ -72,6 +80,107 @@ fn conpty_cache_rejects_a_directory_in_place_of_an_image() {
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
     assert!(prepare(&root.0).is_err());
+}
+
+#[test]
+fn conpty_preferred_host_is_verified_and_cannot_be_replaced() {
+    let root = TestDirectory::new();
+    let prepared = prepare(&root.0).unwrap();
+    let sibling = prepared.dll.with_file_name("OpenConsole.exe");
+    let host = native_host().unwrap();
+    assert_eq!(std::fs::read(&sibling).unwrap(), host.decode().unwrap());
+    assert!(std::fs::write(&sibling, "replacement host").is_err());
+    assert!(std::fs::remove_file(&sibling).is_err());
+    let replacement = root.0.join("replacement.exe");
+    std::fs::write(&replacement, "replacement host").unwrap();
+    assert!(std::fs::rename(&replacement, &sibling).is_err());
+    drop(prepared);
+    // Preserve the valid architecture-directory image while replacing only the sibling.
+    std::fs::remove_file(&sibling).unwrap();
+    std::fs::write(&sibling, "unchecked sibling").unwrap();
+    assert!(prepare(&root.0).is_err());
+}
+
+#[test]
+fn conpty_rejects_a_reparse_point_in_the_preferred_host_location() {
+    let root = TestDirectory::new();
+    let prepared = prepare(&root.0).unwrap();
+    let sibling = prepared.dll.with_file_name("OpenConsole.exe");
+    drop(prepared);
+    std::fs::remove_file(&sibling).unwrap();
+    let target = root.0.join("junction-target");
+    std::fs::create_dir(&target).unwrap();
+    let result = std::process::Command::new("cmd.exe")
+        .args(["/d", "/c", "mklink", "/J"])
+        .arg(&sibling)
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(prepare(&root.0).is_err());
+}
+
+struct ProcessHandle(usize);
+
+impl Drop for ProcessHandle {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.0 as _) };
+    }
+}
+
+fn verify_launched_host(expected: &Path) -> Result<()> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    ensure!(
+        snapshot != INVALID_HANDLE_VALUE,
+        "cannot inspect child processes"
+    );
+    let _snapshot = ProcessHandle(snapshot as usize);
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    ensure!(
+        unsafe { Process32FirstW(snapshot, &mut entry) } != 0,
+        "empty process snapshot"
+    );
+    let mut found = false;
+    loop {
+        let end = entry
+            .szExeFile
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(entry.szExeFile.len());
+        let name = String::from_utf16_lossy(&entry.szExeFile[..end]);
+        if entry.th32ParentProcessID == std::process::id()
+            && name.eq_ignore_ascii_case("OpenConsole.exe")
+        {
+            let handle =
+                unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, entry.th32ProcessID) };
+            ensure!(!handle.is_null(), "cannot inspect the console host");
+            let _process = ProcessHandle(handle as usize);
+            let mut buffer = vec![0u16; 32768];
+            let mut length = buffer.len() as u32;
+            ensure!(
+                unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) }
+                    != 0,
+                "cannot locate the console host"
+            );
+            let actual = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length as usize]));
+            ensure!(
+                actual.canonicalize()? == expected.canonicalize()?,
+                "unexpected console host: {}",
+                actual.display()
+            );
+            found = true;
+        }
+        if unsafe { Process32NextW(snapshot, &mut entry) } == 0 {
+            break;
+        }
+    }
+    ensure!(found, "the bundled console host was not launched");
+    Ok(())
 }
 
 #[test]
@@ -186,6 +295,8 @@ fn conpty_preserves_text_before_finish_and_prompt_markers() {
         }
     });
     let result = (|| {
+        let bundle = BUNDLE.get().unwrap().as_ref().unwrap();
+        verify_launched_host(&bundle._prepared.dll.with_file_name("OpenConsole.exe"))?;
         let mut tracker = CommandTracker::new();
         let mut transcript = Vec::new();
         let mut completed = 0;

@@ -27,6 +27,9 @@ Each architecture has a gzip-compressed `conpty.dll` and `OpenConsole.exe`.
 The DLL must match the process architecture; the host must match the native
 Windows architecture. Following Microsoft's NuGet layout, x64 processes carry
 both x64 and ARM64 hosts, and x86 processes carry all three hosts.
+The engine also pins the native host as `OpenConsole.exe` beside `conpty.dll`,
+because ConPTY prefers that location. It hard-links the verified host there
+without storing another copy.
 
 The cache is under `%LOCALAPPDATA%\tui-test\conpty\<version>-<architecture>`.
 The engine extracts the selected files, checks their SHA-256 hashes, and loads

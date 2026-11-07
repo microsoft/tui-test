@@ -18,8 +18,12 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetModuleHandleW, GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
     LOAD_LIBRARY_SEARCH_SYSTEM32,
 };
+use windows_sys::Win32::System::SystemInformation::{
+    IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_MACHINE_ARM64, IMAGE_FILE_MACHINE_I386,
+};
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, IsWow64Process2};
 
-use super::conpty_assets::{manifest, selected};
+use super::conpty_assets::{manifest, selected, Asset};
 
 static BUNDLE: OnceLock<Result<LoadedBundle, String>> = OnceLock::new();
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
@@ -130,8 +134,9 @@ fn prepare(cache: &Path) -> Result<PreparedBundle> {
         directory.push(component);
         hold_directory(&directory, &mut directories)?;
     }
+    let host = native_host()?;
     let mut files = Vec::new();
-    for asset in selected() {
+    for asset in selected().iter().chain(std::iter::once(&host)) {
         let path = directory.join(asset.path);
         if let Some(parent) = path.parent().filter(|parent| *parent != directory) {
             hold_directory(parent, &mut directories)?;
@@ -139,7 +144,16 @@ fn prepare(cache: &Path) -> Result<PreparedBundle> {
         let file = match open_image(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                publish(&path, &asset.decode()?)?;
+                if asset.path == "OpenConsole.exe" {
+                    // ConPTY prefers this sibling over architecture subdirectories.
+                    match std::fs::hard_link(directory.join(asset.key), &path) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                } else {
+                    publish(&path, &asset.decode()?)?;
+                }
                 open_image(&path)?
             }
             Err(error) => return Err(error.into()),
@@ -165,6 +179,37 @@ fn prepare(cache: &Path) -> Result<PreparedBundle> {
         dll: directory.join("conpty.dll"),
         _files: files,
         _directories: directories,
+    })
+}
+
+fn native_host() -> Result<Asset> {
+    let mut process_machine = 0;
+    let mut native_machine = 0;
+    ensure!(
+        unsafe {
+            IsWow64Process2(
+                GetCurrentProcess(),
+                &mut process_machine,
+                &mut native_machine,
+            )
+        } != 0,
+        "cannot determine native Windows architecture: {}",
+        std::io::Error::last_os_error()
+    );
+    let key = match native_machine {
+        IMAGE_FILE_MACHINE_AMD64 => "x64/OpenConsole.exe",
+        IMAGE_FILE_MACHINE_ARM64 => "arm64/OpenConsole.exe",
+        IMAGE_FILE_MACHINE_I386 => "x86/OpenConsole.exe",
+        other => anyhow::bail!("unsupported native Windows machine {other:#x}"),
+    };
+    let asset = selected()
+        .iter()
+        .find(|asset| asset.key == key)
+        .context("native ConPTY host is not included for this process architecture")?;
+    Ok(Asset {
+        key: asset.key,
+        path: "OpenConsole.exe",
+        compressed: asset.compressed,
     })
 }
 
