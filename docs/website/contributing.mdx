@@ -8,18 +8,113 @@ sidebar:
 
 ## Build from source
 
+Clone the repository and install Rust 1.90 or newer.
+The CLI build enables terminal backends whose native dependencies must also
+be available; CI installs Zig for Ghostty.
+
+```sh
+cargo build -p tui-test-cli -p tui-test-ffi
+```
+
+The [native library reference](/docs/reference/native-library/) has platform
+requirements, musl build flags, and examples for using a local library.
+Language-specific source build instructions are in the
+[Python](/docs/api/python/#build-from-source) and
+[JavaScript](/docs/api/javascript/#install) references.
+
 ## Run repository checks
+
+The repository's [CI workflow](https://github.com/microsoft/tui-test/blob/main/.github/workflows/ci.yml)
+defines checks for Windows, Linux, and macOS.
+Run the relevant checks for a change; the Rust commands include:
+
+```sh
+cargo fmt --all -- --check
+cargo run --locked -p tui-test-bindgen -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo clippy -p tui-test-rs --all-targets --no-default-features -- -D warnings
+cargo test --workspace -- --test-threads=1
+cargo test -p tui-test-rs --features recording-font-jetbrains-mono-styles -- --test-threads=1
+```
+
+The workflow also checks the native header, Go formatting and tests, Python and
+JavaScript bindings, and release-package assembly.
+See [xterm.js maintenance](/docs/reference/xtermjs/#updating) when changing
+vendored terminal assets.
 
 ## Update language bindings
 
+Shared owned Rust models are authoritative.
+Regenerate boundary declarations rather than editing generated files:
+
+```sh
+cargo run --locked -p tui-test-bindgen
+cargo run --locked -p tui-test-bindgen -- --check
+```
+
+Keep `rustfmt` and `gofmt` on `PATH`.
+The [native library reference](/docs/reference/native-library/#generate-boundaries)
+lists model sources, generated outputs, and handwritten responsibilities.
+Keep the library and language adapter on the same source revision.
+
 ## Update documentation
+
+Author website pages under `docs/website` in this repository.
+The [website repository](https://github.com/cpendery/tui-test-website) copies
+them into its Astro/Starlight content collection.
+Keep READMEs short and link to the relevant website guides and API pages.
+
+From a website checkout, preview local docs with:
+
+```sh
+npm run sync -- --source ../tui-test
+npm run check
+npm run build
+```
+
+Adjust the source path to your checkout.
+Use `/docs/.../` for website links and full GitHub URLs for source files.
+Each page needs a title and description in its frontmatter.
 
 ## Contributor license agreement
 
+Most contributions require a Contributor License Agreement (CLA) declaring that
+you have the right to grant us the rights to use your contribution.
+See [the CLA site](https://cla.opensource.microsoft.com) for details.
+
+When you submit a pull request, the CLA bot determines whether you need to
+provide a CLA and adds a status check or comment. Follow its instructions.
+You only need to do this once across repositories using our CLA.
+
 ## Code of conduct
+
+This project follows the
+[Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
+See the [FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact
+[opencode@microsoft.com](mailto:opencode@microsoft.com) with questions.
 
 ## Report issues and get support
 
+Search [GitHub Issues](https://github.com/microsoft/tui-test/issues) before
+filing a bug or feature request. Use
+[GitHub Discussions](https://github.com/microsoft/tui-test/discussions) for
+questions about using the project.
+Support is limited to these resources; see
+[`SUPPORT.md`](https://github.com/microsoft/tui-test/blob/main/SUPPORT.md).
+
 ## Report security vulnerabilities
 
+Do not report vulnerabilities through public GitHub issues.
+Report them to the
+[Microsoft Security Response Center](https://msrc.microsoft.com/create-report)
+or follow the instructions in
+[`SECURITY.md`](https://github.com/microsoft/tui-test/blob/main/SECURITY.md).
+
 ## Trademarks
+
+This project may contain trademarks or logos for projects, products, or services.
+Authorized use of Microsoft trademarks or logos is subject to
+[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks/usage/general).
+Use of Microsoft trademarks or logos in modified versions of this project must
+not cause confusion or imply Microsoft sponsorship.
+Third-party trademarks and logos are subject to their owners' policies.

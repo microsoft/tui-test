@@ -8,40 +8,200 @@ sidebar:
 
 ## Installation
 
+```sh
+cargo add tui-test-rs@0.1.1
+```
+
+Requires Rust 1.90 or newer. The package is `tui-test-rs`; the library import
+is `tui_test`. Sessions run in-process without the CLI.
+
 ## Cargo features
+
+| Feature | Enables |
+| --- | --- |
+| `ghostty` | Ghostty backend |
+| `rio` | Rio backend |
+| `xtermjs` | xterm.js backend |
+| `recording-raster` | Raster output, including APNG, GIF, and MP4 |
+| `recording-font-jetbrains-mono` | Raster output with a bundled font |
+| `recording-font-jetbrains-mono-styles` | Additional bundled font styles |
+| `recording-font-jetbrains-mono-full` | Full bundled font set |
+
+Alacritty is available without optional backend features.
+Raster output otherwise uses installed fonts. MP4 also requires `ffmpeg`.
 
 ## Quick start
 
+```rust
+use tui_test::{OpenOptions, Operation, Session};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let terminal = Session::new("example");
+    terminal.open(OpenOptions::default())?;
+    let result = (|| {
+        terminal.execute(Operation::Submit {
+            data: Some("echo hello".into()),
+        })?;
+        terminal.get_by_text("hello").last().expect()
+    })();
+    terminal.close()?;
+    result?;
+    Ok(())
+}
+```
+
 ## Session
+
+`Session::new(name)` creates a terminal owner. Call `open` or `run` to start it.
+The [full Session reference](https://docs.rs/tui-test-rs/latest/tui_test/struct.Session.html)
+lists methods and return types.
 
 ### Lifecycle
 
+`open(OpenOptions)` starts a shell.
+`run(RunOptions)` starts a program directly.
+`close()` closes the session.
+Use `Operation::Restart` to replay the launch with a graceful timeout.
+Keep cleanup outside fallible operation sequences, as in the example above.
+
 ### Input and terminal state
+
+`execute(Operation)` handles input and state reads, returning an
+`OperationResult`. Operations include `Submit`, `Write`, `Key`, `Mouse`,
+`Resize`, `Signal`, `State`, `Text`, and `Cells`, plus getters for command,
+cursor, modes, colors, size, title, clipboard, and bells.
 
 ### Waits and assertions
 
+Use `Operation::WaitCommand` after submitting a shell command and
+`Operation::WaitExit` after running a program directly.
+Locator `expect()` and `wait()` retry for visible text.
+`wait_hidden()` waits for absence.
+`WaitIdle` only establishes that the screen stopped changing.
+
 ### Scrollback
+
+`Operation::Scroll` takes a `ScrollTarget`.
+`GetViewport` returns history offset and available rows.
+Visible locators and captures use the viewport, while a full `Text` read
+returns history plus the live screen independently.
+See the [scrollback example](https://github.com/microsoft/tui-test/blob/main/crates/tui-test/examples/scrollback.rs).
 
 ### Screenshots, snapshots, and recordings
 
+Use the corresponding `Operation` variants for screenshots, snapshot assertions,
+and recording control. `StartRecording` samples the live terminal at `fps`,
+default 30. `StopRecording` preserves active elapsed time, including quiet
+periods, without a default idle cap or extra final hold.
+
+`PauseRecording` and `ResumeRecording` exclude time from APNG, GIF, and MP4 while
+the terminal continues. Asciicast rejects them. Resume captures the live terminal
+and restarts the visible cursor phase. Stop during a pause excludes that pause.
+Automatic diagnostic recordings and recovery casts remain continuous.
+Repeated pause or resume calls return usage errors.
+
+`idle_time_limit` caps unchanged visual intervals before `speed` scales their
+durations. Cursor blink phases share the source screen's idle limit.
+Asciicast remains a timestamped output stream.
+
+Run the examples from a source checkout:
+
+```sh
+cargo run -p tui-test-rs --features recording-font-jetbrains-mono --example time_based_recording
+cargo run -p tui-test-rs --features recording-font-jetbrains-mono --example pause_resume_recording
+cargo run -p tui-test-rs --features recording-font-jetbrains-mono --example cursor_blink_recording
+```
+
+The time-based example checks a six-second quiet screen and a one-second second
+state in `target/time-based-recording.gif`. The cursor example writes slow,
+fast, and steady GIFs plus matching PNGs under `target/cursor-blink/`.
+Both accept an optional first argument for another output path or directory.
+
+Set cursor style before opening:
+
+```rust
+let mut options = tui_test::OpenOptions::default();
+options.style.cursor.blink = true;
+options.style.cursor.blink_interval_ms = 250;
+```
+
+Blinking also requires an application cursor style that requests it.
+The interval sets each visible or hidden phase, so 250 ms gives a half-second
+cycle. `blink = false` makes the cursor steady. Hidden and off-screen cursors
+stay hidden, screenshots remain deterministic, and asciicast is unchanged.
+
 ## SessionRegistry
+
+`SessionRegistry` manages named sessions for callers that need shared discovery
+and lifecycle management. Use it when session ownership spans more than one
+call site. See its
+[API reference](https://docs.rs/tui-test-rs/latest/tui_test/struct.SessionRegistry.html)
+for session handles, lookup, and cleanup.
 
 ## Operation
 
+`Operation` represents a terminal action or query.
+`Session::execute` returns a typed `OperationResult`, while
+`execute_with_context` also carries diagnostic context and artifact settings.
+Use the
+[enum reference](https://docs.rs/tui-test-rs/latest/tui_test/enum.Operation.html)
+for every variant and field.
+
 ## Locator
+
+Locators resolve against fresh terminal state before a read or action.
 
 ### Create and compose locators
 
+Create them with `get_by_text`, `get_by_style`, and `get_by_link`.
+Relative selectors support within, after, and before directions.
+`and` and `or` form contiguous per-row cell runs; containment filters preserve
+whole matches. See [locators](/docs/guides/locators/) for composition semantics.
+
 ### Select and inspect matches
+
+Select with `any`, `unique`, `first`, `last`, or `nth`.
+Read with `locations`, `location`, `count`, or `all`.
+`location` requires one match, and `all` does not wait.
 
 ### Wait, assert, click, and highlight
 
+Use `wait`, `wait_hidden`, `expect`, `click`, and `highlight`.
+Option variants include `wait_with_timeout`, `expect_with`, `click_with`, and
+`highlight_with_timeout`.
+Clicks require one selected match and target its middle cell.
+
 ## Launch options, profiles, and timeouts
+
+`OpenOptions` and `RunOptions` carry the backend, dimensions, working directory,
+environment, readiness, restart, profile, timeout, recording, and style settings.
+`OpenOptions` adds the shell; `RunOptions` adds the program and arguments.
+The default grid is 80 by 30.
+`Profile` sets scrollback and colors, and `Timeouts` sets per-class budgets.
 
 ## Keyboard and mouse options
 
+`KeyAction` distinguishes press, down, repeat, and up.
+`MouseButton`, `MouseOptions`, and `LocatorClickOptions` configure mouse buttons,
+modifiers, click count, and locator timing.
+Coordinates are zero-based terminal cells.
+
 ## Diagnostics and failure artifacts
+
+Use `ExecutionContext` and `FailureArtifactOptions` to attach caller context and
+write failure artifacts. `FailureDetails` and `FailureArtifactRef` contain
+structured evidence and export status.
+Review captures before sharing them.
 
 ## Errors and result types
 
+Operations return `Result<OperationResult, TuiTestError>`.
+Inspect the error kind and structured details rather than parsing a display
+message. Optional artifact-write failures do not replace the original assertion.
+
 ## Full API on docs.rs
+
+The [crate reference](https://docs.rs/tui-test-rs/latest/tui_test/) documents
+every exported type and method.
+The [tape module](https://docs.rs/tui-test-rs/latest/tui_test/tape/) covers the
+parser, compiler, and GIF runner.

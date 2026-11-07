@@ -8,12 +8,81 @@ sidebar:
 
 ## Run tests with your language's test runner
 
+The examples in [writing tests](/docs/getting-started/writing-tests/) use the
+standard runners:
+
+| Language | Command |
+| --- | --- |
+| JavaScript | `node --test terminal.test.mjs` |
+| Python | `python -m unittest test_terminal` |
+| Go | `go test ./...` |
+| Rust | `cargo test` |
+
+Library tests run in-process and do not need a CLI daemon.
+
 ## Run a single test
+
+```sh
+node --test --test-name-pattern="prints Ready" terminal.test.mjs
+python -m unittest test_terminal.TerminalTests.test_ready
+go test -run '^TestTerminal$' ./...
+cargo test terminal_output
+```
 
 ## Run tests in parallel
 
+Give each test a unique session. The JavaScript and Python test helpers and
+`TuiTest.ephemeral()` generate names for you. Go's `tuitesttest.New` registers
+cleanup and keeps options local to each test, including tests using `t.Parallel()`.
+
+Rust callers should use a distinct name for each session they register.
+Avoid process-wide cleanup such as `closeAll()` while unrelated tests are
+running. Separate CLI jobs should use different `--session` names.
+
 ## Configure the test environment
+
+Set dimensions, working directory, environment, backend, and timeouts in the
+launch options. The default grid is 80 columns by 30 rows, and the default
+backend is Alacritty. A fixed grid is useful when comparing layouts or
+[snapshots](/docs/guides/snapshots/).
+
+Install the shell or application your test launches. Keep native dependencies
+from the same release as the binding. See the [Go runtime requirements](/docs/api/go/#install)
+and [native library reference](/docs/reference/native-library/) for source builds.
 
 ## Run tests in CI
 
+Run the same test command after installing the language package and building
+your app. A graphical desktop is not required to inspect terminal state.
+Use launch options to select a shell that is available on the runner.
+
+For example, after installing the JavaScript package:
+
+```yaml
+- run: node --test terminal.test.mjs
+```
+
+MP4 recording needs `ffmpeg` on `PATH`. Rust raster captures need
+`recording-raster` and fonts; a `recording-font-jetbrains-mono*` feature bundles
+fonts. See [recordings](/docs/tools/recordings/).
+
 ## Collect failure artifacts
+
+Configure traces before starting a terminal. In JavaScript:
+
+```js
+const options = {
+  trace: { mode: "on-failure", directory: "artifacts/traces" },
+  artifacts: {
+    dir: "artifacts/failures",
+    onFailure: "all",
+    includeRecording: true,
+  },
+};
+```
+
+Pass these options to the client or test helper.
+The [trace viewer](/docs/tools/trace-viewer/) reads `trace.html`; automated
+consumers should use `trace.md`, `trace.json`, and `timeline.json`.
+Review output before uploading it: traces may contain terminal text, titles,
+locator operands, and recordings.

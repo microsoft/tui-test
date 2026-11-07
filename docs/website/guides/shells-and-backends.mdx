@@ -8,14 +8,64 @@ sidebar:
 
 ## Supported shells
 
+Supported shells are bash, zsh, fish, PowerShell, pwsh, cmd, xonsh, elvish, and
+nushell. The selected shell must be installed.
+
+```sh
+tui-test open --shell bash
+```
+
 ## Shell integration and readiness
+
+Shell sessions track prompts, submitted commands, working directories, output,
+and exit codes. Use `wait ready` for a prompt and `wait command` after `submit`.
+Use `run` and `wait exit` when launching an application without a shell.
 
 ## Supported terminal backends
 
+Alacritty is the default backend. Ghostty, Rio, and xterm.js are also supported.
+The same input, inspection, locator, and capture APIs operate across backends.
+
 ## Select a backend
+
+```sh
+tui-test open --backend xtermjs
+tui-test run --backend ghostty my-app
+```
+
+Library clients and launch options accept `backend`.
+The values are `alacritty`, `ghostty`, `rio`, and `xtermjs`.
 
 ## Platform requirements
 
+The CLI and libraries run on Windows, Linux, and macOS.
+Language and native runtime requirements are listed on the
+[installation page](/docs/install/).
+Source builds need Rust and the dependencies for the enabled backends.
+The repository's CI installs Zig for the Ghostty build.
+
+The xterm.js backend embeds its JavaScript bundles and does not need Node.js at
+runtime.
+
 ## Backend differences and limitations
 
+Terminal backends can differ in Unicode widths, escape-sequence handling, and
+reported metadata. Run tests against the backend you intend to support.
+
+The xterm.js backend uses Unicode 11 width tables to match Alacritty's measured
+cell widths. It reports underline color only on cells with an underline style;
+`SGR 58` alone is not readable from a cell even though rendering is unchanged.
+See the [xterm.js backend reference](/docs/reference/xtermjs/) for the measured
+cases and shim behavior.
+
 ## Rust backend features
+
+The Rust crate includes Alacritty by default.
+Enable `ghostty`, `rio`, or `xtermjs` in Cargo to use another backend:
+
+```sh
+cargo add tui-test-rs --features xtermjs
+```
+
+Recording features are independent of backend selection.
+See the [Rust API guide](/docs/api/rust/#cargo-features).

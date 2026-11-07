@@ -8,20 +8,90 @@ sidebar:
 
 ## Session state
 
+```sh
+tui-test state --json
+```
+
+`state` returns visible text and terminal dimensions with command, process-exit,
+cursor, mode, mouse-mode, color, timeout, readiness, and bell state.
+The language APIs return a typed `State`.
+
 ## Visible text and full text
+
+`text` reads the selected viewport. `text --full` reads retained history plus
+the live screen, independently of the viewport.
+In JavaScript use `text({ full: true })`; in Python use `text(full=True)`;
+Go uses `Text(TextOptions{Full: true})`.
 
 ## Cells, styles, and hyperlinks
 
+```sh
+tui-test cells 0 0 20 2 --json
+```
+
+The arguments are `X Y [W H]` in zero-based terminal cells.
+Cells expose text and style information, including foreground and background
+colors, underline style and color, attributes, and OSC 8 link metadata.
+Go exposes hyperlink metadata through `Cell.Link` and `Cell.LinkID`.
+
 ## Command output and process state
+
+`get command`, `get output`, and `get exit-code` read the last tracked shell
+command, its output, and its status. An unavailable value is distinct from an
+empty string or exit code zero; the language APIs preserve it with nullable
+values or pointers.
+
+Use `wait command` after submitting a shell command, or `wait exit` after
+launching a program directly. See [waiting](/docs/guides/waiting/).
 
 ## Working directory
 
+`get cwd` returns the tracked working directory. Launch options can set the
+child's initial directory with `--cwd` or the language's `cwd` option.
+
 ## Cursor and terminal size
+
+```sh
+tui-test get cursor --json
+tui-test get size --json
+tui-test get viewport --json
+```
+
+The cursor includes position, visibility, shape, and color.
+Cursor state retains application coordinates even while viewing history.
+Captures project the cursor into the selected viewport and hide it when it
+falls outside the view. `get viewport` reports history offset and available
+rows. An offset of zero means the live screen.
 
 ## Window title
 
+`get title` reads the terminal title. Use `wait title` or `expect title`
+when a test must wait for a particular value.
+
 ## Clipboard and bells
+
+`get clipboard` reads the session clipboard.
+`get bells` reads the cumulative bell count, and `get bell-events` returns
+the event records. Use the corresponding waits rather than polling them in
+a fixed-delay loop.
 
 ## Terminal modes
 
+`get modes` and `state.modes` report boolean modes with all keys present.
+`state.mouse_mode` is `none`, `click`, `drag`, or `motion`.
+Cursor visibility and wrapping are on by default.
+`expect mode NAME [--off]` asserts a mode.
+
 ## Terminal colors and palette
+
+`get colors` and `state.colors` report foreground, background, cursor, and
+palette overrides that differ from the profile. Unchanged values use the
+session profile.
+
+```sh
+tui-test get colors --json
+tui-test expect colors --background '#1d1f21'
+```
+
+See [configuration](/docs/reference/configuration/#terminal-colors) for profile
+colors and [assertions](/docs/guides/assertions/) for color checks.

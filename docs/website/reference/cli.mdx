@@ -8,36 +8,266 @@ sidebar:
 
 ## Invocation
 
+```sh
+tui-test [GLOBAL OPTIONS] COMMAND
+tui-test [GLOBAL OPTIONS] -- PROGRAM [ARGS...]
+```
+
+The second form is an alias for `run`. Sessions persist between CLI invocations.
+For a complete walkthrough, see [your first session](/docs/getting-started/first-session/).
+
 ## Global options
+
+| Option | Description |
+| --- | --- |
+| `--session NAME` | Select a session; defaults to `TUI_TEST_SESSION` or `default`. |
+| `--json` | Print structured JSON. |
+| `--verbose`, `-v` | Write a session log. |
+| `--failure-artifacts DIR` | Write structured assertion artifacts. |
+| `--failure-artifact-mode MODE` | Select `none`, `text`, `html`, or `all`. |
+| `--failure-artifact-recording` | Copy the automatic cast through the failure boundary. |
+| `--diagnostic-context KEY=VALUE` | Add safe caller context to failure details. |
 
 ## Session commands
 
+| Command | Description |
+| --- | --- |
+| `open [options]` | Open a shell. |
+| `run [options] PROGRAM [ARGS...]` | Run a program directly. |
+| `restart [--graceful-timeout MS]` | Replay the last successful launch. |
+| `sessions` | List sessions. |
+| `close [--all]` | Close one or all sessions. |
+
+`open` and `run` reuse a live session unless `--restart` is set.
+Restart preserves launch options and the latest terminal size, with a default
+five-second grace period. See [sessions](/docs/guides/sessions/).
+
 ## Spawn options
+
+`open` and `run` accept:
+
+| Option | Description |
+| --- | --- |
+| `--backend NAME` | `alacritty`, `ghostty`, `rio`, or `xtermjs`; default `alacritty`. |
+| `--cols N`, `--rows N` | Grid size; default 80 by 30. |
+| `--cwd PATH` | Child working directory. |
+| `--env KEY=VALUE` | Environment override; repeat for more variables. |
+| `--wait-ready`, `--no-wait-ready` | Control startup readiness waiting. |
+| `--restart` | Replace a live session. |
+| `--config PATH` | Select a config file. |
+| `--profile NAME` | Select a profile. |
+| `--timeout-<class> MS` | Set a text, idle, command, exit, or ready timeout. |
+| `--screen-history-limit COUNT` | Retain recent distinct screens for failures. |
+
+`open` also accepts `--shell NAME`.
 
 ## Locator commands and options
 
+```sh
+tui-test find text TEXT [options]
+tui-test expect text TEXT [options]
+tui-test click text TEXT [options]
+tui-test highlight text TEXT [options]
+```
+
+`find` returns current matches and cell spans.
+`expect` retries until the locator passes; `click` retries and clicks its middle
+cell; `highlight` marks matches in screenshots and the live monitor.
+
+| Option | Description |
+| --- | --- |
+| `--regex` | Treat `TEXT` as a regular expression. |
+| `--full` | Include scrollback. |
+| `--whitespace exact\|normalize` | Select whitespace matching. |
+| `--after-text TEXT`, `--before-text TEXT` | Search relative to an anchor. |
+| `--after-regex`, `--before-regex` | Use a regular-expression anchor. |
+| `--after-match MODE`, `--before-match MODE` | Select anchor matches: `any`, `unique`, `first`, or `last`. |
+| `--after-nth N`, `--before-nth N` | Select a zero-based anchor. |
+| `--match MODE` | Select `any`, `unique`, `first`, or `last`. |
+| `--nth N` | Select a zero-based match. |
+
+Style flags are `--fg`, `--bg`, `--bold`, `--dim`, `--italic`,
+`--underline-style`, `--underline-color`, `--inverse`, `--hidden`,
+`--strikethrough`, and `--blink`. Boolean styles accept `=false`.
+
+`--link URI` separately requires every matched cell, including spaces, to have
+that OSC 8 target. `--link ""` requires no link.
+Library APIs also support link-only locators, cell-set intersection and union,
+and containment filters; see [locators](/docs/guides/locators/).
+
+`expect text` accepts `--not` and `--timeout MS`.
+`click text` accepts `--button left|middle|right`, `--alt`, `--ctrl`, `--shift`,
+`--clicks N`, and `--timeout MS`. `highlight text` accepts `--timeout MS`.
+
 ## Keyboard and mouse commands
+
+| Command | Description |
+| --- | --- |
+| `submit [TEXT]` | Type text and press Enter. |
+| `type TEXT` | Type text without Enter. |
+| `write DATA` | Write raw bytes. |
+| `key press KEYS...` | Press keys. |
+| `key down KEYS...` | Send keydown events. |
+| `key repeat KEYS...` | Send repeat events. |
+| `key up KEYS...` | Send keyup events. |
+| `mouse click [X Y] [options]` | Click cells or `--on-text TEXT`. |
+| `mouse move X Y` | Move the pointer. |
+| `mouse down X Y [options]` | Press a button. |
+| `mouse up X Y [options]` | Release a button. |
+| `mouse drag X1 Y1 X2 Y2 [options]` | Drag between cells. |
+| `mouse scroll up\|down [--amount N]` | Send wheel input to the application. |
+| `resize COLS ROWS` | Resize the terminal. |
+
+Mouse button options are `--button left|middle|right`, `--alt`, `--ctrl`, and
+`--shift`. Click also accepts `--clicks N`.
+Coordinates are zero-based cells.
+
+Named keys include arrows, Home, End, PageUp, PageDown, Insert, Delete,
+Backspace, Tab, Enter, Space, Escape, and F1 through F12.
+Join Ctrl, Alt, Shift, Super, Meta, or Hyper modifiers with `+`.
 
 ## Process control
 
+`signal INT|TERM|KILL|QUIT` sends a signal. `kill` kills the child process.
+Use `close` to release the session when finished.
+
 ## State and history commands
+
+| Command | Description |
+| --- | --- |
+| `state` | Read session state and visible text. |
+| `text [--full]` | Read visible text or history plus the live screen. |
+| `cells X Y [W H]` | Read cells and styles. |
+| `get command` | Read the last command. |
+| `get output` | Read the last command output. |
+| `get exit-code` | Read the last exit code. |
+| `get cwd` | Read the working directory. |
+| `get cursor` | Read cursor position, visibility, shape, and color. |
+| `get viewport` | Read history offset and available rows. |
+| `get size` | Read terminal dimensions. |
+| `get title` | Read the window title. |
+| `get clipboard` | Read the session clipboard. |
+| `get bells` | Read the cumulative bell count. |
+| `get bell-events` | Read bell events. |
+| `get modes` | Read boolean terminal modes. |
+| `get colors` | Read color and palette overrides. |
+| `scroll up\|down [LINES]` | Move the history viewport; default one row. |
+| `scroll top\|bottom` | Show the oldest output or return to live output. |
+
+Native scrolling does not send mouse input. New output preserves the historical
+view, while keyboard input returns to live output. Mouse input and historical
+locator clicks fail until you return to live output. Full-text reads remain
+independent of the viewport.
 
 ## Wait commands
 
+| Command | Description |
+| --- | --- |
+| `wait title TEXT [--regex --not --timeout MS]` | Wait for a title. |
+| `wait clipboard [TEXT] [--regex --timeout MS]` | Wait for a clipboard change or match. |
+| `wait idle [--timeout MS]` | Wait for the screen to stop changing. |
+| `wait command [--timeout MS]` | Wait for a submitted shell command. |
+| `wait exit [--timeout MS]` | Wait for the program to exit. |
+| `wait ready [--timeout MS]` | Wait for a shell prompt. |
+| `wait bell [--timeout MS]` | Wait for a bell. |
+
+Use command waits after `submit`, exit waits after `run`, and locators for visible
+state. Idle does not establish completion or success.
+Default timeouts are five seconds for text and idle, and 30 seconds for command,
+exit, and ready.
+
 ## Assertion commands
+
+| Command | Description |
+| --- | --- |
+| `expect text TEXT [options]` | Assert a locator. |
+| `expect title TEXT [--regex --not --timeout MS]` | Assert the title. |
+| `expect exit-code CODE [--timeout MS]` | Assert the last exit code. |
+| `expect output TEXT [--regex]` | Assert tracked command output. |
+| `expect bell COUNT [--timeout MS]` | Wait for the cumulative count to reach `COUNT`. |
+| `expect snapshot NAME [-u] [--include-style] [--include-title]` | Compare or update a snapshot. |
+| `expect cursor [options]` | Check selected cursor properties. |
+| `expect mode NAME [--off]` | Check a boolean terminal mode. |
+| `expect colors [options]` | Check selected colors and palette entries. |
+
+See [assertions](/docs/guides/assertions/) for cursor and color options.
 
 ## Screenshots and recordings
 
+| Command | Description |
+| --- | --- |
+| `screenshot [PATH] [-o PATH] [--full] [--zoom N] [--background COLOR \| --transparent]` | Return text or save SVG or PNG. |
+| `record start PATH [options]` | Start APNG, GIF, MP4, or asciinema recording. |
+| `record pause` | Pause raster capture while the terminal continues. |
+| `record resume` | Resume raster capture from the current screen. |
+| `record stop` | Export and finish the recording. |
+| `get-recording [SESSION] [--config PATH]` | Read the automatic asciinema recording. |
+| `tape check PATH` | Validate a trusted tape without running it. |
+| `tape run PATH` | Run a trusted tape in an isolated session and export a GIF. |
+
+Recording options are `--format`, `--fps`, `--speed`, `--idle-time-limit`,
+`--zoom`, `--background`, and `--transparent`. Extensions select `.png` or
+`.apng`, `.gif`, `.mp4`, or `.cast`; `--format` overrides that selection.
+MP4 requires `ffmpeg` and cannot use transparency. Cast cannot use canvas
+options or pause/resume.
+
+Run only trusted tapes; they execute shell commands without a sandbox.
+Tape commands accept the global `--json` flag but reject session, verbose,
+failure-artifact, and diagnostic-context flags.
+See [tapes](/docs/tools/tapes/) and [recordings](/docs/tools/recordings/).
+
 ## Monitor commands
+
+`monitor` watches the selected CLI session.
+`monitor --interactive` forwards keyboard, paste, and supported SGR mouse input.
+Press `Ctrl+]` to detach. See [live monitor](/docs/tools/monitor/).
 
 ## Daemon commands
 
+`daemon start` starts the selected session's daemon, `daemon status` reports
+its status, and `daemon stop [--all]` stops one or all daemons.
+
 ## Configuration options
+
+Use `--config PATH` and `--profile NAME` at launch.
+The [configuration reference](/docs/reference/configuration/) covers discovery,
+profiles, environment variables, timeouts, and capture style.
 
 ## Diagnostic and artifact options
 
+Artifact modes are `none`, `text`, `html`, and `all`.
+`all` is the default when exports are enabled.
+Add `--failure-artifact-recording` for the automatic cast.
+See [failure diagnostics](/docs/tools/failure-diagnostics/) for filenames and
+structured failure data.
+
 ## Agent commands
+
+| Command | Description |
+| --- | --- |
+| `usage` | Print a short command guide. |
+| `agent-context` | Print the full command schema as JSON. |
+| `skill` | Print the complete agent guide. |
+| `skill --add` | Install the skill and local references. |
 
 ## JSON output
 
+Add `--json` for machine-readable command results.
+Read typed values and error details instead of parsing human-readable output.
+For example:
+
+```sh
+tui-test get viewport --json
+tui-test state --json
+```
+
 ## Errors and exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | Wait or assertion failed |
+| `2` | Invalid usage |
+| `3` | No session |
+| `4` | Daemon or IPC error |
+| `5` | Internal error |

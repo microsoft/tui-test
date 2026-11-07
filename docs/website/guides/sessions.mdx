@@ -8,16 +8,92 @@ sidebar:
 
 ## Shell sessions and direct program launches
 
+Use `open` when you need a shell, prompt readiness, and shell-command tracking.
+Use `run` to launch a program directly.
+
+```sh
+tui-test --session shell open --shell bash
+tui-test --session shell submit "echo hello"
+tui-test --session shell wait command
+
+tui-test --session app run my-app
+tui-test --session app wait exit
+```
+
+In the language APIs, the corresponding methods are `open` and `run`
+(`Open` and `Run` in Go). Client construction does not start a terminal.
+
 ## Named and ephemeral sessions
+
+CLI commands select `--session NAME`, then `TUI_TEST_SESSION`, then `default`.
+The Python, JavaScript, and Go clients use the same environment fallback when
+you omit a name. Clients with the same name share a session in their process.
+Closing that session affects every client that uses it.
+
+Use `TuiTest.ephemeral()` in Python or JavaScript, or `tuitest.Ephemeral` in Go,
+for an automatically generated unique name.
 
 ## CLI sessions and in-process library sessions
 
+The CLI uses a daemon so separate commands can control one terminal.
+Library sessions live in the caller's process and do not require a daemon or
+the CLI. A CLI command cannot control a Python, JavaScript, Go, or Rust
+in-process session.
+
 ## Terminal size, working directory, and environment
+
+```sh
+tui-test --session build open --cols 100 --rows 40 --cwd . --env TERM=xterm-256color
+```
+
+The default size is 80 columns by 30 rows. Launch options accept a working
+directory, environment overrides, backend, profile, readiness behavior, and
+timeouts. `open` also accepts a shell.
+See the [CLI spawn options](/docs/reference/cli/#spawn-options) or your
+[language API](/docs/getting-started/overview/#choose-an-interface).
 
 ## Reuse and restart a session
 
+`open` and `run` reuse a live CLI session unless you pass `--restart`.
+Use an explicit restart when a test needs a fresh process:
+
+```sh
+tui-test --session build restart --graceful-timeout 5000
+```
+
+`restart` replays the last successful launch with its original working directory
+and options, plus the latest terminal size. It sends Ctrl-C and waits up to
+five seconds before forcing replacement. A timeout of zero skips that wait.
+The terminal and automatic recording start fresh.
+
+Restart works after child exit, but not after closing the session or stopping
+its daemon.
+
 ## Discover and close sessions
+
+```sh
+tui-test sessions
+tui-test --session build close
+```
+
+`close --all` closes all CLI sessions. In-process discovery and cleanup use
+`sessions()` / `closeAll()` in JavaScript, `sessions()` / `close_all()` in Python,
+and `Sessions` / `CloseAll` in Go. These operate only within their process.
 
 ## CLI daemons
 
+`daemon start`, `daemon status`, and `daemon stop` manage the selected session's
+daemon. `daemon stop --all` stops all CLI daemons. Closing a session or stopping
+a daemon makes its previous launch unavailable to `restart`.
+
 ## Session cleanup
+
+Put cleanup in a `finally` block, async context manager, or test cleanup hook.
+Use `closeQuiet()` / `close_quiet()` / `CloseQuiet()` when cleanup should not
+replace the original failure.
+
+Go operations block; use goroutines for concurrent work. JavaScript and Python
+calls are asynchronous, but abandoning a promise or canceling an await does
+not cancel the native operation. Explicitly close the session to interrupt
+pending waits. See [writing tests](/docs/getting-started/writing-tests/) for
+cleanup helpers.

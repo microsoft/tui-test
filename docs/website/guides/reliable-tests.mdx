@@ -8,14 +8,54 @@ sidebar:
 
 ## Isolate sessions
 
+Create a session for each test. Use ephemeral names or the language test
+helpers. Clients with the same name can share state, and closing that name
+affects all its clients.
+Do not call process-wide cleanup while unrelated tests are running.
+
 ## Wait for state instead of sleeping
+
+Wait for text, a title, command completion, or process exit.
+A fixed sleep can expire too early on a busy runner and wastes time on a fast
+one. `wait idle` only establishes that the screen stopped changing.
+
+```js
+await terminal.getByText("Loading").expect({ not: true });
+await terminal.getByText("Continue").click();
+```
 
 ## Set the terminal environment explicitly
 
+Set dimensions, backend, working directory, and required environment variables
+at launch. Use the same profile when comparing screenshots or snapshots.
+Make sure the test's shell and application are installed on each platform.
+
 ## Select unambiguous locator matches
+
+Use a relative anchor, style, or hyperlink to distinguish repeated labels.
+Require `unique()` when the UI should contain one match. Select `first`,
+`last`, or `nth` only when that order is part of the test.
+Remember that a shell can echo the command text as well as print its output.
 
 ## Assert process results separately
 
+Finding "Done" does not prove that the command exited successfully.
+Use `wait command` after a shell submission and `wait exit` after a direct
+launch, then assert the relevant output or exit code.
+
 ## Close sessions after failures
 
+Use test helpers or cleanup blocks. Canceling a Python task or abandoning a
+JavaScript promise does not stop the native operation. A canceled launch can
+still finish; explicit cleanup remains the caller's responsibility.
+
 ## Retain and review failure artifacts
+
+Enable `on-failure` traces before launching the terminal.
+Use structured error details instead of parsing error strings.
+Human readers can open `trace.html`; agents should start with `trace.md`
+and use the JSON files for detailed evidence.
+
+Review captured output before sharing it. See
+[failure diagnostics](/docs/tools/failure-diagnostics/) for artifact modes and
+caller context.

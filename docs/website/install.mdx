@@ -2,9 +2,16 @@
 title: Install tui-test
 description: Install the tui-test CLI or use the terminal engine from Python, JavaScript, Rust, or Go.
 editUrl: false
+sidebar:
+  order: 2
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`tui-test` runs on Windows, Linux, and macOS. Install the CLI for terminal
+automation, or a library to use the engine from your code.
+See the [documentation overview](/docs/getting-started/overview/) for guides
+and references.
 
 ## CLI
 
@@ -52,6 +59,9 @@ Library sessions run in your process and do not require the CLI.
     pip install tui-test
     ```
 
+    The wheel includes the native library.
+    [Python API](/docs/api/python/)
+
   </TabItem>
   <TabItem label="JavaScript">
     Requires Node.js 20 or newer.
@@ -59,6 +69,11 @@ Library sessions run in your process and do not require the CLI.
     ```sh
     npm install @microsoft/tui-test
     ```
+
+    The package is ESM only. Keep optional dependencies enabled; they include
+    native platform binaries. Bun and Deno are best effort; Deno 2 needs local
+    `node_modules` and `--allow-ffi`.
+    [JavaScript and TypeScript API](/docs/api/javascript/)
 
   </TabItem>
   <TabItem label="Rust">
@@ -68,7 +83,10 @@ Library sessions run in your process and do not require the CLI.
     cargo add tui-test-rs
     ```
 
-    [Rust API reference](https://docs.rs/tui-test-rs/latest/tui_test/)
+    Add `recording-raster` for APNG, GIF, and MP4 output. It uses installed
+    fonts; `recording-font-jetbrains-mono*` features bundle a font.
+    [Rust guide](/docs/api/rust/) and
+    [full API reference](https://docs.rs/tui-test-rs/latest/tui_test/)
   </TabItem>
   <TabItem label="Go">
     Requires Go 1.26 or newer. Published modules include the native engine.
@@ -77,5 +95,27 @@ Library sessions run in your process and do not require the CLI.
     go get github.com/microsoft/tui-test/bindings/go@latest
     ```
 
+    Published modules support Linux and macOS on `amd64` and `arm64`, and
+    Windows on `amd64`. Linux requires glibc 2.28+ or musl 1.2+.
+    [Go API and runtime requirements](/docs/api/go/)
+
   </TabItem>
 </Tabs>
+
+Go, Python, and JavaScript use the same
+[native adapter](/docs/reference/native-library/) through PureGo, ctypes, and
+Koffi. Set `TUI_TEST_NATIVE_LIBRARY` to an absolute path to select a library
+from the same release or source revision.
+
+## Start a session
+
+```sh
+tui-test open
+tui-test submit "echo hello"
+tui-test wait command
+tui-test expect output "hello"
+tui-test close
+```
+
+Continue with [your first session](/docs/getting-started/first-session/) or
+[writing tests](/docs/getting-started/writing-tests/).

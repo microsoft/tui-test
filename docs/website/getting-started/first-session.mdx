@@ -8,12 +8,73 @@ sidebar:
 
 ## Open a shell or run an app
 
+After [installation](/docs/install/), open a named shell session:
+
+```sh
+tui-test --session hello open --cols 80 --rows 30
+tui-test --session hello submit "echo hello"
+tui-test --session hello wait command
+```
+
+`open` starts the platform's default shell. `submit` types a command and presses
+Enter. `wait command` waits for that command to finish.
+The session persists between CLI invocations.
+
+To launch a program directly, use `tui-test --session hello run --restart my-app`.
+Replace `my-app` with your executable and put its arguments after the name.
+Use `wait exit` to wait for a directly launched program to terminate.
+
 ## Find text
+
+```sh
+tui-test --session hello find text "hello"
+tui-test --session hello expect text "hello" --match last
+```
+
+`find` returns the matches on the current screen.
+`expect` retries until the selected text appears or its timeout expires.
+Selecting the last match avoids ambiguity with a shell's echoed command.
 
 ## Send input
 
+```sh
+tui-test --session hello type "echo another command"
+tui-test --session hello key press Enter
+tui-test --session hello wait command
+```
+
+For an app with mouse support, `click text "Continue"` finds the label and clicks
+its middle cell. Text locators, input, and waits are also available in each
+[language API](/docs/getting-started/overview/#choose-an-interface).
+
 ## Wait for output
+
+```sh
+tui-test --session hello expect output "another command"
+tui-test --session hello expect exit-code 0
+```
+
+Command output is separate from visible screen text. Wait for command completion
+before asserting its output or exit code. For an app that stays open, wait for
+a visible state with a text locator instead.
 
 ## Inspect the terminal
 
+```sh
+tui-test --session hello text
+tui-test --session hello state --json
+tui-test --session hello screenshot -o hello.svg
+```
+
+`state --json` includes visible text, dimensions, cursor, modes, and command state.
+The screenshot writes an SVG; a `.png` extension selects PNG.
+
 ## Close the session
+
+```sh
+tui-test --session hello close
+```
+
+Close sessions in cleanup code so a failed assertion does not leave a child
+running. [Writing tests](/docs/getting-started/writing-tests/) shows helpers that
+do this for you.

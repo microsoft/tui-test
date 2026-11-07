@@ -8,18 +8,76 @@ sidebar:
 
 ## Structured assertion errors
 
+Language errors expose structured failure details when the native operation
+provides them. JavaScript and Python errors have `details` and `artifact`;
+Go's `*tuitest.Error` has `Details` and `Artifact`.
+Rust exposes `FailureDetails` and `FailureArtifactRef` through `TuiTestError`.
+Use these fields instead of parsing messages.
+
+JavaScript and Python expectation errors also populate the compatibility
+`terminal.text` and `terminal.screenshot` fields.
+
 ## Caller diagnostic context
+
+Add safe labels to identify a failing test or operation:
+
+```sh
+tui-test --json --failure-artifacts ./artifacts/failures --diagnostic-context test=settings-save expect text "Save" --fg green --timeout 5000
+```
+
+`--diagnostic-context KEY=VALUE` adds caller context to failure details.
+Do not put credentials or other sensitive values in these labels.
+Rust callers can supply an `ExecutionContext`.
 
 ## Export failure artifacts
 
+Use `--failure-artifacts DIR` to enable per-assertion exports.
+Python and JavaScript clients accept an `artifacts` object; Go uses
+`ClientOptions.Artifacts`. Rust uses `FailureArtifactOptions`.
+
 ## Artifact modes and files
+
+| Mode | Files |
+| --- | --- |
+| `none` | No per-failure files |
+| `text` | `failure.json`, `current.txt`, and `failure.md` |
+| `html` | Standalone `failure.html` with diagnostic data and evidence embedded |
+| `all` | Text and HTML outputs plus `current.svg` and `timeline.json` |
+
+The CLI's `--failure-artifact-mode` selects the mode; `all` is the default when
+exports are enabled. Python uses `on_failure`, JavaScript uses `onFailure`,
+and Go uses `ArtifactAll`, `ArtifactHTML`, `ArtifactText`, or `ArtifactNone`.
 
 ## Terminal, locator, and process evidence
 
+Failure details can include operation, locator, process, runtime, and screen
+evidence. The current text and SVG show what the terminal contained at failure.
+Use the locator details to inspect match selection and style constraints.
+
 ## Retained screen history and timelines
+
+`--screen-history-limit COUNT` controls the number of recent distinct screens
+retained for diagnostics. Configure `[diagnostics] screen-history-limit` or
+the corresponding client option to change the default of 10.
+This is separate from scrollback retention.
 
 ## Include the session recording
 
+`--failure-artifact-recording` copies the automatic cast through the failure
+boundary. Libraries use `includeRecording` or `include_recording`, and Go uses
+`IncludeRecording`. Automatic and recovery casts keep output even while a
+raster recording is paused.
+
 ## Artifact paths and write status
 
+The artifact reference reports paths and write status.
+Failure to capture an optional artifact does not replace the assertion error.
+Keep that error as the test result and use artifact status to diagnose missing
+evidence.
+
 ## Review artifacts before sharing
+
+Artifacts can contain terminal output, titles, locator operands, caller context,
+and recordings. Review them before uploading.
+For session-wide evidence, enable [traces](/docs/tools/trace-viewer/) before
+launching the terminal.

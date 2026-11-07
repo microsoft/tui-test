@@ -8,20 +8,153 @@ sidebar:
 
 ## Text locators
 
+Locators describe a query and resolve against the latest terminal screen before
+each read or action. They do not hold a stale cell location.
+
+```sh
+tui-test find text "Save"
+tui-test expect text "Save"
+tui-test click text "Save"
+```
+
+In JavaScript use `terminal.getByText("Save")`; in Python use
+`terminal.get_by_text("Save")`. Rust and Go expose the same operations through
+`get_by_text` and `GetByText`.
+
 ## Regular expressions and whitespace
+
+```sh
+tui-test expect text 'item \d+' --regex
+tui-test find text "first second" --whitespace normalize
+```
+
+Text queries accept literal text or a regular expression. Whitespace matching
+is `exact` or `normalize`. Add `--full` to search scrollback as well as the
+live screen.
 
 ## Style locators
 
+```sh
+tui-test expect text "Ready" --fg green --bold
+tui-test expect text "Ready" --bold=false
+```
+
+Style fields include foreground, background, bold, dim, italic, underline style
+and color, inverse, hidden, strikethrough, and blink. Boolean options can require
+either true or false.
+
+The libraries also create style-only locators, such as
+`terminal.getByStyle({ bold: true })`. Root style selectors find contiguous
+runs within each row. A chained style selector with the default `within`
+direction checks the whole candidate match. Style checks skip blank cells
+when the match contains visible text.
+
 ## Hyperlink locators
+
+```sh
+tui-test expect text "Docs" --link "https://example.com/docs"
+tui-test expect text "Plain text" --link ""
+```
+
+Links match exact OSC 8 targets, not the visible spelling of a URL.
+An empty URI requires no link. Every cell, including spaces, must satisfy
+the link constraint.
+
+JavaScript's `getByLink`, Python's and Rust's `get_by_link`, and Go's
+`GetByLink` create link-only locators. Root selectors find per-row runs;
+chained selectors with `within` check whole matches.
 
 ## Relative locators
 
+```sh
+tui-test click text "Save" --after-text "Settings" --match unique
+```
+
+Library locators can chain text, style, and link selectors with `within`,
+`after`, or `before` directions:
+
+```js
+const save = terminal
+  .getByText("Settings")
+  .getByText("Save", { direction: "after" })
+  .getByStyle({ foreground: "green" })
+  .unique();
+
+await save.click();
+```
+
+CLI anchors accept `--after-regex` or `--before-regex`, match selection with
+`--after-match` / `--before-match`, and zero-based
+`--after-nth` / `--before-nth`.
+
 ## Combine and filter locators
+
+```js
+const label = terminal.getByText("Documentation");
+const link = terminal.getByLink("https://example.com/docs");
+const linkedCells = label.and(link);
+const either = label.or(terminal.getByText("Help"));
+const containsLink = label.filter({ has: link });
+const withoutOldText = label.filter({ hasNot: terminal.getByText("old") });
+```
+
+`and` keeps shared cells; `or` combines cells without duplicates. Adjacent cells
+merge within each physical row, even across original matches. Gaps and row
+breaks split runs. Counts and clicks use these cell runs, not DOM elements.
+Text retains exact whitespace.
+
+`filter` accepts locators. `has` requires a match inside the candidate;
+`hasNot` requires none. Both apply when supplied, and an inner match may cover
+the whole candidate. A partially linked word illustrates the difference:
+`filter({ has: link })` keeps the whole word, a chained `getByLink` rejects it,
+and `and(link)` keeps only linked cells.
+
+Use operands from the same client. Composition leaves them unchanged and reads
+one fresh snapshot when resolved. Selection order matters:
+`a.first().and(b)` can differ from `a.and(b).first()`. Errors, including a failed
+`unique()`, propagate. If any branch uses `full`, the whole query includes
+scrollback.
+
+Python spells these methods `and_`, `or_`, and `filter(has=..., has_not=...)`;
+Go uses `And`, `Or`, and `Filter`. Rust uses `and` and `or`.
+The CLI has no expression syntax for these composition operations.
 
 ## Select among multiple matches
 
+| Selection | Meaning |
+| --- | --- |
+| `any()` | Keep all matches. |
+| `unique()` | Require exactly one match. |
+| `first()` / `last()` | Select the first or last match. |
+| `nth(index)` | Select a zero-based match. |
+
+The CLI uses `--match any|unique|first|last` or `--nth N`.
+Choose a match explicitly when the same label appears more than once.
+
 ## Read match locations and cell spans
+
+`locations()` returns all selected locations; `location()` requires one.
+`count()` returns the current count. `all()` creates a locator for each current
+match and does not wait. Match results include text, positions, and cell spans.
+Coordinates are zero-based terminal cells.
 
 ## Wait, assert, click, and highlight
 
+`expect()` waits for a matching locator, and a negative expectation waits for
+it to be absent. `wait()` supports visible and hidden states.
+`click()` retries, then clicks the middle cell of one match.
+Click options select the button, modifiers, click count, and timeout.
+`highlight()` marks matches in screenshots and the live monitor.
+
+```sh
+tui-test expect text "Loading" --not --timeout 10000
+tui-test click text "Continue" --button left --clicks 1
+tui-test highlight text "Done"
+```
+
 ## Locate text in scrollback
+
+Use `full` to include scrollback. Visible locators follow the selected native
+history viewport. Mouse input and historical locator clicks fail while that
+viewport shows history; return with `scroll bottom` before clicking.
+See [scrollback](/docs/guides/scrollback/).

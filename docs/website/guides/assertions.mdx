@@ -8,20 +8,94 @@ sidebar:
 
 ## Text and style assertions
 
+```sh
+tui-test expect text "Ready" --fg green --bold
+tui-test expect text "Save" --after-text "Settings" --match unique
+```
+
+Text assertions use [locators](/docs/guides/locators/) and retry against the
+current screen. Combine text with style or hyperlink constraints when the
+visual state matters.
+
 ## Negative assertions
+
+```sh
+tui-test expect text "Loading" --not
+```
+
+In JavaScript use `expect({ not: true })`; in Python use
+`expect(not_=True)`. Negative expectations wait until the locator is absent.
 
 ## Command output and exit codes
 
+```sh
+tui-test submit "echo complete"
+tui-test wait command
+tui-test expect output "complete"
+tui-test expect exit-code 0
+```
+
+`expect output` checks tracked command output and accepts `--regex`.
+It is separate from a visible-text assertion. Wait for the command first.
+For a directly launched program, wait for process exit before checking its code.
+
 ## Window title
+
+`expect title TEXT` accepts `--regex`, `--not`, and `--timeout MS`.
+Use it when the application reports state through the terminal title.
 
 ## Cursor properties
 
+```sh
+tui-test expect cursor --hidden
+tui-test expect cursor --visible --shape bar
+tui-test expect cursor --x 4 --y 0
+```
+
+Only the named properties are checked. Cursor coordinates are terminal cells.
+Read `get cursor --json` for position, visibility, shape, and color.
+
 ## Terminal modes and colors
+
+```sh
+tui-test expect mode alternate_screen
+tui-test expect mode bracketed_paste --off
+tui-test expect colors --background '#1d1f21'
+tui-test expect colors --foreground 7 --cursor '#ff0000'
+tui-test expect colors --palette '1=#00ff00' --palette '200=#123456'
+```
+
+Color assertions accept hex RGB, `r,g,b`, or an ANSI palette index.
+They check the named slots together; repeat `--palette` for multiple entries.
+`default` is not accepted. Use [terminal state](/docs/guides/terminal-state/)
+to inspect modes and effective colors.
 
 ## Bell counts
 
+`expect bell COUNT` waits until the cumulative bell count reaches `COUNT`.
+The language methods are `expectBellCount`, `expect_bell_count`, and
+`ExpectBellCount`.
+
 ## Snapshot assertions
+
+```sh
+tui-test expect snapshot main-screen --include-style --include-title
+```
+
+Snapshots compare terminal output with an on-disk baseline.
+See [snapshot testing](/docs/guides/snapshots/) for baseline creation and updates.
 
 ## Assertion timeouts
 
+Locator assertions use the text timeout, five seconds by default.
+Override an individual wait with `--timeout MS` or the language's timeout
+option. A screen-idle wait is not a substitute for checking the state that
+matters to the test.
+
 ## Assertion failures
+
+CLI assertion and wait failures exit with code `1`. Language APIs raise or
+return typed errors with structured failure details when available.
+Configure [failure artifacts](/docs/tools/failure-diagnostics/) or
+[traces](/docs/tools/trace-viewer/) before the test to retain screen,
+locator, process, and timeline evidence.

@@ -8,18 +8,97 @@ sidebar:
 
 ## Type text and write raw input
 
+```sh
+tui-test type "hello"
+tui-test write "raw input"
+```
+
+`type` enters text. `write` sends raw bytes. These operations do not press Enter.
+The language APIs use `type` / `write`, or `Type` / `Write` in Go.
+
 ## Submit shell commands
+
+```sh
+tui-test submit "echo hello"
+tui-test wait command
+```
+
+`submit` types text and presses Enter. Omit the text to submit the current line.
+For shell command results, wait for command completion before reading output.
 
 ## Named keys and modifiers
 
+```sh
+tui-test key press Ctrl+C
+tui-test key press Escape : w q Enter
+```
+
+Named keys include `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`,
+`PageDown`, `Insert`, `Delete`, `Backspace`, `Tab`, `Enter`, `Space`, `Escape`,
+and `F1` through `F12`. Join modifiers `Ctrl`, `Alt`, `Shift`, `Super`, `Meta`,
+or `Hyper` with `+`.
+
 ## Key press, down, repeat, and up events
+
+`key press` sends a key press. Use separate events when testing an application
+that handles keydown, repetition, or release:
+
+```sh
+tui-test key down Shift+Right
+tui-test key repeat Shift+Right
+tui-test key up Shift+Right
+```
+
+Python and JavaScript expose these as `terminal.keyboard` methods.
+`press()` is also available directly on the client.
 
 ## Click text or terminal cells
 
+```sh
+tui-test click text "Continue"
+tui-test mouse click 10 5
+tui-test mouse click --on-text "Continue"
+```
+
+Coordinates are zero-based cells, not pixels.
+Text clicks retry and target the middle cell of a unique selected match.
+Use a locator selection if the label appears more than once.
+
 ## Mouse buttons and modifiers
+
+```sh
+tui-test mouse click 10 5 --button right --ctrl
+tui-test click text "Item" --shift --clicks 2
+```
+
+Buttons are `left`, `middle`, or `right`. Button actions accept Alt, Ctrl, and
+Shift modifiers. Clicks also accept a click count.
 
 ## Move, drag, and scroll
 
+```sh
+tui-test mouse move 10 5
+tui-test mouse down 10 5 --button left
+tui-test mouse up 10 5 --button left
+tui-test mouse drag 2 3 12 3
+tui-test mouse scroll down --amount 3
+```
+
+Mouse wheel input goes to the application. Native history scrolling is separate:
+`scroll up`, `scroll down`, `scroll top`, and `scroll bottom` move tui-test's
+viewport. Return to the live screen before sending mouse input.
+
 ## Resize the terminal
 
+```sh
+tui-test resize 100 40
+```
+
+Resize dimensions are columns and rows. A test can resize before checking a
+responsive terminal layout. Captures use the resulting terminal size.
+
 ## Signal or kill a process
+
+`signal INT|TERM|KILL|QUIT` sends a signal. `kill` kills the child process.
+Closing the session also releases it. Use [session cleanup](/docs/guides/sessions/#session-cleanup)
+even when a test stops the child explicitly.

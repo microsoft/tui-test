@@ -138,4 +138,4 @@ Helpers: `createTerminal`, `withTerminal`, `closeAllTracked`, `setTerminalDefaul
 
 `ExpectationError`, `UsageError`, `NoSessionError`, and `InternalError` extend `TuiTestError`.
 
-Full API: [bindings/js/README.md](https://github.com/microsoft/tui-test/blob/main/bindings/js/README.md)
+Full API: [JavaScript and TypeScript](https://tui-test.dev/docs/api/javascript/)

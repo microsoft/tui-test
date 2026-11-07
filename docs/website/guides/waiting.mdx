@@ -8,18 +8,92 @@ sidebar:
 
 ## Text appearing or disappearing
 
+Use a locator to wait for the state your next action needs:
+
+```sh
+tui-test expect text "Ready"
+tui-test expect text "Loading" --not --timeout 10000
+```
+
+`expect`, `click`, and `highlight` retry. `find` reads the current screen.
+Library locator waits support visible and hidden states.
+
 ## Shell readiness
+
+`wait ready` waits for a shell prompt. `open` accepts `--wait-ready` and
+`--no-wait-ready` to control startup waiting. Prompt and command tracking use
+the supported shell's integration.
 
 ## Command completion
 
+```sh
+tui-test submit "echo complete"
+tui-test wait command
+tui-test get output
+tui-test get exit-code
+```
+
+Use this sequence for a command submitted to an open shell.
+Command completion and visible text are separate observations.
+
 ## Process exit
+
+Use `wait exit` after `run` to wait for the directly launched program.
+A program can print its final-looking message and remain running; asserting
+that message alone does not establish process exit.
 
 ## Screen idle
 
+`wait idle` waits for the screen to stop changing. It does not establish command
+completion, application readiness, or success. Prefer a text locator or a
+command/process wait when one expresses the required condition.
+
 ## Window title
+
+```sh
+tui-test wait title "Editor" --timeout 5000
+tui-test expect title "Loading" --not
+```
+
+Title waits accept regular expressions and negative matching.
 
 ## Clipboard changes
 
+`wait clipboard` with no text waits for the next clipboard change.
+Supply text for a content match or `--regex` for a regular expression.
+
+```sh
+tui-test wait clipboard "copied text" --timeout 5000
+```
+
+JavaScript accepts a `RegExp` and preserves its flags. Python accepts a compiled
+text `re.Pattern` with `search()` semantics; bytes patterns are rejected.
+
 ## Bell events
 
+`wait bell` waits for a bell. `expect bell COUNT` waits until the cumulative
+bell count reaches the requested count. Inspect `get bells` and
+`get bell-events` when a test needs the recorded events.
+
 ## Timeouts and retries
+
+| Class | Default |
+| --- | --- |
+| Text | 5 seconds |
+| Idle | 5 seconds |
+| Command | 30 seconds |
+| Exit | 30 seconds |
+| Ready | 30 seconds |
+
+CLI operation timeouts use milliseconds, for example `--timeout 10000`.
+Session launch flags include `--timeout-text`, `--timeout-idle`,
+`--timeout-command`, `--timeout-exit`, and `--timeout-ready`.
+Python and JavaScript options also use milliseconds; Go uses `*time.Duration`.
+
+Go's nil timeout uses the client setting, then the engine default. Explicit zero
+stays zero, negative durations are rejected, and positive fractions of a
+millisecond round up.
+
+Launch retries apply to retryable startup failures, not usage errors.
+Each retryable attempt is closed before the next one starts.
+See [configuration](/docs/reference/configuration/) for defaults and overrides.
